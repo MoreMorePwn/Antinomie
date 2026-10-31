@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Reopen finalized captures and inspect only byte ranges known to be received.
 use crate::{
     api::*,

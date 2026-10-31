@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # run-overhead-bench.sh — Phase 3: the same pinned four-thread
 # workload (tests/monitor/overhead-bench.c) on four vCPUs under three kernels

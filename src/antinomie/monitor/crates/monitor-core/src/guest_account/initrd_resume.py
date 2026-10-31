@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 """Give a provisioned Debian disk's initramfs its resume device.
 
 Runs inside the guest (python3 -I, through guestfish) after provisioning wrote

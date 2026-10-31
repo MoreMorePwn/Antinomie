@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Tests for the route module: a scripted guest talks to the real gateway
 //! over a Unix socket (as QEMU's stream netdev would), and a fake SOCKS5
 //! server stands in for Tor, a VPN or a proxy. Nothing leaves the machine.

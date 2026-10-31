@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Memory dumps and their analysis with Volatility 3.
 //!
 //! A dump of a running VM is QEMU's `dump-guest-memory` (an ELF core of the

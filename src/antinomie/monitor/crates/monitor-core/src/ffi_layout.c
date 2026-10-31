@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 #include "host_api.h"
 /* Matched compile-time assertions also live in transport.rs. */
 _Static_assert(sizeof(struct ant_backing) == 16, "backing layout");

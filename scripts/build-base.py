@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Build one Antinomie base from this kit: kernel source, patched kernel, image.
 
 The kit is the repository layout the app carries: this script, the kernel
@@ -43,7 +44,6 @@ the console-only Debian 13 base (no desktop). debian-minimal shares the minimal
 kernel profile with BusyBox (everything built in, no modules), so the kernel
 cached for a BusyBox build serves it too.
 """
-# SPDX-License-Identifier: MIT
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
 import argparse
 import hashlib

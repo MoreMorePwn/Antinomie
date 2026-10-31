@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Tor route's own tor, with stand-in programs: nothing here starts a
 //! real tor or reaches the Tor network.
 use super::{WAIT, no_data, scratch};

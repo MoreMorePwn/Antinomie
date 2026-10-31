@@ -9,6 +9,7 @@ This is a metadata/provenance gate, not a determination of legal clearance.
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -98,11 +99,44 @@ def boundary():
     for name, license_id in expected:
         if f'SPDX-License-Identifier: {license_id}' not in (ROOT / name).read_text().splitlines()[0]:
             raise ValueError(f'wrong license boundary: {name}')
+    missing = missing_spdx()
+    if missing:
+        raise ValueError(f'{len(missing)} original files lack an SPDX-License-Identifier line: {", ".join(missing[:10])}')
     if f'license = "{HOST_LICENSE}"' not in (MONITOR / 'Cargo.toml').read_text():
         raise ValueError('workspace license differs from the host license')
     license_text = (ROOT / 'LICENSE').read_text()
     if 'GNU GENERAL PUBLIC LICENSE' not in license_text or 'Version 3, 29 June 2007' not in license_text:
         raise ValueError('root GPLv3 text is missing')
+
+
+# Original code that must say its own license: the SPDX line has to be among
+# a file's first lines. Imported material (src/debian, the kernel patch series)
+# keeps its upstream terms and is not listed here.
+ORIGINAL_DIRS = ('scripts', 'tests', 'src/antinomie/monitor', 'src/antinomie/transport')
+ORIGINAL_FILES = ('install.sh', 'run.sh')
+SOURCE_SUFFIXES = ('.rs', '.py', '.sh', '.c', '.h')
+SKIPPED_DIRS = {'target', '__pycache__', '.git', 'node_modules'}
+SPDX_LINES = 6
+
+
+def original_files():
+    found = [ROOT / name for name in ORIGINAL_FILES if (ROOT / name).is_file()]
+    for directory in ORIGINAL_DIRS:
+        for current, names, files in os.walk(ROOT / directory):
+            names[:] = [name for name in names if name not in SKIPPED_DIRS]
+            found += [Path(current) / name for name in files if name.endswith(SOURCE_SUFFIXES)]
+    return sorted(found)
+
+
+def missing_spdx():
+    """Original source files without an SPDX-License-Identifier line near the top."""
+    missing = []
+    for path in original_files():
+        with open(path, errors='replace') as handle:
+            head = [handle.readline() for _ in range(SPDX_LINES)]
+        if not any('SPDX-License-Identifier:' in line for line in head):
+            missing.append(str(path.relative_to(ROOT)))
+    return missing
 
 
 def documents(package):

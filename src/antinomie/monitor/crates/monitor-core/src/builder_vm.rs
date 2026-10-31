@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! QEMU base builder: builds a base inside a Debian VM so the host
 //! needs only QEMU and curl.
 //!

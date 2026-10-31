@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Install one optional analysis tool the way Tools > Analysis tools does.
 //!
 //! usage: install-tool DATA_DIR capa|floss|upx|die|ghidra|volatility3|memnixfs|sigma|magika|gef|pwndbg

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Captured data in common text forms (UTF-8, hexdump, C array, Base64, ...),
 //! the windows that show a field's whole capture, and the copy menus of
 //! numeric values.

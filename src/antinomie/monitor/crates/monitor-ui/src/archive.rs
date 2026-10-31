@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Bounded offline work, independent of rendering and the transport owner.
 use antinomie_monitor_core::{
     recording, syscall_groups::SyscallGroup, AsyncPage, BackendOptions, CaptureSummary,

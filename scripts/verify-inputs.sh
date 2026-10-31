@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # verify-inputs.sh — verify the pinned Debian source inputs against the hashes
 # recorded in the adapter. Refuses to continue on any mismatch.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! How a run records its route, and how the choice of route is made.
 use super::{Rig, config_for, no_data, record_for, socks_server::FakeSocks};
 use crate::{

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use antinomie_monitor_core::{AnalysisData, AnalysisSection};
 use eframe::egui;
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Meaning colors for static-analysis lists.
 //! Rule names follow severity, string encodings follow the string type,
 //! structure names follow the structure kind, and hardening values follow

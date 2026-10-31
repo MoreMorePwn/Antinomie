@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! The base build kit the app carries.
 //!
 //! `build.rs` embeds the repository files a base build needs, in their

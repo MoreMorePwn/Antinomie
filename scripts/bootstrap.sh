@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # bootstrap.sh — build the disposable work trees for an adapter from the
 # tracked text in src/. Safe to re-run; existing work trees are left as-is.

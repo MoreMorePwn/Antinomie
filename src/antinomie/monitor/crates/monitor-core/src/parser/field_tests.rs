@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Large exec-style events use the aggregate field budget without rejecting
 //! valid object identities or losing bytes from the derived object store.
 use super::{tests::packet, *};

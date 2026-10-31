@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Metadata rows: muted labels, hashes and hex values in monospace, sizes as
 //! bytes with a KB/MB/GB figure, yes/no style values by outcome and
 //! timestamps in local time.

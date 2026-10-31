@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! The saved route settings and the checked form of each route.
 use super::{no_data, scratch};
 use crate::route::{

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! The Memory tab: RAM dumps of a VM and their analysis with Volatility 3 or
 //! MemNixFS, in the manner of Volatility Workbench. Pick a dump, pick a
 //! plugin and its options (or a MemNixFS report), run it; every run is saved

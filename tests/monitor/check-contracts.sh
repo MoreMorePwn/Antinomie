@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
 set -euo pipefail
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 kernel="${ANTINOMIE_SOURCE_TREE:-$repo/work/debian-6.12.94-1-trixie/core}"

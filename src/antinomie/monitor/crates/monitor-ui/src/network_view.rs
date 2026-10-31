@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Network panel: the network captures of the selected VM and the packet list
 //! of one of them. While a capture runs, QEMU writes every frame of the VM's
 //! network interface to its pcap file, outside the guest; the list follows

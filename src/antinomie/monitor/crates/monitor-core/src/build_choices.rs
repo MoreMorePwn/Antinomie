@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Choices offered by the base build wizard.
 //!
 //! Keyboard layouts and variants were captured from xkb-data `evdev.lst` and

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Malware samples from MalwareBazaar (abuse.ch) and MalShare, for running in
 //! a VM.
 //!

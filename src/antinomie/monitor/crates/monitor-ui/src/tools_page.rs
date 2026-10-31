@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Library > Analysis tools: the optional static-analysis tools, whether the
 //! system has them, and installing Antinomie's own copy when it does not.
 use crate::theme;

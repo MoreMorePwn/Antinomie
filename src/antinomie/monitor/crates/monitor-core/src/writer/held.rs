@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Test control of the recording writer. [`SlowWriter`] gives the calling
 //! thread a writer of its own that can be stopped, as a disk that stops
 //! answering would stop the real one, without holding up the tests that run

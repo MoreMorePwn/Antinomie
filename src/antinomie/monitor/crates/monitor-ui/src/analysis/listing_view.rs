@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Paged views of a category's full listing: disassembly as an address /
 //! bytes / instruction table, decompilation as numbered source, strings as a
 //! table. Rows load from the retained listing in pages, as they scroll in.

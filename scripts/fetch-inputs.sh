@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # fetch-inputs.sh — ensure the pinned Debian source inputs are present and match
 # the adapter's recorded SHA-256. Only the large upstream orig tarball is fetched

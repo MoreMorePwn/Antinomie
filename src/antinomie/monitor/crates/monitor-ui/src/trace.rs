@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Paired invocation presentation and inspectors for actually captured content.
 use crate::tree_lines::Prefix;
 use crate::{

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Persistent observation archives, independent of launched programs and PTYs.
 use crate::{
     api::{BackendOptions, Health},

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Guest process selection and independent, non-terminating telemetry captures.
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

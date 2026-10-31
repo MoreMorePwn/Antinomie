@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Network capture: while a capture runs, QEMU writes every frame of a NAT
 //! VM's network interface to a pcap file in the boot recording (a filter-dump
 //! object added over QMP, outside the guest). Each capture is

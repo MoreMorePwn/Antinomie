@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use crate::api::ExecRequest;
 pub(crate) const UPLOAD_BEGIN: u32 = 0x1001;
 pub(crate) const UPLOAD_CHUNK: u32 = 0x1002;

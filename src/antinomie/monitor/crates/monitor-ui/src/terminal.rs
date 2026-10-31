@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use crate::theme;
 use eframe::egui::{self, Color32, Key, Sense, TextStyle};
 use std::time::{Duration, Instant};

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Bounded, distinct diagnostics for archive queries.
 
 pub(super) fn push_issue(issues: &mut Vec<String>, message: String) {

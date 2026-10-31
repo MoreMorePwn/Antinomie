@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use std::{env, fs, path::Path};
 
 /// Repository files the app writes out as its base build kit, in

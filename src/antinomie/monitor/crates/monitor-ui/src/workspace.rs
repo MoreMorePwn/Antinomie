@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! A single dock tree rendered by moving each surface into its native viewport.
 #[path = "workspace_drag.rs"]
 mod workspace_drag;

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-only
 """Boot an isolated test disk and exercise kernel control through public V7 APIs."""
 import argparse
 import json

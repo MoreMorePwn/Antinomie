@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use super::*;
 
 fn reply(sequence: u64, age: u64, flags: u32) -> Vec<u8> {

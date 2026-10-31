@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Base builds: installer-style options, built natively, in a container or in
 //! the QEMU builder.
 //!

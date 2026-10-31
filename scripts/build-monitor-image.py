@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-only
 """Create a reproducible minimal guest bundle without mounting host filesystems."""
 import argparse
 import hashlib

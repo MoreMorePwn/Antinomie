@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Startup runtime checks and Tools > App dependencies; package changes stay
 //! with the user, and a recheck updates which feature actions are available.
 use crate::theme;

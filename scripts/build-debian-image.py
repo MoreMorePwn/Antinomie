@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-only
 """Build a Debian 13 bundle (a desktop, or the console-only Minimal base) for the
 pinned Antinomie kernel with mmdebstrap.
 

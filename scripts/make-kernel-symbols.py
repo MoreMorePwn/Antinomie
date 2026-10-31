@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-only
 """Write the Volatility 3 symbol table (ISF) of a kernel build, xz-compressed.
 
     make-kernel-symbols.py --vmlinux FILE --system-map FILE --output FILE

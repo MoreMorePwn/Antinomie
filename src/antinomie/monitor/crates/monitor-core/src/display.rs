@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::net::{AddressFamily, SocketAddrUnix, SocketFlags, SocketType};
 use std::{

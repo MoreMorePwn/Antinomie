@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Disk writes for recordings, off the transport thread.
 //!
 //! Raw packet blocks and object chunks are queued here and written by one

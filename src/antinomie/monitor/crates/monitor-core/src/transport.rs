@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use std::os::unix::ffi::OsStrExt;
 use std::{
     ffi::{CString, c_char, c_int, c_uint, c_void},

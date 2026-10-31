@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! MalShare (malshare.com), the second sample source: free API keys, 2000
 //! calls a day, samples served as the files themselves.
 //!

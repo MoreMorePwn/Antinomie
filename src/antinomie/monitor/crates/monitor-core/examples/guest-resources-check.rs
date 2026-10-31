@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Boots one disposable BusyBox guest and watches the Summary resource feed.
 //! Usage: guest-resources-check BUNDLE DATA_DIR
 //! Prints the host's guest readings next to the guest's own `/proc/meminfo`,

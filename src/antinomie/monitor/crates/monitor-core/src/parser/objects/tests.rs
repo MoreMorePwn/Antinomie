@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use super::super::*;
 use crate::{api::FieldSummary, recording::read_captured_range};
 use std::{fs, path::Path};

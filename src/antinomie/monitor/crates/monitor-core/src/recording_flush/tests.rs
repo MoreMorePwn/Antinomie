@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use super::*;
 use crate::{
     api::{ExecRequest, Health, RunState, RunSummary},

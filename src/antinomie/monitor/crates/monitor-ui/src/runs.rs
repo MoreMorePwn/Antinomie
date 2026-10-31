@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Presentation state for independent native program terminals.
 use crate::terminal::Terminal;
 use antinomie_monitor_core::{RunState, RunSummary};

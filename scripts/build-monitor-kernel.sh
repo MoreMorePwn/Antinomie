@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # build-monitor-kernel.sh — build the patched guest kernel for one profile.
 #

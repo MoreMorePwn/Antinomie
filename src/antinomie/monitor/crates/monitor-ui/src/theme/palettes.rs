@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! The token sets. One `Palette` per theme, mirroring the mockup's
 //! `css/tokens.css` variable for variable (dark and light are its values;
 //! blue is the dark theme on navy surfaces). Nothing else in the app holds

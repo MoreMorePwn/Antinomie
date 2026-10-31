@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-only
 """Check that a built guest kernel's BTF names nothing of Antinomie.
 
     check-kernel-btf.py --vmlinux FILE [--system-map FILE] [--modules DIR]

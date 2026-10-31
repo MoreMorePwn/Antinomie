@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! A matching page of the invocation list and its totals, as separate reads.
 //!
 //! A page seeks to its cursor in the packet index and stops after the calls

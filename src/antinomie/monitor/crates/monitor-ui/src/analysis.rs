@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Opt-in launch selection and retained, run-addressed analysis evidence.
 use antinomie_monitor_core::{
     analysis_tools::ToolStatus, AnalysisExportFormat, AnalysisKind, AnalysisReport,

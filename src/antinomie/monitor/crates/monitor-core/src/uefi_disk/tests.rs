@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use super::*;
 
 fn layout_json(removed: &[&str]) -> serde_json::Value {

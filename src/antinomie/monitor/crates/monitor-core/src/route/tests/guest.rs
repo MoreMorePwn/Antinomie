@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! A scripted guest: Ethernet frames over the socket QEMU would use (each
 //! frame behind a 4-byte big-endian length), a small TCP client with
 //! go-back-N retransmission, DNS and DHCP.

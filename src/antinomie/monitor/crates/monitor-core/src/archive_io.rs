@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Imported archive members must be confined regular files, never devices or FIFOs.
 use std::{
     fs::{self, File, OpenOptions},

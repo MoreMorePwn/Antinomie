@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Inputs the guest read again after a call's Entry (contract section 22).
 //!
 //! A guest from series 0053 on reads an input its Entry recorded NOT_RESIDENT

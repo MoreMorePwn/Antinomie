@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Native retained-evidence workspace; all acquisition remains outside rendering.
 mod capa_matrix;
 pub(crate) mod content;

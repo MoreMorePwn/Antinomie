@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Real four-vCPU snapshot/reconnect qualification in a disposable data folder.
 //! Usage: snapshot-check BUNDLE WORK_DIR [debian]
 //! With `debian` the VM is sized for a Debian desktop base and boots longer.

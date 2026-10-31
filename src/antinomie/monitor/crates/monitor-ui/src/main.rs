@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 mod activity;
 mod analysis;
 mod api_keys_window;

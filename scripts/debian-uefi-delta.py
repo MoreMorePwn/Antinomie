@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-only
 """What the UEFI layout of a Debian Minimal base changes in its root filesystem.
 
 usage: debian-uefi-delta.py BIOS-ROOT UEFI-ROOT DELTA-TAR LAYOUT-JSON

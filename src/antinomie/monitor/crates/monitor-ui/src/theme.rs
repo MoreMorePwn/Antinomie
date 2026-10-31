@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Colors, fonts and spacing. Two palettes (dark, light) chosen at runtime;
 //! widgets read the active one through the functions below. Data (numbers,
 //! addresses, strings, flags, errors) gets syntax colors so dense views stay

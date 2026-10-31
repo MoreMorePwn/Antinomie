@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Snapshot transactions run on the backend owner. Disk artifacts are owned by
 //! the store; restored guest identities live in fresh, immutable archive namespaces.
 use super::*;

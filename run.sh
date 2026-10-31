@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # run.sh — start Antinomie from this checkout, rebuilding it first when
 # anything it is built from changed (Cargo decides; an up-to-date build takes

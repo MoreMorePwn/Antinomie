@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! One install command for every missing host dependency. The package names
 //! of every supported package manager live in [`PACKAGES`]; nothing is run.
 use super::{Dependency, Report};

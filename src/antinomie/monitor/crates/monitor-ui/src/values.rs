@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Syscall values shown by meaning: counts, sizes, descriptors, PIDs and
 //! results in decimal; pointers, addresses and flags in hex; errors by name
 //! (the number stays available on hover); captured strings without their

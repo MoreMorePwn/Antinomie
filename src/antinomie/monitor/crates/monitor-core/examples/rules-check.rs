@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Report the rules of a YARA file that YARA-X cannot compile.
 //!
 //! usage: rules-check FILE.yar

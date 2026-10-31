@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Typed row projections. Legacy values are displayed, never reverse-parsed.
 use antinomie_monitor_core::{
     AnalysisAddressKind, AnalysisData, AnalysisEntry, AnalysisKind, AnalysisRange,

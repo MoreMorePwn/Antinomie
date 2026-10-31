@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Test control of the persistence thread. [`SlowDisk`] gives the calling
 //! thread (and threads that inherit it, see [`inherit`]) a queue of its own
 //! that can be stopped, as a disk that does not answer would stop the real

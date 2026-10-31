@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Field statuses that say there was nothing to copy, the recorder's own
 //! incomplete marks, and packet numbers shared by a task's events.
 use super::{tests::packet, *};

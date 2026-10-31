@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! What each route does with a guest's traffic.
 use super::{
     DNS, GATEWAY, GUEST, Rig, WAIT, config_for,

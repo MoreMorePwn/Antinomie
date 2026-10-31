@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Match counts of an archive view, computed apart from the page reads.
 //!
 //! A page seeks to its cursor and costs about one page. The counts behind

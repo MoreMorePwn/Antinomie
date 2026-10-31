@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use antinomie_monitor_core::{
     APP_REVISION, Backend, BackendOptions, Command, ExecRequest, Notification, Snapshot, VmConfig,
     VmLaunchOptions, VmState, recording::open_recording,

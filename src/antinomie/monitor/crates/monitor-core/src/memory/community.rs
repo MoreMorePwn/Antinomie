@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Community Volatility 3 plugins from a catalog, downloaded on demand.
 //!
 //! Antinomie distributes none of them: the catalog (`community-plugins.json`,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! wireproxy as the VPN route starts it, with stand-in programs.
 use super::{WAIT, no_data, scratch};
 use crate::route::{

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Native process selection and observer history, without program terminals.
 use super::{icon, theme, values};
 use antinomie_monitor_core::{

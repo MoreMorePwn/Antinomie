@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! The processes a capture observed, as a tree: Capture All splits its
 //! events by process the way launched programs are split into runs.
 //!

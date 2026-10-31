@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Measure how fast the host persists a recorded telemetry stream.
 //!
 //! usage: replay-bench TELEMETRY.raw OUTPUT_DIR [COPIES]

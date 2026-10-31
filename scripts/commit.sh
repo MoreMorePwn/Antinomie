@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # commit.sh — export one commit of an adapter's author repo as the next patch
 # of the guest series, regenerate the Quilt view, and stage both in this repo.

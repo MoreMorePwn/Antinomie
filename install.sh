@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # install.sh — install Antinomie for the current user (no root needed):
 #   ~/.local/bin/antinomie                                  the app

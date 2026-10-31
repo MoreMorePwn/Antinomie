@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! "Build base" wizard: Debian-installer-style questions, then a
 //! build that runs natively or in the QEMU builder VM and installs itself.
 

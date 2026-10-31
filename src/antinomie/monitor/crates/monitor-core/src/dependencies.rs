@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Runtime prerequisites, checked at startup and again before using a feature.
 //! Build tools and optional analysis adapters have their own existing checks.
 use crate::{BackendOptions, VmAcceleration, VmLaunchOptions};

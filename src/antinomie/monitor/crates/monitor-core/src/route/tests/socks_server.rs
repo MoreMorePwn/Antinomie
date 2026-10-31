@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! A SOCKS5 server for the tests. It is also the destination: it never
 //! dials out, it plays the far end itself.
 use std::{

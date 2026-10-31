@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Tools → Malware samples: search MalwareBazaar or MalShare, download samples (kept in
 //! their encrypted archives) and send them into the running VM, optionally
 //! running them there. Nothing is run or unpacked on the host.

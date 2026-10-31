@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Tree order of a capture's processes, built once per change of the list.
 //!
 //! Building walks the list a few times and costs a hash lookup per process.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! QEMU's own `stream` netdev against the gateway. QEMU is started with no
 //! machine and no CPU (`-machine none`), paused: it only parses the network
 //! options and connects, so no guest is booted and no RAM is used.

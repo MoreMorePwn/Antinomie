@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! The process-core budget and deadline chooser, shared by Run program and the
 //! Dump core dialog. The guest says what it accepts; the choices above that are
 //! shown but disabled, with the reason as their hover text.

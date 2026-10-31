@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Checked ANTT application protocol parsing and bounded, disk-backed assembly.
 use crate::{
     api::{EventSummary, FieldSummary},

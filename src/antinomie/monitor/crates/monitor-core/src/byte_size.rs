@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! One text form for every user-visible size: the exact byte count and, from
 //! 1024 bytes up, a rounded figure in 1024-based units.
 

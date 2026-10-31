@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Host folder selection without blocking native rendering.
 use std::{
     io::Read,

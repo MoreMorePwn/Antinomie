@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use crate::{
     api::{BackendOptions, VmAcceleration, VmConfig, VmCpuModel, VmLaunchOptions, VmNetwork},
     storage::{Bundle, private_dir, unique_id, vm_dir},

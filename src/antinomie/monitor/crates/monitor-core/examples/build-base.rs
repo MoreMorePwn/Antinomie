@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Drive one base build through the backend, as the "Build base" wizard does.
 //!
 //! usage: build-base DATA_DIR busybox|debian-minimal|debian-xfce automatic|native|podman|docker|qemu [OPTIONS_JSON]

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! Drives the backend from a JSON plan: optionally import a base and create a
 //! VM, then boot it, upload files and record runs, each waiting for a terminal
 //! marker. Used for the overhead benchmark and to populate a data directory
