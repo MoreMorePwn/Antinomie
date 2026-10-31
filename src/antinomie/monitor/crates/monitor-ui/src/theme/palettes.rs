@@ -26,6 +26,9 @@ pub struct Palette {
     pub accent: Color32,
     /// Section titles only.
     pub heading: Color32,
+    /// The name of the thing a page is about (a sample's name) and the link
+    /// back from it: a hue apart from links, status and section titles.
+    pub identity: Color32,
     /// The one filled primary button of a surface.
     pub primary: Color32,
     pub primary_text: Color32,
@@ -77,6 +80,7 @@ impl Palette {
             self.hint,
             self.accent,
             self.heading,
+            self.identity,
             self.good,
             self.warn,
             self.error,
@@ -158,6 +162,7 @@ pub const DARK: Palette = Palette {
     hint: rgb(110, 117, 131),
     accent: rgb(110, 176, 255),
     heading: rgb(130, 196, 255),
+    identity: rgb(214, 176, 255),
     primary: rgb(46, 110, 196),
     primary_text: rgb(242, 246, 252),
     cta: rgb(30, 130, 255),
@@ -232,6 +237,7 @@ pub const LIGHT: Palette = Palette {
     hint: rgb(140, 147, 160),
     accent: rgb(20, 104, 204),
     heading: rgb(18, 88, 176),
+    identity: rgb(112, 56, 192),
     primary: rgb(28, 108, 208),
     primary_text: rgb(255, 255, 255),
     cta: rgb(10, 100, 230),
@@ -304,6 +310,7 @@ pub const BLUE: Palette = Palette {
     hint: rgb(108, 128, 164),
     accent: rgb(116, 182, 255),
     heading: rgb(136, 200, 255),
+    identity: rgb(218, 184, 255),
     primary: rgb(44, 112, 206),
     primary_text: rgb(244, 248, 255),
     cta: rgb(34, 136, 255),

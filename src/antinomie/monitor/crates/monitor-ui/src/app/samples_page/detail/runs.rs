@@ -493,16 +493,15 @@ impl MonitorApp {
         egui::Sides::new().show(
             ui,
             |ui| {
-                ui.label(
-                    RichText::new(format!(
+                ui.label(theme::section_title(
+                    ui,
+                    format!(
                         "{} · {} · {}",
                         parts::run_name(entry.number),
                         vm_name(run),
                         crate::time_format::unix_ms(run.started_ms)
-                    ))
-                    .strong()
-                    .color(theme::palette().heading),
-                );
+                    ),
+                ));
             },
             |ui| {
                 self.delete_run_item(ui, entry, go);

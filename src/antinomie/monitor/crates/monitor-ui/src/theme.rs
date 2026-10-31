@@ -109,6 +109,10 @@ pub fn blue() -> Color32 {
 pub fn heading() -> Color32 {
     palette().heading
 }
+/// The name of the thing a page is about, and the link back from it.
+pub fn identity() -> Color32 {
+    palette().identity
+}
 pub fn primary() -> Color32 {
     palette().primary
 }
@@ -665,6 +669,23 @@ mod tests {
         (a.max(b) + 0.05) / (a.min(b) + 0.05)
     }
 
+    /// A neutral chip's text reads on its own tint over every surface.
+    #[test]
+    fn neutral_chips_read_on_every_surface_in_every_theme() {
+        for theme in Theme::ALL {
+            let p = theme.palette();
+            let ink = crate::widgets::tone::neutral_ink(p);
+            for ground in [p.bg, p.panel, p.raised] {
+                let fill = ground.blend(p.neutral_bg);
+                assert!(
+                    contrast(ink, fill) >= 4.5,
+                    "{theme:?}: {ink:?} on {fill:?} is {}",
+                    contrast(ink, fill)
+                );
+            }
+        }
+    }
+
     /// Bold titles use a real bold face, wider than the regular one, and every
     /// glyph of it still resolves (the bold family keeps the fallbacks).
     #[test]
@@ -779,8 +800,8 @@ mod tests {
                     "{name}: muted on {ground:?}"
                 );
                 for color in [
-                    p.accent, p.heading, p.good, p.warn, p.error, p.info, p.live, p.number,
-                    p.string, p.pointer, p.flag, p.name,
+                    p.accent, p.heading, p.identity, p.good, p.warn, p.error, p.info, p.live,
+                    p.number, p.string, p.pointer, p.flag, p.name,
                 ] {
                     assert!(
                         contrast(color, ground) >= 3.5,
@@ -921,6 +942,39 @@ mod tests {
         for tint in tints {
             assert!(tint.r().max(tint.g()).max(tint.b()) <= 120, "{tint:?}");
         }
+    }
+
+    /// The theme paints plain text in the text color, so a placeholder given
+    /// as a plain string would read white: each one is `theme::hint_text`.
+    #[test]
+    fn every_placeholder_is_drawn_in_the_hint_color() {
+        fn walk(dir: &std::path::Path, bad: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, bad);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    for (at, _) in text.match_indices(".hint_text(") {
+                        let rest = text[at + ".hint_text(".len()..].trim_start();
+                        if !(rest.starts_with("theme::hint_text(")
+                            || rest.starts_with("crate::theme::hint_text("))
+                        {
+                            let line = text[..at].matches('\n').count() + 1;
+                            bad.push(format!("{}:{line}", path.display()));
+                        }
+                    }
+                }
+            }
+        }
+        let mut bad = Vec::new();
+        walk(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut bad,
+        );
+        // This test names the call it looks for.
+        bad.retain(|place| !place.contains("src/theme.rs"));
+        assert!(bad.is_empty(), "plain placeholders: {bad:?}");
     }
 
     #[test]

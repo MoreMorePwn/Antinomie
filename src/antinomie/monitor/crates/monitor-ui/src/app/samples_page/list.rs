@@ -63,11 +63,7 @@ impl MonitorApp {
         egui::Sides::new().show(
             ui,
             |ui| {
-                ui.label(
-                    RichText::new("Samples")
-                        .strong()
-                        .color(theme::palette().heading),
-                );
+                ui.label(theme::section_title(ui, "Samples"));
                 if self.samples_page.loading.is_some() {
                     theme::spinner(ui);
                 }

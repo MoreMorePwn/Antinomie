@@ -593,7 +593,7 @@ impl MonitorApp {
         let mut action = None;
         let Some(data) = data else {
             ui.horizontal(|ui| {
-                if widgets::link(ui, "‹ All samples").clicked() {
+                if widgets::back_link(ui, "‹ All samples").clicked() {
                     action = Some(Action::Back);
                 }
                 if let Some(error) = &detail.error {
@@ -679,7 +679,7 @@ impl MonitorApp {
         let mut chosen = None;
         // The back link has a line of its own; the title bar with the
         // sample's actions sits under it.
-        if widgets::link(ui, "‹ All samples").clicked() {
+        if widgets::back_link(ui, "‹ All samples").clicked() {
             back = true;
         }
         ui.add_space(2.0);
@@ -690,7 +690,7 @@ impl MonitorApp {
                     RichText::new(&data.record.name)
                         .strong()
                         .size(ui.text_style_height(&egui::TextStyle::Heading))
-                        .color(theme::palette().heading),
+                        .color(theme::identity()),
                 );
                 for tag in data
                     .tags

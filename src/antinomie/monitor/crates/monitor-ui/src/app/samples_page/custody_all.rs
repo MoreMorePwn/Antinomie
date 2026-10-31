@@ -106,7 +106,7 @@ impl CustodyAll {
         egui::Sides::new().show(
             ui,
             |ui| {
-                if widgets::link(ui, "‹ All samples").clicked() {
+                if widgets::back_link(ui, "‹ All samples").clicked() {
                     outcome = Outcome::Back;
                 }
                 ui.label(

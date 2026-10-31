@@ -105,12 +105,13 @@ impl RegexState {
     }
 }
 
-/// The name field, the Add button and the least the expression is given, in points.
+/// The name field's width, in points.
 const NAME_WIDTH: f32 = 240.0;
+/// The least room, Add included, the expression is given on the name's row;
+/// with less it moves to its own row.
+const MIN_PATTERN_ROOM: f32 = 220.0;
 /// What the empty name field says.
 const NAME_HINT: &str = "Name, e.g. Campaign marker";
-const ADD_WIDTH: f32 = 48.0;
-const MIN_PATTERN_WIDTH: f32 = 160.0;
 
 impl Model {
     pub(super) fn regex_tab(&mut self, ui: &mut egui::Ui, data_dir: &Path) {
@@ -154,8 +155,32 @@ impl Model {
             self.regex.apply(data_dir, changed);
         }
         let full = self.regex.config.custom.len() >= CUSTOM_MAX_COUNT;
-        // One row: the name, its category, the expression, which takes
-        // everything the others leave, and Add.
+        // One row when the window is wide enough: the name, its category, the
+        // expression (which takes what Add leaves) and Add. Below that the
+        // expression and Add drop to a row of their own, so nothing is pushed
+        // out of the window at any text size.
+        let ready = !full && !self.regex.name.trim().is_empty() && !self.regex.pattern.is_empty();
+        let mut add = false;
+        let mut expression = |ui: &mut egui::Ui, pattern: &mut String| {
+            // Add is laid out first, at the width its own text needs; the
+            // expression field then fills what is left.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                add = ui
+                    .add_enabled(ready, egui::Button::new("Add"))
+                    .on_hover_text("Rust regex syntax, matched against every string")
+                    .clicked();
+                ui.add(
+                    egui::TextEdit::singleline(pattern)
+                        .hint_text(theme::hint_text(
+                            "Regular expression, such as evil[0-9]+\\.example\\.com",
+                        ))
+                        .char_limit(PATTERN_MAX_LEN)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_width(ui.available_width()),
+                );
+            });
+        };
+        let mut second_row = false;
         ui.horizontal(|ui| {
             // Room for the whole hint at any text size.
             let hint_width = ui.fonts(|fonts| {
@@ -174,7 +199,7 @@ impl Model {
                 egui::TextEdit::singleline(&mut self.regex.name)
                     .hint_text(theme::hint_text(NAME_HINT))
                     .char_limit(80)
-                    .desired_width(name_width),
+                    .desired_width(name_width.min((ui.available_width() - 120.0).max(120.0))),
             );
             egui::ComboBox::from_id_salt("regex-new-category")
                 .selected_text(self.regex.category.label())
@@ -183,30 +208,18 @@ impl Model {
                         ui.selectable_value(&mut self.regex.category, category, category.label());
                     }
                 });
-            let pattern_width = (ui.available_width() - ADD_WIDTH - ui.spacing().item_spacing.x)
-                .max(MIN_PATTERN_WIDTH);
-            ui.add(
-                egui::TextEdit::singleline(&mut self.regex.pattern)
-                    .hint_text(theme::hint_text(
-                        "Regular expression, such as evil[0-9]+\\.example\\.com",
-                    ))
-                    .char_limit(PATTERN_MAX_LEN)
-                    .font(egui::TextStyle::Monospace)
-                    .desired_width(pattern_width),
-            );
-            let ready =
-                !full && !self.regex.name.trim().is_empty() && !self.regex.pattern.is_empty();
-            if ui
-                .add_enabled(
-                    ready,
-                    egui::Button::new("Add").min_size(egui::vec2(ADD_WIDTH, 0.0)),
-                )
-                .on_hover_text("Rust regex syntax, matched against every string")
-                .clicked()
-            {
-                self.regex.add(data_dir);
+            if ui.available_width() >= MIN_PATTERN_ROOM {
+                expression(ui, &mut self.regex.pattern);
+            } else {
+                second_row = true;
             }
         });
+        if second_row {
+            ui.horizontal(|ui| expression(ui, &mut self.regex.pattern));
+        }
+        if add {
+            self.regex.add(data_dir);
+        }
         ui.horizontal(|ui| {
             ui.label("Try on");
             ui.add(

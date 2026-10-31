@@ -316,7 +316,7 @@ impl RegexWindow {
                 });
             ui.add(
                 egui::TextEdit::singleline(&mut self.query)
-                    .hint_text("Filter the matches")
+                    .hint_text(crate::theme::hint_text("Filter the matches"))
                     .desired_width(ui.available_width()),
             );
         });

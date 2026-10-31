@@ -328,55 +328,58 @@ impl Model {
             return;
         };
         let feed = status.feed;
+        ui.add_space(6.0);
         ui.separator();
-        ui.label(
-            RichText::new(format!("{} · {}", feed.name, feed.file))
-                .strong()
-                .color(theme::text()),
-        );
-        let line = |ui: &mut egui::Ui, text: String| {
-            ui.add(egui::Label::new(RichText::new(text).small().color(theme::muted())).wrap());
-        };
-        line(
-            ui,
-            format!(
-                "Source: {}",
-                feed.url_display().trim_start_matches("https://")
-            ),
-        );
-        line(
-            ui,
-            format!(
-                "Terms: {} ({})",
-                feed.license(),
-                feed.home.trim_start_matches("https://")
-            ),
-        );
-        line(ui, format!("Matches: {}", feed.used_for));
-        if let Some(meta) = &status.meta {
+        widgets::detail_block(ui, |ui| {
+            ui.label(
+                RichText::new(format!("{} · {}", feed.name, feed.file))
+                    .strong()
+                    .color(theme::text()),
+            );
+            let line = |ui: &mut egui::Ui, text: String| {
+                ui.add(egui::Label::new(RichText::new(text).small().color(theme::muted())).wrap());
+            };
             line(
                 ui,
                 format!(
-                    "Stored copy: {} records, {}, fetched {} ({} days ago), sha256 {}",
-                    thousands(meta.records),
-                    size_text(meta.size),
-                    meta.date(),
-                    meta.age_days(now),
-                    &meta.sha256[..meta.sha256.len().min(16)]
+                    "Source: {}",
+                    feed.url_display().trim_start_matches("https://")
                 ),
             );
             line(
                 ui,
                 format!(
-                    "File: {}",
-                    ioc::feeds::data_path(data_dir, feed)
-                        .map_or_else(|| "missing".into(), |path| path.display().to_string())
+                    "Terms: {} ({})",
+                    feed.license(),
+                    feed.home.trim_start_matches("https://")
                 ),
             );
-        }
-        if let Some(error) = &status.last_error {
-            crate::activity::warning(ui, format!("Last update failed: {error}"));
-        }
+            line(ui, format!("Matches: {}", feed.used_for));
+            if let Some(meta) = &status.meta {
+                line(
+                    ui,
+                    format!(
+                        "Stored copy: {} records, {}, fetched {} ({} days ago), sha256 {}",
+                        thousands(meta.records),
+                        size_text(meta.size),
+                        meta.date(),
+                        meta.age_days(now),
+                        &meta.sha256[..meta.sha256.len().min(16)]
+                    ),
+                );
+                line(
+                    ui,
+                    format!(
+                        "File: {}",
+                        ioc::feeds::data_path(data_dir, feed)
+                            .map_or_else(|| "missing".into(), |path| path.display().to_string())
+                    ),
+                );
+            }
+            if let Some(error) = &status.last_error {
+                crate::activity::warning(ui, format!("Last update failed: {error}"));
+            }
+        });
     }
 
     fn fp_section(&mut self, ui: &mut egui::Ui, data_dir: &Path) {

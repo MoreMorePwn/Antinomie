@@ -152,22 +152,25 @@ impl Model {
             ui.weak("Select a pack for its details.");
             return;
         };
+        ui.add_space(6.0);
         ui.separator();
-        if let Some(pack) = catalog
-            .sources
-            .iter()
-            .find(|pack| pack.id == offer.id)
-            .cloned()
-        {
-            self.source_entry(ui, data_dir, outbound, &pack);
-        } else if let Some(entry) = catalog
-            .packs
-            .iter()
-            .find(|entry| entry.id == offer.id)
-            .cloned()
-        {
-            self.archive_entry(ui, data_dir, outbound, &entry);
-        }
+        widgets::detail_block(ui, |ui| {
+            if let Some(pack) = catalog
+                .sources
+                .iter()
+                .find(|pack| pack.id == offer.id)
+                .cloned()
+            {
+                self.source_entry(ui, data_dir, outbound, &pack);
+            } else if let Some(entry) = catalog
+                .packs
+                .iter()
+                .find(|entry| entry.id == offer.id)
+                .cloned()
+            {
+                self.archive_entry(ui, data_dir, outbound, &entry);
+            }
+        });
         ui.add_space(4.0);
         theme::section(ui, "Rules");
     }

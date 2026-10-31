@@ -19,10 +19,6 @@ pub(crate) struct RouteProgram {
     pub path: Option<std::path::PathBuf>,
 }
 
-fn size(bytes: u64) -> String {
-    crate::values::file_size(bytes)
-}
-
 /// The rounded size alone, for a button.
 fn short_size(bytes: u64) -> String {
     antinomie_monitor_core::byte_size::short_size(bytes)
@@ -181,9 +177,8 @@ pub(crate) fn tool_row(
                         .fill(theme::primary()),
                     )
                     .on_hover_text(format!(
-                        "{} · download size {}",
-                        tool.version,
-                        size(tool.size)
+                        "{} · downloads from its upstream release",
+                        tool.version
                     ))
                     .clicked()
             {

@@ -11,11 +11,7 @@ pub(super) fn section(
 ) {
     ui.add_space(12.0);
     let heading = ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(title)
-                .strong()
-                .color(theme::palette().heading),
-        );
+        ui.label(theme::section_title(ui, title));
         if let Some(count) = count {
             ui.label(RichText::new(count.to_string()).color(theme::muted()));
         }
@@ -118,8 +114,11 @@ pub(super) fn equal_boxes(
         .min_rect()
         .height()
         .max(second.content_ui.min_rect().height());
-    first.content_ui.set_min_height(height);
-    second.content_ui.set_min_height(height);
+    // `set_min_height` counts from the cursor, which would add the content's
+    // own height again: grow each box down to the taller one's bottom.
+    for ui in [&mut first.content_ui, &mut second.content_ui] {
+        ui.expand_to_include_y(ui.min_rect().min.y + height);
+    }
     first.end(&mut columns[0]);
     second.end(&mut columns[1]);
 }

@@ -593,7 +593,7 @@ fn string_table(
                 }
             })
             .body(|body| {
-                body.rows(table::row_height(font), shown.len(), |mut row| {
+                body.rows(table::list_row_height(font), shown.len(), |mut row| {
                     let values = cells(&shown[row.index()]);
                     for (index, value) in values.iter().enumerate() {
                         row.col(|ui| {
@@ -658,7 +658,11 @@ fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go
                 ));
             }
             widgets::chip(ui, format!("{:?}", report.state), Tone::Good);
-            if widgets::link(ui, "Static analysis ›").clicked() {
+            if ui
+                .button("Open Static analysis")
+                .on_hover_text("Open this report in the Static analysis tab")
+                .clicked()
+            {
                 *go = Some(Go::Report(AnalysisKind::Metadata));
             }
         });
@@ -671,21 +675,35 @@ fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go
                 continue;
             };
             let value = line_value(*kind, sub, section, total, data);
-            let response = ui
-                .horizontal(|ui| {
-                    ui.label(RichText::new(*label).strong());
-                    if !sub.is_empty() {
-                        ui.label(RichText::new(*sub).small().color(theme::muted()));
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new("›").color(theme::muted()));
-                        ui.add(egui::Label::new(RichText::new(&value).monospace()).truncate());
+            let name = if sub.is_empty() {
+                (*label).to_owned()
+            } else {
+                format!("{label} · {sub}")
+            };
+            // The name, whole, at the left; the count or value, then a normal
+            // button, at the right. The button carries the whole row's action.
+            let mut open = false;
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    open = ui
+                        .button("Open")
+                        .on_hover_text(format!("Open {name} in Static analysis"))
+                        .clicked();
+                    ui.add(
+                        egui::Label::new(RichText::new(&value).monospace())
+                            .truncate()
+                            .selectable(false),
+                    );
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(
+                            egui::Label::new(RichText::new(&name).strong())
+                                .truncate()
+                                .selectable(false),
+                        );
                     });
-                })
-                .response
-                .interact(egui::Sense::click())
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            if response.clicked() {
+                });
+            });
+            if open {
                 *go = Some(match (*label, *sub) {
                     // Content is the sample's own bytes: the file viewer.
                     ("Content", _) => Go::View,
@@ -962,7 +980,7 @@ fn aliases(ui: &mut egui::Ui, data: &Data, font: f32) {
             .map(|alias| alias.name.as_str())
             .collect();
         let heading = ui.horizontal(|ui| {
-            ui.label(RichText::new("Aliases").strong());
+            ui.label(theme::section_title(ui, "Aliases"));
             ui.label(
                 RichText::new(format!(
                     "{} name{}",

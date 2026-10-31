@@ -40,7 +40,7 @@ impl Tone {
             Tone::Info => palette.info,
             Tone::Live => palette.live,
             Tone::Accent => palette.accent,
-            Tone::Neutral => palette.muted,
+            Tone::Neutral => neutral_ink(palette),
             Tone::Plain => palette.text,
         }
     }
@@ -58,6 +58,13 @@ impl Tone {
             Tone::Neutral | Tone::Plain => palette.neutral_bg,
         }
     }
+}
+
+/// The text of a neutral chip: between the muted and the body color, so a
+/// source or process tag inside a line of text still reads in every theme
+/// (the muted color alone is too faint on the chip's tint).
+pub(crate) fn neutral_ink(palette: &theme::Palette) -> Color32 {
+    palette.muted.lerp_to_gamma(palette.text, 0.6)
 }
 
 /// A pill with `text` in `tone`.
