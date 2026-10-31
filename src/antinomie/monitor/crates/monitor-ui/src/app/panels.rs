@@ -559,7 +559,12 @@ impl MonitorApp {
                 }
                 crate::workspace::DetailsOf::History => self.history_detail(ui),
                 crate::workspace::DetailsOf::Triage => self.show_triage_details(ui),
-                crate::workspace::DetailsOf::Syscall => self.details(ui),
+                crate::workspace::DetailsOf::Syscall => {
+                    let trace_shown = self
+                        .details_follow
+                        .on_screen(ui.ctx(), crate::workspace::DetailsOf::Syscall);
+                    self.details(ui, trace_shown)
+                }
                 crate::workspace::DetailsOf::Core => self.core_view.details(ui),
                 crate::workspace::DetailsOf::Static => crate::analysis::details(ui),
                 crate::workspace::DetailsOf::Sample => self.sample_run_details(ui),

@@ -77,27 +77,29 @@ fn worker_main() -> Result<(), String> {
     // reservation, hundreds of open jars and a project database in /tmp.
     super::limits::set_time_limit(report.time_limit_seconds);
     super::limits::set_limits(report.limits);
-    let (cpu, address_space, file_size, files) = if has(AnalysisKind::Decompilation) {
-        (6 * DECOMPILER_SECONDS, None, Some(512 * 1024 * 1024), 8192)
-    } else if has(AnalysisKind::Capabilities) || has(AnalysisKind::Floss) {
-        (
-            600,
-            Some(8 * 1024 * 1024 * 1024),
-            Some(super::limits::listing_bytes()),
-            1024,
-        )
-    } else {
-        (
-            300,
-            Some(4 * 1024 * 1024 * 1024),
-            Some(super::limits::listing_bytes()),
-            256,
-        )
-    };
+    let ghidra_listing = super::decompile::listing_only(&report);
+    let (cpu, address_space, file_size, files) =
+        if has(AnalysisKind::Decompilation) || ghidra_listing.is_some() {
+            (6 * DECOMPILER_SECONDS, None, Some(512 * 1024 * 1024), 8192)
+        } else if has(AnalysisKind::Capabilities) || has(AnalysisKind::Floss) {
+            (
+                600,
+                Some(8 * 1024 * 1024 * 1024),
+                Some(super::limits::listing_bytes()),
+                1024,
+            )
+        } else {
+            (
+                300,
+                Some(4 * 1024 * 1024 * 1024),
+                Some(super::limits::listing_bytes()),
+                256,
+            )
+        };
     // A longer time limit than the tools' own needs the CPU budget to follow.
     let cpu = cpu.max(
         report.time_limit_seconds.unwrap_or(0)
-            * if has(AnalysisKind::Decompilation) {
+            * if has(AnalysisKind::Decompilation) || ghidra_listing.is_some() {
                 6
             } else {
                 2
@@ -135,6 +137,14 @@ fn worker_main() -> Result<(), String> {
         );
     }
     super::progress::publish(Path::new("/output"), &report, None);
+    // The built-in rows are published above; Ghidra's listing follows them.
+    if let Some(index) = ghidra_listing {
+        super::decompile::disassembly_listing(
+            &mut report.sections[index],
+            &specimen,
+            Path::new("/output/listings"),
+        );
+    }
     report.state = if report
         .sections
         .iter()

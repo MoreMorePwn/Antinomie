@@ -500,7 +500,10 @@ fn results(
     } else {
         Structure::All
     };
-    if section.listing.is_some() {
+    // Ghidra's listing stands in for built-in rows that could not be made.
+    if section.listing.is_some()
+        || (kind == AnalysisKind::Disassembly && report.ghidra_disassembly().is_some())
+    {
         let record_context = state.record_context_for(report, kind);
         let view_key = if kind == AnalysisKind::Structures {
             format!("{kind:?}/{filter:?}/listing")
@@ -519,6 +522,26 @@ fn results(
         }
         let command = view.listing.command.take();
         state.run_row(command);
+        return action;
+    }
+    // A check that was stopped, or could not run, and has no rows says so once
+    // (the chip, the summary and the warning above) instead of showing an empty
+    // table with its headers.
+    if section.entries.is_empty()
+        && matches!(
+            section.state,
+            antinomie_monitor_core::AnalysisSectionState::Timeout
+                | antinomie_monitor_core::AnalysisSectionState::Unavailable
+        )
+    {
+        state.active_view = None;
+        ui.weak(
+            if section.state == antinomie_monitor_core::AnalysisSectionState::Timeout {
+                "Nothing was found before the check was stopped."
+            } else {
+                "This check has no rows."
+            },
+        );
         return action;
     }
     let record_context = state.record_context_for(report, kind);
@@ -788,12 +811,18 @@ fn categories(
                         {
                             state.show(kind);
                         }
-                        crate::widgets::chip_wide(
+                        let tag = crate::widgets::chip_wide(
                             ui,
                             state_word(report, section),
                             state_tone(section),
                             tag_width,
                         );
+                        // Why a check is not complete is one hover away.
+                        if !section.summary.is_empty()
+                            && section.state != antinomie_monitor_core::AnalysisSectionState::Complete
+                        {
+                            tag.on_hover_text(&section.summary);
+                        }
                         // The regex matches are read from the strings: they
                         // have a count once the matches have been scanned.
                         let rows = if kind == AnalysisKind::Regex {

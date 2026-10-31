@@ -92,7 +92,7 @@ fn run(section: &mut AnalysisSection, floss: &str, specimen_len: u64, listings: 
                     section,
                     "FLOSS",
                     timeout.as_secs(),
-                    "FLOSS found nothing before it was stopped; programs with many routines, statically linked ones especially, take it much longer",
+                    "Programs with many routines, statically linked ones especially, take FLOSS much longer.",
                 );
                 return;
             }

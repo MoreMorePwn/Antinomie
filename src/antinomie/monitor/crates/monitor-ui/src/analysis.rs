@@ -611,14 +611,25 @@ pub(crate) enum ReportAction {
         run_id: String,
     },
     /// Read a page of a category's full listing, filtered by `query` and
-    /// ordered by `sort` over the whole listing.
+    /// ordered by `sort` over the whole listing. `source` says which listing.
     ReadListing {
         report_id: String,
         kind: AnalysisKind,
+        source: ListingSource,
         start: u64,
         query: String,
         sort: Option<antinomie_monitor_core::ListingSort>,
     },
+}
+
+/// Which listing of a category a page is read from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ListingSource {
+    /// Ghidra's disassembly listing instead of the category's own.
+    pub ghidra: bool,
+    /// Start the page at the row of this address (Ghidra's listing only); the
+    /// page's `start` is then the row's index.
+    pub at: Option<u64>,
 }
 
 pub(crate) fn section_title(kind: AnalysisKind) -> &'static str {

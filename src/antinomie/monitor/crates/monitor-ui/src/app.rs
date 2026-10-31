@@ -327,6 +327,7 @@ struct AnalysisView {
         u64,
         String,
         Option<antinomie_monitor_core::ListingSort>,
+        crate::analysis::ListingSource,
     )>,
     record_context: Option<Vec<(&'static str, crate::query::RowValue)>>,
 }

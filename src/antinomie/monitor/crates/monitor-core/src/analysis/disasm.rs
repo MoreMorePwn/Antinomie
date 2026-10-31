@@ -198,7 +198,25 @@ pub fn decode_window(
     lines.split_off(first)
 }
 
+/// The marker before the architecture in the summary of a disassembly that
+/// has rows; the Disassembly tab shows it beside the tool.
+pub const ARCHITECTURE_MARK: &str = "; architecture: ";
+
 pub(super) fn disassemble(section: &mut AnalysisSection, specimen: &[u8], listings: &Path) {
+    disassemble_rows(section, specimen, listings);
+    if section.listing.is_some()
+        && let Ok(file) = object::File::parse(specimen)
+    {
+        section.summary.push_str(&format!(
+            "{ARCHITECTURE_MARK}{:?}, {}-bit, {:?}-endian",
+            file.architecture(),
+            if file.is_64() { 64 } else { 32 },
+            file.endianness()
+        ));
+    }
+}
+
+fn disassemble_rows(section: &mut AnalysisSection, specimen: &[u8], listings: &Path) {
     let Ok(file) = object::File::parse(specimen) else {
         unavailable(
             section,

@@ -66,8 +66,27 @@ pub(crate) fn tooltip(run: &RunSummary) -> String {
 /// The recording state of `run`: a warning when saving stopped, then each
 /// note as muted text. Draws nothing for a run with neither.
 pub(crate) fn show(ui: &mut egui::Ui, run: &RunSummary) {
+    show_removable(ui, run, false);
+}
+
+/// [`show`], with a Remove button under the warning of a run in the boot's
+/// list that `RunSummary::forgettable` says is only a leftover entry. Returns whether
+/// Remove was clicked.
+pub(crate) fn show_removable(ui: &mut egui::Ui, run: &RunSummary, in_run_list: bool) -> bool {
+    let mut remove = false;
     if let Some(message) = warning_message(run) {
         crate::activity::warning(ui, message);
+        if in_run_list
+            && run.forgettable().is_ok()
+            && ui
+                .button("Remove")
+                .on_hover_text(
+                    "Take this run off the list. Its recording folder is already gone, so no file is deleted.",
+                )
+                .clicked()
+        {
+            remove = true;
+        }
     }
     for note in &run.notes {
         ui.add(
@@ -77,6 +96,7 @@ pub(crate) fn show(ui: &mut egui::Ui, run: &RunSummary) {
             .wrap(),
         );
     }
+    remove
 }
 
 /// Only the warning of `show`: Triage lists the notes in its own section.

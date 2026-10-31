@@ -774,14 +774,31 @@ impl MonitorApp {
         }
     }
 
-    pub(super) fn details(&mut self, ui: &mut egui::Ui) {
-        if let Some(run) = self.selected_vm_run() {
-            crate::run_recording::show(ui, run);
+    /// The Details of the syscall selected in the Trace. `trace_shown` is
+    /// false when the Trace tab is not on screen (Details still follow it from
+    /// an earlier visit): with no syscall selected the run's recording
+    /// warnings stay and the hint names the tabs that have details, instead of
+    /// asking for a syscall in a tab the person is not looking at.
+    pub(super) fn details(&mut self, ui: &mut egui::Ui, trace_shown: bool) {
+        let removed = self.selected_vm_run().and_then(|run| {
+            let listed = self.snapshot.runs.iter().any(|live| live.id == run.id);
+            crate::run_recording::show_removable(ui, run, listed).then(|| run.id.clone())
+        });
+        if let Some(run_id) = removed {
+            self.send(Command::ForgetRun { run_id });
         }
         let invocations = self.invocations();
         let invocation = invocations
             .iter()
             .find(|invocation| Some(trace::key(invocation)) == self.selected_event);
+        if invocation.is_none() && !trace_shown {
+            ui.add_space(6.0);
+            ui.colored_label(
+                theme::muted(),
+                "Select a row in a tab that has details (Trace, Network, Memory, Triage, Static analysis…) to see it here.",
+            );
+            return;
+        }
         let directory = self.invocation_directory(invocation);
         let read = self.inspector.show(ui, invocation, directory.is_some());
         for request in std::mem::take(&mut self.inspector.open_data) {

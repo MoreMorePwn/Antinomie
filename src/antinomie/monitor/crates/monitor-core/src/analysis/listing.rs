@@ -241,8 +241,9 @@ pub fn read_listing_page_sorted(
     )
 }
 
-/// One page of the disassembly Ghidra exported during the decompilation run
-/// (`AnalysisSection::disassembly` of the Decompilation category). The page's
+/// One page of the disassembly Ghidra exported (`AnalysisSection::disassembly`
+/// of the Decompilation category, or of the Disassembly category in a run
+/// without Decompilation). The page's
 /// `kind` is `Disassembly`: its rows are the same instruction and function
 /// records as the Disassembly category's own listing, in address order, with
 /// Ghidra's labels and references. Same arguments and rules as
@@ -266,6 +267,44 @@ pub fn read_ghidra_disassembly_page(
         None,
         keep,
     )
+}
+
+/// The index of the first row of Ghidra's disassembly listing at `address`
+/// (a function header or an instruction, object addresses), when the listing
+/// has one. A jump from a target or a cross reference goes to this row.
+pub fn ghidra_row_of(
+    directory: &Path,
+    report_id: &str,
+    address: u64,
+) -> Result<Option<u64>, String> {
+    let report = super::open_report(directory)?;
+    if report.id != report_id {
+        return Err("saved analysis report identity mismatch".into());
+    }
+    let disassembly = report
+        .ghidra_disassembly()
+        .ok_or("category has no listing")?;
+    let path = directory.join("listings").join(GHIDRA_DISASSEMBLY_FILE);
+    let file = crate::archive_io::open_regular(&directory.join("listings"), &path)
+        .map_err(|e| format!("listing: {e}"))?;
+    if file.metadata().map_err(|e| e.to_string())?.len() != disassembly.listing.bytes {
+        return Err("listing changed after it was saved".into());
+    }
+    for (index, line) in BufReader::new(file).split(b'\n').enumerate() {
+        let line = line.map_err(|error| format!("listing: {error}"))?;
+        let entry: AnalysisEntry = serde_json::from_slice(&line)
+            .map_err(|error| format!("listing row malformed: {error}"))?;
+        let at = match entry.record.as_ref().map(|record| &record.data) {
+            Some(
+                AnalysisData::Function { address, .. } | AnalysisData::Instruction { address, .. },
+            ) => *address,
+            _ => continue,
+        };
+        if at == address {
+            return Ok(Some(index as u64));
+        }
+    }
+    Ok(None)
 }
 
 /// `ghidra` reads the companion listing of the Decompilation section instead
@@ -292,18 +331,12 @@ fn read_page(
     if report.id != report_id {
         return Err("saved analysis report identity mismatch".into());
     }
-    let section = report
-        .sections
-        .iter()
-        .find(|section| {
-            section.kind
-                == if ghidra {
-                    AnalysisKind::Decompilation
-                } else {
-                    kind
-                }
-        })
-        .ok_or("category not in this report")?;
+    let section = if ghidra {
+        report.ghidra_disassembly_section()
+    } else {
+        report.sections.iter().find(|section| section.kind == kind)
+    }
+    .ok_or("category not in this report")?;
     let (listing, name) = if ghidra {
         (
             section.disassembly.as_ref().map(|d| &d.listing),
@@ -363,6 +396,7 @@ fn read_page(
     Ok(AnalysisListingPage {
         report_id: report_id.into(),
         kind,
+        ghidra,
         query: query.into(),
         sort,
         start,

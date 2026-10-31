@@ -180,6 +180,15 @@ impl DetailsFollow {
         }
     }
 
+    /// Whether the panel `of` was drawn in the last pass: its tab is on screen.
+    pub(crate) fn on_screen(&self, ctx: &egui::Context, of: DetailsOf) -> bool {
+        let now = ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT);
+        Self::SIDES
+            .iter()
+            .position(|side| *side == of)
+            .is_some_and(|side| self.drawn[side].is_some_and(|pass| pass + 1 >= now))
+    }
+
     /// What Details show now.
     pub(crate) fn of(&self, ctx: &egui::Context) -> DetailsOf {
         let now = ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT);

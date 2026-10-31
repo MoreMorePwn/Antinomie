@@ -156,6 +156,7 @@ pub(super) fn guest_scoped_command(command: &Command) -> bool {
             | Command::TerminalSnapshot { .. }
             | Command::Signal { .. }
             | Command::StopRun { .. }
+            | Command::ForgetRun { .. }
             | Command::RecorderStats
             | Command::ListProcesses { .. }
             | Command::AttachProcess { .. }

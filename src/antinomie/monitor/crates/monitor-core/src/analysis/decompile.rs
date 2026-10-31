@@ -20,7 +20,8 @@ const LISTING_EXPORT: &str = "/tmp/ghidra-disassembly.txt";
 
 /// Ghidra post-script: export the disassembly listing, then decompile every
 /// function within a time budget. Arguments: decompilation file, seconds for
-/// the decompilation, listing file, listing size bound in octets.
+/// the decompilation, listing file, listing size bound in octets and, last,
+/// `listing` to stop after the listing (a Disassembly-only run).
 const GHIDRA_SCRIPT: &str = r#"// SPDX-License-Identifier: MIT
 // Antinomie: export Ghidra's disassembly listing and its decompilation of every
 // function as plain text.
@@ -43,6 +44,9 @@ public class AntinomieExport extends GhidraScript {
         long budget = Long.parseLong(args[1]) * 1000L;
         if (args.length >= 4) {
             exportListing(args[2], Long.parseLong(args[3]), Math.max(20000L, budget / 3));
+        }
+        if (args.length >= 5 && args[4].equals("listing")) {
+            return;
         }
         long start = System.currentTimeMillis();
         DecompInterface decompiler = new DecompInterface();
@@ -122,12 +126,10 @@ pub(super) fn decompile(section: &mut AnalysisSection, specimen: &[u8], listings
     }
 }
 
-fn ghidra_run(
-    section: &mut AnalysisSection,
-    specimen: &[u8],
-    listings: &Path,
-    ghidra: &str,
-) -> Result<(), String> {
+/// One Ghidra headless run of the post-script. `listing_only` stops the
+/// script after the disassembly listing (no decompile loop). Returns the run
+/// and the budget in seconds it was given.
+fn launch_ghidra(ghidra: &str, listing_only: bool) -> Result<(tools::Run, u64), String> {
     for directory in [
         "/tmp/ghidra-home",
         "/tmp/ghidra-project",
@@ -140,26 +142,28 @@ fn ghidra_run(
     let budget = super::worker::decompiler_seconds();
     let analysis = (budget / 2).to_string();
     let export = (budget / 2).saturating_sub(60).max(30).to_string();
+    let mut args = vec![
+        "/tmp/ghidra-project",
+        "antinomie",
+        "-import",
+        "/input/specimen",
+        "-scriptPath",
+        "/tmp/ghidra-scripts",
+        "-postScript",
+        "AntinomieExport.java",
+        "/tmp/decompiled.txt",
+        &export,
+        LISTING_EXPORT,
+    ];
+    let size = super::ghidra_listing::EXPORT_MAX_SIZE.to_string();
+    args.push(&size);
+    if listing_only {
+        args.push("listing");
+    }
+    args.extend(["-analysisTimeoutPerFile", &analysis, "-max-cpu", "4"]);
     let run = tools::run_with(
         ghidra,
-        &[
-            "/tmp/ghidra-project",
-            "antinomie",
-            "-import",
-            "/input/specimen",
-            "-scriptPath",
-            "/tmp/ghidra-scripts",
-            "-postScript",
-            "AntinomieExport.java",
-            "/tmp/decompiled.txt",
-            &export,
-            LISTING_EXPORT,
-            &super::ghidra_listing::EXPORT_MAX_SIZE.to_string(),
-            "-analysisTimeoutPerFile",
-            &analysis,
-            "-max-cpu",
-            "4",
-        ],
+        &args,
         &if ghidra == GHIDRA_MANAGED {
             vec![
                 ("HOME", "/tmp/ghidra-home"),
@@ -181,6 +185,73 @@ fn ghidra_run(
             eprintln!("  {line}");
         }
     }
+    Ok((run, budget))
+}
+
+/// The Disassembly check of a run without Decompilation: Ghidra analyzes the
+/// program and exports only its listing, which the section keeps beside the
+/// built-in rows. Nothing happens when Ghidra is not installed or the file is
+/// not an object file; a failed run is said in the summary. Never a second run
+/// beside a decompilation: [`listing_only`] is false when that is selected.
+pub(super) fn disassembly_listing(section: &mut AnalysisSection, specimen: &[u8], listings: &Path) {
+    if object::File::parse(specimen).is_err() {
+        return;
+    }
+    let Some(ghidra) = tools::find_tool(crate::analysis_tools::GHIDRA_SYSTEM, GHIDRA_MANAGED)
+    else {
+        return;
+    };
+    let result = launch_ghidra(ghidra, true);
+    let _ = fs::remove_file("/tmp/decompiled.txt");
+    let (run, budget) = match result {
+        Ok(done) => done,
+        Err(error) => {
+            eprintln!("Ghidra listing: {error}");
+            section.summary.push_str("; Ghidra listing not made");
+            return;
+        }
+    };
+    section.disassembly = disassembly(
+        listings,
+        specimen,
+        &ghidra_version(ghidra),
+        Path::new(LISTING_EXPORT),
+    );
+    if section.disassembly.is_none() {
+        let why = run
+            .failure(Duration::from_secs(budget))
+            .unwrap_or_else(|| "exported no instructions".into());
+        section
+            .summary
+            .push_str(&format!("; Ghidra listing not made: Ghidra {why}"));
+    }
+}
+
+/// Whether the run's Disassembly check also starts Ghidra for its listing: the
+/// check is still to run, the setting allows it and the run does not have
+/// Decompilation (that one Ghidra run exports the listing as well). Returns
+/// the Disassembly section's index.
+pub(super) fn listing_only(report: &AnalysisReport) -> Option<usize> {
+    if !report.limits.unwrap_or_default().ghidra_disassembly
+        || report
+            .sections
+            .iter()
+            .any(|s| s.kind == AnalysisKind::Decompilation)
+    {
+        return None;
+    }
+    report.sections.iter().position(|s| {
+        s.kind == AnalysisKind::Disassembly && s.state == AnalysisSectionState::Pending
+    })
+}
+
+fn ghidra_run(
+    section: &mut AnalysisSection,
+    specimen: &[u8],
+    listings: &Path,
+    ghidra: &str,
+) -> Result<(), String> {
+    let (run, budget) = launch_ghidra(ghidra, false)?;
     section.disassembly = disassembly(
         listings,
         specimen,

@@ -181,6 +181,9 @@ pub(crate) fn worker_deadline(report: &AnalysisReport) -> Duration {
             AnalysisKind::Unpacking => own(super::unpack::BUDGET_SECONDS) + 30,
             AnalysisKind::Embedded => own(super::binwalk::TIMEOUT_SECONDS) + 20,
             AnalysisKind::Identification => own(60) * 2 + 40,
+            AnalysisKind::Disassembly if super::decompile::listing_only(report).is_some() => {
+                own(60) + 30 + own(super::worker::DECOMPILER_SECONDS) + 120
+            }
             AnalysisKind::Disassembly | AnalysisKind::Rules => own(60) + 30,
             _ => 20,
         })

@@ -144,7 +144,7 @@ pub(super) fn capabilities(section: &mut AnalysisSection) {
                 section,
                 "capa",
                 timeout.as_secs(),
-                "capa found nothing before it was stopped. Statically linked programs take capa much longer because it also analyses the bundled C library.",
+                "Statically linked programs take capa much longer because it also analyses the bundled C library.",
             );
         } else if run.truncated {
             section.state = AnalysisSectionState::Unavailable;

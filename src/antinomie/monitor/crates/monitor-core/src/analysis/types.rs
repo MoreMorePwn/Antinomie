@@ -486,6 +486,8 @@ pub enum StructureField {
 pub struct AnalysisListingPage {
     pub report_id: String,
     pub kind: AnalysisKind,
+    /// The rows are Ghidra's disassembly listing, not the category's own.
+    pub ghidra: bool,
     pub query: String,
     /// The order of the matching rows; `None` is the listing's own order.
     pub sort: Option<ListingSort>,
@@ -559,6 +561,25 @@ pub struct AnalysisDisassembly {
     /// Why the listing stops short, empty when it is whole.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
+}
+
+impl AnalysisReport {
+    /// The section that carries Ghidra's disassembly listing: Decompilation
+    /// when the run decompiled, otherwise Disassembly.
+    pub fn ghidra_disassembly_section(&self) -> Option<&AnalysisSection> {
+        [AnalysisKind::Decompilation, AnalysisKind::Disassembly]
+            .into_iter()
+            .find_map(|kind| {
+                self.sections
+                    .iter()
+                    .find(|section| section.kind == kind && section.disassembly.is_some())
+            })
+    }
+
+    /// Ghidra's disassembly listing of this report, when it has one.
+    pub fn ghidra_disassembly(&self) -> Option<&AnalysisDisassembly> {
+        self.ghidra_disassembly_section()?.disassembly.as_ref()
+    }
 }
 
 impl AnalysisSection {

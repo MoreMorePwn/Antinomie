@@ -313,6 +313,7 @@ impl MonitorApp {
             Some(crate::analysis::ReportAction::ReadListing {
                 report_id,
                 kind,
+                source,
                 start,
                 query,
                 sort,
@@ -326,8 +327,8 @@ impl MonitorApp {
                     || view
                         .listing_pending
                         .as_ref()
-                        .is_some_and(|(_, k, s, q, o)| {
-                            *k == kind && *s == start && *q == query && *o == sort
+                        .is_some_and(|(_, k, s, q, o, g)| {
+                            *k == kind && *s == start && *q == query && *o == sort && *g == source
                         })
                 {
                     return;
@@ -338,7 +339,7 @@ impl MonitorApp {
                 };
                 self.analysis_generation = self.analysis_generation.wrapping_add(1);
                 let generation = self.analysis_generation;
-                view.listing_pending = Some((generation, kind, start, query.clone(), sort));
+                view.listing_pending = Some((generation, kind, start, query.clone(), sort, source));
                 let record_context = report
                     .as_ref()
                     .map(|report| view.state.record_context_for(report, kind))
@@ -349,6 +350,7 @@ impl MonitorApp {
                     directory,
                     report_id,
                     kind,
+                    source,
                     start,
                     query,
                     sort,

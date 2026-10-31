@@ -337,6 +337,7 @@ fn listing_page(report: &AnalysisReport, kind: AnalysisKind) -> Listing {
     Ok(AnalysisListingPage {
         report_id: report.id.clone(),
         kind,
+        ghidra: false,
         query: String::new(),
         sort: None,
         start: 0,
@@ -943,25 +944,52 @@ fn native_analysis_workspace_fixture() {
                         ReportAction::ReadListing {
                             report_id,
                             kind,
+                            source,
                             start,
                             query,
                             sort,
                         } if self.directory.is_some() => {
                             let fields = super::super::listing_view::listing_fields(kind);
                             let filter = crate::query::compile_table(&query, &fields);
-                            self.listing = Some(antinomie_monitor_core::read_listing_page_sorted(
-                                self.directory.as_ref().unwrap(),
-                                &report_id,
-                                kind,
-                                start,
-                                antinomie_monitor_core::LISTING_PAGE_MAX_ROWS,
-                                &query,
-                                sort,
-                                |entry| {
-                                    filter
-                                        .keep_table(&super::super::listing_view::listing_row(entry))
-                                },
-                            ));
+                            let start = match source.at {
+                                Some(address) => antinomie_monitor_core::ghidra_row_of(
+                                    self.directory.as_ref().unwrap(),
+                                    &report_id,
+                                    address,
+                                )
+                                .unwrap()
+                                .unwrap_or(start),
+                                None => start,
+                            };
+                            self.listing = Some(if source.ghidra {
+                                antinomie_monitor_core::read_ghidra_disassembly_page(
+                                    self.directory.as_ref().unwrap(),
+                                    &report_id,
+                                    start,
+                                    antinomie_monitor_core::LISTING_PAGE_MAX_ROWS,
+                                    &query,
+                                    |entry| {
+                                        filter.keep_table(&super::super::listing_view::listing_row(
+                                            entry,
+                                        ))
+                                    },
+                                )
+                            } else {
+                                antinomie_monitor_core::read_listing_page_sorted(
+                                    self.directory.as_ref().unwrap(),
+                                    &report_id,
+                                    kind,
+                                    start,
+                                    antinomie_monitor_core::LISTING_PAGE_MAX_ROWS,
+                                    &query,
+                                    sort,
+                                    |entry| {
+                                        filter.keep_table(&super::super::listing_view::listing_row(
+                                            entry,
+                                        ))
+                                    },
+                                )
+                            });
                         }
                         ReportAction::ReadListing { .. } => {}
                         action => eprintln!("Synthetic workspace action: {action:?}"),
@@ -2628,7 +2656,7 @@ fn limits_report() -> AnalysisReport {
     section(
         AnalysisKind::Capabilities,
         AnalysisSectionState::Timeout,
-        "capa found nothing before it was stopped.",
+        "Statically linked programs take capa much longer because it also analyses the bundled C library.",
     );
     report.sections[3].limits.push(AnalysisLimit {
         kind: AnalysisLimitKind::Time,
@@ -2784,5 +2812,250 @@ fn the_built_in_analysis_keeps_its_name_in_reports_saved_before_the_rename() {
     assert_eq!(
         tools(&section),
         ["Built-in analysis (object 0.40)", "capa v9.4.0"]
+    );
+}
+
+/// A report with a Disassembly check whose built-in rows are `tool`'s and,
+/// when `ghidra` is set, Ghidra's listing beside them.
+fn disassembly_report(ghidra: bool, running: bool) -> AnalysisReport {
+    let mut report = fixture();
+    report.sections.retain(|s| s.kind == AnalysisKind::Metadata);
+    report.state = if running {
+        AnalysisState::Running
+    } else {
+        AnalysisState::Complete
+    };
+    let mut section = AnalysisSection::new(AnalysisKind::Disassembly);
+    section.state = AnalysisSectionState::Complete;
+    section.tools = vec!["iced-x86 1.21".into()];
+    section.summary =
+        "2 instructions in 1 executable sections; architecture: X86_64, 64-bit, Little-endian"
+            .replace(
+                "; architecture",
+                antinomie_monitor_core::analysis::ARCHITECTURE_MARK,
+            );
+    section.listing = Some(AnalysisListing {
+        rows: 2,
+        bytes: 100,
+        truncated: false,
+    });
+    if ghidra {
+        section.disassembly = Some(antinomie_monitor_core::AnalysisDisassembly {
+            listing: AnalysisListing {
+                rows: 4,
+                bytes: 100,
+                truncated: false,
+            },
+            tool: "Ghidra 12.2".into(),
+            language: "ARM:LE:32:v8".into(),
+            endian: "little".into(),
+            pointer_bits: 32,
+            functions: 1,
+            instructions: 3,
+            note: String::new(),
+        });
+    }
+    report.sections.push(section);
+    report
+}
+
+fn instruction_row(
+    id: u64,
+    address: u64,
+    mnemonic: &str,
+    operands: &str,
+    label: Option<&str>,
+    targets: &[u64],
+    xrefs: &[u64],
+) -> (u64, AnalysisEntry) {
+    use antinomie_monitor_core::{AnalysisReference, AnalysisReferenceKind as K};
+    let reference = |address: &u64| AnalysisReference {
+        address: *address,
+        kind: K::Call,
+    };
+    (
+        id - 1,
+        AnalysisEntry {
+            label: "fn".into(),
+            value: format!("{mnemonic} {operands}"),
+            offset: None,
+            record: Some(antinomie_monitor_core::AnalysisRecord {
+                revision: 1,
+                id,
+                location: None,
+                data: AnalysisData::Instruction {
+                    address,
+                    bytes: "00 00 a0 e3".into(),
+                    mnemonic: mnemonic.into(),
+                    operands: operands.into(),
+                    function: Some("main".into()),
+                    label: label.map(str::to_owned),
+                    targets: targets.iter().map(reference).collect(),
+                    xrefs: xrefs.iter().map(reference).collect(),
+                },
+            }),
+        },
+    )
+}
+
+fn disassembly_page(ghidra: bool, rows: Vec<(u64, AnalysisEntry)>) -> Listing {
+    Ok(AnalysisListingPage {
+        report_id: "workspace-fixture".into(),
+        kind: AnalysisKind::Disassembly,
+        ghidra,
+        query: String::new(),
+        sort: None,
+        start: 0,
+        total: rows.len() as u64,
+        rows,
+        functions: Vec::new(),
+    })
+}
+
+fn shown_texts(output: &egui::FullOutput) -> Vec<String> {
+    texts(output).into_iter().map(|(text, _)| text).collect()
+}
+
+/// Acceptance (T0188 UI): the built-in rows show at once with their source
+/// and architecture; while the run goes the tab says Ghidra's listing is
+/// expected; when it is there the tab asks for it and shows its source,
+/// architecture, labels, targets and cross references; a target jumps.
+#[test]
+fn the_disassembly_tab_shows_built_in_rows_then_ghidra_s_listing_with_jumps() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let size = egui::vec2(1300.0, 700.0);
+    let kind = Some(AnalysisKind::Disassembly);
+    let mut state = WorkspaceState::default();
+    let builtin = disassembly_page(
+        false,
+        vec![
+            instruction_row(1, 0x1000, "mov", "eax, 1", None, &[], &[]),
+            instruction_row(2, 0x1005, "ret", "", None, &[], &[]),
+        ],
+    );
+    // Built-in rows, the analysis still running: source, architecture, hint.
+    let running = disassembly_report(false, true);
+    let mut output = egui::FullOutput::default();
+    for _ in 0..3 {
+        output = frame(
+            &ctx,
+            &running,
+            &mut state,
+            kind,
+            size,
+            Vec::new(),
+            (None, Some(&builtin)),
+        )
+        .0;
+    }
+    let shown = shown_texts(&output);
+    assert!(shown.iter().any(|t| t == "iced-x86"), "{shown:?}");
+    assert!(shown.iter().any(|t| t.contains("X86_64")), "{shown:?}");
+    assert!(
+        shown
+            .iter()
+            .any(|t| t.contains("Ghidra's listing replaces these rows")),
+        "{shown:?}"
+    );
+    // Ghidra's listing arrived in the report: the built-in page is not the one
+    // to show, the tab asks for Ghidra's.
+    let done = disassembly_report(true, false);
+    let mut asked = None;
+    for _ in 0..3 {
+        let (_, action) = frame(
+            &ctx,
+            &done,
+            &mut state,
+            kind,
+            size,
+            Vec::new(),
+            (None, Some(&builtin)),
+        );
+        asked = action.or(asked);
+    }
+    match asked {
+        Some(ReportAction::ReadListing { source, kind, .. }) => {
+            assert!(source.ghidra && source.at.is_none());
+            assert_eq!(kind, AnalysisKind::Disassembly);
+        }
+        other => panic!("expected a read of Ghidra's listing, got {other:?}"),
+    }
+    let ghidra = disassembly_page(
+        true,
+        vec![
+            instruction_row(1, 0x2000, "bl", "0x2020", Some("start"), &[0x2020], &[]),
+            instruction_row(2, 0x2004, "mov", "r0,#0x1", None, &[], &[0x2000, 0x2010]),
+            instruction_row(3, 0x2008, "bx", "lr", None, &[], &[]),
+            instruction_row(4, 0x2020, "nop", "", None, &[], &[0x2000]),
+        ],
+    );
+    for _ in 0..3 {
+        output = frame(
+            &ctx,
+            &done,
+            &mut state,
+            kind,
+            size,
+            Vec::new(),
+            (None, Some(&ghidra)),
+        )
+        .0;
+    }
+    let shown = shown_texts(&output);
+    assert!(shown.iter().any(|t| t == "Ghidra 12.2"), "{shown:?}");
+    assert!(
+        shown
+            .iter()
+            .any(|t| t == "ARM:LE:32:v8 · little-endian · 32-bit"),
+        "{shown:?}"
+    );
+    assert!(
+        shown.iter().any(|t| t == "start:"),
+        "a label is shown: {shown:?}"
+    );
+    assert!(
+        shown.iter().any(|t| t.contains("→ 2020")),
+        "a target is shown: {shown:?}"
+    );
+    assert!(
+        shown.iter().any(|t| t.ends_with(" 2")),
+        "the cross reference count is shown: {shown:?}"
+    );
+    assert!(shown.iter().any(|t| t == "Show iced-x86 rows"), "{shown:?}");
+    // Clicking a target asks for the page that starts at its row.
+    let target = center_of(&output, "→ 2020");
+    let click = press(
+        &ctx,
+        &done,
+        &mut state,
+        kind,
+        size,
+        (egui::PointerButton::Primary, target),
+        (None, Some(&ghidra)),
+    );
+    match click.action {
+        Some(ReportAction::ReadListing { source, .. }) => {
+            assert!(source.ghidra);
+            assert_eq!(source.at, Some(0x2020));
+        }
+        other => panic!("expected a jump to 0x2020, got {other:?}"),
+    }
+    // The built-in rows can be shown instead, and Ghidra's listing back.
+    let toggle = center_of(&output, "Show iced-x86 rows");
+    let after = press(
+        &ctx,
+        &done,
+        &mut state,
+        kind,
+        size,
+        (egui::PointerButton::Primary, toggle),
+        (None, Some(&builtin)),
+    );
+    let shown = shown_texts(&after.output);
+    assert!(shown.iter().any(|t| t == "iced-x86"), "{shown:?}");
+    assert!(
+        shown.iter().any(|t| t == "Show Ghidra 12.2 listing"),
+        "{shown:?}"
     );
 }

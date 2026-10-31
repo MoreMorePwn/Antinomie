@@ -454,7 +454,12 @@ impl MonitorApp {
             return;
         };
         // A warning or note about the recording shows only when there is one.
-        crate::run_recording::show(ui, &run);
+        let listed = self.snapshot.runs.iter().any(|live| live.id == run.id);
+        if crate::run_recording::show_removable(ui, &run, listed) {
+            self.send(Command::ForgetRun {
+                run_id: run.id.clone(),
+            });
+        }
         self.run_tree_view(ui, &run, viewport);
         ui.add_space(6.0);
         let labels = self.run_labels.of(ui.ctx(), &run);

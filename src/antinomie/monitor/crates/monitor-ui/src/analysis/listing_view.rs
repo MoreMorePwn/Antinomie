@@ -14,6 +14,7 @@ use eframe::egui::{self, Color32, FontId, RichText};
 use egui_extras::{Column, TableBuilder};
 
 mod fields;
+mod ghidra;
 mod row_text;
 #[cfg(test)]
 pub(crate) use fields::listing_row;
@@ -40,6 +41,45 @@ pub(super) struct ListingState {
     pub(super) content: bool,
     /// What the last row menu chose; the caller takes and carries it out.
     pub(super) command: Option<RowCommand>,
+    /// Show the built-in rows although Ghidra's listing is there.
+    builtin: bool,
+    /// Whether the rows last shown came from Ghidra's listing; the function
+    /// list, line counts and selection belong to one source.
+    shown_ghidra: bool,
+    /// An address to go to in Ghidra's listing: asked for, and the page the
+    /// answer replaces.
+    goto: Option<Jump>,
+    /// The address of the last jump that found no row.
+    missing: Option<u64>,
+    /// The row to scroll to once, after a jump.
+    scroll: Option<u64>,
+}
+
+/// A jump to the row of an address.
+#[derive(Clone, Copy)]
+struct Jump {
+    address: u64,
+    /// The request was made; `stamp` is the page that was on screen then.
+    asked: bool,
+    stamp: Option<PageStamp>,
+}
+
+/// Enough of a page to tell a new one from the one on screen.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PageStamp {
+    start: u64,
+    total: u64,
+    first: Option<u64>,
+}
+
+impl PageStamp {
+    fn of(page: &AnalysisListingPage) -> Self {
+        Self {
+            start: page.start,
+            total: page.total,
+            first: page.rows.first().map(|(index, _)| *index),
+        }
+    }
 }
 
 impl ListingState {
@@ -65,16 +105,48 @@ pub(super) fn show(
     let kind = section.kind;
     let mut action = None;
     let sort = listing_sort(ui.ctx(), kind, state.scope);
+    // Ghidra's listing takes the place of the built-in rows once it is there.
+    let ghidra_listing = report
+        .ghidra_disassembly()
+        .filter(|_| kind == AnalysisKind::Disassembly);
+    let from_ghidra = ghidra_listing.is_some() && (!state.builtin || section.listing.is_none());
+    if state.shown_ghidra != from_ghidra {
+        state.shown_ghidra = from_ghidra;
+        state.functions.clear();
+        state.lines.clear();
+        state.selected = None;
+        state.function = None;
+        state.goto = None;
+        state.scroll = None;
+    }
+    let at = state.goto.map(|jump| jump.address);
+    if let Some(address) = state.missing {
+        ui.weak(format!(
+            "0x{address:x} is not an instruction or function start in this listing."
+        ));
+    }
+    let source = super::ListingSource {
+        ghidra: from_ghidra,
+        at: at.filter(|_| from_ghidra),
+    };
     let request = |start: u64, query: &str| {
         Some(ReportAction::ReadListing {
             report_id: report.id.clone(),
             kind,
+            source,
             start,
             query: query.to_owned(),
             sort,
         })
     };
-    let listing = section.listing.as_ref();
+    let listing = if from_ghidra {
+        ghidra_listing.map(|disassembly| &disassembly.listing)
+    } else {
+        section.listing.as_ref()
+    };
+    if kind == AnalysisKind::Disassembly {
+        ghidra::source_bar(ui, report, section, state);
+    }
     let fields = listing_fields(kind);
     let tags = state
         .record
@@ -123,7 +195,12 @@ pub(super) fn show(
     let query = query.as_str();
     let current = page
         .and_then(|page| page.as_ref().ok())
-        .filter(|page| page.kind == kind && page.query == query);
+        .filter(|page| page.kind == kind && page.query == query && page.ghidra == from_ghidra);
+    if let Some(jump) = state.goto.as_mut().filter(|jump| !jump.asked) {
+        jump.asked = true;
+        jump.stamp = current.map(PageStamp::of);
+        action = request(0, query);
+    }
     match (current, listing) {
         (Some(page), Some(listing)) => {
             ui.label(format!("{} / {} rows", page.total, listing.rows));
@@ -136,7 +213,11 @@ pub(super) fn show(
         }
     }
     let page = match page {
-        Some(Ok(page)) if page.kind == kind && page.query == query => page,
+        Some(Ok(page))
+            if page.kind == kind && page.query == query && page.ghidra == from_ghidra =>
+        {
+            page
+        }
         Some(Err(error)) => {
             crate::activity::error(ui, error);
             if ui.button("Retry").clicked() {
@@ -149,7 +230,9 @@ pub(super) fn show(
             return request(0, query);
         }
     };
-    remember_functions(&mut state.functions, section, page);
+    let preview: &[AnalysisEntry] = if from_ghidra { &[] } else { &section.entries };
+    remember_functions(&mut state.functions, preview, page);
+    resolve_jump(state, page);
     remember_lines(&mut state.lines, page);
     // A new order is read while the last one stays on screen.
     let resorting = page.sort != sort;
@@ -170,6 +253,7 @@ pub(super) fn show(
     let loaded = page.start..page.start + page.rows.len() as u64;
     let mut needed = None;
     let mut clicked = None;
+    let mut jump: Option<u64> = None;
     let split = matches!(
         kind,
         AnalysisKind::Disassembly | AnalysisKind::Decompilation
@@ -259,6 +343,18 @@ pub(super) fn show(
     };
     let columns: &[(&str, Column)] = match kind {
         AnalysisKind::Structures if !structure_columns.is_empty() => &structure_columns,
+        AnalysisKind::Disassembly if from_ghidra => &[
+            ("Address", Column::exact(mono.size * 7.5)),
+            (
+                "Bytes",
+                Column::initial(mono.size * 9.0).at_least(40.0).clip(true),
+            ),
+            (
+                "Instruction",
+                Column::remainder().at_least(350.0).clip(true),
+            ),
+            ("Xrefs", Column::exact(mono.size * 4.5)),
+        ],
         AnalysisKind::Disassembly => &[
             ("Address", Column::exact(mono.size * 7.5)),
             (
@@ -326,6 +422,9 @@ pub(super) fn show(
                     .sense(egui::Sense::click())
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     .max_scroll_height(height);
+                if let Some(row) = state.scroll.take().filter(|_| focus.is_none()) {
+                    table = table.scroll_to_row(row as usize, Some(egui::Align::Min));
+                }
                 for (_, column) in columns {
                     table = table.column(*column);
                 }
@@ -370,12 +469,31 @@ pub(super) fn show(
                                 .as_ref()
                                 .is_some_and(|(selected, _)| selected == listing_index);
                             row.set_selected(selected);
-                            cells(&mut row, kind, state.scope, entry, &mono, &state.lines);
+                            if from_ghidra
+                                && kind == AnalysisKind::Disassembly
+                                && matches!(
+                                    entry.record.as_ref().map(|record| &record.data),
+                                    Some(AnalysisData::Instruction { .. })
+                                )
+                            {
+                                ghidra::instruction_cells(&mut row, entry, &mono, &mut jump);
+                            } else {
+                                cells(&mut row, kind, state.scope, entry, &mono, &state.lines);
+                            }
                             row.response().context_menu(|ui| {
                                 let cells: Vec<_> = columns
                                     .iter()
                                     .map(|(title, _)| *title)
-                                    .zip(row_text::texts(kind, state.scope, entry))
+                                    .zip(if from_ghidra && kind == AnalysisKind::Disassembly {
+                                        let ghidra = ghidra::texts(entry);
+                                        if ghidra.is_empty() {
+                                            row_text::texts(kind, state.scope, entry)
+                                        } else {
+                                            ghidra
+                                        }
+                                    } else {
+                                        row_text::texts(kind, state.scope, entry)
+                                    })
                                     .collect();
                                 if let Some(next) = row_menu::menu(
                                     ui,
@@ -428,6 +546,18 @@ pub(super) fn show(
     if let Some(selection) = clicked {
         state.selected = Some(selection);
     }
+    if let Some(address) = jump {
+        // The whole listing, at the row of the address.
+        state.query.clear();
+        state.function = None;
+        state.missing = None;
+        state.goto = Some(Jump {
+            address,
+            asked: false,
+            stamp: None,
+        });
+        ui.ctx().request_repaint();
+    }
     if let Some(index) = needed.filter(|_| !resorting) {
         action = request(index.saturating_sub(LOOK_BEHIND), query);
     }
@@ -436,16 +566,39 @@ pub(super) fn show(
     action
 }
 
-/// Adds function headers from this page and from `section.entries`.
+/// A jump is over when the page it asked for is on screen: the row of the
+/// address is scrolled to and selected, or the listing has no such row.
+fn resolve_jump(state: &mut ListingState, page: &AnalysisListingPage) {
+    let Some(jump) = state.goto.filter(|jump| jump.asked) else {
+        return;
+    };
+    let first = page.rows.first();
+    let found = first.is_some_and(|(_, entry)| {
+        matches!(
+            entry.record.as_ref().map(|record| &record.data),
+            Some(AnalysisData::Function { address, .. } | AnalysisData::Instruction { address, .. })
+                if *address == jump.address
+        )
+    });
+    if found {
+        state.scroll = Some(page.start);
+        state.selected = first.map(|(index, entry)| (*index, entry.clone()));
+        state.goto = None;
+    } else if Some(PageStamp::of(page)) != jump.stamp {
+        state.missing = Some(jump.address);
+        state.goto = None;
+    }
+}
+
+/// Adds function headers from this page and from the preview rows.
 /// Later pages append; an identity already stored is left in place.
 /// Instruction and source rows are not turned into functions.
 fn remember_functions(
     functions: &mut Vec<ListedFunction>,
-    section: &AnalysisSection,
+    preview: &[AnalysisEntry],
     page: &AnalysisListingPage,
 ) {
-    for entry in section
-        .entries
+    for entry in preview
         .iter()
         .chain(page.rows.iter().map(|(_, entry)| entry))
     {
@@ -466,8 +619,7 @@ fn remember_functions(
             address: *address,
         });
     }
-    for entry in section
-        .entries
+    for entry in preview
         .iter()
         .chain(page.rows.iter().map(|(_, entry)| entry))
     {

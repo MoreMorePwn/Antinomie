@@ -50,6 +50,15 @@ fn export_file(
     headless: &Path,
     path: &Path,
 ) -> (PathBuf, Vec<u8>, AnalysisListing, ListingSummary) {
+    export_mode(headless, path, false)
+}
+
+/// `listing_only` runs the post-script the way a Disassembly-only run does.
+fn export_mode(
+    headless: &Path,
+    path: &Path,
+    listing_only: bool,
+) -> (PathBuf, Vec<u8>, AnalysisListing, ListingSummary) {
     let name = path.file_name().unwrap().to_string_lossy().into_owned();
     let work = scratch(&name);
     let specimen = std::fs::read(path).unwrap();
@@ -74,6 +83,7 @@ fn export_file(
         .arg("60")
         .arg(&export)
         .arg(EXPORT_MAX_SIZE.to_string())
+        .args(listing_only.then_some("listing"))
         .args(["-analysisTimeoutPerFile", "120", "-deleteProject"])
         .env("HOME", work.join("home"))
         .envs(java_home())
@@ -471,5 +481,124 @@ fn the_disassembly_is_adopted_under_the_listing_size_setting() {
         "{}",
         note(&raised)
     );
+    let _ = std::fs::remove_dir_all(host);
+}
+
+fn report_of(
+    kinds: &[AnalysisKind],
+    limits: Option<super::super::limits::AnalysisLimits>,
+) -> AnalysisReport {
+    let sections = kinds
+        .iter()
+        .map(|kind| AnalysisSection::new(*kind))
+        .collect();
+    AnalysisReport {
+        id: "plan".into(),
+        state: AnalysisState::Queued,
+        source_path: "/fixture".into(),
+        specimen_sha256: None,
+        specimen_len: None,
+        reason: None,
+        sections,
+        layer: None,
+        specimen_source: None,
+        time_limit_seconds: None,
+        limits,
+    }
+}
+
+/// Acceptance: a Disassembly-only run starts Ghidra in listing-only mode, with
+/// Decompilation it stays the one run, and the setting turns it off.
+#[test]
+fn a_disassembly_only_run_plans_ghidra_unless_decompilation_or_the_setting_say_otherwise() {
+    use super::super::decompile::listing_only;
+    use super::super::limits::AnalysisLimits;
+    let only = report_of(&[AnalysisKind::Metadata, AnalysisKind::Disassembly], None);
+    assert_eq!(listing_only(&only), Some(1));
+    // Decompilation selected: its single Ghidra run exports the listing too.
+    let both = report_of(
+        &[AnalysisKind::Disassembly, AnalysisKind::Decompilation],
+        None,
+    );
+    assert_eq!(listing_only(&both), None);
+    // The setting off keeps the built-in rows only.
+    let mut off = AnalysisLimits::default();
+    off.ghidra_disassembly = false;
+    let mut report = report_of(&[AnalysisKind::Disassembly], off.for_report());
+    assert!(
+        report
+            .limits
+            .is_some_and(|limits| !limits.ghidra_disassembly)
+    );
+    assert_eq!(listing_only(&report), None);
+    // A finished Disassembly check is not run again.
+    report.limits = None;
+    report.sections[0].state = AnalysisSectionState::Complete;
+    assert_eq!(listing_only(&report), None);
+    // A report saved before the setting existed has it on.
+    let old: AnalysisLimits = serde_json::from_str(r#"{"rows":4096}"#).unwrap();
+    assert!(old.ghidra_disassembly && old.rows == 4096);
+    // The run's time goes to Ghidra's whole analysis, not 90 seconds.
+    assert!(
+        super::super::progress::worker_deadline(&only)
+            > std::time::Duration::from_secs(super::super::worker::DECOMPILER_SECONDS)
+    );
+}
+
+/// Acceptance: Ghidra's listing-only run exports the ARM fixture (no built-in
+/// disassembler needed) and writes no decompilation; the report that carries
+/// it on the Disassembly section pages it like a decompilation run's.
+#[test]
+fn a_listing_only_run_lists_the_arm_fixture_and_writes_no_decompilation() {
+    let Some(headless) = headless() else {
+        eprintln!("skipped: Ghidra is not installed");
+        return;
+    };
+    let (work, specimen, listing, summary) = export_mode(&headless, &fixture("arm.elf"), true);
+    assert!(
+        !work.join("decompiled.txt").exists(),
+        "listing-only mode skips the decompile loop"
+    );
+    assert!(
+        summary.language.starts_with("ARM:LE:32"),
+        "{}",
+        summary.language
+    );
+    assert!(summary.instructions >= 20 && summary.functions > 0);
+    let host = scratch("only-host");
+    std::fs::create_dir_all(host.join("output")).unwrap();
+    std::fs::rename(work.join("listings"), host.join("output/listings")).unwrap();
+    let mut section = AnalysisSection::new(AnalysisKind::Disassembly);
+    section.state = AnalysisSectionState::Complete;
+    section.disassembly = Some(AnalysisDisassembly {
+        listing: listing.clone(),
+        tool: "Ghidra test".into(),
+        language: summary.language.clone(),
+        endian: summary.endian.clone(),
+        pointer_bits: summary.pointer_bits,
+        functions: summary.functions,
+        instructions: summary.instructions,
+        note: String::new(),
+    });
+    let mut report = report_of(&[], None);
+    report.id = "only".into();
+    report.specimen_len = Some(specimen.len() as u64);
+    report.sections = vec![section];
+    super::super::jobs::adopt_listings(&host, &mut report, &[]);
+    assert!(report.ghidra_disassembly().is_some());
+    assert!(
+        !report
+            .sections
+            .iter()
+            .any(|s| s.kind == AnalysisKind::Decompilation)
+    );
+    std::fs::write(
+        host.join("report.json"),
+        serde_json::to_vec(&report).unwrap(),
+    )
+    .unwrap();
+    let page = read_ghidra_disassembly_page(&host, "only", 0, 6, "", |_| true).unwrap();
+    assert_eq!((page.rows.len() as u64, page.total), (6, listing.rows));
+    let _ = std::fs::remove_dir_all(work);
     let _ = std::fs::remove_dir_all(host);
 }

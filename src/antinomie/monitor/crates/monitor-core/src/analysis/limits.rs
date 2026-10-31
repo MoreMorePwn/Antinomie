@@ -129,6 +129,9 @@ pub struct AnalysisLimits {
     pub large_output_mib: u32,
     pub floss_strings: u32,
     pub floss_file_mib: u32,
+    /// A run with Disassembly but not Decompilation starts Ghidra for its
+    /// listing when Ghidra is installed (Settings > Analysis).
+    pub ghidra_disassembly: bool,
 }
 
 impl Default for AnalysisLimits {
@@ -146,6 +149,7 @@ impl AnalysisLimits {
         large_output_mib: 32,
         floss_strings: 50_000,
         floss_file_mib: 16,
+        ghidra_disassembly: true,
     };
 
     /// The value of one setting.

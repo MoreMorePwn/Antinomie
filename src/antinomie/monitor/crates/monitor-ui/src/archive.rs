@@ -107,6 +107,7 @@ pub(crate) enum Request {
         directory: PathBuf,
         report_id: String,
         kind: antinomie_monitor_core::AnalysisKind,
+        source: crate::analysis::ListingSource,
         start: u64,
         query: String,
         sort: Option<antinomie_monitor_core::ListingSort>,
@@ -481,6 +482,7 @@ fn answer(request: Request, shared: &Shared) -> Answer {
             directory,
             report_id,
             kind,
+            source,
             start,
             query,
             sort,
@@ -491,6 +493,29 @@ fn answer(request: Request, shared: &Shared) -> Answer {
                 let filter = crate::query::compile_table(&query, &fields);
                 if let Some(error) = filter.error.clone() {
                     Err(error)
+                } else if source.ghidra {
+                    // A jump starts the page at the row of an address.
+                    let start = match source.at {
+                        Some(address) => {
+                            antinomie_monitor_core::ghidra_row_of(&directory, &report_id, address)
+                                .unwrap_or(None)
+                                .unwrap_or(start)
+                        }
+                        None => start,
+                    };
+                    antinomie_monitor_core::read_ghidra_disassembly_page(
+                        &directory,
+                        &report_id,
+                        start,
+                        antinomie_monitor_core::LISTING_PAGE_MAX_ROWS,
+                        &query,
+                        |entry| {
+                            filter.keep_table(&crate::analysis::listing_row_with(
+                                entry,
+                                &record_context,
+                            ))
+                        },
+                    )
                 } else {
                     antinomie_monitor_core::read_listing_page_sorted(
                         &directory,

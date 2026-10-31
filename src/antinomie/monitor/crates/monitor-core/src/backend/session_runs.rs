@@ -594,3 +594,67 @@ pub(super) fn canonical_live_history(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod forget_tests {
+    use super::*;
+
+    fn run(state: RunState, error: Option<&str>, directory: &std::path::Path) -> RunSummary {
+        RunSummary {
+            started_ms: Some(1),
+            clock_anchor: None,
+            id: "r1".into(),
+            vm_id: "vm".into(),
+            boot_id: "b1".into(),
+            session_id: 0,
+            root_task_cookie: 7,
+            pid: 0,
+            request: crate::ExecRequest::default(),
+            directory: directory.to_path_buf(),
+            terminal_eof: false,
+            state,
+            notes: Vec::new(),
+            recording_error: error.map(str::to_owned),
+            execution: None,
+            analysis: None,
+            machine: None,
+            route: None,
+            environment: None,
+        }
+    }
+
+    #[test]
+    fn only_a_finished_run_with_a_failed_save_and_no_folder_is_forgotten() {
+        let root = std::env::temp_dir().join(format!("ant-forget-{}", storage::unique_id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let gone = root.join("runs/r1");
+        let error = Some("recording I/O: No such file or directory (os error 2)");
+        for state in [
+            RunState::Finished,
+            RunState::Interrupted,
+            RunState::Finalized,
+        ] {
+            assert_eq!(run(state, error, &gone).forgettable(), Ok(()));
+        }
+        for state in [
+            RunState::Running,
+            RunState::StopRequested,
+            RunState::TerminalClosed,
+        ] {
+            let refused = run(state, error, &gone).forgettable().unwrap_err();
+            assert!(refused.contains("still going"), "{refused}");
+        }
+        // Saving did not fail: nothing to remove it for.
+        let healthy = run(RunState::Finished, None, &gone)
+            .forgettable()
+            .unwrap_err();
+        assert!(healthy.contains("did not fail"), "{healthy}");
+        // The folder is there: its evidence is deleted the other way.
+        std::fs::create_dir_all(&gone).unwrap();
+        let kept = run(RunState::Finished, error, &gone)
+            .forgettable()
+            .unwrap_err();
+        assert!(kept.contains("still there"), "{kept}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

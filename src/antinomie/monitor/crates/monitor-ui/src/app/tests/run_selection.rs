@@ -838,6 +838,7 @@ fn select_run_keeps_a_queued_listing_and_the_run_lists() {
                 0,
                 String::new(),
                 None,
+                crate::analysis::ListingSource::default(),
             )),
             ..Default::default()
         }
@@ -848,6 +849,7 @@ fn select_run_keeps_a_queued_listing_and_the_run_lists() {
         directory: PathBuf::from("/x"),
         report_id: "r".into(),
         kind: antinomie_monitor_core::AnalysisKind::Strings,
+        source: crate::analysis::ListingSource::default(),
         start: 0,
         query: String::new(),
         sort: None,

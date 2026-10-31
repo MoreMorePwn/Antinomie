@@ -27,10 +27,10 @@ pub(crate) mod tools;
 mod unpack;
 mod worker;
 pub use decompile::{decompile_captured_core, sparse_core_plan, synthetic_captured_elf};
-pub use disasm::{DecodedInstruction, decode_window};
+pub use disasm::{ARCHITECTURE_MARK, DecodedInstruction, decode_window};
 pub use limits::{AnalysisLimits, LIMIT_FIELDS, LimitField, LimitSetting, fixed_limits_text};
 pub use listing::{
-    LISTING_PAGE_MAX_ROWS, read_ghidra_disassembly_page, read_listing_page,
+    LISTING_PAGE_MAX_ROWS, ghidra_row_of, read_ghidra_disassembly_page, read_listing_page,
     read_listing_page_sorted, read_listing_page_with,
 };
 pub use specimen::read_specimen_range;

@@ -827,6 +827,30 @@ pub struct RunSummary {
     pub environment: Option<crate::run_environment::RunEnvironment>,
 }
 
+impl RunSummary {
+    /// Whether the run may be taken off the boot's run list: it is over, saving
+    /// failed for it and its recording folder is gone, so nothing of it is left
+    /// to protect. Anything else is refused with the reason.
+    pub fn forgettable(&self) -> Result<(), String> {
+        if matches!(
+            self.state,
+            RunState::Unknown
+                | RunState::Running
+                | RunState::StopRequested
+                | RunState::TerminalClosed
+        ) {
+            return Err("the run is still going; stop it first".into());
+        }
+        if self.recording_error.is_none() {
+            return Err("saving did not fail for this run".into());
+        }
+        match std::fs::symlink_metadata(&self.directory) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            _ => Err("the run's folder is still there; delete its evidence instead".into()),
+        }
+    }
+}
+
 /// Maps one guest monotonic timeline to host wall time without changing the wire.
 /// Receipt time includes queue latency and is an estimate, not clock synchronization.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1899,6 +1923,13 @@ pub enum Command {
         signal: u32,
     },
     StopRun {
+        run_id: String,
+    },
+    /// Take a finished run whose recording folder is gone off this boot's run
+    /// list. Refused for a live run, for a run whose folder still exists (its
+    /// evidence is deleted through `DeleteEvidence` or the Samples page) and
+    /// for a run saving did not fail for.
+    ForgetRun {
         run_id: String,
     },
     RecorderStats,

@@ -753,7 +753,8 @@ fn spawn_worker_binary(
             .iter()
             .any(|s| s.kind == kind && s.state == AnalysisSectionState::Pending)
     };
-    let decompiler = has(AnalysisKind::Decompilation);
+    let decompiler =
+        has(AnalysisKind::Decompilation) || super::decompile::listing_only(&job.report).is_some();
     // capa and FLOSS unpack themselves into /tmp before they run.
     let tmp_size = if decompiler {
         "2147483648"
@@ -1532,32 +1533,29 @@ time.sleep(30)
         assert!(!dir.join("descendant-survived").exists());
         fs::remove_dir_all(dir).unwrap();
     }
-    /// Every category in the real sandbox, listings adopted and paged.
-    /// ANTINOMIE_TEST_SPECIMEN picks the program (default /usr/bin/true).
-    #[test]
-    #[ignore = "requires the app ELF in ANTINOMIE_TEST_WORKER_BINARY, bubblewrap and minutes of CPU"]
-    fn production_worker_all_categories_with_listings() {
+    /// One real sandboxed run of `checks` on `source`: the report as the host
+    /// adopts it, the directory it is kept in and the time it took.
+    fn production_run(
+        source: &str,
+        checks: Vec<AnalysisKind>,
+        limits: AnalysisLimits,
+    ) -> (PathBuf, AnalysisReport, Duration) {
         let executable = PathBuf::from(
             std::env::var_os("ANTINOMIE_TEST_WORKER_BINARY").expect("set the app ELF path"),
         );
-        let source = std::env::var("ANTINOMIE_TEST_SPECIMEN").unwrap_or("/usr/bin/true".into());
         let directory =
             std::env::temp_dir().join(format!("ant-deep-smoke-{}", storage::unique_id()));
         fs::create_dir(&directory).unwrap();
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
-        let specimen = fs::read(&source).unwrap();
+        let specimen = fs::read(source).unwrap();
         fs::write(directory.join("specimen"), &specimen).unwrap();
         let selection = AnalysisSelection {
             enabled: true,
-            checks: AnalysisKind::TRIAGE
-                .iter()
-                .chain(AnalysisKind::DEEP)
-                .copied()
-                .collect(),
+            checks,
             time_limit_minutes: 0,
-            limits: Default::default(),
+            limits,
         };
-        let mut report = new_report(&source, &selection);
+        let mut report = new_report(source, &selection);
         report.state = AnalysisState::Queued;
         report.specimen_len = Some(specimen.len() as u64);
         report.specimen_sha256 = Some(format!("{:x}", Sha256::digest(&specimen)));
@@ -1624,6 +1622,20 @@ time.sleep(30)
             );
             assert!(!section.entries.iter().any(|row| row.label == "Engine"));
         }
+        (directory, report, started.elapsed())
+    }
+    /// Every category in the real sandbox, listings adopted and paged.
+    /// ANTINOMIE_TEST_SPECIMEN picks the program (default /usr/bin/true).
+    #[test]
+    #[ignore = "requires the app ELF in ANTINOMIE_TEST_WORKER_BINARY, bubblewrap and minutes of CPU"]
+    fn production_worker_all_categories_with_listings() {
+        let source = std::env::var("ANTINOMIE_TEST_SPECIMEN").unwrap_or("/usr/bin/true".into());
+        let checks = AnalysisKind::TRIAGE
+            .iter()
+            .chain(AnalysisKind::DEEP)
+            .copied()
+            .collect();
+        let (directory, report, elapsed) = production_run(&source, checks, Default::default());
         if std::env::var_os("ANTINOMIE_TEST_REQUIRE_GHIDRA_PROJECT").is_some() {
             let project = super::super::retained_ghidra_project(&directory, &report.id)
                 .expect("real headless Ghidra must retain its native project");
@@ -1668,33 +1680,92 @@ time.sleep(30)
             .iter()
             .find(|s| s.kind == AnalysisKind::Disassembly)
             .unwrap();
-        assert!(disassembly.listing.as_ref().is_some_and(|l| l.rows > 0));
-        let page = super::super::read_listing_page(
-            &directory,
-            &report.id,
-            AnalysisKind::Disassembly,
-            0,
-            8,
-            "",
-        )
-        .unwrap();
-        assert_eq!(page.rows.len(), 8);
-        let found = super::super::read_listing_page(
-            &directory,
-            &report.id,
-            AnalysisKind::Disassembly,
-            0,
-            4,
-            "call",
-        )
-        .unwrap();
-        assert!(found.total > 0 && found.rows.iter().all(|(_, row)| row.value.contains("call")));
+        // With Decompilation selected there is one Ghidra run and it carries the
+        // listing; the Disassembly check keeps the built-in rows only.
+        assert!(disassembly.disassembly.is_none());
+        let ghidra = report.ghidra_disassembly();
+        // The built-in rows exist for x86 and where objdump knows the
+        // architecture; Ghidra's listing covers the rest.
+        assert!(
+            disassembly.listing.as_ref().is_some_and(|l| l.rows > 0) || ghidra.is_some(),
+            "no disassembly at all: {}",
+            disassembly.summary
+        );
+        if disassembly.listing.is_some() {
+            let page = super::super::read_listing_page(
+                &directory,
+                &report.id,
+                AnalysisKind::Disassembly,
+                0,
+                8,
+                "",
+            )
+            .unwrap();
+            assert_eq!(page.rows.len(), 8);
+            let found = super::super::read_listing_page(
+                &directory,
+                &report.id,
+                AnalysisKind::Disassembly,
+                0,
+                4,
+                "call",
+            )
+            .unwrap();
+            assert!(
+                found.total > 0 && found.rows.iter().all(|(_, row)| row.value.contains("call"))
+            );
+        }
         eprintln!(
-            "all categories in {:?}; report {} octets; kept at {}",
-            started.elapsed(),
+            "all categories in {elapsed:?}; report {} octets; kept at {}",
             fs::metadata(directory.join("report.json")).unwrap().len(),
             directory.display()
         );
+    }
+    /// A Disassembly-only run starts Ghidra in listing-only mode when the
+    /// setting is on, and not when it is off (ANTINOMIE_TEST_SPECIMEN picks
+    /// the program; needs Ghidra in ANTINOMIE_TEST_TOOLS_DIR).
+    #[test]
+    #[ignore = "requires the app ELF in ANTINOMIE_TEST_WORKER_BINARY, a Ghidra tools directory and bubblewrap"]
+    fn production_worker_disassembly_only_starts_ghidra_unless_the_setting_is_off() {
+        let source = std::env::var("ANTINOMIE_TEST_SPECIMEN").unwrap_or("/usr/bin/true".into());
+        let (directory, report, elapsed) =
+            production_run(&source, vec![AnalysisKind::Disassembly], Default::default());
+        let section = &report.sections[0];
+        let ghidra = section.disassembly.as_ref().expect("Ghidra's listing");
+        assert!(ghidra.instructions > 0 && ghidra.functions > 0);
+        // No decompilation: no Decompilation section and no Ghidra project.
+        assert!(
+            !report
+                .sections
+                .iter()
+                .any(|s| s.kind == AnalysisKind::Decompilation)
+        );
+        assert!(!directory.join("artifacts/ghidra").exists());
+        let page =
+            super::super::read_ghidra_disassembly_page(&directory, &report.id, 0, 8, "", |_| true)
+                .unwrap();
+        assert_eq!(page.rows.len(), 8);
+        eprintln!("Disassembly-only run in {elapsed:?}: {ghidra:?}");
+        // ANTINOMIE_TEST_KEEP=1 leaves the retained directory for a look at it.
+        if std::env::var_os("ANTINOMIE_TEST_KEEP").is_some() {
+            eprintln!("kept at {}", directory.display());
+        } else {
+            fs::remove_dir_all(&directory).unwrap();
+        }
+        let mut off = AnalysisLimits::default();
+        off.ghidra_disassembly = false;
+        let (directory, report, _) = production_run(&source, vec![AnalysisKind::Disassembly], off);
+        assert!(report.sections[0].disassembly.is_none());
+        assert!(report.ghidra_disassembly().is_none());
+        assert!(
+            super::super::read_ghidra_disassembly_page(&directory, &report.id, 0, 8, "", |_| true)
+                .is_err()
+        );
+        if std::env::var_os("ANTINOMIE_TEST_KEEP").is_some() {
+            eprintln!("kept (setting off) at {}", directory.display());
+        } else {
+            fs::remove_dir_all(&directory).unwrap();
+        }
     }
     #[test]
     #[ignore = "requires rebuilt feature ELF in ANTINOMIE_TEST_WORKER_BINARY and working bubblewrap"]

@@ -864,6 +864,13 @@ impl Worker {
                     "signal {signal} sent to process group {current_pid}"
                 ))
             }
+            Command::ForgetRun { run_id } => {
+                let cookie = session.run_cookie(&run_id)?;
+                let run = session.runs.get(&cookie).ok_or("unknown run")?;
+                run.summary.forgettable()?;
+                session.runs.remove(&cookie);
+                Ok(format!("run {run_id} removed from this list"))
+            }
             Command::StopRun { run_id } => {
                 let cookie = session.run_cookie(&run_id)?;
                 let run = session.runs.get(&cookie).ok_or("unknown run")?;
