@@ -33,6 +33,25 @@ def check(ok, what):
         failures.append(what)
 
 
+def skip(what):
+    print(f"skip {what}")
+
+
+def have_tool(name):
+    if shutil.which(name):
+        return True
+    skip(f"{name} is not installed")
+    return False
+
+
+def have_module(*names):
+    import importlib.util
+    missing = [n for n in names if importlib.util.find_spec(n) is None]
+    if missing:
+        skip(f"python module {', '.join(missing)} is not installed")
+    return not missing
+
+
 def run(*args, **kw):
     return subprocess.run(args, capture_output=True, text=True, **kw)
 
@@ -54,25 +73,31 @@ def pick(folder, suffix):
 
 
 def check_json(folder):
-    import jsonschema
-    schema = json.loads(SCHEMA.read_text())
-    jsonschema.Draft202012Validator.check_schema(schema)
-    path = pick(folder, ".json")
+    have_schema = have_module("jsonschema")
+    if have_schema:
+        import jsonschema
+        schema = json.loads(SCHEMA.read_text())
+        jsonschema.Draft202012Validator.check_schema(schema)
     paths = [p for p in sorted(folder.glob("antinomie-report-*.json"))
              if not p.name.endswith((".misp.json", ".stix.json"))]
     path = paths[0]
     doc = json.loads(path.read_text())
-    errors = list(jsonschema.Draft202012Validator(schema).iter_errors(doc))
-    check(not errors, f"JSON matches schema version 1 ({path.name}) {errors[:1]}")
+    if have_schema:
+        errors = list(jsonschema.Draft202012Validator(schema).iter_errors(doc))
+        check(not errors, f"JSON matches schema version 1 ({path.name}) {errors[:1]}")
     check(doc["schema_version"] == 1 and doc["schema"] == "antinomie-triage-report", "JSON names its schema and version")
     for part in ("summary", "indicators", "attack", "processes", "findings", "files", "file_activity", "network", "detections", "evidence", "custody"):
         check(part in doc, f"JSON has the {part} key (null when not chosen)")
-    bad = json.loads(path.read_text())
-    del bad["schema_version"]
-    check(bool(list(jsonschema.Draft202012Validator(schema).iter_errors(bad))), "a document without its version is rejected")
-    bad = json.loads(path.read_text())
-    bad["summary"]["assessment"] = "malicious"
-    check(bool(list(jsonschema.Draft202012Validator(schema).iter_errors(bad))), "an unknown assessment is rejected")
+    if have_schema:
+        bad = json.loads(path.read_text())
+        del bad["schema_version"]
+        check(bool(list(jsonschema.Draft202012Validator(schema).iter_errors(bad))), "a document without its version is rejected")
+        bad = json.loads(path.read_text())
+        bad["summary"]["assessment"] = "malicious"
+        check(bool(list(jsonschema.Draft202012Validator(schema).iter_errors(bad))), "an unknown assessment is rejected")
+    for hit in doc.get("detections") or []:
+        check(all(key in hit for key in ("author", "license", "source", "reference")),
+              f"detection {hit['rule_id']} carries its author, licence, source and reference")
     return doc
 
 
@@ -92,6 +117,9 @@ def check_misp(folder):
         if attr["type"] == "ip-dst|port":
             ok &= re.match(r"^[0-9a-f.:]+\|[0-9]+$", attr["value"]) is not None
     check(ok, "every MISP attribute has a known type, a boolean to_ids, a uuid and its fields")
+    notes = [a["value"] for a in event["Attribute"] if a["type"] == "comment" and " rule " in a["value"]]
+    check(all("Author:" in n and "License:" in n and "Source:" in n for n in notes),
+          "every MISP rule comment names the rule's author, licence and source")
     tags = [t["name"] for t in event["Tag"]]
     check(all(t.startswith(("antinomie:", "misp-galaxy:mitre-attack-pattern=")) for t in tags), "MISP tags are antinomie: or ATT&CK galaxy tags")
     if "Galaxy" in event:
@@ -102,6 +130,8 @@ def check_misp(folder):
 
 
 def check_stix(folder):
+    if not have_module("stix2", "stix2patterns"):
+        return
     import stix2
     from stix2patterns.v21.pattern import Pattern
     path = next(folder.glob("antinomie-report-*.stix.json"))
@@ -130,11 +160,16 @@ def check_stix(folder):
                 patterns_ok = False
                 print("  pattern:", obj["pattern"], error)
     check(patterns_ok, "every indicator pattern is valid STIX patterning")
+    notes = [o for o in json.loads(text)["objects"] if o["type"] == "note"]
+    check(all("Author:" in n["content"] and "License:" in n["content"] and n.get("authors") for n in notes),
+          "every STIX rule note names the rule's author and licence")
     kinds = {o["type"] for o in bundle.objects}
     check({"identity", "indicator", "relationship"} <= kinds, "bundle has identity, indicator and relationship objects")
 
 
 def check_pdf(folder, doc):
+    if not all(have_tool(t) for t in ("qpdf", "pdfinfo", "pdftotext", "mutool")):
+        return None
     path = next(folder.glob("antinomie-report-*.pdf"))
     q = run("qpdf", "--check", str(path))
     check(q.returncode == 0, "qpdf --check finds no syntax or stream errors")
@@ -155,15 +190,21 @@ def check_pdf(folder, doc):
 
 def check_html(folder, doc, subdir=None):
     path = next(folder.glob("antinomie-report-*.html"))
-    check(run("xmllint", "--noout", str(path)).returncode == 0, f"HTML is well-formed ({path.parent.name}/{path.name})")
+    if have_tool("xmllint"):
+        check(run("xmllint", "--noout", str(path)).returncode == 0, f"HTML is well-formed ({path.parent.name}/{path.name})")
     text = path.read_text()
     for bad in ("<script", "<link", "src=", "@import", "url(", "href=\"http", "http://", "https://"):
         check(bad not in text, f"HTML is self-contained: no {bad}")
     check("<h2>Run overview</h2>" in text, "HTML has the overview")
+    for hit in doc.get("detections") or [] if doc else []:
+        check(all(value in text for value in (hit["author"], hit["license"])),
+              f"HTML names the author and licence of {hit['rule_id']}")
     return text
 
 
 def check_bundle(folder):
+    if not have_tool("7z"):
+        return
     bundle = next(folder.glob("antinomie-report-*-evidence.zip"))
     with zipfile.ZipFile(bundle) as z:
         sums = z.read("manifest.sha256").decode()
@@ -186,6 +227,8 @@ def check_bundle(folder):
 
 def check_dropped(path):
     """The inner archive opens with 7z and the password `infected`, not without."""
+    if not have_tool("7z"):
+        return
     with zipfile.ZipFile(path) as z:
         manifest = json.loads(z.read("manifest.json"))
         inner = [f for f in manifest["files"] if f["path"] == "dropped-files.zip"][0]

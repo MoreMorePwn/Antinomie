@@ -52,7 +52,9 @@ counter is added to the name), are owner-only (0600) and are named
   unpublished with distribution 0 (your organisation only). The cluster uuids
   are derived from the technique id; MISP matches clusters by their tag name
   when its ATT&CK galaxy is loaded. URL indicators carry the cleartext scheme
-  `http://`, since only cleartext HTTP is indexed as a URL.
+  `http://`, since only cleartext HTTP is indexed as a URL. Each matching
+  detection rule is a `comment` attribute that names the rule, its author,
+  licence and source.
 - **STIX 2.1** is a bundle: an `identity`, the sample as a `file` and a
   `malware` object, a `malware-analysis` (result `suspicious` when an indicator
   matched or a HIGH or MEDIUM rule fired, else `unknown`), an `indicator` for
@@ -60,7 +62,8 @@ counter is added to the name), are owner-only (0600) and are named
   or certificate hash, file hash; JA3 and JA4 have no standard pattern and are
   left out), an `attack-pattern` with a `mitre-attack` external reference for
   each technique, and `relationship`s (indicator `indicates` malware, malware
-  `uses` attack-pattern). Object ids are version-5 UUIDs of the content, so a
+  `uses` attack-pattern), and a `note` for each matching detection rule that
+  names the rule's author, licence and source. Object ids are version-5 UUIDs of the content, so a
   second export of the same run has the same ids.
 
 ## Evidence bundle
@@ -102,7 +105,7 @@ does not change it, so read with unknown fields ignored.
 | `files` | `tabs`: one named table for each Files tab. |
 | `file_activity` | Per created or changed file: `path`, `created`, `changed`, `deleted`, `final_size`, `guest_sha256`, `reconstruction` (`complete` or `incomplete`), `bytes_written`, `bytes_not_captured`, `bytes_unknown`, `bundle_entry`. |
 | `network` | Named tables: Endpoints, Domains, URLs, TLS. |
-| `detections` | Matches of the YARA, IDS and Sigma engines whose reports are complete (from the run's Triage digest). |
+| `detections` | Matches of the YARA, IDS and Sigma engines whose reports are complete (from the run's Triage digest): `engine`, `rule_id`, `title`, `severity`, `mitre`, `count`, and the rule's `author` (as the rule gives it), `license`, `source` (the rule pack) and `reference` (the rule's own link). A rule's licence asks that its author stay with every message that reports a match, so every format carries them (the HTML and PDF write the reference without its scheme, as they hold no links). |
 | `evidence` | The run folder's files and folders: `kind`, `path`, `size`, `sha256` (files up to 64 MiB). |
 | `custody` | The sample's custody log head hash, entry count and whether the chain verified. |
 | `notes` | What the report could not say. |

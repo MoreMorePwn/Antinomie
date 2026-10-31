@@ -212,6 +212,39 @@ pub fn render(report: &Report) -> Result<String, String> {
         objects.push(pattern);
     }
 
+    // One note per matching rule, so its author and licence stay with the match.
+    for hit in report.detections.iter().flatten() {
+        let credit = |value: &str| if value.is_empty() { "unknown" } else { value }.to_owned();
+        let mut fields = json!({
+            "abstract": format!("{} rule {} matched", hit.engine, hit.rule_id),
+            "content": format!(
+                "{} rule {} ({}) matched {} time(s) in run {run}. Author: {}. License: {}. Source: {}.",
+                hit.engine,
+                hit.rule_id,
+                hit.title,
+                hit.count,
+                credit(&hit.author),
+                credit(&hit.license),
+                credit(&hit.source),
+            ),
+            "authors": [credit(&hit.author)],
+            "object_refs": [malware_id.clone().unwrap_or_else(|| identity_id.clone())],
+            "created_by_ref": identity_id,
+        });
+        if !hit.reference.is_empty() {
+            fields["external_references"] = json!([{
+                "source_name": if hit.source.is_empty() { "rule" } else { hit.source.as_str() },
+                "url": hit.reference,
+            }]);
+        }
+        objects.push(object(
+            "note",
+            &format!("{run}:{}:{}", hit.engine, hit.rule_id),
+            &at,
+            fields,
+        ));
+    }
+
     let bundle = json!({
         "type": "bundle",
         "id": format!("bundle--{}", uuid5(&format!("stix:bundle:{run}:{}", report.generated_ms))),

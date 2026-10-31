@@ -129,6 +129,10 @@ fn detections(
                 mitre: finding.mitre.clone(),
                 count: finding.count,
                 family: yara_family(report.engine, &finding.rule_text),
+                author: finding.author.clone(),
+                license: finding.license.clone(),
+                source: detection::pack_name(report, finding),
+                reference: finding.reference(report.engine),
             });
         }
     }

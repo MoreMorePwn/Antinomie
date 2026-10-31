@@ -318,6 +318,42 @@ pub struct Finding {
     pub rule_text: String,
 }
 
+impl Finding {
+    /// The rule's own reference link, when its text or details give one: a
+    /// YARA `reference` meta, the first Sigma reference, or a Suricata
+    /// `reference:url`. Empty when the rule names none.
+    pub fn reference(&self, engine: Engine) -> String {
+        let found = match engine {
+            Engine::Yara => self.rule_text.lines().find_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                matches!(key.trim(), "reference" | "reference_url" | "url")
+                    .then(|| value.trim().trim_matches('"').trim().to_owned())
+            }),
+            Engine::Sigma => self
+                .details
+                .split_once(" References: ")
+                .and_then(|(_, list)| list.split("; ").next())
+                .map(|first| first.trim().to_owned()),
+            Engine::Ids => self
+                .rule_text
+                .split("reference:url,")
+                .nth(1)
+                .and_then(|rest| {
+                    let end = rest.find(';')?;
+                    let address = rest[..end].trim();
+                    (!address.is_empty()).then(|| {
+                        if address.contains("://") {
+                            address.to_owned()
+                        } else {
+                            format!("https://{address}")
+                        }
+                    })
+                }),
+        };
+        found.filter(|link| !link.is_empty()).unwrap_or_default()
+    }
+}
+
 /// The fixed caveat 0.7.x saved in every Sigma report's warnings. It is help
 /// text on the header now, so a saved report does not show it as a warning.
 pub const SIGMA_CATEGORY_CAVEAT: &str = "Category acceptance is not full compatibility. Syntax, backend conversion, logsource, and per-run evidence are counted separately.";

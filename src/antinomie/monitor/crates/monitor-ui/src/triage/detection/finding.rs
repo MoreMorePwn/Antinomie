@@ -150,7 +150,7 @@ fn json_text(value: &serde_json::Value) -> String {
 
 /// The rule pack a finding came from. YARA records a namespace `sN` that
 /// indexes the report's sources, and Sigma appends the source digest.
-pub(super) fn pack_name(report: &Report, finding: &Finding) -> String {
+pub(in crate::triage) fn pack_name(report: &Report, finding: &Finding) -> String {
     let index = finding
         .source
         .strip_prefix('s')

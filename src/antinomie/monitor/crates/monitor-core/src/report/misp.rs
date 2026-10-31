@@ -232,6 +232,43 @@ pub fn render(report: &Report) -> Result<String, String> {
             }
         }
     }
+    for hit in report.detections.iter().flatten() {
+        attrs.push(attribute(
+            "comment",
+            "Other",
+            &format!(
+                "{} rule {} ({}) matched {} time(s). Author: {}. License: {}. Source: {}{}",
+                hit.engine,
+                hit.rule_id,
+                hit.title,
+                hit.count,
+                if hit.author.is_empty() {
+                    "unknown"
+                } else {
+                    &hit.author
+                },
+                if hit.license.is_empty() {
+                    "unknown"
+                } else {
+                    &hit.license
+                },
+                if hit.source.is_empty() {
+                    "unknown"
+                } else {
+                    &hit.source
+                },
+                if hit.reference.is_empty() {
+                    String::new()
+                } else {
+                    format!(". Reference: {}", hit.reference)
+                },
+            ),
+            false,
+            "a detection rule that matched; the rule's author and licence travel with it",
+            &seed,
+            at,
+        ));
+    }
     attrs.push(attribute(
         "comment",
         "Other",

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use super::bundle::{self, BundleInput, DroppedFile};
 use super::export;
 use super::layout;
@@ -133,6 +134,10 @@ pub(super) fn fixture() -> Report {
         severity: "high".into(),
         mitre: vec!["T1105".into()],
         count: 1,
+        author: "Jane Rule".into(),
+        license: "DRL 1.1".into(),
+        source: "Example Pack".into(),
+        reference: "https://example.org/r1".into(),
     }]);
     report.evidence = Some(vec![EvidenceRef {
         kind: "telemetry".into(),
@@ -633,4 +638,34 @@ fn choices_remember_parts_and_formats() {
         serde_json::from_str::<Choices>("{}").unwrap(),
         Choices::default()
     );
+}
+
+#[test]
+fn every_format_keeps_a_matching_rule_s_author_licence_and_source() {
+    let report = fixture();
+    for format in [Format::Json, Format::Html, Format::Misp, Format::Stix] {
+        let text = String::from_utf8(export::render(&report, format, false).unwrap()).unwrap();
+        for credit in [
+            "Jane Rule",
+            "DRL 1.1",
+            "Example Pack",
+            "https://example.org/r1",
+        ] {
+            assert!(
+                text.contains(credit) || text.contains(&credit.replace('/', "&#x2F;")),
+                "{format:?} lacks {credit}"
+            );
+        }
+    }
+    let pdf = export::render(&report, Format::Pdf, false).unwrap();
+    let (text, _) = pdf_text(&pdf);
+    assert!(
+        text.contains("Jane Rule") && text.contains("DRL 1.1"),
+        "PDF lacks the rule credit"
+    );
+    // A rule that names no author says so rather than leaving the cell empty.
+    let mut anonymous = fixture();
+    anonymous.detections.as_mut().unwrap()[0].author.clear();
+    let html = String::from_utf8(export::render(&anonymous, Format::Html, false).unwrap()).unwrap();
+    assert!(html.contains("unknown"));
 }

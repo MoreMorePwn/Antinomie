@@ -460,6 +460,7 @@ mod tests {
             } else {
                 String::new()
             },
+            ..DetectionHit::default()
         };
         let a = RunDigest {
             detections: Some(vec![hit("xmrig")]),

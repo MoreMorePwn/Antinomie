@@ -164,7 +164,11 @@
         "title": {"type": "string"},
         "severity": {"type": "string"},
         "mitre": {"type": "array", "items": {"type": "string"}},
-        "count": {"type": "integer", "minimum": 0}
+        "count": {"type": "integer", "minimum": 0},
+        "author": {"type": "string", "description": "The rule's author as the rule gives it; empty when it names none."},
+        "license": {"type": "string", "description": "The licence of the rule's pack."},
+        "source": {"type": "string", "description": "The rule pack the rule came from."},
+        "reference": {"type": "string", "description": "The rule's own reference link; empty when it names none."}
       }
     },
     "evidence": {

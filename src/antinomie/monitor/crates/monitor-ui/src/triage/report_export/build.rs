@@ -420,6 +420,10 @@ fn detections(run_dir: &Path) -> Vec<Detection> {
             severity: hit.severity,
             mitre: hit.mitre,
             count: hit.count,
+            author: hit.author,
+            license: hit.license,
+            source: hit.source,
+            reference: hit.reference,
         })
         .collect()
 }

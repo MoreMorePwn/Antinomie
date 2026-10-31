@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 use super::super::tests::{call, captured, http_pcap, path_call, write_rwx_calls};
 use super::*;
 use antinomie_monitor_core::report::bundle::{self, BundleInput};
@@ -20,6 +21,22 @@ fn fixture() -> (PacketSpool, PathBuf) {
     std::fs::write(temp.directory.join("telemetry.raw"), raw).unwrap();
     let pcap = temp.directory.join("fixture.pcap");
     std::fs::write(&pcap, http_pcap()).unwrap();
+    // One rule that matched, with the credit its licence asks to keep.
+    antinomie_monitor_core::run_digest::RunDigest::update(&temp.directory, |digest| {
+        digest.detections = Some(vec![antinomie_monitor_core::run_digest::DetectionHit {
+            engine: "YARA".into(),
+            rule_id: "fixture_rule".into(),
+            title: "fixture_rule".into(),
+            severity: "high".into(),
+            count: 2,
+            author: "Jane Rule".into(),
+            license: "DRL 1.1".into(),
+            source: "Example Pack".into(),
+            reference: "https://example.org/rule".into(),
+            ..Default::default()
+        }]);
+    })
+    .unwrap();
     (temp, pcap)
 }
 
@@ -108,7 +125,14 @@ fn a_whole_run_exports_every_format_whatever_the_screen_filters_say() {
         .any(|i| i["kind"] == "url"));
     assert!(json["summary"]["counts"]["findings"].as_u64().unwrap() >= 1);
     assert_eq!(json["sample"]["sha256"], "ab".repeat(32));
+    assert_eq!(json["detections"][0]["author"], "Jane Rule");
+    assert_eq!(json["detections"][0]["license"], "DRL 1.1");
+    assert_eq!(
+        json["detections"][0]["reference"],
+        "https://example.org/rule"
+    );
     let html = read(&path("HTML"));
+    assert!(html.contains("Jane Rule") && html.contains("DRL 1.1"));
     assert!(html.contains("<h2>Processes</h2>") && html.contains("example.com"));
     let pdf = std::fs::read(path("PDF")).unwrap();
     assert!(pdf.starts_with(b"%PDF-1.4"));
@@ -118,6 +142,8 @@ fn a_whole_run_exports_every_format_whatever_the_screen_filters_say() {
         .unwrap()
         .iter()
         .any(|a| a["type"] == "url"));
+    assert!(read(&path("MISP")).contains("Jane Rule"));
+    assert!(read(&path("STIX 2.1")).contains("Jane Rule"));
     let stix: serde_json::Value = serde_json::from_str(&read(&path("STIX 2.1"))).unwrap();
     assert_eq!(stix["type"], "bundle");
 

@@ -77,6 +77,16 @@ pub struct DetectionHit {
     /// The malware family a YARA rule names in its metadata; empty when the
     /// rule names none (and for the other engines).
     pub family: String,
+    /// The rule's author as the rule gives it, unchanged; empty when it names
+    /// none. A rule's licence asks for it to stay with every message that
+    /// reports a match.
+    pub author: String,
+    /// The licence of the rule's pack.
+    pub license: String,
+    /// The rule pack the rule came from.
+    pub source: String,
+    /// The rule's own reference link, when it names one.
+    pub reference: String,
 }
 
 /// One indicator of compromise of the run.

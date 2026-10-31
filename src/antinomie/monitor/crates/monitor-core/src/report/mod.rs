@@ -209,6 +209,14 @@ pub struct Detection {
     pub severity: String,
     pub mitre: Vec<String>,
     pub count: u64,
+    /// The rule's author as the rule gives it; empty when it names none.
+    pub author: String,
+    /// The licence of the rule's pack.
+    pub license: String,
+    /// The rule pack the rule came from.
+    pub source: String,
+    /// The rule's own reference link, when it names one.
+    pub reference: String,
 }
 
 /// What the Files > File activity window knows of one file.

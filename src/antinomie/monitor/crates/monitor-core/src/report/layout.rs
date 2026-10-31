@@ -397,9 +397,12 @@ pub fn document(report: &Report, defang: bool) -> Document {
             )]
         } else {
             vec![Block::Table(DocTable {
-                columns: ["Engine", "Rule", "Title", "Severity", "ATT&CK", "Count"]
-                    .map(String::from)
-                    .to_vec(),
+                columns: [
+                    "Engine", "Rule", "Title", "Severity", "ATT&CK", "Count", "Author", "License",
+                    "Source",
+                ]
+                .map(String::from)
+                .to_vec(),
                 rows: detections
                     .iter()
                     .map(|hit| {
@@ -410,6 +413,9 @@ pub fn document(report: &Report, defang: bool) -> Document {
                             hit.severity.clone(),
                             hit.mitre.join(", "),
                             hit.count.to_string(),
+                            or_unknown(&hit.author),
+                            hit.license.clone(),
+                            source_text(hit),
                         ]
                     })
                     .collect(),
@@ -497,4 +503,29 @@ pub fn document(report: &Report, defang: bool) -> Document {
 
 fn iso_short(report: &Report) -> String {
     iso(report.generated_ms)[..19].replace('T', " ")
+}
+
+/// A rule's author, or `unknown` when the rule names none (a rule's licence
+/// asks that the author stay with its matches).
+fn or_unknown(author: &str) -> String {
+    if author.is_empty() {
+        "unknown".into()
+    } else {
+        author.into()
+    }
+}
+
+/// The rule pack and the rule's own reference. The HTML holds no link, so the
+/// reference is written without its scheme here; the JSON, MISP and STIX keep
+/// the full address.
+fn source_text(hit: &super::Detection) -> String {
+    let reference = hit
+        .reference
+        .split_once("://")
+        .map_or(hit.reference.as_str(), |(_, rest)| rest);
+    match (hit.source.is_empty(), reference.is_empty()) {
+        (_, true) => hit.source.clone(),
+        (true, false) => reference.to_owned(),
+        (false, false) => format!("{} ({reference})", hit.source),
+    }
 }

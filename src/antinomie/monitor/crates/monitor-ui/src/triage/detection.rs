@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 mod cards;
 mod coverage;
 mod finding;
+pub(super) use finding::pack_name;
 mod header;
 pub(in crate::triage) use header::ScanActivity;
 mod inputs;
