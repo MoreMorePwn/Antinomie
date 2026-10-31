@@ -374,7 +374,7 @@ fn recorded_tracer_triage() {
     }
 
     if let Some(directory) = runs.get("versions") {
-        versions(&scan(directory, true), &fixture);
+        versions(&scan(directory, true), &journal(directory), &fixture);
     }
 
     for (label, user) in [("user", "user"), ("nobody", "65534")] {
@@ -439,8 +439,9 @@ fn digest_at(
 /// appends, a rename over a file, shared-mapping writes and two writers.
 /// Every version must be recoverable from the recording, the version that
 /// was executed or read must be the one shown at that call, and the files
-/// must stay listed after they were deleted or emptied.
-fn versions(found: &ArchiveScan, fixture: &str) {
+/// must stay listed after they were deleted or emptied. `events` is the run's
+/// normalized journal.
+fn versions(found: &ArchiveScan, events: &[serde_json::Value], fixture: &str) {
     let activity = &found.file_activity;
     let file = |name: &str| {
         let path = format!("/tmp/tracer-v/{name}");
@@ -493,13 +494,24 @@ fn versions(found: &ArchiveScan, fixture: &str) {
         executed.iter().any(|digest| digest == fixture),
         format!("versions payload: the version shown at the exec is v2 ({executed:?})"),
     );
+    // The guest's exec image hash is carried by the exec'd process's creation.
+    // The fixture rewrites the payload as soon as the child has exited, which
+    // can be while the guest still hashes it: then it must say so, and never
+    // give another version's digest.
+    let exec = event_for(events, "process_creation", "Image", "/tmp/tracer-v/payload");
+    let hashes = exec.map_or(serde_json::Value::Null, |event| {
+        event["fields"]["Hashes"].clone()
+    });
+    let skipped = exec.map_or(serde_json::Value::Null, |event| {
+        event["fields"]["HashSkipped"].clone()
+    });
     expect(
-        payload.iter().any(|file| {
-            file.hashes
-                .iter()
-                .any(|hash| hash.moment == "exec image" && hash.sha256.as_deref() == Some(fixture))
-        }),
-        "versions payload: the guest's exec image hash is v2".into(),
+        hashes == format!("SHA256={fixture}").as_str()
+            || (hashes.is_null()
+                && skipped
+                    .as_str()
+                    .is_some_and(|why| why.contains("changed while it was being read"))),
+        format!("versions payload: the guest's exec image hash is v2 or marked changed ({hashes} / {skipped})"),
     );
     expect(
         payload.iter().any(|file| file.deleted),
