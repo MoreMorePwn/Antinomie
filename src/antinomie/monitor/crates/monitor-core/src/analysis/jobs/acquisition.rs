@@ -2,7 +2,35 @@
 //! Drain expiring guest specimens independently of slow host analysis tools.
 use super::*;
 
+/// The part of the acquisition budget any transfer needs, whatever its size.
+const TRANSFER_BASE: Duration = Duration::from_secs(120);
+/// The acquisition budget grows by this much per MiB of specimen.
+const TRANSFER_PER_MIB: Duration = Duration::from_secs(1);
+
+/// Time a job has to receive a specimen of `total_len` bytes once it starts:
+/// 120 s plus a second per MiB, so the largest one (128 MiB, 248 s) still
+/// arrives when a loaded host reads it at about half a MiB a second. The guest
+/// keeps a handle while it is read (its 180 s idle lifetime restarts at every
+/// read), and transfers rotate chunk by chunk, so a waiting handle is read too.
+pub(super) fn transfer_deadline(total_len: u64) -> Duration {
+    let mib = total_len
+        .min(u64::from(control::SPECIMEN_MAX_SIZE))
+        .div_ceil(1024 * 1024);
+    TRANSFER_BASE + TRANSFER_PER_MIB * mib as u32
+}
+
 impl Jobs {
+    /// True while a guest specimen is still being read. Each chunk is one
+    /// pass of the backend loop, which then waits less between passes, as it
+    /// does for a core transfer.
+    pub fn transferring(&self) -> bool {
+        self.acquiring.iter().chain(self.queue.iter()).any(|job| {
+            job.report.state == AnalysisState::Acquiring
+                && job.handle.is_some()
+                && job.received_len < job.total_len
+        })
+    }
+
     pub(super) fn acquire_next(&mut self) -> Option<Action> {
         if self.acquiring.is_none() {
             let index = self
@@ -140,6 +168,39 @@ mod tests {
         reply.extend_from_slice(&0u32.to_le_bytes());
         reply.extend_from_slice(data);
         reply
+    }
+
+    #[test]
+    fn a_larger_specimen_gets_a_longer_transfer_and_a_faster_loop() {
+        assert_eq!(transfer_deadline(0), Duration::from_secs(120));
+        assert_eq!(transfer_deadline(3), Duration::from_secs(121));
+        assert_eq!(transfer_deadline(100_378_920), Duration::from_secs(216));
+        let largest = u64::from(control::SPECIMEN_MAX_SIZE);
+        assert_eq!(transfer_deadline(largest), Duration::from_secs(248));
+        assert_eq!(transfer_deadline(u64::MAX), Duration::from_secs(248));
+
+        let root = std::env::temp_dir().join(format!("ant-acquisition-{}", storage::unique_id()));
+        let mut jobs = Jobs::default();
+        assert!(!jobs.transferring());
+        submit(&mut jobs, &root, 1, 3);
+        assert!(jobs.transferring());
+        let before = Instant::now();
+        let deadline = jobs.queue[0].deadline;
+        assert!(deadline >= before + Duration::from_secs(120));
+        let Some(Action::Read {
+            offset,
+            total,
+            capacity,
+            ..
+        }) = jobs.next()
+        else {
+            panic!("no read");
+        };
+        jobs.chunk(Ok(reply(0, 3, b"abc")), offset, total, capacity);
+        // Received whole: nothing left to read from the guest.
+        assert!(!jobs.transferring());
+        drop(jobs);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

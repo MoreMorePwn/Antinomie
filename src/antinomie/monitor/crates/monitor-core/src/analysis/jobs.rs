@@ -245,7 +245,7 @@ impl Jobs {
                 total_len,
                 received_len: 0,
                 file: Some(file),
-                deadline: Instant::now() + TRANSFER_DEADLINE,
+                deadline: Instant::now() + acquisition::transfer_deadline(total_len),
                 child: None,
                 cleanup_reason: None,
                 reserved_len,
@@ -679,8 +679,6 @@ impl Drop for Jobs {
     }
 }
 /// Wall-clock budget of one worker: decompilers analyze the whole program.
-/// Time a job has to receive its specimen once it starts.
-const TRANSFER_DEADLINE: Duration = Duration::from_secs(120);
 /// Time the durable report of an acquired specimen has to be written.
 const PUBLICATION_DEADLINE: Duration = Duration::from_secs(30);
 
