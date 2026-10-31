@@ -598,6 +598,7 @@ impl Fixture {
                 warnings: vec![
                     "Remaining mapping pages were omitted from this synthetic capture".into(),
                 ],
+                machine: antinomie_monitor_core::core_dump::EM_X86_64,
             },
         };
         let mut page = vec![None; PAGE_SIZE * 2];

@@ -764,10 +764,10 @@ madvise.dontdump | madvise(start=<addr>, len=16384, behavior=MADV_DONTDUMP) = <v
 madvise.dontfork | madvise(start=<addr>, len=16384, behavior=MADV_DONTFORK) = <value> |
 madvise.dontneed | madvise(start=<addr>, len=8192, behavior=MADV_DONTNEED) = <value> |
 madvise.free | madvise(start=<addr>, len=16384, behavior=MADV_FREE) = <value> |
-madvise.hugepage | madvise(start=<addr>, len=16384, behavior=MADV_HUGEPAGE) = <value> |
+madvise.hugepage | madvise(start=<addr>, len=16384, behavior=MADV_HUGEPAGE) = EINVAL |
 madvise.keeponfork | madvise(start=<addr>, len=16384, behavior=MADV_KEEPONFORK) = <value> |
 madvise.mergeable | madvise(start=<addr>, len=16384, behavior=MADV_MERGEABLE) = <value> |
-madvise.nohugepage | madvise(start=<addr>, len=16384, behavior=MADV_NOHUGEPAGE) = <value> |
+madvise.nohugepage | madvise(start=<addr>, len=16384, behavior=MADV_NOHUGEPAGE) = EINVAL |
 madvise.normal | madvise(start=<addr>, len=16384, behavior=MADV_NORMAL) = <value> |
 madvise.pageout | madvise(start=<addr>, len=16384, behavior=MADV_PAGEOUT) = <value> |
 madvise.populate_read | madvise(start=<addr>, len=16384, behavior=MADV_POPULATE_READ) = <value> |

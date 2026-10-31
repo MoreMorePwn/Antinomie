@@ -371,7 +371,7 @@ fn checks(text: &str) -> Vec<(String, String, String)> {
 
 /// Calls the run's recording holds.
 fn recorded_calls(directory: &Path) -> Result<u64, String> {
-    let recording = recording::Recording::raw(&directory);
+    let recording = recording::Recording::raw(directory);
     let cancel = AtomicBool::new(false);
     let mut count = 0;
     let mut offset = 0;

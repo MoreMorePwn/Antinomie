@@ -17,6 +17,8 @@
  * shape of the launched process. "STEALTH-END" ends the output.
  *
  * Build: cc -static -O2 -Wall -Wextra -Werror tests/monitor/stealth-probe.c
+ * (also aarch64-linux-gnu-gcc: the CPUID and I/O port checks are x86-64's, and
+ * the timing checks read the virtual counter, cntvct_el0, for the TSC)
  */
 #define _GNU_SOURCE
 #include <ctype.h>
@@ -35,8 +37,10 @@
 #include <ifaddrs.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#if defined(__x86_64__)
 #include <cpuid.h>
 #include <sys/io.h>
+#endif
 #include <sys/ioctl.h>
 #include <sys/klog.h>
 #include <sys/mman.h>
@@ -44,7 +48,21 @@
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/utsname.h>
+#if defined(__x86_64__)
 #include <x86intrin.h>
+static inline uint64_t ticks(void)
+{
+	return __rdtsc();
+}
+#else
+static inline uint64_t ticks(void)
+{
+	uint64_t value;
+
+	__asm__ volatile("isb; mrs %0, cntvct_el0" : "=r"(value));
+	return value;
+}
+#endif
 
 #define VALUE_MAX 240
 
@@ -139,6 +157,10 @@ static int antinomie_word(const char *text)
 
 static void check_cpuid(void)
 {
+#if !defined(__x86_64__)
+	report("skip", "cpuid", "x86-64 only");
+}
+#else
 	unsigned int a, b, c, d, regs[12];
 	char vendor[13], hv[13], brand[49];
 	int i;
@@ -184,6 +206,7 @@ static void check_cpuid(void)
 		report("fail", "cpuid.brand", "no brand string leaves");
 	}
 }
+#endif
 
 /* --- Timing (pafish rdtsc checks, sleep skew) ---------------------------- */
 
@@ -211,6 +234,7 @@ static void check_timing(void)
 	double skew;
 	int i;
 
+#if defined(__x86_64__)
 	for (i = 0; i < N; i++) {
 		t0 = __rdtsc();
 		t1 = __rdtsc();
@@ -229,18 +253,29 @@ static void check_timing(void)
 		(unsigned long long)plain[N / 2]);
 	reportf(vmexit[N / 2] > 1000 ? "fail" : "pass", "timing.rdtsc-cpuid", "median %llu cycles (min %llu)",
 		(unsigned long long)vmexit[N / 2], (unsigned long long)vmexit[0]);
+#else
+	/* The generic timer has no trapping read to time; counter ticks only. */
+	for (i = 0; i < N; i++) {
+		t0 = ticks();
+		t1 = ticks();
+		plain[i] = t1 - t0;
+	}
+	(void)vmexit; (void)a; (void)b; (void)c; (void)d;
+	qsort(plain, N, sizeof(plain[0]), cmp_u64);
+	reportf("info", "timing.cntvct-delta", "median %llu ticks", (unsigned long long)plain[N / 2]);
+#endif
 	/* The TSC rate from a 100 ms busy wait, then a 500 ms sleep timed twice. */
 	m0 = now_ns(CLOCK_MONOTONIC);
-	t0 = __rdtsc();
+	t0 = ticks();
 	while (now_ns(CLOCK_MONOTONIC) - m0 < 100000000ull)
 		;
 	m1 = now_ns(CLOCK_MONOTONIC);
-	t1 = __rdtsc();
+	t1 = ticks();
 	tsc_hz = (t1 - t0) * 1000000000ull / (m1 - m0);
 	m0 = now_ns(CLOCK_MONOTONIC);
-	t0 = __rdtsc();
+	t0 = ticks();
 	nanosleep(&half, NULL);
-	t1 = __rdtsc();
+	t1 = ticks();
 	m1 = now_ns(CLOCK_MONOTONIC);
 	slept_mono = m1 - m0;
 	slept_tsc = (t1 - t0) * 1000000000ull / (tsc_hz ? tsc_hz : 1);
@@ -419,6 +454,10 @@ static void check_fw_cfg(void)
 
 	report(stat("/sys/firmware/qemu_fw_cfg", &st) ? "pass" : "fail", "fwcfg.sysfs",
 	       stat("/sys/firmware/qemu_fw_cfg", &st) ? "absent" : "present");
+#if !defined(__x86_64__)
+	(void)sig;
+	(void)i;
+#else
 	/* The I/O ports: selector 0 (signature) at 0x510, data at 0x511. */
 	if (ioperm(0x510, 2, 1)) {
 		report("skip", "fwcfg.ioport", strerror(errno));
@@ -432,6 +471,7 @@ static void check_fw_cfg(void)
 	}
 	ioperm(0x510, 2, 0);
 	reportf(!strcmp(sig, "QEMU") ? "fail" : "pass", "fwcfg.ioport", "signature \"%s\"", sig);
+#endif
 }
 
 /* --- Devices ------------------------------------------------------------- */

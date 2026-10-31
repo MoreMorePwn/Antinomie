@@ -185,6 +185,7 @@ mod tests {
             auxv: Vec::new(),
             notes: Vec::new(),
             warnings: Vec::new(),
+            machine: crate::core_dump::EM_X86_64,
         }
     }
 

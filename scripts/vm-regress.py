@@ -29,8 +29,8 @@ older): by convention the 0.7.0 BusyBox base, from before the tracer's hashes.
 --arch arm64 runs a tier on an arm64 BusyBox base: its fixtures are built
 with aarch64-linux-gnu-gcc into fixtures-arm64, every timeout is scaled by the
 host's arm64 time scale (monitor-core src/vm/machine.rs ARM64_TIME_SCALE), and
-the checks that have no arm64 version yet are not planned (the debugger, the x86
-stealth probe, interop, stress-extreme: see ARM64_LATER).
+the checks that have no arm64 version yet are not planned (the debugger, the cloud
+profiles, interop, stress-extreme: see ARM64_LATER).
 
 BASE is a BusyBox base bundle built from the current guest series; the quick
 tier also runs on a Debian Minimal base (its VMs get a throwaway account and
@@ -107,9 +107,10 @@ MEASURED_GROUPS = {"conf-stress-rate": "stress-rate"}
 # The compiler of each guest architecture's static fixtures.
 ARCH_CC = {"x86_64": "gcc", "arm64": "aarch64-linux-gnu-gcc"}
 # Checks an arm64 tier does not plan yet, and the card that brings each: the
-# debugger (MA-11/14), the x86 CPUID stealth probe (MA-17), interop (x86 bases
-# only), stress-extreme (disk under TCG).
-ARM64_LATER = {"debug-p2", "debug-p3", "debugger-live", "stealth", "cloud",
+# debugger (MA-11/14), the cloud profiles (MA-17), interop (x86 bases only),
+# stress-extreme (disk under TCG). The stealth probe measures arm64 without its
+# CPUID and I/O port checks.
+ARM64_LATER = {"debug-p2", "debug-p3", "debugger-live", "cloud",
                "conf-stress-extreme", "uring-legacy", "tracer-legacy"}
 MACHINE_RS = MONITOR / "crates/monitor-core/src/vm/machine.rs"
 
@@ -554,8 +555,8 @@ def build_fixtures(out, arch="x86_64"):
 
 def build_foreign_fixtures(out, arch):
     """A foreign architecture's static fixtures, cross-built into fixtures-<arch>:
-    the portable ones (no debugger fixtures, no x86 CPUID probe) and the stress
-    samples."""
+    the portable ones (no debugger fixtures; the stealth probe without its x86
+    checks) and the stress samples."""
     fix = out / f"fixtures-{arch}"
     stamp = fix / ".built"
     if stamp.exists():
@@ -572,6 +573,7 @@ def build_foreign_fixtures(out, arch):
         (["-static", "-O2", *strict], "audit-fixture.c", fix / "audit-fixture"),
         (["-static", "-O2", "-pthread", *strict], "uring-fixture.c", fix / "uring-fixture"),
         (["-static", "-O2", *strict], "tracer-fixture.c", fix / "tracer-fixture"),
+        (["-static", "-O2", *strict], "stealth-probe.c", fix / "stealth-probe"),
         (["-static", "-O2", *strict], "cloud-probe.c", fix / "cloud-probe"),
     ]
     for flags, source, target in builds:

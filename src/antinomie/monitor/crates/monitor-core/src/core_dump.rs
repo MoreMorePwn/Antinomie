@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Bounded, file-backed Linux x86-64 process-core inspection. Physical QEMU
+//! Bounded, file-backed Linux x86-64 and aarch64 process-core inspection. Physical QEMU
 //! dumps are deliberately rejected: their CPU notes are not process threads.
 use iced_x86::{Decoder, DecoderOptions, Formatter, IntelFormatter};
 use object::{Object, ObjectSegment, ObjectSymbol, SymbolKind};
@@ -20,6 +20,18 @@ const REG_NAMES: [&str; 27] = [
     "rdi", "orig_rax", "rip", "cs", "rflags", "rsp", "ss", "fs_base", "gs_base", "ds", "es", "fs",
     "gs",
 ];
+/// ELF machines of the process cores this reader opens.
+pub const EM_X86_64: u16 = 62;
+pub const EM_AARCH64: u16 = 183;
+/// aarch64's `user_pt_regs`, its `elf_gregset_t`.
+const AARCH64_REG_NAMES: [&str; 34] = [
+    "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14",
+    "x15", "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27",
+    "x28", "x29", "x30", "sp", "pc", "pstate",
+];
+fn x86_64_machine() -> u16 {
+    EM_X86_64
+}
 
 #[derive(Debug)]
 pub struct CoreError(String);
@@ -99,6 +111,10 @@ pub struct CoreDump {
     pub auxv: Vec<(u64, u64)>,
     pub notes: Vec<String>,
     pub warnings: Vec<String>,
+    /// ELF machine (`EM_X86_64`, `EM_AARCH64`); records saved before 0.9.0
+    /// are x86-64.
+    #[serde(default = "x86_64_machine")]
+    pub machine: u16,
 }
 fn number<const N: usize>(data: &[u8], offset: usize) -> Result<[u8; N]> {
     data.get(
@@ -141,7 +157,7 @@ impl CoreDump {
     ///
     /// | Argument / result | Meaning |
     /// |---|---|
-    /// | `path` | Existing ELF64 little-endian Linux x86-64 ET_CORE file |
+    /// | `path` | Existing ELF64 little-endian Linux x86-64 or aarch64 ET_CORE file |
     /// | result | File-backed mappings and recovered process-thread metadata |
     ///
     /// # Errors
@@ -160,12 +176,13 @@ impl CoreDump {
             || header[5] != 1
             || header[6] != 1
             || u16_at(&header, 16)? != 4
-            || u16_at(&header, 18)? != 62
+            || !matches!(u16_at(&header, 18)?, EM_X86_64 | EM_AARCH64)
         {
             return Err(invalid(
-                "requires a Linux x86-64 little-endian ELF process core",
+                "requires a Linux x86-64 or aarch64 little-endian ELF64 process core",
             ));
         }
+        let machine = u16_at(&header, 18)?;
         let ph_offset = u64_at(&header, 32)?;
         let ph_size = u16_at(&header, 54)?;
         let ph_count = usize::from(u16_at(&header, 56)?);
@@ -189,6 +206,7 @@ impl CoreDump {
             auxv: Vec::new(),
             notes: Vec::new(),
             warnings: Vec::new(),
+            machine,
         };
         let mut note_size = 0u64;
         for index in 0..ph_count {
@@ -302,9 +320,12 @@ impl CoreDump {
             let desc = &data[desc_offset..end];
             if owner == "CORE" {
                 match kind {
-                    1 if desc.len() >= 336 => {
-                        let mut registers = Vec::with_capacity(27);
-                        for (index, name) in REG_NAMES.iter().enumerate() {
+                    // elf_prstatus: the registers at 112, then pr_fpvalid and padding
+                    // (336 octets on x86-64, 392 on aarch64).
+                    1 if desc.len() >= 112 + self.register_names().len() * 8 + 8 => {
+                        let names = self.register_names();
+                        let mut registers = Vec::with_capacity(names.len());
+                        for (index, name) in names.iter().enumerate() {
                             registers.push(((*name).into(), u64_at(desc, 112 + index * 8)?));
                         }
                         self.threads.push(CoreThread {
@@ -340,7 +361,7 @@ impl CoreDump {
                             "signal info: signo={signal} errno={} code={code}",
                             i32_at(desc, 4)?
                         ));
-                        // Linux x86-64 siginfo union starts at offset 16. Only
+                        // A 64-bit Linux siginfo's union starts at offset 16. Only
                         // interpret si_addr for a known signal-specific code.
                         if matches!(signal, 4 | 5 | 7 | 8 | 11)
                             && code > 0
@@ -462,8 +483,21 @@ impl CoreDump {
         }
         Ok(result)
     }
+    /// The names of a thread's registers in the core's `NT_PRSTATUS`.
+    fn register_names(&self) -> &'static [&'static str] {
+        if self.machine == EM_AARCH64 {
+            &AARCH64_REG_NAMES
+        } else {
+            &REG_NAMES
+        }
+    }
     /// Decode only a user-selected virtual span, stopping at the first gap.
     pub fn disassemble(&self, address: u64, size: usize) -> Result<String> {
+        if self.machine != EM_X86_64 {
+            return Err(invalid(
+                "this core view disassembles x86-64 process memory only; aarch64 code is shown as bytes",
+            ));
+        }
         let data = self.read_virtual(address, size.min(64 * 1024))?;
         let available: Vec<u8> = data.iter().map_while(|byte| *byte).collect();
         if available.is_empty() {
@@ -728,6 +762,43 @@ mod tests {
             assert!(core.read_virtual(u64::MAX, 2).is_err());
             assert!(core.read_virtual(0, READ_LIMIT + 1).is_err());
         });
+    }
+    #[test]
+    fn aarch64_cores_name_their_registers_and_x86_sized_status_is_short() {
+        let core_of = |desc_size: u32| {
+            let mut data = fixture();
+            put16(&mut data, 18, EM_AARCH64);
+            data[0x200..0x200 + 712].fill(0);
+            put64(&mut data, 96, 20 + u64::from(desc_size));
+            put32(&mut data, 0x200, 5);
+            put32(&mut data, 0x204, desc_size);
+            put32(&mut data, 0x208, 1);
+            data[0x20c..0x211].copy_from_slice(b"CORE\0");
+            let desc = 0x200 + 20;
+            put32(&mut data, desc + 32, 77);
+            put64(&mut data, desc + 112 + 31 * 8, 0xffff_f000);
+            put64(&mut data, desc + 112 + 32 * 8, 0x400004);
+            let path = std::env::temp_dir().join(format!(
+                "antinomie-core-a64-{desc_size}-{}",
+                std::process::id()
+            ));
+            fs::write(&path, data).unwrap();
+            let core = CoreDump::open(&path);
+            fs::remove_file(path).unwrap();
+            core
+        };
+        let core = core_of(392).unwrap();
+        assert_eq!(core.machine, EM_AARCH64);
+        assert_eq!(core.threads.len(), 1);
+        assert_eq!(core.threads[0].tid, 77);
+        assert_eq!(core.threads[0].registers.len(), 34);
+        assert_eq!(core.threads[0].register("pc"), Some(0x400004));
+        assert_eq!(core.threads[0].register("sp"), Some(0xffff_f000));
+        assert_eq!(core.threads[0].register("rip"), None);
+        assert!(core.disassemble(0x400000, 4).is_err());
+        // An x86-64-sized status holds no aarch64 thread: no registers at all.
+        assert!(core_of(336).is_err());
+        with_core(|path| assert_eq!(CoreDump::open(path).unwrap().machine, EM_X86_64));
     }
     #[test]
     fn truncated_headers_and_qemu_are_rejected() {

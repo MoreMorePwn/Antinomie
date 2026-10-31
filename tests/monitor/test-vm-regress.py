@@ -199,10 +199,11 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(x86, {c.name: c.timeout for c in vm.plan("full", self.ctx(), "x86_64")})
         arm64 = {c.name: c for c in vm.plan("full", self.ctx(), "arm64")}
         self.assertIn("conf-quick", arm64)
-        for name in ("debug-p2", "debugger-live", "stealth", "conf-stress-extreme",
+        for name in ("debug-p2", "debugger-live", "cloud", "conf-stress-extreme",
                      "io-old-new-p3", "io-new-old-audit", "uring-legacy"):
             self.assertNotIn(name, arm64)
         self.assertIn("snapshot", arm64)
+        self.assertIn("stealth", arm64)
         for name, check in arm64.items():
             self.assertEqual(check.timeout, x86[name] * scale, name)
         self.assertEqual([c.name for c in vm.plan("quick", self.ctx(), "arm64")], ["conf-quick"])

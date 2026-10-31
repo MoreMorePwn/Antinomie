@@ -735,11 +735,12 @@ still starts x86-64 VMs only (arm64 VMs start with MA-16).
 * **Regression tiers.** `scripts/vm-regress.py --arch arm64` cross-builds the
   fixtures with `aarch64-linux-gnu-gcc` (`CC` in the fixture build scripts),
   scales every timeout by `ARM64_TIME_SCALE` (read from `vm/machine.rs`), lists the
-  groups that are not ported yet (`ARM64_LATER`: debugger, stealth, cloud,
-  snapshots, interop) as not planned, and names the architecture in the
+  groups that are not ported yet (`ARM64_LATER`: debugger, cloud, interop,
+  stress-extreme) as not planned, and names the architecture in the
   report. Conformance goldens for arm64 live in `golden/aarch64/`. The
-  conformance trace fixture (x86 assembly) and the stealth probe (CPUID) are
-  ported with MA-13 and MA-17.
+  stealth probe measures arm64 without its CPUID and I/O port checks (its
+  timing checks read the virtual counter, `cntvct_el0`); the snapshot check
+  gives an arm64 VM 2 vCPUs and 1 GiB and scales its waits.
 * **Old bases and old hosts in the tiers.** An old host refuses a base of a
   newer contract revision before it boots it. That is its intended guard, so
   when BASE's revision (`bundle.json`) is newer than the old host's (`REVISION`
@@ -815,6 +816,12 @@ revision 20 is unchanged: the wire carried the architecture since 0.8.0.
   into the base's ids, walks the base's table in the coverage matrix, scales its
   waits by the guest's time scale and gives an emulated guest at most 2 vCPUs
   and 1 GiB. arm64 goldens live in `golden/aarch64/`.
+* **Process cores.** The guest accepts a core of its own ELF machine; the core
+  reader (`core_dump.rs`) opens aarch64 cores (`CoreDump::machine`, serde
+  default x86-64 for saved records) with aarch64's `user_pt_regs` names
+  (`x0`..`x30`, `sp`, `pc`, `pstate`); disassembly stays x86-64 only (MA-14).
+  arm64's minimal kernel has no transparent huge pages, as x86-64's: with them
+  a sparse heap was dense, and so was its core (the audit core qualification).
 * **Known gap.** The raw `/sys/firmware/fdt` (root only) still shows the
   `antinomie_*` boot options (MA-18).
 

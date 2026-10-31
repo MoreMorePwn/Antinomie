@@ -647,7 +647,9 @@ impl Session {
             .capture
             .guest_kernel
             .as_ref()
-            .map_or(crate::api::GuestArch::ELF_X86_64, |kernel| kernel.arch.machine);
+            .map_or(crate::api::GuestArch::ELF_X86_64, |kernel| {
+                kernel.arch.machine
+            });
         if core.offset == 0
             && data.len() >= 20
             && (&data[..7] != b"\x7fELF\x02\x01\x01"

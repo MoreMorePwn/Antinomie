@@ -576,6 +576,7 @@ fn core(memory: &[u8], start: u64) -> CoreDump {
         auxv: Vec::new(),
         notes: Vec::new(),
         warnings: Vec::new(),
+        machine: crate::core_dump::EM_X86_64,
     }
 }
 
