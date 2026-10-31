@@ -3051,14 +3051,14 @@ export CARGO_TARGET_DIR=$HOME/fuzz-scratch/target ANTINOMIE_FUZZ_DISKS=/dev/shm/
 cargo +nightly fuzz build
 python3 make-seeds.py "$HOME/fuzz-scratch/seeds"   # benign seeds from the repository fixtures
 mkdir -p ~/fuzz-scratch/corpus/analysis_section
-cp -r seeds/analysis_section/. ~/fuzz-scratch/corpus/analysis_section/      # committed, minimised seeds
+cp -r ~/fuzz-scratch/seeds/analysis_section/. ~/fuzz-scratch/corpus/analysis_section/
 nice -n 10 "$CARGO_TARGET_DIR"/x86_64-unknown-linux-gnu/release/analysis_section \
     -max_total_time=1800 -max_len=65536 -rss_limit_mb=2048 -timeout=10 \
     ~/fuzz-scratch/corpus/analysis_section
 ```
 
-Corpora and crash artifacts stay out of git; only minimised seeds
-(`fuzz/seeds/<target>/`, under 1 MB in all) are committed. Set
+Seeds, corpora and crash artifacts stay out of git: `make-seeds.py` builds the
+seeds from the repository's fixtures each time. Set
 `ASAN_OPTIONS=detect_leaks=0` to ignore leak reports at exit. Samples are
 never used as seeds: the seeds are fixtures of this repository and generated
 bytes. A finding gets a regression test in the crate's normal tests and a fix
