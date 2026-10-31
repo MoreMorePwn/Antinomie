@@ -2014,7 +2014,7 @@ fn selecting_a_row_hands_it_to_the_details_panel_once() {
     crate::theme::install(&fresh);
     assert!(panel(&fresh)
         .iter()
-        .any(|(text, _)| text.starts_with("Nothing selected.")));
+        .any(|(text, _)| text.starts_with("Select a row to see its details.")));
 }
 
 #[test]

@@ -97,7 +97,7 @@ impl CoreView {
     /// The Details panel's body.
     pub(crate) fn details(&self, ui: &mut egui::Ui) {
         let Some(detail) = &self.detail else {
-            ui.weak("Nothing selected. Select a mapping, function, string or note in Cores to inspect it here.");
+            ui.weak("Select a mapping, function, string or note to see its details.");
             return;
         };
         ui.horizontal_wrapped(|ui| {

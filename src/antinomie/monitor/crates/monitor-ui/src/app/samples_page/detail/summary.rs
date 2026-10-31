@@ -22,6 +22,8 @@ enum Go {
     Analyze,
     /// The static report on this tab.
     Report(AnalysisKind),
+    /// The static report on this tab, on one of its views.
+    ReportView(AnalysisKind, crate::analysis::SubTab),
     AllRuns,
     Verify,
     /// Open the file viewer on the archived sample.
@@ -174,6 +176,12 @@ impl MonitorApp {
             }
             Some(Go::Report(kind)) => {
                 if let Some(reference) = &data.report {
+                    self.open_sample_report(&reference.report, reference.directory.clone(), kind);
+                }
+            }
+            Some(Go::ReportView(kind, sub)) => {
+                if let Some(reference) = &data.report {
+                    self.pending_sub_tab = Some((reference.report.id.clone(), kind, sub));
                     self.open_sample_report(&reference.report, reference.directory.clone(), kind);
                 }
             }
@@ -615,7 +623,7 @@ fn string_table(
     });
 }
 
-/// What the static report has, one line per Static Analysis tab, each
+/// What the static report has, one line per Static analysis tab, each
 /// opening that tab.
 fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go: &mut Option<Go>) {
     parts::section(ui, "Static analysis", None, |ui| {
@@ -650,7 +658,7 @@ fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go
                 ));
             }
             widgets::chip(ui, format!("{:?}", report.state), Tone::Good);
-            if widgets::link(ui, "Static Analysis ›").clicked() {
+            if widgets::link(ui, "Static analysis ›").clicked() {
                 *go = Some(Go::Report(AnalysisKind::Metadata));
             }
         });
@@ -678,7 +686,18 @@ fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go
                 .interact(egui::Sense::click())
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             if response.clicked() {
-                *go = Some(Go::Report(*kind));
+                *go = Some(match (*label, *sub) {
+                    // Content is the sample's own bytes: the file viewer.
+                    ("Content", _) => Go::View,
+                    ("File Info", "Sections") => {
+                        Go::ReportView(*kind, crate::analysis::SubTab::Sections)
+                    }
+                    ("File Info", "Segments") => {
+                        Go::ReportView(*kind, crate::analysis::SubTab::Segments)
+                    }
+                    ("Symbols", _) => Go::ReportView(*kind, crate::analysis::SubTab::Symbols),
+                    _ => Go::Report(*kind),
+                });
             }
         }
     });
@@ -688,7 +707,7 @@ fn short_id(id: &str) -> String {
     id.chars().take(8).collect()
 }
 
-/// One line per Static Analysis tab, in the window's order.
+/// One line per Static analysis tab, in the window's order.
 const LINES: &[(AnalysisKind, &str, &str)] = &[
     (AnalysisKind::Metadata, "File Info", "Summary"),
     (AnalysisKind::Structures, "File Info", "Sections"),
@@ -815,7 +834,7 @@ fn identity(
                     parts::row_in(
                         ui,
                         "Type",
-                        format!("{kind}{arch} · {}", crate::values::file_size(record.size)),
+                        format!("{kind}{arch} · {}", crate::values::short_size(record.size)),
                         value_width,
                     );
                     for (index, origin) in data.origins.iter().enumerate() {

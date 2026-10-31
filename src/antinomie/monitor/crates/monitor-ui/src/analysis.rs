@@ -17,7 +17,7 @@ pub(crate) use listing_view::{listing_fields, listing_row_with};
 #[cfg(test)]
 pub(crate) use source::ARGUMENT_PLACEHOLDER;
 pub(crate) use source::{LaunchSource, ProgramSource, SourceOutcome, UploadFields};
-pub(crate) use workspace::{details, workspace, workspace_section, WorkspaceState};
+pub(crate) use workspace::{details, workspace, workspace_section, SubTab, WorkspaceState};
 
 #[derive(Clone, Copy)]
 pub(crate) struct LaunchCapabilities {
@@ -242,7 +242,7 @@ fn core_unavailable_reason(core_supported: bool) -> &'static str {
     if core_supported {
         "Core capture requires Run in: App terminal; desktop launchers run a shell wrapper."
     } else {
-        "Core capture requires a guest built with revision 15 or newer."
+        "Core capture needs a newer guest base. Rebuild or download a newer base image (Library > Base images)."
     }
 }
 
@@ -399,7 +399,7 @@ pub(crate) fn selection(
     );
     let master = tree_lines::row(ui, &root, char_width, |ui| {
         tree_lines::caret(ui, &mut state);
-        ui.checkbox(&mut selection.enabled, "Static Analysis")
+        ui.checkbox(&mut selection.enabled, "Static analysis")
             .on_hover_text("Analyze the initial executable only")
     });
     if state.is_open() {
@@ -596,7 +596,7 @@ pub(crate) enum ReportAction {
     OpenAnalysisSettings,
     /// Open Settings at the field that raises one bound a warning named.
     OpenAnalysisLimit(antinomie_monitor_core::LimitSetting),
-    /// Make this report the one the Static Analysis panel shows.
+    /// Make this report the one the Static analysis panel shows.
     ShowReport {
         report_id: String,
     },
@@ -725,7 +725,7 @@ pub(crate) fn progress_banner(ui: &mut egui::Ui, report: &AnalysisReport) {
     }
 }
 
-/// The Static Analysis panel without a report: what it is and how to get one.
+/// The Static analysis panel without a report: what it is and how to get one.
 /// `title` says which report is missing.
 pub(crate) fn no_report(ui: &mut egui::Ui, title: &str) {
     crate::widgets::info_panel(
@@ -739,8 +739,8 @@ pub(crate) fn no_report(ui: &mut egui::Ui, title: &str) {
             steps_title: "To get a report",
             steps: &[
                 "Start the VM.",
-                "Open Run → Launch program.",
-                "Tick Static Analysis, choose the analyses, then Run.",
+                "Open Run → Run program.",
+                "Tick Static analysis, choose the analyses, then Run.",
                 "Select the run in Run History: its report shows here.",
             ],
         },

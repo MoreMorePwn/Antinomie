@@ -417,6 +417,12 @@ impl MonitorApp {
                 if let Some(labels) = labels.zip(report.as_ref()) {
                     view.set_record(labels.1, labels.0, identities);
                 }
+                if let Some((_, _, sub)) = self
+                    .pending_sub_tab
+                    .take_if(|(id, wanted, _)| id == report_id && wanted == kind)
+                {
+                    view.state.show_sub_tab(sub);
+                }
                 let action = crate::analysis::workspace_section(
                     ui,
                     report.as_ref(),
@@ -557,6 +563,13 @@ impl MonitorApp {
                 crate::workspace::DetailsOf::Core => self.core_view.details(ui),
                 crate::workspace::DetailsOf::Static => crate::analysis::details(ui),
                 crate::workspace::DetailsOf::Sample => self.sample_run_details(ui),
+                crate::workspace::DetailsOf::Nothing => {
+                    ui.add_space(6.0);
+                    ui.colored_label(
+                        theme::muted(),
+                        "This tab has no details. Select a row in Syscall Trace, Run History, Triage, Memory, Disks or Static analysis.",
+                    );
+                }
             },
             Panel::Activity => self.activity(ui),
             Panel::Terminal(id) => {

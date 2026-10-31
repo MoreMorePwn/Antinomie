@@ -66,7 +66,7 @@ pub(crate) fn details(ui: &mut egui::Ui) {
         .ctx()
         .data(|data| data.get_temp::<ChosenRow>(egui::Id::new(CHOSEN_ROW)));
     let Some(chosen) = chosen else {
-        ui.weak("Nothing selected.");
+        ui.weak("Select a row to see its details.");
         return;
     };
     ui.horizontal_wrapped(|ui| {
@@ -77,7 +77,25 @@ pub(crate) fn details(ui: &mut egui::Ui) {
     row_menu::details(ui, chosen.specimen_len, &chosen.entry);
 }
 
+/// A view inside a category pane that a link from another window names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SubTab {
+    Sections,
+    Segments,
+    Symbols,
+}
+
 impl WorkspaceState {
+    /// Show the `sub` view of a category pane, as if it had been picked in the
+    /// pane's own filter.
+    pub(crate) fn show_sub_tab(&mut self, sub: SubTab) {
+        self.structure = match sub {
+            SubTab::Sections => Structure::Sections,
+            SubTab::Segments => Structure::Segments,
+            SubTab::Symbols => Structure::Symbols,
+        };
+    }
+
     /// Hand the row selected in the shown category to the Details panel when
     /// it differs from the one handed over last.
     fn publish(
@@ -533,8 +551,8 @@ fn results(
     }
     ui.label(format!(
         "{} matching / {} retained",
-        indices.len(),
-        section.entries.len()
+        crate::values::thousands(indices.len() as u64),
+        crate::values::thousands(section.entries.len() as u64)
     ));
     let selected = view
         .selected

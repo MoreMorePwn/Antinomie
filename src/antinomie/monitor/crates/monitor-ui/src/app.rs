@@ -487,6 +487,12 @@ pub struct MonitorApp {
     analysis_windows: BTreeMap<String, antinomie_monitor_core::AnalysisReport>,
     analysis_directories: BTreeMap<String, PathBuf>,
     pending_analysis_sections: Vec<(String, antinomie_monitor_core::AnalysisKind)>,
+    /// The view a link from the sample window wants inside an opened category pane.
+    pending_sub_tab: Option<(
+        String,
+        antinomie_monitor_core::AnalysisKind,
+        crate::analysis::SubTab,
+    )>,
     analysis_views: BTreeMap<String, AnalysisView>,
     analysis_generation: u64,
     archive_selected: bool,
@@ -678,6 +684,7 @@ impl MonitorApp {
             analysis_windows: BTreeMap::new(),
             analysis_directories: BTreeMap::new(),
             pending_analysis_sections: Vec::new(),
+            pending_sub_tab: None,
             analysis_views: BTreeMap::new(),
             analysis_generation: 0,
             archive_selected: false,

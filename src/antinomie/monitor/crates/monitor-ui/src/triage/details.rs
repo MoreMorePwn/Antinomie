@@ -167,7 +167,7 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
         .ctx()
         .data(|data| data.get_temp::<Selection>(selection_id()))
     else {
-        ui.weak("Nothing selected.");
+        ui.weak("Select a row to see its details.");
         return;
     };
     egui::ScrollArea::vertical().id_salt("triage-shared-details")
@@ -448,14 +448,14 @@ mod tests {
         let mut cells = rows[0].cells.clone();
         cells[0].values.clone_from(&rows[0].values);
         select(&ctx, "triage-findings", &["Rule"], &cells);
-        rows[0].cells[5].text = "~16:00:00 (UTC+07:00)".into();
+        rows[0].cells[5].text = "~16:00:00 (UTC+7)".into();
         refresh_findings(&ctx, "triage-findings", &["Rule"], &rows);
         assert_eq!(
             ctx.data(|data| data.get_temp::<Selection>(selection_id()))
                 .unwrap()
                 .cells[5]
                 .text,
-            "~16:00:00 (UTC+07:00)"
+            "~16:00:00 (UTC+7)"
         );
         refresh_findings(&ctx, "triage-findings", &["Rule"], &[]);
         assert!(ctx

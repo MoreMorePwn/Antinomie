@@ -215,10 +215,10 @@ fn details_follow_the_triage_tab_and_return_to_the_trace() {
     let output = render(&mut app, &ctx, size);
     assert!(texts(&output)
         .iter()
-        .any(|(text, _)| text == "Nothing selected."));
+        .any(|(text, _)| text == "Select a row to see its details."));
     assert!(!texts(&output)
         .iter()
-        .any(|(text, _)| text == "Select a syscall in the trace to decode it here"));
+        .any(|(text, _)| text == "Select a syscall to see its details."));
     app.focus_panel = Some(Panel::Trace);
     for _ in 0..3 {
         render(&mut app, &ctx, size);
@@ -226,7 +226,7 @@ fn details_follow_the_triage_tab_and_return_to_the_trace() {
     let output = render(&mut app, &ctx, size);
     assert!(texts(&output)
         .iter()
-        .any(|(text, _)| text == "Select a syscall in the trace to decode it here"));
+        .any(|(text, _)| text == "Select a syscall to see its details."));
 }
 
 #[test]
@@ -273,7 +273,7 @@ fn details_follow_the_network_tab_with_the_selected_packet_details_and_bytes() {
     }
     assert!(shown(&mut app)
         .iter()
-        .any(|text| text == "Select a syscall in the trace to decode it here"));
+        .any(|text| text == "Select a syscall to see its details."));
     // On the Network tab, Details follow it; selecting a packet shows its
     // layers and bytes.
     app.focus_panel = Some(Panel::Network);
@@ -289,7 +289,7 @@ fn details_follow_the_network_tab_with_the_selected_packet_details_and_bytes() {
     );
     assert!(!texts_now
         .iter()
-        .any(|text| text == "Select a syscall in the trace to decode it here"));
+        .any(|text| text == "Select a syscall to see its details."));
     render_until(&mut app, &ctx, size, |shown| {
         shown
             .iter()
@@ -316,7 +316,7 @@ fn details_follow_the_network_tab_with_the_selected_packet_details_and_bytes() {
     let texts_now = shown(&mut app);
     assert!(texts_now
         .iter()
-        .any(|text| text == "Select a syscall in the trace to decode it here"));
+        .any(|text| text == "Select a syscall to see its details."));
     assert!(!texts_now.iter().any(|text| text.starts_with("Ethernet II")));
     std::fs::remove_dir_all(root).unwrap();
 }

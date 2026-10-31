@@ -674,7 +674,7 @@ impl MemoryView {
         });
         let Some((plugin, columns, row)) = row else {
             ui.add_space(6.0);
-            ui.colored_label(theme::muted(), "Select a row.");
+            ui.colored_label(theme::muted(), "Select a row to see its details.");
             return;
         };
         let mono = theme::mono(font_size - 1.0);

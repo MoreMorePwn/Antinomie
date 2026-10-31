@@ -181,10 +181,7 @@ impl Inspector {
     ) -> Option<(FieldSummary, u64, usize)> {
         let Some(invocation) = invocation else {
             ui.add_space(6.0);
-            ui.colored_label(
-                theme::muted(),
-                "Select a syscall in the trace to decode it here",
-            );
+            ui.colored_label(theme::muted(), "Select a syscall to see its details.");
             return None;
         };
         if self.selection.is_none() {

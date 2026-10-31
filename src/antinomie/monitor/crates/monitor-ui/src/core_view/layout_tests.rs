@@ -284,7 +284,7 @@ fn the_details_panel_names_what_is_selected_or_asks_for_a_selection() {
     };
     assert!(shown(&view)
         .iter()
-        .any(|(text, _)| text.starts_with("Nothing selected.")));
+        .any(|(text, _)| text.starts_with("Select a mapping, function, string or note")));
     view.detail = Some(details::note(
         "Note",
         "NT_PRSTATUS",

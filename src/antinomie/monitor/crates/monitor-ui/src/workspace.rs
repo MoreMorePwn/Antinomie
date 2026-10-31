@@ -30,7 +30,7 @@ pub(crate) enum Panel {
     Details,
     Activity,
     Terminal(String),
-    /// The debugger of the attached session: it sits beside Static Analysis
+    /// The debugger of the attached session: it sits beside Static analysis
     /// while a session lasts, and is never restored with the saved
     /// arrangement.
     Debugger,
@@ -80,7 +80,7 @@ impl Panel {
             Self::Disks => "Disks",
             Self::CoreDump => "Core dumps",
             Self::Triage => "Triage",
-            Self::StaticAnalysis => "Static Analysis",
+            Self::StaticAnalysis => "Static analysis",
             Self::AnalysisSection { kind, .. } => kind.label(),
             Self::Summary => "Summary",
             Self::RunHistory => "Run History",
@@ -117,6 +117,8 @@ pub(crate) enum DetailsOf {
     Static,
     /// A run of the open sample, selected on the sample window's Runs tab.
     Sample,
+    /// The open tab has no details (Summary, Base images, Settings pages...).
+    Nothing,
 }
 
 impl DetailsFollow {
@@ -188,6 +190,7 @@ impl DetailsFollow {
             .collect();
         match visible.as_slice() {
             [only] => Self::SIDES[*only],
+            [] if self.drawn.iter().any(Option::is_some) => DetailsOf::Nothing,
             _ => Self::SIDES[self.followed],
         }
     }
@@ -409,7 +412,7 @@ impl WorkspaceLayout {
         ))
     }
 
-    /// Put the Debugger tab right after Static Analysis, wherever that went.
+    /// Put the Debugger tab right after Static analysis, wherever that went.
     fn place_debugger(&mut self) {
         match self.dock.find_tab(&Panel::StaticAnalysis) {
             Some((surface, node, tab)) => {
@@ -1341,7 +1344,7 @@ mod tests {
                 .unwrap()
                 .1
                 .center();
-            let title = if before { "Summary" } else { "Static Analysis" };
+            let title = if before { "Summary" } else { "Static analysis" };
             let rect = texts.iter().find(|(text, _)| text == title).unwrap().1;
             let target = egui::pos2(
                 if before { rect.left() } else { rect.right() },
@@ -2570,7 +2573,7 @@ mod tests {
         assert_eq!(
             layout.debugger_position(),
             Some((Some(Panel::StaticAnalysis), true)),
-            "beside Static Analysis"
+            "beside Static analysis"
         );
         layout.focus(Panel::Trace);
         layout.fold_details_for_tab();
