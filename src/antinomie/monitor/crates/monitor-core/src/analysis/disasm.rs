@@ -62,21 +62,26 @@ fn containing(functions: &Functions, address: u64) -> Option<&str> {
         start.saturating_add(*size)
     } else {
         functions
-            .range(start + 1..)
+            .range(start.saturating_add(1)..)
             .next()
             .map_or(u64::MAX, |(next, _)| *next)
     };
     (address < end).then_some(name.as_str())
 }
 
+/// Address ranges of the code sections; a section that claims to run past the
+/// end of the address space stops at it.
+fn text_ranges(file: &object::File) -> Vec<(u64, u64)> {
+    file.sections()
+        .filter(|s| s.kind() == SectionKind::Text)
+        .map(|s| (s.address(), s.address().saturating_add(s.size())))
+        .collect()
+}
+
 /// Name every direct call target inside executable code `sub_<address>`,
 /// so stripped programs still read as functions.
 fn call_targets(file: &object::File, bitness: u32, functions: &mut Functions) {
-    let ranges: Vec<(u64, u64)> = file
-        .sections()
-        .filter(|s| s.kind() == SectionKind::Text)
-        .map(|s| (s.address(), s.address() + s.size()))
-        .collect();
+    let ranges = text_ranges(file);
     for code in file.sections().filter(|s| s.kind() == SectionKind::Text) {
         let Ok(bytes) = code.data() else { continue };
         let mut decoder = Decoder::with_ip(bitness, bytes, code.address(), DecoderOptions::NONE);
@@ -519,5 +524,24 @@ mod window_tests {
         let lines = decode_window(0x1000, &[0xe8, 0x90, 0x90, 0x90, 0x90, 0x90], 0x1001, 3, 2);
         assert_eq!(lines.first().map(|line| line.address), Some(0x1001));
         assert_eq!(lines.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Found by fuzzing: a code section whose address plus size overflowed.
+    #[test]
+    fn a_code_section_at_the_end_of_the_address_space_does_not_overflow() {
+        let bytes = include_bytes!("../../tests/fixtures/fuzz/section-address-overflow.elf");
+        let file = object::File::parse(&bytes[..]).expect("the fixture is an ELF");
+        let ranges = text_ranges(&file);
+        assert!(ranges.iter().all(|(start, end)| start <= end), "{ranges:?}");
+        let mut named = functions(&file);
+        call_targets(&file, 64, &mut named);
+        let mut table = Functions::new();
+        table.insert(u64::MAX, ("last".into(), 0));
+        assert_eq!(containing(&table, u64::MAX), None);
     }
 }
