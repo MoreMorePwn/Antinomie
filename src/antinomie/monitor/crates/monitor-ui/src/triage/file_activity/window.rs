@@ -669,9 +669,24 @@ pub(super) fn tally_text(tally: &Tally) -> String {
     text
 }
 
-/// Why some written bytes have no place in the file.
-const UNPLACED_WHY: &str = "Appends and descriptors opened before the run have no recorded \
+/// Why some written bytes have no place in the file, on a base before
+/// kernel revision 18.
+const UNPLACED_OLD_BASE: &str = "Appends and descriptors opened before the run have no recorded \
      position, and bases before kernel revision 18 do not record positions at all.";
+
+/// Why some written bytes have no place in the file, on revision 18 or later:
+/// the guest records every position, so its record of the call was lost.
+const UNPLACED_LOST: &str = "The exit record was lost.";
+
+/// The reason written bytes were left unplaced, by the run's kernel revision
+/// (an unrecorded revision is an old base).
+pub(super) fn unplaced_why(revision: Option<u32>) -> &'static str {
+    if revision.is_some_and(|revision| revision >= 18) {
+        UNPLACED_LOST
+    } else {
+        UNPLACED_OLD_BASE
+    }
+}
 
 /// The run's written content: bytes kept and skipped. The reasons are named
 /// only for what happened; the caps only when one was reached.
@@ -684,7 +699,7 @@ pub(super) fn written_text(activity: &Activity) -> Option<String> {
     let mut text = format!("Written content: {}.", tally_text(tally));
     if tally.offset_unknown > 0 {
         text.push(' ');
-        text.push_str(UNPLACED_WHY);
+        text.push_str(unplaced_why(activity.kernel_revision));
     }
     let mut caps = Vec::new();
     if tally.file_cap > 0 {

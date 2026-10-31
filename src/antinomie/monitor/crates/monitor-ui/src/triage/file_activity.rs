@@ -265,6 +265,8 @@ pub(super) struct Activity {
     /// Written bytes kept and skipped by the whole run, and the caps.
     pub written: Tally,
     pub limits: Limits,
+    /// Kernel revision of the run's base, if recorded.
+    pub kernel_revision: Option<u32>,
 }
 
 impl Activity {
@@ -324,6 +326,9 @@ pub(super) struct Transfer {
     /// The guest's write order (revision 18): racing writes to one file are
     /// laid in the order the file system applied them.
     pub order: Option<u64>,
+    /// Moved on a stream (terminal, pipe, socket): the file has no position
+    /// to place the bytes at, and none is missing.
+    pub stream: bool,
 }
 
 /// Pages of a file written through a shared mapping, as the guest saw them
@@ -358,6 +363,7 @@ pub(super) struct Builder {
     steps: usize,
     /// The recording segment being read.
     segment: usize,
+    kernel_revision: Option<u32>,
 }
 
 fn kind_of(hits: &[Hit], name: &str, transfer: Option<&Transfer>) -> Kind {
@@ -402,6 +408,10 @@ impl Builder {
     /// The caps on the write content kept (set before the first call).
     pub(super) fn set_limits(&mut self, limits: Limits) {
         self.budget = Budget::new(limits);
+    }
+
+    pub(super) fn set_kernel_revision(&mut self, revision: Option<u32>) {
+        self.kernel_revision = revision;
     }
 
     fn process(&mut self, pid: u32, image: Option<&str>) -> u32 {
@@ -558,7 +568,9 @@ impl Builder {
             if success == Some(false) {
                 return t;
             }
-            if t.write {
+            if t.write && t.stream {
+                // Nothing to place: the event row and its preview stay.
+            } else if t.write {
                 let added = file.writes.add_ordered(
                     &mut self.budget,
                     t.offset,
@@ -808,6 +820,7 @@ impl Builder {
             omitted_events: self.omitted_events,
             written: self.budget.run,
             limits: self.budget.limits,
+            kernel_revision: self.kernel_revision,
         }
     }
 }

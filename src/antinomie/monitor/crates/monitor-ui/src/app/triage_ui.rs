@@ -78,6 +78,11 @@ impl MonitorApp {
             ));
         self.triage.set_data_dir(&self.options.data_dir);
         self.triage.set_write_limits(self.settings.write_limits());
+        self.triage.set_kernel_revision(
+            run.environment
+                .as_ref()
+                .and_then(|environment| environment.kernel_revision),
+        );
         self.triage.set_curl(&self.options.curl);
         if self.triage.take_rule_manager() {
             self.open_library(crate::workspace::LibraryPage::Rules);

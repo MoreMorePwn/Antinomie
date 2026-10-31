@@ -269,6 +269,7 @@ pub(super) struct FileIndex {
     activity: file_activity::Builder,
     /// Directory and object names shared by the extents of a field.
     interned: file_content::Interned,
+    kernel_revision: Option<u32>,
 }
 
 impl FileIndex {
@@ -760,6 +761,7 @@ impl FileIndex {
                     .zip(known_size)
                     .is_some_and(|(offset, known)| offset.saturating_add(size) > known),
                 order: kernel_position.and_then(|position| position.order),
+                stream: !explicit && self.is_stream(call, kernel_position.is_some()),
             }),
         };
         let shape = shape::of(name, args, &copy, open_flags(call, event), success, changed);
@@ -2007,6 +2009,62 @@ mod tests {
             (Kind::Write, None, Some(2))
         );
         assert_eq!(write.content, b"ab");
+    }
+
+    fn activity_at_revision(calls: &[InvocationSummary], revision: Option<u32>) -> Activity {
+        let mut index = FileIndex::default();
+        index.set_kernel_revision(revision);
+        let mut files = FdState::default();
+        let cookies = task_cookies(calls);
+        for call in calls {
+            let event = trace::representative(call).unwrap();
+            remember_cwd(&mut files, call, event);
+            remember_open(&mut files, call, event);
+            apply_dup(&mut files, call, event);
+            forget_closed(&mut files, call, event);
+            inherit_open_fds(&mut files, call, event, &cookies);
+            index.observe(&files, call, event, None);
+        }
+        index.finish_all().1
+    }
+
+    fn terminal_write() -> InvocationSummary {
+        operation(2, 1, "write", 6, [1, 0, 6, 0, 0, 0], b"hello\n")
+    }
+
+    #[test]
+    fn a_stream_write_on_revision_18_or_later_is_not_unplaced() {
+        let activity = activity_at_revision(&[terminal_write()], Some(20));
+        assert_eq!(activity.written.offset_unknown, 0);
+        assert_eq!(activity.written.skipped(), 0);
+        assert_eq!(activity.written.kept, 0);
+        let standard = activity
+            .files
+            .iter()
+            .find(|file| file.standard_io)
+            .expect("the write is still listed");
+        let write = &standard.events[0];
+        assert_eq!(
+            (write.kind, write.offset, write.len),
+            (Kind::Write, None, Some(6))
+        );
+        assert_eq!(write.content, b"hello\n");
+    }
+
+    #[test]
+    fn a_write_with_no_position_on_an_older_base_stays_unplaced() {
+        for revision in [Some(17), None] {
+            let activity = activity_at_revision(&[terminal_write()], revision);
+            assert_eq!(activity.written.offset_unknown, 6, "{revision:?}");
+        }
+    }
+
+    #[test]
+    fn an_incomplete_exit_on_revision_20_is_still_unplaced() {
+        let mut lost = terminal_write();
+        lost.exit.as_mut().unwrap().complete = false;
+        let activity = activity_at_revision(&[lost], Some(20));
+        assert_eq!(activity.written.offset_unknown, 6, "exit record not whole");
     }
 
     #[test]

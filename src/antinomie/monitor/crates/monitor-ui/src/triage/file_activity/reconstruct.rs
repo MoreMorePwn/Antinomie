@@ -242,7 +242,7 @@ impl Open {
         clock: Option<antinomie_monitor_core::HostClockAnchor>,
         directory: Option<&Path>,
     ) {
-        self.header(ui, file);
+        self.header(ui, file, activity.kernel_revision);
         self.controls(ui, activity, file, clock);
         ui.separator();
         egui::SidePanel::right("file-reconstruction-side")
@@ -260,7 +260,7 @@ impl Open {
         });
     }
 
-    fn header(&self, ui: &mut egui::Ui, file: &FileActivity) {
+    fn header(&self, ui: &mut egui::Ui, file: &FileActivity, revision: Option<u32>) {
         ui.add(egui::Label::new(RichText::new(&file.path).strong().monospace()).wrap());
         for name in &file.names {
             ui.weak(format!("also seen as {name}"));
@@ -287,8 +287,13 @@ impl Open {
             crate::activity::warning(
                 ui,
                 format!(
-                    "{} B were written where the host could not place them (append or shared descriptor without a position record); they are not in the map.",
-                    tally.offset_unknown
+                    "{} B were written where the host could not place them ({}); they are not in the map.",
+                    tally.offset_unknown,
+                    if revision.is_some_and(|revision| revision >= 18) {
+                        "the exit record was lost"
+                    } else {
+                        "append or shared descriptor without a position record"
+                    },
                 ),
             );
         }

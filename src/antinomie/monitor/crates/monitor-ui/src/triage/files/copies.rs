@@ -105,6 +105,7 @@ pub(super) fn copy_transfer(
 ) -> Option<file_activity::Transfer> {
     let offset = copy.destination.offset?;
     (copy.kind != CopyKind::Fallocate).then(|| file_activity::Transfer {
+        stream: false,
         write: true,
         offset: Some(offset),
         len: copy.len,
@@ -118,6 +119,22 @@ pub(super) fn copy_transfer(
 
 /// Bookkeeping of the names and descriptors that lead to a file.
 impl FileIndex {
+    /// The kernel revision of the run's base, when the run recorded it.
+    pub fn set_kernel_revision(&mut self, revision: Option<u32>) {
+        self.kernel_revision = revision;
+        self.activity.set_kernel_revision(revision);
+    }
+
+    /// From revision 18 the guest records the position of every read and
+    /// write on a regular file or block device. A successful transfer (not a
+    /// copy) whose exit came whole without one had no position to record: it
+    /// went to a terminal, pipe or socket. `kernel_revision` is the base's.
+    pub(super) fn is_stream(&self, call: &InvocationSummary, position: bool) -> bool {
+        !position
+            && call.exit.as_ref().is_some_and(|exit| exit.complete)
+            && self.kernel_revision.is_some_and(|revision| revision >= 18)
+    }
+
     pub(super) fn remember_alias(&mut self, group: &str, alias: Option<String>) {
         if let Some(alias) = alias {
             let names = self.aliases.entry(group.to_owned()).or_default();
@@ -126,6 +143,7 @@ impl FileIndex {
             }
         }
     }
+
     pub(super) fn bind_description(&mut self, description: u64, group: String) {
         if self.description_group.len() < 65536 {
             self.description_group.insert(description, group);

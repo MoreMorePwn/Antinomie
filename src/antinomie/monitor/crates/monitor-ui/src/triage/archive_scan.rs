@@ -276,6 +276,7 @@ pub(super) fn scan_archive_query(
     let mut change_page = sorting::Page::new(request, 2, cancel);
     let mut file_index = files::FileIndex::default();
     file_index.set_write_limits(request.write_limits);
+    file_index.set_kernel_revision(request.kernel_revision);
     let mut bpf_calls = Vec::new();
     let mut bpf_size = 0usize;
     let mut bpf_omitted = 0;

@@ -108,6 +108,7 @@ pub(in crate::triage) fn activity() -> Activity {
         omitted_files: 0,
         omitted_events: 0,
         written: Default::default(),
+        kernel_revision: None,
         limits: Default::default(),
     }
 }
@@ -590,6 +591,28 @@ fn a_narrow_pane_stacks_the_file_list_above_the_history() {
         .expect("the calls")
         .1;
     assert!(history.top() > list.bottom(), "{history:?} under {list:?}");
+}
+
+#[test]
+fn the_revision_sentence_is_only_for_bases_before_18() {
+    let mut run = Activity::default();
+    run.written.offset_unknown = 933;
+    for revision in [None, Some(17)] {
+        run.kernel_revision = revision;
+        let text = written_text(&run).unwrap();
+        assert!(text.contains("kernel revision 18"), "{text}");
+        assert!(!text.contains("exit record"), "{text}");
+    }
+    for revision in [Some(18), Some(20)] {
+        run.kernel_revision = revision;
+        let text = written_text(&run).unwrap();
+        assert!(text.contains("The exit record was lost."), "{text}");
+        assert!(!text.contains("kernel revision 18"), "{text}");
+        assert!(
+            !text.contains("descriptors opened before the run"),
+            "{text}"
+        );
+    }
 }
 
 #[test]

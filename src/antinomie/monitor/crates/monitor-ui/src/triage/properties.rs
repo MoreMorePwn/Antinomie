@@ -145,6 +145,11 @@ impl TriageView {
         self.scan_request.write_limits = limits;
     }
 
+    /// The kernel revision the selected run's base had (`None` when unrecorded).
+    pub(crate) fn set_kernel_revision(&mut self, revision: Option<u32>) {
+        self.scan_request.kernel_revision = revision;
+    }
+
     pub(crate) fn set_tools_dir(&mut self, dir: &std::path::Path) {
         if self.properties.tools_dir.as_deref() != Some(dir) {
             self.properties.tools_dir = Some(dir.to_owned());
