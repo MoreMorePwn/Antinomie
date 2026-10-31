@@ -215,46 +215,35 @@ it runs.
   and per file, and says why a range is missing (cap, not recorded by the
   kernel, unknown offset).
 
-- **File activity reads a changed file's earlier bytes from the disk the run
-  started from.** At every boot the app records which frozen layers (the
-  installed base and any checkpoint) sit under the VM's writable disk. For a file
+- **File activity reads a changed file's earlier bytes, and a boot keeps them in
+  its recording.** When a VM starts, the disk it was left in is sealed under a
+  fresh empty layer (instant, nothing is copied), so the boot cannot overwrite it
+  and a plain restart of a used VM has a readable starting state like a new one.
+  At every boot the app records which frozen layers (the installed base, any
+  checkpoint and that sealed layer) sit under the VM's writable disk. For a file
   the run changed that existed at the start, the window finds it on that disk
   (by path, and by inode, generation, size, owner and time when the guest named
   the inode, so a name another file took over is not mistaken for it) and reads
-  its bytes on demand with the sandboxed disk reader over the qcow2 chain; nothing
-  is copied into the recording or mounted. Files the run created start empty.
-  The window says when earlier bytes are not available: the file is on tmpfs or
-  another mount, it is over 1 GiB, the VM's disk already held changes from earlier
-  boots when the run started (start from a new VM or restore a checkpoint to keep
-  the starting state), a snapshot restore replaced the disk while the run used the
-  file, or the base or checkpoint was deleted or changed afterwards.
-
-- **File activity places writes where the kernel put them.** With a
-  revision-18 guest, each read and write of a file carries the position the
-  file system used, so an `O_APPEND` write and a write through a descriptor
-  shared with another process (fork, dup) land at their real offset instead of
-  being counted as at an unknown offset, and two processes writing the same
-  range at once leave the bytes of the write applied last. A sendfile, splice, copy_file_range,
-  reflink clone or fallocate now changes only its own range of the
-  destination, with the file's size after it; the bytes a splice from a pipe
-  put into a file are shown as written content.
-
-- **A boot's earlier file bytes now live in its recording.** When a VM starts, the
-  disk it was left in is sealed under a fresh empty layer (instant, nothing is
-  copied), so the boot cannot overwrite it, and a plain restart of a used VM has a
-  readable starting state like a new one. When the boot is over and its recording
-  is saved, the earlier bytes of only the files the runs changed are copied into
-  the recording from the sealed layer, and the layer is merged back down at once:
-  at most one extra layer, and only while the VM runs. The earlier bytes then read
-  without the base or any checkpoint, even after they are deleted. Two caps, 64 MiB
-  per file and 1 GiB per run (Settings › Advanced), keep the copy small; a file over
-  one keeps its size and SHA-256 and is listed as not captured. The layer is not a
-  snapshot and is never shown in Snapshots; your snapshots are never merged or
-  changed (if you take or restore one during the boot, the layer stays in the chain
-  as the snapshot's own). If the app or the machine dies mid-run the VM still boots,
-  and the next start or launch of the app finishes the copy and the merge. The copy
-  is not counted in the Recording quota. Several runs in one boot share the boot's
-  starting state; a boot started by a snapshot restore still reads its checkpoint.
+  its bytes with the sandboxed disk reader over the qcow2 chain. When the boot is
+  over and its recording is saved, the earlier bytes of only the files the runs
+  changed are copied into the recording from the sealed layer, and the layer is
+  merged back down at once: at most one extra layer, and only while the VM runs.
+  The earlier bytes then read without the base or any checkpoint, even after they
+  are deleted. Two caps, 64 MiB per file and 1 GiB per run (Settings › Advanced),
+  keep the copy small; a file over one keeps its size and SHA-256 and is listed
+  as not captured. The layer is not a snapshot and is never shown in Snapshots;
+  your snapshots are never merged or changed (if you take or restore one during
+  the boot, the layer stays in the chain as the snapshot's own). If the app or the
+  machine dies mid-run the VM still boots, and the next start or launch of the app
+  finishes the copy and the merge. The copy is not counted in the Recording
+  quota. Several runs in one boot share the boot's starting state; a boot started
+  by a snapshot restore still reads its checkpoint. Files the run created start
+  empty. The window says when earlier bytes are not available: the file is on
+  tmpfs or another mount, it is over 1 GiB, the VM's disk chain was at its limit
+  and already held changes from earlier boots when the run started (create an
+  independent duplicate of the VM, or delete snapshots), a snapshot restore
+  replaced the disk while the run used the file, or the base or checkpoint was
+  deleted or changed afterwards and the bytes were not yet copied.
 
 - **File activity shows writes through shared file mappings.** With a
   revision-18 guest, the pages a program stored into a `MAP_SHARED` mapping of

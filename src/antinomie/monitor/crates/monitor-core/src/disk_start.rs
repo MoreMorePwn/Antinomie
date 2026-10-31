@@ -12,16 +12,17 @@
 //!   lays a new empty overlay on the checkpoint's frozen layer): the layers
 //!   below it, top first, each with its size and modification time, are the
 //!   starting disk ([`Start::Frozen`]);
-//! * the overlay already held changes from earlier boots: the starting state
-//!   is in a file the boot is about to write, so it cannot be read back
+//! * the overlay already held changes from earlier boots and could not be
+//!   sealed (the backing chain is at its limit): the starting state is in a
+//!   file the boot is about to write, so it cannot be read back
 //!   ([`Start::Changed`]);
 //! * the chain could not be read ([`Start::Unknown`]).
 //!
-//! Nothing is copied into the recording. The layers are read in place, only
-//! when a file's earlier bytes are asked for, and only if every layer is
-//! still the file it was at the start ([`Frozen::verify`]); a base that was
-//! deleted, refreshed or rewritten, or a checkpoint that was deleted, makes
-//! the earlier bytes unavailable, and the window says so.
+//! The layers are read in place, only when a file's earlier bytes are asked
+//! for, and only if every layer is still the file it was at the start
+//! ([`Frozen::verify`]); a base that was deleted, refreshed or rewritten, or a
+//! checkpoint that was deleted, makes the earlier bytes unavailable until the
+//! boot's recording has its own copy, and the window says so.
 use serde::{Deserialize, Serialize};
 use std::{
     fs::File,

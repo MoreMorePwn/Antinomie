@@ -91,8 +91,9 @@ impl StartDisk {
             Start::Changed => {
                 return Err(
                     "the VM's disk already held changes from earlier boots when the run \
-                            started, and that state was not kept (start from a new or reset VM, \
-                            or restore a checkpoint, to keep it)"
+                            started, and its backing chain was too long to seal, so that \
+                            state was not kept (create an independent duplicate of the VM, \
+                            or delete snapshots, to keep it)"
                         .into(),
                 );
             }
