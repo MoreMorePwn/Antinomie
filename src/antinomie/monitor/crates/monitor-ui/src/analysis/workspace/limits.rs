@@ -4,7 +4,7 @@
 use super::ReportAction;
 use antinomie_monitor_core::{
     AnalysisKind, AnalysisLimit, AnalysisLimitKind, AnalysisReport, AnalysisSection, AnalysisState,
-    LimitSetting, TIME_LIMIT_MAX_MINUTES,
+    TIME_LIMIT_MAX_MINUTES,
 };
 use eframe::egui;
 
@@ -90,6 +90,7 @@ pub(super) fn notes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use antinomie_monitor_core::LimitSetting;
 
     fn limit(seconds: Option<u64>) -> AnalysisLimit {
         AnalysisLimit {
