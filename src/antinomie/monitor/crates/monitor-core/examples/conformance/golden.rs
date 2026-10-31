@@ -5,6 +5,11 @@
 //! `<pid>`, addresses `<addr>`, and content the program could not predict
 //! (`volatile` cases, exit-time buffers) is left out. The files live in
 //! tests/monitor/conformance/trace/golden/GROUP.txt; `--bless` rewrites them.
+//! A Debian Minimal base has its own (`golden/debian-minimal/GROUP.txt`): its
+//! kernel has Debian's configuration, so calls whose result depends on it
+//! (kexec_file_load, userfaultfd, transparent huge pages, the shadow stack, the
+//! persistent keyring, the log buffer size, the built-in file systems) answer
+//! as Debian's kernel does, not as the BusyBox kernel's.
 use crate::{Context, judge::CaseResult, oracle, recording, render::Views, trace::GroupReport};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -301,8 +306,21 @@ fn diff(old: &str, new: &str) -> Vec<String> {
     out
 }
 
+/// The golden directory for the base: Debian Minimal's own, else the shared one.
+fn directory(context: &Context) -> std::path::PathBuf {
+    let shared = context.repo.join("tests/monitor/conformance/trace/golden");
+    let guest = antinomie_monitor_core::storage::Bundle::load(&context.base)
+        .ok()
+        .and_then(|bundle| bundle.guest)
+        .map(|guest| guest.id);
+    match guest.as_deref() {
+        Some("debian-minimal") => shared.join("debian-minimal"),
+        _ => shared,
+    }
+}
+
 pub fn check(context: &Context, reports: &[GroupReport], views: &Views) -> Result<Checked, String> {
-    let directory = context.repo.join("tests/monitor/conformance/trace/golden");
+    let directory = directory(context);
     let mut passed = true;
     let mut summary = Vec::new();
     for report in reports

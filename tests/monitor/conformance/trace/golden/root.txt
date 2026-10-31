@@ -38,7 +38,7 @@ ioperm.off_root | ioperm(from=128, num=1, on=0) = 0 |
 ioperm.on_root | ioperm(from=128, num=1, on=1) = 0 |
 iopl.lower_root | iopl(level=0) = 0 |
 iopl.raise_root | iopl(level=3) = 0 |
-kexec_file_load.unload | kexec_file_load(kernel_fd=-1, initrd_fd=-1, cmdline_len=0, cmdline_ptr=NULL, flags=0x1) = ENOSYS | arg3.data:null pointer:uncaptured
+kexec_file_load.unload | kexec_file_load(kernel_fd=-1, initrd_fd=-1, cmdline_len=0, cmdline_ptr=NULL, flags=KEXEC_FILE_UNLOAD) = ENOSYS | arg3.data:null pointer:uncaptured
 kexec_load.bad_flags | kexec_load(entry=0, nr_segments=0, segments=NULL, flags=KEXEC_ARCH_DEFAULT|0x100) = EINVAL | arg2.segments:complete:uncaptured
 kexec_load.too_many_segments_root | kexec_load(entry=0, nr_segments=17, segments=<addr>, flags=KEXEC_ARCH_DEFAULT) = EINVAL | arg2.segments:invalid extent:uncaptured !3
 kexec_load.unload | kexec_load(entry=0, nr_segments=0, segments=NULL, flags=KEXEC_ARCH_DEFAULT) = 0 | arg2.segments:complete:uncaptured

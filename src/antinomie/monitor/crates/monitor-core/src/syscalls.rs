@@ -599,6 +599,12 @@ fn rules(group: &str) -> Vec<FlagRule> {
             ("LANDLOCK_CREATE_RULESET_ERRATA", 2),
         ]),
         "shadow_stack" => bits(&[("SHADOW_STACK_SET_TOKEN", 1)]),
+        "kexec_file" => bits(&[
+            ("KEXEC_FILE_UNLOAD", 0x1),
+            ("KEXEC_FILE_ON_CRASH", 0x2),
+            ("KEXEC_FILE_NO_INITRAMFS", 0x4),
+            ("KEXEC_FILE_DEBUG", 0x8),
+        ]),
         "listmount" => bits(&[("LISTMOUNT_REVERSE", 1)]),
         "lsm_get" => bits(&[("LSM_FLAG_SINGLE", 1)]),
         "ipc_create" | "shmget" => {
@@ -1283,6 +1289,11 @@ mod tests {
         let kexec = argument_flags(246, 3, (62 << 16) | 1).unwrap();
         assert_eq!(kexec.names, ["KEXEC_ARCH_X86_64", "KEXEC_ON_CRASH"]);
         assert_eq!(kexec.unknown_bits, 0);
+        // kexec_file_load's flags are their own (unload, as root does).
+        let unload = argument_flags(320, 4, 1).unwrap();
+        assert_eq!(unload.names, ["KEXEC_FILE_UNLOAD"]);
+        assert_eq!(unload.unknown_bits, 0);
+        assert_eq!(argument_flags(320, 4, 0x10).unwrap().unknown_bits, 0x10);
     }
 
     #[test]

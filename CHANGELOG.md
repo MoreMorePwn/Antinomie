@@ -217,6 +217,15 @@ it runs.
   (`scripts/check-kernel-abi.py`). New Debian Minimal bases only; the kernel
   build now needs `zstd`.
 
+- **Conformance goldens for Debian Minimal, and kexec_file_load's flags.**
+  With Debian's configuration some calls answer differently from the BusyBox
+  kernel (kexec_file_load and userfaultfd exist, transparent huge pages,
+  the shadow stack, the persistent keyring, a smaller log buffer, fewer
+  built-in file systems), so the quick tier compares a Debian Minimal base
+  with goldens of its own (`trace/golden/debian-minimal/`). The Syscall Trace
+  names kexec_file_load's flags (`KEXEC_FILE_UNLOAD`, `KEXEC_FILE_ON_CRASH`,
+  `KEXEC_FILE_NO_INITRAMFS`, `KEXEC_FILE_DEBUG`) instead of showing raw bits.
+
 - **Export the whole Triage as a report.** Triage › Export report… writes the
   run as HTML (one self-contained file), PDF (the same layout, written by the
   app with no browser or network), JSON (versioned schema, documented in

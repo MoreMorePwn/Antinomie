@@ -8142,7 +8142,7 @@
           "name": "flags",
           "c_type": "unsigned long",
           "pointer": false,
-          "flags": "unknown"
+          "flags": "kexec_file"
         }
       ],
       "implemented": true,

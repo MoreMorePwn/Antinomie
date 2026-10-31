@@ -61,8 +61,13 @@ flowchart LR
    `golden.rs` compares with `trace/golden/GROUP.txt`. Golden lines name the
    root disk (`<root-dev>`: BusyBox's whole disk, a Debian Minimal partition)
    and the work directory's device number (`<work-dev>`) by role, as the
-   fixture reports them (`ANT_GROUP` `rootdev`, `workdev`), so one golden
-   serves both bases.
+   fixture reports them (`ANT_GROUP` `rootdev`, `workdev`). A Debian Minimal
+   base compares with `trace/golden/debian-minimal/GROUP.txt` instead: its
+   kernel has Debian's configuration, so calls such as kexec_file_load,
+   userfaultfd, `madvise(MADV_HUGEPAGE)`, map_shadow_stack, the keyring
+   capabilities, the log buffer size and the count of built-in file systems
+   answer differently from the BusyBox kernel's; the lines are otherwise the
+   same.
 
 Reports: `OUT_DIR/trace/GROUP.json` (every case, problem, gap, the accounting and
 throughput), the matrix, `render/`, and on a golden mismatch
