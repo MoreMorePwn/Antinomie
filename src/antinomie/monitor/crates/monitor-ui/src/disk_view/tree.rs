@@ -87,7 +87,12 @@ pub(super) struct Tree {
 const SIZE_CHARS: usize = 10;
 const MODE_CHARS: usize = 10;
 /// Least width the name column keeps before the tree scrolls sideways.
-const MIN_NAME_WIDTH: f32 = 160.0;
+const MIN_NAME_WIDTH: f32 = 220.0;
+/// A pane narrower than this leaves out the `uid:gid` field (the Entry details
+/// have it), so the names keep their room.
+const IDS_PANE: f32 = 620.0;
+/// The id digits of a tree drawn without the `uid:gid` field.
+const NO_IDS: (usize, usize) = (0, 0);
 
 /// How a row is drawn: the tree's options and where its columns are.
 #[derive(Clone, Copy)]
@@ -109,6 +114,9 @@ impl Columns {
     /// as wide as the next and the columns line up under each other.
     fn text(&self, size: &str, modes: &str, entry: &DiskEntry) -> String {
         let (uid, gid) = self.id_digits;
+        if self.id_digits == NO_IDS {
+            return format!("{size:>SIZE_CHARS$}  {modes:<MODE_CHARS$}");
+        }
         format!(
             "{size:>SIZE_CHARS$}  {modes:<MODE_CHARS$}  {:>uid$}:{:<gid$}",
             entry.uid, entry.gid
@@ -116,6 +124,9 @@ impl Columns {
     }
 
     fn chars(id_digits: (usize, usize)) -> usize {
+        if id_digits == NO_IDS {
+            return SIZE_CHARS + 2 + MODE_CHARS;
+        }
         SIZE_CHARS + 2 + MODE_CHARS + 2 + id_digits.0 + 1 + id_digits.1
     }
 }
@@ -368,11 +379,15 @@ impl Tree {
         let char_width = crate::tree_lines::char_width(ui, &mono);
         // The metadata sits at the right edge of the viewport, in the same
         // place for every row; names get what is left and are cut short there.
-        let meta_width = Columns::chars(self.id_digits) as f32 * char_width;
         let viewport = ui.available_width() - ui.spacing().scroll.allocated_width();
+        let id_digits = if viewport < IDS_PANE {
+            NO_IDS
+        } else {
+            self.id_digits
+        };
+        let meta_width = Columns::chars(id_digits) as f32 * char_width;
         let name_width =
             (viewport - meta_width - 3.0 * ui.spacing().item_spacing.x).max(MIN_NAME_WIDTH);
-        let id_digits = self.id_digits;
         let mut area = egui::ScrollArea::both()
             .id_salt("disk_tree")
             .auto_shrink([false, false])
@@ -583,7 +598,7 @@ fn entry_row(
             choose(ui, "Open with…", file, Choice::OpenWith);
             choose(
                 ui,
-                "Hand to Static Analysis",
+                "Hand to Static analysis",
                 entry.kind == DiskEntryKind::File,
                 Choice::HandToAnalysis,
             );

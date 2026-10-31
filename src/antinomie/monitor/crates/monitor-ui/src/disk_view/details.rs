@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The shared Details dock for the Disks tab: the open view, or the selected
-//! file, directory or link, with Extract, Save, Open with and Static Analysis.
+//! file, directory or link, with Extract, Save, Open with and Static analysis.
 use super::{extraction::Intent, *};
 use crate::theme;
 use antinomie_monitor_core::disks::{export::ExportFormat, reader::DiskEntry};
@@ -439,7 +439,7 @@ impl DiskView {
             if ui
                 .add_enabled(
                     elf && !busy && entry.kind == DiskEntryKind::File,
-                    egui::Button::new("Hand to Static Analysis"),
+                    egui::Button::new("Hand to Static analysis"),
                 )
                 .on_hover_text("Extract the file and analyze it offline, in the isolated worker")
                 .on_disabled_hover_text("Only ELF files are handed over")

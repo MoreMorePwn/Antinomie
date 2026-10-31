@@ -417,7 +417,9 @@ impl MonitorApp {
             .show(ctx, |ui| {
                 egui::ScrollArea::horizontal()
                     .id_salt("toolbar_controls")
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                    // A narrow window cuts the row: the bar says so when the
+                    // pointer is over it, and the wheel scrolls it.
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
                     .show(ui, |ui| {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             ui.spacing_mut().item_spacing.x = 4.0;

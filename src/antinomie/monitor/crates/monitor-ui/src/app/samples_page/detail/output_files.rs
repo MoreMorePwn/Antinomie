@@ -100,7 +100,7 @@ pub(in crate::app::samples_page) struct Output {
 /// The width the three action buttons of a row need on one line.
 const ACTIONS_WIDTH: f32 = 380.0;
 /// The width the longest of them needs when they sit one above the other.
-const STACKED_WIDTH: f32 = 170.0;
+const STACKED_WIDTH: f32 = 110.0;
 
 fn size_of(path: &std::path::Path) -> Option<u64> {
     let meta = std::fs::metadata(path).ok()?;
@@ -302,7 +302,10 @@ pub(in crate::app::samples_page) fn section(
         let mono = egui::TextStyle::Monospace.resolve(ui.style());
         let hash = parts::fitted(ui, &mono, ["SHA-256".to_owned(), "00000000".to_owned()]);
         let size = widest("Size", &|output| {
-            output.size.map_or("–".to_owned(), crate::values::file_size)
+            output.size.map_or(
+                "–".to_owned(),
+                antinomie_monitor_core::byte_size::short_size,
+            )
         });
         // The three buttons need about this much; a narrower last column
         // puts them on separate lines, in taller rows, instead of cutting
@@ -315,7 +318,7 @@ pub(in crate::app::samples_page) fn section(
         let actions = if roomy { ACTIONS_WIDTH } else { STACKED_WIDTH };
         // (column, least width)
         let mut over = widths.iter().sum::<f32>() + actions - room;
-        for (index, least) in [(3, 80.0), (4, 120.0), (0, 90.0), (2, 56.0), (5, 150.0)] {
+        for (index, least) in [(3, 80.0), (4, 84.0), (0, 90.0), (2, 56.0), (5, 150.0)] {
             if over <= 0.0 {
                 break;
             }
@@ -352,7 +355,7 @@ pub(in crate::app::samples_page) fn section(
                         if roomy {
                             table::row_height(font) + 6.0
                         } else {
-                            3.0 * (font + 12.0) + 6.0
+                            table::row_height(font) + 6.0
                         },
                         data.outputs.len(),
                         |mut row| {
@@ -385,9 +388,10 @@ pub(in crate::app::samples_page) fn section(
                                 ui.label(&output.saved_because);
                             });
                             row.col(|ui| {
-                                ui.label(
-                                    output.size.map_or("–".to_owned(), crate::values::file_size),
-                                );
+                                ui.label(output.size.map_or(
+                                    "–".to_owned(),
+                                    antinomie_monitor_core::byte_size::short_size,
+                                ));
                             });
                             row.col(|ui| {
                                 ui.horizontal(|ui| match &output.availability {
@@ -447,7 +451,7 @@ pub(in crate::app::samples_page) fn section(
                                 });
                             });
                             row.col(|ui| {
-                                ui.horizontal_wrapped(|ui| {
+                                let buttons = |ui: &mut egui::Ui| {
                                     let why = match output.availability {
                                         Availability::Deleted => "The file was deleted",
                                         Availability::Kept(..) => {
@@ -499,7 +503,14 @@ pub(in crate::app::samples_page) fn section(
                                     {
                                         crate::evidence::reveal(ui.ctx(), &output.path);
                                     }
-                                });
+                                };
+                                // A narrow table keeps one button, which opens the
+                                // three, so a row stays one line.
+                                if roomy {
+                                    ui.horizontal(buttons);
+                                } else {
+                                    ui.menu_button("Actions", buttons);
+                                }
                             });
                             row.response().context_menu(|ui| {
                                 let why = match output.availability {

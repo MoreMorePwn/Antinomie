@@ -139,7 +139,9 @@ pub(super) fn show(
         }
         if ui
             .button("Detach and kill")
-            .on_hover_text("Ends the process with SIGKILL")
+            .on_hover_text(
+                "Ends the process now with SIGKILL, without letting it save or clean up.",
+            )
             .clicked()
         {
             actions.push(PanelAction::Detach { kill: true });

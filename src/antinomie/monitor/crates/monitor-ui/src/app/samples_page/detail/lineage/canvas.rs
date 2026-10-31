@@ -11,10 +11,10 @@ use std::collections::BTreeMap;
 use super::labels;
 
 pub(super) const HEIGHT: f32 = 380.0;
-const COLUMN: f32 = 310.0;
-const ROW: f32 = 64.0;
-const NODE_W: f32 = 170.0;
-const NODE_H: f32 = 32.0;
+const COLUMN: f32 = 340.0;
+const ROW: f32 = 72.0;
+const NODE_W: f32 = 220.0;
+const NODE_H: f32 = 40.0;
 const MIN_ZOOM: f32 = 0.2;
 const MAX_ZOOM: f32 = 3.0;
 const MINIMAP: Vec2 = egui::vec2(150.0, 96.0);
@@ -331,7 +331,7 @@ pub(super) fn show(
     let in_minimap = |at: Pos2| minimap.contains(at);
     // Edges first, under the nodes; their labels are placed once all are
     // known (so none covers a node or another label) and drawn over the nodes.
-    let font = egui::FontId::proportional((11.0 * scale).clamp(8.0, 16.0));
+    let font = egui::FontId::proportional((14.0 * scale).clamp(9.0, 20.0));
     struct Pending<'a> {
         edge: &'a LineageEdge,
         galley: std::sync::Arc<egui::Galley>,
@@ -421,7 +421,7 @@ pub(super) fn show(
         // One line; the full text is the node's hover text.
         let mut job = egui::text::LayoutJob::simple(
             node_title(node),
-            egui::FontId::new((12.0 * scale).clamp(8.0, 18.0), family),
+            egui::FontId::new((15.0 * scale).clamp(9.0, 22.0), family),
             text_color,
             box_.width() - 12.0 * scale,
         );
@@ -448,7 +448,7 @@ pub(super) fn show(
                 } else {
                     "−".into()
                 };
-                let size = egui::vec2(26.0, 16.0) * scale.clamp(0.7, 1.2);
+                let size = egui::vec2(32.0, 19.0) * scale.clamp(0.7, 1.2);
                 let pill = Rect::from_center_size(Pos2::new(side_x, box_.center().y), size);
                 painter.rect_filled(pill, size.y / 2.0, palette.panel);
                 painter.rect_stroke(
@@ -461,7 +461,7 @@ pub(super) fn show(
                     pill.center(),
                     egui::Align2::CENTER_CENTER,
                     label,
-                    egui::FontId::proportional(10.0 * scale.clamp(0.7, 1.2)),
+                    egui::FontId::proportional(12.0 * scale.clamp(0.7, 1.2)),
                     palette.accent,
                 );
                 if click.is_some_and(|at| pill.contains(at) && !in_minimap(at)) {

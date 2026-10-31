@@ -220,94 +220,102 @@ impl MonitorApp {
             });
         let selected = self.selected_base.clone();
         let height = (ui.available_height() - table::row_height(font) * 2.0).max(80.0);
-        table::begin(ui);
-        egui_extras::TableBuilder::new(ui)
-            .id_salt("library_bases")
-            .sense(egui::Sense::click())
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .striped(true)
-            // The name and the status take what they need; the guest column
-            // takes the rest, so no column is squeezed by a long base name.
-            .column(
-                Column::initial(360.0)
-                    .at_least(200.0)
-                    .resizable(true)
-                    .clip(true),
-            )
-            .column(
-                Column::initial(310.0)
-                    .at_least(110.0)
-                    .resizable(true)
-                    .clip(true),
-            )
-            .column(Column::exact(104.0))
-            .column(Column::exact(72.0))
-            .column(Column::remainder().at_least(140.0).clip(true))
-            .max_scroll_height(height)
-            .min_scrolled_height(0.0)
-            .header(table::header_height(font), |mut header| {
-                for (column, title) in ["Base", "Status", "Size", "VMs", "Guest"]
-                    .into_iter()
-                    .enumerate()
-                {
-                    header.col(|ui| {
-                        crate::table_sort::header_aligned(
-                            ui,
-                            "library_bases",
-                            column,
-                            title,
-                            table::numeric_align(matches!(column, 2 | 3)),
-                        )
-                    });
-                }
-            })
-            .body(|body| {
-                body.rows(table::row_height(font), rows.len(), |mut row| {
-                    let base = &rows[order[row.index()]];
-                    let is_selected = selected.as_deref() == Some(base.id.as_str());
-                    row.set_selected(is_selected);
-                    row.col(|ui| {
-                        table::row_mark(
-                            ui,
-                            if is_selected {
-                                table::Mark::Selected
-                            } else {
-                                table::Mark::None
-                            },
-                        );
-                        table::cell_click(ui, table::Cell::Text, &base.name)
-                            .on_hover_text(format!("{}\n{}", base.name, base.details));
-                    });
-                    row.col(|ui| {
-                        let (text, tone) = match base.status {
-                            RevisionStatus::Current => ("Current", Tone::Good),
-                            RevisionStatus::NeedsNewerApp => (base.hint.as_str(), Tone::Error),
-                            _ => (base.hint.as_str(), Tone::Warn),
-                        };
-                        widgets::chip(ui, text, tone).on_hover_text(&base.details);
-                    });
-                    row.col(|ui| {
-                        table::cell_click(
-                            ui,
-                            table::Cell::Number,
-                            &format!("{:.1} GiB", base.size as f64 / 1073741824.0),
-                        );
-                    });
-                    row.col(|ui| {
-                        table::cell_click(ui, table::Cell::Number, &base.vms.to_string());
-                    });
-                    row.col(|ui| {
-                        table::cell_click(ui, table::Cell::Text, &base.guest);
-                    });
-                    let response = row.response();
-                    if response.clicked() || response.secondary_clicked() {
-                        clicked = Some(base.id.clone());
+        // The table gets its own box, so its column rules stop at its last
+        // row and never run through the hints below.
+        let box_size = egui::vec2(
+            ui.available_width(),
+            height + table::header_height(font) + 4.0,
+        );
+        ui.allocate_ui_with_layout(box_size, egui::Layout::top_down(egui::Align::Min), |ui| {
+            table::begin(ui);
+            egui_extras::TableBuilder::new(ui)
+                .id_salt("library_bases")
+                .sense(egui::Sense::click())
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .striped(true)
+                // The name and the status take what they need; the guest column
+                // takes the rest, so no column is squeezed by a long base name.
+                .column(
+                    Column::initial(360.0)
+                        .at_least(200.0)
+                        .resizable(true)
+                        .clip(true),
+                )
+                .column(Column::remainder().at_least(220.0).clip(true))
+                .column(Column::exact(104.0))
+                .column(Column::exact(84.0))
+                .column(
+                    Column::initial(170.0)
+                        .at_least(110.0)
+                        .resizable(true)
+                        .clip(true),
+                )
+                .max_scroll_height(height)
+                .min_scrolled_height(0.0)
+                .header(table::header_height(font), |mut header| {
+                    for (column, title) in ["Base", "Status", "Size", "VMs", "Guest"]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        header.col(|ui| {
+                            crate::table_sort::header_aligned(
+                                ui,
+                                "library_bases",
+                                column,
+                                title,
+                                table::numeric_align(matches!(column, 2 | 3)),
+                            )
+                        });
                     }
-                    response.context_menu(|ui| {
-                        self.base_menu(ui, &base.id, &mut base_action);
+                })
+                .body(|body| {
+                    body.rows(table::row_height(font), rows.len(), |mut row| {
+                        let base = &rows[order[row.index()]];
+                        let is_selected = selected.as_deref() == Some(base.id.as_str());
+                        row.set_selected(is_selected);
+                        row.col(|ui| {
+                            table::row_mark(
+                                ui,
+                                if is_selected {
+                                    table::Mark::Selected
+                                } else {
+                                    table::Mark::None
+                                },
+                            );
+                            table::cell_click(ui, table::Cell::Text, &base.name)
+                                .on_hover_text(format!("{}\n{}", base.name, base.details));
+                        });
+                        row.col(|ui| {
+                            let (text, tone) = match base.status {
+                                RevisionStatus::Current => ("Current", Tone::Good),
+                                RevisionStatus::NeedsNewerApp => (base.hint.as_str(), Tone::Error),
+                                _ => (base.hint.as_str(), Tone::Warn),
+                            };
+                            widgets::chip(ui, text, tone).on_hover_text(&base.details);
+                        });
+                        row.col(|ui| {
+                            table::cell_click(
+                                ui,
+                                table::Cell::Number,
+                                &format!("{:.1} GiB", base.size as f64 / 1073741824.0),
+                            );
+                        });
+                        row.col(|ui| {
+                            table::cell_click(ui, table::Cell::Number, &base.vms.to_string());
+                        });
+                        row.col(|ui| {
+                            table::cell_click(ui, table::Cell::Text, &base.guest);
+                        });
+                        let response = row.response();
+                        if response.clicked() || response.secondary_clicked() {
+                            clicked = Some(base.id.clone());
+                        }
+                        response.context_menu(|ui| {
+                            self.base_menu(ui, &base.id, &mut base_action);
+                        });
                     });
                 });
-            });
+        });
         ui.add_space(6.0);
         let target = self.selected_base.clone().or(clicked.clone());
         ui.horizontal_wrapped(|ui| {

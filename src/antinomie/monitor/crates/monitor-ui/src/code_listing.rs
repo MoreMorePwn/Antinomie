@@ -159,6 +159,15 @@ pub(crate) fn text_instruction(ui: &mut egui::Ui, line: &str) {
         return;
     };
     let (mnemonic, operands) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+    // The function list writes `0x401000`; so does the listing.
+    let address = if address.starts_with("0x")
+        || address.is_empty()
+        || !address.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        address.to_owned()
+    } else {
+        format!("0x{address}")
+    };
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         ui.add(egui::Label::new(

@@ -219,16 +219,23 @@ impl DiskView {
         }
         let mut close = false;
         ui.horizontal_top(|ui| {
-            close = ui
-                .add(
-                    egui::Button::new(
-                        egui::RichText::new(egui_phosphor::regular::X).color(theme::muted()),
+            // The dismiss button sits at the right, as on every other message.
+            let button = ui.spacing().interact_size.y + ui.spacing().item_spacing.x;
+            ui.scope(|ui| {
+                ui.set_max_width((ui.available_width() - button).max(60.0));
+                ui.add(egui::Label::new(job).wrap());
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                close = ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new(egui_phosphor::regular::X).color(theme::muted()),
+                        )
+                        .frame(false),
                     )
-                    .frame(false),
-                )
-                .on_hover_text("Dismiss")
-                .clicked();
-            ui.add(egui::Label::new(job).wrap());
+                    .on_hover_text("Dismiss")
+                    .clicked();
+            });
         });
         if close {
             self.status = None;

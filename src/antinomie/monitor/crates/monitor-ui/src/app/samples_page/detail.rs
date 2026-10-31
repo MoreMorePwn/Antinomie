@@ -29,6 +29,16 @@ mod similar;
 mod summary;
 mod triage_parts;
 
+/// The width a column of texts needs, within `most` (see `parts`).
+pub(super) fn fitted_up_to(
+    ui: &egui::Ui,
+    font: &egui::FontId,
+    texts: impl IntoIterator<Item = String>,
+    most: f32,
+) -> f32 {
+    parts::fitted_up_to(ui, font, texts, most)
+}
+
 /// A time as the event rows show it.
 pub(super) fn second(ms: u64) -> String {
     parts::second(ms)

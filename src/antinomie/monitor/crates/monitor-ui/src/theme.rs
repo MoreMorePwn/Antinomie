@@ -459,7 +459,10 @@ pub fn apply_theme(ctx: &egui::Context, theme: Theme) {
     style.visuals.warn_fg_color = palette.warn;
     style.visuals.error_fg_color = palette.error;
     style.visuals.selection.bg_fill = palette.selection;
-    style.visuals.selection.stroke = Stroke::new(1.0_f32, palette.accent);
+    // Also the text color of a selected table row and a selected list item:
+    // blue text on the blue selection fill lost the row's emphasis, so the
+    // selected text stays the theme's text color.
+    style.visuals.selection.stroke = Stroke::new(1.0_f32, palette.text);
     style.visuals.window_stroke = Stroke::new(1.0_f32, palette.line);
     // Windows: 8 px corners, a 1 px line and a soft shadow (the mockup's
     // `.modal`); menus keep 6.
@@ -485,6 +488,10 @@ pub fn apply_theme(ctx: &egui::Context, theme: Theme) {
     }
     style.visuals.widgets.noninteractive.bg_fill = palette.panel;
     style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, palette.muted);
+    // A control's outline reads against its fill: a check box or radio is a
+    // box, and a hairline as faint as a panel rule left it nearly invisible.
+    style.visuals.widgets.inactive.bg_stroke =
+        Stroke::new(1.0_f32, palette.line.lerp_to_gamma(palette.muted, 0.5));
     style.visuals.widgets.inactive.bg_fill = palette.raised;
     style.visuals.widgets.inactive.weak_bg_fill = palette.raised;
     style.visuals.widgets.hovered.bg_fill = palette.hover;
@@ -926,7 +933,7 @@ mod tests {
         assert_eq!(style.visuals.window_fill, raised());
         assert_eq!(style.visuals.extreme_bg_color, bg());
         assert_eq!(style.visuals.override_text_color, Some(text()));
-        assert_eq!(style.visuals.selection.stroke.color, blue());
+        assert_eq!(style.visuals.selection.stroke.color, text());
         for (text_style, size) in [
             (TextStyle::Body, 18.0),
             (TextStyle::Button, 18.0),

@@ -194,7 +194,13 @@ pub(super) fn show(
             }))
             .show_inside(ui, |ui| {
                 crate::code_listing::heading(ui, names.len(), names.len());
-                if ui.button("Export text").clicked() {
+                if ui
+                    .button("Export text")
+                    .on_hover_text(
+                        "Save this listing as a text file. Export category… in the report menu offers more formats.",
+                    )
+                    .clicked()
+                {
                     action = Some(ReportAction::Export {
                         report_id: report.id.clone(),
                         kind: Some(kind),

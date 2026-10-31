@@ -50,19 +50,37 @@ impl HistoryColumns {
         let pane = (ui.available_width() / 100.0).floor().max(3.0) * 100.0;
         // A pane too narrow for every column drops Sample and Arguments; the
         // minimums of the others then shrink together if they still do not fit.
-        let wide = pane >= Self::WIDE_PANE;
+        // The start time shows whole, to the second and the zone: measured with
+        // the widest form it takes, so a larger text size does not cut it.
+        let start_text = ui.fonts(|fonts| {
+            fonts
+                .layout_no_wrap(
+                    "2026-10-31 10:43:07.514 (UTC+7)".into(),
+                    egui::TextStyle::Body.resolve(ui.style()),
+                    egui::Color32::PLACEHOLDER,
+                )
+                .size()
+                .x
+        }) + 2.0 * spacing.item_spacing.x;
+        // The start time is never cut: the pane drops Sample and Arguments before
+        // it takes room from the time.
+        let wide = pane >= Self::WIDE_PANE + (start_text - 190.0).max(0.0);
+        let mut base = Self::LEAST;
+        if wide {
+            base[0] = start_text;
+        }
         let kept = if wide { 6.0 } else { 4.0 };
         let gaps = gaps * kept / 6.0;
-        let sum: f32 = Self::LEAST
+        let sum: f32 = base
             .iter()
             .enumerate()
             .filter(|(index, _)| wide || !matches!(index, 2 | 3))
             .map(|(_, least)| least)
             .sum();
         let share = ((pane - actions - gaps) / sum).clamp(Self::SHRINK_MIN, 1.0);
-        let least = Self::LEAST.map(|least| least * share);
+        let least = base.map(|least| least * share);
         // What each wide column wants.
-        let wanted = [190.0, 120.0, 170.0, 190.0, 110.0];
+        let wanted = [start_text.max(190.0), 120.0, 280.0, 190.0, 110.0];
         let others = [least[0], least[2], least[3], least[4], least[5]];
         let kept_others: f32 = others
             .iter()

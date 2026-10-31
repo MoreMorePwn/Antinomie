@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Attach the debugger to a running guest process and show how to reach it.
 //! The engine is in the guest kernel and the RSP server on the host; the
-//! Debugger tab beside Static Analysis starts and ends the session, shows how
+//! Debugger tab beside Static analysis starts and ends the session, shows how
 //! to reach it from gdb, and is the in-app debugger: run control, the listing
 //! around the instruction pointer with the registers, and folded panes for
 //! threads, processes, breakpoints, memory, stack, signals and a gdb console.
@@ -228,9 +228,16 @@ fn show(
         .frame(egui::Frame::new())
         .show_inside(ui, |ui| {
             use egui_extras::{Size, StripBuilder};
+            let reg_width = ui.text_style_height(&egui::TextStyle::Monospace) * 0.62 * 25.0 + 12.0;
             StripBuilder::new(ui)
                 .size(Size::remainder().at_least(360.0))
-                .size(Size::relative(0.3).at_least(240.0).at_most(380.0))
+                // Room for a 64-bit register whole (name, 18 hex digits and
+                // the scroll bar) at any text size.
+                .size(
+                    Size::relative(0.3)
+                        .at_least(reg_width)
+                        .at_most(reg_width.max(420.0)),
+                )
                 .horizontal(|mut strip| {
                     strip.cell(|ui| code::show(ui, panel, view, actions));
                     strip.cell(|ui| data::registers_column(ui, view));

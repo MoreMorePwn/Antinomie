@@ -12,7 +12,7 @@ use antinomie_monitor_core::samples::TagKind;
 /// The first hex digits of a SHA-256 the list shows.
 const SHORT_HASH: usize = 8;
 /// The width the columns need together; narrower, the table scrolls sideways.
-const MIN_TABLE_WIDTH: f32 = 860.0;
+const MIN_TABLE_WIDTH: f32 = 780.0;
 
 impl Row {
     /// The row matches the search text: name, description, a tag or the start
@@ -294,8 +294,8 @@ impl MonitorApp {
             .column(Column::initial(180.0).at_least(110.0).resizable(true))
             .column(Column::remainder().at_least(140.0))
             .column(Column::initial(190.0).at_least(80.0).resizable(true))
-            .column(Column::exact(56.0))
-            .column(Column::exact(140.0))
+            .column(Column::exact(72.0))
+            .column(Column::exact(100.0))
             .column(Column::initial(180.0).at_least(120.0).resizable(true))
             .column(Column::exact(104.0))
             .max_scroll_height(height)
@@ -306,7 +306,7 @@ impl MonitorApp {
                     "Description",
                     "Tags",
                     "Runs",
-                    "Parents / children",
+                    "Lineage",
                     "Latest run",
                     "SHA-256",
                 ]
@@ -400,7 +400,8 @@ impl MonitorApp {
                         });
                         table_row.col(|ui| match &row.runs.latest {
                             Some(run) => {
-                                table::cell(ui, table::Cell::Mono, &started(run.started_ms));
+                                table::cell(ui, table::Cell::Mono, &started(run.started_ms))
+                                    .on_hover_text(crate::time_format::unix_ms(run.started_ms));
                                 widgets::chip(
                                     ui,
                                     &run.exit,

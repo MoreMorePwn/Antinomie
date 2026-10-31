@@ -110,8 +110,8 @@ pub fn chip_width(ui: &egui::Ui, words: &[&str]) -> f32 {
     widest + 16.0
 }
 
-/// A filter-bar toggle: a pill that is on (check mark) or off (dimmed, struck
-/// through), with an optional muted count. Returns the click; the caller flips
+/// A filter-bar toggle: a pill that is on (check mark, filled) or off (a
+/// plain muted label), with an optional muted count. Returns the click; the caller flips
 /// the flag.
 pub fn toggle_chip(ui: &mut egui::Ui, label: &str, on: bool, count: Option<u64>) -> egui::Response {
     toggle_chip_with(ui, egui_phosphor::regular::CHECK, label, on, count)
@@ -119,7 +119,7 @@ pub fn toggle_chip(ui: &mut egui::Ui, label: &str, on: bool, count: Option<u64>)
 
 /// [`toggle_chip`] with `icon` where the check mark is, for a filter whose
 /// values have an icon of their own (the finding categories). It shows only
-/// while the chip is on; an off chip is dimmed and struck through as before.
+/// while the chip is on; an off chip is a plain muted label.
 pub fn toggle_chip_with(
     ui: &mut egui::Ui,
     icon: &str,
@@ -137,15 +137,21 @@ pub fn toggle_chip_with(
     if let Some(count) = count {
         text.push_str(&format!(" {count}"));
     }
-    let mut rich = RichText::new(text).small().color(color);
-    if !on {
-        rich = rich.strikethrough();
-    }
+    // Off is a plain muted label (a struck-through one reads as removed); on is
+    // filled and checked. The size is the buttons' own.
+    let rich = RichText::new(text).color(color);
     ui.add(
         egui::Button::new(rich)
-            .fill(palette.raised)
-            .stroke(egui::Stroke::new(1.0_f32, palette.line))
+            .fill(if on {
+                palette.selection
+            } else {
+                palette.raised
+            })
+            .stroke(egui::Stroke::new(
+                1.0_f32,
+                if on { palette.accent } else { palette.line },
+            ))
             .corner_radius(10)
-            .min_size(egui::vec2(0.0, 20.0)),
+            .min_size(egui::vec2(0.0, ui.spacing().interact_size.y - 4.0)),
     )
 }

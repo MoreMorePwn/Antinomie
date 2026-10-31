@@ -235,7 +235,7 @@ impl MonitorApp {
                     // A pane of another width starts its columns afresh, so the
                     // row and the icons at its end always fit the pane.
                     .id_salt(("run_history", widths.pane as i32))
-                    .column(Column::initial(widths.start).range(widths.start_least..=400.0).clip(true))
+                    .column(Column::initial(widths.start).range(widths.start_least..=widths.start_least.max(widths.start).max(400.0)).clip(true))
                     .sense(egui::Sense::click())
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     // Not resizable: a resizable column keeps the width it had, so a
