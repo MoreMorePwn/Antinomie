@@ -1,0 +1,514 @@
+Description: antinomie: add the arm64 debug engine
+ The engine's arm64 side was a stub that offered nothing. It now debugs
+ AArch64 programs as the x86-64 side does: an AArch32 program on the same
+ guest is still refused.
+ .
+ A software breakpoint is a BRK with an immediate only the engine plants
+ (0xa71; a program's own BRK keeps its SIGTRAP), taken from
+ do_el0_brk64() before the signal. A single step is the hardware step
+ (TIF_SINGLESTEP: MDSCR_EL1.SS with SPSR.SS), armed on the stopped task
+ as ptrace arms it and taken from do_el0_softstep(); the saved SS bit is
+ cleared again once the step is done. A stepped SVC ends at the system
+ call's exit: syscall_trace_exit() asks the engine before ptrace's step
+ report. Neither reaches the program as SIGTRAP or ptrace state.
+ .
+ Hardware breakpoints and watchpoints use the perf breakpoints (BRPs and
+ WRPs, up to four of each), and a watchpoint may watch loads alone
+ (ANTC_DEBUG_BP_HW_READ, offered with CAPS READ_WATCH of revision 20).
+ arm64 takes both before the instruction or its access completes, so a
+ thread resumed where one stopped it runs that instruction with its debug
+ registers off and one step armed, as the kernel steps a suspended
+ breakpoint; the step's exception (or the SVC's exit) turns them on again.
+ .
+ Registers are NT_PRSTATUS (user_pt_regs), NT_PRFPREG (user_fpsimd_state)
+ and NT_ARM_TLS. x86-64 is unchanged: the arm64 pieces of debug.c and of
+ the shared headers are compiled only there.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-01
+
+---
+diff --git a/arch/arm64/kernel/debug-monitors.c b/arch/arm64/kernel/debug-monitors.c
+index 16390fd4b..bbe293842 100644
+--- a/arch/arm64/kernel/debug-monitors.c
++++ b/arch/arm64/kernel/debug-monitors.c
+@@ -27,6 +27,7 @@
+ #include <asm/system_misc.h>
+ #include <asm/traps.h>
+ #include <asm/uprobes.h>
++#include <linux/antinomie_monitor.h>
+ 
+ /* Determine debug architecture. */
+ u8 debug_monitors_arch(void)
+@@ -182,6 +183,8 @@ void do_el0_softstep(unsigned long esr, struct pt_regs *regs)
+ {
+ 	if (uprobe_single_step_handler(regs, esr) == DBG_HOOK_HANDLED)
+ 		return;
++	if (ant_monitor_arm64_softstep(regs))
++		return;
+ 
+ 	send_user_sigtrap(TRAP_TRACE);
+ 	/*
+@@ -257,6 +260,8 @@ void do_el0_brk64(unsigned long esr, struct pt_regs *regs)
+ 		esr_brk_comment(esr) == UPROBES_BRK_IMM &&
+ 		uprobe_brk_handler(regs, esr) == DBG_HOOK_HANDLED)
+ 		return;
++	if (ant_monitor_arm64_brk(regs, esr))
++		return;
+ 
+ 	send_user_sigtrap(TRAP_BRKPT);
+ }
+diff --git a/arch/arm64/kernel/ptrace.c b/arch/arm64/kernel/ptrace.c
+index ff1fe2d39..b6dcb5751 100644
+--- a/arch/arm64/kernel/ptrace.c
++++ b/arch/arm64/kernel/ptrace.c
+@@ -29,6 +29,7 @@
+ #include <linux/regset.h>
+ #include <linux/elf.h>
+ #include <linux/rseq.h>
++#include <linux/antinomie_monitor.h>
+ 
+ #include <asm/compat.h>
+ #include <asm/cpufeature.h>
+@@ -2317,6 +2318,9 @@ void syscall_trace_exit(struct pt_regs *regs)
+ 	if (flags & _TIF_SYSCALL_TRACEPOINT)
+ 		trace_sys_exit(regs, syscall_get_return_value(current, regs));
+ 
++	/* A debugger of the engine ends its step here; ptrace's report is not for it. */
++	if ((flags & _TIF_SINGLESTEP) && ant_monitor_arm64_syscall_step(regs))
++		flags &= ~_TIF_SINGLESTEP;
+ 	if (flags & (_TIF_SYSCALL_TRACE | _TIF_SINGLESTEP))
+ 		report_syscall(regs, PTRACE_SYSCALL_EXIT);
+ 
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index de5b9e308..108671097 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -80,6 +80,33 @@ static inline bool ant_monitor_syscall_step(struct pt_regs *regs)
+ 		return ant_dbg_syscall_step(regs);
+ 	return false;
+ }
++#ifdef CONFIG_ARM64
++bool ant_dbg_arm64_brk(struct pt_regs *regs, unsigned long esr);
++bool ant_dbg_arm64_softstep(struct pt_regs *regs);
++bool ant_dbg_arm64_syscall_step(struct pt_regs *regs);
++/* arm64 reports a user BRK, a software step and a stepped system call's exit
++ * without hooks of its own (do_el0_brk64(), do_el0_softstep(),
++ * syscall_trace_exit()): the engine's are taken first, before SIGTRAP.
++ */
++static inline bool ant_monitor_arm64_brk(struct pt_regs *regs, unsigned long esr)
++{
++	if (static_branch_unlikely(&ant_dbg_shadow_key))
++		return ant_dbg_arm64_brk(regs, esr);
++	return false;
++}
++static inline bool ant_monitor_arm64_softstep(struct pt_regs *regs)
++{
++	if (static_branch_unlikely(&ant_dbg_shadow_key))
++		return ant_dbg_arm64_softstep(regs);
++	return false;
++}
++static inline bool ant_monitor_arm64_syscall_step(struct pt_regs *regs)
++{
++	if (static_branch_unlikely(&ant_dbg_shadow_key))
++		return ant_dbg_arm64_syscall_step(regs);
++	return false;
++}
++#endif
+ /* A task of a debugged program is created: a new thread gets its debug
+  * registers, a new process may be followed (before the child runs).
+  */
+@@ -219,6 +246,11 @@ static inline int ant_monitor_signal(int signr, struct kernel_siginfo *info,
+ static inline bool ant_monitor_debugged(struct task_struct *task) { return false; }
+ static inline void ant_monitor_signal_delivered(void) {}
+ static inline bool ant_monitor_syscall_step(struct pt_regs *regs) { return false; }
++#ifdef CONFIG_ARM64
++static inline bool ant_monitor_arm64_brk(struct pt_regs *regs, unsigned long esr) { return false; }
++static inline bool ant_monitor_arm64_softstep(struct pt_regs *regs) { return false; }
++static inline bool ant_monitor_arm64_syscall_step(struct pt_regs *regs) { return false; }
++#endif
+ static inline void ant_monitor_debug_fork(struct task_struct *child, u64 clone_flags) {}
+ static inline void ant_monitor_debug_exec(void) {}
+ static inline void ant_task_state_reserve(int *task_blob_size) {}
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index 51439009c..f2a5f6369 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -237,6 +237,8 @@
+ #define ANTC_DEBUG_BP_HW_EXEC 2
+ #define ANTC_DEBUG_BP_HW_WRITE 3
+ #define ANTC_DEBUG_BP_HW_ACCESS 4
++/* Revision 20, only where CAPS has READ_WATCH: a watchpoint on loads alone. */
++#define ANTC_DEBUG_BP_HW_READ 5
+ /* Telemetry lifecycle records (no control command): phase-3 events whose one
+  * field is a fixed little-endian structure. Layout names are versioned.
+  * lifecycle.creds, layout "antinomie.creds/2", 96 bytes: u32 uid, euid, suid,
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+index 6bf2f3d35..0829d727d 100644
+--- a/kernel/antinomie/debug.c
++++ b/kernel/antinomie/debug.c
+@@ -1034,9 +1034,18 @@ static void hw_triggered(struct perf_event *bp, struct perf_sample_data *data,
+ 		t->pending_addr = bp->attr.bp_addr;
+ 		t->pending_aux = type == HW_BREAKPOINT_X ? 0 :
+ 			type == HW_BREAKPOINT_W ? ANTC_DEBUG_BP_HW_WRITE : ANTC_DEBUG_BP_HW_ACCESS;
++#ifdef ANT_DBG_READ_WATCH
++		if (type == HW_BREAKPOINT_R)
++			t->pending_aux = ANTC_DEBUG_BP_HW_READ;
++#endif
+ 		/* An instruction breakpoint is hit before the instruction ran. */
++#ifdef ANT_DBG_WATCH_BEFORE
++		/* So is a watchpoint here: it resumes past its instruction too. */
++		t->rf_pc = instruction_pointer(regs);
++#else
+ 		if (type == HW_BREAKPOINT_X)
+ 			t->rf_pc = instruction_pointer(regs);
++#endif
+ 		WRITE_ONCE(t->pending, type == HW_BREAKPOINT_X ? ANTC_DEBUG_EVENT_HWBREAK :
+ 			   ANTC_DEBUG_EVENT_WATCH);
+ 		queue_thread(s, t);
+@@ -2618,6 +2627,36 @@ static void step_not_inherited(struct ant_dbg *s, struct task_struct *child)
+ 	rcu_read_unlock();
+ }
+ 
++#ifdef ANT_DBG_FORK_REPAIR
++/* A child with its own copy of the program's memory that the debugger does
++ * not follow, before it runs: the engine's bytes in that copy go back to the
++ * program's own. A child that met one would take a SIGTRAP, and under a
++ * SIGTRAP handler it would trap again at the same BRK for ever.
++ */
++static void unfollowed_child_bytes(struct ant_dbg *s, struct task_struct *child)
++{
++	struct ant_dbg_bp *bps;
++	struct ant_dbg_as *as;
++	unsigned int i, count = 0;
++
++	as = as_get(s);
++	if (!as)
++		return;
++	bps = kmalloc_array(MAX_BREAKPOINTS, sizeof(*bps), GFP_KERNEL);
++	if (bps) {
++		spin_lock_irq(&as->lock);
++		for (i = 0; i < as->bp_count; i++)
++			if (as->bps[i].inserted)
++				bps[count++] = as->bps[i];
++		spin_unlock_irq(&as->lock);
++		for (i = 0; i < count; i++)
++			restore_byte(child->mm, bps[i].addr, bps[i].orig, bps[i].len);
++		kfree(bps);
++	}
++	as_put(as);
++}
++#endif
++
+ /* A task of the program was created (kernel_clone, before it runs). */
+ void ant_dbg_fork(struct task_struct *child, u64 clone_flags)
+ {
+@@ -2642,6 +2681,10 @@ void ant_dbg_fork(struct task_struct *child, u64 clone_flags)
+ 		thread_created(s, child);
+ 		goto out;
+ 	}
++#ifdef ANT_DBG_FORK_REPAIR
++	if (!(READ_ONCE(s->opts) & ANTC_DEBUG_OPT_FORK) && !(clone_flags & CLONE_VM))
++		unfollowed_child_bytes(s, child);
++#endif
+ 	/* A shared address space that is not a vfork has no owner to follow. */
+ 	if (!(READ_ONCE(s->opts) & ANTC_DEBUG_OPT_FORK) ||
+ 	    ((clone_flags & CLONE_VM) && !vfork))
+@@ -3281,8 +3324,13 @@ static int cmd_breakpoint(u32 opcode, struct ant_dbg *s, const u8 *args, size_t
+ 	unsigned int i;
+ 	int error;
+ 
++#ifdef ANT_DBG_READ_WATCH
++	if (args_len != 40 || addr >= TASK_SIZE_MAX || !kind || kind > ANTC_DEBUG_BP_HW_READ)
++		return -EINVAL;
++#else
+ 	if (args_len != 40 || addr >= TASK_SIZE_MAX || !kind || kind > ANTC_DEBUG_BP_HW_ACCESS)
+ 		return -EINVAL;
++#endif
+ 	if (kind != ANTC_DEBUG_BP_SOFTWARE) {
+ 		error = need_stopped(s, get_unaligned_le64(args + 32));
+ 		if (error)
+diff --git a/kernel/antinomie/debug.h b/kernel/antinomie/debug.h
+index ff5aa17db..582a00328 100644
+--- a/kernel/antinomie/debug.h
++++ b/kernel/antinomie/debug.h
+@@ -77,6 +77,17 @@ int ant_dbg_arch_hw_fill(struct perf_event_attr *attr, u32 kind, u64 addr, u32 l
+  * when it resumes at the same instruction.
+  */
+ void ant_dbg_arch_resume_past_hw(struct task_struct *task);
++/* arm64's breakpoint and watchpoint exceptions are both taken before the
++ * instruction or its access completes (an x86 watchpoint traps after it), and
++ * its debug registers can watch loads alone (ANTC_DEBUG_BP_HW_READ). A BRK
++ * does not advance the pc: a forked child the debugger does not follow gets
++ * the program's own bytes back before it runs (ANT_DBG_FORK_REPAIR).
++ */
++#ifdef CONFIG_ARM64
++#define ANT_DBG_WATCH_BEFORE 1
++#define ANT_DBG_READ_WATCH 1
++#define ANT_DBG_FORK_REPAIR 1
++#endif
+ 
+ /* Engine side, called from the architecture's trap glue in exception context
+  * (interrupts off, no sleeping). They return true when the trap was consumed.
+diff --git a/kernel/antinomie/debug_arm64.c b/kernel/antinomie/debug_arm64.c
+index b0a06490d..0aa542919 100644
+--- a/kernel/antinomie/debug_arm64.c
++++ b/kernel/antinomie/debug_arm64.c
+@@ -1,36 +1,119 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+-/* arm64 side of the debug engine, before its port: CAPS name the architecture
+- * and offer nothing, and no task is one the engine debugs, so ATTACH and
+- * register access answer EOPNOTSUPP. The recorder, cores and every other
+- * feature are unaffected.
++/* arm64 side of the debug engine: registers are the kernel's regset blobs
++ * (NT_PRSTATUS, NT_PRFPREG, NT_ARM_TLS), a software breakpoint is a BRK with an
++ * immediate only the engine plants, and a single step is the hardware step
++ * (MDSCR_EL1.SS with SPSR.SS), armed on the stopped task as ptrace arms it.
++ * Neither is visible from EL0: the step state lives in system registers and in
++ * the saved PSTATE, which the engine clears again before anything can read it.
++ * Only AArch64 programs are debugged; an AArch32 program on the same guest is not.
++ *
++ * Breakpoint and watchpoint exceptions on arm64 are taken before the
++ * instruction (or its access) completes, so a thread resumed where it stopped
++ * would take them again: it runs that one instruction with its debug registers
++ * off, as the kernel steps a suspended breakpoint (ant_dbg_arch_resume_past_hw).
+  */
++#include <linux/compat.h>
+ #include <linux/elf.h>
+ #include <linux/errno.h>
++#include <linux/hw_breakpoint.h>
++#include <linux/irqflags.h>
++#include <linux/mm.h>
+ #include <linux/ptrace.h>
++#include <linux/regset.h>
+ #include <linux/sched.h>
+ #include <linux/sched/task_stack.h>
+ #include <linux/string.h>
++#include <linux/unaligned.h>
++#include <linux/antinomie_monitor.h>
++#include <asm/debug-monitors.h>
++#include <asm/esr.h>
++#include <asm/insn.h>
++#include <asm/ptrace.h>
+ #include "control_wire.h"
+ #include "debug.h"
+ 
++/* BRK #imm the engine plants: no other user of BRK on Linux uses this
++ * immediate (asm/brk-imm.h), and a program's own BRK keeps its SIGTRAP.
++ */
++#define ANT_DBG_BRK_IMM 0xa71
++#define ANT_DBG_BRK (AARCH64_BREAK_MON | (ANT_DBG_BRK_IMM << 5))
++
++#define STEP_FORCED 0
++
+ void ant_dbg_arch_caps(struct ant_dbg_caps *caps)
+ {
+ 	memset(caps, 0, sizeof(*caps));
+ 	caps->arch = EM_AARCH64;
++	caps->flags = ANTC_DEBUG_CAP_SW_BREAKPOINT | ANTC_DEBUG_CAP_HW_SINGLE_STEP |
++		ANTC_DEBUG_CAP_READ_WATCH;
++	caps->swbp_len_mask = BIT(3);	/* 4 bytes */
++	caps->hw_breakpoints = min_t(u32, hw_breakpoint_slots(TYPE_INST), ANT_DBG_MAX_HW);
++	caps->hw_watchpoints = min_t(u32, hw_breakpoint_slots(TYPE_DATA), ANT_DBG_MAX_HW);
++	if (caps->hw_breakpoints)
++		caps->flags |= ANTC_DEBUG_CAP_HW_BREAKPOINT;
++	if (caps->hw_watchpoints)
++		caps->flags |= ANTC_DEBUG_CAP_HW_WATCHPOINT;
++	caps->hw_watch_len_mask = BIT(0) | BIT(1) | BIT(3) | BIT(7);	/* 1, 2, 4, 8 bytes */
++	caps->regset_count = 3;
++	caps->regsets[0] = (struct ant_dbg_regset_cap){ NT_PRSTATUS,
++		sizeof(struct user_pt_regs), 1 };
++	caps->regsets[1] = (struct ant_dbg_regset_cap){ NT_PRFPREG,
++		sizeof(struct user_fpsimd_state), 1 };
++	caps->regsets[2] = (struct ant_dbg_regset_cap){ NT_ARM_TLS, sizeof(u64), 1 };
+ }
+ 
+ int ant_dbg_arch_hw_fill(struct perf_event_attr *attr, u32 kind, u64 addr, u32 len)
+ {
+-	return -EOPNOTSUPP;
++	ptrace_breakpoint_init(attr);
++	attr->bp_addr = addr;
++	switch (kind) {
++	case ANTC_DEBUG_BP_HW_EXEC:
++		/* An A64 instruction: four bytes, aligned. */
++		if (len != 4 || (addr & 3))
++			return -EINVAL;
++		attr->bp_type = HW_BREAKPOINT_X;
++		attr->bp_len = HW_BREAKPOINT_LEN_4;
++		return 0;
++	case ANTC_DEBUG_BP_HW_WRITE:
++		attr->bp_type = HW_BREAKPOINT_W;
++		break;
++	case ANTC_DEBUG_BP_HW_ACCESS:
++		attr->bp_type = HW_BREAKPOINT_RW;
++		break;
++	case ANTC_DEBUG_BP_HW_READ:
++		attr->bp_type = HW_BREAKPOINT_R;
++		break;
++	default:
++		return -EINVAL;
++	}
++	if ((len != 1 && len != 2 && len != 4 && len != 8) || (addr & (len - 1)))
++		return -EINVAL;
++	attr->bp_len = len;
++	return 0;
+ }
+ 
++/* The task is parked. Its breakpoint and watchpoint registers go off when it
++ * is next switched in (hw_breakpoint_thread_switch), it steps one instruction,
++ * and try_step_suspended_breakpoints() turns them on again at that step,
++ * ending the step unless the engine was stepping the thread itself.
++ */
+ void ant_dbg_arch_resume_past_hw(struct task_struct *task)
+ {
++	struct debug_info *info = &task->thread.debug;
++
++	info->bps_disabled = 1;
++	info->wps_disabled = 1;
++	if (test_tsk_thread_flag(task, TIF_SINGLESTEP))
++		info->suspended_step = 1;
++	else
++		user_enable_single_step(task);
+ }
+ 
+ bool ant_dbg_arch_task_ok(struct task_struct *task)
+ {
+-	return false;
++	const struct user_regset_view *view = task_user_regset_view(task);
++
++	return view->e_machine == EM_AARCH64 && !is_compat_thread(task_thread_info(task));
+ }
+ 
+ unsigned long ant_dbg_arch_pc(struct task_struct *task)
+@@ -45,36 +128,128 @@ void ant_dbg_arch_set_pc(struct pt_regs *regs, unsigned long pc)
+ 
+ unsigned long ant_dbg_arch_bp_addr(struct pt_regs *regs)
+ {
++	/* BRK is reported at the instruction itself. */
+ 	return instruction_pointer(regs);
+ }
+ 
+ unsigned int ant_dbg_arch_bp_insn(unsigned int len, u8 *insn)
+ {
+-	return 0;
++	if (len != 4)
++		return 0;
++	put_unaligned_le32(ANT_DBG_BRK, insn);
++	return 4;
+ }
+ 
+ unsigned int ant_dbg_arch_step_class(struct task_struct *task)
+ {
+-	return ANT_DBG_STEP_PLAIN;
++	__le32 code;
++
++	if (access_process_vm(task, instruction_pointer(task_pt_regs(task)), &code,
++			      sizeof(code), FOLL_FORCE) != sizeof(code))
++		return ANT_DBG_STEP_PLAIN;
++	/* A stepped SVC is reported at the system call's exit (syscall_trace_exit). */
++	return aarch64_insn_is_svc(le32_to_cpu(code)) ? ANT_DBG_STEP_SYSCALL : ANT_DBG_STEP_PLAIN;
+ }
+ 
+ void ant_dbg_arch_step_syscall(struct task_struct *task, bool on)
+ {
++	/* TIF_SINGLESTEP already sends a stepped system call through
++	 * syscall_trace_exit(), where the engine's hook takes the step first.
++	 */
+ }
+ 
+ void ant_dbg_arch_step_arm(struct task_struct *task, struct ant_dbg_step *step)
+ {
++	struct debug_info *info = &task->thread.debug;
++
++	/* A step that resumes past a breakpoint or watchpoint was armed by
++	 * ant_dbg_arch_resume_past_hw() a moment ago. That step is the engine's:
++	 * try_step_suspended_breakpoints() must turn the registers on again and
++	 * pass the trap on to do_el0_softstep() rather than end it there.
++	 */
++	if ((info->bps_disabled || info->wps_disabled) && !info->suspended_step &&
++	    test_tsk_thread_flag(task, TIF_SINGLESTEP)) {
++		info->suspended_step = 1;
++		step->data[STEP_FORCED] = 1;
++		user_rewind_single_step(task);
++		return;
++	}
++	step->data[STEP_FORCED] = !test_tsk_thread_flag(task, TIF_SINGLESTEP);
++	if (step->data[STEP_FORCED])
++		user_enable_single_step(task);
++	else
++		user_rewind_single_step(task);
++}
++
++static void step_off(struct task_struct *task)
++{
++	user_disable_single_step(task);
++	task_pt_regs(task)->pstate &= ~DBG_SPSR_SS;
+ }
+ 
+ void ant_dbg_arch_step_disown(struct task_struct *child, struct ant_dbg_step *step)
+ {
++	/* The child is new and has not run: its flags and registers are its own copy. */
++	if (step->data[STEP_FORCED])
++		step_off(child);
+ }
+ 
+ void ant_dbg_arch_hide_step(struct pt_regs *regs, struct ant_dbg_step *step)
+ {
++	if (step->data[STEP_FORCED])
++		regs->pstate &= ~DBG_SPSR_SS;
+ }
+ 
+ void ant_dbg_arch_step_done(struct task_struct *task, struct ant_dbg_step *step,
+ 			    bool stepped)
+ {
++	if (step->data[STEP_FORCED])
++		step_off(task);
++}
++
++/* ---- trap glue (arch/arm64/kernel/debug-monitors.c, ptrace.c) -------------- */
++
++/* do_el0_brk64(), interrupts on: a BRK of the engine's immediate. */
++bool ant_dbg_arm64_brk(struct pt_regs *regs, unsigned long esr)
++{
++	unsigned long flags;
++	bool consumed;
++
++	if (esr_brk_comment(esr) != ANT_DBG_BRK_IMM)
++		return false;
++	local_irq_save(flags);
++	consumed = ant_dbg_trap_breakpoint(regs, ant_dbg_arch_bp_addr(regs));
++	local_irq_restore(flags);
++	return consumed;
++}
++
++/* do_el0_softstep(), interrupts on: the engine's step of this thread. */
++bool ant_dbg_arm64_softstep(struct pt_regs *regs)
++{
++	unsigned long flags;
++	bool consumed;
++
++	local_irq_save(flags);
++	consumed = ant_dbg_trap_step(regs);
++	local_irq_restore(flags);
++	/* As the kernel does after a step it handled: if the flag stays set, the
++	 * next return to user mode steps one instruction, not none.
++	 */
++	if (consumed)
++		user_rewind_single_step(current);
++	return consumed;
++}
++
++/* syscall_trace_exit() of a thread with TIF_SINGLESTEP: a step over a resumed
++ * breakpoint ends here when its instruction was an SVC, and so does a step of
++ * the engine. Returns true when ptrace's step report is not for this step.
++ */
++bool ant_dbg_arm64_syscall_step(struct pt_regs *regs)
++{
++	struct debug_info *info = &current->thread.debug;
++
++	if ((info->bps_disabled || info->wps_disabled) && ant_dbg_wants_signals(current) &&
++	    try_step_suspended_breakpoints(regs))
++		return true;
++	return ant_dbg_syscall_step(regs);
+ }

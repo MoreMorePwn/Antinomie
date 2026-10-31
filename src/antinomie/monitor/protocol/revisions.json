@@ -11,6 +11,7 @@
     {"revision": 17, "first_app_version": "0.7.0"},
     {"revision": 18, "first_app_version": "0.8.0"},
     {"revision": 19, "first_app_version": "0.8.0"},
-    {"revision": 20, "first_app_version": "0.8.0"}
+    {"revision": 20, "first_app_version": "0.8.0",
+     "notes": "0.9.0 adds the debug breakpoint kind BP_HW_READ (5, load-only watchpoints) without a new revision: it is offered only through the revision-20 CAPS flag READ_WATCH (arm64 guests), so an older host never sends it and an older or x86-64 guest never offers it."}
   ]
 }

@@ -237,6 +237,12 @@
 #define ANTC_DEBUG_BP_HW_EXEC 2
 #define ANTC_DEBUG_BP_HW_WRITE 3
 #define ANTC_DEBUG_BP_HW_ACCESS 4
+/* Revision 20, capability-gated (added in 0.9.0 without a new revision): a
+ * watchpoint on loads alone. Only a guest whose CAPS has READ_WATCH (the arm64
+ * engine) accepts it, and a host sends it only to such a guest; x86-64 guests
+ * do not offer READ_WATCH and refuse kind 5 as an invalid argument, as every
+ * guest before it did. */
+#define ANTC_DEBUG_BP_HW_READ 5
 /* Telemetry lifecycle records (no control command): phase-3 events whose one
  * field is a fixed little-endian structure. Layout names are versioned.
  * lifecycle.creds, layout "antinomie.creds/2", 96 bytes: u32 uid, euid, suid,
