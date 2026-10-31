@@ -286,7 +286,7 @@ level: low
     def test_real_incompleteness_is_still_partial(self):
         incomplete = self.scan([self.rule()], complete=False)
         self.assertEqual(incomplete["state"], "partial", "the journal is truncated or incomplete")
-        self.assertTrue(incomplete["warnings"][0].startswith("Partial: the captured events are incomplete"), incomplete["warnings"])
+        self.assertTrue(incomplete["warnings"][0].startswith("Partial: the saved events are incomplete"), incomplete["warnings"])
         budget = self.scan([self.rule("First"), self.rule("Second")], MAX_RULES=1)
         self.assertEqual(budget["state"], "partial", "the rule budget is exhausted")
         self.assertEqual(budget["scanned_rules"], 1)

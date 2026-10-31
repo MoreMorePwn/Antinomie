@@ -408,7 +408,7 @@ def scan(request, events_path):
         report["warnings"].append("Partial: evaluation stopped at its " + str(EVALUATION_SECONDS) + " second budget after " + str(report["scanned_rules"]) + " rules; the remaining rules were not evaluated.")
     except Exception as error:
         report["state"] = "partial" if report["scanned_rules"] else "unavailable"
-        report["warnings"].append("Sigma evaluation stopped: " + str(error)[:512])
+        report["warnings"].append("Partial: Sigma evaluation stopped: " + str(error)[:512])
     finally:
         connection.close()
     return report
