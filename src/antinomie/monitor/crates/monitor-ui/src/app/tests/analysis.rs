@@ -189,6 +189,7 @@ fn run_in_is_offered_for_graphical_bases_remembered_and_sent_with_the_launch() {
             min_ram_mib: 4096,
             min_disk_gib: 16,
             fixed_display: true,
+            arch: Default::default(),
             size_bytes: 0,
             revision: Some(APP_REVISION),
             min_app_version: None,

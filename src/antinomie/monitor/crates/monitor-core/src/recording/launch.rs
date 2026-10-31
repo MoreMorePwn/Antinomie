@@ -90,7 +90,8 @@ impl Recording {
         }
         let (connection, _) = archive_index(&self.directory, cancel)?;
         let boundary = indexed_boundary(&connection)?;
-        let mut reader = CallReader::open(&self.directory, &connection, boundary)?;
+        let mut reader =
+            CallReader::open(&self.directory, &connection, boundary, self.guest_arch())?;
         let events = reader.lifecycle(&key_blob((stream_id, root_cookie, 0)), cancel)?;
         Ok(from_events(&events))
     }

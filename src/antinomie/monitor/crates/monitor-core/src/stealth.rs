@@ -41,8 +41,8 @@ mod tests;
 
 pub use firmware::{Ovmf, find_ovmf};
 pub(crate) use launch::{
-    apply, cpu_option, disk_args, escape, firmware_args, machine_options, netdev_option,
-    nic_option_for, pointer_args, smp_option,
+    aavmf_files, apply, cpu_option, disk_args, escape, firmware_args, machine_options,
+    netdev_option, nic_option_for, pointer_args, smp_option,
 };
 pub use nat::NatNetwork;
 
@@ -1287,6 +1287,20 @@ impl StealthProfile {
         }
         self.nat.validate()?;
         Ok(())
+    }
+
+    /// What still tells a VM of this guest architecture apart, most telling
+    /// first: an arm64 VM is QEMU's virt machine under TCG, whatever the
+    /// x86 identity says (`fast_emulation`: booted without KPTI).
+    pub fn giveaways_for(
+        &self,
+        arch: crate::api::GuestArch,
+        fast_emulation: bool,
+    ) -> Vec<&'static str> {
+        if arch == crate::api::GuestArch::AARCH64 {
+            return crate::vm::virt_giveaways(self.firmware.is_uefi(), fast_emulation);
+        }
+        self.giveaways()
     }
 
     /// What still tells a VM apart, most telling first.

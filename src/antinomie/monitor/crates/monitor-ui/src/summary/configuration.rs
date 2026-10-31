@@ -51,8 +51,11 @@ pub(super) fn show(ui: &mut egui::Ui, vm: &VmConfig, snapshot: &Snapshot) {
         &snapshot.bases,
         antinomie_monitor_core::stealth::HostSupport::cached(),
     );
+    let arch = crate::app::selected_base(snapshot, vm.base_identity.as_deref())
+        .map_or_else(Default::default, |base| base.arch);
+    let giveaways = vm.stealth.giveaways_for(arch, vm.launch.fast_emulation);
     resource_cards(ui, "summary-stealth", 1, 1, width.max(80.0), 10, |ui, _| {
-        stealth(ui, &vm.stealth, narrow, &fallbacks)
+        stealth(ui, &vm.stealth, narrow, &fallbacks, &giveaways)
     });
     ui.add_space(10.0);
     resource_cards(
@@ -249,7 +252,13 @@ fn firmware_kind(firmware: Firmware) -> &'static str {
     }
 }
 
-fn stealth(ui: &mut egui::Ui, profile: &StealthProfile, narrow: bool, fallbacks: &[Fallback]) {
+fn stealth(
+    ui: &mut egui::Ui,
+    profile: &StealthProfile,
+    narrow: bool,
+    fallbacks: &[Fallback],
+    giveaways: &[&'static str],
+) {
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(icon::SHIELD).size(18.0).color(theme::blue()));
         ui.strong("Device profile");
@@ -388,7 +397,6 @@ fn stealth(ui: &mut egui::Ui, profile: &StealthProfile, narrow: bool, fallbacks:
             });
         });
     }
-    let giveaways = profile.giveaways();
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("Still visible").small().color(theme::muted()));
@@ -566,6 +574,7 @@ mod tests {
             min_ram_mib: 0,
             min_disk_gib: 0,
             fixed_display: false,
+            arch: Default::default(),
             size_bytes: 0,
             revision: None,
             min_app_version: None,

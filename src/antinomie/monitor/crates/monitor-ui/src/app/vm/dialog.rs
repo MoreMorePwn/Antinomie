@@ -235,7 +235,9 @@ impl MonitorApp {
         vm_section(ui, "Display and emulation");
         form_grid("vm_display", ui).show(ui, |ui| {
             let kvm_problem = app.kvm_problem();
-            launch_options(ui, &mut app.draft.launch, kvm_problem.as_deref());
+            let arch = selected_base(&app.snapshot, app.draft.base_identity.as_deref())
+                .map_or_else(Default::default, |base| base.arch);
+            launch_options(ui, &mut app.draft.launch, kvm_problem.as_deref(), arch);
             let fallbacks = app.draft_stealth_fallbacks();
             super::stealth::preset_row(
                 ui,
@@ -474,7 +476,12 @@ fn vm_section(ui: &mut egui::Ui, title: &str) {
     dialog_section(ui, title);
 }
 
-fn launch_options(ui: &mut egui::Ui, launch: &mut VmLaunchOptions, kvm_problem: Option<&str>) {
+fn launch_options(
+    ui: &mut egui::Ui,
+    launch: &mut VmLaunchOptions,
+    kvm_problem: Option<&str>,
+    arch: antinomie_monitor_core::GuestArch,
+) {
     ui.label("Resolution");
     egui::ComboBox::from_id_salt("vm_resolution")
         .selected_text(launch.resolution.label())
@@ -554,6 +561,16 @@ fn launch_options(ui: &mut egui::Ui, launch: &mut VmLaunchOptions, kvm_problem: 
             }
         });
     ui.end_row();
+    if arch == antinomie_monitor_core::GuestArch::AARCH64 {
+        ui.label("Emulation");
+        ui.checkbox(&mut launch.fast_emulation, "Faster emulation (KPTI off)")
+            .on_hover_text(
+                "Boots the arm64 guest without kernel page-table isolation, which the \
+                 emulated CPU runs slowly. A program can notice: a real machine of this CPU \
+                 has it. Listed under Still visible in the VM's summary.",
+            );
+        ui.end_row();
+    }
 }
 
 /// VM settings > Telemetry transport: how telemetry travels from the guest.

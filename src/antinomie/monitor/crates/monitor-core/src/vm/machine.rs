@@ -73,8 +73,8 @@ impl Machine {
             Self::Virt => "ttyAMA0",
         }
     }
-    /// Unused until MA-16 starts arm64 VMs and scales their deadlines.
-    #[allow(dead_code)]
+    /// How many times longer the guest takes for the same work (the
+    /// shutdown deadline scales by it).
     pub fn time_scale(self) -> u32 {
         match self {
             Self::Pc => 1,

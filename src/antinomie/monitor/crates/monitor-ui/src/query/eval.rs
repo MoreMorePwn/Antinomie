@@ -367,7 +367,10 @@ pub(super) fn field(invocation: &InvocationSummary, name: &str) -> Result<Resolv
     };
     let number = match key.as_str() {
         "stream.id" => Some(i128::from(invocation.stream_id)),
-        "syscall.num" | "syscall.number" => Some(i128::from(event.syscall_nr)),
+        // The number the guest's program used (x86-64 ids are their numbers).
+        "syscall.num" | "syscall.number" => Some(i128::from(
+            antinomie_monitor_core::syscalls::wire_number(event.syscall_nr),
+        )),
         "tid" | "process.tid" => Some(i128::from(event.tid)),
         "pid" | "process.pid" | "process.tgid" if event.pid != 0 => Some(i128::from(event.pid)),
         "cpu" => Some(i128::from(event.cpu)),

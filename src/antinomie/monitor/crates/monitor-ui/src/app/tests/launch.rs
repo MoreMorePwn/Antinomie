@@ -140,6 +140,7 @@ fn launch_controls_edit_create_and_save_owned_configurations() {
             acceleration: VmAcceleration::Tcg,
             cpu_model: VmCpuModel::Max,
             screen: antinomie_monitor_core::VmScreen::QemuWindow,
+            fast_emulation: false,
         }
     );
     assert_eq!(created.disk_root, Some(PathBuf::from("/disks")));

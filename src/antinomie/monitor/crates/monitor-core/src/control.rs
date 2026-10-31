@@ -1186,7 +1186,7 @@ mod tests {
             arch_caps(&caps(1, 0)),
             Ok(GuestArch::new(0, 2, crate::api::Endian::Little))
         );
-        assert!(!GuestArch::AARCH64.supported());
+        assert!(!GuestArch::RISCV64.supported());
         assert!(arch_caps(&caps(2, 62)).is_err());
         assert!(arch_caps(&caps(1, 62)[..47]).is_err());
     }

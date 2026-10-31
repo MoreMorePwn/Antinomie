@@ -67,6 +67,8 @@ mod qmp;
 mod state_transfer;
 pub(crate) use machine::*;
 use qmp::*;
+mod virt;
+pub(crate) use virt::giveaways as virt_giveaways;
 /// Delete guest RAM files that no process holds open: an app that exits
 /// without stopping its VM leaves `runtime/<run>/shared-ram` behind, several
 /// GiB each. A running VM's QEMU keeps its file open, so it is kept.
@@ -243,6 +245,23 @@ fn apply_launch_settings(
     }
     command.arg("-display").arg(display);
     Ok(())
+}
+
+/// The accelerator of a launch on `machine`: an arm64 VM runs under TCG on
+/// every host (no KVM for a foreign architecture), an x86-64 one as
+/// [`crate::accel::choose`] decides.
+fn launch_accel(
+    options: &BackendOptions,
+    launch: &VmLaunchOptions,
+    machine: Machine,
+) -> Result<crate::accel::Choice, String> {
+    if machine == Machine::Virt {
+        return Ok(crate::accel::Choice {
+            accelerator: crate::accel::Accelerator::Tcg,
+            fallback: None,
+        });
+    }
+    crate::accel::choose(options, launch)
 }
 
 pub(crate) struct VmProcess {
@@ -431,12 +450,24 @@ impl VmProcess {
         disk: &Path,
         incoming: bool,
     ) -> Result<Self, String> {
-        vm.launch.validate_for(options)?;
-        let accel = crate::accel::choose(options, &vm.launch)?;
+        let machine = Machine::of(bundle.arch)?;
+        machine.check_ram(vm.ram_mib)?;
+        let qemu = machine.qemu(&options.qemu);
+        let virt = machine == Machine::Virt;
+        if !virt {
+            vm.launch.validate_for(options)?;
+        }
+        let accel = launch_accel(options, &vm.launch, machine)?;
         let waits = crate::accel::Waits::new(&accel, &options.start);
-        crate::dependencies::require_vm(options, &vm.launch)?;
+        if virt {
+            crate::dependencies::require_virt(options, &vm.launch, &qemu)?;
+        } else {
+            crate::dependencies::require_vm(options, &vm.launch)?;
+        }
         crate::storage::validate_boot_display(vm, bundle)?;
+        // An arm64 VM's window keeps QEMU's own size.
         let initial_size = initial_size(options, &vm.launch)
+            .filter(|_| !virt)
             .map(|dimensions| {
                 crate::display::InitialWindowSize::prepare().map(|sizing| (sizing, dimensions))
             })
@@ -448,14 +479,6 @@ impl VmProcess {
             started: false,
         };
         let ram_path = runtime_dir.join("shared-ram");
-        let machine = Machine::of(bundle.arch)?;
-        machine.check_ram(vm.ram_mib)?;
-        if machine != Machine::Pc {
-            return Err(format!(
-                "this Antinomie does not start {} VMs yet",
-                bundle.arch.label()
-            ));
-        }
         let ram_size = u64::from(vm.ram_mib) * 1024 * 1024;
         let layout = machine.ram_layout(ram_size);
         let bootstrap = options
@@ -545,34 +568,70 @@ impl VmProcess {
         }
         let serial = File::create(runtime_dir.join("serial.log")).map_err(|e| e.to_string())?;
         let stderr = File::create(runtime_dir.join("qemu.log")).map_err(|e| e.to_string())?;
-        let mut cmd = qemu_command(&options.qemu);
-        cmd.arg("-name")
-            .arg(name_option(&vm.name))
-            .arg("-machine")
-            .arg(format!(
-                "{},memory-backend=shared,max-ram-below-4g=4G{}",
-                stealth.machine.qemu(),
-                crate::stealth::machine_options(&stealth)
-            ))
-            .arg("-object")
-            .arg(format!(
-                "memory-backend-file,id=shared,size={}M,mem-path={},share=on",
+        let mut cmd = qemu_command(&qemu);
+        if virt {
+            // UEFI when the profile asks for it and the base boots it (the
+            // fitted profile kept it); AAVMF missing: the device tree.
+            let uefi = if stealth.firmware.is_uefi() {
+                match crate::stealth::aavmf_files(&options.qemu, &vm_dir(options, &vm.id)?) {
+                    Ok(files) => Some(files),
+                    Err(error) => {
+                        fallbacks.push(format!(
+                            "UEFI firmware: {error}; the VM boots its kernel directly."
+                        ));
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            cmd.arg("-name").arg(name_option(&vm.name));
+            virt::machine_args(
+                &mut cmd,
                 vm.ram_mib,
-                qemu_path(&ram_path)?
-            ))
-            .arg("-m")
-            .arg(vm.ram_mib.to_string())
-            .arg("-smp")
-            .arg(crate::stealth::smp_option(&stealth, vm.cpus))
-            .arg("-kernel")
-            .arg(&bundle.kernel)
-            .args(crate::stealth::disk_args(&stealth, &qemu_path(disk)?))
-            .arg("-qmp")
-            .arg(format!("unix:{},server=on,wait=off", qemu_path(&qmp_path)?))
-            .args(["-monitor", "none", "-serial", "stdio"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(serial))
-            .stderr(Stdio::from(stderr));
+                &qemu_path(&ram_path)?,
+                vm.cpus,
+                uefi.as_ref()
+                    .map(|(code, vars)| (code.as_path(), vars.as_path())),
+            )?;
+            cmd.arg("-kernel")
+                .arg(&bundle.kernel)
+                .args(virt::disk_args(&stealth, &qemu_path(disk)?))
+                .arg("-qmp")
+                .arg(format!("unix:{},server=on,wait=off", qemu_path(&qmp_path)?))
+                .args(["-monitor", "none", "-serial", "stdio"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(serial))
+                .stderr(Stdio::from(stderr));
+        } else {
+            cmd.arg("-name")
+                .arg(name_option(&vm.name))
+                .arg("-machine")
+                .arg(format!(
+                    "{},memory-backend=shared,max-ram-below-4g=4G{}",
+                    stealth.machine.qemu(),
+                    crate::stealth::machine_options(&stealth)
+                ))
+                .arg("-object")
+                .arg(format!(
+                    "memory-backend-file,id=shared,size={}M,mem-path={},share=on",
+                    vm.ram_mib,
+                    qemu_path(&ram_path)?
+                ))
+                .arg("-m")
+                .arg(vm.ram_mib.to_string())
+                .arg("-smp")
+                .arg(crate::stealth::smp_option(&stealth, vm.cpus))
+                .arg("-kernel")
+                .arg(&bundle.kernel)
+                .args(crate::stealth::disk_args(&stealth, &qemu_path(disk)?))
+                .arg("-qmp")
+                .arg(format!("unix:{},server=on,wait=off", qemu_path(&qmp_path)?))
+                .args(["-monitor", "none", "-serial", "stdio"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(serial))
+                .stderr(Stdio::from(stderr));
+        }
         if incoming {
             cmd.args(["-S", "-incoming", "defer"]);
         }
@@ -611,9 +670,25 @@ impl VmProcess {
             boot.kernel_append
                 .push_str(&format!(" antinomie_ring_kib={}", vm.transport.ring_kib));
         }
-        apply_launch_settings(
-            &mut cmd, options, &vm.launch, &accel, &stealth, vm.cpus, &boot, bootstrap,
-        )?;
+        if virt {
+            let mut append = virt::append(&boot.kernel_append, bootstrap, vm.launch.fast_emulation);
+            virt::display_args(
+                &mut cmd,
+                virt::VirtDisplay {
+                    headless: options.headless,
+                    window: vm.launch.screen == crate::api::VmScreen::QemuWindow,
+                    resolution: vm.launch.resolution.dimensions(),
+                    fullscreen: vm.launch.fullscreen,
+                    fit_to_window: vm.launch.fit_to_window,
+                },
+                &mut append,
+            );
+            cmd.arg("-append").arg(append);
+        } else {
+            apply_launch_settings(
+                &mut cmd, options, &vm.launch, &accel, &stealth, vm.cpus, &boot, bootstrap,
+            )?;
+        }
         // The in-app screen: VNC on a unix socket next to the QMP socket (a
         // private folder), never TCP. The display backend itself is `none`.
         // lock-key-sync=off: the app sends the key (with Shift held), not a
@@ -626,13 +701,15 @@ impl VmProcess {
                 qemu_path(socket)?
             ));
         }
-        crate::stealth::apply(&mut cmd, &stealth, &runtime_dir, vm.ram_mib, vm.cpus)?;
-        crate::stealth::firmware_args(
-            &mut cmd,
-            &stealth,
-            &options.qemu,
-            &vm_dir(options, &vm.id)?,
-        )?;
+        if !virt {
+            crate::stealth::apply(&mut cmd, &stealth, &runtime_dir, vm.ram_mib, vm.cpus)?;
+            crate::stealth::firmware_args(
+                &mut cmd,
+                &stealth,
+                &options.qemu,
+                &vm_dir(options, &vm.id)?,
+            )?;
+        }
         if let Some(initrd) = &bundle.initrd {
             cmd.arg("-initrd").arg(initrd);
         }
@@ -874,7 +951,7 @@ impl VmProcess {
             return Err("QEMU compatibility version is unavailable".into());
         }
         // The same decision the launch makes, so the identity matches the boot.
-        let acceleration = crate::accel::choose(options, &vm.launch)?
+        let acceleration = launch_accel(options, &vm.launch, machine)?
             .accelerator
             .qemu_name();
         let host_identity = if acceleration == "kvm" {

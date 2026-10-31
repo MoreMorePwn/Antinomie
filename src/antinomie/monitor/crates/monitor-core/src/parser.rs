@@ -509,6 +509,9 @@ impl Event {
     }
 }
 
+/// The abi field of a native call's records (`ANT_ABI_NATIVE`).
+const ANT_ABI_NATIVE: u16 = 1;
+
 pub struct Assembler {
     directory: PathBuf,
     quota: u64,
@@ -534,8 +537,25 @@ pub struct Assembler {
     write_error: crate::writer::ErrorSlot,
     /// Where chunks are stored; none for a reader of a saved archive.
     pack: Option<PackWriter>,
+    /// The ABI of the guest's native calls: events carry host syscall ids
+    /// of it (`syscalls::id`).
+    abi: crate::syscalls::Abi,
 }
 impl Assembler {
+    /// Read the records of a guest of this architecture (x86-64 until set).
+    pub fn set_arch(&mut self, arch: crate::api::GuestArch) {
+        self.abi = crate::syscalls::Abi::of(arch).unwrap_or(crate::syscalls::Abi::X86_64);
+    }
+    /// The host syscall id of a record: native calls by the guest's table;
+    /// another ABI's calls on a non-x86 guest by number only (x86-64 keeps
+    /// naming every call by its native table, as it always did).
+    pub(crate) fn syscall_id(&self, h: &Header) -> u64 {
+        match self.abi {
+            crate::syscalls::Abi::X86_64 => h.syscall_nr,
+            abi if h.abi == ANT_ABI_NATIVE => crate::syscalls::id(abi, h.syscall_nr),
+            _ => crate::syscalls::untabled_id(h.syscall_nr),
+        }
+    }
     pub fn new(directory: PathBuf, quota: u64) -> Result<Self> {
         private_dir(&directory).map_err(|e| error(e.to_string()))?;
         Ok(Self::empty(directory, quota, false))
@@ -561,6 +581,7 @@ impl Assembler {
             finished: VecDeque::new(),
             just_finished: false,
             capacity: MAX_RETAINED_FIELDS / 2,
+            abi: crate::syscalls::Abi::X86_64,
             write_error,
         }
     }
@@ -706,13 +727,14 @@ impl Assembler {
             self.saving_error.get_or_insert(error);
             self.enabled = false;
         }
-        let (h, b) = match parse_packet(packet) {
+        let (mut h, b) = match parse_packet(packet) {
             Ok(v) => v,
             Err(e) => {
                 self.malformed_count += 1;
                 return Err(e);
             }
         };
+        h.syscall_nr = self.syscall_id(&h);
         if h.record_type == 2 {
             return Ok(None);
         }

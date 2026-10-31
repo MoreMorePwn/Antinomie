@@ -144,7 +144,8 @@ impl Recording {
         if offset > raw_identity(&path)?.1 {
             return Err(RecordingError::Limit("cursor beyond raw archive"));
         }
-        let mut reader = CallReader::open(&self.directory, &connection, boundary)?;
+        let mut reader =
+            CallReader::open(&self.directory, &connection, boundary, self.guest_arch())?;
         let mut query = call_rows(&connection)?;
         let mut rows = query.query(rusqlite::params![
             i64::try_from(offset).map_err(|_| RecordingError::Limit("cursor too large"))?,
@@ -238,7 +239,8 @@ impl Recording {
         let path = self.directory.join("telemetry.raw");
         let (connection, identity) = archive_index(&self.directory, cancel)?;
         let boundary = indexed_boundary(&connection)?;
-        let mut reader = CallReader::open(&self.directory, &connection, boundary)?;
+        let mut reader =
+            CallReader::open(&self.directory, &connection, boundary, self.guest_arch())?;
         let mut query = call_rows(&connection)?;
         let mut rows = query.query(rusqlite::params![0_i64, boundary as i64, pid])?;
         let (mut total, mut source_total) = (0_u64, 0_u64);

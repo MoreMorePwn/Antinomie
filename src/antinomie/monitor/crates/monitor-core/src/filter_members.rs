@@ -89,15 +89,23 @@ struct Selector {
     syscall_numbers: Vec<u64>,
 }
 
+/// The keywords: the native table's architecture's layouts.
 fn inventory() -> &'static Inventory {
-    static INVENTORY: OnceLock<Inventory> = OnceLock::new();
-    INVENTORY.get_or_init(|| {
-        // Generated compiled input is validated by tests and the generator;
-        // the layouts of the native table's architecture, as its keywords.
-        serde_json::from_str(syscalls::arch::captured_layouts_json(
-            syscalls::native().abi,
-        ))
-        .expect("invalid compiled captured member inventory")
+    inventory_of(syscalls::native().abi)
+}
+
+/// One ABI's captured layouts, which decode that ABI's records.
+fn inventory_of(abi: syscalls::Abi) -> &'static Inventory {
+    static X86_64: OnceLock<Inventory> = OnceLock::new();
+    static AARCH64: OnceLock<Inventory> = OnceLock::new();
+    let cell = match abi {
+        syscalls::Abi::X86_64 => &X86_64,
+        syscalls::Abi::Aarch64 => &AARCH64,
+    };
+    cell.get_or_init(|| {
+        // Generated compiled input is validated by tests and the generator.
+        serde_json::from_str(syscalls::arch::captured_layouts_json(abi))
+            .expect("invalid compiled captured member inventory")
     })
 }
 fn kind(text: &str) -> MemberKind {
@@ -308,14 +316,17 @@ fn metadata(field: &FieldSummary, member: &str) -> Option<MemberValue> {
     })
 }
 
+/// The layout of a call's argument, from the layouts of the call's own ABI
+/// (`nr` is a host syscall id).
 fn layout(field: &FieldSummary, nr: u64, index: usize) -> Option<&'static Layout> {
-    inventory().layouts.iter().find(|layout| {
+    let abi = syscalls::table_of(nr).map_or(syscalls::native().abi, |table| table.abi);
+    let number = syscalls::wire_number(nr);
+    inventory_of(abi).layouts.iter().find(|layout| {
         layout.supported
             && layout.layout == field.layout
-            && layout
-                .arguments
-                .iter()
-                .any(|argument| argument.syscall_number == nr && argument.argument_index == index)
+            && layout.arguments.iter().any(|argument| {
+                argument.syscall_number == number && argument.argument_index == index
+            })
     })
 }
 
@@ -377,7 +388,9 @@ fn decode_field_inner(
         return MemberValue::Missing;
     };
     if let Some(selector) = &member.selector
-        && (!selector.syscall_numbers.contains(&nr)
+        && (!selector
+            .syscall_numbers
+            .contains(&syscalls::wire_number(nr))
             || args
                 .and_then(|args| args.get(selector.argument_index).copied())
                 .is_none_or(|value| !selector.values.contains(&value)))

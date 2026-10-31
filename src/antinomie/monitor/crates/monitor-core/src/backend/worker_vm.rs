@@ -137,6 +137,7 @@ impl Worker {
                 Assembler::new(capture_dir.join("objects"), self.options.capture_quota_size)
                     .map_err(|e| e.to_string())?;
             assembler.set_event_table(vm.transport.event_table as usize);
+            assembler.set_arch(bundle.arch);
             if let Err(e) = process.verify_ram_layout() {
                 capture.queue_manifest(&vm, &bundle, &disk_bundle, "start-failed")?;
                 return Err(e);

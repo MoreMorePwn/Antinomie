@@ -954,6 +954,7 @@ fn base_named(id: &str, support: &[&str]) -> crate::api::BaseSummary {
         min_ram_mib: 0,
         min_disk_gib: 0,
         fixed_display: false,
+        arch: Default::default(),
         size_bytes: 0,
         revision: None,
         min_app_version: None,

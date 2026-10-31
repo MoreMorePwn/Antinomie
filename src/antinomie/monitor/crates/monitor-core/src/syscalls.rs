@@ -13,7 +13,9 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 pub mod arch;
+mod ids;
 pub use arch::{Constants, DataModel, Endian};
+pub use ids::{id, untabled_id, wire_number};
 
 #[derive(Debug, Deserialize)]
 pub struct ArgumentInfo {
@@ -63,6 +65,15 @@ impl Abi {
             crate::api::GuestArch::AARCH64 => Some(Self::Aarch64),
             _ => None,
         }
+    }
+}
+
+/// The table of an id's ABI, if it has one.
+pub fn table_of(id: u64) -> Option<&'static Table> {
+    match ids::tag_of(id) {
+        0 => Some(table(Abi::X86_64)),
+        tag if tag == Abi::Aarch64.tag() => Some(table(Abi::Aarch64)),
+        _ => None,
     }
 }
 
@@ -167,22 +178,24 @@ pub fn all() -> &'static [SyscallInfo] {
     native().all()
 }
 
-pub fn syscall(number: u64) -> Option<&'static SyscallInfo> {
-    native().by_number(number)
+/// The call of a host syscall id ([`id`]), from its ABI's table.
+pub fn syscall(id: u64) -> Option<&'static SyscallInfo> {
+    table_of(id)?.by_number(wire_number(id))
 }
 
-/// The number a name has on the run's ABI.
+/// The id a name has on x86-64 (the id of the same call on another ABI:
+/// [`id`] with [`Table::number`]).
 pub fn number(name: &str) -> Option<u64> {
     native().number(name)
 }
 
-/// The table's name for a number, without a copy.
-pub fn known_name(number: u64) -> Option<&'static str> {
-    native().name_of(number)
+/// The table's name for an id, without a copy.
+pub fn known_name(id: u64) -> Option<&'static str> {
+    syscall(id).map(|entry| entry.name.as_str())
 }
 
-pub fn name(number: u64) -> String {
-    known_name(number).map_or_else(|| format!("syscall_{number}"), str::to_owned)
+pub fn name(id: u64) -> String {
+    known_name(id).map_or_else(|| format!("syscall_{}", wire_number(id)), str::to_owned)
 }
 
 type FlagRule = (&'static str, u64, u64);
@@ -1050,13 +1063,13 @@ fn prctl_suboption(constants: &Constants, option: u64, value: u64) -> Option<Str
 /// Name a selector argument whose meaning may depend on another argument, such
 /// as a socket option name given its level. None means the argument is not a
 /// selector in the pinned schema. Read with the native table's architecture.
-pub fn selector_name(number: u64, index: usize, args: &[u64; 6]) -> Option<String> {
-    native().selector_name(number, index, args)
+pub fn selector_name(id: u64, index: usize, args: &[u64; 6]) -> Option<String> {
+    table_of(id)?.selector_name(wire_number(id), index, args)
 }
 
 /// Return None when the argument is not classified as flags by the pinned schema.
-pub fn argument_flags(number: u64, index: usize, value: u64) -> Option<FlagValue> {
-    native().argument_flags(number, index, value)
+pub fn argument_flags(id: u64, index: usize, value: u64) -> Option<FlagValue> {
+    table_of(id)?.argument_flags(wire_number(id), index, value)
 }
 
 impl Table {

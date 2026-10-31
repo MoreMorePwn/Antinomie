@@ -142,7 +142,8 @@ impl Recording {
         if owned && known.is_none() {
             return Err(RecordingError::Limit("call is not in the archive index"));
         }
-        let mut reader = CallReader::open(&self.directory, &connection, boundary)?;
+        let mut reader =
+            CallReader::open(&self.directory, &connection, boundary, self.guest_arch())?;
         let mut preview = reader.preview();
         let window = reader.window(&key, seq_index(from_event_seq), limit, &mut preview, cancel)?;
         let total = reader.saved(&key)?;

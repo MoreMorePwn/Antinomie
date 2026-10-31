@@ -441,7 +441,7 @@ fn event_for(
             request.last_seq
         },
         phase,
-        syscall_nr: equivalent.nr,
+        syscall_nr: id_on_abi_of(parent.syscall_nr, equivalent),
         syscall_name: equivalent.name.into(),
         pid: parent.pid,
         tid: parent.tid,
@@ -452,6 +452,18 @@ fn event_for(
         complete: request.complete,
         issues: Vec::new(),
         fields: Vec::new(),
+    }
+}
+
+/// The equivalent call's id on the ABI of the call that carried the request
+/// (an arm64 ring's openat is arm64's openat), x86-64's when that table has
+/// no such call; x86-64 runs keep the ids they always had.
+fn id_on_abi_of(parent: u64, equivalent: &Equivalent) -> u64 {
+    match syscalls::table_of(parent) {
+        Some(table) if table.abi != syscalls::Abi::X86_64 => table
+            .number(equivalent.name)
+            .map_or(equivalent.nr, |number| syscalls::id(table.abi, number)),
+        _ => equivalent.nr,
     }
 }
 

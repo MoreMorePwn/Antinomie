@@ -435,6 +435,29 @@ pub(crate) fn require_vm(options: &BackendOptions, launch: &VmLaunchOptions) -> 
     crate::accel::choose(options, launch).map(|_| ())
 }
 
+/// [`require_vm`] for an arm64 VM: `qemu` is the `qemu-system-aarch64` it
+/// runs, always under TCG (no KVM for a foreign architecture).
+pub(crate) fn require_virt(
+    options: &BackendOptions,
+    launch: &VmLaunchOptions,
+    qemu: &Path,
+) -> Result<(), String> {
+    require_tool(qemu, "qemu-system-arm")?;
+    if let Some(problem) = qemu_version_problem(qemu) {
+        return Err(format!("{problem}; install a newer QEMU"));
+    }
+    require_tool(&options.qemu_img, "qemu-utils")?;
+    if !options.headless
+        && launch.screen == crate::api::VmScreen::QemuWindow
+        && let Some(problem) = gtk_problem(qemu)
+    {
+        return Err(format!(
+            "{problem}; on Debian/Ubuntu: sudo apt install qemu-system-gui"
+        ));
+    }
+    Ok(())
+}
+
 fn display_help(qemu: &Path, timeout: Duration) -> Result<String, String> {
     probe_output(qemu, &["-display", "help"], timeout)
 }

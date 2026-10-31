@@ -430,7 +430,10 @@ pub(super) fn capture_text(field: &FieldSummary, text: String) -> RichText {
 }
 
 pub(super) fn syscall_name(nr: u64) -> String {
-    syscalls::syscall(nr).map_or_else(|| format!("syscall {nr}"), |info| info.name.clone())
+    syscalls::syscall(nr).map_or_else(
+        || format!("syscall {}", syscalls::wire_number(nr)),
+        |info| info.name.clone(),
+    )
 }
 
 pub(crate) fn argument_name(nr: u64, index: usize) -> &'static str {
@@ -878,12 +881,15 @@ pub(crate) fn cells(invocation: &InvocationSummary) -> Vec<(Vec<(String, Tone)>,
     let group = antinomie_monitor_core::syscall_groups::SyscallGroup::of(&event.syscall_name);
     let syscall = vec![
         (event.syscall_name.clone(), Tone::Value(ValueKind::Name)),
-        (format!(" ({})", event.syscall_nr), Tone::Label),
+        (
+            format!(" ({})", syscalls::wire_number(event.syscall_nr)),
+            Tone::Label,
+        ),
     ];
     let syscall_hover = format!(
         "{} (syscall {}){}",
         event.syscall_name,
-        event.syscall_nr,
+        syscalls::wire_number(event.syscall_nr),
         group.map_or_else(String::new, |group| format!("\n{}", group.label()))
     );
     let (result, result_hover) = match invocation.exit.as_ref().and_then(|exit| exit.result) {

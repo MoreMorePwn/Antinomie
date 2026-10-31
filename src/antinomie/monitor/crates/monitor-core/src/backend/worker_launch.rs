@@ -326,6 +326,7 @@ impl Worker {
         };
         run.assembler
             .set_event_table(session.vm.transport.event_table as usize);
+        run.assembler.set_arch(session.disk_bundle.arch);
         run.summary.recording_error = None;
         run.watch = request.dump_trigger.as_ref().and_then(|plan| {
             crate::dump_trigger::Watch::new(plan, &self.options.reduced_keep_calls)

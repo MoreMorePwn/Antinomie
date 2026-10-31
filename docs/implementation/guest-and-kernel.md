@@ -626,7 +626,7 @@ series is nineteen patches (`src/antinomie/patches/README.md`, "Architectures"):
   and a 0.7 host rejects a nonzero reserved word in INFO. The host keeps the
   architecture in `GuestKernel::arch` (recordings without it read as x86-64),
   decodes x86-64 guests only, and on another architecture says why and refuses
-  launches.
+  launches. (0.9.0 adds arm64: see the arm64 section.)
 
 "No behaviour change" was checked by comparing the recorder's objects before
 and after, and by running the conformance and stress groups on bases built from
@@ -749,6 +749,74 @@ still starts x86-64 VMs only (arm64 VMs start with MA-16).
   `$ANTINOMIE_LEGACY_BASE`, else `--old-base` when that base is revision 17 or
   older), by convention the 0.7.0 BusyBox base
   (`tests/monitor/conformance/README.md`).
+
+### arm64 guests: core, BusyBox base and launch (0.9.0)
+
+Multi-arch plan cards MA-10, MA-13, MA-15 and MA-16 (BusyBox first). Contract
+revision 20 is unchanged: the wire carried the architecture since 0.8.0.
+
+* **Guest series.** Patch 31 makes the generic EFI stub, which arm64 boots
+  through, claim the bootstrap page (`antinomie_boot_gpa=`) before the kernel
+  image is placed. Patch 32 adds `arch/arm64/include/asm/antinomie.h` and the
+  generated native table (318 calls, the same table id as
+  `protocol/aarch64/native-syscalls.json`). Patch 33 hooks `el0_svc_common()`
+  around `invoke_syscall()` (AArch64 and AArch32 calls), takes the boot options
+  after `setup_machine_fdt()`, reserves the bootstrap page after
+  `arm64_memblock_init()`, writes the cleaned command line back into the device
+  tree's `/chosen/bootargs`, and adds `antinomie_kpti=` (the "faster emulation"
+  switch); `capture_arm64.c` decodes the rt_sigreturn frame (with
+  `extra_context`) and the MTE tag ptrace requests; `debug_arm64.c` is a stub
+  (ATTACH returns EOPNOTSUPP until MA-11). Patch 34 reads clone()'s child TID
+  pointer from the fifth argument where `CONFIG_CLONE_BACKWARDS` puts it, and
+  names the field `arg4.child_tid` there, as the arm64 schema numbers it.
+  Patch 36 fixes never-drop waits on kernels without `CONFIG_PREEMPT_COUNT`
+  (arm64's voluntary preemption, as in Debian's arm64 configuration): every
+  sender looked atomic there and gave up after the 200 us atomic spin, so a
+  host read gap with a full ring dropped a packet; a sender with interrupts on
+  now spins for the whole progress-sensitive send wait (it cannot sleep: a
+  held spinlock is invisible without the count). x86-64 compiles it out.
+  Patch 35 renames the debugger's `set_state()`: arm64's build inlines
+  `kernel/stop_machine.c`'s function of that name, and pahole described it under
+  the recorder's symbol (`check-kernel-btf.py` caught it).
+* **Kernel configuration.** The minimal profile resolves arm64 with
+  `mod2noconfig` (arm64's defconfig makes about 1150 modules a BusyBox base never
+  loads). What a module would have given and x86-64 builds in is listed in
+  `kconfig/arm64/minimal.cfg`: IPv6 (Debian has it built in; nftables' inet
+  family needs it) and the iptables tables and conntrack. `!NAME` turns a symbol
+  off (`PREEMPT`: Debian's arm64 banner says SMP).
+* **BusyBox arm64 base.** `build-monitor-image.py --arch arm64` takes its
+  userland from pinned Debian 13 arm64 packages (busybox-static, e2fsprogs and
+  the libraries resize2fs and chattr load, glibc's loader), fetched through the
+  archive's signed index from snapshot.debian.org and cached by SHA-256
+  (`--package-cache`). Applets come from BusyBox's packed name table, so the
+  build needs no emulation. The console is `ttyAMA0`; the bundle says
+  `"arch": "arm64"`.
+* **Launch.** `vm/virt.rs` builds QEMU's `virt` machine under TCG:
+  `cortex-a72` with the device tree, `neoverse-n1` with AAVMF (pflash code and a
+  per-VM variable store), SATA through ich9-ahci, virtio-gpu with xHCI keyboard
+  and tablet. The shutdown deadline scales by `Machine::time_scale()`.
+  `VmLaunchOptions::fast_emulation` (serialized only when set, so x86 VM files
+  and snapshot identities are unchanged) boots with `antinomie_kpti=off`; the VM
+  dialog offers it for arm64 bases, and the VM summary lists what still tells
+  an arm64 VM apart (`StealthProfile::giveaways_for`).
+* **Host decoding.** `GuestArch::supported()` includes arm64. Events carry host
+  syscall ids (`syscalls::id`: the ELF machine in the high bits; x86-64's tag is
+  0, so its ids are its numbers): the live assembler, the archive readers
+  (`Recording::guest_arch()` from the run's environment), io_uring request
+  equivalents (by the ring owner's table) and struct member filters (the
+  record's own ABI layouts) all name calls by the guest's table. Views and the
+  query's `syscall.num` show the wire number.
+* **Conformance.** The trace fixture builds for aarch64: legacy calls are under
+  `#ifdef SYS_<name>` (with traced generic replacements where later cases need
+  the result), x86-only requests under `__x86_64__`, and the signal trampoline,
+  clone's argument order, the pkey rights bit, `epoll_event` and `semid64_ds`
+  are per architecture. The x86-64 fixture is the same program as before (its
+  preprocessed source is unchanged). The example converts the fixture's numbers
+  into the base's ids, walks the base's table in the coverage matrix, scales its
+  waits by the guest's time scale and gives an emulated guest at most 2 vCPUs
+  and 1 GiB. arm64 goldens live in `golden/aarch64/`.
+* **Known gap.** The raw `/sys/firmware/fdt` (root only) still shows the
+  `antinomie_*` boot options (MA-18).
 
 ### Fair, progress-sensitive send waits (0.8.0)
 

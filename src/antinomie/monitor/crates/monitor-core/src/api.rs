@@ -273,6 +273,11 @@ pub struct VmLaunchOptions {
     /// the guest sees the same devices either way.
     #[serde(default, skip_serializing_if = "VmScreen::is_default")]
     pub screen: VmScreen,
+    /// arm64 only: boot with kernel page-table isolation (KPTI) off, which
+    /// makes system calls under emulation several times faster and is a
+    /// giveaway (a real arm64 machine with KASLR isolates). Off by default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fast_emulation: bool,
 }
 impl VmLaunchOptions {
     /// The options as the checkpoint identity sees them: the screen is how the
@@ -1142,6 +1147,8 @@ pub struct BaseSummary {
     pub min_ram_mib: u32,
     pub min_disk_gib: u32,
     pub fixed_display: bool,
+    /// The guest architecture the base's kernel and programs are for.
+    pub arch: GuestArch,
     /// Size of the base disk image on disk, in bytes.
     pub size_bytes: u64,
     /// Antinomie patch revision the base's kernel was built from.
@@ -1431,6 +1438,12 @@ impl Default for GuestArch {
 }
 
 impl GuestArch {
+    /// How many times longer a guest of this architecture takes for the same
+    /// work on this host (1 for x86-64; arm64 runs under TCG). Tools that
+    /// wait on a guest scale their deadlines by it.
+    pub fn time_scale(self) -> u32 {
+        crate::vm::Machine::of(self).map_or(1, crate::vm::Machine::time_scale)
+    }
     /// `EM_X86_64`.
     pub const ELF_X86_64: u32 = 62;
     /// `EM_AARCH64`.
@@ -1476,7 +1489,7 @@ impl GuestArch {
     /// Whether this host decodes the architecture's records and launches
     /// programs there.
     pub fn supported(self) -> bool {
-        self == Self::X86_64
+        matches!(self, Self::X86_64 | Self::AARCH64)
     }
 
     pub fn label(self) -> String {
@@ -3381,7 +3394,8 @@ mod tests {
         assert!(
             GuestArch::X86_64.runs_elf_arch("x86_64") && !GuestArch::X86_64.runs_elf_arch("ARM")
         );
-        assert!(GuestArch::X86_64.supported() && !GuestArch::AARCH64.supported());
+        assert!(GuestArch::X86_64.supported() && GuestArch::AARCH64.supported());
+        assert!(!GuestArch::RISCV64.supported() && !GuestArch::ARM.supported());
         let elf = |class: u8, data: u8, machine: u16| {
             let mut header = b"\x7fELF".to_vec();
             header.extend([class, data, 1]);

@@ -243,6 +243,7 @@ impl Session {
         let mut assembler = Assembler::new(capture_dir.join("objects"), options.capture_quota_size)
             .map_err(|error| error.to_string())?;
         assembler.set_event_table(vm.transport.event_table as usize);
+        assembler.set_arch(bundle.arch);
         capture.queue_manifest(&vm, &bundle, &disk_bundle, "snapshot-resume-pending")?;
         // A reconnect runs on the thread that drains telemetry while the old
         // timeline's recordings are made durable in the background: on a busy
@@ -419,6 +420,7 @@ impl Session {
             capture
                 .assembler
                 .set_event_table(vm.transport.event_table as usize);
+            capture.assembler.set_arch(bundle.arch);
             capture.persist_summary()?;
             captures.insert(capture.summary.id.clone(), capture);
         }

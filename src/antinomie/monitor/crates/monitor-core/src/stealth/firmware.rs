@@ -78,18 +78,29 @@ pub(super) fn matches(
     descriptor: &serde_json::Value,
     secure_boot: bool,
 ) -> Option<(PathBuf, PathBuf)> {
+    matches_target(descriptor, secure_boot, "x86_64", "pc-q35")
+}
+
+/// [`matches`] for another QEMU target: the descriptor's architecture and a
+/// prefix of its machine patterns (`aarch64`, `virt`: AAVMF).
+fn matches_target(
+    descriptor: &serde_json::Value,
+    secure_boot: bool,
+    architecture: &str,
+    machine_prefix: &str,
+) -> Option<(PathBuf, PathBuf)> {
     let has = |list: &str, value: &str| {
         descriptor[list]
             .as_array()
             .is_some_and(|items| items.iter().any(|item| item.as_str() == Some(value)))
     };
     let q35 = descriptor["targets"].as_array()?.iter().any(|target| {
-        target["architecture"].as_str() == Some("x86_64")
+        target["architecture"].as_str() == Some(architecture)
             && target["machines"].as_array().is_some_and(|machines| {
                 machines
                     .iter()
                     .filter_map(|machine| machine.as_str())
-                    .any(|machine| machine.starts_with("pc-q35"))
+                    .any(|machine| machine.starts_with(machine_prefix))
             })
     });
     let mapping = &descriptor["mapping"];
@@ -147,14 +158,44 @@ pub fn find_ovmf(qemu: &Path, secure_boot: bool) -> Result<Ovmf, String> {
         })
 }
 
+/// AAVMF (UEFI for arm64 `virt`) for `qemu`'s `qemu-system-aarch64`, without
+/// Secure Boot (arm64 profiles do not offer it yet).
+pub fn find_aavmf(qemu: &Path) -> Result<Ovmf, String> {
+    descriptors(qemu)
+        .into_iter()
+        .find_map(|path| {
+            let (code, vars_template) =
+                matches_target(&read_descriptor(&path)?, false, "aarch64", "virt")?;
+            Some(Ovmf {
+                code,
+                vars_template,
+                descriptor: path,
+            })
+        })
+        .ok_or_else(|| {
+            "no AAVMF among QEMU's firmware descriptors; on Debian/Ubuntu: \
+             sudo apt install qemu-efi-aarch64"
+                .to_owned()
+        })
+}
+
 /// The VM's own variable store (boot entries, Secure Boot keys), copied from
 /// the template on its first UEFI boot and kept with the VM after that.
 pub(super) fn vm_vars(ovmf: &Ovmf, vm_dir: &Path, secure_boot: bool) -> Result<PathBuf, String> {
-    let path = vm_dir.join(if secure_boot {
-        "efi-vars-secure-boot.fd"
-    } else {
-        "efi-vars.fd"
-    });
+    vm_vars_named(
+        ovmf,
+        vm_dir,
+        if secure_boot {
+            "efi-vars-secure-boot.fd"
+        } else {
+            "efi-vars.fd"
+        },
+    )
+}
+
+/// [`vm_vars`] under its own name (`efi-vars-aarch64.fd` for AAVMF).
+pub(super) fn vm_vars_named(ovmf: &Ovmf, vm_dir: &Path, name: &str) -> Result<PathBuf, String> {
+    let path = vm_dir.join(name);
     if path.exists() {
         return Ok(path);
     }

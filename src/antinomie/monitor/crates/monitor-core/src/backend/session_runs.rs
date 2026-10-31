@@ -129,6 +129,7 @@ impl Session {
         capture
             .assembler
             .set_event_table(self.vm.transport.event_table as usize);
+        capture.assembler.set_arch(self.disk_bundle.arch);
         if let Some(error) = self.capture.error.clone() {
             capture.storage_error(error);
         }

@@ -770,8 +770,8 @@ pub(super) fn take_pending_flush_steps(
 /// Why nothing runs on a guest whose architecture this host cannot decode.
 pub(super) fn unsupported_arch(arch: crate::api::GuestArch) -> String {
     format!(
-        "the guest kernel is {}: this Antinomie decodes x86-64 guests only, so it \
-         neither launches nor traces programs there",
+        "the guest kernel is {}: this Antinomie decodes x86-64 and arm64 guests only, so \
+         it neither launches nor traces programs there",
         arch.label()
     )
 }

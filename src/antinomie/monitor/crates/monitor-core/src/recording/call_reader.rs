@@ -29,9 +29,11 @@ pub(super) struct Preview {
 }
 
 impl Preview {
-    pub(super) fn new(objects: PathBuf) -> Self {
+    pub(super) fn new(objects: PathBuf, arch: crate::api::GuestArch) -> Self {
+        let mut assembler = Assembler::archive_checked(objects);
+        assembler.set_arch(arch);
         Self {
-            assembler: Assembler::archive_checked(objects),
+            assembler,
             latest: BTreeMap::new(),
             size: 0,
         }
@@ -82,6 +84,8 @@ const WINDOW_SIZE: usize = 512 * 1024;
 /// The raw archive and the objects it was recorded with.
 struct Source {
     objects: PathBuf,
+    /// The guest's architecture: the records' calls are its ids.
+    arch: crate::api::GuestArch,
     file: File,
     /// Archive bytes from `window_start`, read with one positioned read.
     window: Vec<u8>,
@@ -165,6 +169,7 @@ impl<'a> CallReader<'a> {
         directory: &Path,
         connection: &'a rusqlite::Connection,
         boundary: u64,
+        arch: crate::api::GuestArch,
     ) -> Result<Self, RecordingError> {
         let objects = directory.join("objects");
         // One check of the objects directory for the whole read.
@@ -204,6 +209,7 @@ impl<'a> CallReader<'a> {
             },
             source: Source {
                 objects,
+                arch,
                 file,
                 window: Vec::new(),
                 window_start: 0,
@@ -219,7 +225,7 @@ impl<'a> CallReader<'a> {
     }
 
     pub(super) fn preview(&self) -> Preview {
-        Preview::new(self.source.objects.clone())
+        Preview::new(self.source.objects.clone(), self.source.arch)
     }
 
     /// Read at most `limit` async observations of `key` from sequence `from`

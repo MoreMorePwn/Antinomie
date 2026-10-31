@@ -5,7 +5,10 @@ use super::{
     DiskBus, DiskMedia, Firmware, NicModel, NicSlot, Pointer, RtcClock, SmbiosEntry, StealthPreset,
     StealthProfile, firmware, host_cpu_vendor, host_cpuinfo, memory, processor, smbios,
 };
-use std::{path::Path, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 /// QEMU option values double their commas.
 pub(crate) fn escape(text: &str) -> String {
@@ -295,6 +298,14 @@ pub(crate) fn firmware_args(
         command.args(["-global", "driver=cfi.pflash01,property=secure,value=on"]);
     }
     Ok(())
+}
+
+/// AAVMF for an arm64 VM booting through UEFI: the firmware's code and the
+/// VM's own variable store, kept in `vm_dir`.
+pub(crate) fn aavmf_files(qemu: &Path, vm_dir: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let aavmf = firmware::find_aavmf(qemu)?;
+    let vars = firmware::vm_vars_named(&aavmf, vm_dir, "efi-vars-aarch64.fd")?;
+    Ok((aavmf.code, vars))
 }
 
 /// The SMBIOS processor family of a CPU brand string (SMBIOS 3.x "processor

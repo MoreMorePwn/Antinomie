@@ -521,6 +521,13 @@ fn index_archive(
 }
 
 impl Recording {
+    /// The guest architecture the run recorded (x86-64 for runs saved before
+    /// it was kept): the raw records' calls are its numbers.
+    pub fn guest_arch(&self) -> crate::api::GuestArch {
+        serde_json::from_value(self.manifest["run"]["environment"]["arch"].clone())
+            .unwrap_or_default()
+    }
+
     /// Match the full retained recording off the UI thread, retaining only one page.
     ///
     /// | Argument | Meaning |
@@ -598,6 +605,7 @@ impl Recording {
         let boundary = reader.get_ref().metadata()?.len();
         let mut assembler = Assembler::open_archive(self.directory.join("objects"))
             .map_err(|_| RecordingError::Limit("cannot open archived objects"))?;
+        assembler.set_arch(self.guest_arch());
         loop {
             if cancel.load(Ordering::Relaxed) {
                 return Err(RecordingError::Limit("archive read cancelled"));
@@ -627,7 +635,7 @@ impl Recording {
             if header.phase == 3
                 || (header.phase != 0
                     && matches!(
-                        crate::syscalls::known_name(header.syscall_nr),
+                        crate::syscalls::known_name(assembler.syscall_id(&header)),
                         Some("execve" | "execveat")
                     ))
             {
