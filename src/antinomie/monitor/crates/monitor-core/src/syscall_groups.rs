@@ -210,8 +210,10 @@ mod tests {
 
     #[test]
     fn every_native_syscall_has_one_group() {
-        let table: serde_json::Value =
-            serde_json::from_str(include_str!("../../../protocol/native-syscalls.json")).unwrap();
+        let table: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../protocol/x86_64/native-syscalls.json"
+        ))
+        .unwrap();
         let syscalls = table["syscalls"].as_array().unwrap();
         assert_eq!(syscalls.len(), 375);
         for syscall in syscalls {

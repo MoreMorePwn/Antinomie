@@ -1,0 +1,25 @@
+{
+  "format_version": 1,
+  "kernel_version": "6.12.94",
+  "architecture": "x86_64",
+  "elf_machine": 62,
+  "elf_class": 64,
+  "endianness": "little",
+  "data_model": "LP64",
+  "audit_arch": "c000003e",
+  "layout_prefix": "linux-6.12.94/x86_64/",
+  "changed": {},
+  "absent": [],
+  "additions": {},
+  "provenance": {
+    "generator": "scripts/generate-arch-constants.py",
+    "compiler_target": "x86_64-linux-gnu",
+    "uapi": [
+      "arch/x86/include/uapi",
+      "include/uapi"
+    ],
+    "makefile_sha256": "8df3210f3cd7a8e55c262adfe5412e21a4da3b80f287a13a3c0cb2c1cc12c7a8",
+    "evaluated_names": 1295,
+    "method": "libclang enum evaluation over the pinned installed-UAPI view, one header per unit; names compared with x86-64's evaluation of the same names"
+  }
+}

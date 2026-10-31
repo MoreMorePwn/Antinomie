@@ -389,7 +389,12 @@ fn meaning(nr: u64, index: usize) -> Meaning {
         "int" | "pid_t" | "clockid_t" | "key_t" | "timer_t" | "mqd_t" | "key_serial_t" => {
             Meaning::Signed32
         }
-        "long" | "loff_t" | "off_t" => Meaning::Signed64,
+        "loff_t" => Meaning::Signed64,
+        // long and the kernel's off_t follow the data model (ILP32: 32 bits).
+        "long" | "off_t" => match syscalls::native().constants().data_model {
+            syscalls::DataModel::Lp64 => Meaning::Signed64,
+            syscalls::DataModel::Ilp32 => Meaning::Signed32,
+        },
         "unsigned int" | "u32" | "__u32" | "uint32_t" | "uid_t" | "gid_t" | "qid_t" => {
             Meaning::Unsigned32
         }

@@ -453,7 +453,7 @@ fn bpf_attr_is_decoded_by_the_command_that_passed_it() {
 #[test]
 fn bpf_member_offsets_agree_with_the_compiled_inventory_and_stay_inside_the_union() {
     let inventory: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../protocol/captured-layout-members.json"
+        "../../../../protocol/x86_64/captured-layout-members.json"
     ))
     .unwrap();
     let attr = inventory["layouts"]

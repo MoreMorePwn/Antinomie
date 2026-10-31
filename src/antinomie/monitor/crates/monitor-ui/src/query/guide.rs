@@ -210,7 +210,7 @@ fn guide_rows() -> &'static [(String, String, String)] {
             rows.push((
                 format!("args.{name}"),
                 "schema argument".into(),
-                "Argument name from protocol/native-syscalls.json.".into(),
+                "Argument name from protocol/<arch>/native-syscalls.json.".into(),
             ));
         }
         for name in names {

@@ -5,6 +5,8 @@
 //! trace shows the name and keeps the number available; a value the table
 //! does not know reads `Unknown <what> <hex>`.
 
+use super::Constants;
+
 type Table = &'static [(&'static str, u64)];
 
 const FCNTL: Table = &[
@@ -456,21 +458,23 @@ const IOCTL: Table = &[
     ("FITHAW", 0xc004_5878),
 ];
 
-fn lookup(table: Table, value: u64) -> Option<&'static str> {
+/// A value's name in a table of x86-64 values, read with the architecture's
+/// constants (a name the arch lacks never matches).
+fn lookup(c: &Constants, table: Table, value: u64) -> Option<&'static str> {
     table
         .iter()
-        .find(|&&(_, number)| number == value)
+        .find(|&&(name, number)| c.value(name, number) == Some(value))
         .map(|&(name, _)| name)
 }
 
-fn named(table: Table, value: u64, what: &str) -> String {
-    lookup(table, value).map_or_else(|| format!("Unknown {what} {value:#x}"), Into::into)
+fn named(c: &Constants, table: Table, value: u64, what: &str) -> String {
+    lookup(c, table, value).map_or_else(|| format!("Unknown {what} {value:#x}"), Into::into)
 }
 
 /// An ioctl request by name, else by its `_IOC` encoding.
-fn ioctl(request: u64) -> String {
+fn ioctl(c: &Constants, request: u64) -> String {
     let request = request as u32;
-    if let Some(name) = lookup(IOCTL, u64::from(request)) {
+    if let Some(name) = lookup(c, IOCTL, u64::from(request)) {
         return name.into();
     }
     let nr = request & 0xff;
@@ -491,10 +495,10 @@ fn ioctl(request: u64) -> String {
 
 /// A clock id: a named clock, or the CPU clock of a process or thread
 /// (`MAKE_PROCESS_CPUCLOCK`: the inverted PID shifted left by 3).
-fn clock(value: u64) -> String {
+fn clock(c: &Constants, value: u64) -> String {
     let id = value as i32;
     if id >= 0 {
-        return named(CLOCKS, u64::from(id as u32), "clock");
+        return named(c, CLOCKS, u64::from(id as u32), "clock");
     }
     let pid = !(id >> 3);
     let which = match id & 3 {
@@ -508,10 +512,10 @@ fn clock(value: u64) -> String {
 }
 
 /// A scheduling policy with its SCHED_RESET_ON_FORK flag.
-fn policy(value: u64) -> String {
+fn policy(c: &Constants, value: u64) -> String {
     const RESET_ON_FORK: u64 = 0x4000_0000;
     let value = value & 0xffff_ffff;
-    let base = named(POLICY, value & !RESET_ON_FORK, "policy");
+    let base = named(c, POLICY, value & !RESET_ON_FORK, "policy");
     if value & RESET_ON_FORK != 0 {
         format!("{base}|SCHED_RESET_ON_FORK")
     } else {
@@ -520,10 +524,10 @@ fn policy(value: u64) -> String {
 }
 
 /// A SysV IPC control command, with the IPC_64 flag glibc adds.
-fn ipc(table: Table, value: u64) -> String {
+fn ipc(c: &Constants, table: Table, value: u64) -> String {
     const IPC_64: u64 = 0x100;
     let value = value & 0xffff_ffff;
-    let base = named(table, value & !IPC_64, "command");
+    let base = named(c, table, value & !IPC_64, "command");
     if value & IPC_64 != 0 {
         format!("{base}|IPC_64")
     } else {
@@ -532,10 +536,10 @@ fn ipc(table: Table, value: u64) -> String {
 }
 
 /// io_uring_register's opcode, with the registered-ring flag.
-fn uring_register(value: u64) -> String {
+fn uring_register(c: &Constants, value: u64) -> String {
     const USE_REGISTERED_RING: u64 = 1 << 31;
     let value = value & 0xffff_ffff;
-    let base = named(URING_REGISTER, value & !USE_REGISTERED_RING, "opcode");
+    let base = named(c, URING_REGISTER, value & !USE_REGISTERED_RING, "opcode");
     if value & USE_REGISTERED_RING != 0 {
         format!("{base}|IORING_REGISTER_USE_REGISTERED_RING")
     } else {
@@ -545,40 +549,53 @@ fn uring_register(value: u64) -> String {
 
 /// The name of argument `index` of syscall `number` when the schema types it
 /// as a plain integer but its values are named constants.
-pub(super) fn named_argument(number: u64, index: usize, args: &[u64; 6]) -> Option<String> {
+/// The name of argument `index` of `call` when the call's argument is an
+/// enumerated selector, with the architecture's values.
+pub(super) fn named_argument(
+    c: &Constants,
+    call: &str,
+    index: usize,
+    args: &[u64; 6],
+) -> Option<String> {
     let value = args[index];
     let int = value & 0xffff_ffff;
-    Some(match (number, index) {
-        (72, 1) => named(FCNTL, int, "command"),
-        (158, 0) => named(ARCH_PRCTL, int, "code"),
-        (16, 1) => ioctl(value),
-        (8, 2) => named(WHENCE, int, "whence"),
-        (14, 0) => named(SIGMASK_HOW, int, "how"),
-        (28, 2) | (440, 3) => named(MADVISE, int, "advice"),
-        (221, 3) => named(FADVISE, int, "advice"),
-        (41 | 53, 0) => named(FAMILY, int, "family"),
-        (48, 1) => named(SHUTDOWN, int, "how"),
-        (233, 1) => named(EPOLL_OP, int, "operation"),
-        (222 | 227 | 228 | 229 | 230 | 283 | 305, 0) => clock(value),
-        (97 | 160, 0) | (302, 1) => named(RLIMIT, int, "resource"),
-        (98, 0) => named(RUSAGE, int, "who"),
-        (140 | 141, 0) => named(PRIORITY_WHICH, int, "which"),
-        (251 | 252, 0) => named(IOPRIO_WHO, int, "which"),
-        (247, 0) => named(IDTYPE, int, "id type"),
-        (144, 1) | (146 | 147, 0) => policy(value),
-        (66, 2) => ipc(SEMCTL, value),
-        (71, 1) => ipc(MSGCTL, value),
-        (31, 1) => ipc(SHMCTL, value),
-        (431, 1) => named(FSCONFIG, int, "command"),
-        (324, 0) => named(MEMBARRIER, int, "command"),
-        (317, 0) => named(SECCOMP_OP, int, "operation"),
-        (427, 1) => uring_register(value),
-        (103, 0) => named(SYSLOG, int, "action"),
-        (169, 0) => named(REBOOT_MAGIC1, int, "magic"),
-        (169, 1) => named(REBOOT_MAGIC2, int, "magic"),
-        (169, 2) => named(REBOOT_CMD, int, "command"),
-        (312, 2) => named(KCMP, int, "type"),
-        (445, 1) => named(LANDLOCK_RULE, int, "rule type"),
+    Some(match (call, index) {
+        ("fcntl", 1) => named(c, FCNTL, int, "command"),
+        ("arch_prctl", 0) => named(c, ARCH_PRCTL, int, "code"),
+        ("ioctl", 1) => ioctl(c, value),
+        ("lseek", 2) => named(c, WHENCE, int, "whence"),
+        ("rt_sigprocmask", 0) => named(c, SIGMASK_HOW, int, "how"),
+        ("madvise", 2) | ("process_madvise", 3) => named(c, MADVISE, int, "advice"),
+        ("fadvise64", 3) => named(c, FADVISE, int, "advice"),
+        ("socket" | "socketpair", 0) => named(c, FAMILY, int, "family"),
+        ("shutdown", 1) => named(c, SHUTDOWN, int, "how"),
+        ("epoll_ctl", 1) => named(c, EPOLL_OP, int, "operation"),
+        (
+            "timer_create" | "clock_settime" | "clock_gettime" | "clock_getres" | "clock_nanosleep"
+            | "timerfd_create" | "clock_adjtime",
+            0,
+        ) => clock(c, value),
+        ("getrlimit" | "setrlimit", 0) | ("prlimit64", 1) => named(c, RLIMIT, int, "resource"),
+        ("getrusage", 0) => named(c, RUSAGE, int, "who"),
+        ("getpriority" | "setpriority", 0) => named(c, PRIORITY_WHICH, int, "which"),
+        ("ioprio_set" | "ioprio_get", 0) => named(c, IOPRIO_WHO, int, "which"),
+        ("waitid", 0) => named(c, IDTYPE, int, "id type"),
+        ("sched_setscheduler", 1) | ("sched_get_priority_max" | "sched_get_priority_min", 0) => {
+            policy(c, value)
+        }
+        ("semctl", 2) => ipc(c, SEMCTL, value),
+        ("msgctl", 1) => ipc(c, MSGCTL, value),
+        ("shmctl", 1) => ipc(c, SHMCTL, value),
+        ("fsconfig", 1) => named(c, FSCONFIG, int, "command"),
+        ("membarrier", 0) => named(c, MEMBARRIER, int, "command"),
+        ("seccomp", 0) => named(c, SECCOMP_OP, int, "operation"),
+        ("io_uring_register", 1) => uring_register(c, value),
+        ("syslog", 0) => named(c, SYSLOG, int, "action"),
+        ("reboot", 0) => named(c, REBOOT_MAGIC1, int, "magic"),
+        ("reboot", 1) => named(c, REBOOT_MAGIC2, int, "magic"),
+        ("reboot", 2) => named(c, REBOOT_CMD, int, "command"),
+        ("kcmp", 2) => named(c, KCMP, int, "type"),
+        ("landlock_add_rule", 1) => named(c, LANDLOCK_RULE, int, "rule type"),
         _ => return None,
     })
 }
@@ -590,7 +607,14 @@ mod tests {
     fn name(number: u64, index: usize, value: u64) -> String {
         let mut args = [0; 6];
         args[index] = value;
-        named_argument(number, index, &args).unwrap()
+        let table = super::super::native();
+        named_argument(
+            table.constants(),
+            table.name_of(number).unwrap(),
+            index,
+            &args,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -605,7 +629,7 @@ mod tests {
         assert_eq!(name(144, 1, 0x4000_0003), "SCHED_BATCH|SCHED_RESET_ON_FORK");
         assert_eq!(name(169, 2, 0), "LINUX_REBOOT_CMD_CAD_OFF");
         assert_eq!(name(72, 1, 0x7fff), "Unknown command 0x7fff");
-        assert!(named_argument(0, 0, &[0; 6]).is_none());
+        assert!(named_argument(super::super::native().constants(), "read", 0, &[0; 6]).is_none());
     }
 
     #[test]

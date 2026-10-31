@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Socket levels and option names, from the pinned UAPI headers.
+use super::Constants;
 
 // Socket levels and options named by the pinned UAPI headers. The kernel capture
 // table in kernel/antinomie/native_capture.c lists the same options; values were
@@ -248,35 +249,58 @@ pub(super) const TCP_OPTIONS: &[(&str, i32)] = &[
     ("TCP_AO_REPAIR", 42),
 ];
 
-pub(super) fn lookup(table: &[(&'static str, i32)], value: i32) -> Option<&'static str> {
+/// A value's name in a table of x86-64 values, read with the architecture's
+/// constants (a name the arch lacks never matches).
+pub(super) fn lookup(
+    constants: &Constants,
+    table: &[(&'static str, i32)],
+    value: i32,
+) -> Option<&'static str> {
     table
         .iter()
-        .find(|&&(_, number)| number == value)
+        .find(|&&(name, number)| arch_value(constants, name, number) == Some(value))
         .map(|&(name, _)| name)
 }
 
-pub(super) fn socket_option_name(get: bool, level: i32, option: i32) -> String {
-    const SOL_SOCKET: i32 = 1;
-    const IPPROTO_IP: i32 = 0;
-    const IPPROTO_IPV6: i32 = 41;
-    const IPPROTO_TCP: i32 = 6;
+fn arch_value(constants: &Constants, name: &str, generic: i32) -> Option<i32> {
+    constants
+        .value(name, generic as i64 as u64)
+        .map(|value| value as i32)
+}
+
+pub(super) fn socket_option_name(
+    constants: &Constants,
+    get: bool,
+    level: i32,
+    option: i32,
+) -> String {
+    let level_of = |name, generic| arch_value(constants, name, generic);
+    let sol_socket = level_of("SOL_SOCKET", 1);
+    let ipproto_ip = level_of("IPPROTO_IP", 0);
+    let ipproto_ipv6 = level_of("IPPROTO_IPV6", 41);
+    let ipproto_tcp = level_of("IPPROTO_TCP", 6);
+    let level = Some(level);
     // SO_GET_FILTER shares SO_ATTACH_FILTER's number; the direction selects it.
-    if get && level == SOL_SOCKET && option == 26 {
+    if get && level == sol_socket && Some(option) == arch_value(constants, "SO_ATTACH_FILTER", 26) {
         return "SO_GET_FILTER".into();
     }
-    let table: &[(&str, i32)] = match level {
-        SOL_SOCKET => SOL_SOCKET_OPTIONS,
-        IPPROTO_IP => IP_OPTIONS,
-        IPPROTO_IPV6 => IPV6_OPTIONS,
-        IPPROTO_TCP => TCP_OPTIONS,
-        _ => &[],
+    let table: &[(&str, i32)] = if level == sol_socket {
+        SOL_SOCKET_OPTIONS
+    } else if level == ipproto_ip {
+        IP_OPTIONS
+    } else if level == ipproto_ipv6 {
+        IPV6_OPTIONS
+    } else if level == ipproto_tcp {
+        TCP_OPTIONS
+    } else {
+        &[]
     };
-    if let Some(name) = lookup(table, option) {
+    if let Some(name) = lookup(constants, table, option) {
         return name.into();
     }
     // The IP handlers pass options they do not know to netfilter.
-    if level == IPPROTO_IP || level == IPPROTO_IPV6 {
-        let prefix = if level == IPPROTO_IP { "IPT" } else { "IP6T" };
+    if level == ipproto_ip || level == ipproto_ipv6 {
+        let prefix = if level == ipproto_ip { "IPT" } else { "IP6T" };
         let name = match (get, option) {
             (false, 64) => Some("SO_SET_REPLACE"),
             (false, 65) => Some("SO_SET_ADD_COUNTERS"),

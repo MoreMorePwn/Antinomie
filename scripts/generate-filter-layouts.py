@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
 # Copyright (c) 2026 MikiMiku (MoreMorePwn)
-"""Generate captured-member facts from Linux 6.12.94 using the x86-64 Clang ABI.
+"""Generate captured-member facts from Linux 6.12.94 using a target's Clang ABI.
 
 No host libc headers, runtime pointer reads, or retained upstream C are used.
 Development prerequisite: the existing libclang Python binding. Unknown/selector
@@ -18,7 +18,22 @@ from clang import cindex
 ROOT = Path(__file__).resolve().parent.parent
 MONITOR = ROOT / "src/antinomie/monitor"
 KERNEL = ROOT / "work/debian-6.12.94-1-trixie/core"
-PREFIX = "linux-6.12.94/x86_64/"
+# Per architecture: the layout prefix the guest names layouts with
+# (ANT_ARCH_LAYOUT), Clang's target and the macro its compiler predefines, the
+# UAPI directory, its native syscall table, its capture_<arch>.c decoder,
+# kernel-only user ABI records, and representative sizes and offsets that must
+# not move (epoll_event is packed on x86-64 only).
+ARCHES = {
+    "x86_64": {"prefix": "linux-6.12.94/x86_64/", "target": "x86_64-linux-gnu",
+               "define": "__x86_64__", "uapi": "arch/x86/include/uapi",
+               "table": "arch/x86/entry/syscalls/syscall_64.tbl", "capture": "capture_x86.c",
+               "records": {"arch/x86/include/asm/user_64.h": ["user_regs_struct", "user_i387_struct"]},
+               "sizes": {"epoll_event": 12, "user_regs_struct": 216}, "epoll_data_offset": 32},
+    "aarch64": {"prefix": "linux-6.12.94/aarch64/", "target": "aarch64-linux-gnu",
+                "define": "__aarch64__", "uapi": "arch/arm64/include/uapi",
+                "table": "arch/arm64/tools/syscall_64.tbl", "capture": "capture_arm64.c",
+                "records": {}, "sizes": {"epoll_event": 16}, "epoll_data_offset": 64},
+}
 # Recorded layout spelling -> exact pinned declaration and source header.
 TYPES = {
     "open_how": ("struct open_how", "linux/openat2.h"),
@@ -104,6 +119,8 @@ TYPES = {
     "siginfo_t": ("siginfo_t", "asm/siginfo.h"),
     "io_uring_params": ("struct io_uring_params", "linux/io_uring.h"),
     "xt_counters_info": ("struct xt_counters_info", "linux/netfilter/x_tables.h"),
+    "user_pt_regs": ("struct user_pt_regs", "asm/ptrace.h"),
+    "user_fpsimd_state": ("struct user_fpsimd_state", "asm/ptrace.h"),
 }
 SCALARS = {
     "int": ("int", True), "wait_status": ("int", True), "timer_t": ("int", True),
@@ -185,39 +202,41 @@ def bpf_attr_members(root_type):
         unique[(member["member"], member["bit_offset"], tuple(member["selector"]["values"]))] = member
     return sorted(unique.values(), key=lambda m: (m["member"], m["bit_offset"])), sorted(set(unsupported))
 
-# Dynamic/selector capture families not fully represented by C prototypes.
+# Dynamic/selector capture families not fully represented by C prototypes,
+# by call name and argument index (calls an arch lacks are skipped).
 EXTRA_BINDINGS = {
-    "sock_fprog": [(54, 3), (157, 2), (317, 2)],
-    "msghdr": [(46, 1), (47, 1)], "mmsghdr[]": [(299, 1), (307, 1)],
-    "iovec[]": [(19, 1), (20, 1), (295, 1), (296, 1), (310, 1), (310, 3), (311, 1), (311, 3), (327, 1), (328, 1)],
-    "sockaddr": [(42, 1), (49, 1), (43, 1), (51, 1), (52, 1), (288, 1), (44, 4), (45, 4)],
-    "bpf_map_info": [(321, 1)], "cap_data[]": [(125, 1), (126, 1)],
-    "bpf_attr": [(321, 1)], "siginfo_t[]": [(101, 3)],
-    "iovec": [(101, 3)],
-    "linger": [(54, 3), (55, 3)],
-    "bpf_func_info[]": [(321, 1)], "bpf_line_info[]": [(321, 1)], "bpf_core_relo[]": [(321, 1)],
-    "bpf_insn[]": [(321, 1)], "sock_filter[]": [(54, 3), (55, 3), (157, 2), (317, 2)],
-    "cmsghdr[]": [(46, 1), (47, 1), (299, 1), (307, 1)],
-    "f_owner_ex": [(72, 2)], "flock": [(72, 2)], "uid_t[2]": [(72, 2)],
-    "keyctl_dh_params": [(250, 1)], "keyctl_kdf_params": [(250, 4)],
-    "keyctl_pkey_params": [(250, 1)], "keyctl_pkey_query": [(250, 4)],
-    "prctl_mm_map": [(157, 2)], "landlock_path_beneath_attr": [(445, 2)],
-    "landlock_net_port_attr": [(445, 2)], "seccomp_notif_sizes": [(317, 2)],
-    "stack_t": [(131, 0), (131, 1)], "user_desc": [(154, 1), (101, 3)],
-    "ptrace_peeksiginfo_args": [(101, 2)], "ptrace_syscall_info": [(101, 3)],
-    "ptrace_rseq_configuration": [(101, 3)], "ptrace_sud_config": [(101, 3)],
-    "seccomp_metadata": [(101, 3)],
-    "if_dqblk": [(179, 3), (443, 3)], "if_dqinfo": [(179, 3), (443, 3)],
-    "if_nextdqblk": [(179, 3), (443, 3)], "fs_disk_quota": [(179, 3), (443, 3)],
-    "fs_quota_stat": [(179, 3), (443, 3)], "fs_quota_statv": [(179, 3), (443, 3)],
-    "shmid64_ds": [(31, 2)], "shminfo64": [(31, 2)], "shm_info": [(31, 2)],
-    "msqid64_ds": [(71, 2)], "msginfo": [(71, 2)], "semid64_ds": [(66, 3)], "seminfo": [(66, 3)],
-    "u64": [(157, 4), (101, 3), (72, 2), (303, 3)],
-    "u32": [(125, 0), (126, 0), (157, 1), (157, 2), (101, 3), (317, 2), (309, 0), (309, 1), (202, 0), (202, 4)],
-    "u32[]": [(321, 1)], "u64[]": [(321, 1), (458, 1)],
-    "user_regs_struct": [(101, 3)], "user_i387_struct": [(101, 3)],
-    "tcp_ao_getsockopt": [(55, 3)], "tcp_zerocopy_receive": [(55, 3)],
-    "xt_counters_info": [(54, 3)],
+    "sock_fprog": [("setsockopt", 3), ("prctl", 2), ("seccomp", 2)],
+    "msghdr": [("sendmsg", 1), ("recvmsg", 1)], "mmsghdr[]": [("recvmmsg", 1), ("sendmmsg", 1)],
+    "iovec[]": [("readv", 1), ("writev", 1), ("preadv", 1), ("pwritev", 1), ("process_vm_readv", 1), ("process_vm_readv", 3), ("process_vm_writev", 1), ("process_vm_writev", 3), ("preadv2", 1), ("pwritev2", 1)],
+    "sockaddr": [("connect", 1), ("bind", 1), ("accept", 1), ("getsockname", 1), ("getpeername", 1), ("accept4", 1), ("sendto", 4), ("recvfrom", 4)],
+    "bpf_map_info": [("bpf", 1)], "cap_data[]": [("capget", 1), ("capset", 1)],
+    "bpf_attr": [("bpf", 1)], "siginfo_t[]": [("ptrace", 3)],
+    "iovec": [("ptrace", 3)],
+    "linger": [("setsockopt", 3), ("getsockopt", 3)],
+    "bpf_func_info[]": [("bpf", 1)], "bpf_line_info[]": [("bpf", 1)], "bpf_core_relo[]": [("bpf", 1)],
+    "bpf_insn[]": [("bpf", 1)], "sock_filter[]": [("setsockopt", 3), ("getsockopt", 3), ("prctl", 2), ("seccomp", 2)],
+    "cmsghdr[]": [("sendmsg", 1), ("recvmsg", 1), ("recvmmsg", 1), ("sendmmsg", 1)],
+    "f_owner_ex": [("fcntl", 2)], "flock": [("fcntl", 2)], "uid_t[2]": [("fcntl", 2)],
+    "keyctl_dh_params": [("keyctl", 1)], "keyctl_kdf_params": [("keyctl", 4)],
+    "keyctl_pkey_params": [("keyctl", 1)], "keyctl_pkey_query": [("keyctl", 4)],
+    "prctl_mm_map": [("prctl", 2)], "landlock_path_beneath_attr": [("landlock_add_rule", 2)],
+    "landlock_net_port_attr": [("landlock_add_rule", 2)], "seccomp_notif_sizes": [("seccomp", 2)],
+    "stack_t": [("sigaltstack", 0), ("sigaltstack", 1)], "user_desc": [("modify_ldt", 1), ("ptrace", 3)],
+    "ptrace_peeksiginfo_args": [("ptrace", 2)], "ptrace_syscall_info": [("ptrace", 3)],
+    "ptrace_rseq_configuration": [("ptrace", 3)], "ptrace_sud_config": [("ptrace", 3)],
+    "seccomp_metadata": [("ptrace", 3)],
+    "if_dqblk": [("quotactl", 3), ("quotactl_fd", 3)], "if_dqinfo": [("quotactl", 3), ("quotactl_fd", 3)],
+    "if_nextdqblk": [("quotactl", 3), ("quotactl_fd", 3)], "fs_disk_quota": [("quotactl", 3), ("quotactl_fd", 3)],
+    "fs_quota_stat": [("quotactl", 3), ("quotactl_fd", 3)], "fs_quota_statv": [("quotactl", 3), ("quotactl_fd", 3)],
+    "shmid64_ds": [("shmctl", 2)], "shminfo64": [("shmctl", 2)], "shm_info": [("shmctl", 2)],
+    "msqid64_ds": [("msgctl", 2)], "msginfo": [("msgctl", 2)], "semid64_ds": [("semctl", 3)], "seminfo": [("semctl", 3)],
+    "u64": [("prctl", 4), ("ptrace", 3), ("fcntl", 2), ("name_to_handle_at", 3)],
+    "u32": [("capget", 0), ("capset", 0), ("prctl", 1), ("prctl", 2), ("ptrace", 3), ("seccomp", 2), ("getcpu", 0), ("getcpu", 1), ("futex", 0), ("futex", 4)],
+    "u32[]": [("bpf", 1)], "u64[]": [("bpf", 1), ("listmount", 1)],
+    "user_regs_struct": [("ptrace", 3)], "user_i387_struct": [("ptrace", 3)],
+    "user_pt_regs": [("ptrace", 3)], "user_fpsimd_state": [("ptrace", 3)],
+    "tcp_ao_getsockopt": [("getsockopt", 3)], "tcp_zerocopy_receive": [("getsockopt", 3)],
+    "xt_counters_info": [("setsockopt", 3)],
 }
 META = [
     {"member": "complete", "kind": "boolean", "detail": "Whole captured argument field complete"},
@@ -333,15 +352,55 @@ def walk_members(record_type, prefix="", offset=0, bpf=None, ancestors=(), commo
         unique[(member["member"], member["bit_offset"], tuple(member.get("selector", {}).get("values", [])))] = member
     return sorted(unique.values(), key=lambda m: (m["member"], m["bit_offset"])), sorted(set(unsupported))
 
-def generate(kernel):
+def uapi_overlay(kernel, spec, schema, overlay, sources):
+    """Fill OVERLAY with the arch's installed-UAPI view of the pinned tree."""
+    (overlay / "asm").mkdir()
+    (overlay / "linux").mkdir()
+    # Same removal as pinned scripts/headers_install.sh: compiler-only
+    # declarations are not part of installed userspace ABI headers.
+    for header in (kernel / "include/uapi/linux").rglob("*.h"):
+        text = header.read_text()
+        cleaned = re.sub(r"^#include <linux/compiler(?:_types)?\.h>[^\n]*$", "", text, flags=re.M)
+        if cleaned != text:
+            target = overlay / "linux" / header.relative_to(kernel / "include/uapi/linux")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(cleaned)
+            sources[str(header.relative_to(kernel))] = sha(header)
+    for directory in (kernel / spec["uapi"] / "asm", kernel / "include/uapi/asm-generic"):
+        for header in directory.glob("*.h"):
+            text = header.read_text()
+            cleaned = re.sub(r"^#include <linux/compiler(?:_types)?\.h>[^\n]*$", "", text, flags=re.M)
+            if cleaned != text:
+                target = overlay / ("asm" if directory.name == "asm" else "asm-generic") / header.name
+                target.parent.mkdir(exist_ok=True)
+                target.write_text(cleaned)
+                sources[str(header.relative_to(kernel))] = sha(header)
+    # Mirror Kbuild's generic UAPI fallback, while architecture headers win.
+    arch = kernel / spec["uapi"] / "asm"
+    for header in (kernel / "include/uapi/asm-generic").glob("*.h"):
+        if not (arch / header.name).exists():
+            (overlay / "asm" / header.name).write_text("#include <asm-generic/" + header.name + ">\n")
+    # UAPI structures do not use syscall numbers. Satisfy the arch's
+    # <asm/unistd_64.h> include using constants generated from the same pinned
+    # native table.
+    table_path = kernel / spec["table"]
+    syscall_definitions = ["#define __NR_" + row["name"] + " " + str(row["number"]) for row in schema["syscalls"]]
+    (overlay / "asm/unistd_64.h").write_text("\n".join(syscall_definitions) + "\n")
+    sources[str(table_path.relative_to(kernel))] = sha(table_path)
+
+
+def generate(kernel, arch):
+    spec = ARCHES[arch]
+    prefix = spec["prefix"]
     version = dict(re.findall(r"^(VERSION|PATCHLEVEL|SUBLEVEL)\s*=\s*(\d+)\s*$", (kernel / "Makefile").read_text(), re.M))
     if [version.get(key) for key in ("VERSION", "PATCHLEVEL", "SUBLEVEL")] != ["6", "12", "94"]:
         raise ValueError("captured member facts require Linux 6.12.94")
-    schema_path = MONITOR / "protocol/native-syscalls.json"
+    schema_path = MONITOR / "protocol" / arch / "native-syscalls.json"
     schema = json.loads(schema_path.read_text())
     by_number = {row["number"]: row for row in schema["syscalls"]}
+    # The shared decoders and this arch's capture_<arch>.c, never another arch's.
     capture_paths = sorted(set((kernel / "kernel/antinomie").glob("*capture.c"))
-                           | set((kernel / "kernel/antinomie").glob("capture_*.c")))
+                           | set((kernel / "kernel/antinomie").glob(spec["capture"])))
     capture_source = "\n".join(path.read_text() for path in capture_paths)
     captured = set(re.findall(r'LAYOUT\("([^"]+)"\)', capture_source))
     # Explicit macro rows (the syscall by its __NR_ name), including the
@@ -359,38 +418,7 @@ def generate(kernel):
     layouts = []
     with tempfile.TemporaryDirectory(prefix="ant-layout-") as temporary:
         overlay = Path(temporary)
-        (overlay / "asm").mkdir()
-        (overlay / "linux").mkdir()
-        # Same removal as pinned scripts/headers_install.sh: compiler-only
-        # declarations are not part of installed userspace ABI headers.
-        for header in (kernel / "include/uapi/linux").rglob("*.h"):
-            text = header.read_text()
-            cleaned = re.sub(r"^#include <linux/compiler(?:_types)?\.h>[^\n]*$", "", text, flags=re.M)
-            if cleaned != text:
-                target = overlay / "linux" / header.relative_to(kernel / "include/uapi/linux")
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(cleaned)
-                sources[str(header.relative_to(kernel))] = sha(header)
-        for directory in (kernel / "arch/x86/include/uapi/asm", kernel / "include/uapi/asm-generic"):
-            for header in directory.glob("*.h"):
-                text = header.read_text()
-                cleaned = re.sub(r"^#include <linux/compiler(?:_types)?\.h>[^\n]*$", "", text, flags=re.M)
-                if cleaned != text:
-                    target = overlay / ("asm" if directory.name == "asm" else "asm-generic") / header.name
-                    target.parent.mkdir(exist_ok=True)
-                    target.write_text(cleaned)
-                    sources[str(header.relative_to(kernel))] = sha(header)
-        # Mirror Kbuild's generic UAPI fallback, while architecture headers win.
-        arch = kernel / "arch/x86/include/uapi/asm"
-        for header in (kernel / "include/uapi/asm-generic").glob("*.h"):
-            if not (arch / header.name).exists():
-                (overlay / "asm" / header.name).write_text("#include <asm-generic/" + header.name + ">\n")
-        # UAPI structures do not use syscall numbers. Satisfy the actual x86
-        # include using constants generated from the same pinned native table.
-        table_path = kernel / "arch/x86/entry/syscalls/syscall_64.tbl"
-        syscall_definitions = ["#define __NR_" + row["name"] + " " + str(row["number"]) for row in schema["syscalls"]]
-        (overlay / "asm/unistd_64.h").write_text("\n".join(syscall_definitions) + "\n")
-        sources[str(table_path.relative_to(kernel))] = sha(table_path)
+        uapi_overlay(kernel, spec, schema, overlay, sources)
         socket_source_path = kernel / "include/linux/socket.h"
         socket_source = socket_source_path.read_text()
         sources[str(socket_source_path.relative_to(kernel))] = sha(socket_source_path)
@@ -405,7 +433,7 @@ def generate(kernel):
         for relative, names in {
             "include/linux/sched.h": ["sched_param"],
             "include/linux/types.h": ["ustat"],
-            "arch/x86/include/asm/user_64.h": ["user_regs_struct", "user_i387_struct"],
+            **spec["records"],
         }.items():
             source_path = kernel / relative
             sources[relative] = sha(source_path)
@@ -423,7 +451,7 @@ def generate(kernel):
             if base in SCALARS: expr, _ = SCALARS[base]; header = "linux/time_types.h"
             if base in special: expr = special[base]; header = "linux/uio.h"
             if not expr:
-                layouts.append({"layout": PREFIX + layout, "supported": False, "reason": "no qualified pinned declaration/selector mapping"})
+                layouts.append({"layout": prefix + layout, "supported": False, "reason": "no qualified pinned declaration/selector mapping"})
                 continue
             code = "#include <linux/types.h>\n#include <" + header + ">\n"
             if base in special: code += extras
@@ -431,20 +459,19 @@ def generate(kernel):
                 code = code.replace("#include <linux/shm.h>", "#define _LINUX_IPC_H\n#include <linux/ipc.h>\n" +
                     extract_record((kernel / "include/uapi/linux/shm.h").read_text(), base))
             code += "typedef " + expr + " __ant_layout;\n"
-            args = ["-std=gnu11", "-target", "x86_64-linux-gnu", "-nostdinc", "-D__x86_64__", "-D__user=", "-D__force=", "-D__attribute_const__=",
-                    "-I" + str(overlay), "-I" + str(kernel / "arch/x86/include/uapi"), "-I" + str(kernel / "include/uapi")]
+            args = compiler_args(kernel, spec, overlay)
             unit = cindex.Index.create().parse("members.c", args=args, unsaved_files=[("members.c", code)])
             errors = [str(d) for d in unit.diagnostics if d.severity >= cindex.Diagnostic.Error]
             if errors:
                 diagnostics = [e.replace(str(kernel) + "/", "").replace(str(overlay) + "/", "uapi-overlay/") for e in errors]
-                layouts.append({"layout": PREFIX + layout, "supported": False, "reason": "pinned declaration does not compile without unsupported dependencies", "diagnostics": diagnostics})
+                layouts.append({"layout": prefix + layout, "supported": False, "reason": "pinned declaration does not compile without unsupported dependencies", "diagnostics": diagnostics})
                 continue
             typedef = next((cursor for cursor in unit.cursor.get_children() if cursor.spelling == "__ant_layout"), None)
             if not typedef: raise ValueError("compiler did not emit layout typedef")
             root_type = typedef.underlying_typedef_type
             stride = root_type.get_size()
             if stride <= 0:
-                layouts.append({"layout": PREFIX + layout, "supported": False,
+                layouts.append({"layout": prefix + layout, "supported": False,
                     "reason": "pinned declaration is incomplete or has no constant ABI size"})
                 continue
             if base in SCALARS:
@@ -467,23 +494,23 @@ def generate(kernel):
                         key = str(original.relative_to(kernel)); layout_sources[key] = sha(original); sources[key] = layout_sources[key]
                 if path.is_relative_to(kernel):
                     key = str(path.relative_to(kernel)); layout_sources[key] = sha(path); sources[key] = layout_sources[key]
-            layouts.append({"layout": PREFIX + layout, "supported": bool(members), "c_type": expr,
+            layouts.append({"layout": prefix + layout, "supported": bool(members), "c_type": expr,
                 "stride": stride, "array": bool(array), "array_count": count, "members": members,
                 "unsupported_members": unsupported, "sources": sorted(layout_sources),
                 **({} if members else {"reason": "all known members require an unqualified union selector"})})
-    required_sizes = {"open_how": 24, "clone_args": 88, "sock_fprog": 16,
-                      "epoll_event": 12, "timespec": 16, "user_regs_struct": 216}
+    required_sizes = {"open_how": 24, "clone_args": 88, "sock_fprog": 16, "timespec": 16,
+                      **spec["sizes"]}
     for name, size in required_sizes.items():
-        facts = next(layout for layout in layouts if layout["layout"] == PREFIX + name)
+        facts = next(layout for layout in layouts if layout["layout"] == prefix + name)
         if not facts["supported"] or facts.get("stride") != size:
             raise ValueError(f"representative {name} ABI changed; expected {size}, review pinned inputs")
     required_offsets = {"open_how": {"flags": 0, "mode": 64, "resolve": 128},
                         "sock_fprog": {"len": 0, "filter": 64},
-                        "epoll_event": {"events": 0, "data": 32},
+                        "epoll_event": {"events": 0, "data": spec["epoll_data_offset"]},
                         "clone_args": {"flags": 0, "pidfd": 64, "child_tid": 128, "parent_tid": 192},
                         "siginfo_t": {"si_signo": 0, "si_errno": 32, "si_code": 64}}
     for name, offsets in required_offsets.items():
-        facts = next(layout for layout in layouts if layout["layout"] == PREFIX + name)
+        facts = next(layout for layout in layouts if layout["layout"] == prefix + name)
         actual = {member["member"]: member["bit_offset"] for member in facts.get("members", [])}
         if any(actual.get(member) != offset for member, offset in offsets.items()):
             raise ValueError(f"representative {name} member offsets changed; review pinned inputs")
@@ -500,21 +527,22 @@ def generate(kernel):
         row = by_number.get(nr)
         if not row or index >= len(row["arguments"]): return
         arg = row["arguments"][index]
-        bindings.setdefault(PREFIX + layout, set()).add((nr, index, arg["name"]))
+        bindings.setdefault(prefix + layout, set()).add((nr, index, arg["name"]))
     for layout, nr, index in direct: bind(layout, nr, index)
     for layout, cases in EXTRA_BINDINGS.items():
-        for nr, index in cases: bind(layout, nr, index)
+        for call, index in cases:
+            if call in by_name: bind(layout, by_name[call], index)
     for layout in layouts:
         expr = layout.get("c_type")
         if expr:
             for row in schema["syscalls"]:
                 for index, arg in enumerate(row["arguments"]):
                     if re.search(r"\b" + re.escape(expr) + r"\s*\*", arg["c_type"]):
-                        bind(layout["layout"][len(PREFIX):], row["number"], index)
+                        bind(layout["layout"][len(prefix):], row["number"], index)
         layout["arguments"] = [{"syscall_number": n, "argument_index": i, "name": a}
             for n, i, a in sorted(bindings.get(layout["layout"], []))]
-    return {"format_version": 1, "kernel_version": "6.12.94", "architecture": "x86_64",
-        "endianness": "little", "compiler_target": "x86_64-linux-gnu",
+    return {"format_version": 1, "kernel_version": "6.12.94", "architecture": arch,
+        "endianness": "little", "compiler_target": spec["target"],
         "provenance": {"native_schema_sha256": sha(schema_path), "source_sha256": dict(sorted(sources.items())),
             "generator": "scripts/generate-filter-layouts.py",
             "compiler_library_sha256": sha(Path(cindex.conf.lib._name)),
@@ -524,13 +552,22 @@ def generate(kernel):
         "argument_names": sorted({argument["name"] for row in schema["syscalls"] for argument in row["arguments"]}),
         "metadata_members": META, "layouts": layouts}
 
+def compiler_args(kernel, spec, overlay):
+    """Clang arguments that read the overlay as the arch's installed UAPI."""
+    return ["-std=gnu11", "-target", spec["target"], "-nostdinc", "-D" + spec["define"],
+            "-D__user=", "-D__force=", "-D__attribute_const__=",
+            "-I" + str(overlay), "-I" + str(kernel / spec["uapi"]), "-I" + str(kernel / "include/uapi")]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kernel", type=Path, default=KERNEL)
-    parser.add_argument("--output", type=Path, default=MONITOR / "protocol/captured-layout-members.json")
+    parser.add_argument("--arch", choices=sorted(ARCHES), default="x86_64")
+    parser.add_argument("--output", type=Path, help="default: protocol/<arch>/captured-layout-members.json")
     parser.add_argument("--check", action="store_true")
     options = parser.parse_args()
-    generated = json.dumps(generate(options.kernel.resolve()), indent=2, sort_keys=False) + "\n"
+    options.output = options.output or MONITOR / "protocol" / options.arch / "captured-layout-members.json"
+    generated = json.dumps(generate(options.kernel.resolve(), options.arch), indent=2, sort_keys=False) + "\n"
     if options.check:
         if options.output.read_text() != generated: raise SystemExit("captured-layout inventory differs; regenerate and review")
         print("captured-layout inventory matches pinned compiler facts")

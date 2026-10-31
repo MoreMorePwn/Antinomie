@@ -2,12 +2,18 @@
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Pinned native declaration metadata and argument-specific flag interpretation.
 //!
-//! The table is x86-64's (`protocol/native-syscalls.json`, generated per
-//! architecture). A session decodes records only from a guest whose INFO
-//! reports x86-64 (`GuestArch`); it launches and traces nothing on another.
+//! One table per shipped architecture (`protocol/<arch>/native-syscalls.json`,
+//! generated per architecture), with that architecture's constants
+//! (`protocol/<arch>/constants.json`): flag groups and selector names keep
+//! x86-64's values and take another architecture's by name. A session decodes
+//! records only from a guest whose INFO reports x86-64 (`GuestArch`); it
+//! launches and traces nothing on another.
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::OnceLock;
+
+pub mod arch;
+pub use arch::{Constants, DataModel, Endian};
 
 #[derive(Debug, Deserialize)]
 pub struct ArgumentInfo {
@@ -40,10 +46,12 @@ pub struct FlagValue {
 }
 
 /// A system call ABI this host ships a table for. Records name their calls
-/// through the table of the run's ABI; today only x86-64 has one.
+/// through the table of the run's ABI. aarch64's set is shipped for the
+/// decoders; no guest architecture maps to it yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Abi {
     X86_64,
+    Aarch64,
 }
 
 impl Abi {
@@ -63,16 +71,14 @@ pub struct Table {
     pub abi: Abi,
     entries: &'static [SyscallInfo],
     by_name: HashMap<&'static str, usize>,
+    constants: Constants,
 }
 
 impl Table {
     fn load(abi: Abi) -> Self {
-        let json = match abi {
-            // This is a generated, compiled-in constant verified by the inventory tests.
-            Abi::X86_64 => include_str!("../../../protocol/native-syscalls.json"),
-        };
-        let inventory: Inventory =
-            serde_json::from_str(json).expect("invalid compiled native syscall inventory");
+        // A generated, compiled-in constant verified by the inventory tests.
+        let inventory: Inventory = serde_json::from_str(arch::native_syscalls_json(abi))
+            .expect("invalid compiled native syscall inventory");
         // The table lives for the whole process, so its names can be 'static.
         let entries: &'static [SyscallInfo] = Vec::leak(inventory.syscalls);
         let mut by_name = HashMap::new();
@@ -83,7 +89,13 @@ impl Table {
             abi,
             entries,
             by_name,
+            constants: arch::load_constants(abi),
         }
+    }
+
+    /// The architecture's identity, data model and constant differences.
+    pub fn constants(&self) -> &Constants {
+        &self.constants
     }
 
     pub fn all(&self) -> &'static [SyscallInfo] {
@@ -126,8 +138,10 @@ impl Table {
 /// The table of an ABI.
 pub fn table(abi: Abi) -> &'static Table {
     static X86_64: OnceLock<Table> = OnceLock::new();
+    static AARCH64: OnceLock<Table> = OnceLock::new();
     match abi {
         Abi::X86_64 => X86_64.get_or_init(|| Table::load(Abi::X86_64)),
+        Abi::Aarch64 => AARCH64.get_or_init(|| Table::load(Abi::Aarch64)),
     }
 }
 
@@ -166,6 +180,25 @@ fn bits(flags: &'static [(&'static str, u64)]) -> Vec<FlagRule> {
         .iter()
         .map(|&(name, mask)| (name, mask, mask))
         .collect()
+}
+
+/// A group's rules with the architecture's values: a flag whose mask is its
+/// value takes the arch's value as both, an enumerated field value keeps its
+/// mask; names the arch lacks drop out and arch-only names join as flags.
+fn arch_rules(constants: &'static Constants, group: &str) -> Vec<FlagRule> {
+    let mut values: Vec<FlagRule> = rules(group)
+        .into_iter()
+        .filter_map(|(name, mask, value)| {
+            let arch = constants.value(name, value)?;
+            Some((name, if mask == value { arch } else { mask }, arch))
+        })
+        .collect();
+    values.extend(
+        constants
+            .additions(group)
+            .map(|(name, value)| (name, value, value)),
+    );
+    values
 }
 
 fn rules(group: &str) -> Vec<FlagRule> {
@@ -899,13 +932,27 @@ const PTRACE_OPTIONS: &[(&str, u64)] = &[
     ("PTRACE_O_SUSPEND_SECCOMP", 0x20_0000),
 ];
 
-fn named(table: &[(&'static str, u64)], value: u64, kind: &str) -> String {
+fn named(constants: &Constants, table: &[(&'static str, u64)], value: u64, kind: &str) -> String {
+    named_in(constants, table, "", value, kind)
+}
+
+/// A value by name in a table of x86-64 values read with the architecture's
+/// constants, plus the arch-only names of `group`.
+fn named_in(
+    constants: &Constants,
+    table: &[(&'static str, u64)],
+    group: &str,
+    value: u64,
+    kind: &str,
+) -> String {
     table
         .iter()
-        .find(|&&(_, number)| number == value)
+        .filter_map(|&(name, number)| Some((name, constants.value(name, number)?)))
+        .chain(constants.additions(group))
+        .find(|&(_, number)| number == value)
         .map_or_else(
             || format!("Unknown {kind} {value:#x}"),
-            |&(name, _)| name.into(),
+            |(name, _)| name.into(),
         )
 }
 
@@ -930,7 +977,7 @@ fn ptrace_options(value: u64) -> String {
 }
 
 /// `QCMD(subcommand, type)` as used by quotactl and quotactl_fd.
-fn quota_command(cmd: u64) -> String {
+fn quota_command(constants: &Constants, cmd: u64) -> String {
     const SUBCOMMANDS: &[(&str, u64)] = &[
         ("Q_SYNC", 0x80_0001),
         ("Q_QUOTAON", 0x80_0002),
@@ -952,7 +999,7 @@ fn quota_command(cmd: u64) -> String {
         ("Q_XGETNEXTQUOTA", 0x5809),
     ];
     let cmd = cmd as u32;
-    let subcommand = named(SUBCOMMANDS, u64::from(cmd >> 8), "subcommand");
+    let subcommand = named(constants, SUBCOMMANDS, u64::from(cmd >> 8), "subcommand");
     let kind = match cmd & 0xff {
         0 => "USRQUOTA".into(),
         1 => "GRPQUOTA".into(),
@@ -962,7 +1009,7 @@ fn quota_command(cmd: u64) -> String {
     format!("{subcommand} / {kind}")
 }
 
-fn prctl_suboption(option: u64, value: u64) -> Option<String> {
+fn prctl_suboption(constants: &Constants, option: u64, value: u64) -> Option<String> {
     const PR_SET_MM: u64 = 35;
     const PR_SCHED_CORE: u64 = 62;
     const PR_SET_SYSCALL_USER_DISPATCH: u64 = 59;
@@ -979,81 +1026,113 @@ fn prctl_suboption(option: u64, value: u64) -> Option<String> {
         PR_SET_VMA => &[("PR_SET_VMA_ANON_NAME", 0)],
         _ => return None,
     };
-    Some(named(table, value, "sub-option"))
+    Some(named(constants, table, value, "sub-option"))
 }
 
 /// Name a selector argument whose meaning may depend on another argument, such
 /// as a socket option name given its level. None means the argument is not a
-/// selector in the pinned schema.
+/// selector in the pinned schema. Read with the native table's architecture.
 pub fn selector_name(number: u64, index: usize, args: &[u64; 6]) -> Option<String> {
-    const PTRACE_SETOPTIONS: u64 = 0x4200;
-    const PTRACE_SEIZE: u64 = 0x4206;
-    const PTRACE_OLDSETOPTIONS: u64 = 21;
-    match (number, index) {
-        (101, 0) => Some(named(PTRACE_REQUESTS, args[0], "request")),
-        (101, 3)
-            if matches!(
-                args[0],
-                PTRACE_SETOPTIONS | PTRACE_SEIZE | PTRACE_OLDSETOPTIONS
-            ) =>
-        {
-            Some(ptrace_options(args[3]))
-        }
-        (139, 0) => Some(
-            match args[0] {
-                1 => "filesystem name to index",
-                2 => "filesystem index to name",
-                3 => "filesystem count",
-                _ => return Some(format!("Unknown option {:#x}", args[0])),
-            }
-            .into(),
-        ),
-        (157, 0) => Some(named(PRCTL_OPTIONS, args[0] as u32 as u64, "option")),
-        (157, 1) => prctl_suboption(args[0] as u32 as u64, args[1]),
-        (250, 0) => Some(named(KEYCTL_COMMANDS, args[0] as u32 as u64, "command")),
-        (321, 0) => Some(named(BPF_COMMANDS, args[0] as u32 as u64, "command")),
-        (179, 0) => Some(quota_command(args[0])),
-        (443, 1) => Some(quota_command(args[1])),
-        (54 | 55, 1) => Some(
-            lookup(SOCKET_LEVELS, args[1] as i32)
-                .map_or_else(|| format!("Unknown level {}", args[1] as i32), Into::into),
-        ),
-        (54 | 55, 2) => Some(socket_option_name(
-            number == 55,
-            args[1] as i32,
-            args[2] as i32,
-        )),
-        _ => selectors::named_argument(number, index, args),
-    }
+    native().selector_name(number, index, args)
 }
 
 /// Return None when the argument is not classified as flags by the pinned schema.
 pub fn argument_flags(number: u64, index: usize, value: u64) -> Option<FlagValue> {
-    let group = syscall(number)?.arguments.get(index)?.flags.as_deref()?;
-    // The inventory leaves some flag groups unnamed; these have one meaning.
-    let group = match (number, index, group) {
-        // memfd_secret(flags): only O_CLOEXEC is defined.
-        (447, 0, "unknown") => "cloexec",
-        _ => group,
-    };
-    let mut masks = rules(group);
-    masks.sort_by_key(|&(_, mask, _)| std::cmp::Reverse(mask.count_ones()));
-    let mut known = 0;
-    let mut names = Vec::new();
-    for (name, mask, expected) in masks {
-        if value & mask == expected && mask & known == 0 {
-            names.push(name.to_owned());
-            known |= mask;
+    native().argument_flags(number, index, value)
+}
+
+impl Table {
+    /// [`selector_name`] for a call of this table's ABI, keyed by the call's name.
+    pub fn selector_name(
+        &'static self,
+        number: u64,
+        index: usize,
+        args: &[u64; 6],
+    ) -> Option<String> {
+        const PTRACE_SETOPTIONS: u64 = 0x4200;
+        const PTRACE_SEIZE: u64 = 0x4206;
+        const PTRACE_OLDSETOPTIONS: u64 = 21;
+        let c = &self.constants;
+        let call = self.name_of(number)?;
+        match (call, index) {
+            ("ptrace", 0) => Some(named_in(
+                c,
+                PTRACE_REQUESTS,
+                "ptrace_request",
+                args[0],
+                "request",
+            )),
+            ("ptrace", 3)
+                if [PTRACE_SETOPTIONS, PTRACE_SEIZE, PTRACE_OLDSETOPTIONS]
+                    .iter()
+                    .zip(["PTRACE_SETOPTIONS", "PTRACE_SEIZE", "PTRACE_OLDSETOPTIONS"])
+                    .any(|(&value, name)| c.value(name, value) == Some(args[0])) =>
+            {
+                Some(ptrace_options(args[3]))
+            }
+            ("sysfs", 0) => Some(
+                match args[0] {
+                    1 => "filesystem name to index",
+                    2 => "filesystem index to name",
+                    3 => "filesystem count",
+                    _ => return Some(format!("Unknown option {:#x}", args[0])),
+                }
+                .into(),
+            ),
+            ("prctl", 0) => Some(named(c, PRCTL_OPTIONS, args[0] as u32 as u64, "option")),
+            ("prctl", 1) => prctl_suboption(c, args[0] as u32 as u64, args[1]),
+            ("keyctl", 0) => Some(named(c, KEYCTL_COMMANDS, args[0] as u32 as u64, "command")),
+            ("bpf", 0) => Some(named(c, BPF_COMMANDS, args[0] as u32 as u64, "command")),
+            ("quotactl", 0) => Some(quota_command(c, args[0])),
+            ("quotactl_fd", 1) => Some(quota_command(c, args[1])),
+            ("setsockopt" | "getsockopt", 1) => Some(
+                lookup(c, SOCKET_LEVELS, args[1] as i32)
+                    .map_or_else(|| format!("Unknown level {}", args[1] as i32), Into::into),
+            ),
+            ("setsockopt" | "getsockopt", 2) => Some(socket_option_name(
+                c,
+                call == "getsockopt",
+                args[1] as i32,
+                args[2] as i32,
+            )),
+            _ => selectors::named_argument(c, call, index, args),
         }
     }
-    if group == "clone" && value & 0xff != 0 {
-        names.push(format!("exit_signal={}", value & 0xff));
-        known |= 0xff;
+
+    /// [`argument_flags`] for a call of this table's ABI, with its values.
+    pub fn argument_flags(
+        &'static self,
+        number: u64,
+        index: usize,
+        value: u64,
+    ) -> Option<FlagValue> {
+        let info = self.by_number(number)?;
+        let group = info.arguments.get(index)?.flags.as_deref()?;
+        // The inventory leaves some flag groups unnamed; these have one meaning.
+        let group = match (info.name.as_str(), index, group) {
+            // memfd_secret(flags): only O_CLOEXEC is defined.
+            ("memfd_secret", 0, "unknown") => "cloexec",
+            _ => group,
+        };
+        let mut masks = arch_rules(&self.constants, group);
+        masks.sort_by_key(|&(_, mask, _)| std::cmp::Reverse(mask.count_ones()));
+        let mut known = 0;
+        let mut names = Vec::new();
+        for (name, mask, expected) in masks {
+            if value & mask == expected && mask & known == 0 {
+                names.push(name.to_owned());
+                known |= mask;
+            }
+        }
+        if group == "clone" && value & 0xff != 0 {
+            names.push(format!("exit_signal={}", value & 0xff));
+            known |= 0xff;
+        }
+        Some(FlagValue {
+            names,
+            unknown_bits: value & !known,
+        })
     }
-    Some(FlagValue {
-        names,
-        unknown_bits: value & !known,
-    })
 }
 
 #[cfg(test)]
@@ -1232,6 +1311,56 @@ mod tests {
             values.dedup();
             assert_eq!(values.len(), count);
         }
+    }
+
+    #[test]
+    fn aarch64_names_calls_and_flags_by_its_own_numbers_and_values() {
+        let arm = table(Abi::Aarch64);
+        let x86 = table(Abi::X86_64);
+        assert_eq!(arm.all().len(), 318);
+        assert_eq!(arm.number("execve"), Some(221));
+        assert_eq!(arm.number("openat"), Some(56));
+        assert_eq!(arm.number("open"), None);
+        assert_eq!(arm.number("arch_prctl"), None);
+        // CLONE_BACKWARDS: tls before child_tid.
+        assert_eq!(arm.argument("clone", "tls"), Some(3));
+        assert_eq!(x86.argument("clone", "tls"), Some(4));
+        let openat = |table: &'static Table, value| {
+            table
+                .argument_flags(table.number("openat").unwrap(), 2, value)
+                .unwrap()
+        };
+        let arm_flags = openat(arm, 0o40000);
+        assert!(arm_flags.names.contains(&"O_DIRECTORY".into()));
+        assert_eq!(arm_flags.unknown_bits, 0);
+        assert!(openat(x86, 0o40000).names.contains(&"O_DIRECT".into()));
+        assert!(openat(arm, 0o200000).names.contains(&"O_DIRECT".into()));
+        let mprotect = arm.number("mprotect").unwrap();
+        let bti = arm.argument_flags(mprotect, 2, 0x11).unwrap();
+        assert_eq!(bti.names, ["PROT_READ", "PROT_BTI"]);
+        assert_eq!(bti.unknown_bits, 0);
+        assert_eq!(x86.argument_flags(10, 2, 0x11).unwrap().unknown_bits, 0x10);
+        let mmap = arm.number("mmap").unwrap();
+        assert_eq!(
+            arm.argument_flags(mmap, 3, 0x42).unwrap().unknown_bits,
+            0x40
+        );
+        let ptrace = arm.number("ptrace").unwrap();
+        let request = |table: &'static Table, nr| table.selector_name(nr, 0, &[33, 0, 0, 0, 0, 0]);
+        assert_eq!(request(arm, ptrace).as_deref(), Some("PTRACE_PEEKMTETAGS"));
+        assert_eq!(request(x86, 101).as_deref(), Some("PTRACE_SINGLEBLOCK"));
+        let fcntl = arm.number("fcntl").unwrap();
+        assert_eq!(
+            arm.selector_name(fcntl, 1, &[3, 1030, 0, 0, 0, 0])
+                .as_deref(),
+            Some("F_DUPFD_CLOEXEC")
+        );
+        let setsockopt = arm.number("setsockopt").unwrap();
+        assert_eq!(
+            arm.selector_name(setsockopt, 2, &[3, 1, 8, 0, 4, 0])
+                .as_deref(),
+            Some("SO_RCVBUF")
+        );
     }
 
     #[test]

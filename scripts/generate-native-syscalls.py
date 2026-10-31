@@ -22,10 +22,27 @@ KERNEL = ROOT / "work/debian-6.12.94-1-trixie/core"
 # columns that make up the native ABI, the expected row count, the per-arch
 # C header the guest recorder includes (<asm/antinomie_syscalls.h>) and the
 # preprocessor symbols that select the arch's prototypes in syscalls.h.
+# arm64 and riscv64 select CLONE_BACKWARDS (clone's tls before child_tid);
+# both use the asm-generic numbering, arm64 from its own copy of the table.
 ARCHES = {
     "x86_64": {"table": "arch/x86/entry/syscalls/syscall_64.tbl", "abis": ("common", "64"),
                "count": 375, "c_header": "arch/x86/include/asm/antinomie_syscalls.h",
                "defines": ("-DCONFIG_X86_64=1",)},
+    "aarch64": {"table": "arch/arm64/tools/syscall_64.tbl",
+                "abis": ("common", "64", "renameat", "rlimit", "memfd_secret"),
+                "count": 318, "c_header": "arch/arm64/include/asm/antinomie_syscalls.h",
+                "defines": ("-DCONFIG_ARM64=1", "-DCONFIG_CLONE_BACKWARDS=1"),
+                "clone_backwards": True},
+    "riscv64": {"table": "scripts/syscall.tbl",
+                "abis": ("common", "64", "riscv", "rlimit", "memfd_secret"),
+                "count": 319, "c_header": "arch/riscv/include/asm/antinomie_syscalls.h",
+                "defines": ("-DCONFIG_RISCV=1", "-DCONFIG_CLONE_BACKWARDS=1"),
+                "clone_backwards": True,
+                "declarations": """
+long sys_riscv_flush_icache(uintptr_t start, uintptr_t end, uintptr_t flags);
+long sys_riscv_hwprobe(struct riscv_hwprobe *pairs, size_t pair_count, size_t cpusetsize,
+                       unsigned long *cpus, unsigned int flags);
+"""},
 }
 DECLARATION = re.compile(r"asmlinkage\s+long\s+(sys_\w+)\s*\((.*?)\)\s*;", re.S)
 COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
@@ -43,7 +60,8 @@ long sys_rt_sigreturn(void);
 """
 
 # Names omitted by generic prototypes, checked against the pinned native
-# SYSCALL_DEFINE declarations (clone uses the normal x86-64 ordering).
+# SYSCALL_DEFINE declarations (clone uses the normal x86-64 ordering; the
+# CLONE_BACKWARDS order is CLONE_BACKWARDS_NAMES).
 ARGUMENT_NAMES = {
     "rt_sigaction": ("kernel/signal.c", ("sig", "act", "oact", "sigsetsize")),
     "clone": ("kernel/fork.c", ("clone_flags", "newsp", "parent_tidptr", "child_tidptr", "tls")),
@@ -63,6 +81,7 @@ ARGUMENT_NAMES = {
     "pselect6": ("fs/select.c", ("n", "inp", "outp", "exp", "tsp", "sig")),
     "ppoll": ("fs/select.c", ("ufds", "nfds", "tsp", "sigmask", "sigsetsize")),
 }
+CLONE_BACKWARDS_NAMES = ("kernel/fork.c", ("clone_flags", "newsp", "parent_tidptr", "tls", "child_tidptr"))
 
 
 def native_table(kernel, arch):
@@ -114,7 +133,8 @@ def declarations(kernel, arch):
     # Typedef placeholders let Clang parse grammar without the full build's
     # include/config context. Their sizes are deliberately not exported.
     aliases = set()
-    for _, args in signatures:
+    extra = re.findall(r"long\s+(sys_\w+)\s*\((.*?)\)\s*;", ARCHES[arch].get("declarations", ""), re.S)
+    for _, args in signatures + extra:
         for arg in args.split(","):
             words = re.findall(r"\b[A-Za-z_]\w*\b", arg)
             if words == ["void"]:
@@ -133,6 +153,7 @@ def declarations(kernel, arch):
                         for name in sorted(aliases))
     source = prelude + "\n" + "\n".join(
         f"long {name}({args});" for name, args in signatures) + ARCH_DECLARATIONS
+    source += ARCHES[arch].get("declarations", "")
     unit = cindex.Index.create().parse(
         "native-declarations.c", args=["-std=gnu11", "-ferror-limit=0"],
         unsaved_files=[("native-declarations.c", source)])
@@ -231,8 +252,11 @@ def generate(kernel, arch, output, c_header):
         # No table entry point, or the kernel's ENOSYS stub: never implemented here.
         row["implemented"] = bool(entry) and entry != "sys_ni_syscall"
         row["arg_count"] = len(arguments) if arguments is not None else None
-        if row["name"] in ARGUMENT_NAMES:
-            source, names = ARGUMENT_NAMES[row["name"]]
+        named = ARGUMENT_NAMES.get(row["name"])
+        if row["name"] == "clone" and ARCHES[arch].get("clone_backwards"):
+            named = CLONE_BACKWARDS_NAMES
+        if named:
+            source, names = named
             if len(names) != len(row["arguments"]):
                 raise ValueError(f"native argument count mismatch: {row['name']}")
             for arg, name in zip(row["arguments"], names):
@@ -292,11 +316,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kernel", type=Path, default=KERNEL)
     parser.add_argument("--arch", choices=sorted(ARCHES), default="x86_64")
-    parser.add_argument("--output", type=Path, default=ROOT / "src/antinomie/monitor/protocol/native-syscalls.json")
+    parser.add_argument("--output", type=Path,
+                        help="default: protocol/<arch>/native-syscalls.json")
     parser.add_argument("--c-header", type=Path,
                         help="default: the arch's header in the kernel tree")
     args = parser.parse_args()
-    generate(args.kernel, args.arch, args.output,
+    output = args.output or ROOT / "src/antinomie/monitor/protocol" / args.arch / "native-syscalls.json"
+    output.parent.mkdir(exist_ok=True)
+    generate(args.kernel, args.arch, output,
              args.c_header or args.kernel / ARCHES[args.arch]["c_header"])
 
 

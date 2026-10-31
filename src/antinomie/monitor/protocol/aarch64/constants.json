@@ -1,0 +1,77 @@
+{
+  "format_version": 1,
+  "kernel_version": "6.12.94",
+  "architecture": "aarch64",
+  "elf_machine": 183,
+  "elf_class": 64,
+  "endianness": "little",
+  "data_model": "LP64",
+  "audit_arch": "c00000b7",
+  "layout_prefix": "linux-6.12.94/aarch64/",
+  "changed": {
+    "O_DIRECT": 65536,
+    "O_DIRECTORY": 16384,
+    "O_LARGEFILE": 131072,
+    "O_NOFOLLOW": 32768,
+    "O_TMPFILE": 4210688
+  },
+  "absent": [
+    "ARCH_ENABLE_TAGGED_ADDR",
+    "ARCH_FORCE_TAGGED_SVA",
+    "ARCH_GET_CPUID",
+    "ARCH_GET_FS",
+    "ARCH_GET_GS",
+    "ARCH_GET_MAX_TAG_BITS",
+    "ARCH_GET_UNTAG_MASK",
+    "ARCH_GET_XCOMP_GUEST_PERM",
+    "ARCH_GET_XCOMP_PERM",
+    "ARCH_GET_XCOMP_SUPP",
+    "ARCH_MAP_VDSO_32",
+    "ARCH_MAP_VDSO_64",
+    "ARCH_MAP_VDSO_X32",
+    "ARCH_REQ_XCOMP_GUEST_PERM",
+    "ARCH_REQ_XCOMP_PERM",
+    "ARCH_SET_CPUID",
+    "ARCH_SET_FS",
+    "ARCH_SET_GS",
+    "ARCH_SHSTK_DISABLE",
+    "ARCH_SHSTK_ENABLE",
+    "ARCH_SHSTK_LOCK",
+    "ARCH_SHSTK_STATUS",
+    "ARCH_SHSTK_UNLOCK",
+    "MAP_32BIT",
+    "PTRACE_ARCH_PRCTL",
+    "PTRACE_GETFPREGS",
+    "PTRACE_GETFPXREGS",
+    "PTRACE_GETREGS",
+    "PTRACE_GET_THREAD_AREA",
+    "PTRACE_OLDSETOPTIONS",
+    "PTRACE_SETFPREGS",
+    "PTRACE_SETFPXREGS",
+    "PTRACE_SETREGS",
+    "PTRACE_SET_THREAD_AREA",
+    "PTRACE_SINGLEBLOCK",
+    "SHADOW_STACK_SET_TOKEN"
+  ],
+  "additions": {
+    "protection": {
+      "PROT_BTI": 16,
+      "PROT_MTE": 32
+    },
+    "ptrace_request": {
+      "PTRACE_PEEKMTETAGS": 33,
+      "PTRACE_POKEMTETAGS": 34
+    }
+  },
+  "provenance": {
+    "generator": "scripts/generate-arch-constants.py",
+    "compiler_target": "aarch64-linux-gnu",
+    "uapi": [
+      "arch/arm64/include/uapi",
+      "include/uapi"
+    ],
+    "makefile_sha256": "8df3210f3cd7a8e55c262adfe5412e21a4da3b80f287a13a3c0cb2c1cc12c7a8",
+    "evaluated_names": 1263,
+    "method": "libclang enum evaluation over the pinned installed-UAPI view, one header per unit; names compared with x86-64's evaluation of the same names"
+  }
+}

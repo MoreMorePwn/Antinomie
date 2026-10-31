@@ -30,7 +30,7 @@ class TierTests(unittest.TestCase):
     def test_contract_paths_are_full(self):
         for path in ("src/antinomie/core/6.12/0051-x.patch", "src/antinomie/patches/series",
                      "src/antinomie/transport/ring.c", "src/antinomie/monitor/protocol/control.h",
-                     "src/antinomie/monitor/protocol/native-syscalls.json"):
+                     "src/antinomie/monitor/protocol/x86_64/native-syscalls.json"):
             with self.subTest(path=path):
                 tier, reasons = vm.choose_tier(["README.md", path])
                 self.assertEqual(tier, "full")

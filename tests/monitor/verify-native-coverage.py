@@ -14,7 +14,7 @@ import struct
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-INVENTORY = ROOT / "src/antinomie/monitor/protocol/native-syscalls.json"
+INVENTORY = ROOT / "src/antinomie/monitor/protocol/x86_64/native-syscalls.json"
 STATUS_NAMES = ["COMPLETE", "COPY_FAULT", "INVALID_EXTENT", "UNKNOWN_EXTENT", "NO_DECODER",
                 "NULL_POINTER", "ADDRESS_ONLY", "ASYNC_UNOBSERVED", "RESOURCE_EXHAUSTED",
                 "ABORTED_ON_LOSS", "CONTEXT_MISSING", "NOT_WRITTEN", "NOT_RESIDENT"]

@@ -92,9 +92,10 @@ struct Selector {
 fn inventory() -> &'static Inventory {
     static INVENTORY: OnceLock<Inventory> = OnceLock::new();
     INVENTORY.get_or_init(|| {
-        // Generated compiled input is validated by tests and the generator.
-        serde_json::from_str(include_str!(
-            "../../../protocol/captured-layout-members.json"
+        // Generated compiled input is validated by tests and the generator;
+        // the layouts of the native table's architecture, as its keywords.
+        serde_json::from_str(syscalls::arch::captured_layouts_json(
+            syscalls::native().abi,
         ))
         .expect("invalid compiled captured member inventory")
     })
