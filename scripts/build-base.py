@@ -36,8 +36,9 @@ kernel compiler output is cached there, so a new patch series recompiles only
 what it touched.
 
 JOB.json: {"format": 1, "profile": "busybox" | "debian-xfce" | "debian-minimal",
-           "options": {...}, "app_version": "0.1.0"}
-           (app_version optional: recorded as built_with)
+           "options": {...}, "app_version": "0.1.0", "arch": "x86_64" | "arm64"}
+           (app_version optional: recorded as built_with; arch optional, x86_64
+           by default: the guest architecture the kernel is built for)
 
 debian-xfce is Debian 13 with the desktop its options choose; debian-minimal is
 the console-only Debian 13 base (no desktop). Both run the stock kernel
@@ -76,6 +77,12 @@ PROFILES = {
 }
 # The image recipe's answer that selects the console-only Debian base.
 CONSOLE_DESKTOP = "none"
+# Guest architectures the kernel builds for, and the adapter key of Debian's
+# banner for each (adapter.conf).
+ARCHES = {"x86_64": "KERNEL_BANNER", "arm64": "KERNEL_BANNER_ARM64"}
+# Profiles whose image recipe builds an arm64 base yet (none before the arm64
+# BusyBox recipe; the kernel itself cross-builds already).
+ARM64_PROFILES = set()
 
 
 def stage(name):
@@ -135,24 +142,30 @@ def series_hash():
     return hashlib.sha256(listing.encode()).hexdigest()
 
 
-def toolchain(kernel_profile):
+def arch_env(arch):
+    """The kernel build script's architecture setting (none for x86_64, as before)."""
+    return {} if arch == "x86_64" else {"ANTINOMIE_ARCH": arch}
+
+
+def toolchain(kernel_profile, arch="x86_64"):
     """The compiler's and linker's version lines the kernel build script would
     record in the kernel's banner, as {"cc": ..., "ld": ...}."""
     command = ["bash", str(KIT / "scripts/build-monitor-kernel.sh"), kernel_profile]
+    env = arch_env(arch) | {"ANTINOMIE_PRINT_TOOLCHAIN": "1"}
     if SANDBOX is not None:
-        output = SANDBOX.run(command, {"ANTINOMIE_PRINT_TOOLCHAIN": "1"}, capture_output=True,
-                             text=True, check=True).stdout
+        output = SANDBOX.run(command, env, capture_output=True, text=True, check=True).stdout
     else:
-        output = subprocess.run(command, env=os.environ | {"ANTINOMIE_PRINT_TOOLCHAIN": "1"},
+        output = subprocess.run(command, env=os.environ | env,
                                 capture_output=True, text=True, check=True).stdout
     return dict(line.split(": ", 1) for line in output.splitlines() if ": " in line)
 
 
-def debian_toolchain():
+def debian_toolchain(arch="x86_64"):
     """Debian's compiler and linker lines, from the pinned kernel banner."""
-    match = BANNER.fullmatch(adapter()["KERNEL_BANNER"])
+    key = ARCHES[arch]
+    match = BANNER.fullmatch(adapter()[key])
     if not match:
-        raise RuntimeError("adapter.conf KERNEL_BANNER is not a kernel banner")
+        raise RuntimeError(f"adapter.conf {key} is not a kernel banner")
     return {"cc": match[3], "ld": match[4]}
 
 
@@ -337,7 +350,12 @@ def load_job(path):
     app_version = job.get("app_version")
     if app_version is not None and not isinstance(app_version, str):
         raise RuntimeError("job app_version must be a string")
-    return profile, values, app_version
+    arch = job.get("arch", "x86_64")
+    if arch not in ARCHES:
+        raise RuntimeError(f"unknown arch {arch!r} (x86_64 or arm64)")
+    if arch != "x86_64" and profile not in ARM64_PROFILES:
+        raise RuntimeError(f"no {arch} image recipe for {profile} yet")
+    return profile, values, app_version, arch
 
 
 def require_space(work, gib):
@@ -381,11 +399,11 @@ def prepare_source(inputs, work):
     return tree
 
 
-def build_kernel(kernel_profile, tree, work, jobs, ccache=None, debian_image=None):
+def build_kernel(kernel_profile, tree, work, jobs, ccache=None, debian_image=None, arch="x86_64"):
     """Build the kernel; debian_image (Debian's linux-image package) is what the
     stock profile's exports, BTF and traceable functions are compared with."""
     build = work / f"kernel-{kernel_profile}"
-    env = ({"ANTINOMIE_CCACHE_DIR": str(ccache)} if ccache else {}) | (
+    env = arch_env(arch) | ({"ANTINOMIE_CCACHE_DIR": str(ccache)} if ccache else {}) | (
         {"ANTINOMIE_DEBIAN_IMAGE": str(debian_image)} if debian_image else {}) | {
         "ANTINOMIE_SOURCE_TREE": str(tree), "ANTINOMIE_BUILD_TREE": str(build),
         "ANTINOMIE_DEBIAN_CONFIG": str(tree / "debian/config"),
@@ -465,16 +483,21 @@ def keep_artifacts(build, work):
     return kept
 
 
-def kernel_identity(kernel_profile):
+def kernel_identity(kernel_profile, arch="x86_64"):
     """What a cached kernel must have been built from: the series, the
-    scripts, and the compiler and linker (their versions are in its banner)."""
-    return {"format": 1, "profile": kernel_profile, "series": series_hash(),
-            "kernel_script_sha256": checksum(KIT / "scripts/build-monitor-kernel.sh"),
-            "symbols_script_sha256": checksum(KIT / "scripts/make-kernel-symbols.py"),
-            "toolchain": toolchain(kernel_profile)}
+    scripts, the compiler and linker (their versions are in its banner), and
+    the architecture (named only when it is not x86_64, so an x86_64 kernel
+    cached before keeps matching)."""
+    identity = {"format": 1, "profile": kernel_profile, "series": series_hash(),
+                "kernel_script_sha256": checksum(KIT / "scripts/build-monitor-kernel.sh"),
+                "symbols_script_sha256": checksum(KIT / "scripts/make-kernel-symbols.py"),
+                "toolchain": toolchain(kernel_profile, arch)}
+    if arch != "x86_64":
+        identity["arch"] = arch
+    return identity
 
 
-def load_cached_kernel(cache, kernel_profile, work):
+def load_cached_kernel(cache, kernel_profile, work, arch="x86_64"):
     """Unpack a cached kernel that matches this kit, or return None."""
     if cache is None or not cache.is_file():
         return None
@@ -485,7 +508,7 @@ def load_cached_kernel(cache, kernel_profile, work):
         with tarfile.open(cache) as archive:
             manifest = json.load(archive.extractfile("kernel-cache.json"))
             if {key: value for key, value in manifest.items() if key != "builder"} \
-                    != kernel_identity(kernel_profile):
+                    != kernel_identity(kernel_profile, arch):
                 print("cached kernel is from another patch series or build script; rebuilding",
                       flush=True)
                 return None
@@ -504,11 +527,11 @@ def load_cached_kernel(cache, kernel_profile, work):
     return kept
 
 
-def save_cached_kernel(cache, kept, kernel_profile):
+def save_cached_kernel(cache, kept, kernel_profile, arch="x86_64"):
     """Write the kernel artifacts to the cache file atomically."""
     partial = cache.with_name(cache.name + ".part")
     cache.parent.mkdir(parents=True, exist_ok=True)
-    manifest = kernel_identity(kernel_profile)
+    manifest = kernel_identity(kernel_profile, arch)
     # Which builder made it: informational, never compared, so a kernel built in
     # the container builder serves a native build with the same toolchain.
     if os.environ.get("ANTINOMIE_BUILDER_IMAGE"):
@@ -597,7 +620,7 @@ def main():
         if getattr(args, name) is not None:
             setattr(args, name, getattr(args, name).resolve())
     try:
-        profile, values, app_version = load_job(args.job)
+        profile, values, app_version, arch = load_job(args.job)
         if args.output.exists():
             raise RuntimeError(f"{args.output} already exists")
         args.work.mkdir(parents=True, exist_ok=True)
@@ -606,7 +629,7 @@ def main():
             require_debian_toolchain(kernel_profile, args.toolchain_chroot, args.work,
                                      args.inputs, args.ccache)
         kernel_space, image_space = PROFILES[profile][3]
-        build = load_cached_kernel(args.kernel_cache, kernel_profile, args.work)
+        build = load_cached_kernel(args.kernel_cache, kernel_profile, args.work, arch)
         if build is None:
             require_space(args.work, kernel_space + image_space)
             stage("source")
@@ -614,13 +637,13 @@ def main():
             stage("kernel")
             build = build_kernel(kernel_profile, tree, args.work, args.jobs, args.ccache,
                                  debian_image(args.inputs, args.work, values.get("proxy", ""))
-                                 if kernel_profile == "stock" else None)
+                                 if kernel_profile == "stock" else None, arch)
             stage("symbols")
             make_symbols(build, args.work)
             if not args.keep_kernel_build:
                 build = keep_artifacts(build, args.work)
             if args.kernel_cache is not None:
-                save_cached_kernel(args.kernel_cache, build, kernel_profile)
+                save_cached_kernel(args.kernel_cache, build, kernel_profile, arch)
         else:
             stage("kernel")
             require_space(args.work, image_space)

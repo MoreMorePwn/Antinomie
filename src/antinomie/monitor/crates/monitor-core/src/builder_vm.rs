@@ -65,6 +65,31 @@ const TOOL_PACKAGES: &[&str] = &[
     "debian-archive-keyring",
     "ccache",
 ];
+/// Added for a job that builds an arm64 guest (`"arch": "arm64"`): Debian 13's
+/// cross toolchain (the arm64 kernel banner names it), the 32-bit ARM one for
+/// AArch32 test programs, qemu-user-static (it registers its binfmt handlers
+/// in the builder VM's own kernel, for foreign maintainer scripts) and the
+/// device tree compiler. The container image pins the same packages.
+const ARM64_TOOL_PACKAGES: &[&str] = &[
+    "gcc-14-aarch64-linux-gnu",
+    "binutils-aarch64-linux-gnu",
+    "libc6-dev-arm64-cross",
+    "gcc-14-arm-linux-gnueabihf",
+    "binutils-arm-linux-gnueabihf",
+    "libc6-dev-armhf-cross",
+    "qemu-user-static",
+    "device-tree-compiler",
+];
+
+/// The packages the builder VM installs for a job: an x86-64 job's list is
+/// what it always was, so its cached tools disk stays valid.
+fn tool_packages(job: &serde_json::Value) -> String {
+    let mut packages = TOOL_PACKAGES.to_vec();
+    if job["arch"].as_str() == Some("arm64") {
+        packages.extend(ARM64_TOOL_PACKAGES);
+    }
+    packages.join(" ")
+}
 /// Bundle files the guest may upload; `provenance.tar` is unpacked on the host.
 const OUTPUT_FILES: &[&str] = &[
     "bundle.json",
@@ -257,7 +282,8 @@ impl QemuBuild<'_> {
     ) -> Result<PathBuf, String> {
         let mut digest = Sha256::new();
         digest.update(image.file_name().unwrap_or_default().as_encoded_bytes());
-        digest.update(TOOL_PACKAGES.join(" "));
+        let packages = tool_packages(self.job);
+        digest.update(&packages);
         let key = format!("{:x}", digest.finalize());
         let overlay = builder.join(format!("tools-{}.qcow2", &key[..16]));
         if overlay.with_extension("ready").is_file() {
@@ -287,7 +313,7 @@ impl QemuBuild<'_> {
             "{}\n{}\nexport DEBIAN_FRONTEND=noninteractive\napt-get update\napt-get install -y --no-install-recommends {}\napt-get clean\nfstrim -av || true\n",
             apt_proxy(self.proxy),
             apt_mirror(self.mirror),
-            TOOL_PACKAGES.join(" ")
+            packages
         );
         server.add_text("user-data", user_data(&server.base(), &script));
         server.add_text(
@@ -302,7 +328,7 @@ impl QemuBuild<'_> {
         server.stop();
         match result {
             Ok(()) if ok => {
-                fs::write(overlay.with_extension("ready"), TOOL_PACKAGES.join("\n"))
+                fs::write(overlay.with_extension("ready"), packages.replace(' ', "\n"))
                     .map_err(|e| e.to_string())?;
                 Ok(overlay)
             }
@@ -843,6 +869,15 @@ mod tests {
         let mut reply = String::new();
         stream.read_to_string(&mut reply).unwrap();
         reply
+    }
+
+    #[test]
+    fn an_arm64_job_adds_the_cross_tools_and_an_x86_job_keeps_its_list() {
+        let x86 = tool_packages(&serde_json::json!({"format": 1, "profile": "busybox"}));
+        assert_eq!(x86, TOOL_PACKAGES.join(" "));
+        let arm64 = tool_packages(&serde_json::json!({"profile": "busybox", "arch": "arm64"}));
+        assert!(arm64.starts_with(&x86) && arm64.ends_with("device-tree-compiler"));
+        assert!(arm64.contains(" gcc-14-aarch64-linux-gnu "));
     }
 
     #[test]

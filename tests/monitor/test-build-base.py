@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -62,6 +63,28 @@ class BuildBaseTests(unittest.TestCase):
                     self.assertFalse((Path(name) / "work/source").exists())
         # A cached kernel names the toolchain that built it.
         self.assertEqual(base.kernel_identity("minimal")["toolchain"], found)
+        self.assertNotIn("arch", base.kernel_identity("minimal"))
+
+    def test_an_arm64_kernel_takes_debian_13s_cross_toolchain(self):
+        self.assertEqual(base.debian_toolchain("arm64"),
+                         {"cc": "aarch64-linux-gnu-gcc-14 (Debian 14.2.0-19) 14.2.0",
+                          "ld": "GNU ld (GNU Binutils for Debian) 2.44"})
+        self.assertTrue(base.BANNER.fullmatch(base.adapter()["KERNEL_BANNER_ARM64"])[1]
+                        .endswith("+deb13-arm64"))
+        found = base.toolchain("minimal", "arm64")
+        # The cross compiler is a host package (the container image has it).
+        if shutil.which("aarch64-linux-gnu-gcc-14"):
+            self.assertTrue(found["cc"].startswith("aarch64-linux-gnu-gcc-14 "), found)
+        identity = base.kernel_identity("minimal", "arm64")
+        self.assertEqual((identity["arch"], identity["toolchain"]), ("arm64", found))
+        with tempfile.TemporaryDirectory() as name:
+            job = Path(name) / "job.json"
+            for arch, error in (("arm64", "no arm64 image recipe"), ("riscv64", "unknown arch")):
+                job.write_text(json.dumps({"format": 1, "profile": "busybox", "arch": arch}))
+                with self.assertRaisesRegex(RuntimeError, error):
+                    base.load_job(job)
+            job.write_text(json.dumps({"format": 1, "profile": "busybox"}))
+            self.assertEqual(base.load_job(job)[3], "x86_64")
 
     def fake_engine(self, directory, name, version_exit=0, stderr="", rootless="false",
                     have_image=True):
@@ -113,6 +136,12 @@ exit 0
         # Debian 13's compiler and linker, by exact version, write the banner.
         self.assertIn("gcc-14=14.2.0-19", text)
         self.assertIn("binutils=2.44-3", text)
+        # arm64 guests: Debian 13's cross toolchain (the arm64 banner), the
+        # 32-bit ARM one for AArch32 fixtures, qemu-user and the DT compiler.
+        for pin in ("gcc-14-aarch64-linux-gnu=14.2.0-19cross1", "binutils-aarch64-linux-gnu=2.44-3",
+                    "libc6-dev-arm64-cross=", "gcc-14-arm-linux-gnueabihf=14.2.0-19cross1",
+                    "qemu-user-static=", "device-tree-compiler="):
+            self.assertIn(pin, text)
 
     def test_a_container_build_mounts_its_folders_and_always_removes_the_container(self):
         for engine, rootless in (("podman", "true"), ("docker", "false")):
@@ -158,17 +187,17 @@ exit 0
                 (kept / file).write_text("x")
             identity = {"format": 1, "profile": "minimal", "series": "s"}
             cache = work / "kernel.tar"
-            with unittest.mock.patch.object(base, "kernel_identity", side_effect=lambda _: dict(identity)), \
+            with unittest.mock.patch.object(base, "kernel_identity", side_effect=lambda *_: dict(identity)), \
                     unittest.mock.patch.dict("os.environ",
                                              {"ANTINOMIE_BUILDER_IMAGE": "antinomie-builder:abc"}):
                 base.save_cached_kernel(cache, kept, "minimal")
                 with base.tarfile.open(cache) as archive:
                     manifest = json.load(archive.extractfile("kernel-cache.json"))
                 self.assertEqual(manifest["builder"], {"image": "antinomie-builder:abc"})
-            with unittest.mock.patch.object(base, "kernel_identity", side_effect=lambda _: dict(identity)):
+            with unittest.mock.patch.object(base, "kernel_identity", side_effect=lambda *_: dict(identity)):
                 self.assertIsNotNone(base.load_cached_kernel(cache, "minimal", work))
                 changed = dict(identity, series="other")
-            with unittest.mock.patch.object(base, "kernel_identity", side_effect=lambda _: dict(changed)):
+            with unittest.mock.patch.object(base, "kernel_identity", side_effect=lambda *_: dict(changed)):
                 self.assertIsNone(base.load_cached_kernel(cache, "minimal", work))
 
     def test_jobs_accept_only_the_options_a_profile_offers(self):
