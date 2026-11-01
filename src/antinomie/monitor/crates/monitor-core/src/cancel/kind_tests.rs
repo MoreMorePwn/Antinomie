@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! One test per kind of download: a cancel stops it within a second or two and
 //! leaves no partial file, temporary folder or changed state. The `curl` here is
 //! a script that writes a few bytes where it was told to and then waits, so

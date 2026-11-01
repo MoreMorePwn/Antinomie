@@ -120,6 +120,9 @@ struct Sort {
     descending: bool,
 }
 
+/// A sample download under way: its reply and the flag that stops it.
+type RunningDownload = (Receiver<Result<StoredSample, String>>, Arc<AtomicBool>);
+
 impl Drop for SamplesView {
     fn drop(&mut self) {
         if let Some(cancel) = &self.search_cancel {
@@ -377,7 +380,7 @@ pub(crate) struct SamplesView {
     catalog_errors: Vec<String>,
     offline: bool,
     /// Downloads under way, by listed hash: the reply and the flag that stops it.
-    downloads: BTreeMap<String, (Receiver<Result<StoredSample, String>>, Arc<AtomicBool>)>,
+    downloads: BTreeMap<String, RunningDownload>,
     stored: Option<Vec<StoredSample>>,
     /// Run pushed samples as root instead of the guest user.
     as_root: bool,

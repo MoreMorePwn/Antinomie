@@ -877,12 +877,11 @@ fn install_package(
                 },
             );
             if let Err(error) = fetched {
-                if attempt == 1 || crate::cancel::is_cancelled(&error) {
-                    return Err(if crate::cancel::is_cancelled(&error) {
-                        error
-                    } else {
-                        format!("download failed: {}", download.url)
-                    });
+                if crate::cancel::is_cancelled(&error) {
+                    return Err(error);
+                }
+                if attempt == 1 {
+                    return Err(format!("download failed: {}", download.url));
                 }
             }
             progress("verify", done + download.size, total);

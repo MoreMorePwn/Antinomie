@@ -631,7 +631,7 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_download_keeps_verified_files_and_resumes() {
+    fn a_cancelled_download_removes_its_staging_folder_and_a_new_one_starts_clean() {
         let source = staging("cancel-source");
         let catalog = parse_catalog(sample_catalog(&source).as_bytes()).unwrap();
         let remote = format!("file://{}", source.display());
@@ -651,9 +651,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error, "download cancelled");
-        let kernel = target.join("kernel");
-        assert_eq!(sha256(&kernel), catalog.bases[0].files[0].sha256);
-        let modified = fs::metadata(&kernel).unwrap().modified().unwrap();
+        assert!(!target.exists(), "a download you cancel changes nothing");
         cancel.store(false, Ordering::Relaxed);
         download_base(
             Path::new("curl"),
@@ -664,7 +662,6 @@ mod tests {
             |_, _| {},
         )
         .unwrap();
-        assert_eq!(fs::metadata(&kernel).unwrap().modified().unwrap(), modified);
         assert!(target.join("bundle.json").is_file());
         fs::remove_dir_all(source).unwrap();
         fs::remove_dir_all(target).unwrap();
@@ -691,9 +688,8 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error, "download cancelled");
-        assert!(target.join("bundle.json").is_file());
+        assert!(!target.exists());
         fs::remove_dir_all(source).unwrap();
-        fs::remove_dir_all(target).unwrap();
     }
 
     #[test]
