@@ -8,7 +8,8 @@ it runs.
 
 Runs the bases 0.8.3 runs (contract revision 20, unchanged) and arm64 BusyBox
 bases built by this release. An app older than 0.9.0 refuses an arm64 base
-before it starts a VM.
+before it starts a VM. x86-64 bases built by this release also record 32-bit
+x86 programs by their own table.
 
 ### Host
 
@@ -22,6 +23,14 @@ before it starts a VM.
   **Faster emulation (KPTI off)**.
 - **32-bit ARM programs** run on arm64 guests and are recorded and decoded by
   arm's own EABI numbers and layouts.
+- **32-bit x86 programs** (ia32, such as XorDDoS and Rex) on x86-64 guests are
+  recorded and decoded by the i386 table: their calls by name, their arguments,
+  paths, written bytes, socket addresses (also through `socketcall`), task
+  names and their children's exec, so the process table, Files, Network,
+  Triage and Sigma read them as an x86-64 program's. Before, their numbers were
+  read as x86-64 ones (another call's name, "?" processes, a false
+  `persistence.module`); a base of 0.8.3 or older still records them by number only, and
+  this app shows those raw. Their process cores are still not written.
 - **Debugger on arm64.** gdb-multiarch drives the guest's arm64 debug engine;
   the Code pane disassembles aarch64 with Capstone (BSD-3-Clause and NCSA,
   notices in `THIRD-PARTY-NOTICES.md`); hardware breakpoints, write and read
@@ -55,7 +64,9 @@ before it starts a VM.
 - **Tests.** `vm-regress.py --arch arm64` runs the full tier on an arm64 base
   (the cloud check expects the arm64 instance; the route and specimen probes
   are built for arm64) and checks that an old host refuses the base
-  (`io-old-arm64-refused`).
+  (`io-old-arm64-refused`). The x86-64 full tier has `tracer-ia32`: one
+  program built as a 32-bit x86 and an x86-64 program, recorded alike (its
+  32-bit build needs `gcc -m32`: gcc-multilib and libc6-dev-i386).
 
 ### Guest
 
@@ -71,6 +82,10 @@ before it starts a VM.
   breakpoints); boot options kept out of the device tree and virt's own devices
   out of ACPI; the stock arm64 kernel's BTF kept Debian's type for type (the
   core exit hooks' arm64 forms, setup.c's bootargs helper in the recorder).
+- Patch 42: ia32 programs on x86-64 recorded by the i386 table (ABI 3, compat,
+  as AArch32 on arm64), a `socketcall` as the socket call it makes; on x86-64
+  only `kernel/antinomie/recorder.o` and `control.o` (ARCH_INFO's ABI mask)
+  change.
 
 ## 0.8.3 — 2026-MM-DD
 

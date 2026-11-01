@@ -878,6 +878,60 @@ already defines bit 3, compat.
 * **Not supported.** The guest writes no process core of a 32-bit program (the
   run says why), and the debugger does not attach to one.
 
+### ia32 programs on x86-64 guests (0.9.0)
+
+Board card "Decode 32-bit x86 (ia32) system calls" (evaluation run 1, B1):
+XorDDoS and Rex are i386 programs. An x86-64 guest recorded their calls with
+ABI 0 (numbers only) and the host read the numbers as x86-64 ones: i386's
+`rt_sigaction` (174) and `rt_sigprocmask` (175) became `create_module` and
+`init_module` (a false `persistence.module` per process), schema gaps for
+nearly every call, no exec of their children ("?" processes). The AArch32
+machinery above now serves ia32 too; contract revision 20 is unchanged
+(ARCH_INFO's ABI bit 3, compat, is set on x86-64 guests with
+`CONFIG_IA32_EMULATION`).
+
+* **Schema set.** `protocol/i386/` holds the i386 table
+  (`generate-native-syscalls.py --arch i386`, from
+  `arch/x86/entry/syscalls/syscall_32.tbl`), its captured layouts
+  (`linux-6.12.94/x86/`, x86-64's `ANT_ARCH_COMPAT_LAYOUT`) and constants
+  (ILP32, `audit_arch` 40000003). A 64-bit argument takes two consecutive
+  registers (the `sys_ia32_*` entries already name the halves, `pos_lo`,
+  `pos_hi`); clone has `CLONE_BACKWARDS`' order. Rows carry arm's `family`
+  names where i386 shares them (`stat64` is `stat`, `mmap2` is `mmap`,
+  `setuid32` is `setuid`) and the x86-64 `native` number of 264 calls with the
+  same arguments and objects of one layout.
+* **Guest (patch 42).** x86-64 defines `ANT_ABI_COMPAT` with
+  `CONFIG_IA32_EMULATION`: an ia32 call (`in_ia32_syscall()`) is recorded with
+  its i386 number and ABI 3, its arguments the registers' low halves, by the
+  code patch 37 added (now compiled on x86-64; the compat ABI's `__NR_` names
+  come from `ANT_COMPAT_UNISTD`/`ANT_COMPAT_NR()` of the architecture header).
+  i386 programs reach the socket calls through `socketcall(call, args)` (Debian
+  13's i386 glibc, built for kernels from 3.2, does; so does Go): such a call
+  is recorded as the direct i386 call it makes, its arguments read from its
+  array (`accept` as `accept4` without flags, `send` and `recv` as `sendto`
+  and `recvfrom` without an address, as `net/socket.c` makes them), with a
+  `socketcall.call` field; an unreadable array leaves the socketcall itself.
+  On x86-64 only `kernel/antinomie/recorder.o` (the compat code) and
+  `control.o` (ARCH_INFO's ABI mask gains bit 3) change; arm64's objects are
+  unchanged.
+* **Host.** `syscalls::Abi::I386` (id tag 3, `EM_386`) is x86-64's `compat()`
+  ABI: the assembler names ABI-3 records of an x86-64 run by it (x32's, and an
+  older guest's ia32 records of ABI 0, keep their numbers as before), struct
+  member filters read natively captured fields by the x86-64 call's layouts
+  and number, and results, argument vectors (4-byte pointers) and data models
+  follow the AArch32 rules above.
+* **Check.** vm-regress's `tracer-ia32` (x86-64 full tier) runs
+  `tests/monitor/ia32-fixture.c` built with `gcc -m32 -static` and for x86-64
+  (`ANTINOMIE_IA32_CC` picks the compiler) and checks each behaviour (mkdir,
+  open, write, stat, rename, unlink, connect and sendto through socketcall,
+  `PR_SET_NAME`, the child's exec) is recorded in both, the ia32 run's own
+  calls by the i386 table, none unnamed or raw. `tracer-check` honours
+  `ANTINOMIE_FORCE_TCG` (eight times the waits) for hosts without KVM.
+* **Not supported.** No process core of an ia32 program; `ipc`, the old
+  `mmap` and `select` (argument structures) and the 32-bit time calls record
+  their pointers by address only; the debugger does not attach to an ia32
+  program.
+
 ### arm64 debugger (0.9.0)
 
 Multi-arch plan cards MA-11 and MA-14: the debug engine, the RSP server, the
