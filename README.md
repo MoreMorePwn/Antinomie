@@ -11,7 +11,7 @@ Run a Linux sample in a disposable VM on your own computer, watch it from inside
 the guest kernel, and investigate everything it did in one desktop app.
 
 **Local**: samples, recordings and analysis stay on your machine; nothing is uploaded without your approval.<br>
-**Kernel-level**: the guest kernel records every system call, file activity and packet; no agent to find.<br>
+**Kernel-level**: the guest kernel records every system call, file activity and packet; no monitoring process runs beside the sample.<br>
 **Sandbox**: QEMU VMs you control down to the hardware: CPU, memory, disks and their bus, real device and cloud identities, branching snapshots you can reset or roll back to, and a network route per run.<br>
 **Workspace**: trace, Triage, network, memory, disks, static analysis, a debugger and all the tools you need in one space.
 
@@ -70,7 +70,10 @@ is the recorded run; no VM is running.</sub>
 **A sandbox at kernel level**
 
 Samples run in QEMU VMs on your own machine. A patched guest kernel observes
-and controls them, so nothing runs beside the sample for it to find.
+and controls them, so no monitoring process, ptrace or injected library runs
+in the guest's userspace beside the sample. The observer is in the guest kernel:
+a sample with root can still look for it, and one that exploits the kernel can
+blind it.
 
 </td>
 <td width="33%" valign="top">
