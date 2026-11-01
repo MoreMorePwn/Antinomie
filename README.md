@@ -30,10 +30,11 @@ the guest kernel, and investigate everything it did in one desktop app.
 
 <br>
 
-<img src="assets/screenshots/run-history.png" alt="The Antinomie window: the VM list and library on the left, Run History listing three recorded runs, and the selected run's process tree in the Details panel below" width="860">
+<img src="assets/screenshots/inc-walkthrough.gif" alt="A recorded run of INC ransomware in Antinomie: Run History, the Triage summary with ATT&amp;CK T1036, T1486 and T1622, the sample's process and its five worker threads, the high-severity mass-rewrite finding, the twelve files renamed to .INC, one file's history from open to rename, the system-call trace filtered to pwrite64 and rename, and the capa ATT&amp;CK matrix" width="860">
 
-<sub>Run History in the Antinomie window. This frame is a UI test fixture with
-<b>synthetic data</b>, not a recorded malware run.</sub>
+<sub>A real recording: INC ransomware (MalwareBazaar, SHA-256 <code>86d04474…7f0d13</code>) run as
+root on Debian 13 Minimal against decoy VM files, with the InetSim route. Every view
+is the recorded run; no VM is running.</sub>
 
 </div>
 
