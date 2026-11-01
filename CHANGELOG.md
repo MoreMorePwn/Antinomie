@@ -8,6 +8,15 @@ it runs.
 
 ### Host
 
+- **Fixed: the Tor route's own tor starts again.** The generated torrc wrote
+  `Log notice file "<path>"`; tor only unquotes a value quoted as a whole, so
+  it looked for a file whose name contained the quote characters and every run
+  on the Tor route stopped with "tor stopped before it was ready (exit status:
+  1)". The torrc now says `Log notice stdout` and tor's stdout is the private
+  `tor.log` (mode 0600), which is still read for the bootstrap progress; data
+  folders with spaces work. Tested with a real tor (`ANTINOMIE_TEST_TOR` or
+  `tor` on PATH) under `DisableNetwork 1`.
+
 - **Fixed: run views and reports no longer show host paths.** Per-file history
   said "unavailable: /home/<user>/.../disk.qcow2 changed after the run started";
   it now says "the VM's disk changed after the run started". Disk-layer errors,

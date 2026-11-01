@@ -4,7 +4,7 @@
 use super::{WAIT, no_data, scratch};
 use crate::route::{
     Gateway, GatewayNet, RouteConfig, RouteKind, TorMode, config::TorLaunch,
-    tor::bootstrap_progress, tor::start_tor,
+    tor::bootstrap_progress, tor::start_tor, tor::torrc,
 };
 use std::{os::unix::fs::PermissionsExt, path::Path, time::Duration};
 
@@ -16,7 +16,7 @@ fn script(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
 }
 
 /// A stand-in for tor: reads the torrc it is given with `-f`, logs the
-/// bootstrap the way tor does (to the `Log notice file`), records how it was
+/// bootstrap the way tor does (to stdout, `Log notice stdout`), records how it was
 /// started in `seen.txt` next to the torrc, then answers SOCKS5 like an echo
 /// proxy on the SocksPort.
 const FAKE_TOR: &str = r#"#!/usr/bin/env python3
@@ -25,13 +25,14 @@ args = sys.argv[1:]
 torrc = args[args.index("-f") + 1]
 text = open(torrc).read()
 port = int(re.search(r"SocksPort 127\.0\.0\.1:(\d+)", text).group(1))
-log = re.search(r'Log notice file "([^"]+)"', text).group(1)
+assert "Log notice stdout\n" in text, text
 with open(os.path.join(os.path.dirname(torrc), "seen.txt"), "w") as seen:
     seen.write(os.environ.get("LD_LIBRARY_PATH", "") + "\n" + " ".join(args) + "\n")
 srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 srv.bind(("127.0.0.1", port)); srv.listen(8)
 LAST = 100
-with open(log, "a") as out:
+if True:
+    out = sys.stdout
     for percent, tag in [(5, "conn"), (40, "loading_status"), (100, "done")]:
         if percent > LAST:
             break
@@ -286,5 +287,135 @@ fn the_settings_test_brings_the_own_tor_up_and_stops_it() {
     // The check leaves tor's cache for the next start, but no process.
     assert!(state.join("torrc").exists());
     let _ = no_data;
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Tor reads a value quoted as a whole, but takes the quotes inside a
+/// multi-word value such as `Log notice file "<path>"` as part of the name.
+#[test]
+fn the_torrc_has_no_path_on_the_log_line_and_quotes_paths_as_a_whole() {
+    let dir = scratch("tor-torrc");
+    let geoip = dir.join("geo ip");
+    std::fs::create_dir_all(&geoip).unwrap();
+    for file in ["geoip", "geoip6"] {
+        std::fs::write(geoip.join(file), b"").unwrap();
+    }
+    let mut tor = launch(&dir, std::path::PathBuf::from("tor"));
+    tor.geoip_dir = Some(geoip.clone());
+    let state = dir.join("my state");
+    let text = torrc(&tor, &state, 9150).unwrap();
+    let log: Vec<_> = text.lines().filter(|l| l.starts_with("Log ")).collect();
+    assert_eq!(log, ["Log notice stdout"], "{text}");
+    assert!(
+        text.contains(&format!(
+            "DataDirectory \"{}\"\n",
+            state.join("data").display()
+        )),
+        "{text}"
+    );
+    assert!(text.contains(&format!(
+        "GeoIPFile \"{}\"\n",
+        geoip.join("geoip").display()
+    )));
+    for line in text.lines() {
+        let (key, value) = line.split_once(' ').unwrap();
+        // A quote only ever wraps the whole value, and only on path keys.
+        assert_eq!(
+            value.contains('"'),
+            matches!(key, "DataDirectory" | "GeoIPFile" | "GeoIPv6File"),
+            "{line}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Stops the tor of a test even when an assertion fails.
+struct KillOnDrop(std::process::Child);
+impl std::ops::Deref for KillOnDrop {
+    type Target = std::process::Child;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for KillOnDrop {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn real_tor() -> Option<std::path::PathBuf> {
+    if let Some(path) = std::env::var_os("ANTINOMIE_TEST_TOR") {
+        return Some(path.into());
+    }
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|dir| dir.join("tor"))
+            .find(|tor| tor.is_file())
+    })
+}
+
+/// A real tor with the generated torrc (plus `DisableNetwork 1`, so it never
+/// touches the Tor network) in a data folder with a space in its name starts, logs to
+/// stdout (so the log is readable for the progress) and stays up. With
+/// `DisableNetwork` tor opens no listener, so the SocksPort is not checked.
+#[test]
+fn a_real_tor_accepts_the_generated_torrc_and_stays_up() {
+    let Some(binary) = real_tor() else {
+        eprintln!("skipped: no tor in ANTINOMIE_TEST_TOR or PATH");
+        return;
+    };
+    let dir = scratch("tor-real");
+    let state = dir.join("state with space");
+    for folder in [&state, &state.join("data")] {
+        crate::storage::private_dir(folder).unwrap();
+    }
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let mut tor = launch(&dir, binary.clone());
+    tor.geoip_dir = None;
+    let mut text = torrc(&tor, &state, port).unwrap();
+    text.push_str("DisableNetwork 1\n");
+    std::fs::write(state.join("torrc"), text).unwrap();
+    std::fs::write(state.join("defaults"), b"").unwrap();
+    let log = std::fs::File::create(state.join("tor.log")).unwrap();
+    let mut command = std::process::Command::new(&binary);
+    command
+        .arg("--defaults-torrc")
+        .arg(state.join("defaults"))
+        .arg("-f")
+        .arg(state.join("torrc"))
+        .stdin(std::process::Stdio::null())
+        .stdout(log)
+        .stderr(std::process::Stdio::null());
+    if let Some(libraries) = binary.parent() {
+        command.env("LD_LIBRARY_PATH", libraries);
+    }
+    let mut child = KillOnDrop(command.spawn().unwrap());
+    let started = std::time::Instant::now();
+    let mut opened = false;
+    while started.elapsed() < Duration::from_secs(3) || !opened {
+        if let Some(status) = child.try_wait().unwrap() {
+            let said = std::fs::read_to_string(state.join("tor.log")).unwrap_or_default();
+            panic!("tor stopped ({status}): {said}");
+        }
+        let said = std::fs::read_to_string(state.join("tor.log")).unwrap_or_default();
+        opened = bootstrap_progress(&said).is_some();
+        assert!(started.elapsed() < Duration::from_secs(20), "{said}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let said = std::fs::read_to_string(state.join("tor.log")).unwrap();
+    eprintln!("{said}");
+    assert!(said.contains("DisableNetwork is set"), "{said}");
+    assert!(child.try_wait().unwrap().is_none(), "tor exited");
+    drop(child);
     let _ = std::fs::remove_dir_all(dir);
 }

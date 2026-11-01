@@ -9,7 +9,8 @@
 //!   the next start finds its consensus.
 //! * The SocksPort is a free port on 127.0.0.1 picked for each start; tor
 //!   offers nothing else: no ControlPort, no listener on another address.
-//! * Bootstrap progress is read from tor's log file, so no control
+//! * Tor logs to its stdout, which is the private `tor.log` (stderr goes to
+//!   `tor.out`). Bootstrap progress is read from that log file, so no control
 //!   connection is needed. A tor that stops, or that is not at 100% within
 //!   the wait, is an error and the route does not come up.
 use super::{config::TorLaunch, managed::Managed};
@@ -59,12 +60,18 @@ fn private_file(path: &Path, truncate: bool) -> Result<File, String> {
 }
 
 /// The torrc of one start.
-fn torrc(launch: &TorLaunch, data: &Path, log: &Path, port: u16) -> Result<String, String> {
+///
+/// Every path value is quoted as a whole (`Key "<path>"`), which tor accepts
+/// and which keeps a space in the data folder intact. `Log` takes no path:
+/// tor does not unquote inside a multi-word value, so `Log notice file "<path>"`
+/// makes tor open a file whose name contains the quote characters and exit.
+/// `Log notice stdout` is used instead and the process's stdout is the
+/// private log file.
+pub(crate) fn torrc(launch: &TorLaunch, data: &Path, port: u16) -> Result<String, String> {
     let mut text = format!(
         "DataDirectory {}\nSocksPort 127.0.0.1:{port}\nControlPort 0\nCookieAuthentication 0\n\
-         ClientOnly 1\nAvoidDiskWrites 1\nSafeLogging 1\nLog notice file {}\n",
+         ClientOnly 1\nAvoidDiskWrites 1\nSafeLogging 1\nLog notice stdout\n",
         torrc_path(&data.join("data"))?,
-        torrc_path(log)?,
     );
     for (key, file) in [("GeoIPFile", "geoip"), ("GeoIPv6File", "geoip6")] {
         if let Some(path) = launch.geoip_dir.as_ref().map(|dir| dir.join(file))
@@ -118,7 +125,7 @@ pub(crate) fn start_tor(
     let port = free_port()?;
     let log_path = state.join("tor.log");
     // A fresh log, so an earlier start's "Bootstrapped 100%" is never read.
-    drop(private_file(&log_path, true)?);
+    let log_file = private_file(&log_path, true)?;
     let output = private_file(&state.join("tor.out"), true)?;
     let errors = output.try_clone().map_err(|e| format!("Tor: {e}"))?;
     // An empty defaults file stops tor reading the system's torrc-defaults.
@@ -126,7 +133,7 @@ pub(crate) fn start_tor(
     fs::write(&defaults, b"").map_err(|e| format!("Tor: {}: {e}", defaults.display()))?;
     let config = state.join("torrc");
     private_file(&config, true)?
-        .write_all(torrc(launch, &state, &log_path, port)?.as_bytes())
+        .write_all(torrc(launch, &state, port)?.as_bytes())
         .map_err(|e| format!("Tor: {}: {e}", config.display()))?;
     let mut command = Command::new(&launch.binary);
     command
@@ -135,7 +142,8 @@ pub(crate) fn start_tor(
         .arg("-f")
         .arg(&config)
         .stdin(Stdio::null())
-        .stdout(Stdio::from(output))
+        // `Log notice stdout`: tor's log is the private log file.
+        .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(errors));
     if let Some(libraries) = &launch.lib_dir {
         // The bundle's own libevent and OpenSSL, next to its tor.
