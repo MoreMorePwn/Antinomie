@@ -187,7 +187,7 @@ impl TriageView {
                 ui.colored_label(theme::muted(), "Network capture was off for this run. Turn on Capture network in Run program to record one.");
             } else if let Some(warning) = self.scan.as_ref().and_then(|s| s.network_warning.clone())
             {
-                crate::activity::warning(ui, warning);
+                network_note(ui, warning);
             }
             return;
         }
@@ -205,7 +205,7 @@ impl TriageView {
             return;
         };
         if let Some(warning) = &scan.network_warning {
-            crate::activity::warning(ui, warning);
+            network_note(ui, warning);
         }
         let mut open_ioc = false;
         ui.horizontal_wrapped(|ui| {
@@ -235,5 +235,39 @@ impl TriageView {
         if open_ioc {
             self.section = Section::Ioc;
         }
+    }
+}
+
+/// A pcap index note: lookup and list limits are information; an index that
+/// could not be built stays a warning.
+fn network_note(ui: &mut egui::Ui, text: impl std::fmt::Display) {
+    let text = text.to_string();
+    if text.starts_with("Network index unavailable") {
+        crate::activity::warning(ui, text);
+    } else {
+        crate::activity::info(ui, text);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pcap_notes_are_warnings_only_when_the_index_is_unavailable() {
+        let ctx = egui::Context::default();
+        let mut journal = crate::activity::Journal::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                network_note(
+                    ui,
+                    "Address lookup limited to 24 public destinations; 3 more were not queried.",
+                );
+                network_note(ui, "Network index unavailable: broken");
+            });
+        });
+        journal.ingest(&ctx);
+        assert_eq!(journal.counts(), (1, 0));
+        assert_eq!(journal.messages().len(), 2);
     }
 }

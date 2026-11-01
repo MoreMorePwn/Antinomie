@@ -791,7 +791,7 @@ impl MonitorApp {
             ui.separator();
             // Above the buttons, so it stays in view.
             if let Some(error) = &form_error {
-                crate::activity::warning(ui, error);
+                crate::activity::inline_only(ui, crate::activity::Level::Warn, error);
             }
             ui.horizontal(|ui| {
                 save = ui
@@ -978,7 +978,7 @@ fn transport_window(
                 transport_options(ui, transport, cpus, tunable)
             });
             if !editable {
-                crate::activity::warning(ui, "Stop the VM to change these settings.");
+                crate::activity::info(ui, "Stop the VM to change these settings.");
             }
             let mut close = false;
             dialog_footer(ui, |ui| {
@@ -1003,7 +1003,7 @@ fn transport_options(
     tunable: bool,
 ) {
     if !tunable {
-        crate::activity::warning(
+        crate::activity::info(
             ui,
             "This base predates Antinomie 0.3.0: it always uses 256 KiB buffers \
              and drops telemetry when they are full. These settings apply to \

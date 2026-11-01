@@ -698,7 +698,7 @@ fn identity(ui: &mut egui::Ui, report: &AnalysisReport) -> Option<ReportAction> 
                 .map(|s| section_title(s.kind))
                 .collect();
             if !names.is_empty() {
-                crate::activity::warning(
+                crate::activity::info(
                     ui,
                     format!(
                         "Not every check completed: {}. Each one says why.",

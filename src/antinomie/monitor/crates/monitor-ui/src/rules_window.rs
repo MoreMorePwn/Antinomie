@@ -335,7 +335,7 @@ impl Model {
                         );
                 }
                 ("ids", probe, _) => {
-                    crate::activity::warning(
+                    crate::activity::info(
                         ui,
                         match probe {
                             ToolProbe::Absent(_) => {
@@ -361,7 +361,7 @@ impl Model {
                     );
                 }
                 (_, _, probe) => {
-                    crate::activity::warning(
+                    crate::activity::info(
                         ui,
                         format!(
                             "Sigma cannot scan with {}: {}",

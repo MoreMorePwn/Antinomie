@@ -514,7 +514,7 @@ fn needs_tool(
         return;
     }
     crate::tree_lines::row(ui, &parent.child(true), char_width, |ui| {
-        crate::activity::warning(ui, format!("Needs {name}, not installed"));
+        crate::activity::info(ui, format!("Needs {name}, not installed"));
         if ui.small_button("Install…").clicked() {
             *install = true;
         }

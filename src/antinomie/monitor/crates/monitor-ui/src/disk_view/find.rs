@@ -248,7 +248,7 @@ impl DiskView {
             ),
         ] {
             if shown {
-                crate::activity::warning(ui, note);
+                crate::activity::info(ui, note);
             }
         }
         if self.find.reveal_first {

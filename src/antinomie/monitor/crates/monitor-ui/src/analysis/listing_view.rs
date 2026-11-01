@@ -178,7 +178,11 @@ pub(super) fn show(
     });
     let compiled = crate::query::compile_table(&state.query, &fields);
     if let Some(error) = compiled.error.as_ref() {
-        crate::activity::warning(ui, format!("{error} · showing the last valid filter"));
+        crate::activity::inline_only(
+            ui,
+            crate::activity::Level::Warn,
+            format!("{error} · showing the last valid filter"),
+        );
     } else {
         state.applied_query = state.query.clone();
         crate::query::remember_valid_filter(ui, &state.applied_query);

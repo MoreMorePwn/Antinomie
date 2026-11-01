@@ -142,7 +142,7 @@ impl MonitorApp {
             return;
         }
         if self.snapshot.bases.is_empty() {
-            crate::activity::warning(ui, "Install a base image first.");
+            crate::activity::info(ui, "Install a base image first.");
             if ui.button("Go to Base image").clicked() {
                 self.getting_started.step = Step::Base;
             }
@@ -535,7 +535,7 @@ impl MonitorApp {
                 ));
             });
             for notice in &offer.notices {
-                crate::activity::warning(ui, notice);
+                crate::activity::info(ui, notice);
             }
         }
         let queued = !self.getting_started.rule_queue.is_empty();

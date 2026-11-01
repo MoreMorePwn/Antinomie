@@ -289,7 +289,7 @@ impl ProcessPicker {
                     .on_hover_text(format!("Boot {}", identity.boot_id));
                 }
                 if !enabled {
-                    crate::activity::warning(
+                    crate::activity::info(
                         ui,
                         self.unavailable.unwrap_or(if core {
                             "Core capture is not available now."

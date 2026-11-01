@@ -181,7 +181,7 @@ impl Change {
                 .color(theme::text()),
         );
         if self.deleted {
-            crate::activity::warning(ui,
+            crate::activity::info(ui,
                 "File was deleted or unlinked; open descriptors may still refer to its contents.",
             );
         }

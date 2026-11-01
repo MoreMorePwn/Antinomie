@@ -268,13 +268,10 @@ impl MemoryView {
                                         .color(theme::muted()),
                                     );
                                     for caveat in &plugin.caveats {
-                                        crate::activity::warning(
-                                            ui,
-                                            format!("{} {caveat}", egui_phosphor::regular::WARNING),
-                                        );
+                                        crate::activity::info(ui, caveat);
                                     }
                                     for need in &plugin.requires {
-                                        crate::activity::warning(ui, format!("Needs {need}"));
+                                        crate::activity::info(ui, format!("Needs {need}"));
                                     }
                                     for file in &plugin.files {
                                         for edit in &file.edits {

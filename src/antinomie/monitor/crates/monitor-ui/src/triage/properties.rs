@@ -295,7 +295,7 @@ impl View {
             crate::activity::warning(ui, format!("Property refresh failed: {error}"));
         }
         if input.analysis.is_none() {
-            crate::activity::warning(ui, "This run has no executable capture record. Enable static analysis before starting a new run.");
+            crate::activity::info(ui, "This run has no executable capture record. Enable static analysis before starting a new run.");
         } else if matches!(
             status,
             SpecimenStatus::Cancelled | SpecimenStatus::Incomplete | SpecimenStatus::Unavailable

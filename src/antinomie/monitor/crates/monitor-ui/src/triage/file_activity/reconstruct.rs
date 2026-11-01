@@ -304,7 +304,7 @@ impl Open {
             );
         }
         if file.timeline.unlisted > 0 {
-            crate::activity::warning(
+            crate::activity::info(
                 ui,
                 format!(
                     "{} more calls changed this file after the list of steps was full; the map stops before them.",

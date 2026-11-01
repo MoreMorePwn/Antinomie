@@ -241,7 +241,7 @@ impl DiskView {
             });
         }
         if let Some(reason) = measure.unsupported() {
-            crate::activity::warning(ui, reason);
+            crate::activity::info(ui, reason);
         }
         if let Some(index) = choose.filter(|index| measure.partition != Some(*index)) {
             self.pick.partition = Some(index);

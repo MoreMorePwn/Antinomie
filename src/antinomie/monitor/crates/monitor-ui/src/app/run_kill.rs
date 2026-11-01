@@ -100,7 +100,7 @@ impl MonitorApp {
             || self.snapshot.memory_dump.is_some()
             || self.vm_snapshots.pending.is_some()
         {
-            self.report_warning("Run is no longer available to kill; select an active run".into());
+            self.report_info("Run is no longer available to kill; select an active run".into());
             return;
         }
         self.pending_kill = self.send_request(Command::StopRun {

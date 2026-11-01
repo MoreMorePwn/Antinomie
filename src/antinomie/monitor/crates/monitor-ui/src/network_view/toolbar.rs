@@ -216,7 +216,7 @@ impl NetworkView {
             crate::activity::warning(ui, error);
         }
         if let Some(error) = &self.display_error {
-            crate::activity::warning(ui, error);
+            crate::activity::inline_only(ui, crate::activity::Level::Warn, error);
         }
         self.parse_status(ui);
         if let Some(note) = &self.display_jump_note {
@@ -265,7 +265,7 @@ impl NetworkView {
             }
         }
         if let Some(error) = &self.filter_error {
-            crate::activity::warning(ui, error);
+            crate::activity::inline_only(ui, crate::activity::Level::Warn, error);
         }
         let shown_filter = if self.filter_error.is_some() {
             self.applied_filter.trim().to_owned()

@@ -22,12 +22,12 @@ impl MonitorApp {
         };
         let owned_pcap = self.owned_triage_pcap();
         if !run.request.capture_network {
-            crate::activity::warning(
-                ui,
+            ui.colored_label(
+                theme::muted(),
                 "Network capture was off for this run. Turn on Capture network in Run program to record one.",
             );
         } else if owned_pcap.is_none() {
-            crate::activity::warning(ui, "No network capture was saved for this run.");
+            crate::activity::info(ui, "No network capture was saved for this run.");
         }
         crate::run_recording::show_warning(ui, &run);
         let route = crate::route_ui::describe(

@@ -553,7 +553,7 @@ impl Model {
                 if entry.version != pack.version {
                     let newer = entry.version.clone();
                     ui.horizontal_wrapped(|ui| {
-                        crate::activity::warning(ui, format!("Update available: {newer}"));
+                        crate::activity::info(ui, format!("Update available: {newer}"));
                         if ui.button("Update").clicked() {
                             self.install(data_dir, outbound, entry.clone());
                         }

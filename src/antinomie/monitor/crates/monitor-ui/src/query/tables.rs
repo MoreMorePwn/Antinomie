@@ -137,7 +137,11 @@ pub(crate) fn applied_table(
     let id = ui.id().with(("applied-table-filter", id));
     let compiled = compile_table(filter, fields);
     if let Some(error) = compiled.error.as_ref() {
-        crate::activity::warning(ui, format!("{error} · showing the last valid filter"));
+        crate::activity::inline_only(
+            ui,
+            crate::activity::Level::Warn,
+            format!("{error} · showing the last valid filter"),
+        );
         let applied = ui
             .data(|data| data.get_temp::<String>(id))
             .unwrap_or_default();

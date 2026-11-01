@@ -171,17 +171,17 @@ fn show(
 ) {
     header::show(ui, panel, info, view, actions);
     if let Some(ended) = &info.ended {
-        crate::activity::warning(ui, format!("Session ended: {ended}"));
+        crate::activity::info(ui, format!("Session ended: {ended}"));
     }
     let Some(view) = view else {
         theme::loading_weak(ui, "Connecting to the debug engine…");
         return;
     };
     if let Some(notice) = &view.notice {
-        crate::activity::warning(ui, notice);
+        crate::activity::info(ui, notice);
     }
     if let Some(problem) = panel.input_error.clone() {
-        crate::activity::warning(ui, problem);
+        crate::activity::inline_only(ui, crate::activity::Level::Warn, problem);
     }
     processes::fork_prompt(ui, panel, view, actions);
     ui.separator();

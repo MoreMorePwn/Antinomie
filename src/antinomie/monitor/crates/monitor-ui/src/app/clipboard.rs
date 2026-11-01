@@ -64,16 +64,14 @@ impl MonitorApp {
                 .take()
                 .expect("pending clipboard request");
             if self.confirm.is_some() || self.closing {
-                self.report_warning(
+                self.report_info(
                     "Clipboard typing cancelled while another confirmation or shutdown is active"
                         .into(),
                 );
                 return;
             }
             if !intent.current(&self.snapshot) || self.selected.as_ref() != Some(&intent.vm_id) {
-                self.report_warning(
-                    "Clipboard target changed; request clipboard typing again".into(),
-                );
+                self.report_info("Clipboard target changed; request clipboard typing again".into());
                 return;
             }
             match Text::prepare(&paste) {
@@ -107,7 +105,7 @@ impl MonitorApp {
             || self.snapshot.memory_dump.is_some()
             || self.vm_snapshots.pending.is_some()
         {
-            self.report_warning("Clipboard target changed; request clipboard typing again".into());
+            self.report_info("Clipboard target changed; request clipboard typing again".into());
             return;
         }
         self.send(Command::TypeClipboard {

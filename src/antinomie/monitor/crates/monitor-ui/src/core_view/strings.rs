@@ -294,7 +294,11 @@ impl StringsState {
         let compiled = crate::query::compile_table(&self.query, STRING_FIELDS);
         match &compiled.error {
             Some(error) => {
-                crate::activity::warning(ui, format!("{error} · showing the last valid filter"));
+                crate::activity::inline_only(
+                    ui,
+                    crate::activity::Level::Warn,
+                    format!("{error} · showing the last valid filter"),
+                );
             }
             None => {
                 self.applied = self.query.clone();
@@ -505,7 +509,7 @@ impl StringsState {
             return;
         }
         if extracted.stopped == Some(Stopped::Limit) {
-            crate::activity::warning(
+            crate::activity::info(
                 ui,
                 format!(
                     "Only the first {} strings are listed; the core has more.",

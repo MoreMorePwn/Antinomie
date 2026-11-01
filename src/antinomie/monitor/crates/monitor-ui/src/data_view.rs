@@ -668,7 +668,7 @@ impl DataWindow {
             return;
         }
         if self.truncated {
-            crate::activity::warning(
+            crate::activity::info(
                 ui,
                 format!(
                     "Showing the first {} MiB ({} bytes) of {} captured bytes",

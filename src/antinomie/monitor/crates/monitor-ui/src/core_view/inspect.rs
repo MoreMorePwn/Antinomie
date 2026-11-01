@@ -212,7 +212,7 @@ impl CoreView {
                     self.page = None;
                     self.tab = Tab::Mappings;
                 } else {
-                    self.warning("Register points to an unmapped address.".into());
+                    self.hint("Register points to an unmapped address.".into());
                 }
             }
         });
@@ -623,7 +623,7 @@ impl CoreView {
                         self.window_offset = offset / 16 * 16;
                         self.page = None;
                     }
-                    _ => self.warning("Offset must lie inside the selected mapping.".into()),
+                    _ => self.hint("Offset must lie inside the selected mapping.".into()),
                 }
             }
         });

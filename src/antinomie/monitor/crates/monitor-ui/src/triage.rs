@@ -569,7 +569,7 @@ impl TriageView {
             Section::Bpf => {
                 let indexed = self.scan.as_ref().map(|scan| scan.bpf.as_slice());
                 if self.scan.as_ref().is_some_and(|scan| scan.bpf_omitted > 0) {
-                    crate::activity::warning(ui, "Some BPF observations exceed the preview limit; original syscall evidence remains available.");
+                    crate::activity::info(ui, "Some BPF observations exceed the preview limit; original syscall evidence remains available.");
                 }
                 bpf_view(ui, &input, indexed);
                 None
@@ -717,7 +717,7 @@ impl TriageView {
         omitted: u64,
     ) -> Option<trace::InvocationKey> {
         if omitted > 0 {
-            crate::activity::warning(
+            crate::activity::info(
                 ui,
                 format!("{omitted} rule matches are available on other query pages."),
             );
@@ -817,7 +817,11 @@ impl TriageView {
             .data_mut(|data| data.insert_temp(draft_id, self.filter_drafts[index].clone()));
         let compiled = query::compile_table(&self.filter_drafts[index], fields);
         if let Some(error) = compiled.error {
-            crate::activity::warning(ui, format!("{error}; showing the last valid filter"));
+            crate::activity::inline_only(
+                ui,
+                crate::activity::Level::Warn,
+                format!("{error}; showing the last valid filter"),
+            );
         } else if self.scan_request.filters[index] != self.filter_drafts[index] {
             self.scan_request.filters[index] = self.filter_drafts[index].clone();
             self.scan_request.offsets[index] = 0;

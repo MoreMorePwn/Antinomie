@@ -328,3 +328,70 @@ fn the_activity_table_sorts_by_a_clicked_header() {
     let texts = click(&ctx, "Level", &mut show);
     assert_eq!(column_order(&texts, &names), ["charlie", "alpha", "bravo"]);
 }
+
+fn draw(ctx: &egui::Context, add: impl FnMut(&mut egui::Ui) + Clone) {
+    for _ in 0..2 {
+        let mut add = add.clone();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| add(ui));
+        });
+    }
+}
+
+#[test]
+fn inline_only_draws_the_text_but_writes_no_activity_row() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut journal = Journal::default();
+    let output = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            inline_only(ui, Level::Warn, "bad regex · showing the last valid filter");
+            inline_only(ui, Level::Error, "Enter a VM name");
+        });
+    });
+    let drawn: Vec<String> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    assert!(drawn
+        .iter()
+        .any(|text| text.contains("showing the last valid filter")));
+    assert!(drawn.iter().any(|text| text == "Enter a VM name"));
+    assert!(!drawn.iter().any(|text| text == "×"), "no dismiss button");
+    journal.ingest(&ctx);
+    assert!(journal.entries.is_empty(), "{:?}", journal.messages());
+    assert_eq!(journal.counts(), (0, 0));
+}
+
+#[test]
+fn info_notices_are_journaled_at_info_and_leave_the_badge_alone() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut journal = Journal::default();
+    draw(&ctx, |ui| {
+        info(ui, "Install a base image first.");
+        warning(ui, "Capture gap");
+    });
+    journal.ingest(&ctx);
+    let levels: Vec<_> = journal
+        .entries
+        .iter()
+        .map(|entry| (entry.level, entry.message.as_str()))
+        .collect();
+    assert_eq!(
+        levels,
+        [
+            (Level::Info, "Install a base image first."),
+            (Level::Warn, "Capture gap")
+        ]
+    );
+    assert_eq!(journal.counts(), (1, 0), "only the warning is counted");
+    assert!(journal
+        .toast_out
+        .iter()
+        .all(|(level, _)| *level != Level::Info));
+}

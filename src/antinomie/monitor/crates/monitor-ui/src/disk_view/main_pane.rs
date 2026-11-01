@@ -106,7 +106,7 @@ impl DiskView {
             );
             if let Some(notice) = &self.notice {
                 ui.add_space(8.0);
-                crate::activity::warning(ui, notice);
+                crate::activity::info(ui, notice);
             }
         });
     }
@@ -218,7 +218,7 @@ impl DiskView {
         );
         self.source_picker(ui, !busy);
         if let Some(notice) = &self.notice {
-            crate::activity::warning(ui, notice);
+            crate::activity::info(ui, notice);
         }
         let measure = self.current_measure(cx);
         let mut can_open = false;

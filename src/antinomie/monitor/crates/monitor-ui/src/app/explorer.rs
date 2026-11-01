@@ -104,7 +104,7 @@ impl MonitorApp {
 
     pub(super) fn send_explorer_file(&mut self, path: PathBuf) {
         if !self.running() || self.pending_upload.is_some() || self.closing {
-            self.report_warning(
+            self.report_info(
                 "Start the selected VM and wait for any pending upload before Send and Run".into(),
             );
             return;

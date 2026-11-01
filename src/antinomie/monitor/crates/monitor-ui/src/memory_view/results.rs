@@ -181,8 +181,9 @@ impl MemoryView {
                 );
                 let compiled = crate::query::compile_table(&self.filter, &fields);
                 if let Some(error) = compiled.error {
-                    crate::activity::warning(
+                    crate::activity::inline_only(
                         ui,
+                        crate::activity::Level::Warn,
                         format!("{error} · showing the last valid filter"),
                     );
                 } else {
@@ -302,7 +303,7 @@ impl MemoryView {
             return;
         };
         if let Some(error) = &result.filter_error {
-            crate::activity::warning(ui, error);
+            crate::activity::inline_only(ui, crate::activity::Level::Warn, error);
         }
         let mut status = None;
         // The controls keep their size; the title takes what is left.

@@ -361,7 +361,7 @@ impl MonitorApp {
 
     fn recording_page(&mut self, ui: &mut egui::Ui) {
         if self.snapshot.active_vm.is_some() {
-            crate::activity::warning(ui, "Stop the VM to change these.");
+            crate::activity::info(ui, "Stop the VM to change these.");
         }
         ui.add_enabled_ui(self.snapshot.active_vm.is_none(), |ui| {
             form_grid("settings_recording", ui).show(ui, |ui| {
@@ -563,7 +563,7 @@ impl MonitorApp {
 
     fn disks_page(&mut self, ui: &mut egui::Ui) {
         if self.snapshot.active_vm.is_some() {
-            crate::activity::warning(ui, "Stop the VM to change these.");
+            crate::activity::info(ui, "Stop the VM to change these.");
         }
         ui.add_enabled_ui(self.snapshot.active_vm.is_none(), |ui| {
             form_grid("settings_disks", ui).show(ui, |ui| {

@@ -183,7 +183,7 @@ impl Window {
         clock: Option<antinomie_monitor_core::HostClockAnchor>,
     ) {
         if activity.omitted_files > 0 || activity.omitted_events > 0 {
-            crate::activity::warning(
+            crate::activity::info(
                 ui,
                 format!(
                     "Kept the first {} files and {} calls per file; {} files and {} calls are not listed. Trace has every call.",
@@ -408,7 +408,7 @@ impl Window {
                     self.node = Some(clicked);
                 }
                 if file.omitted > 0 {
-                    crate::activity::warning(
+                    crate::activity::info(
                         ui,
                         format!(
                             "{} more calls are not listed; Trace has them.",

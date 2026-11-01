@@ -272,13 +272,13 @@ impl Model {
                     note(ui, line.clone(), theme::muted());
                 }
                 for line in &source.notes {
-                    note(ui, line.clone(), theme::warn());
+                    note(ui, line.clone(), theme::muted());
                 }
                 if !source.options.is_empty() {
                     note(
                         ui,
                         format!("Options on: {}", source.options.join(", ")),
-                        theme::warn(),
+                        theme::muted(),
                     );
                 }
             });
@@ -290,7 +290,7 @@ impl Model {
         {
             let options: BTreeSet<String> = source.options.iter().cloned().collect();
             ui.horizontal_wrapped(|ui| {
-                crate::activity::warning(
+                crate::activity::info(
                     ui,
                     format!(
                         "Update available: {} {}",

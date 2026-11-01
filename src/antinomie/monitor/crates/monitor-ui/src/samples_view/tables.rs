@@ -396,7 +396,7 @@ impl SamplesView {
                 ui.colored_label(theme::muted(), format!("VM: {name}"));
             }
             if !cx.running {
-                crate::activity::warning(ui, "· start the VM to send samples into it");
+                crate::activity::info(ui, "· start the VM to send samples into it");
             }
         });
         ui.add_space(6.0);

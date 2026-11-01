@@ -124,7 +124,7 @@ impl MonitorApp {
         }
         let draft = self.commit_trace_filter();
         if let Some(error) = &draft.error {
-            crate::activity::warning(ui, error);
+            crate::activity::inline_only(ui, crate::activity::Level::Warn, error);
         }
         let filter = if draft.error.is_none() {
             draft

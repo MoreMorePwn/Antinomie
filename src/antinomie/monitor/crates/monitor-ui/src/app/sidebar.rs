@@ -388,6 +388,13 @@ impl MonitorApp {
         self.log("WARN", message);
     }
 
+    /// A normal state or a refused no-op: the status line and an Info row, no
+    /// toast and no count in the Activity badge.
+    pub(super) fn report_info(&mut self, message: String) {
+        self.status = message.clone();
+        self.log("INFO", message);
+    }
+
     pub(super) fn report_error(&mut self, message: String) {
         self.status = message.clone();
         self.log("ERROR", message);

@@ -483,7 +483,7 @@ impl DiskView {
     fn confirmations(&mut self, ui: &mut egui::Ui) {
         if let Some((path, size, intent)) = self.extraction.large.clone() {
             ui.horizontal_wrapped(|ui| {
-                crate::activity::warning(
+                crate::activity::info(
                     ui,
                     format!(
                         "{} is {}, over the {} extraction limit.",

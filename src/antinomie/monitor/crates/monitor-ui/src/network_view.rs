@@ -474,7 +474,7 @@ impl NetworkView {
             && cx.active.is_none()
             && (cx.running || cx.recordings.is_some() || self.list.path.is_some())
         {
-            crate::activity::warning(
+            crate::activity::info(
                 ui,
                 "Disconnected: no network capture. Saved captures can still be inspected.",
             );

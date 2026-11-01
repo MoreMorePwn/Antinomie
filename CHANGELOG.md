@@ -8,6 +8,20 @@ it runs.
 
 ### Host
 
+- **Fewer warnings: setup hints, optional features and confirmations are now
+  information.** 60 messages that described a normal state (Stop the VM to
+  change these, Install a base image first, an optional tool or dataset that is
+  not set up, an update is available, a list or search limit note, a refused
+  drop, a stale Kill or Upload press) are now Info: muted text, an Info row in
+  Activity, no toast and no count in the Activity badge. Filter and form typing
+  errors (12 places: table, record, display, trace, IOC, memory, core and
+  listing filters, the debugger input and the VM form) stay as red or orange
+  text on the field and no longer write an Activity row for every keystroke. The
+  first-use malware dialog lists its points as plain text, and the "Live malware"
+  reminder in the Samples window is shown once per session instead of every time
+  the window opens. A clicked register or offset that leads nowhere says so in
+  the status line only.
+
 - **Fixed: the Tor route's own tor starts again.** The generated torrc wrote
   `Log notice file "<path>"`; tor only unquotes a value quoted as a whole, so
   it looked for a file whose name contained the quote characters and every run

@@ -404,7 +404,7 @@ pub(crate) fn show(
                 }
             }
             if let Some(error) = guest.and_then(|guest| guest.error.as_ref()) {
-                crate::activity::warning(ui, error);
+                crate::activity::info(ui, error);
             }
             ui.add_space(10.0);
             egui::Frame::new()
@@ -486,7 +486,7 @@ pub(crate) fn show(
                     .show(ui, |ui| health::details(ui, &snapshot.health));
             }
             if let Some(error) = resources.and_then(|sample| sample.sample_error.as_ref()) {
-                crate::activity::warning(ui, error);
+                crate::activity::info(ui, error);
             }
         });
 }

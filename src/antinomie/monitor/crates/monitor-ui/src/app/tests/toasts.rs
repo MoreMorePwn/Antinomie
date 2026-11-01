@@ -208,3 +208,24 @@ fn the_live_high_toast_is_off_by_default_and_old_saved_values_do_not_carry_over(
     let round: Settings = serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
     assert!(round.toast_high_findings);
 }
+
+#[test]
+fn normal_state_hints_are_info_rows_with_no_toast_and_no_badge() {
+    let mut app = app();
+    let ctx = context();
+    // Send and Run with no VM running, an upload requested with no VM, and a
+    // dropped item that is refused: each used to be a warning toast.
+    app.send_explorer_file(PathBuf::from("/tmp/ant-sample.bin"));
+    app.request_upload(false);
+    frames(&mut app, &ctx, 3);
+    assert!(toasts(&ctx).is_empty(), "{:?}", toasts(&ctx));
+    assert_eq!(app.activity.counts(), (0, 0));
+    assert!(app
+        .activity
+        .messages()
+        .iter()
+        .any(|message| message.contains("Start the selected VM")));
+    assert!(app.status.contains("Upload requires"));
+    app.report_info("Clipboard target changed; request clipboard typing again".into());
+    assert_eq!(app.activity.counts(), (0, 0));
+}

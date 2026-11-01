@@ -218,8 +218,9 @@ impl CoreView {
         self.status_notice = Some((crate::activity::Level::Error, message.clone()));
         self.status = message;
     }
-    fn warning(&mut self, message: String) {
-        self.status_notice = Some((crate::activity::Level::Warn, message.clone()));
+    /// Feedback for a click that led nowhere: status text, no Activity row.
+    fn hint(&mut self, message: String) {
+        self.status_notice = None;
         self.status = message;
     }
     fn show_status(&self, ui: &mut egui::Ui) {

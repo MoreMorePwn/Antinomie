@@ -169,7 +169,7 @@ impl MonitorApp {
 
     pub(super) fn request_upload(&mut self, run_after: bool) {
         if !self.running() || self.pending_upload.is_some() {
-            self.report_warning(
+            self.report_info(
                 "Upload requires the selected running VM and no pending upload".into(),
             );
             return;
@@ -211,7 +211,7 @@ impl MonitorApp {
     pub(super) fn submit_upload(&mut self, intent: Intent, overwrite: bool) {
         if !intent.same_session(&self.snapshot) || !self.running() || self.pending_upload.is_some()
         {
-            self.report_warning(
+            self.report_info(
                 "Upload cancelled: the selected VM session changed or an upload is pending".into(),
             );
             return;
@@ -242,7 +242,7 @@ impl MonitorApp {
             return;
         }
         if !upload.intent.same_session(&self.snapshot) || !self.running() || self.closing {
-            self.report_warning("Upload completed; Run program was not opened because the selected VM session changed".into());
+            self.report_info("Upload completed; Run program was not opened because the selected VM session changed".into());
             return;
         }
         self.exec.path = upload.intent.destination.clone();

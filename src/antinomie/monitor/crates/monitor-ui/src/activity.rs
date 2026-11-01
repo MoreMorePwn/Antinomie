@@ -394,6 +394,23 @@ pub(crate) fn warning(ui: &mut egui::Ui, message: impl std::fmt::Display) -> egu
 pub(crate) fn error(ui: &mut egui::Ui, message: impl std::fmt::Display) -> egui::Response {
     notice(ui, Level::Error, message)
 }
+/// A normal state, a setup hint or a confirmation: a muted inline notice and an
+/// Info row, which the Activity badge does not count and which never toasts.
+pub(crate) fn info(ui: &mut egui::Ui, message: impl std::fmt::Display) -> egui::Response {
+    notice(ui, Level::Info, message)
+}
+/// Typing feedback (a filter or a form field that does not parse yet): the
+/// coloured text where the person is typing, with no Activity row, no toast
+/// and no dismiss button; it goes away when the text is valid.
+pub(crate) fn inline_only(
+    ui: &mut egui::Ui,
+    level: Level,
+    message: impl std::fmt::Display,
+) -> egui::Response {
+    let message = bounded(message.to_string());
+    ui.add(egui::Label::new(RichText::new(&message).color(level.color())).wrap())
+        .on_hover_text(&message)
+}
 pub(crate) fn notice(
     ui: &mut egui::Ui,
     level: Level,

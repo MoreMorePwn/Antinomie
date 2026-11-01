@@ -205,7 +205,7 @@ impl MemoryView {
                 .on_hover_text(current.help);
         });
         if !linux {
-            crate::activity::warning(
+            crate::activity::info(
                 ui,
                 format!(
                     "This dump is {}: MemNixFS reads Linux dumps only",

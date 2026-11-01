@@ -228,10 +228,10 @@ impl RegexWindow {
             crate::activity::warning(ui, format!("Pattern {id} is not used: {reason}"));
         }
         if scan.cancelled {
-            crate::activity::warning(ui, "The scan was stopped; these are the matches so far.");
+            crate::activity::info(ui, "The scan was stopped; these are the matches so far.");
         }
         if scan.truncated {
-            crate::activity::warning(
+            crate::activity::info(
                 ui,
                 format!(
                     "Only the first {} different matches are listed; the counts are complete.",

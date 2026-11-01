@@ -105,13 +105,13 @@ impl MonitorApp {
         let items: Vec<Option<&Path>> = dropped.iter().map(|path| path.as_deref()).collect();
         let path = match classify(&items, false) {
             Err(refusal) => {
-                self.report_warning(refusal.notice());
+                self.report_info(refusal.notice());
                 return;
             }
             Ok(path) => path,
         };
         if let Some(refusal) = self.drop_unavailable() {
-            self.report_warning(refusal.notice());
+            self.report_info(refusal.notice());
             return;
         }
         let Some(path) = path else {

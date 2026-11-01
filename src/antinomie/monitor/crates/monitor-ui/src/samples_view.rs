@@ -350,6 +350,11 @@ pub(crate) struct SamplesView {
     acknowledged: bool,
     /// The acceptance checkbox of that warning.
     understood: bool,
+    /// The "Live malware" reminder was drawn while the window was open.
+    live_notice_shown: bool,
+    /// The reminder is shown once per app session: it was drawn in an earlier
+    /// opening of this window.
+    live_notice_done: bool,
     text: String,
     /// What the results are, in words ("Newest uploads", "Family Mirai").
     listing: String,
@@ -392,6 +397,11 @@ const FIRST_USE_POINTS: &[&str] = &[
     "Downloading or keeping malware may be restricted by law or by your organisation. \
      Samples are for research and defence only.",
 ];
+
+/// The reminder above the Samples window; it stays a warning, shown once per session.
+const LIVE_MALWARE_NOTICE: &str = "Live malware. Samples stay in encrypted archives in the data \
+     folder and are decrypted only in memory, to be sent into the VM. Nothing is run on this \
+     computer. Use a VM you can throw away, or take a snapshot first.";
 
 /// A guest path for a sample: its hash prefix and a safe form of its name.
 /// `sent` is how many times the sample was sent before: each send gets its
@@ -638,6 +648,7 @@ impl SamplesView {
         }
         crate::toasts::take_failure(ctx, &mut self.status);
         if !self.open {
+            self.live_notice_done |= self.live_notice_shown;
             // The keys are set elsewhere: read them again when it opens.
             self.key_loaded = false;
             return None;
@@ -757,7 +768,7 @@ impl SamplesView {
                 for point in FIRST_USE_POINTS {
                     // Wrapped lines hang under the text, not the bullet.
                     ui.horizontal_top(|ui| {
-                        crate::activity::warning(ui, "•");
+                        ui.label("•");
                         ui.add(egui::Label::new(*point).wrap());
                     });
                     ui.add_space(2.0);
@@ -794,6 +805,9 @@ impl SamplesView {
     }
 
     fn warning(&mut self, ui: &mut egui::Ui, cx: &SamplesContext<'_>) {
+        if self.live_notice_done && cx.network_warning.is_none() && self.status.is_none() {
+            return;
+        }
         egui::Frame::new()
             .fill(theme::panel())
             .stroke(egui::Stroke::new(1.0_f32, theme::line()))
@@ -801,12 +815,13 @@ impl SamplesView {
             .inner_margin(egui::Margin::symmetric(14, 10))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal_top(|ui| {
-                    ui.colored_label(theme::warn(), egui_phosphor::regular::BIOHAZARD);
-                    crate::activity::warning(ui, "Live malware. Samples stay in encrypted archives in the data \
-                             folder and are decrypted only in memory, to be sent into the VM. Nothing is run on this computer. Use a VM you can throw \
-                             away, or take a snapshot first.",);
-                });
+                if !self.live_notice_done {
+                    self.live_notice_shown = true;
+                    ui.horizontal_top(|ui| {
+                        ui.colored_label(theme::warn(), egui_phosphor::regular::BIOHAZARD);
+                        crate::activity::warning(ui, LIVE_MALWARE_NOTICE);
+                    });
+                }
                 if let Some(text) = &cx.network_warning {
                     ui.add_space(4.0);
                     crate::activity::warning(ui, text);
@@ -1240,6 +1255,75 @@ mod tests {
             antinomie_monitor_core::route::RouteKind::Internet,
         );
         assert!(shown(text).contains("default route is Internet"));
+    }
+
+    #[test]
+    fn the_live_malware_reminder_is_shown_once_per_session() {
+        let data = std::env::temp_dir();
+        let cx = SamplesContext {
+            data_dir: &data,
+            curl: Path::new("curl"),
+            running: false,
+            vm_name: None,
+            network_warning: None,
+            font_size: 14.0,
+        };
+        let ctx = egui::Context::default();
+        let mut view = SamplesView::default();
+        let mut journal = crate::activity::Journal::default();
+        let draw = |view: &mut SamplesView, journal: &mut crate::activity::Journal| {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| view.warning(ui, &cx));
+            });
+            journal.ingest(&ctx);
+        };
+        view.open = true;
+        draw(&mut view, &mut journal);
+        draw(&mut view, &mut journal);
+        assert_eq!(
+            journal.counts(),
+            (1, 0),
+            "shown as a warning the first time"
+        );
+        assert!(journal
+            .messages()
+            .iter()
+            .all(|text| text.starts_with("Live malware")));
+        // Closing the window and opening it again does not show it again.
+        view.open = false;
+        view.show(&ctx, &cx);
+        assert!(view.live_notice_done);
+        view.open = true;
+        let before = journal.messages().len();
+        draw(&mut view, &mut journal);
+        assert_eq!(journal.messages().len(), before);
+    }
+
+    #[test]
+    fn the_first_use_dialog_bullets_are_plain_text() {
+        let data = std::env::temp_dir().join(format!("ant-first-use-{}", std::process::id()));
+        std::fs::create_dir_all(&data).unwrap();
+        let cx = SamplesContext {
+            data_dir: &data,
+            curl: Path::new("curl"),
+            running: false,
+            vm_name: None,
+            network_warning: None,
+            font_size: 14.0,
+        };
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut view = SamplesView::default();
+        view.open = true;
+        for _ in 0..2 {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                view.show(ctx, &cx);
+            });
+        }
+        let mut journal = crate::activity::Journal::default();
+        journal.ingest(&ctx);
+        assert!(journal.messages().is_empty(), "{:?}", journal.messages());
+        std::fs::remove_dir_all(&data).ok();
     }
 
     #[test]

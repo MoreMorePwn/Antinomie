@@ -7,7 +7,7 @@ use eframe::egui;
 pub(in crate::app) fn launch_advice(ui: &mut egui::Ui, vm: &mut VmConfig) {
     let (_, note) = vm.stealth.machine.for_ram(u64::from(vm.ram_mib) << 20);
     if let Some(note) = note {
-        crate::activity::warning(ui, note);
+        crate::activity::info(ui, note);
     }
     if vm.stealth.cloud_provider().is_none() {
         if vm.stealth.identity_enabled
@@ -33,7 +33,7 @@ pub(in crate::app) fn launch_advice(ui: &mut egui::Ui, vm: &mut VmConfig) {
         .color(theme::muted()),
     );
     if vm.network() != VmNetwork::Routed {
-        crate::activity::warning(
+        crate::activity::info(
             ui,
             "Cloud metadata service is off: it needs a Routed network. Set Network to Routed to turn it on.",
         );

@@ -209,7 +209,11 @@ impl View {
         let filter = self.drafts.get(&ty).cloned().unwrap_or_default();
         let compiled = query::compile_table(&filter, FIELDS);
         if let Some(error) = &compiled.error {
-            crate::activity::warning(ui, format!("{error}; showing every row"));
+            crate::activity::inline_only(
+                ui,
+                crate::activity::Level::Warn,
+                format!("{error}; showing every row"),
+            );
         }
         let key = format!(
             "{:?}|{:?}|{}|{filter}",

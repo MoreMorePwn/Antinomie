@@ -667,7 +667,7 @@ impl View {
         let _ = input;
         let now = feeds::now_unix();
         if ioc.scan.loaded.is_empty() {
-            crate::activity::warning(
+            crate::activity::info(
                 ui,
                 "No datasets loaded: indicators are not checked. Use Datasets… to download.",
             );
@@ -692,7 +692,7 @@ impl View {
             let wanted = self.feed_states().len();
             let missing = wanted.saturating_sub(ioc.scan.loaded.len());
             if missing > 0 {
-                crate::activity::warning(
+                crate::activity::info(
                     ui,
                     format!(
                         "{missing} of {wanted} feeds are not loaded. Indicators are checked against the feeds that are."
@@ -728,7 +728,7 @@ impl View {
             }
         }
         if ioc.omitted > 0 {
-            crate::activity::warning(
+            crate::activity::info(
                 ui,
                 format!(
                     "{} observations were left out because a list reached its limit.",

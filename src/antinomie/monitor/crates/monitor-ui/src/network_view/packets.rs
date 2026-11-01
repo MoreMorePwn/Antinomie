@@ -88,7 +88,7 @@ impl NetworkView {
             tshark_missing_notice(ui, &error, "Frames are shown raw, without decoding.");
         }
         if self.list.truncated && self.raw_frames() {
-            crate::activity::warning(ui,
+            crate::activity::info(ui,
                 format!(
                     "Showing the first {MAX_PACKETS} packets; open the capture in Wireshark for all."
                 ),
@@ -592,7 +592,15 @@ pub(super) fn tshark_notice(installed: bool, error: &str, what: &str) -> String 
 }
 
 pub(super) fn tshark_missing_notice(ui: &mut egui::Ui, error: &str, what: &str) {
-    crate::activity::warning(ui, tshark_notice(which("tshark").is_some(), error, what));
+    // Not installed is an optional tool that is not set up; installed but
+    // failing is a fault the user may need to look at.
+    let installed = which("tshark").is_some();
+    let text = tshark_notice(installed, error, what);
+    if installed {
+        crate::activity::warning(ui, text);
+    } else {
+        crate::activity::info(ui, text);
+    }
 }
 
 /// The row color of a packet, by the first matching rule.

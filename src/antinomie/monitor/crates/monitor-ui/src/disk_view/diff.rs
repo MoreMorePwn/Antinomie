@@ -539,7 +539,7 @@ impl DiskView {
             ui.colored_label(theme::muted(), format!("· {scanned} entries compared"));
         });
         if truncated {
-            crate::activity::warning(
+            crate::activity::info(
                 ui,
                 format!(
                     "Only the first {listed} differences are listed; the totals count all of them."

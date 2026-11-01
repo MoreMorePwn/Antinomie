@@ -852,7 +852,7 @@ pub(super) fn window(
                 ui.colored_label(theme::error(), error);
             }
             if !editable {
-                crate::activity::warning(ui, "Stop the VM to change its hardware.");
+                crate::activity::info(ui, "Stop the VM to change its hardware.");
             } else if !creating {
                 crate::activity::warning(
                     ui,
