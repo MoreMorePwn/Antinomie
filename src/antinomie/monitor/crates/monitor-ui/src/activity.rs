@@ -260,11 +260,21 @@ impl Journal {
             return;
         }
         crate::widgets::table::begin(ui);
-        // The time and level columns grow with the text size (84 and 60 at 16).
+        // The level column grows with the text size (60 at 16); the time
+        // column fits a monospace date and time plus the cell margin.
         let scale = ui.text_style_height(&egui::TextStyle::Body) / 16.0;
+        let time_width = {
+            let font = egui::TextStyle::Monospace.resolve(ui.style());
+            ui.fonts(|fonts| {
+                fonts
+                    .layout_no_wrap("0000-00-00 00:00:00".into(), font, egui::Color32::WHITE)
+                    .size()
+                    .x
+            }) + 12.0
+        };
         TableBuilder::new(ui)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::exact(84.0 * scale))
+            .column(Column::exact(time_width))
             .column(Column::exact(60.0 * scale))
             .column(Column::remainder())
             .min_scrolled_height(0.0)
@@ -278,15 +288,15 @@ impl Journal {
             .body(|body| {
                 body.rows(26.0, visible.len(), |mut row| {
                     let entry = visible[row.index()];
-                    let time = chrono::DateTime::from_timestamp_millis(entry.unix_ms);
+                    let time = chrono::DateTime::from_timestamp_millis(entry.unix_ms)
+                        .map(|time| time.with_timezone(&chrono::Local));
                     row.col(|ui| {
                         ui.monospace(time.map_or_else(
                             || "—".into(),
-                            |time| time.format("%H:%M:%S").to_string(),
+                            |time| time.format("%Y-%m-%d %H:%M:%S").to_string(),
                         ))
-                        .on_hover_text(time.map_or_else(
-                            || "UTC".into(),
-                            |time| time.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                        .on_hover_text(crate::time_format::local_seconds(
+                            u64::try_from(entry.unix_ms / 1000).unwrap_or_default(),
                         ));
                     });
                     row.col(|ui| {
