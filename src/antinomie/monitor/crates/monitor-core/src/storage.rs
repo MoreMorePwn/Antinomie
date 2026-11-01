@@ -813,6 +813,7 @@ pub(crate) fn validate_vm_bundle(
     vm.launch.validate_for(options)?;
     if let Some(guest) = &bundle.guest {
         guest.validate()?;
+        crate::guest_account::foreign_account(guest, bundle.arch)?;
         if vm.ram_mib < guest.min_ram_mib || vm.disk_gib < guest.min_disk_gib {
             return Err(format!(
                 "guest requires at least {} MiB RAM and {} GiB disk",
@@ -923,6 +924,30 @@ pub(crate) use vm_ops::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_arm64_base_that_needs_a_guest_account_is_refused_plainly() {
+        let mut guest = GuestProfile {
+            id: "debian-minimal".into(),
+            label: "Debian 13 (Minimal)".into(),
+            min_ram_mib: 1024,
+            min_disk_gib: 4,
+            requires_credentials: true,
+            graphical: false,
+        };
+        let arm = crate::api::GuestArch::AARCH64;
+        let error = crate::guest_account::foreign_account(&guest, arm).unwrap_err();
+        assert!(
+            error.starts_with("arm64 VMs of Debian 13 (Minimal) cannot have their guest account"),
+            "{error}"
+        );
+        assert!(
+            crate::guest_account::foreign_account(&guest, crate::api::GuestArch::X86_64).is_ok()
+        );
+        guest.requires_credentials = false;
+        assert!(crate::guest_account::foreign_account(&guest, arm).is_ok());
+    }
+
     fn guest_fixture() -> (PathBuf, BackendOptions, Bundle, VmConfig) {
         let root = std::env::temp_dir().join(format!("ant-guest-storage-{}", unique_id()));
         let source = root.join("source");

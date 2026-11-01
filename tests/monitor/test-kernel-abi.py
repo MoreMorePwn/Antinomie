@@ -166,6 +166,44 @@ class CheckTests(unittest.TestCase):
             found, sites = check.traceable(elf, check.system_map(tmp / "map"))
             self.assertEqual((found, sites), (["traceable: ant_uring_begin"], 1))
 
+    def test_arm64_sites_are_read_before_their_function(self):
+        # arm64 with call ops records two NOPs before each function: the site
+        # of a stock function right after a recorder function (or after the
+        # recorder's end marker) is that stock function's.
+        functions = FUNCTIONS + [(TEXT + 0x21c, "gid_cmp"), (TEXT + 0x400, "ant_uring_begin"),
+                                 (TEXT + 0x440, "io_read")]
+        sites = (TEXT + 0x21c - 8, TEXT + 0x440 - 8, TEXT + 0x300 - 8, TEXT + 0x110 - 8)
+        with tempfile.TemporaryDirectory() as name:
+            tmp = Path(name)
+            image, addresses = vmlinux(EXPORTS, STRUCTS, sites)
+            image = bytearray(image)
+            image[0x12:0x14] = check.EM_AARCH64.to_bytes(2, "little")
+            elf = check.Elf(bytes(image))
+            (tmp / "map").write_text(system_map(addresses, len(sites), functions))
+            found, count = check.traceable(elf, check.system_map(tmp / "map"))
+            # Only the recorder function at +0x110 (its site is at +0x108).
+            self.assertEqual((found, count), ([f"traceable: a recorder function at {TEXT + 0x108:#x}"], 4))
+            # Read as x86-64, the io_read site would be ant_uring_begin's.
+            found, _ = check.traceable(check.Elf(vmlinux(EXPORTS, STRUCTS, sites)[0]),
+                                       check.system_map(tmp / "map"))
+            self.assertIn("traceable: ant_uring_begin", found)
+            self.assertIn("traceable: ant_text_end", found)
+
+    def test_a_header_inline_kept_out_of_line_in_stock_files_is_no_finding(self):
+        # arm64 inlines spin_lock_irq(); GCC keeps __raw_spin_lock_irq out of
+        # line in some files, the recorder's among them.
+        lines = system_map({".init.data": BASE}, 0, FUNCTIONS).splitlines()
+        copy = lambda address: f"{address:016x} t __raw_spin_lock_irq"
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "map"
+            path.write_text("\n".join(lines + [copy(TEXT + 0x180), copy(TEXT + 0x600),
+                                                copy(TEXT + 0x700)]) + "\n")
+            self.assertEqual(check.shared_names(check.system_map(path)), [])
+            # One stock copy: the name was that function's alone.
+            path.write_text("\n".join(lines + [copy(TEXT + 0x180), copy(TEXT + 0x600)]) + "\n")
+            self.assertEqual(check.shared_names(check.system_map(path)),
+                             ["name: the recorder's __raw_spin_lock_irq has a stock function's name"])
+
     def test_no_recorder_function_has_a_stock_name(self):
         functions = FUNCTIONS + [(TEXT + 0x180, "put_event"), (TEXT + 0x500, "put_event"),
                                  (TEXT + 0x180, "__pfx_do_exit")]
@@ -198,6 +236,57 @@ class CheckTests(unittest.TestCase):
             self.assertEqual(check.debian_vmlinux(Path(name) / "vmlinuz"), elf)
 
 
+    def test_debians_arm64_package_is_read_from_its_image_and_module_symvers(self):
+        elf, _ = vmlinux(EXPORTS, STRUCTS)
+        ours = check.Elf(elf)
+        blob = ours.section(".BTF")
+        # The Image as loaded: a header with the arm64 magic, code holding a
+        # stray BTF magic, the BTF, more data. Its System.map is Debian's stub.
+        image = bytearray(0x200) + b"\x9f\xeb\x01\x00" + bytes(60) + blob + bytes(0x100)
+        image[0x38:0x3c] = check.ARM64_IMAGE_MAGIC
+        stub = b"ffffffffffffffff B The real System.map is in the linux-image-<version>-dbg package\n"
+        symvers = "".join(f"0x{crc:08x}\t{name}\tvmlinux\tEXPORT_SYMBOL{'_GPL' if gpl else ''}\t\n"
+                          for name, crc, gpl in EXPORTS)
+        symvers += "0x12345678\text4_get_inode\tfs/ext4/ext4\tEXPORT_SYMBOL\t\n"
+
+        def deb(members):
+            data = io.BytesIO()
+            with tarfile.open(fileobj=data, mode="w") as archive:
+                for path, content in members.items():
+                    entry = tarfile.TarInfo(path)
+                    entry.size = len(content)
+                    archive.addfile(entry, io.BytesIO(content))
+            member = data.getvalue()
+            return (b"!<arch>\n" + f"{'data.tar/':<16}{0:<12}{0:<6}{0:<6}{'100644':<8}"
+                    f"{len(member):<10}`\n".encode() + member)
+
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "linux-arm64.deb"
+            path.write_bytes(deb({"./boot/vmlinuz-6.12.94+deb13-arm64": bytes(image),
+                                  "./boot/System.map-6.12.94+deb13-arm64": stub}))
+            headers = Path(name) / "linux-headers-arm64.deb"
+            headers.write_bytes(deb({
+                "./usr/src/linux-headers-6.12.94+deb13-arm64/Module.symvers": symvers.encode()}))
+            for source in (headers, Path(name) / "Module.symvers"):
+                (Path(name) / "Module.symvers").write_text(symvers)
+                debian = check.debian_kernel(path, source)
+                self.assertIsInstance(debian, check.DebianImage)
+                # vmlinux's exports only, with their licences and CRCs.
+                self.assertEqual(check.debian_exports(debian), check.exports(ours))
+                self.assertEqual(debian.section(".BTF"), blob)
+            # The bare Image reads the same.
+            (Path(name) / "vmlinuz").write_bytes(bytes(image))
+            self.assertEqual(check.debian_kernel(Path(name) / "vmlinuz", headers).section(".BTF"),
+                             blob)
+            # Without Module.symvers the exports are unknown.
+            with self.assertRaises(check.InputError):
+                check.debian_kernel(path)
+            # Two complete blobs: which is the kernel's is unknown.
+            (Path(name) / "twice").write_bytes(bytes(image) + blob)
+            with self.assertRaises(check.InputError):
+                check.debian_kernel(Path(name) / "twice", headers)
+
+
 class ProfileTests(unittest.TestCase):
     def test_the_stock_profile_is_debians_configuration(self):
         script = BUILD.read_text()
@@ -212,7 +301,13 @@ class ProfileTests(unittest.TestCase):
                       "KERNEL_ZSTD|LOCALVERSION|MODULE_SIG_KEY|BUILD_SALT\"", stock)
         self.assertIn('--set-str BUILD_SALT "6.12.94$DEBIAN_LOCALVERSION"', stock)
         self.assertIn("FUNCTION_TRACER DYNAMIC_FTRACE BPF_LSM", stock)
-        self.assertNotIn(" modules", stock.split("bzImage")[1].split("\n")[0])
+        # Only the image (bzImage, arm64's Image), never Debian's modules.
+        build = stock[stock.index('LOCALVERSION= \\'):]
+        self.assertIn('-j"$jobs" "$image"\n', build)
+        self.assertNotIn(" modules", build.split("\n")[1])
+        # Each architecture's own certificate; arm64's Image is not compressed.
+        self.assertIn('debian-6.12.94-1-trixie/$signing"', stock)
+        self.assertIn("--disable KERNEL_ZSTD --enable KERNEL_GZIP", stock.split("if [[ $arch == x86_64 ]]")[1])
         self.assertIn('check-kernel-abi.py" --vmlinux', stock)
         self.assertIn('--debian-image "$ANTINOMIE_DEBIAN_IMAGE"', stock)
 
@@ -228,6 +323,20 @@ class ProfileTests(unittest.TestCase):
         self.assertIn("serial=2C0CF1742BAB754265C4800A1AB38D82A313624B", out.stdout)
         self.assertIn("C9:3C:88:15:4A:5B:FB:62:1D:83:21:40:19:C1:60:97:13:3A:EE:39:A1:D5:65:74:"
                       "95:64:41:A1:2A:4E:62:42", out.stdout)
+
+
+    def test_the_arm64_certificate_is_debians_arm64_build_key(self):
+        pem = REPO / "src/antinomie/packaging/debian-6.12.94-1-trixie/module-signing-arm64.pem"
+        if shutil.which("openssl") is None:
+            self.skipTest("openssl missing")
+        out = subprocess.run(["openssl", "x509", "-in", str(pem), "-noout", "-subject", "-serial",
+                              "-fingerprint", "-sha256"], capture_output=True, text=True, check=True)
+        self.assertIn("CN=Build time autogenerated kernel key", out.stdout.replace(" = ", "="))
+        # The signer serial Debian's arm64 modules name (modinfo -F sig_key
+        # ext4.ko.xz of linux-image-6.12.94+deb13-arm64 6.12.94-1).
+        self.assertIn("serial=39896D984ABB860B4592AB68060447BCC51E45D4", out.stdout)
+        self.assertIn("E8:01:9A:AE:89:40:DA:8E:48:BD:62:08:9A:44:FA:DA:A5:B5:71:64:C0:C4:F2:6A:"
+                      "60:46:A7:0D:E1:39:23:7E", out.stdout)
 
 
 if __name__ == "__main__":

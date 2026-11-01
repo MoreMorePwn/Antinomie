@@ -80,8 +80,13 @@ CONSOLE_DESKTOP = "none"
 # Guest architectures the kernel builds for, and the adapter key of Debian's
 # banner for each (adapter.conf).
 ARCHES = {"x86_64": "KERNEL_BANNER", "arm64": "KERNEL_BANNER_ARM64"}
-# Profiles whose image recipe builds an arm64 base yet (Debian arm64 follows).
-ARM64_PROFILES = {"busybox"}
+# Profiles whose image recipe builds an arm64 base.
+ARM64_PROFILES = {"busybox", "debian-minimal"}
+# The machine name (uname -m) of each guest architecture: a Debian base of
+# another architecture than the build machine's runs that architecture's
+# maintainer scripts under emulation, which only the QEMU builder VM offers
+# (qemu-user-static's binfmt handlers in its own kernel), never a host.
+MACHINES = {"x86_64": "x86_64", "arm64": "aarch64"}
 # The kernel image of each architecture in the build tree. Only x86-64 bases
 # carry a Volatility symbol table: memory analysis reads x86-64 guests only.
 KERNEL_IMAGES = {"x86_64": "arch/x86/boot/bzImage", "arm64": "arch/arm64/boot/Image"}
@@ -175,10 +180,10 @@ def debian_toolchain(arch="x86_64"):
     return {"cc": match[3], "ld": match[4]}
 
 
-def toolchain_problem(kernel_profile):
+def toolchain_problem(kernel_profile, arch="x86_64"):
     """What differs between the kernel toolchain (here, or in the chroot) and
     Debian 13's, or None when it is the same."""
-    found, wanted = toolchain(kernel_profile), debian_toolchain()
+    found, wanted = toolchain(kernel_profile, arch), debian_toolchain(arch)
     for tool in ("cc", "ld"):
         if found.get(tool) != wanted[tool]:
             return (f"kernel {'compiler' if tool == 'cc' else 'linker'} is "
@@ -186,13 +191,14 @@ def toolchain_problem(kernel_profile):
     return None
 
 
-def require_debian_toolchain(kernel_profile, chroot=None, work=None, inputs=None, ccache=None):
+def require_debian_toolchain(kernel_profile, chroot=None, work=None, inputs=None, ccache=None,
+                             arch="x86_64"):
     """A Debian base's kernel (the stock profile) must carry Debian's banner,
     which only Debian 13's compiler and linker write. Use the host's when they are Debian 13's;
     else compile in the rootless toolchain chroot `chroot` (created on first
     use); without one, refuse before building."""
     global SANDBOX
-    problem = toolchain_problem(kernel_profile)
+    problem = toolchain_problem(kernel_profile, arch)
     if problem is None:
         return
     if chroot is None:
@@ -210,7 +216,7 @@ def require_debian_toolchain(kernel_profile, chroot=None, work=None, inputs=None
         mounts.append((ccache, "/ccache", True))
     work.mkdir(parents=True, exist_ok=True)
     SANDBOX = module.Chroot(root, mounts)
-    problem = toolchain_problem(kernel_profile)
+    problem = toolchain_problem(kernel_profile, arch)
     if problem is not None:
         raise RuntimeError(f"the toolchain chroot's {problem}: delete {chroot} and build again")
     print(f"compiling in the Debian 13 toolchain chroot {chroot}", flush=True)
@@ -405,12 +411,15 @@ def prepare_source(inputs, work):
     return tree
 
 
-def build_kernel(kernel_profile, tree, work, jobs, ccache=None, debian_image=None, arch="x86_64"):
+def build_kernel(kernel_profile, tree, work, jobs, ccache=None, debian_image=None, arch="x86_64",
+                 debian_symvers=None):
     """Build the kernel; debian_image (Debian's linux-image package) is what the
-    stock profile's exports, BTF and traceable functions are compared with."""
+    stock profile's exports, BTF and traceable functions are compared with, and
+    debian_symvers (arm64: the linux-headers package) holds its exports."""
     build = work / f"kernel-{kernel_profile}"
     env = arch_env(arch) | ({"ANTINOMIE_CCACHE_DIR": str(ccache)} if ccache else {}) | (
-        {"ANTINOMIE_DEBIAN_IMAGE": str(debian_image)} if debian_image else {}) | {
+        {"ANTINOMIE_DEBIAN_IMAGE": str(debian_image)} if debian_image else {}) | (
+        {"ANTINOMIE_DEBIAN_SYMVERS": str(debian_symvers)} if debian_symvers else {}) | {
         "ANTINOMIE_SOURCE_TREE": str(tree), "ANTINOMIE_BUILD_TREE": str(build),
         "ANTINOMIE_DEBIAN_CONFIG": str(tree / "debian/config"),
         "ANTINOMIE_SERIES_DIR": str(SERIES), "ANTINOMIE_SOURCE_PREPARED": "1",
@@ -419,16 +428,39 @@ def build_kernel(kernel_profile, tree, work, jobs, ccache=None, debian_image=Non
     return build
 
 
-def debian_image(inputs, work, proxy=""):
-    """Debian's linux-image package of the pinned release, in inputs (where the
-    Debian Minimal image takes it from too), downloaded through the archive's
-    signed index when missing."""
+def require_foreign_builder(profile, arch):
+    """Refuse a Debian base of another architecture than this machine's outside
+    the QEMU builder VM: its bootstrap runs the guest's maintainer scripts."""
+    if profile == "busybox" or MACHINES[arch] == os.uname().machine:
+        return
+    if os.environ.get("ANTINOMIE_BUILDER") != "1":
+        raise RuntimeError(
+            f"a Debian {arch} base is built in the QEMU builder: its bootstrap runs {arch} "
+            "maintainer scripts, which only the builder VM's own emulation runs (no binfmt "
+            "handler on this host or in a container)")
+
+
+def debian_recipe():
     spec = importlib.util.spec_from_file_location(
         "debian_image", KIT / "scripts/build-debian-image.py")
     recipe = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(recipe)
+    return recipe
+
+
+def debian_image(inputs, work, proxy="", arch="x86_64"):
+    """Debian's linux-image package of the pinned release, in inputs (where the
+    Debian Minimal image takes it from too), downloaded through the archive's
+    signed index when missing."""
     work.mkdir(parents=True, exist_ok=True)
-    return recipe.debian_kernel_debs(inputs, work, proxy)[0]
+    return debian_recipe().debian_kernel_debs(inputs, work, proxy, arch)[0]
+
+
+def debian_symvers(inputs, work, proxy="", arch="x86_64"):
+    """The pinned package with Debian's Module.symvers where its kernel package
+    has no table map (arm64), the same way; None on x86-64."""
+    work.mkdir(parents=True, exist_ok=True)
+    return debian_recipe().debian_kernel_symvers_deb(inputs, work, proxy, arch)
 
 
 def memory_kib():
@@ -628,6 +660,9 @@ def main():
     args = parser.parse_args()
     if args.container:
         try:
+            # A container shares this host's kernel and its binfmt handlers.
+            profile, _, _, arch = load_job(args.job)
+            require_foreign_builder(profile, arch)
             sys.exit(run_in_container(args, args.container))
         except (RuntimeError, OSError, subprocess.SubprocessError) as error:
             print(f"::error {error}", flush=True)
@@ -642,9 +677,10 @@ def main():
             raise RuntimeError(f"{args.output} already exists")
         args.work.mkdir(parents=True, exist_ok=True)
         kernel_profile = PROFILES[profile][0]
+        require_foreign_builder(profile, arch)
         if kernel_profile == "stock":
             require_debian_toolchain(kernel_profile, args.toolchain_chroot, args.work,
-                                     args.inputs, args.ccache)
+                                     args.inputs, args.ccache, arch)
         kernel_space, image_space = PROFILES[profile][3]
         build = load_cached_kernel(args.kernel_cache, kernel_profile, args.work, arch)
         if build is None:
@@ -652,9 +688,13 @@ def main():
             stage("source")
             tree = prepare_source(args.inputs, args.work)
             stage("kernel")
+            stock = kernel_profile == "stock"
+            proxy = values.get("proxy", "")
             build = build_kernel(kernel_profile, tree, args.work, args.jobs, args.ccache,
-                                 debian_image(args.inputs, args.work, values.get("proxy", ""))
-                                 if kernel_profile == "stock" else None, arch)
+                                 debian_image(args.inputs, args.work, proxy, arch)
+                                 if stock else None, arch,
+                                 debian_symvers(args.inputs, args.work, proxy, arch)
+                                 if stock else None)
             if has_symbols(arch):
                 stage("symbols")
                 make_symbols(build, args.work)

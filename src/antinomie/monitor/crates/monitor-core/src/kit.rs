@@ -113,11 +113,27 @@ pub(crate) fn series_hash() -> String {
 /// kit is cached. The kernel depends only on the series, the kernel build
 /// script and the profile, never on the image answers.
 pub(crate) fn kernel_cache(root: &Path, kernel_profile: &str) -> Result<PathBuf, String> {
+    kernel_cache_for(root, kernel_profile, crate::api::GuestArch::X86_64)
+}
+
+/// [`kernel_cache`] of a kernel for `arch`: another file than x86-64's (whose
+/// name stays as before).
+pub(crate) fn kernel_cache_for(
+    root: &Path,
+    kernel_profile: &str,
+    arch: crate::api::GuestArch,
+) -> Result<PathBuf, String> {
     let script = sha256_hex(kit_file(KERNEL_SCRIPT)?);
-    let key = sha256_hex(format!("{kernel_profile}\n{}\n{script}", series_hash()).as_bytes());
+    let mut text = format!("{kernel_profile}\n{}\n{script}", series_hash());
+    let mut name = kernel_profile.to_owned();
+    if arch != crate::api::GuestArch::X86_64 {
+        text.push_str(&format!("\n{}", arch.label()));
+        name.push_str(&format!("-{}", arch.label()));
+    }
+    let key = sha256_hex(text.as_bytes());
     Ok(root
         .join("kernels")
-        .join(format!("kernel-{kernel_profile}-{}.tar", &key[..16])))
+        .join(format!("kernel-{name}-{}.tar", &key[..16])))
 }
 
 /// Where the Debian root filesystem bootstrapped for `name` (a desktop, or
@@ -137,21 +153,23 @@ pub(crate) fn ccache_archive(root: &Path) -> PathBuf {
     root.join("ccache.tar")
 }
 
-/// Keep only `current` among the cached kernels of its profile.
+/// Keep only `current` among the cached kernels of its profile (and
+/// architecture: `kernel-stock-arm64-*` is not `kernel-stock-*`).
 pub(crate) fn prune_kernel_cache(current: &Path) {
     let (Some(directory), Some(name)) = (current.parent(), current.file_name()) else {
         return;
     };
     let name = name.to_string_lossy();
-    let Some(prefix) = name
-        .rsplit_once('-')
-        .map(|(prefix, _)| format!("{prefix}-"))
-    else {
+    let Some((prefix, _)) = name.rsplit_once('-') else {
         return;
     };
     for entry in fs::read_dir(directory).into_iter().flatten().flatten() {
         let other = entry.file_name().to_string_lossy().into_owned();
-        if other.starts_with(&prefix) && other != name {
+        if other
+            .rsplit_once('-')
+            .is_some_and(|(other_prefix, _)| other_prefix == prefix)
+            && other != name
+        {
             let _ = fs::remove_file(entry.path());
         }
     }
@@ -475,6 +493,20 @@ mod tests {
         let root = Path::new("/data/build");
         let minimal = kernel_cache(root, "minimal").unwrap();
         let debian = kernel_cache(root, "debian").unwrap();
+        // An arm64 kernel has a cache file of its own; x86-64's keeps its name.
+        let x86 = crate::api::GuestArch::X86_64;
+        assert_eq!(
+            kernel_cache_for(root, "stock", x86).unwrap(),
+            kernel_cache(root, "stock").unwrap()
+        );
+        let arm = kernel_cache_for(root, "stock", crate::api::GuestArch::AARCH64).unwrap();
+        assert!(
+            arm.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("kernel-stock-arm64-")
+        );
+        assert_ne!(arm, kernel_cache(root, "stock").unwrap());
         assert!(minimal.starts_with("/data/build/kernels"));
         assert_ne!(minimal, debian);
         assert!(
@@ -490,6 +522,7 @@ mod tests {
             "kernel-debian-old.tar",
             "kernel-minimal-old.tar",
             "kernel-debian-new.tar",
+            "kernel-debian-arm64-old.tar",
         ] {
             fs::write(dir.join(name), b"x").unwrap();
         }
@@ -499,7 +532,14 @@ mod tests {
             .map(|e| e.unwrap().file_name().into_string().unwrap())
             .collect();
         left.sort();
-        assert_eq!(left, ["kernel-debian-new.tar", "kernel-minimal-old.tar"]);
+        assert_eq!(
+            left,
+            [
+                "kernel-debian-arm64-old.tar",
+                "kernel-debian-new.tar",
+                "kernel-minimal-old.tar"
+            ]
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

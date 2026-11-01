@@ -4,7 +4,8 @@
 traceable functions.
 
     check-kernel-abi.py --vmlinux FILE --system-map FILE [--symvers FILE]
-                        [--debian-image FILE] [--report FILE]
+                        [--debian-image FILE [--debian-symvers FILE]]
+                        [--report FILE]
 
 The stock kernel profile builds Debian's configuration with the recorder in,
 so that Debian's own modules load into it and the guest sees Debian's kernel
@@ -19,7 +20,11 @@ function tracer"). This check fails when:
   stock function Debian inlines a BTF entry for the recorder's symbol, and a
   name would resolve to two functions (fentry, kprobes); always checked;
 - with --debian-image (Debian's linux-image package, its vmlinuz, or that
-  kernel as an ELF file):
+  kernel as an ELF file; for arm64, whose vmlinuz is the uncompressed Image
+  and whose System.map is a stub, the package or its Image with
+  --debian-symvers, the Module.symvers of Debian's linux-headers package for
+  that kernel or the package itself: the BTF is found in the Image by its
+  header, the exports, licences and CRCs are Module.symvers'):
   - an exported symbol differs from Debian's kernel: missing, extra, another
     licence (EXPORT_SYMBOL or _GPL) or another modversions CRC (read from
     both kernels' __ksymtab and __kcrctab sections; --symvers, the build's
@@ -46,6 +51,11 @@ import sys
 import tarfile
 
 RECORDER_NAME = re.compile(r"^_*antc?_|antinomie", re.IGNORECASE)
+EM_AARCH64 = 183
+# arm64's patchable entry with call ops (-fpatchable-function-entry=4,2) records
+# the first of two NOPs placed before the function (ftrace_call_adjust()); a
+# site is then 8 bytes before its function. Without call ops it is the entry.
+ARM64_SITE_LEAD = 8
 BTF_MAGIC = 0xEB9F
 KIND_NAMES = {1: "int", 2: "ptr", 3: "array", 4: "struct", 5: "union", 6: "enum", 7: "fwd",
               8: "typedef", 9: "volatile", 10: "const", 11: "restrict", 12: "func",
@@ -68,6 +78,7 @@ class Elf:
         if data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
             raise InputError("not a little-endian 64-bit ELF file")
         self.data = data
+        self.machine, = struct.unpack_from("<H", data, 0x12)
         shoff, = struct.unpack_from("<Q", data, 0x28)
         shentsize, shnum, shstrndx = struct.unpack_from("<HHH", data, 0x3A)
         headers = [struct.unpack_from("<IIQQQQ", data, shoff + i * shentsize) for i in range(shnum)]
@@ -99,6 +110,82 @@ class Elf:
         raise InputError(f"address {address:#x} is in no section")
 
 
+# The arm64 Image header's magic ("ARM\x64" at 0x38).
+ARM64_IMAGE_MAGIC = b"ARM\x64"
+# Module.symvers of Debian's linux-headers package for that kernel.
+HEADERS_SYMVERS = r"(\./)?usr/src/linux-headers-[^/]+/Module\.symvers"
+
+
+class DebianImage:
+    """Debian's arm64 kernel, whose package has no table map (its System.map
+    is a stub naming the -dbg package): the BTF is found in the Image (the
+    kernel as loaded, uncompressed) by its header, and the exports with their
+    licences and CRCs are those of Debian's Module.symvers."""
+
+    def __init__(self, image, symvers_text):
+        self.btf = find_btf(image)
+        self.exported = parse_symvers(symvers_text)
+        if not self.exported:
+            raise InputError("Debian's Module.symvers lists no vmlinux export")
+
+    def section(self, name):
+        return self.btf if name == ".BTF" else None
+
+
+def find_btf(data):
+    """The one complete BTF blob in data: a header with BTF's magic and
+    version 1 whose type and string sections lie inside data, the strings
+    starting and ending with NUL and the types parsing to their exact end."""
+    found = []
+    at = data.find(b"\x9f\xeb\x01")
+    while at >= 0:
+        try:
+            _, _, _, hdr_len, type_off, type_len, str_off, str_len = struct.unpack_from(
+                "<HBBIIIII", data, at)
+        except struct.error:
+            break
+        size = hdr_len + str_off + str_len
+        strings = data[at + hdr_len + str_off:at + size]
+        if (hdr_len >= 24 and type_len and type_len % 4 == 0 and str_off >= type_off + type_len
+                and at + size <= len(data) and strings[:1] == b"\0" and strings[-1:] == b"\0"):
+            try:
+                Btf(data[at:at + size])
+                found.append(data[at:at + size])
+            except (InputError, struct.error, ValueError, UnicodeDecodeError):
+                pass
+        at = data.find(b"\x9f\xeb\x01", at + 1)
+    if len(found) != 1:
+        raise InputError(f"the arm64 Image holds {len(found)} complete BTF blobs, not one")
+    return found[0]
+
+
+def debian_kernel(path, symvers_path=None):
+    """Debian's kernel to compare with: an Elf (debian_vmlinux), or for arm64
+    (its package or its Image), a DebianImage with the exports of symvers_path
+    (Module.symvers, or the linux-headers package that holds it)."""
+    data = Path(path).read_bytes()
+    image = deb_vmlinuz(data) if data.startswith(b"!<arch>\n") else data
+    if image[0x38:0x3c] == ARM64_IMAGE_MAGIC:
+        if symvers_path is None:
+            raise InputError(f"{path}: Debian's arm64 kernel has no table map; give its "
+                             "exports with --debian-symvers (linux-headers' Module.symvers)")
+        return DebianImage(image, read_symvers(symvers_path))
+    return Elf(debian_vmlinux(path))
+
+
+def read_symvers(path):
+    """The text of a Module.symvers, or of the one in a linux-headers package."""
+    data = Path(path).read_bytes()
+    if data.startswith(b"!<arch>\n"):
+        data = deb_member(data, HEADERS_SYMVERS)
+    return data.decode()
+
+
+def debian_exports(debian):
+    """{name: (crc, licence)} of Debian's kernel."""
+    return debian.exported if isinstance(debian, DebianImage) else exports(debian)
+
+
 def debian_vmlinux(path):
     """Debian's kernel as an ELF image, from its linux-image package, its
     vmlinuz (a zstd payload: Debian's compression) or the ELF itself."""
@@ -121,6 +208,11 @@ def debian_vmlinux(path):
 
 def deb_vmlinuz(data):
     """boot/vmlinuz-* of a .deb (an ar archive with a data.tar member)."""
+    return deb_member(data, r"(\./)?boot/vmlinuz-.*")
+
+
+def deb_member(data, pattern):
+    """The first file of a .deb's data.tar whose name matches pattern."""
     at = 8
     while at + 60 <= len(data):
         name = data[at:at + 16].decode().strip().rstrip("/")
@@ -133,9 +225,9 @@ def deb_vmlinuz(data):
                                         check=True).stdout
             with tarfile.open(fileobj=io.BytesIO(member)) as archive:
                 for entry in archive:
-                    if re.fullmatch(r"(\./)?boot/vmlinuz-.*", entry.name) and entry.isfile():
+                    if re.fullmatch(pattern, entry.name) and entry.isfile():
                         return archive.extractfile(entry).read()
-            raise InputError("the package has no boot/vmlinuz")
+            raise InputError(f"the package has no {pattern}")
         at += 60 + size + (size & 1)
     raise InputError("the package has no data.tar member")
 
@@ -163,8 +255,13 @@ def exports(elf):
 
 
 def symvers(path):
+    return parse_symvers(Path(path).read_text())
+
+
+def parse_symvers(text):
+    """{name: (crc, licence)} of vmlinux's exports in a Module.symvers."""
     found = {}
-    for line in Path(path).read_text().splitlines():
+    for line in text.splitlines():
         fields = line.split("\t")
         if len(fields) >= 4 and fields[2] == "vmlinux":
             found[fields[1]] = (int(fields[0], 16), fields[3])
@@ -277,8 +374,12 @@ def compare_btf(ours_raw, theirs_raw):
 
 
 def system_map(path):
+    return parse_system_map(Path(path).read_text(errors="replace"))
+
+
+def parse_system_map(text):
     symbols = []
-    for line in Path(path).read_text(errors="replace").splitlines():
+    for line in text.splitlines():
         fields = line.split()
         if len(fields) == 3:
             symbols.append((int(fields[0], 16), fields[1], fields[2]))
@@ -299,31 +400,42 @@ def traceable(elf, symbols):
     functions = [(address, name) for address, kind, name in symbols if kind.lower() == "t"]
     import bisect
     starts = [address for address, _ in functions]
+    lead = ARM64_SITE_LEAD if getattr(elf, "machine", None) == EM_AARCH64 else 0
     findings = set()
     for site in sites:
-        if begin is not None and begin <= site < end:
+        # The function the site belongs to starts at or before site + lead.
+        function = site + lead
+        if begin is not None and begin <= function < end:
             findings.add(f"traceable: a recorder function at {site:#x}")
             continue
-        index = bisect.bisect_right(starts, site) - 1
+        index = bisect.bisect_right(starts, function) - 1
         if index >= 0 and RECORDER_NAME.search(functions[index][1]):
             findings.add(f"traceable: {functions[index][1]}")
     return sorted(findings), len(sites)
 
 
 def shared_names(symbols):
-    """Findings for recorder functions named like a function outside it."""
+    """Findings for recorder functions named like a function outside it. A
+    header's inline function GCC keeps out of line in several stock files
+    (arm64's __raw_spin_lock_irq) is no finding: its name already names more
+    than one function, and its BTF entry is the stock kernel's."""
     by_name = {name: address for address, _, name in symbols}
     begin, end = by_name.get("ant_text_begin"), by_name.get("ant_text_end")
     if begin is None or end is None:
         return []
-    inside, outside = set(), set()
+    inside, outside, local_copies = set(), set(), {}
     for address, kind, name in symbols:
         if kind.lower() != "t" or name.startswith("__pfx_") or name in ("ant_text_begin",
                                                                        "ant_text_end"):
             continue
-        (inside if begin <= address < end else outside).add(name)
+        if begin <= address < end:
+            inside.add(name)
+        else:
+            outside.add(name)
+            if kind == "t":
+                local_copies[name] = local_copies.get(name, 0) + 1
     return [f"name: the recorder's {name} has a stock function's name"
-            for name in sorted(inside & outside)]
+            for name in sorted(inside & outside) if local_copies.get(name, 0) < 2]
 
 
 def main(argv=None):
@@ -332,6 +444,7 @@ def main(argv=None):
     parser.add_argument("--system-map", required=True)
     parser.add_argument("--symvers")
     parser.add_argument("--debian-image")
+    parser.add_argument("--debian-symvers")
     parser.add_argument("--report")
     args = parser.parse_args(argv)
     findings, notes = [], []
@@ -347,8 +460,8 @@ def main(argv=None):
             notes.append(f"{sites} traceable call sites, none of the recorder"
                          if not traced else f"{sites} traceable call sites")
         if args.debian_image:
-            debian = Elf(debian_vmlinux(args.debian_image))
-            reference = exports(debian)
+            debian = debian_kernel(args.debian_image, args.debian_symvers)
+            reference = debian_exports(debian)
             mine = exports(ours)
             findings += compare_exports("exports", mine, reference)
             if args.symvers:

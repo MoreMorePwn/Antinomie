@@ -65,6 +65,28 @@ pub(crate) fn fail_next_provision() {
     FAIL_PROVISION.with(|fail| fail.set(true));
 }
 
+/// A guest account is made by running the guest's own programs on its disk in
+/// the x86-64 libguestfs appliance, which cannot run another architecture's:
+/// a base that needs one (Debian) is refused for arm64 until it is made inside
+/// the guest.
+pub(crate) fn foreign_account(
+    guest: &crate::api::GuestProfile,
+    arch: crate::api::GuestArch,
+) -> Result<(), String> {
+    if guest.requires_credentials && arch != crate::api::GuestArch::X86_64 {
+        return Err(format!(
+            "{} VMs of {} cannot have their guest account made yet (it is made with the \
+             guest's own programs, which this host's disk tools cannot run for {}); use a \
+             BusyBox {} base",
+            arch.label(),
+            guest.label,
+            arch.label(),
+            arch.label()
+        ));
+    }
+    Ok(())
+}
+
 mod cloud_state;
 pub(crate) use cloud_state::ensure as ensure_cloud_state;
 

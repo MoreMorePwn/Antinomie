@@ -13,8 +13,7 @@
 # ANTINOMIE_ARCH selects the guest architecture: x86_64 (default) or arm64,
 # which cross-compiles with aarch64-linux-gnu-gcc-14 (the container image has
 # Debian 13's). Each architecture's own symbols for the minimal profile are in
-# src/antinomie/packaging/kconfig/<arch>/minimal.cfg. The stock profile is
-# amd64's only for now (Debian arm64 follows the BusyBox arm64 base).
+# src/antinomie/packaging/kconfig/<arch>/minimal.cfg.
 # ANTINOMIE_CONFIG_ONLY=1 stops once the minimal configuration is resolved and
 # checked (the .config is in the build tree) and builds nothing.
 # ANTINOMIE_SOURCE_PREPARED=1 states that the caller (scripts/build-base.py)
@@ -27,13 +26,14 @@
 #   built in, with DWARF debug information in vmlinux; output in
 #   work/monitor-build (work/monitor-build-arm64 for arm64). Used by the
 #   BusyBox base.
-# stock: the pinned Debian amd64 configuration (debian/config/config, then
-#   kernelarch-x86/config, then amd64/config) with nothing changed but the
+# stock: the pinned Debian configuration of the architecture (debian/config/config,
+#   then kernelarch-x86/config and amd64/config, or arm64/config) with nothing changed but the
 #   recorder (and the embedded configuration the image builders read): Debian's
 #   module ABI, BTF, function tracer and module-signing certificate (the public
-#   certificate of Debian's own build, module-signing.pem in the adapter), so
-#   Debian's own signed modules load. Only the kernel image is built; output in
-#   work/monitor-build-stock. Used by the Debian bases (Minimal and the
+#   certificate of Debian's own build of that architecture, module-signing.pem or
+#   module-signing-arm64.pem in the adapter), so Debian's own signed modules load.
+#   Only the kernel image is built; output in work/monitor-build-stock
+#   (-stock-arm64). Used by the Debian bases (Minimal and the
 #   desktops), which install Debian's kernel packages. ANTINOMIE_DEBIAN_IMAGE names Debian's linux-image package
 #   to compare the kernel's exports, BTF and traceable functions with.
 #
@@ -55,24 +55,20 @@ case "$arch" in
         image_path=arch/x86/boot/bzImage
         debian_fragments=(config kernelarch-x86/config amd64/config)
         debian_suffix=amd64 banner_key=KERNEL_BANNER tree_suffix=""
-        shape_symbols=MAXSMP nr_cpus=8192 ;;
+        shape_symbols=MAXSMP nr_cpus=8192 signing=module-signing.pem ;;
     arm64)
-        kernel_arch=arm64 cross=aarch64-linux-gnu- defconfig=defconfig image=Image
+        kernel_arch=arm64 cross=aarch64-linux-gnu- compat=arm-linux-gnueabihf- defconfig=defconfig image=Image
         image_path=arch/arm64/boot/Image
         debian_fragments=(config arm64/config)
         debian_suffix=arm64 banner_key=KERNEL_BANNER_ARM64 tree_suffix=-arm64
-        shape_symbols=ARM64_VA_BITS_52 nr_cpus=512 ;;
+        shape_symbols=ARM64_VA_BITS_52 nr_cpus=512 signing=module-signing-arm64.pem ;;
     *) echo "unknown ANTINOMIE_ARCH $arch (x86_64 or arm64)" >&2; exit 2 ;;
 esac
 case "$profile" in
     minimal) build_tree=${ANTINOMIE_BUILD_TREE:-"$repo/work/monitor-build$tree_suffix"} ;;
-    stock) build_tree=${ANTINOMIE_BUILD_TREE:-"$repo/work/monitor-build-stock"} ;;
+    stock) build_tree=${ANTINOMIE_BUILD_TREE:-"$repo/work/monitor-build-stock$tree_suffix"} ;;
     *) echo "usage: $0 [minimal|stock]" >&2; exit 2 ;;
 esac
-if [[ $profile == stock && $arch != x86_64 ]]; then
-    echo "the stock profile is built for amd64 only (Debian $arch comes later)" >&2
-    exit 2
-fi
 # Both profiles compile with Debian 13's own compiler where the host has it
 # (Debian's kernel build names x86_64-linux-gnu-gcc-14, as /proc/version then
 # shows). A foreign architecture always takes Debian 13's cross compiler
@@ -106,6 +102,15 @@ config="$source_tree/scripts/config"
 # keeps the host's gcc for host programs.
 target=()
 [[ -z $cross ]] || target=(ARCH="$kernel_arch" CROSS_COMPILE="$cross")
+# Debian's arm64 build also names a 32-bit ARM compiler (CROSS_COMPILE_COMPAT,
+# debian/config/arm64 compiler_gnutype_compat), which enables the AArch32 vDSO;
+# the stock profile does the same so its configuration and BTF are Debian's.
+# The minimal profile keeps its own configuration.
+if [[ $profile == stock && -n ${compat:-} ]]; then
+    command -v "${compat}gcc-14" >/dev/null ||
+        { echo "compiler ${compat}gcc-14 is not installed" >&2; exit 1; }
+    target+=(CROSS_COMPILE_COMPAT="$compat" CC_COMPAT="${compat}gcc-14")
+fi
 compiler=()
 if [[ -n $cross ]]; then
     compiler=(CC="$cc")
@@ -339,8 +344,7 @@ if [[ $profile == minimal ]]; then
 fi
 
 if [[ $profile == stock ]]; then
-    fragments=("$debian_config/config" "$debian_config/kernelarch-x86/config"
-               "$debian_config/amd64/config")
+    fragments=("${debian_fragments[@]/#/$debian_config/}")
     for fragment in "${fragments[@]}"; do
         [[ -f $fragment ]] || { echo "missing Debian config fragment $fragment; run scripts/bootstrap.sh" >&2; exit 1; }
     done
@@ -348,7 +352,7 @@ if [[ $profile == stock ]]; then
     rm -rf "$reference"
     mkdir -p "$reference"
     cat "${fragments[@]}" > "$reference/.config"
-    make -C "$source_tree" O="$reference" "${compiler[@]}" olddefconfig >/dev/null
+    make -C "$source_tree" "${target[@]}" O="$reference" "${compiler[@]}" olddefconfig >/dev/null
     cp "$reference/.config" "$build_tree/.config"
     cp "$reference/.config" "$build_tree/debian-config"
     rm -rf "$reference"
@@ -358,21 +362,27 @@ if [[ $profile == stock ]]; then
     # Debian's kernel, takes the same place here, so the kernel trusts exactly
     # Debian's modules. No key is generated and no module is signed.
     mkdir -p "$build_tree/output"
-    cp "$repo/src/antinomie/packaging/debian-6.12.94-1-trixie/module-signing.pem" \
+    cp "$repo/src/antinomie/packaging/debian-6.12.94-1-trixie/$signing" \
         "$build_tree/output/signing_key.pem"
     "$config" --file "$build_tree/.config" --set-str MODULE_SIG_KEY "output/signing_key.pem"
     "$config" --file "$build_tree/.config" --set-str SYSTEM_TRUSTED_KEYS ""
-    # The image builders read the embedded configuration from a gzip bzImage;
-    # nothing in the guest reads it (no /proc/config.gz).
+    # The image builders read the embedded configuration from a gzip bzImage
+    # (arm64's Image is not compressed, as Debian's); nothing in the guest
+    # reads it (no /proc/config.gz).
     "$config" --file "$build_tree/.config" --enable ANTINOMIE --enable IKCONFIG \
-        --disable IKCONFIG_PROC --disable KERNEL_ZSTD --enable KERNEL_GZIP
+        --disable IKCONFIG_PROC
+    compression=()
+    if [[ $arch == x86_64 ]]; then
+        "$config" --file "$build_tree/.config" --disable KERNEL_ZSTD --enable KERNEL_GZIP
+        compression=(KERNEL_GZIP)
+    fi
     "$config" --file "$build_tree/.config" --set-str LOCALVERSION "$DEBIAN_LOCALVERSION"
     # Debian's build salts the build ID note (/sys/kernel/notes) with the
     # release (debian/bin/gencontrol.py: BUILD_SALT).
     "$config" --file "$build_tree/.config" --set-str BUILD_SALT "6.12.94$DEBIAN_LOCALVERSION"
     "$config" --file "$build_tree/.config" --set-str ANTINOMIE_SOURCE_ID "$source_id"
-    make -C "$source_tree" O="$build_tree" "${compiler[@]}" olddefconfig
-    require_symbols ANTINOMIE IKCONFIG KERNEL_GZIP MODVERSIONS MODULE_SIG DEBUG_INFO_BTF \
+    make -C "$source_tree" "${target[@]}" O="$build_tree" "${compiler[@]}" olddefconfig
+    require_symbols ANTINOMIE IKCONFIG "${compression[@]}" MODVERSIONS MODULE_SIG DEBUG_INFO_BTF \
         FUNCTION_TRACER DYNAMIC_FTRACE BPF_LSM
     require_source_id
     # Nothing else of Debian's configuration may change: no symbol the
@@ -387,7 +397,8 @@ if [[ $profile == stock ]]; then
         echo "$unexpected" >&2
         exit 1
     fi
-    make -C "$source_tree" O="$build_tree" "${compiler[@]}" LOCALVERSION= -j"$jobs" bzImage
+    make -C "$source_tree" O="$build_tree" "${target[@]}" "${compiler[@]}" LOCALVERSION= \
+        -j"$jobs" "$image"
     [[ ${ANTINOMIE_CCACHE_DIR:-} == "" ]] || ! command -v ccache >/dev/null || ccache --show-stats >&2
     python3 "$repo/scripts/check-kernel-btf.py" --vmlinux "$build_tree/vmlinux" \
         --system-map "$build_tree/System.map"
@@ -396,9 +407,12 @@ if [[ $profile == stock ]]; then
                --system-map "$build_tree/System.map" --symvers "$build_tree/vmlinux.symvers")
     if [[ -n ${ANTINOMIE_DEBIAN_IMAGE:-} ]]; then
         abi_check+=(--debian-image "$ANTINOMIE_DEBIAN_IMAGE")
+        # arm64: Debian's System.map is a stub; its exports are Module.symvers'.
+        [[ -z ${ANTINOMIE_DEBIAN_SYMVERS:-} ]] ||
+            abi_check+=(--debian-symvers "$ANTINOMIE_DEBIAN_SYMVERS")
     fi
     python3 "${abi_check[@]}"
     check_banner
-    echo "$build_tree/arch/x86/boot/bzImage"
+    echo "$build_tree/$image_path"
     exit 0
 fi

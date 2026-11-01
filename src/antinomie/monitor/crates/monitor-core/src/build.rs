@@ -319,6 +319,20 @@ pub fn valid_base_name(name: &str) -> Result<(), String> {
 
 /// The name a base gets when none is chosen.
 pub fn automatic_base_name(kind: Kind, desktop: &str) -> String {
+    automatic_base_name_for(kind, desktop, crate::api::GuestArch::X86_64)
+}
+
+/// [`automatic_base_name`] for a base of `arch` (arm64 names it).
+pub fn automatic_base_name_for(kind: Kind, desktop: &str, arch: crate::api::GuestArch) -> String {
+    let name = automatic_x86_name(kind, desktop);
+    if arch == crate::api::GuestArch::X86_64 {
+        name
+    } else {
+        format!("{name} {}", arch.label())
+    }
+}
+
+fn automatic_x86_name(kind: Kind, desktop: &str) -> String {
     match kind {
         Kind::BusyBox => "BusyBox".into(),
         Kind::DebianMinimal => "Debian 13 (Minimal)".into(),
@@ -536,6 +550,44 @@ pub struct BuildRequest {
     pub profile: String,
     pub mode: BuildMode,
     pub options: BuildOptions,
+    /// The guest architecture of the base (x86-64 unless named).
+    #[serde(default, skip_serializing_if = "crate::api::GuestArch::is_x86_64")]
+    pub arch: crate::api::GuestArch,
+}
+
+/// The build mode of a base of `kind` for `arch` ([`resolve_mode`] for this
+/// host's own architecture). An arm64 BusyBox base builds anywhere (a cross
+/// compiler and Debian's pinned arm64 programs); an arm64 Debian base on
+/// another machine only in the QEMU builder, whose own emulation runs the
+/// arm64 maintainer scripts: no binfmt handler on the host, which a container
+/// would use too. The Debian desktops have no arm64 recipe yet.
+pub fn arch_mode(
+    kind: Kind,
+    arch: crate::api::GuestArch,
+    requested: BuildMode,
+) -> Result<BuildMode, String> {
+    use crate::api::GuestArch;
+    if arch == GuestArch::X86_64 {
+        return resolve_mode(kind, requested);
+    }
+    if arch != GuestArch::AARCH64 {
+        return Err(format!("no {} bases can be built", arch.label()));
+    }
+    match kind {
+        Kind::BusyBox => resolve_mode(kind, requested),
+        Kind::DebianXfce => Err("the Debian desktops have no arm64 recipe yet".into()),
+        Kind::DebianMinimal if std::env::consts::ARCH == "aarch64" => resolve_mode(kind, requested),
+        Kind::DebianMinimal => match requested {
+            BuildMode::Automatic | BuildMode::Qemu => {
+                mode_obstacle(kind, BuildMode::Qemu).map_or(Ok(BuildMode::Qemu), Err)
+            }
+            _ => Err(
+                "an arm64 Debian base is built in the QEMU builder: its arm64 maintainer \
+                 scripts run under emulation inside the builder VM, never on this host"
+                    .into(),
+            ),
+        },
+    }
 }
 
 /// A host tool a build mode needs, with its Debian/Ubuntu package hint. `path`
@@ -901,6 +953,45 @@ pub(crate) fn run_streaming(
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn an_arm64_debian_base_is_built_only_in_the_qemu_builder() {
+        use crate::api::GuestArch;
+        if std::env::consts::ARCH == "aarch64" {
+            return;
+        }
+        for mode in [BuildMode::Native, BuildMode::Podman, BuildMode::Docker] {
+            let error = arch_mode(Kind::DebianMinimal, GuestArch::AARCH64, mode).unwrap_err();
+            assert!(error.contains("built in the QEMU builder"), "{error}");
+        }
+        assert!(
+            arch_mode(Kind::DebianXfce, GuestArch::AARCH64, BuildMode::Qemu)
+                .unwrap_err()
+                .contains("no arm64 recipe")
+        );
+        assert!(arch_mode(Kind::BusyBox, GuestArch::MIPS, BuildMode::Native).is_err());
+        assert_eq!(
+            automatic_base_name_for(Kind::DebianMinimal, "", GuestArch::AARCH64),
+            "Debian 13 (Minimal) arm64"
+        );
+        assert_eq!(
+            automatic_base_name(Kind::BusyBox, ""),
+            automatic_base_name_for(Kind::BusyBox, "", GuestArch::X86_64)
+        );
+        // A request without an architecture is x86-64's, and says nothing of it.
+        let request: BuildRequest = serde_json::from_value(serde_json::json!({
+            "profile": "busybox", "mode": "Native",
+            "options": serde_json::to_value(BuildOptions::defaults(Kind::BusyBox)).unwrap()
+        }))
+        .unwrap();
+        assert_eq!(request.arch, GuestArch::X86_64);
+        assert!(
+            serde_json::to_value(&request)
+                .unwrap()
+                .get("arch")
+                .is_none()
+        );
+    }
 
     fn collect() -> (std::sync::Arc<Mutex<Vec<String>>>, impl FnMut(&str)) {
         let log = std::sync::Arc::new(Mutex::new(Vec::new()));

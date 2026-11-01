@@ -161,14 +161,14 @@ impl Worker {
         }
         let spec = build::profile(&request.profile).ok_or("unknown build profile")?;
         request.options.validate(spec.kind)?;
-        let mode = build::resolve_mode(spec.kind, request.mode)?;
+        let mode = build::arch_mode(spec.kind, request.arch, request.mode)?;
         // Automatic may fall through from a container to QEMU later,
         // when the image cannot be had.
         let fallback = request.mode == build::BuildMode::Automatic
             && mode.engine().is_some()
             && build::mode_obstacle(spec.kind, build::BuildMode::Qemu).is_none();
         let label = match request.options.name.trim() {
-            "" => build::automatic_base_name(spec.kind, &request.options.desktop),
+            "" => build::automatic_base_name_for(spec.kind, &request.options.desktop, request.arch),
             name => name.to_string(),
         };
         let id = crate::storage::unique_id();
@@ -183,6 +183,7 @@ impl Worker {
         let job = BuildRun {
             kind: spec.kind,
             profile: spec.id,
+            arch: request.arch,
             mode,
             fallback,
             options: request.options,

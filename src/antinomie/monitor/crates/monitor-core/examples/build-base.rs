@@ -4,8 +4,9 @@
 //! usage: build-base DATA_DIR busybox|debian-minimal|debian-xfce automatic|native|podman|docker|qemu [OPTIONS_JSON]
 //!
 //! OPTIONS_JSON overrides fields of the profile's default answers, for example
-//! '{"hostname":"lab","timezone":"Europe/Berlin"}'. Prints stage changes and
-//! build output, then the installed bases.
+//! '{"hostname":"lab","timezone":"Europe/Berlin"}'. ANTINOMIE_BUILD_ARCH=arm64
+//! builds an arm64 base (BusyBox, or Debian Minimal in the QEMU builder).
+//! Prints stage changes and build output, then the installed bases.
 
 use antinomie_monitor_core::{
     Backend, BackendOptions, Command, Notification, Snapshot,
@@ -60,6 +61,11 @@ fn run() -> Result<(), String> {
     })?;
     let id = backend.send(Command::BuildBase {
         request: BuildRequest {
+            arch: match std::env::var("ANTINOMIE_BUILD_ARCH").as_deref() {
+                Ok("arm64") => antinomie_monitor_core::GuestArch::AARCH64,
+                Ok("" | "x86_64") | Err(_) => antinomie_monitor_core::GuestArch::X86_64,
+                Ok(other) => return Err(format!("unknown ANTINOMIE_BUILD_ARCH {other}")),
+            },
             profile: profile.id.into(),
             mode,
             options,

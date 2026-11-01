@@ -79,10 +79,22 @@ class BuildBaseTests(unittest.TestCase):
         self.assertEqual((identity["arch"], identity["toolchain"]), ("arm64", found))
         with tempfile.TemporaryDirectory() as name:
             job = Path(name) / "job.json"
-            # BusyBox has an arm64 recipe; the Debian profiles not yet.
+            # BusyBox and Debian Minimal have arm64 recipes; the desktops not yet.
             job.write_text(json.dumps({"format": 1, "profile": "busybox", "arch": "arm64"}))
             self.assertEqual(base.load_job(job)[3], "arm64")
-            for profile, arch, error in (("debian-minimal", "arm64", "no arm64 image recipe"),
+            job.write_text(json.dumps({"format": 1, "profile": "debian-minimal", "arch": "arm64"}))
+            self.assertEqual(base.load_job(job)[3], "arm64")
+            # A Debian arm64 bootstrap runs only in the QEMU builder VM.
+            with unittest.mock.patch.dict(os.environ, {"ANTINOMIE_BUILDER": ""}), \
+                    unittest.mock.patch.object(base.os, "uname",
+                                               return_value=os.uname_result(("Linux", "h", "6", "#1", "x86_64"))):
+                with self.assertRaisesRegex(RuntimeError, "built in the QEMU builder"):
+                    base.require_foreign_builder("debian-minimal", "arm64")
+                base.require_foreign_builder("busybox", "arm64")
+                base.require_foreign_builder("debian-minimal", "x86_64")
+            with unittest.mock.patch.dict(os.environ, {"ANTINOMIE_BUILDER": "1"}):
+                base.require_foreign_builder("debian-minimal", "arm64")
+            for profile, arch, error in (("debian-xfce", "arm64", "no arm64 image recipe"),
                                          ("busybox", "riscv64", "unknown arch")):
                 job.write_text(json.dumps({"format": 1, "profile": profile, "arch": arch}))
                 with self.assertRaisesRegex(RuntimeError, error):
@@ -285,7 +297,7 @@ exit 0
 
         class Recipe:
             @staticmethod
-            def debian_kernel_debs(cache, work, proxy=""):
+            def debian_kernel_debs(cache, work, proxy="", arch="x86_64"):
                 fetched.append((cache, proxy))
                 return [cache / "linux-image.deb", cache / "meta.deb"]
 
@@ -375,6 +387,12 @@ exit 0
             gcc.write_text("")
             (directory / chroot.MARKER).write_text(json.dumps(
                 {"dockerfile_sha256": chroot.sha256(base.CONTAINER_DOCKERFILE)}))
+            # A chroot made before it had the arm64 cross compiler is made again.
+            self.assertFalse(chroot.ready(directory, base.CONTAINER_DOCKERFILE))
+            (directory / "root/usr/bin/aarch64-linux-gnu-gcc-14").write_text("")
+            # And one made before it had the 32-bit ARM compiler (the AArch32 vDSO).
+            self.assertFalse(chroot.ready(directory, base.CONTAINER_DOCKERFILE))
+            (directory / "root/usr/bin/arm-linux-gnueabihf-gcc-14").write_text("")
             self.assertTrue(chroot.ready(directory, base.CONTAINER_DOCKERFILE))
             changed = directory / "Dockerfile"
             changed.write_text(base.CONTAINER_DOCKERFILE.read_text() + "# changed\n")
@@ -447,7 +465,7 @@ exit 0
                     base.require_debian_toolchain("minimal")
                 # With one, the chroot is made and must then answer with Debian's.
                 answers = iter([newer, trixie])
-                with unittest.mock.patch.object(base, "toolchain", side_effect=lambda _: next(answers)), \
+                with unittest.mock.patch.object(base, "toolchain", side_effect=lambda *_: next(answers)), \
                         unittest.mock.patch.object(base, "toolchain_module", return_value=fake):
                     base.require_debian_toolchain("minimal", root / "chroot", root / "w",
                                                   root / "i", root / "cc")
@@ -460,7 +478,7 @@ exit 0
                 # A chroot that still has another toolchain is not used silently.
                 base.SANDBOX = None
                 answers = iter([newer, newer])
-                with unittest.mock.patch.object(base, "toolchain", side_effect=lambda _: next(answers)), \
+                with unittest.mock.patch.object(base, "toolchain", side_effect=lambda *_: next(answers)), \
                         unittest.mock.patch.object(base, "toolchain_module", return_value=fake), \
                         self.assertRaisesRegex(RuntimeError, "toolchain chroot's kernel compiler"):
                     base.require_debian_toolchain("minimal", root / "chroot", root / "w", root / "i")

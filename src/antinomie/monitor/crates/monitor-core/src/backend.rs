@@ -840,6 +840,8 @@ struct BuildJob {
 struct BuildRun {
     kind: build::Kind,
     profile: &'static str,
+    /// The guest architecture of the base.
+    arch: crate::api::GuestArch,
     mode: build::BuildMode,
     /// Automatic chose a container engine and the QEMU builder is ready: an
     /// image that cannot be had falls through to it, saying why.
@@ -942,21 +944,29 @@ impl BuildRun {
                 &mut |text| (log.borrow_mut())(text),
             )?
         };
-        let job = serde_json::json!({
+        let mut job = serde_json::json!({
             "format": 1,
             "profile": self.profile,
             "options": self.options.job_options(self.kind),
             "app_version": APP_VERSION,
         });
-        let kernel_cache = crate::kit::kernel_cache(&root, build::kernel_profile(self.kind))?;
+        // An x86-64 job stays as before (no "arch").
+        if self.arch != crate::api::GuestArch::X86_64 {
+            job["arch"] = self.arch.label().into();
+        }
+        let kernel_cache =
+            crate::kit::kernel_cache_for(&root, build::kernel_profile(self.kind), self.arch)?;
         if kernel_cache.is_file() {
             line("the kernel for this app version is cached; only the image is built");
         }
         // Debian images reuse a recent root filesystem with the same answers.
-        let image_cache = self
-            .options
-            .rootfs_cache_name(self.kind)
-            .map(|name| crate::kit::image_cache(&root, name));
+        let image_cache = self.options.rootfs_cache_name(self.kind).map(|name| {
+            if self.arch == crate::api::GuestArch::X86_64 {
+                crate::kit::image_cache(&root, name)
+            } else {
+                crate::kit::image_cache(&root, &format!("{name}-{}", self.arch.label()))
+            }
+        });
         if image_cache.as_ref().is_some_and(|cache| cache.is_file()) {
             line("a root filesystem for these answers is cached; it is reused if recent");
         }

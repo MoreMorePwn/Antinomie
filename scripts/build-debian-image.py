@@ -71,6 +71,17 @@ ROOT_MODULE_GROUPS = (
     ("grep -qs '^0x010802' /sys/bus/pci/devices/*/class", ("nvme-auth", "nvme-core", "nvme")),
     ("", ("crc32c_generic", "crc32c-intel", "crc16", "mbcache", "jbd2", "ext4")),
 )
+# Debian's name of each guest architecture (dpkg --print-architecture).
+DEB_ARCHES = {"x86_64": "amd64", "arm64": "arm64"}
+
+
+def root_module_groups(arch="x86_64"):
+    """ROOT_MODULE_GROUPS of the architecture: arm64 has no crc32c-intel (its
+    CRC32 instructions are built in)."""
+    if arch == "x86_64":
+        return ROOT_MODULE_GROUPS
+    return tuple((test, tuple(name for name in names if name != "crc32c-intel"))
+                 for test, names in ROOT_MODULE_GROUPS)
 # What the stock kernel profile may change in Debian's configuration (the
 # recorder and the architecture's HAVE_ANTINOMIE that offers it, the embedded
 # configuration the image builders read, the release suffix, the certificate
@@ -200,6 +211,18 @@ CONSOLE_PACKAGES = (
 # CONSOLE_PACKAGES is bootstrapped with the system.
 BOOT_LOADERS = {"bios": (("os-prober",), ("grub-pc",)),
                 "uefi": (("os-prober",), ("grub-efi-amd64",), ("shim-signed",))}
+# arm64 has no BIOS: the installer always sets up UEFI (grub-efi-arm64, which
+# brings grub-efi-arm64-signed and shim-signed's shimaa64 by recommends). The
+# base's own disk, which an arm64 VM boots on a device tree, has no boot
+# loader; its UEFI copy gets the installer's.
+BOOT_LOADERS_ARM64 = {"bios": (),
+                      "uefi": (("os-prober",), ("grub-efi-arm64",), ("shim-signed",))}
+# CONSOLE_PACKAGES' BIOS boot loader on arm64.
+ARM64_BOOT_LOADER = ("grub-efi-arm64", "the installer's boot loader on arm64, which boots UEFI")
+
+
+def boot_loaders(arch="x86_64"):
+    return BOOT_LOADERS if arch == "x86_64" else BOOT_LOADERS_ARM64
 # The installer's interfaces file without its stanza for the wired NIC:
 # provisioning writes that per VM for the interface its stealth profile's NIC
 # slot gets (bundle stealth_support "onboardnic": enp0s25 at PCI 00:19.0,
@@ -259,7 +282,29 @@ def monitor_helpers():
     return module
 
 
+# The arm64 Image header's magic ("ARM\x64" at 0x38); the Image is the
+# uncompressed kernel, as Debian's arm64 vmlinuz is.
+ARM64_IMAGE_MAGIC = b"ARM\x64"
+# linux_banner: release, build user and host, compiler and linker, version.
+BANNER = re.compile(r"Linux version (\S+) \((\S+)\) \((.*)\) (#\d+ .*)")
+
+
+def is_arm64_image(kernel):
+    with kernel.open("rb") as source:
+        return source.read(0x40)[0x38:0x3c] == ARM64_IMAGE_MAGIC
+
+
 def kernel_release(kernel):
+    """The release string of the kernel's x86 setup header (release, build
+    user and host, version), or for an arm64 Image the same from its banner."""
+    if is_arm64_image(kernel):
+        match = BANNER.fullmatch(kernel_banner(kernel))
+        if not match:
+            raise RuntimeError("the arm64 kernel's banner is not a Linux banner")
+        release = f"{match[1]} ({match[2]}) {match[4]}"
+        if not re.match(r"6\.12\.94(?:[-+ ]|$)", release):
+            raise RuntimeError("kernel must retain pinned Linux 6.12.94")
+        return release
     with kernel.open("rb") as source:
         header = source.read(0x210)
         if len(header) < 0x210 or header[0x202:0x206] != b"HdrS":
@@ -278,6 +323,11 @@ def kernel_banner(kernel):
     import lzma
     import zlib
     data = kernel.read_bytes()
+    if data[0x38:0x3c] == ARM64_IMAGE_MAGIC:
+        match = re.search(rb"Linux version [ -~]+ #\d+ [ -~]+", data)
+        if not match:
+            raise RuntimeError("the kernel image has no banner")
+        return match[0].decode()
     if len(data) < 0x250 or data[0x202:0x206] != b"HdrS":
         raise RuntimeError("kernel must be an x86 Linux bzImage")
     offset, length = struct.unpack_from("<II", data, 0x248)
@@ -302,12 +352,14 @@ def kernel_banner(kernel):
     return match[0].decode()
 
 
-def debian_banner():
-    """Debian's own banner for the pinned package (adapter.conf KERNEL_BANNER)."""
+def debian_banner(arch="x86_64"):
+    """Debian's own banner for the pinned package (adapter.conf KERNEL_BANNER,
+    KERNEL_BANNER_ARM64)."""
+    key = "KERNEL_BANNER" if arch == "x86_64" else "KERNEL_BANNER_ARM64"
     for line in ADAPTER.read_text().splitlines():
-        if line.startswith("KERNEL_BANNER="):
+        if line.startswith(key + "="):
             return line.split("=", 1)[1].strip("'\"")
-    raise RuntimeError("adapter.conf has no KERNEL_BANNER")
+    raise RuntimeError(f"adapter.conf has no {key}")
 
 
 def initrd_provenance(root, provenance, userland, modules=None):
@@ -396,20 +448,28 @@ def options(values):
     return result
 
 
-def requested_packages(desktop):
+def console_packages(arch="x86_64"):
+    """CONSOLE_PACKAGES with the architecture's boot loader."""
+    if arch == "x86_64":
+        return CONSOLE_PACKAGES
+    return tuple(ARM64_BOOT_LOADER if package == "grub-pc" else (package, reason)
+                 for package, reason in CONSOLE_PACKAGES)
+
+
+def requested_packages(desktop, arch="x86_64"):
     """The packages the installation asks for by name (the manifest's list):
     for the console base its set with the BIOS boot loader."""
     if desktop == CONSOLE:
-        return tuple(package for package, _ in CONSOLE_PACKAGES)
+        return tuple(package for package, _ in console_packages(arch))
     return packages(desktop)
 
 
-def packages(desktop):
+def packages(desktop, arch="x86_64"):
     """Packages to bootstrap: the common set plus the desktop's task, or the
     console base's own set (its boot loader comes last, BOOT_LOADERS)."""
     if desktop == CONSOLE:
-        loaders = {name for steps in BOOT_LOADERS.values() for step in steps for name in step}
-        return tuple(package for package, _ in CONSOLE_PACKAGES if package not in loaders)
+        loaders = {name for steps in boot_loaders(arch).values() for step in steps for name in step}
+        return tuple(package for package, _ in console_packages(arch) if package not in loaders)
     task = DESKTOPS[desktop][0]
     extra = ("lightdm-gtk-greeter",) if desktop == "xfce" else ()
     return PACKAGES + (task,) + extra
@@ -497,7 +557,7 @@ UEFI_FILES = ("uefi-root.tar.xz", "uefi-layout.json")
 UEFI_STAGED = ("uefi-root.tar", "uefi-layout.json")
 
 
-def boot_loader_script():
+def boot_loader_script(arch="x86_64"):
     """Run inside a console root, argument bios or uefi: the installer's
     grub-installer step (BOOT_LOADERS, each its own apt transaction). For UEFI
     the ESP's mount point exists (partman mounted it before installing the
@@ -505,7 +565,7 @@ def boot_loader_script():
     too, and fstab names the ESP and the root's partition (sda2)."""
     steps = {firmware: "\n".join(
         "    apt-get -o APT::Get::AllowUnauthenticated=false -y install " + " ".join(step)
-        for step in loader) for firmware, loader in BOOT_LOADERS.items()}
+        for step in loader) or "    :" for firmware, loader in boot_loaders(arch).items()}
     return """#!/bin/sh
 set -eu
 export DEBIAN_FRONTEND=noninteractive
@@ -516,7 +576,7 @@ bios)
 uefi)
     mkdir -p /boot/efi
 """ + steps["uefi"] + """
-    printf 'grub-efi-amd64 grub2/force_efi_extra_removable boolean true\\n' | debconf-set-selections
+    printf 'grub-efi-""" + DEB_ARCHES[arch] + """ grub2/force_efi_extra_removable boolean true\\n' | debconf-set-selections
     root=$(awk '$1 !~ /^#/ && $2 == "/" {print $1}' /etc/fstab)
     { printf '%s' """ + shlex.quote(FSTAB_HEADER + f"# / was on {UEFI_ROOT_DEVICE} during installation\n") + """
       printf """ + shlex.quote(FSTAB_ROOT.format(uuid="%s").replace("UUID=", "").replace("\n", "\\n")) + """ "$root"
@@ -537,7 +597,7 @@ def finish_script():
     return "#!/bin/sh\nset -eu\nmanager=none\n" + FINISH
 
 
-def customization_script():
+def customization_script(arch="x86_64"):
     """Run inside the new root: arguments hostname locale layout variant timezone
     display-manager session (both "none" for the console base) and, for the
     console base, the root filesystem's UUID."""
@@ -546,7 +606,7 @@ set -eu
 hostname=$1 locale=$2 layout=$3 variant=$4 zone=$5 manager=$6 session=$7 rootuuid=${8:-} mirror=${9:-}
 export DEBIAN_FRONTEND=noninteractive
 test "$(. /etc/os-release; printf '%s' "$ID:$VERSION_ID")" = debian:13
-test "$(dpkg --print-architecture)" = amd64
+test "$(dpkg --print-architecture)" = """ + DEB_ARCHES[arch] + """
 grep -qx "$locale UTF-8" /usr/share/i18n/SUPPORTED || { echo "unsupported locale $locale" >&2; exit 1; }
 test -f "/usr/share/zoneinfo/$zone" || { echo "unknown time zone $zone" >&2; exit 1; }
 if [ "$manager" = none ]; then
@@ -612,7 +672,7 @@ none)
     # apt-setup's sources.list, named after the netinst image of this point
     # release (built when base-files was), and the indexes it lists.
     built=$(zcat /usr/share/doc/base-files/changelog.gz | sed -n 's/^ -- .*>  //p' | head -n 1)
-    media="Debian GNU/Linux $(cat /etc/debian_version).0 _Trixie_ - Official amd64 NETINST with firmware $(date -u -d "$built" +%Y%m%d-%H:%M)"
+    media="Debian GNU/Linux $(cat /etc/debian_version).0 _Trixie_ - Official """ + DEB_ARCHES[arch] + """ NETINST with firmware $(date -u -d "$built" +%Y%m%d-%H:%M)"
     sources=""" + shlex.quote(SOURCES_LIST) + """
     url=$(printf '%s' "$mirror" | sed 's/[&|\\]/\\\\&/g')
     printf '%s' "$sources" | sed -e "s|{media}|$media|" -e "s|{mirror}|$url|g" > /etc/apt/sources.list
@@ -697,6 +757,35 @@ DEBIAN_KERNEL_PACKAGES = (
     ("linux-image-amd64", "6.12.94-1",
      "b37181a3638eea668b6b58f73b58bdb6dadffdd085d8c0a9bda7be1e276eb4ce"),
 )
+# The same for arm64: linux-signed-arm64 6.12.94+1's packages, from the same
+# snapshot of trixie-security.
+DEBIAN_KERNEL_PACKAGES_ARM64 = (
+    ("linux-image-6.12.94+deb13-arm64", "6.12.94-1",
+     "72db7fcfb443a4b03448bda98f4e7c1a1fa0d6c21fc57f0b119d704442f8ad49"),
+    ("linux-image-arm64", "6.12.94-1",
+     "15adcacff9420643f9f70856bc401ad2c3574cba99f65b650485026397dd4614"),
+)
+
+# Debian's arm64 System.map is a stub ("The real System.map is in the
+# linux-image-<version>-dbg package"), so the stock arm64 kernel's ABI check
+# takes Debian's exports and CRCs from this package's Module.symvers (3 MiB;
+# the build only reads it, the guest never gets it). Same snapshot.
+DEBIAN_KERNEL_SYMVERS_ARM64 = (
+    ("linux-headers-6.12.94+deb13-arm64", "6.12.94-1",
+     "97fc8465eefc6dc54fcf2655c9a7ea56b57af7a97f5a701e2a4f09675c19cf6d"),
+)
+
+
+def kernel_packages(arch="x86_64"):
+    """Debian's kernel packages of the architecture: (name, version, SHA-256)."""
+    return DEBIAN_KERNEL_PACKAGES if arch == "x86_64" else DEBIAN_KERNEL_PACKAGES_ARM64
+
+
+def kernel_package_release(arch="x86_64"):
+    """The release Debian's kernel package of the architecture installs."""
+    return kernel_packages(arch)[0][0].removeprefix("linux-image-")
+
+
 ARCHIVE_KEYRINGS = (Path("/usr/share/keyrings/debian-archive-keyring.pgp"),
                     Path("/usr/share/keyrings/debian-archive-keyring.gpg"))
 
@@ -787,12 +876,22 @@ def index_entries(packages, wanted, arch="amd64"):
     return found
 
 
-def debian_kernel_debs(cache, work, proxy=""):
-    """Debian's kernel packages (DEBIAN_KERNEL_PACKAGES), from cache when a
-    copy there matches its pinned SHA-256, else downloaded into cache (or work)
-    through the archive's signed index."""
-    return pinned_debs((DEBIAN_KERNEL_ARCHIVE, DEBIAN_KERNEL_SUITE, "amd64"),
-                       DEBIAN_KERNEL_PACKAGES, cache, work, proxy, "Debian kernel packages")
+def debian_kernel_debs(cache, work, proxy="", arch="x86_64"):
+    """Debian's kernel packages (DEBIAN_KERNEL_PACKAGES, or arm64's), from cache
+    when a copy there matches its pinned SHA-256, else downloaded into cache (or
+    work) through the archive's signed index."""
+    return pinned_debs((DEBIAN_KERNEL_ARCHIVE, DEBIAN_KERNEL_SUITE, DEB_ARCHES[arch]),
+                       kernel_packages(arch), cache, work, proxy, "Debian kernel packages")
+
+
+def debian_kernel_symvers_deb(cache, work, proxy="", arch="x86_64"):
+    """The package with Debian's Module.symvers for the ABI check, where the
+    kernel package has no table map (arm64); None where it has (x86-64)."""
+    if arch == "x86_64":
+        return None
+    return pinned_debs((DEBIAN_KERNEL_ARCHIVE, DEBIAN_KERNEL_SUITE, DEB_ARCHES[arch]),
+                       DEBIAN_KERNEL_SYMVERS_ARM64, cache, work, proxy,
+                       "Debian kernel headers")[0]
 
 
 def pinned_debs(source, packages, cache, work, proxy="", what="Debian packages"):
@@ -873,11 +972,11 @@ def deb_member(deb, wanted):
     raise RuntimeError(f"{deb.name} has no data archive")
 
 
-def stock_config(config, deb):
+def stock_config(config, deb, arch="x86_64"):
     """Refuse a console kernel whose configuration is not Debian's: Debian's
     modules load only into a kernel with its configuration (the stock kernel
     profile). deb is Debian's linux-image package (its /boot/config)."""
-    release = DEBIAN_KERNEL_PACKAGES[0][0].removeprefix("linux-image-")
+    release = kernel_package_release(arch)
     debian = deb_member(deb, lambda path: path == f"boot/config-{release}")
     if not debian:
         raise RuntimeError(f"{deb.name} has no boot/config-{release}")
@@ -914,14 +1013,15 @@ def modinfo(data):
     return {}
 
 
-def root_modules(deb):
+def root_modules(deb, arch="x86_64"):
     """Debian's modules the console base's initrd loads (ROOT_MODULE_GROUPS),
     decompressed (the kernel checks the signature Debian appended before
     compressing), for build-monitor-image.py's initrd_tree(); each module's
     dependencies load before it."""
     import lzma
-    release = DEBIAN_KERNEL_PACKAGES[0][0].removeprefix("linux-image-")
-    wanted = {name for _, names in ROOT_MODULE_GROUPS for name in names}
+    release = kernel_package_release(arch)
+    groups = root_module_groups(arch)
+    wanted = {name for _, names in groups for name in names}
     prefix = f"usr/lib/modules/{release}/kernel/"
     packed = deb_member(deb, lambda path: path.startswith(prefix)
                         and Path(path).name.removesuffix(".ko.xz") in wanted)
@@ -930,7 +1030,7 @@ def root_modules(deb):
     missing = wanted - set(files)
     if missing:
         raise RuntimeError(f"{deb.name} lacks the modules " + ", ".join(sorted(missing)))
-    for _, names in ROOT_MODULE_GROUPS:
+    for _, names in groups:
         loaded = set()
         for name in names:
             info = modinfo(files[name])
@@ -942,7 +1042,7 @@ def root_modules(deb):
             if unmet:
                 raise RuntimeError(f"{name} needs {', '.join(sorted(unmet))} loaded before it")
             loaded.add(name.replace("_", "-"))
-    return {"files": files, "groups": [(test, list(names)) for test, names in ROOT_MODULE_GROUPS],
+    return {"files": files, "groups": [(test, list(names)) for test, names in groups],
             "package": deb.name,
             "sha256": {f"/lib/modules/{name}.ko": hashlib.sha256(data).hexdigest()
                        for name, data in sorted(files.items())}}
@@ -1094,7 +1194,8 @@ def boot_loader_hooks(scripts, provenance):
     return ["--customize-hook=" + hook for hook in hooks]
 
 
-def mmdebstrap_command(values, tarball, script, provenance, times=None, kernel_debs=()):
+def mmdebstrap_command(values, tarball, script, provenance, times=None, kernel_debs=(),
+                       arch="x86_64"):
     """The mmdebstrap invocation; hooks run as (namespace) root with "$1" the new root.
     Every Debian base installs Debian's kernel packages (kernel_debs), whose
     modules its kernel loads."""
@@ -1107,8 +1208,8 @@ def mmdebstrap_command(values, tarball, script, provenance, times=None, kernel_d
                # distribution's on a non-Debian host).
                "--keyring=" + str(archive_keyring()),
                "--variant=" + ("standard" if values["standard"] else "important"),
-               "--architectures=amd64", "--format=tar",
-               "--include=" + ",".join(packages(values["desktop"])),
+               "--architectures=" + DEB_ARCHES[arch], "--format=tar",
+               "--include=" + ",".join(packages(values["desktop"], arch)),
                '--aptopt=APT::Install-Recommends "true"',
                "--aptopt=APT::Get::AllowUnauthenticated \"false\"",
                "--aptopt=Acquire::AllowInsecureRepositories \"false\"",
@@ -1135,7 +1236,7 @@ def mmdebstrap_command(values, tarball, script, provenance, times=None, kernel_d
                        '-y install ' + " ".join(f"/tmp/{deb.name}" for deb in kernel_debs))
         command.append('--customize-hook=rm -f ' + " ".join(f'"$1/tmp/{deb.name}"'
                                                          for deb in kernel_debs))
-        packaged = " ".join(name for name, _, _ in DEBIAN_KERNEL_PACKAGES)
+        packaged = " ".join(name for name, _, _ in kernel_packages(arch))
         # Debian's files as Debian shipped them: nothing for dpkg to report.
         verify = 'test -z "$(dpkg --verify ' + packaged + ')"'
         command.append(f'--customize-hook=chroot "$1" sh -c {q(verify)}')
@@ -1433,7 +1534,8 @@ def console_disk(raw, size, rng):
     return f"{raw}?offset={CONSOLE_ROOT_OFFSET}"
 
 
-def root_image(values, raw, staging, provenance, log, cache=None, debian_kernel=None):
+def root_image(values, raw, staging, provenance, log, cache=None, debian_kernel=None,
+               arch="x86_64"):
     """The root filesystem image. debian_kernel: the SHA-256 of Debian's kernel
     packages ("hashes") and the packages ("debs")."""
     tarball = staging / "rootfs.tar"
@@ -1442,16 +1544,16 @@ def root_image(values, raw, staging, provenance, log, cache=None, debian_kernel=
     root = load_rootfs_cache(cache, values, staging, provenance, log, kernel_hashes)
     if root is None:
         script = staging / "customize.sh"
-        script.write_text(customization_script())
+        script.write_text(customization_script(arch))
         shutil.copy2(script, provenance / "customize.sh")
         if values["desktop"] == CONSOLE:
-            for name, text in (("boot-loader.sh", boot_loader_script()),
+            for name, text in (("boot-loader.sh", boot_loader_script(arch)),
                                ("finish.sh", finish_script())):
                 (staging / name).write_text(text)
                 shutil.copy2(staging / name, provenance / name)
             shutil.copy2(REPO / "scripts/debian-uefi-delta.py", staging / "debian-uefi-delta.py")
         kernel_debs = debian_kernel["debs"] if debian_kernel else ()
-        command = mmdebstrap_command(values, tarball, script, provenance, times, kernel_debs)
+        command = mmdebstrap_command(values, tarball, script, provenance, times, kernel_debs, arch)
         (provenance / "mmdebstrap.json").write_text(json.dumps(command, indent=2) + "\n")
         # mmdebstrap assembles the system in $TMPDIR; /tmp is a small tmpfs on
         # Debian 13 (and in the cloud builder), far too small for a desktop.
@@ -1531,14 +1633,35 @@ def uefi_layout(staging, bundle):
     return {"paths": len(times), "removed": len(record["removed"])}
 
 
+def foreign_bootstrap(arch):
+    """Refuse a bootstrap of another architecture than this machine's unless it
+    runs in the QEMU builder VM with a binfmt handler for it: the guest's
+    maintainer scripts run under qemu-user there, never on a host."""
+    machine = {"x86_64": "x86_64", "arm64": "aarch64"}[arch]
+    if os.uname().machine == machine:
+        return
+    if os.environ.get("ANTINOMIE_BUILDER") != "1":
+        raise RuntimeError(f"a Debian {arch} base is bootstrapped only in the QEMU builder VM, "
+                           "whose own binfmt handler runs its maintainer scripts")
+    if not Path(f"/proc/sys/fs/binfmt_misc/qemu-{machine}").is_file():
+        raise RuntimeError(f"the builder VM has no binfmt handler for {machine} "
+                           "(qemu-user-static registers it)")
+
+
 def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=False,
           values=None, work=None, app_version=None, rootfs_cache=None, symbols=None,
-          kernel_package_cache=None):
+          kernel_package_cache=None, arch="x86_64"):
     if output.exists():
         raise RuntimeError("output already exists; choose a new unpublished bundle path")
     values = options(values or {})
     release = kernel_release(kernel)
     console = values["desktop"] == CONSOLE
+    if arch != "x86_64":
+        if not console:
+            raise RuntimeError(f"no {arch} recipe for the Debian desktops yet")
+        if not is_arm64_image(kernel):
+            raise RuntimeError("an arm64 Debian base needs an arm64 kernel Image")
+        foreign_bootstrap(arch)
     if modules is not None:
         raise RuntimeError("a Debian base loads Debian's own modules; build its kernel with "
                            "the stock profile and pass no modules")
@@ -1566,30 +1689,31 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         # Debian's own kernel packages, which must be the release the
         # Antinomie kernel reports, and loads their modules: the kernel must
         # have Debian's configuration.
-        if release.split()[0] != DEBIAN_KERNEL_PACKAGES[0][0].removeprefix("linux-image-"):
+        if release.split()[0] != kernel_package_release(arch):
             raise RuntimeError(f"kernel release {release.split()[0]} is not Debian's "
-                               f"{DEBIAN_KERNEL_PACKAGES[0][0]}")
+                               f"{kernel_packages(arch)[0][0]}")
         # /proc/version beside Debian's /boot/vmlinuz: the same banner, down to
         # the compiler and linker versions.
         banner = kernel_banner(kernel)
-        if banner != debian_banner():
+        if banner != debian_banner(arch):
             raise RuntimeError(f"the kernel's banner {banner!r} is not Debian's "
-                               f"{debian_banner()!r}; build it with Debian 13's compiler "
+                               f"{debian_banner(arch)!r}; build it with Debian 13's compiler "
                                "and linker (the QEMU builder)")
         packages_dir = staging / "kernel-packages"
         packages_dir.mkdir()
         packages_dir.chmod(0o755)
-        debs = debian_kernel_debs(kernel_package_cache, packages_dir, values["proxy"])
-        stock_config(kernel_config, debs[0])
-        initrd_modules = root_modules(debs[0])
-        debian_kernel = {"hashes": [sha for _, _, sha in DEBIAN_KERNEL_PACKAGES], "debs": debs}
-        # The initrd's programs: Debian's pinned packages, whatever the host runs.
+        debs = debian_kernel_debs(kernel_package_cache, packages_dir, values["proxy"], arch)
+        stock_config(kernel_config, debs[0], arch)
+        initrd_modules = root_modules(debs[0], arch)
+        debian_kernel = {"hashes": [sha for _, _, sha in kernel_packages(arch)], "debs": debs}
+        # The initrd's programs: Debian's pinned packages of the guest's
+        # architecture, whatever the host runs.
         userland = monitor_helpers().debian_userland(kernel_package_cache, packages_dir,
-                                                     values["proxy"])
+                                                     values["proxy"], arch)
         try:
             with log_path.open("w") as log:
                 root = root_image(values, raw, staging, provenance, log, rootfs_cache,
-                                  debian_kernel)
+                                  debian_kernel, arch)
         except (RuntimeError, subprocess.CalledProcessError):
             # The log dies with the staging directory; show why it failed.
             lines = log_path.read_text(errors="replace").splitlines()
@@ -1612,7 +1736,7 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
                   "options": values, "root": root,
                   "apt_authentication": "Debian signed indexes; insecure repositories disallowed",
                   "package_install_recommends": True,
-                  "requested_packages": list(requested_packages(values["desktop"])),
+                  "requested_packages": list(requested_packages(values["desktop"], arch)),
                   "package_inventory": "packages.tsv",
                   "kernel_sha256": hashes["kernel"], "kernel_release": release,
                   "kernel_banner": kernel_banner(kernel),
@@ -1631,6 +1755,8 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         if values["desktop"] == CONSOLE:
             # The app lays a UEFI disk out from these once per base.
             manifest["uefi_root"], manifest["uefi_layout"] = UEFI_FILES
+        if arch != "x86_64":
+            manifest["arch"] = arch
         if symbols:
             shutil.copy2(symbols, bundle / "symbols.json.xz")
             manifest["symbols"] = "symbols.json.xz"
@@ -1697,6 +1823,10 @@ def main():
     parser.add_argument("--rootfs-cache", type=Path,
                         help="reuse this bootstrapped root filesystem if it matches the recipe "
                              "and answers and is recent, else bootstrap and write it")
+    parser.add_argument("--arch", choices=tuple(DEB_ARCHES), default="x86_64",
+                        help="guest architecture; arm64 (the console base only) bootstraps "
+                             "Debian's arm64 system, in the QEMU builder VM unless this is an "
+                             "arm64 machine")
     args = parser.parse_args()
     if not args.kernel.is_file():
         parser.error("an existing patched Linux 6.12.94 kernel is required")
@@ -1711,7 +1841,7 @@ def main():
             raise RuntimeError("options must be a JSON object")
         build(args.kernel, args.output, args.kernel_config, None,
               args.allow_unversioned, values, args.work, args.app_version, args.rootfs_cache,
-              args.symbols, args.kernel_package_cache)
+              args.symbols, args.kernel_package_cache, args.arch)
     except (RuntimeError, OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, "Debian image build failed: " + str(error) + "\n")
     print(args.output)

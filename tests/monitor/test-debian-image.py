@@ -996,6 +996,64 @@ class DebianImageTests(unittest.TestCase):
             self.assertFalse(output.exists())
             self.assertEqual(list(Path(name).iterdir()), [kernel])
 
+    def test_an_arm64_console_base_bootstraps_debians_arm64_system(self):
+        values = image.options({"desktop": image.CONSOLE})
+        with patch.object(image.os, "geteuid", return_value=1000):
+            command = image.mmdebstrap_command(values, Path("/w/r.tar"), Path("/w/c.sh"),
+                                               Path("/w/p"), kernel_debs=[Path("/k/a.deb")],
+                                               arch="arm64")
+        self.assertIn("--architectures=arm64", command)
+        self.assertIn("dpkg --verify linux-image-6.12.94+deb13-arm64 linux-image-arm64",
+                      " ".join(command))
+        include = next(arg for arg in command if arg.startswith("--include="))
+        self.assertNotIn("grub", include)
+        # The installer's arm64 boot loader is UEFI's; the device-tree disk has none.
+        self.assertIn("grub-efi-arm64", image.requested_packages(image.CONSOLE, "arm64"))
+        self.assertNotIn("grub-pc", image.requested_packages(image.CONSOLE, "arm64"))
+        self.assertIn("grub-pc", image.requested_packages(image.CONSOLE))
+        script = image.boot_loader_script("arm64")
+        bios = script[script.index("bios)"):script.index("uefi)")]
+        self.assertNotIn("apt-get", bios)
+        self.assertIn("install grub-efi-arm64", script)
+        self.assertIn("grub-efi-arm64 grub2/force_efi_extra_removable", script)
+        self.assertEqual(image.boot_loader_script(), image.boot_loader_script("x86_64"))
+        customize = image.customization_script("arm64")
+        self.assertIn('test "$(dpkg --print-architecture)" = arm64', customize)
+        self.assertIn("Official arm64 NETINST", customize)
+        self.assertNotIn("amd64", customize)
+        # arm64's CRC32 is built in; the rest of the root modules are Debian's.
+        names = [name for _, group in image.root_module_groups("arm64") for name in group]
+        self.assertNotIn("crc32c-intel", names)
+        self.assertIn("ext4", names)
+        self.assertEqual(image.root_module_groups(), image.ROOT_MODULE_GROUPS)
+        self.assertEqual(image.kernel_package_release("arm64"), "6.12.94+deb13-arm64")
+
+    def test_a_foreign_bootstrap_runs_only_in_the_builder_vm(self):
+        x86 = os.uname_result(("Linux", "h", "6", "#1", "x86_64"))
+        with patch.object(image.os, "uname", return_value=x86), \
+                patch.dict(image.os.environ, {"ANTINOMIE_BUILDER": ""}):
+            with self.assertRaisesRegex(RuntimeError, "only in the QEMU builder VM"):
+                image.foreign_bootstrap("arm64")
+            image.foreign_bootstrap("x86_64")
+        arm = os.uname_result(("Linux", "h", "6", "#1", "aarch64"))
+        with patch.object(image.os, "uname", return_value=arm):
+            image.foreign_bootstrap("arm64")
+
+    def test_an_arm64_image_gives_its_release_and_banner(self):
+        banner = image.debian_banner("arm64")
+        self.assertTrue(banner.startswith("Linux version 6.12.94+deb13-arm64 "), banner)
+        data = bytearray(0x1000)
+        data[0x38:0x3c] = image.ARM64_IMAGE_MAGIC
+        data += b"\0" + banner.encode() + b"\n\0"
+        with tempfile.TemporaryDirectory() as name:
+            kernel = Path(name) / "Image"
+            kernel.write_bytes(bytes(data))
+            self.assertTrue(image.is_arm64_image(kernel))
+            self.assertEqual(image.kernel_banner(kernel), banner)
+            self.assertEqual(image.kernel_release(kernel),
+                             "6.12.94+deb13-arm64 (debian-kernel@lists.debian.org) "
+                             "#1 SMP Debian 6.12.94-1 (2026-06-20)")
+
     def test_kernel_version_checked_from_bzimage_header(self):
         with tempfile.TemporaryDirectory() as name:
             kernel = Path(name) / "kernel"

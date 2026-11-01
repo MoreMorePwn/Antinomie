@@ -29,10 +29,18 @@ import subprocess
 import tempfile
 
 # The Dockerfile packages the kernel steps use (source unpacking, patching,
-# configuring, compiling, BTF, module install, the banner check).
+# configuring, compiling, BTF, module install, the banner check), with the
+# arm64 cross compiler and linker a Debian arm64 kernel's banner names. As on
+# Debian's own arm64 build, the stock arm64 kernel also needs the 32-bit ARM
+# compiler and linker (its AArch32 vDSO, CONFIG_COMPAT_VDSO) and the arm64 C
+# library (CONFIG_CC_CAN_LINK): without them its configuration and BTF differ.
 PACKAGES = ("bc", "binutils", "bison", "ccache", "cpio", "dpkg-dev", "dwarves", "flex", "gcc",
             "gcc-14", "kmod", "libelf-dev", "libssl-dev", "make", "openssl", "patch", "perl",
-            "python3", "xz-utils", "zstd")
+            "python3", "xz-utils", "zstd", "gcc-14-aarch64-linux-gnu", "binutils-aarch64-linux-gnu",
+            "libc6-dev-arm64-cross", "gcc-14-arm-linux-gnueabihf", "binutils-arm-linux-gnueabihf")
+# Programs a complete chroot has (one per toolchain).
+COMPILERS = ("root/usr/bin/x86_64-linux-gnu-gcc-14", "root/usr/bin/aarch64-linux-gnu-gcc-14",
+             "root/usr/bin/arm-linux-gnueabihf-gcc-14")
 KEYRINGS = (Path("/usr/share/keyrings/debian-archive-keyring.pgp"),
             Path("/usr/share/keyrings/debian-archive-keyring.gpg"))
 MARKER = "ready.json"
@@ -79,7 +87,7 @@ def ready(directory, dockerfile):
     except (OSError, ValueError):
         return False
     return marker.get("dockerfile_sha256") == sha256(dockerfile) \
-        and (Path(directory) / "root/usr/bin/x86_64-linux-gnu-gcc-14").exists()
+        and all((Path(directory) / compiler).exists() for compiler in COMPILERS)
 
 
 def ensure(directory, dockerfile, log=print):

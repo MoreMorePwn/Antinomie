@@ -110,6 +110,7 @@ impl BuildWizard {
     }
     pub fn request(&self) -> BuildRequest {
         BuildRequest {
+            arch: Default::default(),
             profile: BUILD_PROFILES[self.profile].id.to_string(),
             mode: self.mode,
             options: self.options[self.profile].clone(),
