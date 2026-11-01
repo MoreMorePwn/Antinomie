@@ -50,6 +50,9 @@ pub(crate) struct WorkspaceState {
     regex_wanted: bool,
     /// The row last handed to the Details panel, so it is handed over once.
     published: Option<AnalysisEntry>,
+    /// A filter that finds the row a note names, applied to its section the
+    /// next time that section is drawn.
+    row_query: Option<(AnalysisKind, String)>,
 }
 
 /// The row the Details panel shows for Static analysis.
@@ -262,6 +265,11 @@ struct ViewState {
 }
 
 impl WorkspaceState {
+    /// Filter the `kind` section to the row a note names.
+    pub(crate) fn ask_row(&mut self, kind: AnalysisKind, query: String) {
+        self.row_query = Some((kind, query));
+    }
+
     /// Bring the tab that shows `kind` to the front.
     fn show(&mut self, kind: AnalysisKind) {
         (self.tab, self.file_info) = tabs::locate(kind, self.file_info);
@@ -493,6 +501,13 @@ fn results(
                 }
             });
     }
+    let wanted = state
+        .row_query
+        .take_if(|(wanted, _)| *wanted == kind)
+        .map(|(_, query)| query);
+    if wanted.is_some() {
+        state.structure = Structure::All;
+    }
     let filter = if kind == AnalysisKind::Structures {
         state.structure
     } else {
@@ -510,6 +525,10 @@ fn results(
         };
         state.active_view = Some(view_key.clone());
         let view = state.views.entry(view_key).or_default();
+        if let Some(query) = wanted {
+            view.listing.query = query;
+            view.listing.selected = None;
+        }
         view.listing.set_record(record_context);
         view.listing.scope = (kind == AnalysisKind::Structures).then_some(filter);
         view.listing.content = forced.is_none();
@@ -547,6 +566,10 @@ fn results(
     let view_key = format!("{kind:?}/{filter:?}");
     state.active_view = Some(view_key.clone());
     let view = state.views.entry(view_key).or_default();
+    if let Some(query) = wanted {
+        view.query = query;
+        view.selected = None;
+    }
     if kind == AnalysisKind::Entropy {
         if let Some(index) = super::entropy::chart(ui, section, report.specimen_len) {
             view.selected = Some(records::identity(index, &section.entries[index]));
@@ -592,7 +615,7 @@ fn results(
         filter,
         &indices,
         view,
-        report.specimen_len,
+        report,
         forced.is_none(),
     );
     state.run_row(command);
@@ -1065,7 +1088,7 @@ fn table(
     filter: Structure,
     indices: &[usize],
     view: &mut ViewState,
-    specimen_len: Option<u64>,
+    report: &AnalysisReport,
     content: bool,
 ) -> Option<RowCommand> {
     let legacy = indices
@@ -1146,7 +1169,7 @@ fn table(
                                 .map(|column| (column.label(), column.text(entry)))
                                 .collect();
                             if let Some(next) =
-                                row_menu::menu(ui, &cells, entry, specimen_len, content)
+                                row_menu::menu(ui, &cells, entry, report, section.kind, content)
                             {
                                 command = Some(next);
                             }

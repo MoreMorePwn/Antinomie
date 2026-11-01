@@ -59,6 +59,14 @@ fn peek_request(ctx: &egui::Context) -> Option<Request> {
     ctx.data(|data| data.get_temp::<Request>(request_id()))
 }
 
+/// The request a menu left, taken: the sample it names and the reference.
+#[cfg(test)]
+pub(crate) fn take_request_for_test(ctx: &egui::Context) -> Option<(Option<String>, NoteRef)> {
+    let request = peek_request(ctx)?;
+    clear_request(ctx);
+    Some((request.sample, request.reference))
+}
+
 fn clear_request(ctx: &egui::Context) {
     ctx.data_mut(|data| data.remove::<Request>(request_id()));
 }
@@ -75,6 +83,12 @@ fn kind_style(kind: RefKind) -> (&'static str, Tone) {
         RefKind::Artifact => (icon::FILE, Tone::Good),
         RefKind::Custody => (icon::SCROLL, Tone::Neutral),
         RefKind::Lineage => (icon::GRAPH, Tone::Neutral),
+        RefKind::Packet => (icon::ARROWS_LEFT_RIGHT, Tone::Info),
+        RefKind::Capture => (icon::NETWORK, Tone::Info),
+        RefKind::MemoryDump => (icon::MEMORY, Tone::Accent),
+        RefKind::DiskDump => (icon::HARD_DRIVES, Tone::Accent),
+        RefKind::ProcessCore => (icon::FILE_ARCHIVE, Tone::Good),
+        RefKind::StaticRow => (icon::MAGNIFYING_GLASS, Tone::Warn),
     }
 }
 
@@ -327,6 +341,18 @@ pub(super) fn reference_exists(reference: &NoteRef, data: &Data) -> bool {
                     .iter()
                     .any(|node| node.target == reference.target)
         }
+        // What a VM's panels hold is not part of the sample's data; the chip
+        // says so when it is opened and the target is gone.
+        RefKind::Packet
+        | RefKind::Capture
+        | RefKind::MemoryDump
+        | RefKind::DiskDump
+        | RefKind::ProcessCore => true,
+        RefKind::StaticRow => reference.static_row().is_some_and(|(report, _, _)| {
+            data.report
+                .as_ref()
+                .is_some_and(|kept| kept.report.id == report)
+        }),
     }
 }
 

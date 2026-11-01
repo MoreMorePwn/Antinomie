@@ -1835,3 +1835,90 @@ fn a_deleted_core_leaves_the_list_and_clears_the_viewer() {
     view.forget_core(&dir);
     assert!(view.records.is_empty() && view.selected.is_none());
 }
+
+#[test]
+fn a_note_chip_selects_its_core_and_a_core_row_names_the_vm_and_the_core() {
+    use antinomie_monitor_core::samples::{core_target, imported_core_target, RefKind};
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let size = egui::vec2(900.0, 700.0);
+    let mut fixture = Fixture::new();
+    let view = &mut fixture.view;
+    view.vm_id = Some("chosen".into());
+    let directory = fixture.directory.join("core-captures/manual");
+    fs::create_dir_all(&directory).unwrap();
+    view.manual.push(ProcessCoreCapture {
+        format: 1,
+        id: "manual".into(),
+        vm_id: "chosen".into(),
+        boot_id: "boot".into(),
+        source_run_id: None,
+        restored_from_capture_id: None,
+        target: antinomie_monitor_core::GuestProcessIdentity {
+            boot_id: "boot".into(),
+            task_cookie: 42,
+            tgid: 123,
+            start_boot_ns: 1,
+        },
+        directory: directory.clone(),
+        file: None,
+        state: antinomie_monitor_core::RunArtifactState::WaitingForRootExit,
+        phase: ProcessCorePhase::Admission,
+        stored_size: 0,
+        guest_size: None,
+        sha256: None,
+        pause_released: None,
+        max_size: 1024 * 1024,
+        timeout_ms: 5000,
+        nonce: [1, 2],
+        guest_handle: None,
+        guest_status: None,
+        issue: None,
+        requested_max_size: None,
+        guest_max_size: None,
+        stored_bytes: None,
+        expected_size: None,
+        allocated_size: None,
+        reason: None,
+    });
+    // The imported core's folder is the fixture's own directory.
+    let folder = fixture
+        .directory
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    view.selected = None;
+    view.selected_directory = None;
+    view.ask_note_target("manual".into());
+    settle(&ctx, view, size);
+    assert_eq!(view.selected_directory.as_ref(), Some(&directory));
+    assert!(view.note_target.is_none());
+
+    view.ask_note_target(format!("imported/{folder}"));
+    settle(&ctx, view, size);
+    assert_eq!(view.selected_directory.as_ref(), Some(&fixture.directory));
+
+    // While a core is being opened the request waits (a click would too).
+    view.ask_note_target("vanished".into());
+    render(&ctx, view, size, Vec::new());
+    assert!(view.job.is_none() || view.pending_note_target() == Some("vanished"));
+
+    // The references the rows give, and how they read back.
+    let manual = core_target("chosen", "manual");
+    let reference = antinomie_monitor_core::samples::NoteRef::new(
+        RefKind::ProcessCore,
+        &manual,
+        "Core PID 123 · manual",
+    );
+    assert_eq!(
+        (reference.vm_id(), reference.item()),
+        (Some("chosen"), Some("manual"))
+    );
+    let imported = antinomie_monitor_core::samples::NoteRef::new(
+        RefKind::ProcessCore,
+        imported_core_target("chosen", &folder),
+        "Imported core",
+    );
+    assert_eq!(imported.imported_core(), Some(folder.as_str()));
+}

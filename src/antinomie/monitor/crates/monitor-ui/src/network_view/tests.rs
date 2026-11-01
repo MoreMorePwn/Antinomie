@@ -40,6 +40,7 @@ fn disconnected_capture_warning_is_visible_while_inspecting_saved_packets() {
                         view.show(
                             ui,
                             NetworkContext {
+                                vm_id: None,
                                 active: None,
                                 recordings: None,
                                 recording_roots: &[],
@@ -595,6 +596,7 @@ fn network_frame(
                 view.show(
                     ui,
                     NetworkContext {
+                        vm_id: None,
                         active: None,
                         recordings: None,
                         recording_roots: &[],
@@ -782,6 +784,7 @@ fn delete_frame(
                 action = view.show(
                     ui,
                     NetworkContext {
+                        vm_id: None,
                         active: None,
                         recordings: None,
                         recording_roots: &[],
@@ -959,6 +962,7 @@ fn without_tshark_the_list_is_raw_frames_with_a_clear_notice() {
                     view.show(
                         ui,
                         NetworkContext {
+                            vm_id: None,
                             active: None,
                             recordings: None,
                             recording_roots: &[],
@@ -1037,6 +1041,7 @@ fn big_capture_frame_times() {
                     view.show(
                         ui,
                         NetworkContext {
+                            vm_id: None,
                             active: None,
                             recordings: None,
                             recording_roots: &[],
@@ -1214,4 +1219,53 @@ fn packet_rows_sort_by_every_header_column_and_keep_ties_in_order() {
         ),
         [2, 0]
     );
+}
+
+#[test]
+fn a_note_chip_opens_its_capture_and_frame_and_a_deleted_capture_says_so() {
+    use antinomie_monitor_core::samples::RefKind;
+    let (ctx, mut view) = view_with_capture();
+    view.record_filter = "name contains nothing".into();
+    view.ask_note_target("cap-1".into(), Some(7));
+    for frame in 0..3 {
+        network_frame(&ctx, &mut view, f64::from(frame) * 0.1, vec![]);
+    }
+    assert_eq!(
+        view.loaded_path(),
+        Some(Path::new("/fixture/net/cap-1.pcap")),
+        "the capture is open"
+    );
+    assert!(view.record_filter.is_empty(), "no record filter hides it");
+    assert!(view.note_target.is_none());
+    assert!(
+        view.display_jump == Some(7) || view.display_jump_note.is_some(),
+        "the frame is being located or the note says why not"
+    );
+    // The capture alone shows its record in Details.
+    view.ask_note_target("cap-1".into(), None);
+    network_frame(&ctx, &mut view, 1.0, vec![]);
+    assert!(view.capture_details.is_some());
+    // A capture that was deleted since the note was written.
+    view.ask_note_target("cap-gone".into(), Some(3));
+    network_frame(&ctx, &mut view, 2.0, vec![]);
+    assert!(view.loaded_path().is_none());
+    assert!(view
+        .display_jump_note
+        .as_ref()
+        .is_some_and(|note| note.contains("cap-gone") && note.contains("deleted")));
+    // A packet's note names the VM, the capture and the frame.
+    view.open(Some(PathBuf::from("/fixture/net/cap-1.pcap")));
+    let packet = NetworkPacket {
+        number: 12,
+        protocol: "TCP".into(),
+        source: "10.0.0.2".into(),
+        destination: "1.1.1.1".into(),
+        ..Default::default()
+    };
+    let reference = view.packet_note(Some("vm1"), &packet).unwrap();
+    assert_eq!(reference.kind, RefKind::Packet);
+    assert_eq!(reference.target, "vm1/cap-1/12");
+    assert_eq!(reference.frame(), Some(12));
+    assert!(reference.label.contains("TCP 10.0.0.2 to 1.1.1.1"));
+    assert!(view.packet_note(None, &packet).is_none());
 }

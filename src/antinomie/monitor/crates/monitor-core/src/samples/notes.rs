@@ -3,7 +3,9 @@
 //!
 //! A note is free text the analyst wrote. Its references are links to a run,
 //! a process, a call, one entry of the Syscall Trace, an indicator, an artefact, a custody entry or a node of
-//! the lineage graph. A reference keeps the label it had when the note was
+//! the lineage graph, and to what a VM's panels hold: a packet, a network
+//! capture, a memory or disk dump, a process core, or a row of a static
+//! analysis report. A reference keeps the label it had when the note was
 //! saved, so it still reads well after the thing it names is gone.
 //!
 //! Adding, editing and deleting a note each add an entry to the sample's
@@ -62,10 +64,26 @@ pub enum RefKind {
     Custody,
     /// A node of the lineage graph; the node's SHA-256 or path key.
     Lineage,
+    /// One frame of a network capture of a VM: `<vm id>/<capture id>/<frame
+    /// number>`, see [`packet_target`]. The note jumps to the frame.
+    Packet,
+    /// A network capture of a VM; `<vm id>/<capture id>`.
+    Capture,
+    /// A memory dump of a VM; `<vm id>/<dump id>`.
+    MemoryDump,
+    /// A disk dump of a VM; `<vm id>/<dump id>`.
+    DiskDump,
+    /// A process core: one taken by hand, `<vm id>/<core id>`, or an imported
+    /// one, `<vm id>/imported/<folder name>`; see [`core_target`] and
+    /// [`imported_core_target`].
+    ProcessCore,
+    /// One row of a static analysis report: `<report id>/<section>/<row>`,
+    /// see [`static_row_target`].
+    StaticRow,
 }
 
 impl RefKind {
-    pub const ALL: [RefKind; 8] = [
+    pub const ALL: [RefKind; 14] = [
         Self::Run,
         Self::Process,
         Self::Call,
@@ -74,6 +92,12 @@ impl RefKind {
         Self::Artifact,
         Self::Custody,
         Self::Lineage,
+        Self::Packet,
+        Self::Capture,
+        Self::MemoryDump,
+        Self::DiskDump,
+        Self::ProcessCore,
+        Self::StaticRow,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -86,6 +110,12 @@ impl RefKind {
             Self::Artifact => "artifact",
             Self::Custody => "custody",
             Self::Lineage => "lineage",
+            Self::Packet => "packet",
+            Self::Capture => "capture",
+            Self::MemoryDump => "memory_dump",
+            Self::DiskDump => "disk_dump",
+            Self::ProcessCore => "process_core",
+            Self::StaticRow => "static_row",
         }
     }
 
@@ -104,6 +134,12 @@ impl RefKind {
             Self::Artifact => "Artifact",
             Self::Custody => "Custody entry",
             Self::Lineage => "Lineage node",
+            Self::Packet => "Packet",
+            Self::Capture => "Network capture",
+            Self::MemoryDump => "Memory dump",
+            Self::DiskDump => "Disk dump",
+            Self::ProcessCore => "Process core",
+            Self::StaticRow => "Static analysis row",
         }
     }
 }
@@ -147,6 +183,87 @@ impl NoteRef {
         }
         self.target.splitn(3, '/').nth(2)?.parse().ok()
     }
+
+    /// The VM a packet, capture, memory dump, disk dump or process core
+    /// reference names.
+    pub fn vm_id(&self) -> Option<&str> {
+        match self.kind {
+            RefKind::Packet
+            | RefKind::Capture
+            | RefKind::MemoryDump
+            | RefKind::DiskDump
+            | RefKind::ProcessCore => self.target.split('/').next(),
+            _ => None,
+        }
+    }
+
+    /// What follows the VM in the target: the capture id of a packet or
+    /// capture, the dump id of a dump, the id of a core (an imported one:
+    /// `imported/<folder name>`).
+    pub fn item(&self) -> Option<&str> {
+        match self.kind {
+            RefKind::Packet => self.target.splitn(3, '/').nth(1),
+            RefKind::Capture | RefKind::MemoryDump | RefKind::DiskDump | RefKind::ProcessCore => {
+                self.target.split_once('/').map(|(_, rest)| rest)
+            }
+            _ => None,
+        }
+    }
+
+    /// The frame number of a packet reference.
+    pub fn frame(&self) -> Option<u64> {
+        if self.kind != RefKind::Packet {
+            return None;
+        }
+        self.target.splitn(3, '/').nth(2)?.parse().ok()
+    }
+
+    /// The report, section and row of a static analysis row reference.
+    pub fn static_row(&self) -> Option<(&str, &str, &str)> {
+        if self.kind != RefKind::StaticRow {
+            return None;
+        }
+        let mut parts = self.target.splitn(3, '/');
+        Some((parts.next()?, parts.next()?, parts.next()?))
+    }
+
+    /// The folder name of an imported process core reference.
+    pub fn imported_core(&self) -> Option<&str> {
+        if self.kind != RefKind::ProcessCore {
+            return None;
+        }
+        self.item()?.strip_prefix(IMPORTED)?.strip_prefix('/')
+    }
+}
+
+/// What an imported process core's id starts with, after its VM.
+const IMPORTED: &str = "imported";
+
+/// The target of a packet reference: the capture and the frame's number.
+pub fn packet_target(vm_id: &str, capture_id: &str, frame: u64) -> String {
+    format!("{vm_id}/{capture_id}/{frame}")
+}
+
+/// The target of a network capture, a memory dump or a disk dump reference.
+pub fn vm_item_target(vm_id: &str, id: &str) -> String {
+    format!("{vm_id}/{id}")
+}
+
+/// The target of a process core taken from a VM.
+pub fn core_target(vm_id: &str, core_id: &str) -> String {
+    format!("{vm_id}/{core_id}")
+}
+
+/// The target of an imported process core: its folder's name, kept with the
+/// recordings of a VM.
+pub fn imported_core_target(vm_id: &str, folder: &str) -> String {
+    format!("{vm_id}/{IMPORTED}/{folder}")
+}
+
+/// The target of a static analysis row: the report, the section's name and
+/// the row's key (its record number, else its offset).
+pub fn static_row_target(report_id: &str, section: &str, row: &str) -> String {
+    format!("{report_id}/{section}/{row}")
 }
 
 /// The target of a trace-entry reference: the run and the entry's event
@@ -217,8 +334,9 @@ fn check(text: &str, refs: &[NoteRef]) -> Result<String, String> {
 }
 
 /// The references as the custody log and its exports name them. A trace
-/// entry also gives its run and event sequence, so a reader of the export can
-/// find the record without the label.
+/// entry also gives its run and event sequence, a packet its capture and
+/// frame, and the other new kinds their ids, so a reader of the export can
+/// find the target without the label.
 fn labels(refs: &[NoteRef]) -> String {
     refs.iter()
         .map(
@@ -226,7 +344,34 @@ fn labels(refs: &[NoteRef]) -> String {
                 (RefKind::Trace, Some((_, run)), Some(seq)) => {
                     format!("{} [run {run}, event {seq}]", reference.label)
                 }
-                _ => reference.label.clone(),
+                _ => match reference.kind {
+                    RefKind::Packet => format!(
+                        "{} [capture {}, frame {}]",
+                        reference.label,
+                        reference.item().unwrap_or("?"),
+                        reference.frame().unwrap_or(0)
+                    ),
+                    RefKind::Capture => {
+                        format!(
+                            "{} [capture {}]",
+                            reference.label,
+                            reference.item().unwrap_or("?")
+                        )
+                    }
+                    RefKind::MemoryDump | RefKind::DiskDump | RefKind::ProcessCore => format!(
+                        "{} [{} {}]",
+                        reference.label,
+                        reference.kind.label().to_lowercase(),
+                        reference.item().unwrap_or("?")
+                    ),
+                    RefKind::StaticRow => match reference.static_row() {
+                        Some((report, section, row)) => {
+                            format!("{} [report {report}, {section} row {row}]", reference.label)
+                        }
+                        None => reference.label.clone(),
+                    },
+                    _ => reference.label.clone(),
+                },
             },
         )
         .collect::<Vec<_>>()

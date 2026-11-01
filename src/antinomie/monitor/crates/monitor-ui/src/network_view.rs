@@ -46,6 +46,8 @@ pub(crate) enum NetworkAction {
 
 /// The selected VM, as the panel needs it.
 pub(crate) struct NetworkContext<'a> {
+    /// The selected VM: what a note about a packet or a capture names.
+    pub vm_id: Option<&'a str>,
     /// The VM's running network capture.
     pub active: Option<&'a NetworkCapture>,
     /// The VM's recording folder.
@@ -133,6 +135,9 @@ pub(crate) struct NetworkView {
     /// The running capture (id, file) last seen, to notice a start or stop.
     seen_active: Option<(String, PathBuf)>,
     hide_list: bool,
+    /// A capture (and frame) a note's chip asked for, opened once the VM's
+    /// captures are listed.
+    note_target: Option<(String, Option<u64>)>,
     /// Details shows the clicked capture's record, until a packet is chosen.
     capture_details: Option<(NetworkCapture, bool)>,
     /// TShark's details of the selected packet, the lines the user expanded
@@ -330,6 +335,64 @@ impl NetworkView {
         self.reset_display_capture();
         self.jump_to_frame(frame_number)
     }
+    /// A note's chip asks for a capture, and one of its frames: they open the
+    /// next time the panel is drawn, when the VM's captures are listed.
+    pub(crate) fn ask_note_target(&mut self, capture_id: String, frame: Option<u64>) {
+        self.note_target = Some((capture_id, frame));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_note_target(&self) -> Option<&(String, Option<u64>)> {
+        self.note_target.as_ref()
+    }
+
+    fn open_note_target(&mut self, id: &str, frame: Option<u64>, cx: &NetworkContext<'_>) {
+        let found = cx
+            .active
+            .filter(|active| active.id == id)
+            .map(|active| (active.clone(), true))
+            .or_else(|| {
+                self.captures
+                    .iter()
+                    .find(|capture| capture.id == id)
+                    .map(|capture| (capture.clone(), false))
+            });
+        let Some((capture, live)) = found else {
+            self.open(None);
+            self.display_jump_note = Some(format!(
+                "Capture {id} is no longer among this VM's captures (it was deleted)."
+            ));
+            return;
+        };
+        // A record filter that hides the capture would close it again.
+        self.record_filter.clear();
+        self.open(Some(capture.file.clone()));
+        self.capture_details = frame.is_none().then(|| (capture, live));
+        if let Some(frame) = frame {
+            if let Err(error) = self.jump_to_evidence(frame) {
+                self.display_jump_note = Some(error);
+            }
+        }
+    }
+
+    /// The reference "Add note…" gives a packet of the open capture.
+    pub(super) fn packet_note(
+        &self,
+        vm_id: Option<&str>,
+        packet: &NetworkPacket,
+    ) -> Option<antinomie_monitor_core::samples::NoteRef> {
+        use antinomie_monitor_core::samples::{packet_target, NoteRef, RefKind};
+        let capture = self.list.path.as_deref()?.file_stem()?.to_string_lossy();
+        Some(NoteRef::new(
+            RefKind::Packet,
+            packet_target(vm_id?, &capture, packet.number),
+            format!(
+                "Packet {} · {} {} to {}",
+                packet.number, packet.protocol, packet.source, packet.destination
+            ),
+        ))
+    }
+
     /// A deleted capture leaves the list, the packet view and Details.
     pub(crate) fn forget_capture(&mut self, file: &Path) {
         self.captures.retain(|capture| capture.file != file);
@@ -456,6 +519,9 @@ impl NetworkView {
                 self.open(Some(file.clone()));
             }
             self.seen_active = active.clone();
+        }
+        if let Some((id, frame)) = self.note_target.take() {
+            self.open_note_target(&id, frame, &cx);
         }
         let is_live =
             active.is_some() && self.list.path.as_ref() == active.as_ref().map(|(_, file)| file);

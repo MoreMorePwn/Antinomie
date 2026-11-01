@@ -155,6 +155,9 @@ enum Tab {
 
 #[derive(Default)]
 pub(crate) struct CoreView {
+    /// A core a note's chip asked for (a taken core's id, or
+    /// `imported/<folder>`), selected when the list is drawn.
+    note_target: Option<String>,
     roots: Vec<PathBuf>,
     vm_id: Option<String>,
     catalog_checked: Option<Instant>,
@@ -214,6 +217,17 @@ pub(crate) struct CoreView {
     strings: strings::StringsState,
 }
 impl CoreView {
+    /// A note's chip asks for a core of the selected VM: the list selects it
+    /// the next time it is drawn.
+    pub(crate) fn ask_note_target(&mut self, item: String) {
+        self.note_target = Some(item);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_note_target(&self) -> Option<&str> {
+        self.note_target.as_deref()
+    }
+
     fn fail(&mut self, message: String) {
         self.status_notice = Some((crate::activity::Level::Error, message.clone()));
         self.status = message;

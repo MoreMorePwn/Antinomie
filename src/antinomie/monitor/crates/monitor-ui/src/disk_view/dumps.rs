@@ -198,6 +198,27 @@ fn dump_row(
 }
 
 impl DiskView {
+    /// A note's chip asks for a dump of the selected VM: the list selects it
+    /// the next time it is drawn.
+    pub(crate) fn ask_note_target(&mut self, id: String) {
+        self.note_target = Some(id);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_note_target(&self) -> Option<&str> {
+        self.note_target.as_deref()
+    }
+
+    /// The reference "Add note…" gives a dump.
+    pub(super) fn note_reference(dump: &DiskDump) -> antinomie_monitor_core::samples::NoteRef {
+        use antinomie_monitor_core::samples::{vm_item_target, NoteRef, RefKind};
+        NoteRef::new(
+            RefKind::DiskDump,
+            vm_item_target(&dump.vm_id, &dump.id),
+            format!("Disk dump · {}", dump_title(dump)),
+        )
+    }
+
     /// Read the dumps of these recording folders.
     pub(super) fn scan(&mut self, roots: &[PathBuf]) {
         self.dumps = dump::list(roots).into_iter().map(Row::new).collect();
@@ -296,6 +317,17 @@ impl DiskView {
     /// The saved dumps with their filter, newest first.
     pub(super) fn dump_list(&mut self, ui: &mut egui::Ui, cx: &DiskContext<'_>) {
         let fields = dump_fields();
+        if let Some(id) = self.note_target.take() {
+            if self.dumps.iter().any(|row| row.dump.id == id) {
+                query::clear_table_filter(ui, "disk-dump-history");
+                self.entry = Entry::Dump(id);
+            } else {
+                self.status = Some((
+                    format!("Disk dump {id} is no longer among this VM's dumps (it was deleted)."),
+                    true,
+                ));
+            }
+        }
         let annotations: Vec<_> = self
             .dumps
             .iter()
@@ -425,7 +457,15 @@ impl DiskView {
         let dump = &row.dump;
         let mut choice = None;
         evidence::menu(ui, &dump.dir);
-        query::table_row_menu(ui, filter_id, &dump_row(dump, annotation));
+        query::table_row_menu_with(
+            ui,
+            filter_id,
+            &dump_row(dump, annotation),
+            query::RowMenuExtras {
+                note: Some((None, Self::note_reference(dump))),
+                ..Default::default()
+            },
+        );
         ui.separator();
         if ui.button("Copy path").clicked() {
             choice = Some(RowMenu::CopyPath(index));

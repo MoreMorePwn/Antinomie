@@ -242,6 +242,7 @@ impl MonitorApp {
                 let action = self.network_view.show(
                     ui,
                     NetworkContext {
+                        vm_id: vm.as_deref(),
                         active: active.as_ref(),
                         recordings: recordings.as_deref(),
                         recording_roots,
@@ -425,6 +426,12 @@ impl MonitorApp {
                     .take_if(|(id, wanted, _)| id == report_id && wanted == kind)
                 {
                     view.state.show_sub_tab(sub);
+                }
+                if let Some((_, _, query)) = self
+                    .pending_static_row
+                    .take_if(|(id, wanted, _)| id == report_id && wanted == kind)
+                {
+                    view.state.ask_row(*kind, query);
                 }
                 let action = crate::analysis::workspace_section(
                     ui,

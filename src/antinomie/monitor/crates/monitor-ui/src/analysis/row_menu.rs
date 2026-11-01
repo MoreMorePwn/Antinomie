@@ -39,15 +39,117 @@ pub(super) fn copy_label(title: &str) -> String {
     format!("Copy {}", title.to_lowercase())
 }
 
+/// The key a note keeps for a row, and the query that finds it again: its
+/// record number, else its file offset; a row with neither has no key.
+pub(super) fn row_key(entry: &AnalysisEntry) -> Option<(String, String)> {
+    if let Some(record) = &entry.record {
+        return Some((
+            format!("id:{}", record.id),
+            format!("record.id == {}", record.id),
+        ));
+    }
+    entry
+        .offset
+        .map(|offset| (format!("off:{offset}"), format!("offset == {offset}")))
+}
+
+/// The filter that shows the row a note's key names, if it is one.
+pub(crate) fn key_query(key: &str) -> Option<String> {
+    match key.split_once(':')? {
+        ("id", number) => Some(format!("record.id == {}", number.parse::<u64>().ok()?)),
+        ("off", number) => Some(format!("offset == {}", number.parse::<u64>().ok()?)),
+        _ => None,
+    }
+}
+
+/// The reference "Add note…" gives a row of `report`'s `kind` section.
+pub(super) fn note_ref(
+    report: &AnalysisReport,
+    kind: AnalysisKind,
+    entry: &AnalysisEntry,
+) -> antinomie_monitor_core::samples::NoteRef {
+    use antinomie_monitor_core::samples::{static_row_target, NoteRef, RefKind};
+    let key = row_key(entry).map_or_else(|| "none".to_owned(), |(key, _)| key);
+    let label: String = entry.label.chars().take(60).collect();
+    NoteRef::new(
+        RefKind::StaticRow,
+        static_row_target(&report.id, kind_name(kind), &key),
+        format!("Static · {} · {label}", super::section_title(kind)),
+    )
+}
+
+/// The name of a section in a note's target.
+pub(crate) fn kind_name(kind: AnalysisKind) -> &'static str {
+    // Matches the serde names of `AnalysisKind`.
+    match kind {
+        AnalysisKind::Metadata => "metadata",
+        AnalysisKind::Structures => "structures",
+        AnalysisKind::Strings => "strings",
+        AnalysisKind::Regex => "regex",
+        AnalysisKind::Entropy => "entropy",
+        AnalysisKind::Hardening => "hardening",
+        AnalysisKind::Rules => "rules",
+        AnalysisKind::Identification => "identification",
+        AnalysisKind::Capabilities => "capabilities",
+        AnalysisKind::Disassembly => "disassembly",
+        AnalysisKind::Decompilation => "decompilation",
+        AnalysisKind::Embedded => "embedded",
+        AnalysisKind::Floss => "floss",
+        AnalysisKind::Unpacking => "unpacking",
+    }
+}
+
+/// The section a note's target names.
+pub(crate) fn kind_of_name(name: &str) -> Option<AnalysisKind> {
+    [
+        AnalysisKind::Metadata,
+        AnalysisKind::Structures,
+        AnalysisKind::Strings,
+        AnalysisKind::Regex,
+        AnalysisKind::Entropy,
+        AnalysisKind::Hardening,
+        AnalysisKind::Rules,
+        AnalysisKind::Identification,
+        AnalysisKind::Capabilities,
+        AnalysisKind::Disassembly,
+        AnalysisKind::Decompilation,
+        AnalysisKind::Embedded,
+        AnalysisKind::Floss,
+        AnalysisKind::Unpacking,
+    ]
+    .into_iter()
+    .find(|kind| kind_name(*kind) == name)
+}
+
+/// "Add note…" for a row: the note goes to the sample the report analysed.
+fn note_item(
+    ui: &mut egui::Ui,
+    report: &AnalysisReport,
+    kind: AnalysisKind,
+    entry: &AnalysisEntry,
+) {
+    match report.specimen_sha256.as_deref() {
+        Some(sha256) => {
+            crate::app::note_menu_item(ui, Some(sha256), note_ref(report, kind, entry));
+        }
+        None => {
+            ui.add_enabled(false, egui::Button::new("Add note…"))
+                .on_disabled_hover_text("This report did not record its specimen's SHA-256");
+        }
+    }
+}
+
 /// The menu items of one row. `cells` holds each visible column's title and
 /// its complete value; `content` offers the Content tab as a destination.
 pub(super) fn menu(
     ui: &mut egui::Ui,
     cells: &[(&str, String)],
     entry: &AnalysisEntry,
-    specimen_len: Option<u64>,
+    report: &AnalysisReport,
+    kind: AnalysisKind,
     content: bool,
 ) -> Option<RowCommand> {
+    let specimen_len = report.specimen_len;
     let mut command = None;
     ui.set_min_width(190.0);
     for (title, value) in cells {
@@ -82,6 +184,8 @@ pub(super) fn menu(
             ui.close_menu();
         }
     }
+    ui.separator();
+    note_item(ui, report, kind, entry);
     command
 }
 

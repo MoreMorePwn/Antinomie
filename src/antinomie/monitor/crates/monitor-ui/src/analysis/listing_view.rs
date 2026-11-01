@@ -499,13 +499,9 @@ pub(super) fn show(
                                         row_text::texts(kind, state.scope, entry)
                                     })
                                     .collect();
-                                if let Some(next) = row_menu::menu(
-                                    ui,
-                                    &cells,
-                                    entry,
-                                    report.specimen_len,
-                                    state.content,
-                                ) {
+                                if let Some(next) =
+                                    row_menu::menu(ui, &cells, entry, report, kind, state.content)
+                                {
                                     state.command = Some(next);
                                 }
                                 ui.separator();

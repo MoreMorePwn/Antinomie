@@ -174,6 +174,29 @@ impl CoreView {
         let mut file_action: Option<(bool, PathBuf)> = None;
         let mut project_action = None;
         let mut delete = None;
+        if self.job.is_none() {
+            if let Some(item) = self.note_target.take() {
+                crate::query::clear_table_filter(ui, "core-history");
+                let imported = item.strip_prefix("imported/");
+                if let Some(record) = self.records.iter().find(|record| {
+                    imported.is_some_and(|folder| {
+                        record.dir.file_name().is_some_and(|name| name == folder)
+                    })
+                }) {
+                    imported_selection = Some(record.clone());
+                } else if let Some(core) = self
+                    .manual
+                    .iter()
+                    .find(|core| imported.is_none() && core.id == item)
+                {
+                    acquired_selection = Some((core.directory.clone(), core.file.clone()));
+                } else {
+                    self.status =
+                        format!("Core {item} is no longer among this VM's cores (it was deleted).");
+                }
+            }
+        }
+        let note_vm = self.vm_id.clone();
         let font_size = egui::TextStyle::Body.resolve(ui.style()).size;
         let mut fields = crate::query::LABEL_FIELDS.to_vec();
         fields.extend(crate::query::CAPTURE_FIELDS);
@@ -296,7 +319,25 @@ impl CoreView {
                     let core_file = core.file.clone();
                     row.context_menu(|ui| {
                         crate::evidence::menu(ui, &core.directory);
-                        crate::query::table_row_menu(ui, filter_id, &manual_filter_row(ui, core));
+                        crate::query::table_row_menu_with(
+                            ui,
+                            filter_id,
+                            &manual_filter_row(ui, core),
+                            crate::query::RowMenuExtras {
+                                note: Some((
+                                    None,
+                                    antinomie_monitor_core::samples::NoteRef::new(
+                                        antinomie_monitor_core::samples::RefKind::ProcessCore,
+                                        antinomie_monitor_core::samples::core_target(
+                                            &core.vm_id,
+                                            &core.id,
+                                        ),
+                                        format!("Core PID {} · {}", core.target.tgid, core.id),
+                                    ),
+                                )),
+                                ..Default::default()
+                            },
+                        );
                         core_file_menu(ui, core_file.as_deref(), &mut file_action);
                         core_project_menu(
                             ui,
@@ -436,10 +477,31 @@ impl CoreView {
                     let core_file = record.core.source.clone();
                     row.context_menu(|ui| {
                         crate::evidence::menu(ui, &record.dir);
-                        crate::query::table_row_menu(
+                        let folder = record
+                            .dir
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned());
+                        let note = note_vm.as_deref().zip(folder).map(|(vm, folder)| {
+                            (
+                                None,
+                                antinomie_monitor_core::samples::NoteRef::new(
+                                    antinomie_monitor_core::samples::RefKind::ProcessCore,
+                                    antinomie_monitor_core::samples::imported_core_target(
+                                        vm, &folder,
+                                    ),
+                                    format!("Imported core {}", record.label),
+                                ),
+                            )
+                        });
+                        crate::query::table_row_menu_with(
                             ui,
                             filter_id,
                             &imported_filter_row(ui, record),
+                            crate::query::RowMenuExtras {
+                                no_note: note.is_none().then_some("Select a VM first"),
+                                note,
+                                ..Default::default()
+                            },
                         );
                         core_file_menu(ui, Some(&core_file), &mut file_action);
                         core_project_menu(ui, &record.dir, self.job.is_none(), &mut project_action);

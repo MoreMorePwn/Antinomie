@@ -2412,3 +2412,33 @@ fn native_disks_fixture() {
     )
     .unwrap();
 }
+
+#[test]
+fn a_note_chip_selects_its_dump_and_a_gone_dump_says_so() {
+    use antinomie_monitor_core::samples::{vm_item_target, RefKind};
+    let recordings = Recordings::new();
+    let dump = recordings.dump("wanted", 5_000_000, |_| {});
+    recordings.dump("other", 6_000_000, |_| {});
+    let ctx = context();
+    let mut scene = Scene::with_dumps(&recordings);
+    let mut view = DiskView::default();
+    scene.settle(&mut view, &ctx);
+    assert_eq!(view.entry, Entry::Current);
+    view.ask_note_target("wanted".into());
+    scene.settle(&mut view, &ctx);
+    assert_eq!(view.entry, Entry::Dump("wanted".into()));
+    // The row's own note names the VM and the dump.
+    let reference = DiskView::note_reference(&dump);
+    assert_eq!(reference.kind, RefKind::DiskDump);
+    assert_eq!(reference.target, vm_item_target("vm", "wanted"));
+    assert_eq!(
+        (reference.vm_id(), reference.item()),
+        (Some("vm"), Some("wanted"))
+    );
+    // A dump that was deleted since: the entry stays, and the request is
+    // answered (the status line becomes a toast).
+    view.ask_note_target("deleted".into());
+    scene.frame(&mut view, &ctx, Vec::new());
+    assert_eq!(view.entry, Entry::Dump("wanted".into()));
+    assert!(view.pending_note_target().is_none());
+}

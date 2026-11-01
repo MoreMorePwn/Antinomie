@@ -741,3 +741,137 @@ fn a_record_keeps_the_process_tree_for_the_runs_tab() {
     assert_eq!(issues, ["lifecycle records were lost"]);
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_note_can_name_a_packet_a_dump_a_core_or_a_static_row_and_the_log_names_each() {
+    let root = temp("notes-surfaces");
+    let mut library = Library::open(&root).unwrap();
+    let sha = added(&mut library, SCRIPT);
+    let refs = vec![
+        reference(
+            RefKind::Packet,
+            &packet_target("vm1", "cap7", 120),
+            "Packet 120 · TCP 10.0.0.2 to 1.1.1.1",
+        ),
+        reference(
+            RefKind::Capture,
+            &vm_item_target("vm1", "cap7"),
+            "Capture cap7",
+        ),
+        reference(
+            RefKind::MemoryDump,
+            &vm_item_target("vm1", "mem3"),
+            "Memory dump mem3",
+        ),
+        reference(
+            RefKind::DiskDump,
+            &vm_item_target("vm1", "dsk2"),
+            "Disk dump dsk2",
+        ),
+        reference(
+            RefKind::ProcessCore,
+            &core_target("vm1", "core9"),
+            "Core PID 31 · core9",
+        ),
+        reference(
+            RefKind::ProcessCore,
+            &imported_core_target("vm1", "c0ffee"),
+            "Imported core c0ffee",
+        ),
+        reference(
+            RefKind::StaticRow,
+            &static_row_target("rep1", "strings", "42"),
+            "Static strings row 42",
+        ),
+    ];
+    let id = library.add_note(&sha, "things to look at", &refs).unwrap();
+    let notes = library.notes(&sha).unwrap();
+    let found = notes.iter().find(|note| note.id == id).unwrap();
+    assert_eq!(found.refs, refs, "every kind survives a reload");
+
+    let packet = &found.refs[0];
+    assert_eq!(packet.vm_id(), Some("vm1"));
+    assert_eq!(packet.item(), Some("cap7"));
+    assert_eq!(packet.frame(), Some(120));
+    assert_eq!(found.refs[1].item(), Some("cap7"));
+    assert_eq!(found.refs[2].vm_id(), Some("vm1"));
+    assert_eq!(found.refs[3].item(), Some("dsk2"));
+    assert_eq!(
+        (found.refs[4].vm_id(), found.refs[4].item()),
+        (Some("vm1"), Some("core9"))
+    );
+    assert_eq!(found.refs[4].imported_core(), None);
+    assert_eq!(found.refs[5].imported_core(), Some("c0ffee"));
+    assert_eq!(found.refs[5].vm_id(), Some("vm1"));
+    assert_eq!(found.refs[6].static_row(), Some(("rep1", "strings", "42")));
+    for kind in RefKind::ALL {
+        assert_eq!(RefKind::parse(kind.as_str()), Some(kind), "{kind:?}");
+    }
+
+    let events = library.events(&sha).unwrap();
+    let CustodyEvent::NoteAdded { refs, .. } = &events
+        .iter()
+        .find(|row| row.event.key() == "note_added")
+        .unwrap()
+        .event
+    else {
+        panic!("not a note event");
+    };
+    for wanted in [
+        "[capture cap7, frame 120]",
+        "Capture cap7 [capture cap7]",
+        "[memory dump mem3]",
+        "[disk dump dsk2]",
+        "[process core core9]",
+        "[process core imported/c0ffee]",
+        "[report rep1, strings row 42]",
+    ] {
+        assert!(refs.contains(wanted), "{wanted} missing from {refs}");
+    }
+    let dest = root.join("out").join("custody.json");
+    library
+        .export_custody(&sha, ExportFormat::Json, &dest, None)
+        .unwrap();
+    let json = fs::read_to_string(&dest).unwrap();
+    assert!(
+        json.contains("frame 120") && json.contains("strings row 42"),
+        "{json}"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn notes_without_the_new_kinds_load_unchanged_and_a_newer_kind_is_still_left_out() {
+    let root = temp("notes-old-surfaces");
+    let mut library = Library::open(&root).unwrap();
+    let sha = added(&mut library, SCRIPT);
+    drop(library);
+    let connection =
+        rusqlite::Connection::open(samples_dir(&root).join(library::DATABASE)).unwrap();
+    connection
+        .execute(
+            "INSERT INTO note(id, sha256, body, by, created_ms) VALUES (3, ?1, 'older', 'analyst', 1)",
+            [&sha],
+        )
+        .unwrap();
+    for (order, kind, target, label) in [
+        (0, "artifact", "core/vm1/r1/core.bin", "Core dump"),
+        (1, "packet", "vm1/cap1/5", "Packet 5"),
+        (2, "frame-of-the-future", "x", "later"),
+    ] {
+        connection
+            .execute(
+                "INSERT INTO note_ref(note_id, ord, kind, target, label) VALUES (3, ?1, ?2, ?3, ?4)",
+                rusqlite::params![order, kind, target, label],
+            )
+            .unwrap();
+    }
+    drop(connection);
+    let library = Library::open(&root).unwrap();
+    let notes = library.notes(&sha).unwrap();
+    assert_eq!(
+        notes[0].refs.iter().map(|r| r.kind).collect::<Vec<_>>(),
+        [RefKind::Artifact, RefKind::Packet]
+    );
+    let _ = fs::remove_dir_all(root);
+}

@@ -147,6 +147,7 @@ pub(crate) fn app() -> MonitorApp {
         analysis_windows: BTreeMap::new(),
         analysis_directories: BTreeMap::new(),
         pending_analysis_sections: Vec::new(),
+        pending_static_row: None,
         pending_sub_tab: None,
         analysis_views: BTreeMap::new(),
         analysis_generation: 0,

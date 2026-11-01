@@ -85,7 +85,7 @@ impl NetworkView {
                     );
                     response.context_menu(|ui| {
                         delete = self
-                            .capture_menu(ui, active, &title, Some(CAPTURE_LIVE))
+                            .capture_menu(ui, active, &title, Some(CAPTURE_LIVE), cx.vm_id)
                             .or(delete.take());
                     });
                     if response.clicked() {
@@ -123,7 +123,7 @@ impl NetworkView {
                     .then_some(CAPTURE_WRITING);
                     response.context_menu(|ui| {
                         delete = self
-                            .capture_menu(ui, capture, &title, writing)
+                            .capture_menu(ui, capture, &title, writing, cx.vm_id)
                             .or(delete.take());
                     });
                     if response.clicked() {
@@ -249,6 +249,7 @@ impl NetworkView {
         capture: &NetworkCapture,
         title: &str,
         blocked: Option<&str>,
+        vm_id: Option<&str>,
     ) -> Option<crate::evidence_delete::Deletion> {
         let directory = capture.file.with_extension("metadata");
         crate::evidence::menu(ui, &directory);
@@ -257,6 +258,24 @@ impl NetworkView {
                 crate::evidence::reveal(ui.ctx(), parent);
             }
             ui.close_menu();
+        }
+        ui.separator();
+        match vm_id {
+            Some(vm_id) => {
+                crate::app::note_menu_item(
+                    ui,
+                    None,
+                    antinomie_monitor_core::samples::NoteRef::new(
+                        antinomie_monitor_core::samples::RefKind::Capture,
+                        antinomie_monitor_core::samples::vm_item_target(vm_id, &capture.id),
+                        format!("Capture {title}"),
+                    ),
+                );
+            }
+            None => {
+                ui.add_enabled(false, egui::Button::new("Add note…"))
+                    .on_disabled_hover_text("No VM is selected");
+            }
         }
         crate::evidence_delete::menu_item(ui, blocked)
             .then(|| crate::evidence_delete::Deletion::network(&capture.file, title))

@@ -24,6 +24,13 @@ it runs.
   tool is removed, and when the catalog no longer lists the base. Plugin
   and rule-pack downloads are small and always start again.
 
+- **Notes on the remaining surfaces.** "Add note…" now exists on the rows of
+  Network packets and captures, memory dumps, disk dumps, imported and manual
+  process cores, and Static analysis rows. Each has its own note kind with a
+  chip that opens its target (the VM's panel with the packet, capture, dump or
+  core selected; the report's section filtered to the row). Old notes load
+  unchanged and the custody log and its exports name each target.
+
 ## 0.8.0 — 2026-11-02
 
 Antinomie 0.8.0 is the first release since 0.7.1. It moves to guest contract

@@ -25,6 +25,7 @@ pub(super) mod notes;
 mod picker;
 mod promote;
 mod report_export;
+mod surface;
 mod viewer;
 
 /// One list row: a library sample with what the list shows of its runs,

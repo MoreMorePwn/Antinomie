@@ -11,6 +11,28 @@ impl MemoryView {
         );
         self.dumps_for = None;
     }
+    /// A note's chip asks for a dump of the selected VM: the list selects it
+    /// the next time it is drawn.
+    pub(crate) fn ask_note_target(&mut self, id: String) {
+        self.note_target = Some(id);
+        self.hide_list = false;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_note_target(&self) -> Option<&str> {
+        self.note_target.as_deref()
+    }
+
+    /// The reference "Add note…" gives a dump.
+    pub(super) fn note_reference(dump: &MemoryDump) -> antinomie_monitor_core::samples::NoteRef {
+        use antinomie_monitor_core::samples::{vm_item_target, NoteRef, RefKind};
+        NoteRef::new(
+            RefKind::MemoryDump,
+            vm_item_target(&dump.vm_id, &dump.id),
+            format!("Memory dump · {}", dump_title(dump)),
+        )
+    }
+
     pub(super) fn scan(&mut self, roots: &[PathBuf]) {
         self.dumps = memory::list(roots);
         self.dumps_for = Some(roots.to_vec());
@@ -158,6 +180,19 @@ impl MemoryView {
             });
         }
         ui.add_space(2.0);
+        if let Some(id) = self.note_target.take() {
+            if self.dumps.iter().any(|dump| dump.id == id) {
+                crate::query::clear_table_filter(ui, "memory-dump-history");
+                self.select(Some(id));
+            } else {
+                self.status = Some((
+                    format!(
+                        "Memory dump {id} is no longer among this VM's dumps (it was deleted)."
+                    ),
+                    true,
+                ));
+            }
+        }
         let mut fields = crate::query::LABEL_FIELDS.to_vec();
         fields.extend(crate::query::CAPTURE_FIELDS);
         fields.extend([
@@ -268,10 +303,14 @@ impl MemoryView {
                     row.context_menu(|ui| {
                         crate::evidence::menu(ui, &dump.dir);
                         let annotation = crate::evidence::annotation(ui, &dump.dir);
-                        crate::query::table_row_menu(
+                        crate::query::table_row_menu_with(
                             ui,
                             filter_id,
                             &memory_dump_row(dump, annotation.as_ref()),
+                            crate::query::RowMenuExtras {
+                                note: Some((None, Self::note_reference(dump))),
+                                ..Default::default()
+                            },
                         );
                         ui.separator();
                         if ui.button("Open folder").clicked() {

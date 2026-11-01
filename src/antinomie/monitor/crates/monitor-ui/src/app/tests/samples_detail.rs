@@ -746,3 +746,67 @@ fn galleys(shape: &egui::Shape, found: &mut impl FnMut(&str, egui::Rect)) {
         _ => {}
     }
 }
+
+#[test]
+fn a_note_chip_opens_its_panel_in_the_vm_that_holds_it() {
+    use crate::workspace::Panel;
+    use antinomie_monitor_core::samples::{
+        core_target, imported_core_target, packet_target, vm_item_target, NoteRef, RefKind,
+    };
+    let (mut app, ctx, _, root) = window("detail-surface");
+    until(&mut app, &ctx, |app| {
+        app.samples_page.detail_probe().is_some()
+    });
+    app.snapshot.vms.push(antinomie_monitor_core::VmConfig {
+        id: "vm".into(),
+        ..Default::default()
+    });
+    app.selected = Some("other".into());
+    let chip = |kind, target: String| NoteRef::new(kind, target, "a label");
+
+    app.open_note_surface(&chip(RefKind::Packet, packet_target("vm", "cap-1", 9)));
+    assert_eq!(app.selected.as_deref(), Some("vm"), "the VM is selected");
+    assert_eq!(app.focus_panel, Some(Panel::Network));
+    assert_eq!(
+        app.network_view.pending_note_target(),
+        Some(&("cap-1".to_owned(), Some(9)))
+    );
+
+    app.focus_panel = None;
+    app.open_note_surface(&chip(RefKind::Capture, vm_item_target("vm", "cap-2")));
+    assert_eq!(
+        app.network_view.pending_note_target(),
+        Some(&("cap-2".to_owned(), None))
+    );
+
+    app.open_note_surface(&chip(RefKind::MemoryDump, vm_item_target("vm", "mem-1")));
+    assert_eq!(app.focus_panel, Some(Panel::Memory));
+    assert_eq!(app.memory_view.pending_note_target(), Some("mem-1"));
+
+    app.open_note_surface(&chip(RefKind::DiskDump, vm_item_target("vm", "dsk-1")));
+    assert_eq!(app.focus_panel, Some(Panel::Disks));
+    assert_eq!(app.disk_view.pending_note_target(), Some("dsk-1"));
+
+    app.open_note_surface(&chip(RefKind::ProcessCore, core_target("vm", "core-1")));
+    assert_eq!(app.focus_panel, Some(Panel::CoreDump));
+    assert_eq!(app.core_view.pending_note_target(), Some("core-1"));
+    app.open_note_surface(&chip(
+        RefKind::ProcessCore,
+        imported_core_target("vm", "folder-1"),
+    ));
+    assert_eq!(
+        app.core_view.pending_note_target(),
+        Some("imported/folder-1")
+    );
+
+    // A VM that is not listed any more: nothing opens, and the page says so.
+    app.focus_panel = None;
+    app.open_note_surface(&chip(RefKind::MemoryDump, vm_item_target("gone", "mem-9")));
+    assert_eq!(app.focus_panel, None);
+    assert_eq!(app.memory_view.pending_note_target(), Some("mem-1"));
+    assert!(app
+        .samples_page
+        .notice_text()
+        .is_some_and(|text| text.contains("no longer listed")));
+    let _ = std::fs::remove_dir_all(root);
+}

@@ -153,6 +153,8 @@ struct Import {
 }
 
 pub(crate) struct MemoryView {
+    /// A dump a note's chip asked for, selected when the list is drawn.
+    note_target: Option<String>,
     dumps: Vec<MemoryDump>,
     dumps_for: Option<Vec<PathBuf>>,
     dumping_seen: bool,
@@ -203,6 +205,7 @@ impl Default for MemoryView {
             dumps: Vec::new(),
             dumps_for: None,
             dumping_seen: false,
+            note_target: None,
             selected: None,
             runs: Vec::new(),
             selected_run: None,

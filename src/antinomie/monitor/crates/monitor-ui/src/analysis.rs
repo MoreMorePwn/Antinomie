@@ -14,6 +14,7 @@ mod source;
 pub(crate) mod workspace;
 pub(crate) use listing_view::{export_ghidra_text, index_ghidra_markers};
 pub(crate) use listing_view::{listing_fields, listing_row_with};
+pub(crate) use row_menu::{key_query, kind_of_name};
 #[cfg(test)]
 pub(crate) use source::ARGUMENT_PLACEHOLDER;
 pub(crate) use source::{LaunchSource, ProgramSource, SourceOutcome, UploadFields};

@@ -277,3 +277,72 @@ fn memnixfs_runs_are_marked_and_partial_results_say_so() {
     )));
     assert!(row.contains(&("partial", crate::query::RowValue::Bool(false))));
 }
+
+#[test]
+fn a_note_chip_selects_its_dump_and_the_row_names_the_vm_and_the_dump() {
+    use antinomie_monitor_core::samples::{vm_item_target, RefKind};
+    let dump = |id: &str| MemoryDump {
+        id: id.into(),
+        vm_id: "vm1".into(),
+        started_ms: 1_700_000_000_000,
+        ..MemoryDump::default()
+    };
+    let mut view = MemoryView::default();
+    view.dumps = vec![dump("first"), dump("second")];
+    view.dumps_for = Some(Vec::new());
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let data_dir = std::env::temp_dir();
+    let frame = |view: &mut MemoryView| {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let cx = MemoryContext {
+                        vm: None,
+                        recordings: None,
+                        recording_roots: &[],
+                        running: false,
+                        dumping: None,
+                        pending: false,
+                        data_dir: &data_dir,
+                        volatility_installed: false,
+                        volatility_installing: false,
+                        memnixfs_installed: false,
+                        memnixfs_installing: false,
+                        bases: &[],
+                        font_size: 16.0,
+                        online_symbols: false,
+                        curl: Path::new("curl"),
+                    };
+                    view.dump_list(ui, &cx);
+                });
+            },
+        );
+    };
+    view.hide_list = true;
+    view.ask_note_target("second".into());
+    assert!(
+        !view.hide_list,
+        "the list shows so the dump can be selected"
+    );
+    frame(&mut view);
+    assert_eq!(view.selected.as_deref(), Some("second"));
+    assert!(view.note_target.is_none());
+    view.ask_note_target("gone".into());
+    frame(&mut view);
+    assert_eq!(view.selected.as_deref(), Some("second"));
+    assert!(view
+        .status
+        .as_ref()
+        .is_some_and(|(text, failed)| *failed && text.contains("deleted")));
+    let reference = MemoryView::note_reference(&view.dumps[1]);
+    assert_eq!(reference.kind, RefKind::MemoryDump);
+    assert_eq!(reference.target, vm_item_target("vm1", "second"));
+}

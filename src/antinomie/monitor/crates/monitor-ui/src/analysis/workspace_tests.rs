@@ -3254,3 +3254,136 @@ fn the_overview_names_why_each_incomplete_category_is_not_complete() {
         "{shown:?}"
     );
 }
+
+#[test]
+fn a_row_menu_adds_a_note_that_names_the_sample_the_report_and_the_row() {
+    use antinomie_monitor_core::samples::RefKind;
+    let mut report = fixture();
+    let kind = Some(AnalysisKind::Strings);
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+
+    // A report that did not record its specimen cannot file a note.
+    let mut state = WorkspaceState::default();
+    let (_, _, menu) = row_menu(&ctx, &report, &mut state, kind, "0x20", None);
+    let disabled = texts(&menu.output)
+        .into_iter()
+        .any(|(text, _)| text == "Add note…");
+    assert!(disabled, "the item shows, disabled");
+    let item = center_of(&menu.output, "Add note…");
+    press(
+        &ctx,
+        &report,
+        &mut state,
+        kind,
+        egui::vec2(1280.0, 820.0),
+        (egui::PointerButton::Primary, item),
+        (None, None),
+    );
+    assert!(crate::app::take_note_request_for_test(&ctx).is_none());
+
+    report.specimen_sha256 = Some("ab".repeat(32));
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut state = WorkspaceState::default();
+    let (_, _, menu) = row_menu(&ctx, &report, &mut state, kind, "0x20", None);
+    let item = center_of(&menu.output, "Add note…");
+    press(
+        &ctx,
+        &report,
+        &mut state,
+        kind,
+        egui::vec2(1280.0, 820.0),
+        (egui::PointerButton::Primary, item),
+        (None, None),
+    );
+    let (sample, reference) =
+        crate::app::take_note_request_for_test(&ctx).expect("the item left a request");
+    assert_eq!(sample.as_deref(), Some("ab".repeat(32).as_str()));
+    assert_eq!(reference.kind, RefKind::StaticRow);
+    let (report_id, section, key) = reference.static_row().unwrap();
+    assert_eq!((report_id, section), ("workspace-fixture", "strings"));
+    assert!(
+        reference.label.starts_with("Static · Strings · "),
+        "{}",
+        reference.label
+    );
+    // The key finds the same row again: the chip filters the section to it.
+    let query = crate::analysis::key_query(key).expect("the row has a key");
+    assert_eq!(
+        crate::analysis::kind_of_name(section),
+        Some(AnalysisKind::Strings)
+    );
+    let mut state = WorkspaceState::default();
+    // The report is bound by the first frame, as the app's panel binds it.
+    frame(
+        &ctx,
+        &report,
+        &mut state,
+        kind,
+        egui::vec2(1280.0, 820.0),
+        Vec::new(),
+        (None, None),
+    );
+    state.ask_row(AnalysisKind::Strings, query.clone());
+    let (output, _) = frame(
+        &ctx,
+        &report,
+        &mut state,
+        kind,
+        egui::vec2(1280.0, 820.0),
+        Vec::new(),
+        (None, None),
+    );
+    assert_eq!(state.views["Strings/All"].query, query);
+    assert!(state.row_query.is_none());
+    let rows = texts(&output)
+        .into_iter()
+        .filter(|(text, _)| text.starts_with("0x"))
+        .count();
+    assert_eq!(
+        rows,
+        1,
+        "only the noted row is listed: {:?}",
+        texts(&output)
+    );
+}
+
+#[test]
+fn row_keys_and_section_names_round_trip() {
+    use super::row_menu::{key_query, kind_name, kind_of_name, row_key};
+    for kind in AnalysisKind::TRIAGE.iter().chain(AnalysisKind::DEEP) {
+        assert_eq!(kind_of_name(kind_name(*kind)), Some(*kind));
+        // The names are the serde names a stored report uses.
+        assert_eq!(
+            serde_json::to_string(kind).unwrap(),
+            format!("\"{}\"", kind_name(*kind))
+        );
+    }
+    let report = fixture();
+    let section = &report.sections[0];
+    let with_record = section
+        .entries
+        .iter()
+        .find(|entry| entry.record.is_some())
+        .unwrap();
+    let (key, query) = row_key(with_record).unwrap();
+    assert!(key.starts_with("id:") && query.starts_with("record.id == "));
+    assert_eq!(key_query(&key).as_deref(), Some(query.as_str()));
+    let offset_only = AnalysisEntry {
+        label: "x".into(),
+        value: "y".into(),
+        offset: Some(64),
+        record: None,
+    };
+    assert_eq!(
+        row_key(&offset_only),
+        Some(("off:64".into(), "offset == 64".into()))
+    );
+    let nothing = AnalysisEntry {
+        offset: None,
+        ..offset_only
+    };
+    assert!(row_key(&nothing).is_none());
+    assert!(key_query("none").is_none() && key_query("id:x").is_none());
+}

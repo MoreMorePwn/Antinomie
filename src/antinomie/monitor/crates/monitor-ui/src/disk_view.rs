@@ -220,6 +220,8 @@ pub(crate) struct Selection {
 
 #[derive(Default)]
 pub(crate) struct DiskView {
+    /// A dump a note's chip asked for, selected when the list is drawn.
+    note_target: Option<String>,
     /// The selected entry.
     entry: Entry,
     /// The open view or the dump the readers are bound to.

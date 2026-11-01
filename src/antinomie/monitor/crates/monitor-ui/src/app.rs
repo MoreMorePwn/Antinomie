@@ -488,6 +488,9 @@ pub struct MonitorApp {
     analysis_windows: BTreeMap<String, antinomie_monitor_core::AnalysisReport>,
     analysis_directories: BTreeMap<String, PathBuf>,
     pending_analysis_sections: Vec<(String, antinomie_monitor_core::AnalysisKind)>,
+    /// The row of a static analysis report a note's chip names: the report,
+    /// the section and the filter that finds the row.
+    pending_static_row: Option<(String, antinomie_monitor_core::AnalysisKind, String)>,
     /// The view a link from the sample window wants inside an opened category pane.
     pending_sub_tab: Option<(
         String,
@@ -568,6 +571,14 @@ pub(crate) fn note_menu_item(
     reference: antinomie_monitor_core::samples::NoteRef,
 ) -> bool {
     samples_page::notes::menu_item_for(ui, sample, || reference)
+}
+
+/// The request a row menu's "Add note…" left, taken (tests).
+#[cfg(test)]
+pub(crate) fn take_note_request_for_test(
+    ctx: &egui::Context,
+) -> Option<(Option<String>, antinomie_monitor_core::samples::NoteRef)> {
+    samples_page::notes::take_request_for_test(ctx)
 }
 
 impl MonitorApp {
@@ -695,6 +706,7 @@ impl MonitorApp {
             analysis_windows: BTreeMap::new(),
             analysis_directories: BTreeMap::new(),
             pending_analysis_sections: Vec::new(),
+            pending_static_row: None,
             pending_sub_tab: None,
             analysis_views: BTreeMap::new(),
             analysis_generation: 0,

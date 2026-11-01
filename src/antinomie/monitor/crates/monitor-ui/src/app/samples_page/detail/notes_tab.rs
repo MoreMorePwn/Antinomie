@@ -199,6 +199,18 @@ impl MonitorApp {
                 }
                 None
             }
+            RefKind::Packet
+            | RefKind::Capture
+            | RefKind::MemoryDump
+            | RefKind::DiskDump
+            | RefKind::ProcessCore => {
+                self.open_note_surface(reference);
+                None
+            }
+            RefKind::StaticRow => {
+                self.open_static_row(data, reference);
+                None
+            }
             RefKind::Custody => Some(Tab::Custody),
             RefKind::Indicator | RefKind::Artifact | RefKind::Lineage => Some(Tab::Summary),
         };
