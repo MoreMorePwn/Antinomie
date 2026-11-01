@@ -2,10 +2,10 @@
  * Community YARA rules from YARA-Forge release 20261004 (core package),
  * https://github.com/YARAHQ/yara-forge, reduced by Antinomie's
  * scripts/refresh-yara-rules.py to rules whose license meta allows
- * redistribution: CC BY-SA 4.0, CC BY 4.0, Detection Rule License 1.1, DRL-1.1, BSD 2-Clause, Apache License 2.0.
+ * redistribution: CC BY-SA 4.0, CC BY 4.0, Detection Rule License 1.1, DRL-1.1, BSD 2-Clause, Apache License 2.0, MIT.
  * Each rule keeps its author, license and source_url meta; the license
  * texts are in LICENSES/third-party/rules/. This file is not covered by
- * Antinomie's MIT license.
+ * Antinomie's own license (GPL-3.0-only); each rule keeps its own.
  * Rules: 2096 kept, 3045 not redistributable or not
  * compiling with YARA-X.
  */
