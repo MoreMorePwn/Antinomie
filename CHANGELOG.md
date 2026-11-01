@@ -8,6 +8,12 @@ it runs.
 
 ### Host
 
+- **Base builds started from the app find every file the kernel script reads.**
+  The app's build kit lacked the kernel configuration fragments, the BTF and ABI
+  checks and Debian's module-signing certificate, so a base build started from the
+  app (native, container or QEMU builder) stopped at the kernel stage. A test now
+  reads the kit's scripts and fails when one names a file the kit does not carry.
+
 - **UI round 5: the 0.8.0 review list.** Notes can now point at one entry of a
   run's Syscall Trace (the run and the record's event sequence), beside the run as a
   whole; right-click a Syscall Trace row, a Triage process, evidence or IOC row, a

@@ -358,6 +358,49 @@ mod tests {
                 .iter()
                 .any(|name| name.starts_with("src/antinomie/core/6.12/0001-"))
         );
+        // Every repository file the kit's scripts read, so a build from the
+        // app (native, container or QEMU builder) finds it: the paths the
+        // kernel script names under "$repo/", the recipes under REPO / and
+        // KIT / (outside work/ and the author-tree checks a kit build skips).
+        let mut referenced = Vec::new();
+        for (name, bytes) in KIT_FILES
+            .iter()
+            .filter(|(name, _)| name.starts_with("scripts/"))
+        {
+            let text = String::from_utf8_lossy(bytes);
+            for marker in ["$repo/", "REPO / \"", "KIT / \""] {
+                for (at, _) in text.match_indices(marker) {
+                    let path: String = text[at + marker.len()..]
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric() || "._/-$".contains(*c))
+                        .collect();
+                    referenced.push((*name, path));
+                }
+            }
+        }
+        for (script, path) in referenced {
+            if path.starts_with("work") || path.starts_with("tests/") || path.is_empty() {
+                continue;
+            }
+            let wanted: Vec<String> = if path.contains("$arch") {
+                ["x86_64", "arm64"]
+                    .iter()
+                    .map(|arch| path.replace("$arch", arch))
+                    .collect()
+            } else {
+                vec![path.trim_end_matches('/').to_owned()]
+            };
+            for wanted in wanted {
+                assert!(
+                    names
+                        .iter()
+                        .any(|name| *name == wanted || name.starts_with(&format!("{wanted}/")))
+                        || wanted == "src/antinomie/monitor/Cargo.toml"
+                        || wanted == "scripts",
+                    "{script} reads {wanted}, which the kit lacks"
+                );
+            }
+        }
         let input = orig_input().unwrap();
         assert_eq!(input.name, "linux_6.12.94.orig.tar.xz");
         assert_eq!(input.size, 151_297_764);
