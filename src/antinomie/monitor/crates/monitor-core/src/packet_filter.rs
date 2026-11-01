@@ -2097,13 +2097,13 @@ mod tests {
             "-n",
             "-2",
             "-r",
-            "/home/u/data/a.pcap",
+            "/data/data/a.pcap",
             "-Y",
             "dns",
             "-r",
-            "/home/u/data/b.pcap",
+            "/data/data/b.pcap",
             "-r",
-            "/home/u/data/a.pcap",
+            "/data/data/a.pcap",
             "-T",
             "fields",
         ];
@@ -2113,11 +2113,11 @@ mod tests {
             mounts,
             [
                 (
-                    PathBuf::from("/home/u/data/a.pcap"),
+                    PathBuf::from("/data/data/a.pcap"),
                     PathBuf::from("/tmp/capture-0.pcap")
                 ),
                 (
-                    PathBuf::from("/home/u/data/b.pcap"),
+                    PathBuf::from("/data/data/b.pcap"),
                     PathBuf::from("/tmp/capture-1.pcap")
                 ),
             ]
@@ -2147,7 +2147,7 @@ mod tests {
 
     #[test]
     fn a_read_refusal_names_the_ubuntu_apparmor_profile() {
-        let refused = "tshark: You don't have permission to read the file \"/home/u/a.pcap\".";
+        let refused = "tshark: You don't have permission to read the file \"/data/a.pcap\".";
         let notice = process::apparmor_notice(refused).unwrap();
         assert!(notice.contains("AppArmor profile for TShark"), "{notice}");
         assert!(notice.contains("/etc/apparmor.d/local/tshark"), "{notice}");
