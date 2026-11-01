@@ -388,10 +388,13 @@ pub(super) fn section(ui: &mut egui::Ui, state: &mut State, data: &Data) -> Opti
         });
         ui.horizontal(canvas::legend);
         let width = ui.available_width();
-        let rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, canvas::HEIGHT));
         let sample = data.record.sha256.clone();
         // Read the graph again when an option changed this frame.
         state.refresh(data);
+        let rect = egui::Rect::from_min_size(
+            ui.cursor().min,
+            egui::vec2(width, canvas_height(ui, state)),
+        );
         state.apply_focus(data, rect.size());
         let mut act = None;
         let (hit, screen) = {
@@ -459,6 +462,18 @@ pub(super) fn section(ui: &mut egui::Ui, state: &mut State, data: &Data) -> Opti
         details(ui, state, data, &mut out);
     });
     out
+}
+
+/// The viewport's height: [`canvas::HEIGHT`], taller for a graph that would
+/// not fit it at actual size, up to [`canvas::MAX_HEIGHT`] and 60% of the
+/// window so the rest of the Summary stays reachable.
+fn canvas_height(ui: &egui::Ui, state: &State) -> f32 {
+    let wanted = state
+        .cached
+        .as_ref()
+        .map_or(canvas::HEIGHT, |cached| cached.layout.bounds.height());
+    let most = canvas::MAX_HEIGHT.min(ui.ctx().screen_rect().height() * 0.6);
+    wanted.min(most).max(canvas::HEIGHT)
 }
 
 /// The line under the graph: the selected node's path and hashes, or the

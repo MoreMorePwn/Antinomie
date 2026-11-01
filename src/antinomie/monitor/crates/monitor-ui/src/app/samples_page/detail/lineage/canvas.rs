@@ -11,7 +11,14 @@ use std::collections::BTreeMap;
 use super::labels;
 
 pub(super) const HEIGHT: f32 = 380.0;
+/// The tallest the viewport grows for a graph whose fitted picture would be
+/// too small to read at [`HEIGHT`].
+pub(super) const MAX_HEIGHT: f32 = 620.0;
 const COLUMN: f32 = 340.0;
+/// A level with more nodes than this wraps into more columns side by side.
+const WRAP_AT: usize = 6;
+/// The gap between the wrapped columns of one level.
+const WRAP_GAP: f32 = 40.0;
 const ROW: f32 = 72.0;
 const NODE_W: f32 = 220.0;
 const NODE_H: f32 = 40.0;
@@ -42,19 +49,55 @@ impl Default for Layout {
     }
 }
 
+/// How many nodes one column of a level holds: all of them up to
+/// [`WRAP_AT`], then about twice as many rows as columns, so a sample that
+/// wrote dozens of files gives a block that fits a wide viewport instead of
+/// one strip that only fits at the smallest zoom.
+fn rows_for(count: usize) -> usize {
+    if count <= WRAP_AT {
+        return count.max(1);
+    }
+    let mut rows = WRAP_AT;
+    while rows * rows < 2 * count {
+        rows += 1;
+    }
+    rows
+}
+
 impl Layout {
     pub(super) fn of(graph: &LineageGraph) -> Self {
-        let mut columns: BTreeMap<i32, usize> = BTreeMap::new();
-        let first = graph.nodes.iter().map(|node| node.level).min().unwrap_or(0);
+        let mut levels: BTreeMap<i32, Vec<&LineageNode>> = BTreeMap::new();
+        for node in &graph.nodes {
+            levels.entry(node.level).or_default().push(node);
+        }
         let mut at = BTreeMap::new();
         let mut bounds: Option<Rect> = None;
-        for node in &graph.nodes {
-            let row = columns.entry(node.level).or_default();
-            let min = Pos2::new((node.level - first) as f32 * COLUMN, *row as f32 * ROW);
-            *row += 1;
-            let rect = Rect::from_min_size(min, egui::vec2(NODE_W, NODE_H));
-            bounds = Some(bounds.map_or(rect, |bounds| bounds.union(rect)));
-            at.insert(node.id.clone(), rect);
+        // Each level is a block of columns centred on y = 0, left to right;
+        // a skipped level still takes its column.
+        let mut x = 0.0;
+        let mut previous: Option<i32> = None;
+        for (level, nodes) in &levels {
+            if let Some(previous) = previous {
+                x += (level - previous - 1).max(0) as f32 * COLUMN;
+            }
+            previous = Some(*level);
+            let rows = rows_for(nodes.len());
+            let columns = nodes.len().div_ceil(rows);
+            // Every other wrapped column sits half a row lower, so an edge to
+            // a far column passes between the boxes of the nearer ones.
+            let stagger = if columns > 1 { ROW / 2.0 } else { 0.0 };
+            let height = (rows.min(nodes.len()) - 1) as f32 * ROW + NODE_H + stagger;
+            for (index, node) in nodes.iter().enumerate() {
+                let (column, row) = (index / rows, index % rows);
+                let min = Pos2::new(
+                    x + column as f32 * (NODE_W + WRAP_GAP),
+                    -height / 2.0 + row as f32 * ROW + (column % 2) as f32 * stagger,
+                );
+                let rect = Rect::from_min_size(min, egui::vec2(NODE_W, NODE_H));
+                bounds = Some(bounds.map_or(rect, |bounds| bounds.union(rect)));
+                at.insert(node.id.clone(), rect);
+            }
+            x += (columns - 1) as f32 * (NODE_W + WRAP_GAP) + COLUMN;
         }
         let routes: Vec<Option<[Pos2; 4]>> = graph
             .edges
@@ -748,6 +791,36 @@ mod tests {
         assert_eq!(layout.at["a"].min.x, layout.at["b"].min.x);
         assert!(layout.at["a"].min.y < layout.at["b"].min.y);
         assert!(layout.bounds.contains_rect(layout.at["b"]));
+    }
+
+    #[test]
+    fn a_crowded_level_wraps_into_columns_that_fit_at_a_readable_zoom() {
+        // demo-all writes a few dozen files: one column of them was a strip
+        // that fitted only at the smallest zoom (round 6 item 16).
+        let mut nodes = vec![node("s", 0)];
+        nodes.extend((0..30).map(|i| node(&format!("c{i}"), 1)));
+        let graph = LineageGraph {
+            nodes,
+            ..LineageGraph::default()
+        };
+        let layout = Layout::of(&graph);
+        let rects: Vec<Rect> = layout.at.values().copied().collect();
+        for (i, a) in rects.iter().enumerate() {
+            for b in &rects[i + 1..] {
+                assert!(!a.intersects(*b), "{a:?} overlaps {b:?}");
+            }
+        }
+        // Every child stays right of the sample.
+        let sample = layout.at["s"];
+        assert!(rects.iter().all(|r| *r == sample || r.min.x > sample.max.x));
+        let mut view = View::default();
+        view.fit(egui::vec2(1600.0, MAX_HEIGHT), layout.bounds);
+        assert!(view.zoom >= 0.6, "fitted at {}", view.zoom);
+        // The sample sits at the middle height of its children.
+        assert!((sample.center().y - layout.bounds.center().y).abs() < ROW);
+        // A level of a few nodes stays one column.
+        assert_eq!(rows_for(5), 5);
+        assert!(rows_for(30) * 30_usize.div_ceil(rows_for(30)) >= 30);
     }
 
     #[test]
