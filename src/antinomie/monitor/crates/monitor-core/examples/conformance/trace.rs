@@ -72,6 +72,33 @@ fn stress_group(context: &Context, name: &str, level: &str, transport: Transport
     }
 }
 
+/// A measurement, not a pass/fail check of the transport: the syscall flood
+/// alone at its extreme level (two threads per vCPU in a tight loop of
+/// getppid/read/clock_gettime for 30 s) on the default transport and the
+/// evaluation VM's shape (2 vCPU, 2 GiB). The guest offers far more than the
+/// host can take; the group reports what was dropped, and judges everything
+/// else as every stress group does.
+fn rate_group(context: &Context) -> Group {
+    let mut group = stress_group(context, RATE_GROUP, "extreme", TransportSettings::default());
+    group.plan.cpus = 2;
+    group.plan.args = vec![
+        "--level".into(),
+        "extreme".into(),
+        "--only".into(),
+        "syscall-load".into(),
+    ];
+    group
+}
+
+/// The rate measurement group (see [`rate_group`]).
+pub const RATE_GROUP: &str = "stress-rate";
+
+/// Groups that may drop packets in the transport: the lossy ring, and the
+/// rate measurement whose offered load is far past the host's drain.
+fn may_drop(group: &Group) -> bool {
+    group.name == "stress-lossy" || group.name == RATE_GROUP
+}
+
 /// What one group's check found, saved as `trace/<group>.json`.
 #[derive(serde::Serialize)]
 pub struct GroupReport {
@@ -111,11 +138,7 @@ pub fn run_problems(group: &Group, run: &GroupRun, scan: &recording::RawScan) ->
     // only the lossy group may drop packets in the transport.
     let stress = group.kind == crate::GroupKind::Stress;
     for (name, value, allowed) in [
-        (
-            "transport drops",
-            health.dropped,
-            group.name == "stress-lossy",
-        ),
+        ("transport drops", health.dropped, may_drop(group)),
         ("bad commands", health.bad_commands, false),
         ("reply stalls", health.reply_stalls, false),
         ("parser errors", health.parser_errors, false),
@@ -124,7 +147,7 @@ pub fn run_problems(group: &Group, run: &GroupRun, scan: &recording::RawScan) ->
         (
             "parser evictions",
             health.parser_evicted_count,
-            group.name == "stress-lossy",
+            may_drop(group),
         ),
         ("storage drops", health.storage_dropped_packets, false),
         ("guest note losses", health.guest_note_lost, stress),
@@ -405,6 +428,7 @@ impl Part for TracePart {
                 TransportSettings::default(),
             ),
             stress_group(context, "stress-lossy", "heavy", lossy),
+            rate_group(context),
             stress_group(context, "stress-contended", "heavy", contended),
         ]
     }

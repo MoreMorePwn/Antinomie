@@ -23,6 +23,14 @@ pub struct StressReport {
     pub throughput: serde_json::Value,
 }
 
+/// The calls per second `stress-rate` must reach: four times what the guest
+/// managed while a waiting sender learnt of its turn only when its own sleep
+/// ended (5,153 calls/s, one packet per 50 to 100 us sleep on each CPU), and a
+/// quarter of what it reaches with the turn handed on (82,676 calls/s on
+/// 2026-11-01, with the host's drain the limit), so a busy host still passes
+/// and a return of the convoy fails.
+const RATE_FLOOR_CALLS_PER_S: f64 = 20_000.0;
+
 /// How a page says a call's async observations were only previewed.
 const ASYNC_PARTIAL: &str = "some calls list only the first 256 of their saved async observations";
 
@@ -144,6 +152,12 @@ pub fn check(
         problems.push(format!("workload: {line}"));
     }
     let seconds = run.run_seconds.max(0.001);
+    if group.name == trace::RATE_GROUP && (calls as f64 / seconds) < RATE_FLOOR_CALLS_PER_S {
+        problems.push(format!(
+            "{:.0} calls/s, under the rate floor of {RATE_FLOOR_CALLS_PER_S:.0}",
+            calls as f64 / seconds
+        ));
+    }
     let attempted = stats[5].max(1);
     let bytes = std::fs::metadata(directory.join("telemetry.raw"))
         .map(|m| m.len())

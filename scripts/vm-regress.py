@@ -13,7 +13,10 @@ full   quick, the debugger, audit, io_uring, tracer, stealth, cloud profiles, ne
        passes with transport drops only when each is attributed to a gap in
        the host's telemetry reads, or to a ring the host kept full while it
        read, at least as long as the group's send wait (the drops by cause,
-       gaps, full-ring spells and calls per second are reported)
+       gaps, full-ring spells and calls per second are reported);
+       conf-stress-rate measures the default transport under a syscall flood
+       on two vCPUs and reports its calls and packets per second, drops and
+       send waits (the group fails below its rate floor, see MEASURED_GROUPS)
 auto   full when the diff against REF touches the kernel/host contract (guest
        patches, transport, protocol docs, ANTC_REVISION), otherwise quick
 
@@ -63,7 +66,8 @@ CONTRACT_PATHS = (
 REVISION_LINE = r"^[[:space:]]*(#[[:space:]]*define[[:space:]]+ANTC_REVISION[[:space:]]|(pub(\([a-z]+\))?[[:space:]]+)?const[[:space:]]+REVISION:)"
 
 QUICK_GROUPS = "user,root,threads"
-STRESS_GROUPS = ("stress-light", "stress-heavy", "stress-extreme", "stress-lossy", "stress-contended")
+STRESS_GROUPS = ("stress-light", "stress-heavy", "stress-extreme", "stress-lossy", "stress-rate",
+                 "stress-contended")
 MIN_MEM_KIB = 5 * 1024 * 1024
 GIB = 1024**3
 # What a finished check leaves that only matters for debugging it: VM disks and recordings.
@@ -90,6 +94,16 @@ LEGACY_BASE_ENV = "ANTINOMIE_LEGACY_BASE"
 # still fails it.
 GAP_TOLERANCE_NS = 20_000_000
 ATTRIBUTED_GROUPS = {"conf-stress-contended": "stress-contended"}
+# Checks that are measurements: check name -> conformance group. stress-rate
+# offers the default never-drop transport far more than it carries (the
+# syscall flood, two threads per vCPU on two vCPUs) and reports the rate the
+# guest got through and what it dropped and waited. The conformance group
+# itself fails below its rate floor (RATE_FLOOR_CALLS_PER_S in the
+# conformance stress check: 20,000 calls/s, four times the 5,153 of the
+# sender convoy patch 26 removed and a quarter of the 82,676 measured after
+# it) and on any problem but transport drops; the numbers are printed with
+# the result either way. Its recording is about 2.6 GiB.
+MEASURED_GROUPS = {"conf-stress-rate": "stress-rate"}
 # The compiler of each guest architecture's static fixtures.
 ARCH_CC = {"x86_64": "gcc", "arm64": "aarch64-linux-gnu-gcc"}
 # Checks an arm64 tier does not plan yet, and the card that brings each: the
@@ -777,6 +791,8 @@ def run_check(check, ctx, args, attempt):
     result = {**result, "status": status, "seconds": round(seconds, 1), "exit": code}
     if check.name in ATTRIBUTED_GROUPS and code is not None:
         result.update(measure(check.name, out, log, code))
+    elif check.name in MEASURED_GROUPS and code is not None:
+        result.update(measure_rate(check.name, out))
     return result
 
 
@@ -936,6 +952,36 @@ def measure(name, out, log, code):
     if code == 1 and only_drops and expected:
         return {**found, "status": "PASS"}
     return found
+
+
+def measure_rate(name, out):
+    """What a measured check reports (see MEASURED_GROUPS): its rate, drops and
+    send waits. The status stays the conformance check's own."""
+    group = MEASURED_GROUPS[name]
+    path = out / "runs" / name / "trace" / f"{group}.json"
+    try:
+        report = json.loads(path.read_text())
+        transport = report["accounting"]["transport"]
+        throughput = report["throughput"]
+        numbers = {
+            "calls": int(throughput["calls"]),
+            "seconds": round(float(throughput["seconds"]), 1),
+            "calls_per_second": round(float(throughput["calls_per_second"])),
+            "packets_per_second": round(float(throughput["packets_per_second"])),
+            "mib_per_second": round(float(throughput["mib_per_second"]), 1),
+            "dropped": int(transport["dropped"]),
+            "attempted": int(transport["attempted"]),
+            "waits": int(throughput["transport_waits"]),
+            "wait_ms": round(float(throughput["transport_wait_ms"])),
+        }
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return {"detail": f"no measurement: {path}: {error}"}
+    share = 100.0 * numbers["dropped"] / numbers["attempted"] if numbers["attempted"] else 0.0
+    detail = (f"{numbers['calls']:,} calls in {numbers['seconds']} s: {numbers['calls_per_second']:,} calls/s, "
+              f"{numbers['packets_per_second']:,} packets/s, {numbers['mib_per_second']} MiB/s; "
+              f"{numbers['dropped']:,} transport drops of {numbers['attempted']:,} ({share:.5f} %); "
+              f"{numbers['waits']:,} send waits, {numbers['wait_ms']:,} ms in all")
+    return {"measurement": numbers, "detail": detail}
 
 
 def run_with_retries(check, ctx, args):

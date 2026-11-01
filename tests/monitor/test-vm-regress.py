@@ -163,7 +163,7 @@ class PlanTests(unittest.TestCase):
         names = [c.name for c in vm.plan("full", self.ctx())]
         self.assertEqual(names[0], "conf-quick")
         for name in ("conf-stress-light", "conf-stress-heavy", "conf-stress-extreme", "conf-stress-lossy",
-                     "conf-stress-contended",
+                     "conf-stress-rate", "conf-stress-contended",
                      "debug-p2", "debug-p3", "audit-stop", "audit-core", "uring-status",
                      "uring-boots", "uring-legacy", "tracer-record", "tracer-legacy", "tracer-qa",
                      "debugger-live", "stealth", "cloud", "route", "snapshot", "specimen", "io-old-new-p3",
@@ -349,7 +349,9 @@ class DiskTests(unittest.TestCase):
     def test_stress_groups_are_separate_checks(self):
         names = [c.name for c in vm.plan("full", PlanTests().ctx()) if c.name.startswith("conf-stress")]
         self.assertEqual(names, [f"conf-{group}" for group in vm.STRESS_GROUPS])
-        self.assertEqual(len(names), 5)
+        self.assertEqual(len(names), 6)
+        quick = [c.name for c in vm.plan("quick", PlanTests().ctx())]
+        self.assertNotIn("conf-stress-rate", quick)
 
     def test_cleanup_removes_bulk_and_keeps_reports(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -795,6 +797,40 @@ class MeasureTests(unittest.TestCase):
         found = vm.measure(self.NAME, self.out, self.log, 1)
         self.assertNotIn("status", found)
         self.assertIn("no measurement", found["detail"])
+
+
+class RateMeasureTests(unittest.TestCase):
+    """stress-rate is a measurement in the full tier: its numbers are reported, its status is its own."""
+    NAME = "conf-stress-rate"
+
+    def test_the_rate_group_is_measured_in_the_full_tier_only(self):
+        self.assertEqual(vm.MEASURED_GROUPS, {"conf-stress-rate": "stress-rate"})
+        check = next(c for c in vm.plan("full", PlanTests().ctx()) if c.name == self.NAME)
+        self.assertEqual(check.argv[-2:], ["--groups", "stress-rate"])
+
+    def test_rate_drops_and_waits_are_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            trace = out / "runs" / self.NAME / "trace"
+            trace.mkdir(parents=True)
+            report = {"passed": True, "problems": [],
+                      "accounting": {"transport": {"dropped": 3, "attempted": 1_000_000}},
+                      "throughput": {"calls": 600_000, "seconds": 30.04, "calls_per_second": 19_973.4,
+                                     "packets_per_second": 99_867.2, "mib_per_second": 20.44,
+                                     "transport_waits": 12_345, "transport_wait_ms": 4_321.6}}
+            (trace / "stress-rate.json").write_text(vm.json.dumps(report))
+            found = vm.measure_rate(self.NAME, out)
+        self.assertNotIn("status", found)
+        self.assertEqual(found["measurement"]["calls_per_second"], 19_973)
+        self.assertEqual(found["detail"],
+                         "600,000 calls in 30.0 s: 19,973 calls/s, 99,867 packets/s, 20.4 MiB/s; "
+                         "3 transport drops of 1,000,000 (0.00030 %); 12,345 send waits, 4,322 ms in all")
+
+    def test_a_missing_report_says_so(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            found = vm.measure_rate(self.NAME, Path(tmp))
+        self.assertTrue(found["detail"].startswith("no measurement: "))
+        self.assertNotIn("measurement", found)
 
 
 if __name__ == "__main__":
