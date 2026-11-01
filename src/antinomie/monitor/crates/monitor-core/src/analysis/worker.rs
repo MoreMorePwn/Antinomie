@@ -303,6 +303,19 @@ fn push_row(
         }),
     });
 }
+/// Why capa or FLOSS cannot analyse `specimen`: an ELF program of another
+/// architecture than x86 (their code analysis, vivisect, reads x86 and
+/// x86-64 only), as an arm64 guest's programs are. Other files go to the tool.
+fn x86_tool_refuses(specimen: &[u8], tool: &str, what: &str) -> Option<String> {
+    let arch = crate::samples::elf_arch(specimen)?;
+    (!matches!(arch, "x86_64" | "x86")).then(|| {
+        format!(
+            "{tool} {what} in x86 and x86-64 programs only; this program is for {arch}, \
+             which it cannot analyse. The Strings check lists its plain strings."
+        )
+    })
+}
+
 fn unavailable(section: &mut AnalysisSection, reason: impl Into<String>) {
     section.state = AnalysisSectionState::Unavailable;
     section.summary = reason.into();
@@ -396,9 +409,17 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
         AnalysisKind::Disassembly => super::disasm::disassemble(section, specimen, listings),
         AnalysisKind::Identification => super::ident::identify(section, specimen),
         AnalysisKind::Rules => super::rules::scan(section, specimen),
-        AnalysisKind::Capabilities => super::capa::capabilities(section, specimen),
+        AnalysisKind::Capabilities => {
+            match x86_tool_refuses(specimen, "capa", "finds capabilities") {
+                Some(reason) => unavailable(section, reason),
+                None => super::capa::capabilities(section, specimen),
+            }
+        }
         AnalysisKind::Embedded => super::binwalk::embedded(section, specimen.len() as u64),
-        AnalysisKind::Floss => super::floss::strings(section, specimen, listings),
+        AnalysisKind::Floss => match x86_tool_refuses(specimen, "FLOSS", "decodes strings") {
+            Some(reason) => unavailable(section, reason),
+            None => super::floss::strings(section, specimen, listings),
+        },
         AnalysisKind::Unpacking => {
             let artifacts = listings.parent().unwrap_or(listings).join("artifacts");
             super::unpack::unpack(section, specimen, &artifacts)
@@ -681,6 +702,24 @@ fn section_flags(flags: object::SectionFlags) -> (String, Vec<String>) {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn capa_and_floss_say_plainly_that_they_skip_programs_of_other_architectures() {
+        let elf = |machine: u16| {
+            let mut header = b"\x7fELF\x02\x01\x01".to_vec();
+            header.resize(18, 0);
+            header.extend(machine.to_le_bytes());
+            header.resize(64, 0);
+            header
+        };
+        let reason = x86_tool_refuses(&elf(183), "capa", "finds capabilities").unwrap();
+        assert!(reason.contains("x86 and x86-64 programs only") && reason.contains("AArch64"));
+        assert!(x86_tool_refuses(&elf(40), "FLOSS", "decodes strings").is_some());
+        assert!(x86_tool_refuses(&elf(62), "capa", "finds capabilities").is_none());
+        assert!(x86_tool_refuses(&elf(3), "FLOSS", "decodes strings").is_none());
+        // A PE file or a script still goes to the tool.
+        assert!(x86_tool_refuses(b"MZ\x90\x00", "capa", "finds capabilities").is_none());
+    }
+
     use super::*;
     /// A fresh directory for the listings a test analysis writes.
     fn listings() -> std::path::PathBuf {

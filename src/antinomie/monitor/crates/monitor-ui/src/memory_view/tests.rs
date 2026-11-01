@@ -346,3 +346,52 @@ fn a_note_chip_selects_its_dump_and_the_row_names_the_vm_and_the_dump() {
     assert_eq!(reference.kind, RefKind::MemoryDump);
     assert_eq!(reference.target, vm_item_target("vm1", "second"));
 }
+
+#[test]
+fn an_arm64_vm_says_its_memory_cannot_be_analysed() {
+    let mut base = BaseSummary {
+        id: "arm".into(),
+        label: "BusyBox arm64".into(),
+        directory: PathBuf::from("/bases/arm"),
+        guest: None,
+        min_ram_mib: 256,
+        min_disk_gib: 1,
+        fixed_display: true,
+        arch: Default::default(),
+        size_bytes: 0,
+        revision: None,
+        min_app_version: None,
+        built_with: None,
+        stealth_support: Vec::new(),
+    };
+    let vm = VmConfig {
+        base_identity: Some("arm".into()),
+        ..Default::default()
+    };
+    let context = |bases: &[BaseSummary]| {
+        foreign_guest(&MemoryContext {
+            vm: Some(&vm),
+            recordings: None,
+            recording_roots: &[],
+            running: false,
+            dumping: None,
+            pending: false,
+            data_dir: Path::new("/nonexistent"),
+            volatility_installed: true,
+            volatility_installing: false,
+            memnixfs_installed: true,
+            memnixfs_installing: false,
+            bases,
+            font_size: 14.0,
+            online_symbols: false,
+            curl: Path::new("curl"),
+        })
+    };
+    assert_eq!(context(std::slice::from_ref(&base)), None);
+    base.arch = antinomie_monitor_core::GuestArch::AARCH64;
+    let note = context(std::slice::from_ref(&base)).unwrap();
+    assert!(
+        note.starts_with("Memory analysis does not work on arm64 VMs"),
+        "{note}"
+    );
+}

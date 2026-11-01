@@ -32,6 +32,8 @@ pub(crate) struct LaunchCapabilities {
     pub core_default_mib: u32,
     /// Where the run's network traffic can go on this VM.
     pub route: crate::route_ui::RouteChoice,
+    /// The guest's architecture: capa and FLOSS read x86 programs only.
+    pub guest_arch: antinomie_monitor_core::GuestArch,
 }
 
 /// Where the Run form leaves the budget the user picked, for the caller to remember.
@@ -81,6 +83,7 @@ pub(crate) fn launch_fields(
                 tools,
                 &mut outcome.install,
             );
+            x86_tools_note(&mut columns[1], &request.analysis, capabilities.guest_arch);
             capture_selection(&mut columns[1], request, capabilities, &mut outcome);
             debugger_selection(&mut columns[1], request, capabilities.debug_on_start);
         });
@@ -89,10 +92,39 @@ pub(crate) fn launch_fields(
         ui.add_space(6.0);
         crate::theme::section(ui, "Analysis");
         selection(ui, &mut request.analysis, tools, &mut outcome.install);
+        x86_tools_note(ui, &request.analysis, capabilities.guest_arch);
         capture_selection(ui, request, capabilities, &mut outcome);
         debugger_selection(ui, request, capabilities.debug_on_start);
     }
     outcome
+}
+
+/// On a guest of another architecture than x86-64: capa and FLOSS, when
+/// chosen, cannot read its programs.
+fn x86_tools_note(
+    ui: &mut egui::Ui,
+    selection: &AnalysisSelection,
+    arch: antinomie_monitor_core::GuestArch,
+) {
+    if let Some(note) = x86_tools_text(selection, arch) {
+        crate::activity::warning(ui, note);
+    }
+}
+
+fn x86_tools_text(
+    selection: &AnalysisSelection,
+    arch: antinomie_monitor_core::GuestArch,
+) -> Option<String> {
+    let chosen = [AnalysisKind::Capabilities, AnalysisKind::Floss]
+        .iter()
+        .any(|kind| selection.checks.contains(kind));
+    (arch != antinomie_monitor_core::GuestArch::X86_64 && selection.enabled && chosen).then(|| {
+        format!(
+            "capa and FLOSS read x86 and x86-64 programs only: on this {} VM their checks \
+             report Unavailable.",
+            arch.label()
+        )
+    })
 }
 
 fn capture_selection(
@@ -171,6 +203,7 @@ pub(crate) fn capture_selection_for_tests(
         core_limits: None,
         core_default_mib: 256,
         route,
+        guest_arch: Default::default(),
     };
     capture_selection(ui, request, capabilities, outcome);
 }
@@ -878,6 +911,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_arm64_run_form_says_capa_and_floss_cannot_read_its_programs() {
+        use antinomie_monitor_core::GuestArch;
+        let mut selection = AnalysisSelection {
+            enabled: true,
+            ..AnalysisSelection::default()
+        };
+        selection.checks.clear();
+        assert_eq!(x86_tools_text(&selection, GuestArch::AARCH64), None);
+        selection.checks.push(AnalysisKind::Floss);
+        let note = x86_tools_text(&selection, GuestArch::AARCH64).unwrap();
+        assert!(note.contains("x86 and x86-64 programs only") && note.contains("arm64"));
+        assert_eq!(x86_tools_text(&selection, GuestArch::X86_64), None);
+        selection.enabled = false;
+        assert_eq!(x86_tools_text(&selection, GuestArch::AARCH64), None);
+    }
+
+    #[test]
     fn core_capture_clears_when_guest_or_launch_session_cannot_capture_target() {
         for (supported, run_in) in [
             (false, RunIn::AppTerminal),
@@ -903,6 +953,7 @@ mod tests {
                             route: crate::route_ui::RouteChoice::fixed(
                                 antinomie_monitor_core::VmNetwork::Disconnected,
                             ),
+                            guest_arch: Default::default(),
                         },
                         &mut LaunchOutcome::default(),
                     )
@@ -929,6 +980,7 @@ mod tests {
                         route: crate::route_ui::RouteChoice::fixed(
                             antinomie_monitor_core::VmNetwork::Disconnected,
                         ),
+                        guest_arch: Default::default(),
                     },
                     &mut LaunchOutcome::default(),
                 )

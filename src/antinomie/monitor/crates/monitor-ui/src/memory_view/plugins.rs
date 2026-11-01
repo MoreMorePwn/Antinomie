@@ -2,6 +2,19 @@
 //! Choosing a Volatility plugin and its options, and the saved runs.
 use super::*;
 
+/// Why the VM's memory cannot be analysed: Volatility 3 and MemNixFS read
+/// x86-64 guests only (an arm64 base carries no symbol table).
+pub(super) fn foreign_guest(cx: &MemoryContext<'_>) -> Option<String> {
+    let base = antinomie_monitor_core::stealth::vm_base(cx.vm?.base_identity.as_deref(), cx.bases)?;
+    (base.arch != antinomie_monitor_core::GuestArch::X86_64).then(|| {
+        format!(
+            "Memory analysis does not work on {} VMs: Volatility 3 and MemNixFS read x86-64 \
+             guest memory only (this VM's base carries no symbol table for them).",
+            base.arch.label()
+        )
+    })
+}
+
 impl MemoryView {
     pub(super) fn analysis(
         &mut self,
@@ -9,6 +22,10 @@ impl MemoryView {
         cx: &MemoryContext<'_>,
     ) -> Option<MemoryAction> {
         let mut action = None;
+        if let Some(note) = foreign_guest(cx) {
+            crate::activity::warning(ui, note);
+            return None;
+        }
         let Some(dump) = self.dump().cloned() else {
             empty_state(
                 ui,

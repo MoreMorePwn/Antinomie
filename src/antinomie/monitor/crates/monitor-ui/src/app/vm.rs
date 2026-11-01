@@ -432,6 +432,12 @@ impl MonitorApp {
                             core_limits: self.snapshot.guest_core_limits,
                             core_default_mib: self.settings.core_budget_mib,
                             route,
+                            guest_arch: self
+                                .snapshot
+                                .guest_kernel
+                                .as_ref()
+                                .map(|kernel| kernel.arch)
+                                .unwrap_or_default(),
                         },
                         crate::analysis::ProgramSource {
                             choice: &mut self.launch_source,
