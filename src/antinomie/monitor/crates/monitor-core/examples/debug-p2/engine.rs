@@ -425,7 +425,9 @@ pub fn forkbp(context: &mut Context) -> Result<String, String> {
     context.driver.receive();
     let output = context.driver.output(&prog.launched.run.id).to_string();
     let children = output.matches("child exit=0 sig=0").count();
-    if output.contains("sig=5") || children == 0 {
+    // A child that met the parent's breakpoint byte exits 3 (its SIGTRAP
+    // handler ran) or dies of SIGTRAP.
+    if output.contains("sig=5") || output.contains("child exit=3") || children == 0 {
         return Err(format!(
             "forked children did not survive the inherited breakpoint ({children} clean exits, {hits} hits):\n{}",
             tail(&output, 400)
@@ -435,15 +437,10 @@ pub fn forkbp(context: &mut Context) -> Result<String, String> {
         .clear_breakpoint(target, 1)
         .map_err(|e| e.to_string())?;
     context.finish(prog)?;
-    // x86-64 children run past the parent's INT3 in their copy; aarch64 children
-    // get their own bytes back at the fork (a BRK would trap again for ever).
-    let memory = if on_aarch64() {
-        "their own bytes put back at the fork"
-    } else {
-        "the parent's breakpoint byte in their memory"
-    };
+    // Children the debugger does not follow get their own bytes back at the
+    // fork: no SIGTRAP from the parent's INT3 or BRK reaches them.
     Ok(format!(
-        "{children} forked children ran hw_code() with {memory} and exited cleanly; {hits} parent hits, {passed} queued SIGCHLD passed on like gdb does"
+        "{children} forked children ran hw_code() with their own bytes put back at the fork and exited cleanly, no SIGTRAP; {hits} parent hits, {passed} queued SIGCHLD passed on like gdb does"
     ))
 }
 

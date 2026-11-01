@@ -1,7 +1,7 @@
 # The Antinomie guest kernel patch series
 
 The guest kernel is Debian's `linux` 6.12.94-1 (trixie) with Antinomie's own
-patch series on top. The series is thirty-seven topic patches; each one adds one
+patch series on top. The series is thirty-eight topic patches; each one adds one
 part of the design and says, in its description, what it adds, why, which
 existing kernel files it hooks and why there, and which contract revision it
 belongs to.
@@ -72,6 +72,7 @@ changes. Line counts are added/removed lines of the patch.
 | 40 | keep the boot options out of arm64's device tree and virt's devices out of ACPI | +73 -3 | `kernel/antinomie/stealth_arm64.c` (`ant_fdt_shown()`: root's `/sys/firmware/fdt` is a copy whose `/chosen` bootargs is the kept command line) | `drivers/of/fdt.c` (`of_fdt_raw_init()`, `of_fdt_raw_read()`), `stealth.c` (arm64 only: ACPI `LNRO0005`/`LNRO0015` not scanned), `include/linux/antinomie_stealth.h`, `kernel/antinomie/Makefile` |
 | 41 | keep the arm64 kernel's BTF type for type Debian's | +66 -31 | `include/linux/antinomie_monitor.h` (`ant_core_exit_hint()`, `ant_core_exit_code()`: arm64's forms of the core exit hooks, the hooks themselves elsewhere), `process_core.c` (`ant_monitor_exit_code()`, arm64), `stealth_arm64.c` (`ant_dt_bootargs()`, from setup.c) | `fs/coredump.c` (the exit hook's condition), `kernel/exit.c` (the exit hooks' entry), `arch/arm64/kernel/setup.c` (loses the helper), `arch/arm64/kernel/cpufeature.c` (`ant_parse_kpti()` notrace), `include/linux/antinomie_stealth.h` |
 | 42 | record ia32 programs on x86-64 by the i386 table | +5681 -4 | `arch/x86/include/asm/antinomie_compat_syscalls.h` (generated: the i386 table and each call's x86-64 counterpart) | none (`arch/x86/include/asm/antinomie.h` defines `ANT_ABI_COMPAT` with `CONFIG_IA32_EMULATION`; `recorder.c`: socketcall recorded as the socket call it makes; the compat ABI's `__NR_` names from the architecture header, `arch/arm64/include/asm/antinomie.h` too) |
+| 43 | give a forked child the x86-64 debugger does not follow its own bytes | +11 -5 | none (`debug.h`: `ANT_DBG_FORK_REPAIR` also with `CONFIG_X86_64`, as patch 39 has it on arm64; `debug.c`'s comment) | none |
 
 Every topic also adds its part of the files shared by all of them:
 `control.c` (dispatch), `control_wire.h` (the wire contract), `antinomie_monitor.h`

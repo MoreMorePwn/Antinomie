@@ -1,0 +1,62 @@
+Description: antinomie: give a forked child the x86-64 debugger does not follow its own bytes
+ A software breakpoint is a byte the engine writes into the program's
+ memory (INT3 on x86-64). A child forked with its own copy of that
+ memory, which the debugger does not follow, inherited the byte: when it
+ ran the instruction it took a SIGTRAP, which killed it, or under a
+ SIGTRAP handler (anti-debug code installs one) returned one byte into
+ the instruction the INT3 replaced and ran from the middle of it.
+ .
+ As patch 39 does on arm64 (where a BRK would trap again for ever), the
+ engine now puts the program's own bytes back in such a child before it
+ runs (ANT_DBG_FORK_REPAIR, now also defined for CONFIG_X86_64). A
+ followed child, a thread and a vfork are as before. Only
+ kernel/antinomie/debug.o changes, on x86-64; arm64's objects are the
+ same. No contract change.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-01
+
+---
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+index 0829d727d..12cf0c574 100644
+--- a/kernel/antinomie/debug.c
++++ b/kernel/antinomie/debug.c
+@@ -2630,8 +2630,8 @@ static void step_not_inherited(struct ant_dbg *s, struct task_struct *child)
+ #ifdef ANT_DBG_FORK_REPAIR
+ /* A child with its own copy of the program's memory that the debugger does
+  * not follow, before it runs: the engine's bytes in that copy go back to the
+- * program's own. A child that met one would take a SIGTRAP, and under a
+- * SIGTRAP handler it would trap again at the same BRK for ever.
++ * program's own. A child that met one would take a SIGTRAP; under a handler,
++ * trap at the same BRK for ever (arm64) or resume inside an INT3's instruction.
+  */
+ static void unfollowed_child_bytes(struct ant_dbg *s, struct task_struct *child)
+ {
+diff --git a/kernel/antinomie/debug.h b/kernel/antinomie/debug.h
+index 582a00328..106eceacf 100644
+--- a/kernel/antinomie/debug.h
++++ b/kernel/antinomie/debug.h
+@@ -79,13 +79,19 @@ int ant_dbg_arch_hw_fill(struct perf_event_attr *attr, u32 kind, u64 addr, u32 l
+ void ant_dbg_arch_resume_past_hw(struct task_struct *task);
+ /* arm64's breakpoint and watchpoint exceptions are both taken before the
+  * instruction or its access completes (an x86 watchpoint traps after it), and
+- * its debug registers can watch loads alone (ANTC_DEBUG_BP_HW_READ). A BRK
+- * does not advance the pc: a forked child the debugger does not follow gets
+- * the program's own bytes back before it runs (ANT_DBG_FORK_REPAIR).
++ * its debug registers can watch loads alone (ANTC_DEBUG_BP_HW_READ).
+  */
+ #ifdef CONFIG_ARM64
+ #define ANT_DBG_WATCH_BEFORE 1
+ #define ANT_DBG_READ_WATCH 1
++#endif
++/* A forked child the debugger does not follow gets the program's own bytes
++ * back before it runs (ANT_DBG_FORK_REPAIR): arm64's BRK does not advance the
++ * pc, so a child that met one would trap again for ever; x86's INT3 does, so
++ * a child that met one took a SIGTRAP (killed, or under a handler resumed
++ * inside the instruction the INT3 replaced).
++ */
++#if defined(CONFIG_ARM64) || defined(CONFIG_X86_64)
+ #define ANT_DBG_FORK_REPAIR 1
+ #endif
+ 

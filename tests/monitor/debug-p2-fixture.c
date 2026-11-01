@@ -23,6 +23,7 @@
  *   anti     the usual anti-debug probes, one line per round
  *   start    prints "main reached" first thing in main (debug on start stops before)
  *   fork     forks a child every fifth round that runs hw_code() and exits
+ *            (3 if it took a SIGTRAP: the parent's breakpoint byte reached it)
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -364,8 +365,10 @@ int main(int argc, char **argv)
             if (round % 5 == 4) {
                 pid_t child = fork();
                 if (child == 0) {
+                    /* Exit 3 if the parent's breakpoint byte reached the child. */
+                    int traps = sigtrap_count;
                     for (int i = 0; i < 3; i++) hw_code(i);
-                    _exit(0);
+                    _exit(sigtrap_count != traps ? 3 : 0);
                 }
                 int status = 0;
                 if (child > 0 && waitpid(child, &status, 0) == child)
