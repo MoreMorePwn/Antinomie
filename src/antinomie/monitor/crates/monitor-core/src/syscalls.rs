@@ -63,8 +63,9 @@ pub struct FlagValue {
 pub enum Abi {
     X86_64,
     Aarch64,
-    /// arm EABI: the AArch32 programs of an arm64 guest (`ANT_ABI_COMPAT`).
+    /// The compat ABIs (`ANT_ABI_COMPAT`): arm EABI on arm64, i386 on x86-64.
     Arm,
+    I386,
 }
 
 impl Abi {
@@ -81,7 +82,8 @@ impl Abi {
     pub fn compat(self) -> Option<Self> {
         match self {
             Self::Aarch64 => Some(Self::Arm),
-            Self::X86_64 | Self::Arm => None,
+            Self::X86_64 => Some(Self::I386),
+            Self::Arm | Self::I386 => None,
         }
     }
 }
@@ -92,6 +94,7 @@ pub fn table_of(id: u64) -> Option<&'static Table> {
         0 => Some(table(Abi::X86_64)),
         tag if tag == Abi::Aarch64.tag() => Some(table(Abi::Aarch64)),
         tag if tag == Abi::Arm.tag() => Some(table(Abi::Arm)),
+        tag if tag == Abi::I386.tag() => Some(table(Abi::I386)),
         _ => None,
     }
 }
@@ -182,10 +185,12 @@ pub fn table(abi: Abi) -> &'static Table {
     static X86_64: OnceLock<Table> = OnceLock::new();
     static AARCH64: OnceLock<Table> = OnceLock::new();
     static ARM: OnceLock<Table> = OnceLock::new();
+    static I386: OnceLock<Table> = OnceLock::new();
     match abi {
         Abi::X86_64 => X86_64.get_or_init(|| Table::load(Abi::X86_64)),
         Abi::Aarch64 => AARCH64.get_or_init(|| Table::load(Abi::Aarch64)),
         Abi::Arm => ARM.get_or_init(|| Table::load(Abi::Arm)),
+        Abi::I386 => I386.get_or_init(|| Table::load(Abi::I386)),
     }
 }
 
@@ -1469,6 +1474,67 @@ mod tests {
         let flags = arm.argument_flags(322, 2, 0o40000).unwrap();
         assert!(flags.names.contains(&"O_DIRECTORY".into()));
         assert_eq!(arm.constants().data_model, DataModel::Ilp32);
+    }
+
+    #[test]
+    fn i386_names_ia32_calls_their_families_and_native_counterparts() {
+        let i386 = table(Abi::I386);
+        let x86 = table(Abi::X86_64);
+        assert_eq!(i386.number("open"), Some(5));
+        assert_eq!(i386.number("execve"), Some(11));
+        assert_eq!(i386.number("socketcall"), Some(102));
+        assert_eq!(i386.number("connect"), Some(362));
+        assert_eq!(i386.number("openat"), Some(295));
+        let id = |name| super::id(Abi::I386, i386.number(name).unwrap());
+        assert_eq!(table_of(id("openat")).unwrap().abi, Abi::I386);
+        // The calls an x86-64 run would have misnamed (eval run 1 B1).
+        assert_eq!(known_name(id("rt_sigaction")), Some("rt_sigaction"));
+        assert_eq!(i386.number("rt_sigaction"), Some(174));
+        assert_eq!(x86.name_of(174), Some("create_module"));
+        assert_eq!(family(id("stat64")), Some("stat"));
+        assert_eq!(family(id("fstatat64")), Some("newfstatat"));
+        assert_eq!(family(id("setuid32")), Some("setuid"));
+        assert_eq!(family(id("mmap2")), Some("mmap"));
+        assert_eq!(family(id("openat")), None);
+        // Captured as the x86-64 call: same arguments, one layout.
+        let native = |name| syscall(id(name)).unwrap().native;
+        assert_eq!(native("open"), x86.number("open"));
+        assert_eq!(native("openat"), x86.number("openat"));
+        assert_eq!(native("connect"), x86.number("connect"));
+        assert_eq!(native("execve"), x86.number("execve"));
+        assert_eq!(native("init_module"), x86.number("init_module"));
+        for name in [
+            "socketcall",
+            "stat64",
+            "fcntl64",
+            "ioctl",
+            "mmap2",
+            "setsockopt",
+            "nanosleep",
+        ] {
+            assert_eq!(native(name), None, "{name}");
+        }
+        // A 64-bit argument takes two consecutive registers (no pad).
+        let pread = i386.by_name("pread64").unwrap();
+        let names: Vec<_> = pread.arguments.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["fd", "ubuf", "count", "poslo", "poshi"]);
+        let mark = i386.by_name("fanotify_mark").unwrap();
+        let names: Vec<_> = mark.arguments.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "fanotify_fd",
+                "flags",
+                "mask_lo",
+                "mask_hi",
+                "fd",
+                "pathname"
+            ]
+        );
+        // clone's ia32 order is CLONE_BACKWARDS'.
+        let clone = i386.by_name("clone").unwrap();
+        assert_eq!(clone.arguments[3].name, "tls");
+        assert_eq!(i386.constants().data_model, DataModel::Ilp32);
     }
 
     #[test]

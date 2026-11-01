@@ -39,7 +39,7 @@ pub(super) struct Argv {
 
 pub(super) fn argument_vector(call: &InvocationSummary, event: &EventSummary) -> Option<Argv> {
     // The call's own table: its argv index and its pointers' width (an
-    // AArch32 program's vector holds 4-byte pointers).
+    // ia32 or AArch32 program's vector holds 4-byte pointers).
     let table = syscalls::table_of(event.syscall_nr).unwrap_or(syscalls::native());
     let argument = match event.syscall_name.as_str() {
         name @ ("execve" | "execveat") => table.argument(name, "argv")?,
@@ -880,6 +880,27 @@ mod tests {
         ]);
         let event = trace::representative(&exec).unwrap();
         assert_eq!(command_line(&exec, event).as_deref(), Some("crontab -l"));
+        // An ia32 program's execve on an x86-64 guest: the same.
+        let narrow = |index: u64, value: u32| {
+            super::super::tests::captured(
+                &format!("arg1.ptr[{index}]"),
+                "linux-6.12.94/x86/pointer",
+                &value.to_le_bytes(),
+            )
+        };
+        let ia32 = syscalls::id(syscalls::Abi::I386, 11);
+        let mut exec = super::super::tests::path_call(1, ia32, "execve", 0, "/bin/busybox");
+        exec.entry.as_mut().unwrap().fields.extend([
+            narrow(0, 0x2000),
+            string(0, b"sh\0"),
+            narrow(1, 0x2010),
+            string(1, b"-c\0"),
+            narrow(2, 0x2020),
+            string(2, b"id\0"),
+            narrow(3, 0),
+        ]);
+        let event = trace::representative(&exec).unwrap();
+        assert_eq!(command_line(&exec, event).as_deref(), Some("sh -c id"));
     }
     fn engine_file() -> &'static str {
         antinomie_monitor_core::analysis::detection::JOURNAL_FILE

@@ -7,7 +7,7 @@ use super::Abi;
 /// numbers (MIPS o32's start at 4000).
 const ABI_SHIFT: u32 = 48;
 const NUMBER_MASK: u64 = (1 << ABI_SHIFT) - 1;
-/// The tag of a call no table describes (an AArch32 call on an arm64 guest).
+/// The tag of a call no table describes (another ABI's call on an arm64 guest).
 const UNTABLED: u64 = 0xffff;
 
 impl Abi {
@@ -19,6 +19,7 @@ impl Abi {
             Self::X86_64 => 0,
             Self::Aarch64 => u64::from(crate::api::GuestArch::ELF_AARCH64),
             Self::Arm => u64::from(crate::api::GuestArch::ELF_ARM),
+            Self::I386 => u64::from(crate::api::GuestArch::ELF_386),
         }
     }
 }

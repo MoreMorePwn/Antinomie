@@ -99,10 +99,12 @@ fn inventory_of(abi: syscalls::Abi) -> &'static Inventory {
     static X86_64: OnceLock<Inventory> = OnceLock::new();
     static AARCH64: OnceLock<Inventory> = OnceLock::new();
     static ARM: OnceLock<Inventory> = OnceLock::new();
+    static I386: OnceLock<Inventory> = OnceLock::new();
     let cell = match abi {
         syscalls::Abi::X86_64 => &X86_64,
         syscalls::Abi::Aarch64 => &AARCH64,
         syscalls::Abi::Arm => &ARM,
+        syscalls::Abi::I386 => &I386,
     };
     cell.get_or_init(|| {
         // Generated compiled input is validated by tests and the generator.
@@ -326,7 +328,7 @@ fn layout(field: &FieldSummary, nr: u64, index: usize) -> Option<&'static Layout
     let mut abi = table.map_or(syscalls::native().abi, |table| table.abi);
     let mut number = syscalls::wire_number(nr);
     if let Some(native) = syscalls::syscall(nr).and_then(|call| call.native)
-        && let Some(native_abi) = [syscalls::Abi::Aarch64]
+        && let Some(native_abi) = [syscalls::Abi::Aarch64, syscalls::Abi::X86_64]
             .into_iter()
             .find(|candidate| candidate.compat() == Some(abi))
         && field

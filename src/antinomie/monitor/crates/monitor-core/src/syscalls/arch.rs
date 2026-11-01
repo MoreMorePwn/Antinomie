@@ -91,6 +91,7 @@ pub(super) fn native_syscalls_json(abi: Abi) -> &'static str {
         Abi::X86_64 => include_str!("../../../../protocol/x86_64/native-syscalls.json"),
         Abi::Aarch64 => include_str!("../../../../protocol/aarch64/native-syscalls.json"),
         Abi::Arm => include_str!("../../../../protocol/arm/native-syscalls.json"),
+        Abi::I386 => include_str!("../../../../protocol/i386/native-syscalls.json"),
     }
 }
 
@@ -99,6 +100,7 @@ fn constants_json(abi: Abi) -> &'static str {
         Abi::X86_64 => include_str!("../../../../protocol/x86_64/constants.json"),
         Abi::Aarch64 => include_str!("../../../../protocol/aarch64/constants.json"),
         Abi::Arm => include_str!("../../../../protocol/arm/constants.json"),
+        Abi::I386 => include_str!("../../../../protocol/i386/constants.json"),
     }
 }
 
@@ -108,6 +110,7 @@ pub fn captured_layouts_json(abi: Abi) -> &'static str {
         Abi::X86_64 => include_str!("../../../../protocol/x86_64/captured-layout-members.json"),
         Abi::Aarch64 => include_str!("../../../../protocol/aarch64/captured-layout-members.json"),
         Abi::Arm => include_str!("../../../../protocol/arm/captured-layout-members.json"),
+        Abi::I386 => include_str!("../../../../protocol/i386/captured-layout-members.json"),
     }
 }
 
@@ -166,7 +169,35 @@ mod tests {
         // arch/arm/include/uapi/asm/fcntl.h, as arm64's
         assert_eq!(arm.value("O_DIRECTORY", 0o200000), Some(0o40000));
         assert_eq!(Abi::Aarch64.compat(), Some(Abi::Arm));
-        assert_eq!(Abi::X86_64.compat(), None);
+    }
+
+    #[test]
+    fn i386_is_x86_64s_ilp32_compat_set() {
+        let i386 = load_constants(Abi::I386);
+        assert_eq!(i386.architecture, "i386");
+        assert_eq!(i386.elf_machine, 3);
+        assert_eq!(i386.elf_class, 32);
+        assert_eq!(i386.endianness, Endian::Little);
+        assert_eq!(i386.data_model, DataModel::Ilp32);
+        assert_eq!(i386.long_size(), 4);
+        assert_eq!(i386.audit_arch, "40000003");
+        // x86-64's ANT_ARCH_COMPAT_LAYOUT.
+        assert_eq!(i386.layout_prefix, "linux-6.12.94/x86/");
+        let layouts: serde_json::Value =
+            serde_json::from_str(captured_layouts_json(Abi::I386)).unwrap();
+        assert_eq!(layouts["architecture"], "i386");
+        for layout in layouts["layouts"].as_array().unwrap() {
+            assert!(
+                layout["layout"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("linux-6.12.94/x86/")
+            );
+        }
+        // The open flags are x86-64's.
+        assert_eq!(i386.value("O_DIRECTORY", 0o200000), Some(0o200000));
+        assert_eq!(Abi::X86_64.compat(), Some(Abi::I386));
+        assert_eq!(Abi::I386.compat(), None);
     }
 
     #[test]

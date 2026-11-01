@@ -316,8 +316,8 @@ pub fn guest_reason(outcome: &CoreOutcome) -> Option<CoreReason> {
         95 => CoreReason::new(
             CoreReasonCode::Writer,
             Some(-95),
-            "the guest writes no core of a 32-bit program (such as an AArch32 program on \
-             arm64) or of a program format without a core writer",
+            "the guest writes no core of a 32-bit program (an ia32 program on x86-64, an \
+             AArch32 program on arm64) or of a program format without a core writer",
         ),
         _ => CoreReason::new(
             CoreReasonCode::Writer,

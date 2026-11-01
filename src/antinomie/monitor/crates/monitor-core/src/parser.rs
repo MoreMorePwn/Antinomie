@@ -511,7 +511,8 @@ impl Event {
 
 /// The abi field of a native call's records (`ANT_ABI_NATIVE`).
 const ANT_ABI_NATIVE: u16 = 1;
-/// The abi field of a compat program's call (`ANT_ABI_COMPAT`): an AArch32
+/// The abi field of a compat program's call (`ANT_ABI_COMPAT`): an ia32
+/// program's on an x86-64 guest, named by the i386 table, or an AArch32
 /// program's on an arm64 guest, named by the arm table.
 const ANT_ABI_COMPAT: u16 = 3;
 
@@ -563,18 +564,19 @@ impl Assembler {
         self.abi = crate::syscalls::Abi::of(arch).unwrap_or(crate::syscalls::Abi::X86_64);
     }
     /// The host syscall id of a record: native calls by the guest's table,
-    /// compat programs' by the table of the guest's compat ABI; another ABI's
-    /// calls on a non-x86 guest by number only (x86-64 keeps naming every
-    /// call by its native table, as it always did).
+    /// compat programs' (ia32 on x86-64, AArch32 on arm64) by the table of
+    /// the guest's compat ABI; another ABI's calls on a non-x86 guest by
+    /// number only. On x86-64 every other record keeps its number as its id,
+    /// as it always did (x32's, and an older guest's ia32 calls, ABI 0).
     pub(crate) fn syscall_id(&self, h: &Header) -> u64 {
         match self.abi {
-            crate::syscalls::Abi::X86_64 => h.syscall_nr,
-            abi if h.abi == ANT_ABI_NATIVE => crate::syscalls::id(abi, h.syscall_nr),
             abi if h.abi == ANT_ABI_COMPAT
                 && let Some(compat) = abi.compat() =>
             {
                 crate::syscalls::id(compat, h.syscall_nr)
             }
+            crate::syscalls::Abi::X86_64 => h.syscall_nr,
+            abi if h.abi == ANT_ABI_NATIVE => crate::syscalls::id(abi, h.syscall_nr),
             _ => crate::syscalls::untabled_id(h.syscall_nr),
         }
     }
@@ -1163,9 +1165,20 @@ mod tests {
             parse_packet(&p).unwrap().0
         };
         let mut assembler = Assembler::sealed();
-        // x86-64 guests keep their numbers whatever the ABI field says.
-        assert_eq!(assembler.syscall_id(&record(3, 322)), 322);
-        assert!(!assembler.decoded_abi(3));
+        // x86-64 guests: ia32 calls by the i386 table; every other record
+        // keeps its number (x32's, an older guest's ia32 calls of ABI 0).
+        let ia32 = assembler.syscall_id(&record(3, 5));
+        assert_eq!(table_of(ia32).unwrap().abi, Abi::I386);
+        assert_eq!(known_name(ia32), Some("open"));
+        assert_eq!(
+            known_name(assembler.syscall_id(&record(3, 102))),
+            Some("socketcall")
+        );
+        assert_eq!(assembler.syscall_id(&record(1, 257)), 257);
+        assert_eq!(assembler.syscall_id(&record(0, 5)), 5);
+        assert_eq!(assembler.syscall_id(&record(2, 0x4000_0001)), 0x4000_0001);
+        assert!(assembler.decoded_abi(1) && assembler.decoded_abi(3));
+        assert!(!assembler.decoded_abi(0) && !assembler.decoded_abi(2));
         assembler.set_arch(crate::api::GuestArch::AARCH64);
         let compat = assembler.syscall_id(&record(3, 322));
         assert_eq!(table_of(compat).unwrap().abi, Abi::Arm);

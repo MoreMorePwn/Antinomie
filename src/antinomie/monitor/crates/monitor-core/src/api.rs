@@ -1452,6 +1452,8 @@ impl GuestArch {
     pub const ELF_RISCV: u32 = 243;
     /// `EM_ARM`.
     pub const ELF_ARM: u32 = 40;
+    /// `EM_386`.
+    pub const ELF_386: u32 = 3;
     /// `EM_MIPS`.
     pub const ELF_MIPS: u32 = 8;
     pub const X86_64: Self = Self::new(Self::ELF_X86_64, 2, Endian::Little);
