@@ -1,0 +1,173 @@
+Description: antinomie: keep the boot options out of arm64's device tree and virt's devices out of ACPI
+ The boot loader's /chosen bootargs carries the host's antinomie_* boot
+ options. /proc/device-tree already showed the command line the kernel
+ kept, but /sys/firmware/fdt, root's copy of the flattened tree, showed
+ the boot loader's, options included, on device-tree and UEFI boots
+ alike (the EFI stub writes the command line there too). It now shows a
+ copy whose bootargs is the kept command line, made by of_fdt_raw_init()
+ through ant_fdt_shown(); with no memory for the copy the file is not
+ made, as when its CRC check fails.
+ .
+ The virt machine's ACPI namespace also lists its 32 virtio-mmio slots
+ (LNRO0005) and its flash (LNRO0015), which no arm64 board has and no
+ driver uses here (the VM's devices are PCI ones). They are left out of
+ the scan as QEMU's own devices are, on arm64 only.
+ .
+ x86-64 is unchanged: stealth_arm64.c is built for arm64, the ACPI
+ names are compiled only there, and drivers/of is not built on x86-64.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-01
+
+---
+diff --git a/drivers/of/fdt.c b/drivers/of/fdt.c
+index 0940955d3..0d8d7fc1b 100644
+--- a/drivers/of/fdt.c
++++ b/drivers/of/fdt.c
+@@ -24,6 +24,7 @@
+ #include <linux/debugfs.h>
+ #include <linux/serial_core.h>
+ #include <linux/sysfs.h>
++#include <linux/antinomie_stealth.h>
+ #include <linux/random.h>
+ 
+ #include <asm/setup.h>  /* for COMMAND_LINE_SIZE */
+@@ -1256,11 +1257,15 @@ void __init unflatten_and_copy_device_tree(void)
+ }
+ 
+ #ifdef CONFIG_SYSFS
++/* The tree /sys/firmware/fdt shows: the boot loader's, as Antinomie's
++ * facade gives it. */
++static const void *of_fdt_raw_blob;
++
+ static ssize_t of_fdt_raw_read(struct file *filp, struct kobject *kobj,
+ 			       struct bin_attribute *bin_attr,
+ 			       char *buf, loff_t off, size_t count)
+ {
+-	memcpy(buf, initial_boot_params + off, count);
++	memcpy(buf, of_fdt_raw_blob + off, count);
+ 	return count;
+ }
+ 
+@@ -1277,7 +1282,10 @@ static int __init of_fdt_raw_init(void)
+ 		pr_warn("not creating '/sys/firmware/fdt': CRC check failed\n");
+ 		return 0;
+ 	}
+-	of_fdt_raw_attr.size = fdt_totalsize(initial_boot_params);
++	of_fdt_raw_blob = ant_fdt_shown(initial_boot_params);
++	if (!of_fdt_raw_blob)
++		return 0;
++	of_fdt_raw_attr.size = fdt_totalsize(of_fdt_raw_blob);
+ 	return sysfs_create_bin_file(firmware_kobj, &of_fdt_raw_attr);
+ }
+ late_initcall(of_fdt_raw_init);
+diff --git a/include/linux/antinomie_stealth.h b/include/linux/antinomie_stealth.h
+index 6a27fedd4..ded892987 100644
+--- a/include/linux/antinomie_stealth.h
++++ b/include/linux/antinomie_stealth.h
+@@ -13,7 +13,17 @@ bool ant_symbol_hidden(unsigned long address, const char *name);
+ /* ACPI scan: whether the device (an acpi_handle) is one of QEMU's own, which
+  * the guest does not enumerate. */
+ bool ant_acpi_device_hidden(void *handle);
++#endif
++#if defined(CONFIG_ANTINOMIE) && defined(CONFIG_ARM64)
++/* The flattened device tree /sys/firmware/fdt shows (NULL: none). */
++const void *ant_fdt_shown(const void *fdt);
+ #else
++static inline const void *ant_fdt_shown(const void *fdt)
++{
++	return fdt;
++}
++#endif
++#ifndef CONFIG_ANTINOMIE
+ static inline void ant_cmdline_take(char *cmdline) { }
+ static inline bool ant_symbol_hidden(unsigned long address, const char *name)
+ {
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index ddbd609d4..ab0babfbb 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -32,4 +32,5 @@ obj-y += fileid.o
+ obj-y += fileops.o
+ obj-y += filemap.o
+ obj-y += stealth.o
++obj-$(CONFIG_ARM64) += stealth_arm64.o
+ obj-y += section_end.o
+diff --git a/kernel/antinomie/stealth.c b/kernel/antinomie/stealth.c
+index 6f72f0971..fbc8de6d3 100644
+--- a/kernel/antinomie/stealth.c
++++ b/kernel/antinomie/stealth.c
+@@ -14,7 +14,9 @@
+  *
+  * QEMU's own ACPI devices (HID QEMU0001 pvpanic, QEMU0002 fw_cfg, ...) are not
+  * enumerated: no driver of this kernel uses them, and enumerated they appear
+- * in /sys/bus/acpi/devices and /proc/ioports by their QEMU names.
++ * in /sys/bus/acpi/devices and /proc/ioports by their QEMU names. On arm64,
++ * neither are the virt machine's virtio-mmio slots and flash (LNRO0005,
++ * LNRO0015).
+  */
+ #include <linux/acpi.h>
+ #include <linux/antinomie_stealth.h>
+@@ -117,6 +119,13 @@ bool ant_acpi_device_hidden(void *handle)
+ 	if (ACPI_FAILURE(acpi_get_object_info(handle, &info)))
+ 		return false;
+ 	hidden = (info->valid & ACPI_VALID_HID) && !strncmp(info->hardware_id.string, "QEMU", 4);
++#ifdef CONFIG_ARM64
++	/* The virt machine's virtio-mmio slots and flash, which no arm64 board
++	 * has (their drivers bind nothing there: the devices are PCI ones). */
++	hidden = hidden || ((info->valid & ACPI_VALID_HID) &&
++			    (!strcmp(info->hardware_id.string, "LNRO0005") ||
++			     !strcmp(info->hardware_id.string, "LNRO0015")));
++#endif
+ 	kfree(info);
+ 	return hidden;
+ }
+diff --git a/kernel/antinomie/stealth_arm64.c b/kernel/antinomie/stealth_arm64.c
+new file mode 100644
+index 000000000..6626786c5
+--- /dev/null
++++ b/kernel/antinomie/stealth_arm64.c
+@@ -0,0 +1,42 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* arm64's device facade: what the device tree shows of Antinomie.
++ *
++ * The boot loader's /chosen bootargs carries the host's antinomie_* boot
++ * options. /proc/device-tree gets the command line the kernel kept
++ * (setup.c); /sys/firmware/fdt, root's copy of the flattened tree as it came,
++ * gets a copy with the same bootargs, so the tree shows one command line
++ * everywhere, as /proc/cmdline does.
++ */
++#include <linux/antinomie_stealth.h>
++#include <linux/init.h>
++#include <linux/libfdt.h>
++#include <linux/mm.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++
++/* The flattened tree /sys/firmware/fdt shows: fdt itself, a copy with the
++ * kept command line as bootargs, or NULL (no copy: the file is not made). */
++const void *__init ant_fdt_shown(const void *fdt)
++{
++	size_t size = fdt_totalsize(fdt);
++	const char *bootargs;
++	int chosen, len;
++	void *copy;
++
++	chosen = fdt_path_offset(fdt, "/chosen");
++	if (chosen < 0)
++		return fdt;
++	bootargs = fdt_getprop(fdt, chosen, "bootargs", &len);
++	if (!bootargs || len <= 0 || !strnstr(bootargs, "antinomie_", len))
++		return fdt;
++	copy = kvmalloc(size, GFP_KERNEL);
++	if (!copy)
++		return NULL;
++	memcpy(copy, fdt, size);
++	/* Shorter than the boot loader's: the tree keeps its size. */
++	if (fdt_setprop_string(copy, chosen, "bootargs", boot_command_line)) {
++		kvfree(copy);
++		return NULL;
++	}
++	return copy;
++}
