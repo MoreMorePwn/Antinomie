@@ -325,7 +325,7 @@ fn small(d: &mut Driver, t: &mut Table, probe: &Path) -> Result<(), String> {
         run.analysis
             .as_ref()
             .is_some_and(|report| report.state == AnalysisState::Unavailable)
-            && reason.contains("larger than the 80.0 MB"),
+            && reason.contains("larger than the 80.0 MiB"),
         reason,
     );
     d.stop()
