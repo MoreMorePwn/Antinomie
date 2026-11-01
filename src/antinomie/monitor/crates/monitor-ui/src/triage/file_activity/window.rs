@@ -324,9 +324,16 @@ impl Window {
         let state =
             egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
         let open = state.is_open();
+        let mut toggle = false;
         state
             .show_header(ui, |ui| {
-                ui.label(egui::RichText::new("Filters").strong());
+                // The word opens and closes the section too, not only the arrow.
+                toggle = ui
+                    .add(
+                        egui::Label::new(egui::RichText::new("Filters").strong())
+                            .sense(egui::Sense::click()),
+                    )
+                    .clicked();
                 if !open && on > 0 {
                     ui.weak(if on == 1 {
                         "1 filter on".to_owned()
@@ -336,6 +343,15 @@ impl Window {
                 }
             })
             .body(|ui| self.filters(ui));
+        if toggle {
+            let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+                ui.ctx(),
+                id,
+                true,
+            );
+            state.toggle(ui);
+            state.store(ui.ctx());
+        }
         ui.weak(format!(
             "{} of {} files",
             shown.len(),
@@ -368,8 +384,12 @@ impl Window {
                             ui.set_min_width(ui.available_width());
                             ui.vertical(|ui| {
                                 let (name, other) = file.names_by(self.name_choice);
+                                // Cut at the start: a renamed file's names
+                                // differ only at the end.
+                                let font = egui::TextStyle::Monospace.resolve(ui.style());
+                                let shown = fit_tail(ui, name, font, ui.available_width());
                                 ui.add(
-                                    egui::Label::new(egui::RichText::new(name).monospace())
+                                    egui::Label::new(egui::RichText::new(shown).monospace())
                                         .truncate()
                                         .selectable(false),
                                 )
@@ -378,9 +398,11 @@ impl Window {
                                     None => name.to_owned(),
                                 });
                                 let summary = match other {
-                                    Some(other) => {
-                                        format!("also seen as {other} · {}", file.summary())
-                                    }
+                                    Some(other) => format!(
+                                        "also seen as {} · {}",
+                                        other_name(name, other),
+                                        file.summary()
+                                    ),
                                     None => file.summary(),
                                 };
                                 ui.add(
@@ -487,9 +509,8 @@ impl Window {
             .id_salt("file-activity-history")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.add(
-                    egui::Label::new(egui::RichText::new(&file.path).strong().monospace()).wrap(),
-                );
+                let (name, other) = file.names_by(self.name_choice);
+                ui.add(egui::Label::new(egui::RichText::new(name).strong().monospace()).wrap());
                 ui.horizontal_wrapped(|ui| {
                     if file.created {
                         widgets::chip(ui, "created by the run", Tone::Good);
@@ -505,7 +526,13 @@ impl Window {
                     }
                     ui.weak(file.summary());
                 });
-                for name in &file.names {
+                // The other name of a renamed file first, then any more.
+                for name in other.into_iter().chain(
+                    file.names
+                        .iter()
+                        .map(String::as_str)
+                        .filter(|seen| Some(*seen) != other && *seen != name),
+                ) {
                     ui.weak(format!("also seen as {name}"));
                 }
                 file_written(ui, file);
@@ -1046,4 +1073,44 @@ pub(super) fn run_text(run: &ByteRun, original_size: Option<u64>) -> String {
         hex(&run.before, added),
         hex(&run.after, false)
     )
+}
+
+/// The end of `text` that fits `width` in `font`, led by "…" when cut: the
+/// file name of a long path stays in view.
+fn fit_tail(ui: &egui::Ui, text: &str, font: egui::FontId, width: f32) -> String {
+    let fits = |candidate: &str| {
+        ui.fonts(|fonts| {
+            fonts
+                .layout_no_wrap(candidate.to_owned(), font.clone(), egui::Color32::WHITE)
+                .size()
+                .x
+        }) <= width
+    };
+    if width <= 0.0 || fits(text) {
+        return text.to_owned();
+    }
+    let starts: Vec<usize> = text.char_indices().map(|(at, _)| at).collect();
+    // The smallest cut whose tail fits, found by halving.
+    let (mut low, mut high) = (1, starts.len());
+    while low < high {
+        let mid = (low + high) / 2;
+        if fits(&format!("…{}", &text[starts[mid]..])) {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    match starts.get(low) {
+        Some(at) => format!("…{}", &text[*at..]),
+        None => "…".to_owned(),
+    }
+}
+
+/// The other name of a renamed file as the list shows it: only its file
+/// name when it stayed in the same folder.
+pub(super) fn other_name<'a>(name: &str, other: &'a str) -> &'a str {
+    match (name.rsplit_once('/'), other.rsplit_once('/')) {
+        (Some((folder, _)), Some((other_folder, file))) if folder == other_folder => file,
+        _ => other,
+    }
 }

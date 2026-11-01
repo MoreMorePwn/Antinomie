@@ -388,7 +388,8 @@ fn choosing_a_file_draws_its_graph_and_choosing_a_node_lists_its_calls() {
     let activity = activity();
     let mut harness = Harness::new();
     let shown = harness.settle(&activity);
-    assert!(shown.iter().any(|(text, _)| text == "/tmp/payload"));
+    // The list shows a renamed file by its last name (round 6 item 25).
+    assert!(shown.iter().any(|(text, _)| text == "/tmp/.payload"));
     assert!(
         !shown
             .iter()
@@ -399,7 +400,7 @@ fn choosing_a_file_draws_its_graph_and_choosing_a_node_lists_its_calls() {
         .iter()
         .any(|(text, _)| text.starts_with("Select a file")));
     // Choose the dropped file.
-    harness.click(&activity, center(&shown, "/tmp/payload"));
+    harness.click(&activity, center(&shown, "/tmp/.payload"));
     let shown = harness.settle(&activity);
     assert_eq!(harness.window.chosen(), (Some("/tmp/payload"), None));
     for label in ["create", "write ×2", "rename", "delete"] {
@@ -425,7 +426,11 @@ fn choosing_a_file_draws_its_graph_and_choosing_a_node_lists_its_calls() {
         .iter()
         .any(|(text, _)| text == "Calls in the chosen step"));
     assert!(
-        !shown.iter().any(|(text, _)| text.contains("/tmp/.payload")),
+        // The list and header show the last name; the rename call's result
+        // ("→ /tmp/.payload") is what must be missing.
+        !shown
+            .iter()
+            .any(|(text, _)| text.contains("→ /tmp/.payload")),
         "the rename is not among the chosen writes"
     );
 }
@@ -497,7 +502,7 @@ fn a_click_on_a_file_shows_it_in_details_and_an_empty_list_says_why() {
     let activity = activity();
     let mut harness = Harness::new();
     let shown = harness.settle(&activity);
-    harness.click(&activity, center(&shown, "/tmp/payload"));
+    harness.click(&activity, center(&shown, "/tmp/.payload"));
     assert_eq!(
         harness
             .ctx
@@ -713,4 +718,9 @@ fn a_renamed_file_is_listed_and_sorted_by_its_last_name_unless_the_first_is_chos
     assert_eq!(first(&window), "/etc/hosts");
     window.name_choice = NameChoice::Last;
     assert!(window.shown(&activity).contains(&index));
+    // The list's second line names the other one by its file name when the
+    // folder is the same (the full paths differ only at their end).
+    use super::window::other_name;
+    assert_eq!(other_name("/tmp/payload.locked", "/tmp/payload"), "payload");
+    assert_eq!(other_name("/tmp/a", "/var/b"), "/var/b");
 }
