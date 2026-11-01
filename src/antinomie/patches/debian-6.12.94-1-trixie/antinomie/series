@@ -67,3 +67,4 @@
 0038-antinomie-read-old-pages-of-the-caller-on-cpus-without-a-hardware-access-flag.patch
 0039-antinomie-add-the-arm64-debug-engine.patch
 0040-antinomie-keep-the-boot-options-out-of-arm64-s-device-tree-and-virt-s-devices-out-of-acpi.patch
+0041-antinomie-keep-the-arm64-kernel-s-btf-type-for-type-debian-s.patch

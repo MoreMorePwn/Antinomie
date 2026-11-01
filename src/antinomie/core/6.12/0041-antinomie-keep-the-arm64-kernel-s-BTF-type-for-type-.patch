@@ -1,0 +1,250 @@
+From 9683aa7fd59ab3a125b853f88fa64048f5c97994 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Sun, 1 Nov 2026 10:42:20 +0700
+Subject: [PATCH] antinomie: keep the arm64 kernel's BTF type for type Debian's
+
+As for x86-64 (keep the kernel's BTF type for type Debian's), Debian's
+arm64 modules carry BTF that refers to vmlinux's types by number, so the
+stock arm64 kernel's BTF has to be byte for byte the BTF of Debian's own
+6.12.94-1 arm64 image. Built with Debian's arm64 configuration and its
+AArch32 vDSO compiler, three hooks still changed it:
+
+- do_coredump()'s exit hook at its top made GCC inline the three calls of
+  __percpu_add_case_32 (arch/arm64/include/asm/percpu.h, this_cpu_inc() of
+  the superblock's percpu_rw_semaphore) that Debian's arm64 build keeps out
+  of line in fs/coredump.o: no ELF symbol, so no BTF function. On arm64 the
+  hook is an unlikely branch (ant_core_exit_hint()), which keeps them out of
+  line, as fs/coredump.c without the hook does.
+- kernel/exit.c called ant_monitor_core_exit(code, NULL), whose declaration
+  put a const kernel_siginfo in exit.c's types; Debian's build meets that
+  type first in kernel/signal.c, and pahole numbers types in the order it
+  meets them. On arm64, exit.c calls ant_monitor_exit_code(), which takes
+  only the status (ant_core_exit_code()).
+- setup.c's helper that gives /proc/device-tree the kept command line
+  (ant_dt_bootargs()) put a const device_node in setup.c's types. It lives
+  in kernel/antinomie/stealth_arm64.c now, built without debug information
+  as the rest of the recorder is.
+
+On x86-64 the per-CPU add is an instruction, not a function, and the type
+order is already Debian's: there the macros expand to the hooks as they
+were, and the objects are unchanged.
+
+Also not traceable: ant_parse_kpti(), the handler of antinomie_kpti=, is
+notrace like every other recorder function.
+
+Hooked kernel files: fs/coredump.c (the condition of the exit hook),
+kernel/exit.c (the exit hooks' entry), arch/arm64/kernel/setup.c (loses the
+helper), arch/arm64/kernel/cpufeature.c (notrace).
+---
+ arch/arm64/kernel/cpufeature.c    |  2 +-
+ arch/arm64/kernel/setup.c         | 27 ---------------------------
+ fs/coredump.c                     |  2 +-
+ include/linux/antinomie_monitor.h | 25 +++++++++++++++++++++++++
+ include/linux/antinomie_stealth.h |  1 +
+ kernel/antinomie/process_core.c   |  8 ++++++++
+ kernel/antinomie/stealth_arm64.c  | 28 ++++++++++++++++++++++++++++
+ kernel/exit.c                     |  4 ++--
+ 8 files changed, 66 insertions(+), 31 deletions(-)
+
+diff --git a/arch/arm64/kernel/cpufeature.c b/arch/arm64/kernel/cpufeature.c
+index f966de2ea..6c8450bfa 100644
+--- a/arch/arm64/kernel/cpufeature.c
++++ b/arch/arm64/kernel/cpufeature.c
+@@ -1987,7 +1987,7 @@ early_param("kpti", parse_kpti);
+  * for speed. The option leaves the command line before it is printed, so
+  * /proc/cmdline does not name it.
+  */
+-static int __init ant_parse_kpti(char *str)
++static int __init notrace ant_parse_kpti(char *str)
+ {
+ 	return parse_kpti(str);
+ }
+diff --git a/arch/arm64/kernel/setup.c b/arch/arm64/kernel/setup.c
+index 8f99689f4..dd56acba9 100644
+--- a/arch/arm64/kernel/setup.c
++++ b/arch/arm64/kernel/setup.c
+@@ -30,7 +30,6 @@
+ #ifdef CONFIG_ANTINOMIE
+ #include <linux/antinomie.h>
+ #include <linux/antinomie_stealth.h>
+-#include <linux/of.h>
+ #endif
+ #include <linux/efi.h>
+ #include <linux/psci.h>
+@@ -284,32 +283,6 @@ u64 cpu_logical_map(unsigned int cpu)
+ 	return __cpu_logical_map[cpu];
+ }
+ 
+-#ifdef CONFIG_ANTINOMIE
+-/*
+- * The device tree's /chosen bootargs is the command line the boot loader
+- * gave, antinomie_* options included, and /proc/device-tree shows it to every
+- * user: it gets the command line the kernel kept (boot_command_line, which
+- * /proc/cmdline shows).
+- */
+-static void __init ant_dt_bootargs(void)
+-{
+-	struct property *prop;
+-	size_t len = strlen(boot_command_line) + 1;
+-	char *value;
+-
+-	prop = of_chosen ? of_find_property(of_chosen, "bootargs", NULL) : NULL;
+-	if (!prop || !prop->length ||
+-	    !strnstr(prop->value, "antinomie_", prop->length))
+-		return;
+-	value = memblock_alloc(len, SMP_CACHE_BYTES);
+-	if (!value)
+-		return;
+-	memcpy(value, boot_command_line, len);
+-	prop->value = value;
+-	prop->length = len;
+-}
+-#endif
+-
+ void __init __no_sanitize_address setup_arch(char **cmdline_p)
+ {
+ 	setup_initial_init_mm(_text, _etext, _edata, _end);
+diff --git a/fs/coredump.c b/fs/coredump.c
+index 93246c3ec..f51a4484c 100644
+--- a/fs/coredump.c
++++ b/fs/coredump.c
+@@ -604,7 +604,7 @@ void do_coredump(const kernel_siginfo_t *siginfo)
+ 		.cpu = raw_smp_processor_id(),
+ 	};
+ 
+-	if (ant_monitor_core_exit(siginfo->si_signo, siginfo))
++	if (ant_core_exit_hint(ant_monitor_core_exit(siginfo->si_signo, siginfo)))
+ 		return;
+ 	audit_core_dumps(siginfo->si_signo);
+ 
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index 108671097..eb3a584b5 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -372,4 +372,29 @@ static inline void ant_monitor_mapped_writeback(struct folio *folio) {}
+ static inline void ant_monitor_mapped_unmap(struct vm_area_struct *vma, struct folio *folio,
+ 					    struct page *page, unsigned int nr) {}
+ #endif
++
++/*
++ * do_coredump()'s exit hook as a branch: on arm64 it is unlikely, so that GCC
++ * inlines in do_coredump() as Debian's arm64 build does (that build keeps
++ * __percpu_add_case_32 out of line there, a function of its BTF). x86-64's
++ * code is Debian's without the hint.
++ */
++#ifdef CONFIG_ARM64
++#define ant_core_exit_hint(hooked) unlikely(hooked)
++#else
++#define ant_core_exit_hint(hooked) (hooked)
++#endif
++
++/*
++ * exit.c's exit hooks, which have no siginfo: on arm64 an entry that takes
++ * only the status, so that exit.c's types do not include a const
++ * kernel_siginfo before Debian's arm64 build meets one (kernel/signal.c),
++ * which would renumber the BTF types after it. x86-64 calls the hook itself.
++ */
++#if defined(CONFIG_ANTINOMIE) && defined(CONFIG_ARM64)
++bool ant_monitor_exit_code(int wait_status);
++#define ant_core_exit_code(code) ant_monitor_exit_code(code)
++#else
++#define ant_core_exit_code(code) ant_monitor_core_exit(code, NULL)
++#endif
+ #endif
+diff --git a/include/linux/antinomie_stealth.h b/include/linux/antinomie_stealth.h
+index ded892987..a71ec2b10 100644
+--- a/include/linux/antinomie_stealth.h
++++ b/include/linux/antinomie_stealth.h
+@@ -17,6 +17,7 @@ bool ant_acpi_device_hidden(void *handle);
+ #if defined(CONFIG_ANTINOMIE) && defined(CONFIG_ARM64)
+ /* The flattened device tree /sys/firmware/fdt shows (NULL: none). */
+ const void *ant_fdt_shown(const void *fdt);
++void ant_dt_bootargs(void);
+ #else
+ static inline const void *ant_fdt_shown(const void *fdt)
+ {
+diff --git a/kernel/antinomie/process_core.c b/kernel/antinomie/process_core.c
+index e2773821c..cc8323fe0 100644
+--- a/kernel/antinomie/process_core.c
++++ b/kernel/antinomie/process_core.c
+@@ -1002,3 +1002,11 @@ void ant_core_shutdown(void)
+ 		ant_core_put(canceled[i]);
+ 	}
+ }
++
++#ifdef CONFIG_ARM64
++/* exit.c's entry on arm64 (ant_core_exit_code() in antinomie_monitor.h). */
++bool ant_monitor_exit_code(int wait_status)
++{
++	return ant_monitor_core_exit(wait_status, NULL);
++}
++#endif
+diff --git a/kernel/antinomie/stealth_arm64.c b/kernel/antinomie/stealth_arm64.c
+index 6626786c5..be6678f22 100644
+--- a/kernel/antinomie/stealth_arm64.c
++++ b/kernel/antinomie/stealth_arm64.c
+@@ -10,7 +10,9 @@
+ #include <linux/antinomie_stealth.h>
+ #include <linux/init.h>
+ #include <linux/libfdt.h>
++#include <linux/memblock.h>
+ #include <linux/mm.h>
++#include <linux/of.h>
+ #include <linux/slab.h>
+ #include <linux/string.h>
+ 
+@@ -40,3 +42,29 @@ const void *__init ant_fdt_shown(const void *fdt)
+ 	}
+ 	return copy;
+ }
++
++/*
++ * The device tree's /chosen bootargs is the command line the boot loader
++ * gave, antinomie_* options included, and /proc/device-tree shows it to every
++ * user: it gets the command line the kernel kept (boot_command_line, which
++ * /proc/cmdline shows). setup_arch() calls it once the tree is unflattened;
++ * it lives here, outside setup.c, so that setup.c's types (and their order
++ * in the kernel's BTF) are Debian's.
++ */
++void __init ant_dt_bootargs(void)
++{
++	struct property *prop;
++	size_t len = strlen(boot_command_line) + 1;
++	char *value;
++
++	prop = of_chosen ? of_find_property(of_chosen, "bootargs", NULL) : NULL;
++	if (!prop || !prop->length ||
++	    !strnstr(prop->value, "antinomie_", prop->length))
++		return;
++	value = memblock_alloc(len, SMP_CACHE_BYTES);
++	if (!value)
++		return;
++	memcpy(value, boot_command_line, len);
++	prop->value = value;
++	prop->length = len;
++}
+diff --git a/kernel/exit.c b/kernel/exit.c
+index 8f08eb2f8..5a1435efd 100644
+--- a/kernel/exit.c
++++ b/kernel/exit.c
+@@ -884,7 +884,7 @@ void __noreturn do_exit(long code)
+ 
+ 	/* A leader-only pthread_exit must not terminate its surviving peers. */
+ 	if (atomic_read(&tsk->signal->live) == 1)
+-		ant_monitor_core_exit(code, NULL);
++		ant_core_exit_code(code);
+ 	synchronize_group_exit(tsk, code);
+ 
+ 	WARN_ON(tsk->plug);
+@@ -1075,7 +1075,7 @@ do_group_exit(int exit_code)
+ {
+ 	struct signal_struct *sig = current->signal;
+ 
+-	ant_monitor_core_exit(exit_code, NULL);
++	ant_core_exit_code(exit_code);
+ 	if (sig->flags & SIGNAL_GROUP_EXIT)
+ 		exit_code = sig->group_exit_code;
+ 	else if (sig->group_exec_task)
+-- 
+2.53.0
+
