@@ -81,13 +81,21 @@ impl<T: Ord + Clone> Window<T> {
     }
 }
 
-/// One task's counters. A flag that ends in `_done` means the rule already fired.
+/// What is true of one thread: its own first call, span and end.
 #[derive(Default)]
-pub(super) struct Task {
-    /// Whether the first call seen from the task was an exec.
+pub(super) struct Thread {
+    /// Whether the first call seen from the thread was an exec.
     pub first_exec: Option<bool>,
     pub first_ns: u64,
     pub last_ns: u64,
+    pub ended: bool,
+}
+
+/// One process's counters (all its threads together, keyed by the thread group
+/// id): a program that spreads its work over worker threads is still one
+/// program. A flag that ends in `_done` means the rule already fired.
+#[derive(Default)]
+pub(super) struct Task {
     pub ssh_hosts_read: bool,
     /// Under `/proc`: pids whose process files were opened.
     pub proc_pids: BTreeSet<u32>,
@@ -127,7 +135,6 @@ pub(super) struct Task {
     pub flood_done: bool,
     /// Writable anonymous ranges, to tell a write-then-execute from a plain exec map.
     pub writable: Vec<(u64, u64)>,
-    pub ended: bool,
     pub kill_done: bool,
     /// Pipe descriptor → the file just spliced into it.
     pub spliced: BTreeMap<u64, String>,
@@ -249,7 +256,10 @@ pub(super) struct State {
     /// Programs the run is running, by path, and who runs them.
     pub images: BTreeMap<String, BTreeSet<u64>>,
     pub image_keys: BTreeMap<FileKey, BTreeSet<u64>>,
+    /// Per process, by thread group id.
     tasks: BTreeMap<u64, Task>,
+    /// Per thread, by task cookie.
+    threads: BTreeMap<u64, Thread>,
     overflow: Task,
     /// Tasks of Antinomie itself, which the rules leave alone.
     pub app_tasks: BTreeSet<u64>,
@@ -264,10 +274,11 @@ pub(super) struct State {
 
 impl State {
     pub(super) fn task(&mut self, cx: &Ctx) -> &mut Task {
-        if self.tasks.len() >= LIMIT && !self.tasks.contains_key(&cx.call.task_cookie) {
+        let process = u64::from(cx.event.pid);
+        if self.tasks.len() >= LIMIT && !self.tasks.contains_key(&process) {
             return &mut self.overflow;
         }
-        self.tasks.entry(cx.call.task_cookie).or_default()
+        self.tasks.entry(process).or_default()
     }
 
     /// A fresh state for a run whose program Static analysis found packed.
@@ -278,8 +289,8 @@ impl State {
         }
     }
 
-    pub(super) fn tasks(&self) -> &BTreeMap<u64, Task> {
-        &self.tasks
+    pub(super) fn threads(&self) -> &BTreeMap<u64, Thread> {
+        &self.threads
     }
 
     /// Bookkeeping after a call has been judged.
@@ -305,13 +316,16 @@ impl State {
         if matches!(cx.name, "socket" | "connect" | "sendto" | "sendmsg") {
             task.active = true;
         }
-        task.first_exec.get_or_insert(cx.is_exec());
-        if task.first_ns == 0 {
-            task.first_ns = time;
-        }
-        task.last_ns = task.last_ns.max(time);
-        if cx.call.task_exit.is_some() || matches!(cx.name, "exit" | "exit_group") {
-            task.ended = true;
+        if self.threads.len() < LIMIT || self.threads.contains_key(&cookie) {
+            let thread = self.threads.entry(cookie).or_default();
+            thread.first_exec.get_or_insert(cx.is_exec());
+            if thread.first_ns == 0 {
+                thread.first_ns = time;
+            }
+            thread.last_ns = thread.last_ns.max(time);
+            if task_ended(cx) {
+                thread.ended = true;
+            }
         }
         if cx.is_exec() && cx.ok && !cx.via_async {
             if let Some(path) = cx.exec_path() {

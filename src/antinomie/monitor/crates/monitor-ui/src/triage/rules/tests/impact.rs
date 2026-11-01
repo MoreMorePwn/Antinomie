@@ -497,3 +497,54 @@ fn ordinary_rewrites_and_renames_are_not_a_mass_rewrite() {
         .collect();
     assert!(!has(&run(varied), "impact.mass_rewrite"));
 }
+
+/// The call as made by thread `tid` of process `pid`, with the thread's own cookie.
+fn as_thread(mut row: InvocationSummary, pid: u32, tid: u32) -> InvocationSummary {
+    row.task_cookie = u64::from(tid);
+    for event in row.entry.iter_mut().chain(row.exit.iter_mut()) {
+        event.pid = pid;
+        event.tid = tid;
+        event.task_cookie = u64::from(tid);
+    }
+    row
+}
+
+/// Twelve renames to `.INC` shared out as 7/2/1/1/1 over five worker threads.
+fn thread_storm(pid_of: impl Fn(u32) -> u32) -> Calls {
+    let shares = [7, 2, 1, 1, 1];
+    let mut calls: Calls = vec![exec(7, "/tmp/locker", &["locker"])];
+    let mut n = 0;
+    for (worker, share) in shares.iter().enumerate() {
+        let tid = 7 + worker as u32;
+        for _ in 0..*share {
+            let old = format!("/srv/data/f{n}.dat");
+            calls.push(as_thread(
+                rename(7, &old, &format!("{old}.INC")),
+                pid_of(tid),
+                tid,
+            ));
+            n += 1;
+        }
+    }
+    calls
+}
+
+#[test]
+fn renames_spread_over_the_threads_of_one_process_are_a_mass_rewrite() {
+    // Every thread is below the threshold, the process as a whole is not.
+    let out = run(thread_storm(|_| 7));
+    assert_eq!(tier(&out, "impact.mass_rewrite").as_deref(), Some("high"));
+    // The workers carry the process name, not "Unknown".
+    let row = rows(&out, "impact.mass_rewrite")[0];
+    assert!(
+        text(row, "process.exe").ends_with("locker"),
+        "{}",
+        text(row, "process.exe")
+    );
+}
+
+#[test]
+fn the_same_renames_by_five_separate_processes_are_not_summed() {
+    let out = run(thread_storm(|tid| tid));
+    assert!(!has(&out, "impact.mass_rewrite"));
+}

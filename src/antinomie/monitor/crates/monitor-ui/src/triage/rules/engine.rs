@@ -449,7 +449,7 @@ fn scope(aggs: &mut [Agg], state: &State, files: &FdState) {
             .get(&task)
             .is_some_and(|node| node.parent.is_some());
         let started_by_exec = state
-            .tasks()
+            .threads()
             .get(&agg.cookie)
             .is_some_and(|task| task.first_exec == Some(true));
         let caused = agg
