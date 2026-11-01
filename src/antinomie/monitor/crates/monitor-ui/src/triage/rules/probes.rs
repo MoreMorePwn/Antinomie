@@ -86,7 +86,7 @@ pub(super) struct Probe {
     key: (u64, u64, u64),
     time: u64,
     answer: Option<String>,
-    /// The answer would show a VM, a container or a debugger.
+    /// The answer gives a VM, a container or a debugger away.
     shows: Option<bool>,
     count: u64,
     gaps: Gaps,
@@ -724,9 +724,9 @@ pub(super) fn rows(st: &State, files: &FdState) -> Vec<Agg> {
                 first,
                 image.as_deref(),
             );
-            agg.summary = format!("{reaction} after a check that would show a VM");
+            agg.summary = format!("{reaction} after a VM check");
             agg.detail = vec![
-                format!("The answer that would show a VM: {} → {}", first.what, first.answer.as_deref().unwrap_or("?")),
+                format!("The answer that gave the VM away: {} → {}", first.what, first.answer.as_deref().unwrap_or("?")),
                 follow.describe(),
                 "Heuristic: this reads only the calls recorded after the checks. It cannot know why the program stopped; a different Device profile may make it go on.".into(),
             ];
@@ -794,7 +794,7 @@ impl Follow {
         )
     }
 
-    /// An exit or a long sleep right after a check that would show a VM, with no work done.
+    /// An exit or a long sleep right after a check that gave the VM away, with no work done.
     fn reaction(&self, revealing: bool) -> Option<&'static str> {
         if !revealing || self.network + self.writes + self.spawned > 0 {
             return None;
@@ -909,22 +909,14 @@ fn row(
     let mut classes: Vec<Class> = probes.iter().map(|probe| probe.class).collect();
     classes.sort();
     classes.dedup();
-    let showing = probes
-        .iter()
-        .filter(|probe| probe.shows == Some(true))
-        .count();
     let labels: Vec<_> = classes.iter().map(|class| class.label()).collect();
+    // The count and kinds only; each answer, and whether it gave the guest
+    // away, is in the detail lines.
     agg.summary = format!(
-        "{} check{} ({}); {} would show {}",
+        "{} check{} ({})",
         probes.len(),
         if probes.len() == 1 { "" } else { "s" },
         labels.join(", "),
-        showing,
-        match rule {
-            "evasion.debugger_check" => "a debugger",
-            "evasion.container_check" => "a container",
-            _ => "a VM",
-        }
     );
     if rule == "evasion.sandbox_probe" {
         // One kind of check is INFO; reading several kinds of VM evidence is a check.
@@ -945,8 +937,8 @@ fn row(
             probe.answer.as_deref().unwrap_or("no answer captured")
         );
         match probe.shows {
-            Some(true) => line.push_str("  (would show it)"),
-            Some(false) => line.push_str("  (does not show it)"),
+            Some(true) => line.push_str("  (gives it away)"),
+            Some(false) => line.push_str("  (looks real)"),
             None => {}
         }
         if probe.count > 1 {

@@ -69,11 +69,11 @@ fn details_list_each_check_with_the_answer_and_what_decides_it() {
     assert!(
         lines.contains("sys_vendor")
             && lines.contains("\"QEMU\"")
-            && lines.contains("would show it"),
+            && lines.contains("gives it away"),
         "{lines}"
     );
     assert!(
-        lines.contains("\"Latitude 7490\"") && lines.contains("does not show it"),
+        lines.contains("\"Latitude 7490\"") && lines.contains("looks real"),
         "{lines}"
     );
     assert!(lines.contains("no hypervisor flag"), "{lines}");
@@ -114,7 +114,7 @@ fn hypervisor_cpu_flag_pci_vendors_clocksource_and_modules_are_judged() {
     ));
     assert!(detail(rows(&pci, "evasion.sandbox_probe")[0])
         .join("\n")
-        .contains("would show it"));
+        .contains("gives it away"));
     let real = run(probe(
         1,
         "/sys/bus/pci/devices/0000:00:03.0/vendor",
@@ -123,7 +123,7 @@ fn hypervisor_cpu_flag_pci_vendors_clocksource_and_modules_are_judged() {
     ));
     assert!(detail(rows(&real, "evasion.sandbox_probe")[0])
         .join("\n")
-        .contains("does not show it"));
+        .contains("looks real"));
     let clock = run(probe(
         1,
         "/sys/devices/system/clocksource/clocksource0/current_clocksource",
@@ -132,7 +132,7 @@ fn hypervisor_cpu_flag_pci_vendors_clocksource_and_modules_are_judged() {
     ));
     assert!(detail(rows(&clock, "evasion.sandbox_probe")[0])
         .join("\n")
-        .contains("would show it"));
+        .contains("gives it away"));
     let modules = run(probe(
         1,
         "/proc/modules",
@@ -141,14 +141,14 @@ fn hypervisor_cpu_flag_pci_vendors_clocksource_and_modules_are_judged() {
     ));
     assert!(detail(rows(&modules, "evasion.sandbox_probe")[0])
         .join("\n")
-        .contains("would show it"));
+        .contains("gives it away"));
     let files = run(vec![
         stat(1, "/dev/vboxguest", -2),
         stat(1, "/sys/hypervisor/type", -2),
     ]);
     let lines = detail(rows(&files, "evasion.sandbox_probe")[0]).join("\n");
     assert!(
-        lines.contains("not available (ENOENT)") && lines.contains("does not show it"),
+        lines.contains("not available (ENOENT)") && lines.contains("looks real"),
         "{lines}"
     );
 }
@@ -163,7 +163,7 @@ fn disk_models_and_vendor_strings_are_checks_too() {
     ));
     let lines = detail(rows(&out, "evasion.sandbox_probe")[0]).join("\n");
     assert!(
-        lines.contains("would show it") && lines.contains("Device profile › Devices"),
+        lines.contains("gives it away") && lines.contains("Device profile › Devices"),
         "{lines}"
     );
     let scsi = run(probe(
@@ -174,7 +174,7 @@ fn disk_models_and_vendor_strings_are_checks_too() {
     ));
     assert!(detail(rows(&scsi, "evasion.sandbox_probe")[0])
         .join("\n")
-        .contains("would show it"));
+        .contains("gives it away"));
 }
 
 #[test]
@@ -212,7 +212,7 @@ fn tracer_pid_in_proc_self_status_is_a_debugger_check_with_the_value_it_read() {
     assert_eq!(list(row[0], "finding.technique"), ["T1622", "DET0371"]);
     let lines = detail(row[0]).join("\n");
     assert!(
-        lines.contains("TracerPid 0") && lines.contains("does not show it"),
+        lines.contains("TracerPid 0") && lines.contains("looks real"),
         "{lines}"
     );
     assert!(
@@ -225,7 +225,7 @@ fn tracer_pid_in_proc_self_status_is_a_debugger_check_with_the_value_it_read() {
         .contains("TracerPid 4242"));
     assert!(detail(rows(&traced, "evasion.debugger_check")[0])
         .join("\n")
-        .contains("would show it"));
+        .contains("gives it away"));
     let by_pid = run(probe(9, "/proc/9/status", 3, b"TracerPid:\t0\n"));
     assert!(
         has(&by_pid, "evasion.debugger_check"),
@@ -255,7 +255,7 @@ fn ptrace_traceme_prctl_dumpable_and_a_sigtrap_handler_join_the_debugger_row() {
     let refused = run(vec![sys(1, 101, "ptrace", [0; 6], -1)]);
     let lines = detail(rows(&refused, "evasion.debugger_check")[0]).join("\n");
     assert!(
-        lines.contains("refused") && lines.contains("would show it"),
+        lines.contains("refused") && lines.contains("gives it away"),
         "{lines}"
     );
     let default = {
@@ -281,14 +281,14 @@ fn container_markers_are_a_low_row_and_absence_is_the_answer() {
     assert_eq!(text(row[0], "finding.tier"), "low");
     let lines = detail(row[0]).join("\n");
     assert!(
-        lines.contains("not available (ENOENT)") && lines.contains("does not show it"),
+        lines.contains("not available (ENOENT)") && lines.contains("looks real"),
         "{lines}"
     );
     assert!(lines.contains("not a container"), "{lines}");
     let present = run(vec![stat(1, "/.dockerenv", 0)]);
     assert!(detail(rows(&present, "evasion.container_check")[0])
         .join("\n")
-        .contains("would show it"));
+        .contains("gives it away"));
     let cgroup = run(probe(1, "/proc/1/cgroup", 3, b"0::/docker/abc\n"));
     assert!(has(&cgroup, "evasion.container_check"));
     assert!(
@@ -426,7 +426,7 @@ fn sysinfo_uptime_and_the_mac_ioctl_are_read_from_their_buffers() {
     );
     let lines = detail(rows(&run(vec![mac]), "evasion.sandbox_probe")[0]).join("\n");
     assert!(
-        lines.contains("08:00:27:aa:bb:cc") && lines.contains("would show it"),
+        lines.contains("08:00:27:aa:bb:cc") && lines.contains("gives it away"),
         "{lines}"
     );
 }
@@ -493,17 +493,14 @@ fn a_cgroup_file_that_names_no_container_is_not_a_container_check_that_shows_it(
     calls.push(at(sys(1, 231, "exit_group", [0; 6], 0), SECOND));
     let out = run(calls);
     let lines = detail(rows(&out, "evasion.container_check")[0]).join("\n");
-    assert!(
-        lines.contains("0 would show") || lines.contains("does not show it"),
-        "{lines}"
-    );
-    assert!(!lines.contains("(would show it)"), "{lines}");
+    assert!(lines.contains("looks real"), "{lines}");
+    assert!(!lines.contains("(gives it away)"), "{lines}");
     assert!(!has(&out, "evasion.probe_then_exit"));
     // The same file naming a container still shows it.
     let docker = run(probe(1, "/proc/self/cgroup", 3, b"0::/docker/abc\n"));
     assert!(detail(rows(&docker, "evasion.container_check")[0])
         .join("\n")
-        .contains("would show it"));
+        .contains("gives it away"));
 }
 
 #[test]
@@ -541,5 +538,5 @@ fn the_hypervisor_flag_is_expected_under_a_cloud_profile() {
     assert!(!has(&cloud, "evasion.probe_then_exit"));
     let lines = detail(rows(&cloud, "evasion.sandbox_probe")[0]).join("\n");
     assert!(lines.contains("expected under a cloud profile"), "{lines}");
-    assert!(lines.contains("does not show it"), "{lines}");
+    assert!(lines.contains("looks real"), "{lines}");
 }
