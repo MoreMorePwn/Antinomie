@@ -68,8 +68,10 @@ const TOOL_PACKAGES: &[&str] = &[
 /// Added for a job that builds an arm64 guest (`"arch": "arm64"`): Debian 13's
 /// cross toolchain (the arm64 kernel banner names it), the 32-bit ARM one for
 /// AArch32 test programs, qemu-user-static (it registers its binfmt handlers
-/// in the builder VM's own kernel, for foreign maintainer scripts) and the
-/// device tree compiler. The container image pins the same packages.
+/// in the builder VM's own kernel, for foreign maintainer scripts), arch-test
+/// (mmdebstrap refuses a foreign architecture without it) and the device tree
+/// compiler. The container image pins the same packages but arch-test (no
+/// foreign bootstrap runs there).
 const ARM64_TOOL_PACKAGES: &[&str] = &[
     "gcc-14-aarch64-linux-gnu",
     "binutils-aarch64-linux-gnu",
@@ -78,6 +80,7 @@ const ARM64_TOOL_PACKAGES: &[&str] = &[
     "binutils-arm-linux-gnueabihf",
     "libc6-dev-armhf-cross",
     "qemu-user-static",
+    "arch-test",
     "device-tree-compiler",
 ];
 
@@ -938,6 +941,8 @@ mod tests {
         let arm64 = tool_packages(&serde_json::json!({"profile": "busybox", "arch": "arm64"}));
         assert!(arm64.starts_with(&x86) && arm64.ends_with("device-tree-compiler"));
         assert!(arm64.contains(" gcc-14-aarch64-linux-gnu "));
+        // mmdebstrap needs arch-test for an arm64 bootstrap in the builder VM.
+        assert!(arm64.contains(" arch-test "));
     }
 
     #[test]
