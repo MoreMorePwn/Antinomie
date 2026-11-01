@@ -7,7 +7,7 @@
 //! text is the theme's own text colour, so it reads in every theme.
 use crate::theme;
 use antinomie_monitor_core::samples::{Tag, TagKind};
-use eframe::egui::{self, Color32, RichText, Stroke};
+use eframe::egui::{self, Color32, Stroke};
 
 /// The colour of a verdict tag value.
 pub(crate) fn verdict_color(value: &str) -> Color32 {
@@ -47,114 +47,80 @@ fn technique_parts(value: &str) -> (&str, &str) {
     value.split_once(' ').unwrap_or((value, ""))
 }
 
-/// The width a tag takes: its text, the chip's margins and the gap inside.
-fn width_of(ui: &egui::Ui, tag: &Tag) -> f32 {
-    let text = |text: &str, font: egui::FontId| {
-        ui.painter()
-            .layout_no_wrap(text.to_owned(), font, Color32::PLACEHOLDER)
-            .size()
-            .x
-    };
-    let small = egui::TextStyle::Small.resolve(ui.style());
+/// The text of a tag as one pill line: a verdict's dot, a technique's ID in
+/// monospace, a custom tag's `#`. The text is the theme's own colour.
+fn tag_job(ui: &egui::Ui, tag: &Tag) -> egui::text::LayoutJob {
+    use crate::widgets::tone::{pill_font, pill_text};
+    let small = pill_font(ui);
     let mono = egui::FontId::monospace(small.size);
-    16.0 + 8.0
-        + match tag.kind {
-            TagKind::Technique => {
-                let (id, name) = technique_parts(&tag.value);
-                text(id, mono) + text(name, small)
-            }
-            TagKind::Custom => text(&format!("#{}", tag.value), small),
-            _ => text(&tag.value, small) + 12.0,
-        }
-}
-
-/// Draw one tag. In a wrapping row a tag that does not fit what is left of
-/// the line starts the next one, whole.
-pub(crate) fn tag(ui: &mut egui::Ui, tag: &Tag) -> egui::Response {
-    let layout = *ui.layout();
-    if layout.is_horizontal()
-        && layout.main_wrap()
-        && ui.cursor().min.x > ui.min_rect().left() + 1.0
-        && width_of(ui, tag) > ui.available_width()
-    {
-        ui.end_row();
-    }
-    let palette = theme::palette();
-    // A chip is never wrapped inside: it moves to the next line whole.
-    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-    let frame = egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 0));
+    let mut job = egui::text::LayoutJob::default();
     match tag.kind {
         TagKind::Verdict => {
             let color = verdict_color(&tag.value);
-            frame
-                .stroke(Stroke::new(1.0_f32, color))
-                .corner_radius(11)
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("●").small().color(color));
-                        ui.label(RichText::new(&tag.value).small().color(color));
-                    });
-                })
-                .response
+            pill_text(&mut job, "● ", small.clone(), color);
+            pill_text(&mut job, &tag.value, small, color);
         }
-        TagKind::Category => {
-            frame
-                .fill(wash(palette.string))
-                .stroke(Stroke::new(1.0_f32, palette.string))
-                .corner_radius(11)
-                .show(ui, |ui| {
-                    ui.label(RichText::new(&tag.value).small().color(theme::text()));
-                })
-                .response
-        }
+        TagKind::Category => pill_text(&mut job, &tag.value, small, theme::text()),
         TagKind::Technique => {
             let (id, name) = technique_parts(&tag.value);
-            // A name longer than the line is cut (the tooltip has it all).
-            let fits = width_of(ui, tag) <= ui.available_width();
-            let room = ui.available_width() - 16.0 - 8.0;
-            frame
-                .fill(wash(palette.pointer))
-                .stroke(Stroke::new(1.0_f32, palette.pointer))
-                .corner_radius(4)
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    ui.horizontal(|ui| {
-                        if !fits {
-                            ui.set_max_width(room.max(60.0));
-                        }
-                        ui.label(
-                            RichText::new(id)
-                                .small()
-                                .strong()
-                                .monospace()
-                                .color(theme::text()),
-                        );
-                        if !name.is_empty() {
-                            let text = RichText::new(name).small().color(theme::text());
-                            if fits {
-                                ui.label(text);
-                            } else {
-                                ui.add(egui::Label::new(text).truncate());
-                            }
-                        }
-                    });
-                })
-                .response
-                .on_hover_text(&tag.value)
+            pill_text(&mut job, id, mono, theme::text());
+            if !name.is_empty() {
+                pill_text(&mut job, " ", small.clone(), theme::text());
+                pill_text(&mut job, name, small, theme::text());
+            }
         }
+        TagKind::Custom => pill_text(&mut job, &format!("#{}", tag.value), small, theme::text()),
+    }
+    job
+}
+
+/// Draw one tag. In a wrapping row a tag that does not fit what is left of
+/// the line starts the next one, whole; one wider than a whole line is cut
+/// with "…" and its tooltip has all of it.
+pub(crate) fn tag(ui: &mut egui::Ui, tag: &Tag) -> egui::Response {
+    use crate::widgets::tone::{pill, PillLook};
+    let palette = theme::palette();
+    let job = tag_job(ui, tag);
+    let look = |fill: Color32, stroke: Stroke, corner: u8| PillLook {
+        fill,
+        stroke,
+        corner,
+        pad: 8.0,
+    };
+    match tag.kind {
+        TagKind::Verdict => {
+            let color = verdict_color(&tag.value);
+            pill(
+                ui,
+                look(Color32::TRANSPARENT, Stroke::new(1.0_f32, color), 11),
+                job,
+                0.0,
+            )
+        }
+        TagKind::Category => pill(
+            ui,
+            look(
+                wash(palette.string),
+                Stroke::new(1.0_f32, palette.string),
+                11,
+            ),
+            job,
+            0.0,
+        ),
+        TagKind::Technique => pill(
+            ui,
+            look(
+                wash(palette.pointer),
+                Stroke::new(1.0_f32, palette.pointer),
+                4,
+            ),
+            job,
+            0.0,
+        )
+        .on_hover_text(&tag.value),
         TagKind::Custom => {
             let color = palette_color(&tag.color);
-            let shown = frame
-                .corner_radius(11)
-                .show(ui, |ui| {
-                    ui.label(
-                        RichText::new(format!("#{}", tag.value))
-                            .small()
-                            .color(theme::text()),
-                    );
-                })
-                .response;
+            let shown = pill(ui, look(Color32::TRANSPARENT, Stroke::NONE, 11), job, 0.0);
             let rect = shown.rect.shrink(0.5);
             let outline = [
                 rect.left_top(),
@@ -172,6 +138,14 @@ pub(crate) fn tag(ui: &mut egui::Ui, tag: &Tag) -> egui::Response {
             shown
         }
     }
+}
+
+/// The width a tag takes on one line, for a caller that keeps a tag and
+/// something beside it together.
+pub(crate) fn width_of(ui: &egui::Ui, tag: &Tag) -> f32 {
+    let mut job = tag_job(ui, tag);
+    job.wrap.max_width = f32::INFINITY;
+    ui.fonts(|fonts| fonts.layout_job(job)).size().x + 16.0
 }
 
 /// The tags the list shows: verdicts and categories, with the techniques and

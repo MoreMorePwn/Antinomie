@@ -102,13 +102,37 @@ fn detector(
                     .small()
                     .color(theme::muted()),
                 );
+                // "No packets were captured…": a complete result that still
+                // evaluated nothing says so under its zero.
+                if let Some(Ok(report)) = view.detection.results[index].as_ref() {
+                    if report.state == State::Complete && counts.rules == 0 {
+                        if let Some(note) = report.warnings.first() {
+                            ui.add(
+                                egui::Label::new(RichText::new(note).small().color(theme::muted()))
+                                    .wrap(),
+                            );
+                        }
+                    }
+                }
             } else {
                 ui.label(RichText::new("—").size(27.0).color(theme::muted()));
                 ui.label(
                     RichText::new(match activity {
                         Some(detection::ScanActivity::Running) => "Scan in progress",
                         Some(detection::ScanActivity::Queued) => "Waiting for its turn",
-                        None => "No evaluated result",
+                        // An engine that could not run says why ("pysigma
+                        // is not installed"), not only that nothing came back.
+                        None => match view.detection.results[index].as_ref() {
+                            Some(Ok(report))
+                                if matches!(report.state, State::Unavailable | State::Missing) =>
+                            {
+                                report
+                                    .warnings
+                                    .first()
+                                    .map_or("No evaluated result", String::as_str)
+                            }
+                            _ => "No evaluated result",
+                        },
                     })
                     .small()
                     .color(theme::muted()),

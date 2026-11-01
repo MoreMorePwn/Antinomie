@@ -67,16 +67,108 @@ pub(crate) fn neutral_ink(palette: &theme::Palette) -> Color32 {
     palette.muted.lerp_to_gamma(palette.text, 0.6)
 }
 
+/// How a [`pill`] is drawn: its fill, outline, corner and side padding.
+#[derive(Clone, Copy)]
+pub struct PillLook {
+    pub fill: Color32,
+    pub stroke: egui::Stroke,
+    pub corner: u8,
+    /// Space left and right of the text.
+    pub pad: f32,
+}
+
+impl PillLook {
+    /// The look of a [`chip`] in `tone`.
+    pub fn tone(tone: Tone) -> Self {
+        Self {
+            fill: tone.bg(),
+            stroke: egui::Stroke::NONE,
+            corner: 10,
+            pad: 8.0,
+        }
+    }
+}
+
+/// Space above and below a pill's text.
+const PILL_PAD_Y: f32 = 2.0;
+
+/// The one way every chip, tag and status pill is drawn: one line of text,
+/// never wrapped inside, centred in a box of a fixed height. In a wrapping
+/// row a pill that does not fit what is left of the line starts the next one
+/// whole; only a pill wider than a whole line is cut, with "…", and its
+/// tooltip is the caller's to add. `min_width` lines up a column of pills.
+pub fn pill(
+    ui: &mut egui::Ui,
+    look: PillLook,
+    job: egui::text::LayoutJob,
+    min_width: f32,
+) -> egui::Response {
+    let natural = ui.fonts(|fonts| fonts.layout_job(single_line(job.clone(), f32::INFINITY)));
+    let width = |text: f32| (text + 2.0 * look.pad).max(min_width);
+    let layout = *ui.layout();
+    if layout.is_horizontal()
+        && layout.main_wrap()
+        && ui.cursor().min.x > ui.min_rect().left() + 1.0
+        && width(natural.size().x) > ui.available_width()
+    {
+        ui.end_row();
+    }
+    let room = ui.available_width() - 2.0 * look.pad;
+    let galley = if natural.size().x > room && room > 0.0 {
+        ui.fonts(|fonts| fonts.layout_job(single_line(job, room)))
+    } else {
+        natural
+    };
+    let size = egui::vec2(width(galley.size().x), galley.size().y + 2.0 * PILL_PAD_Y);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        painter.rect(
+            rect,
+            look.corner,
+            look.fill,
+            look.stroke,
+            egui::StrokeKind::Inside,
+        );
+        let at = rect.center() - galley.size() * 0.5;
+        painter.galley(at, galley, Color32::PLACEHOLDER);
+    }
+    response
+}
+
+/// `job` on one line no wider than `width`, cut with "…".
+fn single_line(mut job: egui::text::LayoutJob, width: f32) -> egui::text::LayoutJob {
+    job.wrap = egui::text::TextWrapping {
+        max_width: width,
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('…'),
+    };
+    job
+}
+
+/// One run of pill text in `font` and `color`.
+pub fn pill_text(job: &mut egui::text::LayoutJob, text: &str, font: egui::FontId, color: Color32) {
+    job.append(
+        text,
+        0.0,
+        egui::TextFormat {
+            font_id: font,
+            color,
+            valign: egui::Align::Center,
+            ..Default::default()
+        },
+    );
+}
+
+/// The small font every pill uses.
+pub fn pill_font(ui: &egui::Ui) -> egui::FontId {
+    egui::TextStyle::Small.resolve(ui.style())
+}
+
 /// A pill with `text` in `tone`.
 pub fn chip(ui: &mut egui::Ui, text: impl Into<String>, tone: Tone) -> egui::Response {
-    egui::Frame::new()
-        .fill(tone.bg())
-        .corner_radius(10)
-        .inner_margin(egui::Margin::symmetric(8, 1))
-        .show(ui, |ui| {
-            ui.label(RichText::new(text).small().color(tone.fg()));
-        })
-        .response
+    chip_wide(ui, text, tone, 0.0)
 }
 
 /// [`chip`] with its text centred in a pill `width` wide (see [`chip_width`]),
@@ -87,17 +179,9 @@ pub fn chip_wide(
     tone: Tone,
     width: f32,
 ) -> egui::Response {
-    egui::Frame::new()
-        .fill(tone.bg())
-        .corner_radius(10)
-        .inner_margin(egui::Margin::symmetric(8, 1))
-        .show(ui, |ui| {
-            ui.set_width((width - 16.0).max(0.0));
-            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                ui.label(RichText::new(text).small().color(tone.fg()));
-            });
-        })
-        .response
+    let mut job = egui::text::LayoutJob::default();
+    pill_text(&mut job, &text.into(), pill_font(ui), tone.fg());
+    pill(ui, PillLook::tone(tone), job, width)
 }
 
 /// The width of a [`chip_wide`] that fits the longest of `words`.

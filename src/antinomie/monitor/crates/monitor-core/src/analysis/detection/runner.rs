@@ -994,11 +994,14 @@ fn sigma(staged: &Staged, work: &Path) -> Result<Report, String> {
         return Ok(report);
     }
     if staged.sigma_sources.is_empty() {
-        let mut report = Report::unavailable(
-            Engine::Sigma,
-            staged.request.identity.clone(),
-            "No compatible Sigma rules were evaluated.",
-        );
+        // The first line says why ("... pysigma is not installed"), not only
+        // that nothing was evaluated: it is the line the cards show.
+        let reason = match staged.warnings.first() {
+            Some(why) => format!("No Sigma rule was evaluated: {why}"),
+            None => "No compatible Sigma rules were evaluated.".to_owned(),
+        };
+        let mut report =
+            Report::unavailable(Engine::Sigma, staged.request.identity.clone(), reason);
         report.selection = staged.selection.clone();
         return Ok(report);
     }

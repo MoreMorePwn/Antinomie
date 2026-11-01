@@ -11,14 +11,21 @@ pub(super) fn frame() -> egui::Frame {
         .inner_margin(12)
 }
 
-pub(super) fn badge(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
-    egui::Frame::new()
-        .fill(color.gamma_multiply(0.12))
-        .corner_radius(4)
-        .inner_margin(egui::Margin::symmetric(7, 3))
-        .show(ui, |ui| {
-            ui.label(RichText::new(text).color(color).small().strong());
-        });
+pub(super) fn badge(ui: &mut egui::Ui, text: &str, color: egui::Color32) -> egui::Response {
+    use crate::widgets::tone::{pill, pill_text, PillLook};
+    let mut job = egui::text::LayoutJob::default();
+    pill_text(&mut job, text, crate::widgets::tone::pill_font(ui), color);
+    pill(
+        ui,
+        PillLook {
+            fill: color.gamma_multiply(0.12),
+            stroke: egui::Stroke::NONE,
+            corner: 4,
+            pad: 7.0,
+        },
+        job,
+        0.0,
+    )
 }
 
 pub(super) fn heading(ui: &mut egui::Ui, title: &str, subtitle: &str) {

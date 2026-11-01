@@ -373,9 +373,13 @@ impl View {
             long.push(full);
         };
         if let Some(Ok(report)) = self.results[index].as_ref() {
-            // A Partial result says why in the engine's words; the general
-            // line is only for one that did not.
-            let says_why = report.state == State::Partial && !report.warnings.is_empty();
+            // A limited result says why in the engine's words ("Suricata is
+            // not installed", "pysigma is not installed"); the general line is
+            // only for one that did not.
+            let says_why = matches!(
+                report.state,
+                State::Partial | State::Unavailable | State::Missing
+            ) && !report.warnings.is_empty();
             if let Some(line) = limitation_line(&report.state).filter(|_| !says_why) {
                 note(line.to_owned(), line.to_owned());
             }
@@ -407,6 +411,18 @@ impl View {
         }
         if !self.notes[index].is_empty() {
             note(self.notes[index].clone(), self.notes[index].clone());
+        }
+        // A complete result's notes (no packets to scan, an engine that a
+        // later run would need) are information, not a limit.
+        if let Some(Ok(report)) = self.results[index].as_ref() {
+            if report.state == State::Complete && short.is_empty() && !report.warnings.is_empty() {
+                crate::activity::notice(
+                    ui,
+                    crate::activity::Level::Info,
+                    report.warnings.join(" "),
+                );
+                return;
+            }
         }
         if short.is_empty() {
             return;
@@ -444,7 +460,9 @@ impl StatusPart {
             Self::Count(text) => {
                 ui.add(label(RichText::new(text).color(theme::text())));
             }
-            Self::Badge(text, tone) => presentation::badge(ui, text, *tone),
+            Self::Badge(text, tone) => {
+                presentation::badge(ui, text, *tone);
+            }
             Self::Evaluated(short, long) => {
                 ui.add(label(RichText::new(short).small().color(theme::muted())))
                     .on_hover_text(long);

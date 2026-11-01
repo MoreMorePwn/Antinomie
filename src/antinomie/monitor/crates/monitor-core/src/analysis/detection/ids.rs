@@ -442,8 +442,19 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                 .iter()
                 .all(|input| input.outcome == InputOutcome::Succeeded);
         if quiet {
-            // The run captured no packet: nothing was missed, so nothing is limited.
+            // The run captured no packet: nothing was missed, so nothing is
+            // limited. The notes say why no rule ran, and whether a capture
+            // with packets could have been scanned on this computer at all.
             report.state = State::Complete;
+            report
+                .warnings
+                .push("No packets were captured, so no IDS rule was evaluated.".into());
+            if suricata_tool().is_none() {
+                report.warnings.push(
+                    "Suricata is not installed: a capture with packets would not be scanned."
+                        .into(),
+                );
+            }
         } else if staged.captures.is_empty() && staged.skipped_inputs.is_empty() {
             report.input(ScannedInput {
                 name: "Network capture".into(),
@@ -1071,6 +1082,13 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|warning| warning.contains("partial") || warning.contains("missing"))
+        );
+        // Complete, but it says why no rule ran.
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.starts_with("No packets were captured"))
         );
         // A run with no capture at all says so on a row of its own.
         let none = scan(&staged_over(&dir, &[]), &dir).unwrap();
