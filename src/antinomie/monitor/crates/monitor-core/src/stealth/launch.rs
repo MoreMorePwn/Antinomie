@@ -74,15 +74,44 @@ pub(crate) fn cpu_option(
     kvm: bool,
     cpus: u16,
 ) -> Option<String> {
+    cpu_option_on(profile, base, kvm, cpus, &LaunchHost::detect())
+}
+
+/// The host CPU facts `-cpu` depends on, injectable so tests cover every vendor.
+pub(crate) struct LaunchHost {
+    pub vendor: String,
+    /// The host's "model name"; None when /proc/cpuinfo has none.
+    pub brand: Option<String>,
+}
+
+impl LaunchHost {
+    pub(crate) fn detect() -> Self {
+        Self {
+            vendor: host_cpu_vendor(),
+            brand: host_cpuinfo("model name"),
+        }
+    }
+}
+
+/// [`cpu_option`] on the given host CPU.
+pub(crate) fn cpu_option_on(
+    profile: &StealthProfile,
+    base: Option<&str>,
+    kvm: bool,
+    cpus: u16,
+    host: &LaunchHost,
+) -> Option<String> {
     let named = !profile.cpu_passthrough && !profile.cpu_model.is_empty();
     let mut model = if profile.cpu_passthrough && kvm {
         "host".to_owned()
     } else if profile.cpu_passthrough {
         // Without KVM the host CPU cannot be passed through; show its name.
-        let brand = profile.cloud_cpu_brand().unwrap_or_else(|| {
-            host_cpuinfo("model name")
-                .unwrap_or_else(|| "Intel(R) Core(TM) i7-10700 CPU @ 2.90GHz".into())
-        });
+        let brand = profile
+            .cloud_cpu_brand_for(&host.vendor)
+            .unwrap_or_else(|| {
+                (host.brand.clone())
+                    .unwrap_or_else(|| "Intel(R) Core(TM) i7-10700 CPU @ 2.90GHz".into())
+            });
         format!("max,model-id={}", escape(&brand))
     } else if named {
         profile.cpu_model.clone()
@@ -100,7 +129,7 @@ pub(crate) fn cpu_option(
     }
     if profile.cpu_passthrough
         && kvm
-        && let Some(brand) = profile.cloud_cpu_brand()
+        && let Some(brand) = profile.cloud_cpu_brand_for(&host.vendor)
     {
         // The host's CPU keeps its vendor, family and flags; only the name
         // is the provider's, of the host's vendor (a laptop's Ryzen name
@@ -111,7 +140,7 @@ pub(crate) fn cpu_option(
         // The named model's caches (leaf 4, 0x8000001d) and an L3.
         model.push_str(",legacy-cache=off,l3-cache=on");
     }
-    if smt(profile, cpus) && matches!(host_cpu_vendor().as_str(), "AuthenticAMD" | "HygonGenuine") {
+    if smt(profile, cpus) && matches!(host.vendor.as_str(), "AuthenticAMD" | "HygonGenuine") {
         // AMD CPUs show their threads through the TOPOEXT leaves.
         model.push_str(",+topoext");
     }

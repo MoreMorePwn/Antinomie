@@ -84,29 +84,55 @@ fn every_cloud_provider_has_its_own_cpu_name_for_each_host_vendor() {
     }
 }
 
+/// Hosts of each vendor family, with a brand like a real laptop or server.
+const HOSTS: [(&str, &str); 3] = [
+    ("GenuineIntel", "Intel(R) Core(TM) i7-10700 CPU @ 2.90GHz"),
+    ("AuthenticAMD", "AMD Ryzen 5 5600H with Radeon Graphics"),
+    ("HygonGenuine", "Hygon C86 7185 32-core Processor"),
+];
+
+fn host(vendor: &str, brand: &str) -> LaunchHost {
+    LaunchHost {
+        vendor: vendor.into(),
+        brand: Some(brand.into()),
+    }
+}
+
 #[test]
 fn a_cloud_profile_names_the_providers_cpu_not_the_hosts() {
-    for provider in CLOUDS {
-        let profile = StealthProfile::cloud_vps(provider);
-        let expected = provider.cpu_brand_for(&host_cpu_vendor());
-        assert_eq!(profile.cloud_cpu_brand().as_deref(), Some(expected));
-        let with_kvm = cpu_option(&profile, None, true, 2).unwrap();
-        assert!(with_kvm.starts_with("host,"), "{with_kvm}");
-        assert!(
-            with_kvm.contains(&format!(",model-id={expected}")),
-            "{with_kvm}"
-        );
-        let without_kvm = cpu_option(&profile, None, false, 2).unwrap();
-        assert!(
-            without_kvm.starts_with(&format!("max,model-id={expected}")),
-            "{without_kvm}"
-        );
-        // The hypervisor stays visible, as on the provider's machines.
-        assert!(!with_kvm.contains("-hypervisor") && !with_kvm.contains("kvm=off"));
-        // An edited name wins over the provider's.
-        let mut edited = profile.clone();
-        edited.cpu_brand = "Custom CPU".into();
-        assert_eq!(edited.cloud_cpu_brand(), None);
+    for (vendor, brand) in HOSTS {
+        let host = host(vendor, brand);
+        for provider in CLOUDS {
+            let profile = StealthProfile::cloud_vps(provider);
+            let expected = provider.cpu_brand_for(vendor);
+            assert_eq!(
+                profile.cloud_cpu_brand_for(vendor).as_deref(),
+                Some(expected)
+            );
+            // QEMU option values double their commas.
+            let escaped = escape(expected);
+            let with_kvm = cpu_option_on(&profile, None, true, 2, &host).unwrap();
+            assert!(with_kvm.starts_with("host,"), "{vendor}: {with_kvm}");
+            assert!(
+                with_kvm.contains(&format!(",model-id={escaped}")),
+                "{vendor} {}: {with_kvm}",
+                provider.id
+            );
+            assert!(!with_kvm.contains(brand), "{vendor}: {with_kvm}");
+            let without_kvm = cpu_option_on(&profile, None, false, 2, &host).unwrap();
+            assert!(
+                without_kvm.starts_with(&format!("max,model-id={escaped}")),
+                "{vendor} {}: {without_kvm}",
+                provider.id
+            );
+            assert!(!without_kvm.contains(brand), "{vendor}: {without_kvm}");
+            // The hypervisor stays visible, as on the provider's machines.
+            assert!(!with_kvm.contains("-hypervisor") && !with_kvm.contains("kvm=off"));
+            // An edited name wins over the provider's.
+            let mut edited = profile.clone();
+            edited.cpu_brand = "Custom CPU".into();
+            assert_eq!(edited.cloud_cpu_brand_for(vendor), None);
+        }
     }
 }
 
@@ -151,14 +177,17 @@ fn a_machine_profile_has_its_own_chassis_and_the_hosts_cpu_name() {
             machine.id
         );
         // The CPU is the host's, passed through whole; no brand override.
-        let cpu = cpu_option(&profile, None, true, 4).unwrap();
-        assert!(
-            cpu.starts_with("host,") && !cpu.contains("model-id"),
-            "{cpu}"
-        );
-        assert_eq!(profile.cloud_cpu_brand(), None);
-        let (without_kvm, _) = (cpu_option(&profile, None, false, 4).unwrap(), ());
-        let host = host_cpuinfo("model name").unwrap_or_default();
-        assert!(host.is_empty() || without_kvm.contains(&host.replace(',', ",,")));
+        for (vendor, brand) in HOSTS {
+            let host = host(vendor, brand);
+            let cpu = cpu_option_on(&profile, None, true, 4, &host).unwrap();
+            assert!(
+                cpu.starts_with("host,") && !cpu.contains("model-id"),
+                "{vendor} {}: {cpu}",
+                machine.id
+            );
+            assert_eq!(profile.cloud_cpu_brand_for(vendor), None);
+            let without_kvm = cpu_option_on(&profile, None, false, 4, &host).unwrap();
+            assert!(without_kvm.contains(&escape(brand)), "{without_kvm}");
+        }
     }
 }

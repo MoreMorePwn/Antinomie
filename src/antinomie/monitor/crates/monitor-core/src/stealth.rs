@@ -1034,11 +1034,16 @@ impl StealthProfile {
     /// `cpu_brand` wins. None for a machine profile (its CPU is the host's,
     /// which the machine must fit: [`cpu_note`](Self::cpu_note)).
     pub fn cloud_cpu_brand(&self) -> Option<String> {
+        self.cloud_cpu_brand_for(&host_cpu_vendor())
+    }
+
+    /// [`cloud_cpu_brand`](Self::cloud_cpu_brand) for a host of `vendor`.
+    pub fn cloud_cpu_brand_for(&self, vendor: &str) -> Option<String> {
         if !self.identity_enabled || !self.cpu_brand.is_empty() {
             return None;
         }
         self.cloud_provider()
-            .map(|provider| provider.cpu_brand_for(&host_cpu_vendor()).to_owned())
+            .map(|provider| provider.cpu_brand_for(vendor).to_owned())
     }
 
     /// The cloud provider of this profile.
