@@ -71,3 +71,6 @@
 0039-antinomie-add-the-arm64-debug-engine.patch
 0040-antinomie-keep-the-boot-options-out-of-arm64-s-device-tree-and-virt-s-devices-out-of-acpi.patch
 0041-antinomie-keep-the-arm64-kernel-s-btf-type-for-type-debian-s.patch
+
+# ia32 programs on x86-64 guests in 0.9.0 (no contract change): the i386 table
+0042-antinomie-record-ia32-programs-on-x86-64-by-the-i386-table.patch

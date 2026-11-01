@@ -51,6 +51,9 @@ IDENTITY = {
     # arm EABI, also the AArch32 compat ABI of arm64 guests.
     "arm": {"elf_machine": 40, "elf_class": 32, "endianness": "little", "data_model": "ILP32",
             "audit_arch": "40000028", "additions": {}},
+    # i386, also the ia32 compat ABI of x86-64 guests.
+    "i386": {"elf_machine": 3, "elf_class": 32, "endianness": "little", "data_model": "ILP32",
+             "audit_arch": "40000003", "additions": {}},
 }
 
 

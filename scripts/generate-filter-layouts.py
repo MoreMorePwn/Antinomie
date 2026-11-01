@@ -42,6 +42,14 @@ ARCHES = {
             "unistd": ("unistd-eabi.h", "unistd-common.h"),
             "records": {}, "sizes": {"epoll_event": 16, "sock_fprog": 8}, "epoll_data_offset": 64,
             "offsets": {"sock_fprog": {"len": 0, "filter": 32}}},
+    # i386 (ILP32, little endian), the ia32 compat ABI of x86-64 guests: their
+    # layouts are named "linux-6.12.94/x86/" (x86-64's ANT_ARCH_COMPAT_LAYOUT).
+    "i386": {"prefix": "linux-6.12.94/x86/", "target": "i386-linux-gnu",
+             "define": "__i386__", "uapi": "arch/x86/include/uapi",
+             "table": "arch/x86/entry/syscalls/syscall_32.tbl", "capture": "capture_ia32.c",
+             "unistd": ("unistd_32.h",),
+             "records": {}, "sizes": {"epoll_event": 12, "sock_fprog": 8}, "epoll_data_offset": 32,
+             "offsets": {"sock_fprog": {"len": 0, "filter": 32}}},
 }
 # Recorded layout spelling -> exact pinned declaration and source header.
 TYPES = {
