@@ -34,7 +34,7 @@ fn fetched_at(seconds: u64) -> String {
 }
 
 fn size_text(bytes: u64) -> String {
-    crate::values::file_size(bytes)
+    crate::values::short_size(bytes)
 }
 
 fn note(ui: &mut egui::Ui, text: impl Into<String>, color: egui::Color32) {
@@ -384,8 +384,8 @@ impl Model {
 #[cfg(test)]
 mod size_tests {
     #[test]
-    fn rule_pack_sizes_use_the_shared_bytes_format() {
-        assert_eq!(super::size_text(2048), "2048 bytes (2.0 KiB)");
-        assert_eq!(super::size_text(3 * 1024 * 1024), "3145728 bytes (3.0 MiB)");
+    fn rule_pack_sizes_show_only_the_rounded_unit() {
+        assert_eq!(super::size_text(2048), "2.0 KiB");
+        assert_eq!(super::size_text(3 * 1024 * 1024), "3.0 MiB");
     }
 }

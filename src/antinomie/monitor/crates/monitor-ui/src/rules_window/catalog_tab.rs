@@ -121,7 +121,7 @@ impl Model {
                                 table::cell_click(
                                     ui,
                                     table::Cell::Number,
-                                    &crate::values::file_size(offer.size),
+                                    &crate::values::short_size(offer.size),
                                 );
                             });
                             row.col(|ui| {

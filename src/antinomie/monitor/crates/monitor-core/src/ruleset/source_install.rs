@@ -524,7 +524,7 @@ fn unlisted_ok(filter: &SourceFilter, path: &str) -> bool {
 }
 
 fn human_bytes(bytes: u64) -> String {
-    crate::byte_size::file_size(bytes)
+    crate::byte_size::short_size(bytes)
 }
 
 /// The provenance recorded in a retained version's manifest.
@@ -554,7 +554,7 @@ pub fn source_update<'a>(catalog: &'a Catalog, pack: &InstalledPack) -> Option<&
 #[cfg(test)]
 mod size_text_tests {
     #[test]
-    fn source_download_sizes_use_the_shared_bytes_format() {
-        assert_eq!(super::human_bytes(1500), "1500 bytes (1.5 KiB)");
+    fn source_download_sizes_show_only_the_rounded_unit() {
+        assert_eq!(super::human_bytes(1500), "1.5 KiB");
     }
 }

@@ -32,7 +32,7 @@ pub(super) struct State {
 }
 
 fn size_text(bytes: u64) -> String {
-    crate::values::file_size(bytes)
+    crate::values::short_size(bytes)
 }
 
 fn thousands(value: u64) -> String {

@@ -117,7 +117,7 @@ pub fn describe(kind: crate::build::Kind, build_root: &Path) -> String {
             if is_ready(&dir) {
                 format!(
                     "compiles in the cached Debian 13 toolchain chroot ({pins}; {} on disk)",
-                    crate::byte_size::file_size(size(&dir))
+                    crate::byte_size::short_size(size(&dir))
                 )
             } else {
                 format!(

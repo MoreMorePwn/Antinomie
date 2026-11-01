@@ -357,7 +357,7 @@ impl BuildWizard {
         ui.horizontal(|ui| {
             ui.small(format!(
                 "Toolchain chroot cache: {} in {}",
-                antinomie_monitor_core::byte_size::file_size(toolchain::size(&dir)),
+                antinomie_monitor_core::byte_size::short_size(toolchain::size(&dir)),
                 dir.display()
             ));
             if ui
