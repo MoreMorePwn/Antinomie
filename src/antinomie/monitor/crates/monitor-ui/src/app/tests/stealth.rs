@@ -528,3 +528,123 @@ fn a_machine_profile_says_it_has_no_affiliation_with_the_maker() {
         texts(&output)
     );
 }
+
+#[test]
+fn an_arm64_vm_presents_an_arm64_machine_and_lists_its_own_giveaways() {
+    use antinomie_monitor_core::stealth::ARM_MACHINES;
+    let size = egui::vec2(1280.0, 1000.0);
+    let mut app = app();
+    let mut base = test_base("arm", true);
+    base.arch = antinomie_monitor_core::GuestArch::AARCH64;
+    base.stealth_support = vec!["uefi".into(), "sata".into(), "dhcp".into()];
+    app.snapshot.bases.push(base);
+    app.new_image();
+    app.draft.base_identity = Some("arm".into());
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    app.stealth_open = true;
+    for _ in 0..3 {
+        render(&mut app, &ctx, size);
+    }
+    let lines: Vec<String> = texts(&render(&mut app, &ctx, size))
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect();
+    // The arm64 picker, not the PC catalog.
+    assert!(
+        lines
+            .iter()
+            .any(|text| text == "By the preset, from the VM's UUID"),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|text| text.starts_with("Shown as: ")
+            && ARM_MACHINES
+                .iter()
+                .any(|machine| text.ends_with(machine.label))),
+        "{lines:?}"
+    );
+    assert!(!MACHINES
+        .iter()
+        .any(|machine| lines.iter().any(|text| text.starts_with(machine.label))));
+    // The window's CPU section (the trace has a CPU column too).
+    let cpu = texts(&render(&mut app, &ctx, size))
+        .into_iter()
+        .rfind(|(text, _)| text == "CPU")
+        .unwrap()
+        .1
+        .center();
+    for pressed in [true, false] {
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events: vec![
+                    egui::Event::PointerMoved(cpu),
+                    egui::Event::PointerButton {
+                        pos: cpu,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            },
+            |root| app.draw(root),
+        );
+    }
+    click_label(&mut app, &ctx, size, "Still visible");
+    for _ in 0..2 {
+        render(&mut app, &ctx, size);
+    }
+    let lines: Vec<String> = texts(&render(&mut app, &ctx, size))
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect();
+    assert!(
+        lines
+            .iter()
+            .any(|text| text.contains("instruction timing of an emulated CPU")),
+        "{lines:?}"
+    );
+    // No x86 giveaway or CPU setting.
+    assert!(!lines
+        .iter()
+        .any(|text| text.contains("CPUID") || text.contains("KVM")));
+    assert!(
+        lines
+            .iter()
+            .any(|text| text.contains("the x86 CPU settings do not apply")),
+        "{lines:?}"
+    );
+    assert_eq!(app.draft.stealth.preset, StealthPreset::RealisticDesktop);
+}
+
+#[test]
+fn an_x86_vm_is_never_offered_an_arm64_base_to_switch_to() {
+    let mut app = sata_on_base(&[], &[("arm", "arm64 base", &["sata"])]);
+    for base in &mut app.snapshot.bases {
+        if base.id == "arm" {
+            base.arch = antinomie_monitor_core::GuestArch::AARCH64;
+        }
+    }
+    app.stealth_open = true;
+    let size = egui::vec2(1280.0, 900.0);
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    click_label(&mut app, &ctx, size, "Storage and devices");
+    for _ in 0..2 {
+        render(&mut app, &ctx, size);
+    }
+    let lines: Vec<String> = texts(&render(&mut app, &ctx, size))
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect();
+    assert!(
+        lines.iter().any(|text| text.ends_with(SATA_LINE)),
+        "{lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|text| text.starts_with("Use base")),
+        "{lines:?}"
+    );
+}

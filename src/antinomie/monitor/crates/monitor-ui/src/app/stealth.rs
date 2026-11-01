@@ -2,6 +2,7 @@
 //! VM configuration > Device profile: the hardware identity a VM shows its
 //! guest. A preset fills every entry; editing one makes the profile Custom.
 use super::*;
+mod arm64;
 mod cloud;
 use antinomie_monitor_core::stealth::{
     base_supporting, chassis_label, disk_bus_unavailable, firmware_unavailable, host_cpu_vendor,
@@ -9,11 +10,21 @@ use antinomie_monitor_core::stealth::{
     MachineIdentity, NatNetwork, NicModel, Pointer, RtcClock, SmbiosEntry, StealthPreset,
     StealthProfile, CHASSIS, CLOUDS, CPU_MODELS, MACHINES,
 };
+use antinomie_monitor_core::GuestArch;
 pub(super) use cloud::launch_advice;
 
 /// What the host offers (OVMF, clean SMT), read once.
 pub(super) fn host_support() -> &'static HostSupport {
     HostSupport::cached()
+}
+
+/// What the host offers a VM of `arch`: AAVMF for an arm64 VM's UEFI.
+fn host_for(arch: GuestArch) -> &'static HostSupport {
+    if arch == GuestArch::AARCH64 {
+        HostSupport::cached_arm64()
+    } else {
+        host_support()
+    }
 }
 
 /// A combo box whose unavailable choices are shown disabled with the reason.
@@ -57,13 +68,16 @@ impl MonitorApp {
             antinomie_monitor_core::stealth::BaseSupport::all(),
             |base| antinomie_monitor_core::stealth::BaseSupport::from_list(&base.stealth_support),
         );
-        let current = selected_base(&self.snapshot, draft.base_identity.as_deref())
-            .map(|base| base.id.clone());
+        let selected = selected_base(&self.snapshot, draft.base_identity.as_deref());
+        let current = selected.map(|base| base.id.clone());
+        let arch = selected.map_or_else(Default::default, |base| base.arch);
         let mut fit = Fit::new(
             &draft.stealth,
             base,
             &self.snapshot.bases,
             current.as_deref(),
+            arch,
+            draft.launch.fast_emulation,
         );
         window(
             ctx,
@@ -93,6 +107,11 @@ impl MonitorApp {
 /// installed base that supports it.
 pub(super) struct Fit<'a> {
     pub base: BaseSupport,
+    /// The base's architecture, and what this host offers it.
+    arch: GuestArch,
+    host: &'static HostSupport,
+    /// The VM boots arm64 without KPTI (a giveaway of its own).
+    fast_emulation: bool,
     fallbacks: Vec<Fallback>,
     bases: &'a [BaseSummary],
     current: Option<&'a str>,
@@ -106,10 +125,16 @@ impl<'a> Fit<'a> {
         base: BaseSupport,
         bases: &'a [BaseSummary],
         current: Option<&'a str>,
+        arch: GuestArch,
+        fast_emulation: bool,
     ) -> Self {
+        let host = host_for(arch);
         Self {
-            fallbacks: profile.fallbacks(&base, host_support()),
+            fallbacks: profile.fallbacks(&base, host),
             base,
+            arch,
+            host,
+            fast_emulation,
             bases,
             current,
             switch: None,
@@ -155,8 +180,7 @@ impl<'a> Fit<'a> {
             )
             .wrap(),
         );
-        if let Some(base) =
-            base_supporting(profile, setting, self.current, self.bases, host_support())
+        if let Some(base) = base_supporting(profile, setting, self.current, self.bases, self.host)
             && ui
                 .button(format!("Use base {}", base.label))
                 .on_hover_text("Switch this VM to an installed base that supports the setting")
@@ -164,6 +188,15 @@ impl<'a> Fit<'a> {
         {
             self.switch = Some(base.id.clone());
         }
+    }
+
+    fn arm64(&self) -> bool {
+        self.arch == GuestArch::AARCH64
+    }
+
+    /// The arm64 VM boots UEFI: its base supports it and AAVMF is here.
+    fn uefi(&self) -> bool {
+        self.base.uefi && self.host.ovmf.is_ok()
     }
 
     /// The top of the window: every setting that will not be applied, where it
@@ -466,10 +499,22 @@ fn firmware(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                 &mut profile.firmware,
                 Firmware::ALL,
                 Firmware::label,
-                |firmware| firmware_unavailable(firmware, &base, host_support()),
+                |firmware| firmware_unavailable(firmware, &base, fit.host),
             );
             ui.end_row();
             fit.row(ui, profile, FallbackSetting::Firmware);
+            if fit.arm64() {
+                // The machine's own tables replace the PC fields and devices.
+                ui.label("");
+                ui.colored_label(
+                    theme::muted(),
+                    "On arm64, UEFI is AAVMF and BIOS boots the kernel on a device tree. \
+                     The machine's ACPI IDs and SMBIOS tables are filled from the catalog; \
+                     the PC devices (HPET, VMware port, ICH9 USB, SMM) do not apply.",
+                );
+                ui.end_row();
+                return;
+            }
             if profile.firmware == Firmware::UefiSecureBoot {
                 ui.label("");
                 ui.colored_label(
@@ -526,6 +571,10 @@ fn firmware(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
 }
 
 fn cpu(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
+    if fit.arm64() {
+        arm64::cpu(ui, profile, fit.uefi());
+        return;
+    }
     ui.checkbox(
         &mut profile.cpu_passthrough,
         "Pass the host CPU through (its real name and features)",
@@ -595,7 +644,7 @@ fn cpu(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
     .on_disabled_hover_text("Hiding the KVM signature also hides kvm-clock");
     ui.checkbox(&mut profile.pmu, "Performance counters");
     ui.checkbox(&mut profile.realistic_topology, "One socket with N cores");
-    let smt = &host_support().smt;
+    let smt = &fit.host.smt;
     ui.add_enabled(
         profile.realistic_topology && smt.is_ok(),
         egui::Checkbox::new(&mut profile.smt, "Two threads per core"),
@@ -857,7 +906,13 @@ pub(super) fn window(
                     .show(ui, |ui| {
                         egui::CollapsingHeader::new("Hardware identity")
                             .default_open(true)
-                            .show(ui, |ui| hardware(ui, profile));
+                            .show(ui, |ui| {
+                                if fit.arm64() {
+                                    arm64::hardware(ui, profile, fit.uefi());
+                                } else {
+                                    hardware(ui, profile);
+                                }
+                            });
                         egui::CollapsingHeader::new("Firmware and ACPI")
                             .show(ui, |ui| firmware(ui, profile, fit));
                         egui::CollapsingHeader::new("CPU").show(ui, |ui| cpu(ui, profile, fit));
@@ -870,8 +925,8 @@ pub(super) fn window(
                         });
                         egui::CollapsingHeader::new("Clock").show(ui, |ui| clock(ui, profile));
                         egui::CollapsingHeader::new("Still visible").show(ui, |ui| {
-                            let (fitted, notes) = profile.fitted(&fit.base, host_support());
-                            for giveaway in fitted.giveaways() {
+                            let (fitted, notes) = profile.fitted(&fit.base, fit.host);
+                            for giveaway in fitted.giveaways_for(fit.arch, fit.fast_emulation) {
                                 ui.label(format!("• {giveaway}"));
                             }
                             for note in notes {

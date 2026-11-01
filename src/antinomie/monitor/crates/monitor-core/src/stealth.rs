@@ -1605,7 +1605,8 @@ pub fn vm_fallbacks(
 
 /// An installed base, other than `current`, that supports every setting this
 /// profile has fallen back on for `setting`: where the user can switch to get
-/// what the profile asks for.
+/// what the profile asks for. Only a base of `current`'s architecture is
+/// offered (`host` is what this host gives that architecture).
 pub fn base_supporting<'a>(
     profile: &StealthProfile,
     setting: FallbackSetting,
@@ -1613,9 +1614,13 @@ pub fn base_supporting<'a>(
     bases: &'a [crate::api::BaseSummary],
     host: &HostSupport,
 ) -> Option<&'a crate::api::BaseSummary> {
+    let arch = current
+        .and_then(|id| bases.iter().find(|base| base.id == id))
+        .map(|base| base.arch);
     bases
         .iter()
         .filter(|base| Some(base.id.as_str()) != current)
+        .filter(|base| arch.is_none_or(|arch| base.arch == arch))
         .find(|base| {
             let support = BaseSupport::from_list(&base.stealth_support);
             !profile

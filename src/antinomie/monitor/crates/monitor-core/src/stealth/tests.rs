@@ -1084,6 +1084,20 @@ fn a_vm_on_a_base_without_a_support_list_falls_back_and_one_with_it_does_not() {
         )
         .is_none()
     );
+    // A base of another architecture is never offered.
+    let mut arm = new.clone();
+    arm.id = "arm".into();
+    arm.arch = crate::api::GuestArch::AARCH64;
+    assert!(
+        base_supporting(
+            &vm.stealth,
+            FallbackSetting::DiskBus,
+            Some("old"),
+            &[old.clone(), arm],
+            &host
+        )
+        .is_none()
+    );
     vm.base_identity = Some("new".into());
     assert!(vm_fallbacks(&vm, &bases, &host).is_empty());
     // A base that is not installed has nothing to compare with.

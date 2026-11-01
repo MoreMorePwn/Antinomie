@@ -438,13 +438,16 @@ impl MonitorApp {
             antinomie_monitor_core::stealth::BaseSupport::all(),
             |base| antinomie_monitor_core::stealth::BaseSupport::from_list(&base.stealth_support),
         );
-        let current = selected_base(&self.snapshot, self.draft.base_identity.as_deref())
-            .map(|base| base.id.clone());
+        let selected = selected_base(&self.snapshot, self.draft.base_identity.as_deref());
+        let current = selected.map(|base| base.id.clone());
+        let arch = selected.map_or_else(Default::default, |base| base.arch);
         let mut fit = super::stealth::Fit::new(
             &self.draft.stealth,
             base,
             &self.snapshot.bases,
             current.as_deref(),
+            arch,
+            self.draft.launch.fast_emulation,
         );
         super::stealth::window(
             ctx,

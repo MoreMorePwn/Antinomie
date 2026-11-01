@@ -168,6 +168,28 @@ pub fn arm_profile(
     arm
 }
 
+/// The machine an arm64 VM of `profile` presents when it boots UEFI
+/// (`uefi`: its base supports it and the host has AAVMF) or not: a UEFI
+/// machine without UEFI is shown as a board on its device tree.
+pub fn presented(profile: &StealthProfile, uefi: bool) -> Option<&'static ArmMachine> {
+    match arm_machine(profile) {
+        Some(machine) if machine.tree.is_none() && !uefi => board_for(profile),
+        machine => machine,
+    }
+}
+
+impl ArmKind {
+    /// The kind as the Device profile window names it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Server => "server",
+            Self::Workstation => "workstation",
+            Self::Cloud => "cloud instance",
+            Self::Board => "single-board computer",
+        }
+    }
+}
+
 /// The profile a VM on a base of `arch` with `stealth_support` shows: on
 /// arm64 with a base that boots UEFI, the arm64 machine's (a run's record
 /// and the VM's summary name it).
@@ -179,11 +201,7 @@ pub fn shown_profile(
     ram_mib: u32,
 ) -> StealthProfile {
     let uefi = super::BaseSupport::from_list(stealth_support).uefi;
-    let machine = match arm_machine(profile) {
-        Some(machine) if machine.tree.is_none() && !uefi => board_for(profile),
-        machine => machine,
-    };
-    match machine {
+    match presented(profile, uefi) {
         Some(machine) if arch == crate::api::GuestArch::AARCH64 => {
             arm_profile(profile, machine, cpus, ram_mib)
         }
