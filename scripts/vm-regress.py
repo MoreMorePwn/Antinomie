@@ -113,8 +113,9 @@ ARCH_CC = {"x86_64": "gcc", "arm64": "aarch64-linux-gnu-gcc"}
 # before 0.9.0 (no arm64 base is older), stress-extreme fills a disk under TCG.
 # The stealth probe measures arm64 without its CPUID and I/O port checks; the
 # cloud check expects the arm64 instance's identity. Interop has its own arm64
-# check (ARM64_INTEROP).
-ARM64_LATER = {"debugger-live", "conf-stress-extreme", "uring-legacy", "tracer-legacy"}
+# check (ARM64_INTEROP). tracer-ia32's 32-bit x86 program runs on x86-64 only.
+ARM64_LATER = {"debugger-live", "conf-stress-extreme", "uring-legacy", "tracer-legacy",
+               "tracer-ia32"}
 # What an old host (--old-host: 0.8.0, which has no arm64 VMs) says when it is
 # asked to start a VM on an arm64 base: it must refuse before QEMU runs, with
 # its own message, or as a base of a newer revision.
@@ -484,6 +485,9 @@ def plan_x86_64(tier, ctx):
         vm_check("uring-legacy", "full", "uring-check", ["legacy", workload, urfix], bundle=old_base,
                  timeout=3000, needs=("old_base",)),
         vm_check("tracer-record", "full", "tracer-check", ["record", fix / "tracer-fixture"]),
+        # One program as a 32-bit x86 and an x86-64 build, recorded alike.
+        vm_check("tracer-ia32", "full", "tracer-check",
+                 ["ia32", fix / "ia32-fixture-32", fix / "ia32-fixture-64"]),
         vm_check("tracer-legacy", "full", "tracer-check", ["legacy", fix / "tracer-fixture"],
                  bundle=ctx.get("legacy_base"), needs=("legacy_base",)),
         Check("tracer-qa", "full", None, mon, 2400, vm=False, cargo=True),
@@ -574,6 +578,15 @@ def build_fixtures(out, arch="x86_64"):
     code, _ = run_logged([str(TESTS / "build-workload.sh"), str(fix), "--static"], env, str(ROOT), log, 1800)
     if code != 0:
         raise Failure(f"building the stress samples failed, see {log}")
+    # tracer-ia32's program as a 32-bit x86 and an x86-64 one, by one compiler
+    # (ANTINOMIE_IA32_CC, default gcc). -m32 needs the 32-bit C library
+    # (gcc-multilib, libc6-dev-i386); without it only tracer-ia32 fails.
+    ia32_cc = os.environ.get("ANTINOMIE_IA32_CC", "gcc").split()
+    for flags, name in ((["-m32"], "ia32-fixture-32"), ([], "ia32-fixture-64")):
+        code, _ = run_logged([*ia32_cc, *flags, "-static", "-O2", *strict, "-o", str(fix / name),
+                              str(TESTS / "ia32-fixture.c")], env, str(ROOT), log, 600)
+        if code != 0:
+            (fix / name).unlink(missing_ok=True)
     stamp.write_text("built\n")
     return fix
 

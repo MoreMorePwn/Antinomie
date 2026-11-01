@@ -165,11 +165,19 @@ class PlanTests(unittest.TestCase):
         for name in ("conf-stress-light", "conf-stress-heavy", "conf-stress-extreme", "conf-stress-lossy",
                      "conf-stress-rate", "conf-stress-contended",
                      "debug-p2", "debug-p3", "audit-stop", "audit-core", "uring-status",
-                     "uring-boots", "uring-legacy", "tracer-record", "tracer-legacy", "tracer-qa",
+                     "uring-boots", "uring-legacy", "tracer-record", "tracer-ia32", "tracer-legacy",
+                     "tracer-qa",
                      "debugger-live", "stealth", "cloud", "route", "snapshot", "specimen", "io-old-new-p3",
                      "io-new-old-audit"):
             self.assertIn(name, names)
         self.assertEqual(len(names), len(set(names)))
+
+    def test_tracer_ia32_runs_both_builds_of_its_program(self):
+        check = {c.name: c for c in vm.plan("full", self.ctx())}["tracer-ia32"]
+        self.assertEqual(check.argv[1], "ia32")
+        self.assertTrue(check.argv[-2].endswith("ia32-fixture-32"))
+        self.assertTrue(check.argv[-1].endswith("ia32-fixture-64"))
+        self.assertNotIn("tracer-ia32", {c.name for c in vm.plan("full", self.ctx(), "arm64")})
 
     def test_interop_pairs_old_host_with_new_base_and_back(self):
         by_name = {c.name: c.argv for c in vm.plan("full", self.ctx())}

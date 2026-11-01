@@ -6,6 +6,7 @@
 //!   tracer-check record BUNDLE NEW_DATA_DIR FIXTURE
 //!   tracer-check legacy BUNDLE NEW_DATA_DIR FIXTURE
 //!   tracer-check reconnects BUNDLE NEW_DATA_DIR FIXTURE [COUNT]
+//!   tracer-check ia32 BUNDLE NEW_DATA_DIR IA32_FIXTURE X86_64_FIXTURE
 //!
 //! FIXTURE is the static `tests/monitor/tracer-fixture`. `record` boots one
 //! VM and makes five runs: `writes` as root (every written-file case), `slow`
@@ -23,8 +24,16 @@
 //! step by step (`RECONNECT` lines). It fails if a reconnect takes longer
 //! than [`RECONNECT_BUDGET`], if the run does not keep its identity across
 //! them, or if a segment of it has no write: what a slow reconnect costs is
-//! measured, not inferred from a missing segment. The data folder must be new
-//! and disposable. Every result is a `RESULT` line.
+//! measured, not inferred from a missing segment. `ia32` runs the same
+//! program (`tests/monitor/ia32-fixture.c`) built as a 32-bit x86 and an
+//! x86-64 program and checks that the recording names and captures each of
+//! its behaviours alike: the ia32 calls by the i386 table (none unnamed, none
+//! raw), their paths, written bytes, socket addresses (also through
+//! socketcall), the task name and the child's exec; it prints `RUN ia32=` and
+//! `RUN x86_64=` lines for the Triage comparison (`recorded_workload_triage`).
+//! With `ANTINOMIE_FORCE_TCG` set the VM runs without KVM and the waits are
+//! eight times longer. The data folder must be new and disposable. Every
+//! result is a `RESULT` line.
 use antinomie_monitor_core::kernel_notes::{self, FileHash, HashKind, HashStatus};
 use antinomie_monitor_core::*;
 use sha2::{Digest, Sha256};
@@ -154,6 +163,7 @@ fn setup(bundle: &str, data: &str, name: &str) -> Result<Driver, String> {
         data_dir: data,
         headless: true,
         capture_quota_size: 1024 * 1024 * 1024,
+        force_tcg: force_tcg(),
         ..Default::default()
     };
     let mut driver = Driver {
@@ -177,7 +187,7 @@ fn setup(bundle: &str, data: &str, name: &str) -> Result<Driver, String> {
     driver.vm_id = driver.snapshot.vms[0].id.clone();
     let vm_id = driver.vm_id.clone();
     driver.command(Command::Start { vm_id })?;
-    driver.wait("revision-17 guest", 120, |s| {
+    driver.wait("revision-17 guest", 120 * wait_scale(), |s| {
         s.guest_kernel
             .as_ref()
             .and_then(|k| k.revision)
@@ -194,6 +204,16 @@ fn setup(bundle: &str, data: &str, name: &str) -> Result<Driver, String> {
 
 fn result(line: String) {
     println!("RESULT {line}");
+}
+
+/// The VM runs without KVM (a host without it, such as a cloud VM).
+fn force_tcg() -> bool {
+    std::env::var_os("ANTINOMIE_FORCE_TCG").is_some()
+}
+
+/// How much longer a guest takes here: eight times under TCG.
+fn wait_scale() -> u64 {
+    if force_tcg() { 8 } else { 1 }
 }
 
 const FIXTURE: &str = "/tmp/tracer-fixture";
@@ -661,6 +681,216 @@ fn reconnects(bundle: &str, data: &str, fixture: &str, count: usize) -> Result<(
     }
 }
 
+/// One behaviour of the ia32 fixture: the calls (by name or x86-64 family)
+/// that may make it, and bytes one of their fields must hold.
+struct Behaviour {
+    label: &'static str,
+    calls: &'static [&'static str],
+    bytes: &'static [u8],
+}
+
+const BEHAVIOURS: &[Behaviour] = &[
+    Behaviour {
+        label: "mkdir",
+        calls: &["mkdir", "mkdirat"],
+        bytes: b"/tmp/ia32-probe",
+    },
+    Behaviour {
+        label: "open",
+        calls: &["open", "openat"],
+        bytes: b"/tmp/ia32-probe/note.txt",
+    },
+    Behaviour {
+        label: "write",
+        calls: &["write"],
+        bytes: b"ia32 probe text",
+    },
+    Behaviour {
+        label: "stat",
+        calls: &["stat", "newfstatat", "statx"],
+        bytes: b"/tmp/ia32-probe/note.txt",
+    },
+    Behaviour {
+        label: "rename",
+        calls: &["rename", "renameat", "renameat2"],
+        bytes: b"/tmp/ia32-probe/renamed.txt",
+    },
+    Behaviour {
+        label: "unlink",
+        calls: &["unlink", "unlinkat"],
+        bytes: b"/tmp/ia32-probe/renamed.txt",
+    },
+    // sockaddr_in of 127.0.0.1 port 9.
+    Behaviour {
+        label: "connect",
+        calls: &["connect"],
+        bytes: &[2, 0, 0, 9, 127, 0, 0, 1],
+    },
+    Behaviour {
+        label: "sendto",
+        calls: &["sendto"],
+        bytes: b"probe",
+    },
+    Behaviour {
+        label: "task name",
+        calls: &["prctl"],
+        bytes: b"ia32probe",
+    },
+    Behaviour {
+        label: "exec",
+        calls: &["execve"],
+        bytes: b"/bin/sh",
+    },
+];
+
+/// For each behaviour, the call that showed it in a run (name and number on
+/// its table), and what is wrong with the run's own records.
+fn behaviours(directory: &Path, root: u32) -> Result<(Vec<Option<String>>, Vec<String>), String> {
+    let recording = recording::Recording::raw(directory);
+    let cancel = AtomicBool::new(false);
+    let mut found = vec![None; BEHAVIOURS.len()];
+    let mut bad = Vec::new();
+    let (mut own, mut unnamed, mut raw) = (0u64, 0u64, 0u64);
+    let mut offset = 0;
+    loop {
+        let page = recording
+            .invocation_page_cancellable(offset, 256, &cancel)
+            .map_err(|e| e.to_string())?;
+        for call in &page.invocations {
+            let Some(event) = call.entry.as_ref().or(call.exit.as_ref()) else {
+                continue;
+            };
+            if event.pid == root {
+                own += 1;
+                unnamed += u64::from(event.syscall_name.starts_with("syscall_"));
+                raw += u64::from(
+                    event
+                        .issues
+                        .iter()
+                        .any(|issue| issue.contains("unknown schema or ABI")),
+                );
+            }
+            let name = syscalls::family(event.syscall_nr).unwrap_or(event.syscall_name.as_str());
+            for (index, behaviour) in BEHAVIOURS.iter().enumerate() {
+                if found[index].is_some() || !behaviour.calls.contains(&name) {
+                    continue;
+                }
+                let holds = [call.entry.as_ref(), call.exit.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|event| &event.fields)
+                    .any(|field| {
+                        field
+                            .preview
+                            .windows(behaviour.bytes.len())
+                            .any(|part| part == behaviour.bytes)
+                    });
+                if holds {
+                    let abi = syscalls::table_of(event.syscall_nr)
+                        .map_or("untabled".to_owned(), |table| format!("{:?}", table.abi));
+                    found[index] = Some(format!(
+                        "{} {} ({abi})",
+                        event.syscall_name,
+                        syscalls::wire_number(event.syscall_nr)
+                    ));
+                }
+            }
+        }
+        match page.next_offset {
+            Some(next) => offset = next,
+            None => break,
+        }
+    }
+    if own == 0 {
+        bad.push("no call of the program itself".into());
+    }
+    if unnamed > 0 {
+        bad.push(format!("{unnamed} of its {own} calls have no name"));
+    }
+    if raw > 0 {
+        bad.push(format!(
+            "{raw} of its {own} calls are raw only (an ABI no table decodes)"
+        ));
+    }
+    Ok((found, bad))
+}
+
+/// The ia32 and x86-64 builds of one program, recorded alike.
+fn ia32(bundle: &str, data: &str, fixture32: &str, fixture64: &str) -> Result<(), String> {
+    let mut d = setup(bundle, data, "tracer ia32")?;
+    let mut runs = Vec::new();
+    for (label, fixture) in [("ia32", fixture32), ("x86_64", fixture64)] {
+        if !Path::new(fixture).is_file() {
+            return Err(format!(
+                "{fixture} is missing: building it needs gcc -m32 (gcc-multilib, libc6-dev-i386)"
+            ));
+        }
+        let destination = format!("/tmp/ia32-fixture-{label}");
+        d.command(Command::Upload {
+            source: PathBuf::from(fixture),
+            destination: destination.clone(),
+            overwrite: true,
+            executable: true,
+        })?;
+        let id = d.launch(&destination, &[], 0)?;
+        d.finished(&id, 180 * wait_scale())?;
+        runs.push((label, d.run(&id).ok_or("run missing")?.clone()));
+    }
+    d.command(Command::Stop)?;
+    d.wait("VM stop", 90 * wait_scale(), |s| {
+        s.state == VmState::Stopped
+    })?;
+    thread::sleep(Duration::from_secs(2));
+    let mut bad = Vec::new();
+    let mut seen = Vec::new();
+    for (label, run) in &runs {
+        let exit = run.execution.as_ref().and_then(|e| e.root_exit.clone());
+        result(format!("{label}: state {:?}, exit {exit:?}", run.state));
+        if !matches!(exit, Some(WaitStatus::Exited { code: 0 })) {
+            bad.push(format!("{label}: the fixture did not exit 0 ({exit:?})"));
+        }
+        let (found, problems) = behaviours(&run.directory, run.pid)?;
+        for (behaviour, call) in BEHAVIOURS.iter().zip(&found) {
+            result(format!(
+                "{label}: {}: {}",
+                behaviour.label,
+                call.as_deref().unwrap_or("MISSING")
+            ));
+        }
+        bad.extend(
+            problems
+                .into_iter()
+                .map(|problem| format!("{label}: {problem}")),
+        );
+        seen.push(found);
+    }
+    for (index, behaviour) in BEHAVIOURS.iter().enumerate() {
+        for ((label, _), found) in runs.iter().zip(&seen) {
+            if found[index].is_none() {
+                bad.push(format!("{label}: {} not recorded", behaviour.label));
+            }
+        }
+    }
+    // The ia32 program's own calls are named by the i386 table.
+    if seen[0]
+        .iter()
+        .flatten()
+        .filter(|call| !call.contains("execve"))
+        .any(|call| !call.ends_with("(I386)"))
+    {
+        bad.push("ia32: a behaviour came from a call not on the i386 table".into());
+    }
+    for (label, run) in &runs {
+        println!("RUN {label}={}", run.directory.display());
+    }
+    if bad.is_empty() {
+        println!("PASS ia32");
+        Ok(())
+    } else {
+        Err(bad.join("; "))
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let outcome = match args
@@ -671,6 +901,7 @@ fn main() {
     {
         ["record", bundle, data, fixture] => record(bundle, data, fixture),
         ["legacy", bundle, data, fixture] => legacy(bundle, data, fixture),
+        ["ia32", bundle, data, fixture32, fixture64] => ia32(bundle, data, fixture32, fixture64),
         ["reconnects", bundle, data, fixture] => reconnects(bundle, data, fixture, 10),
         ["reconnects", bundle, data, fixture, count] => count
             .parse()
@@ -678,7 +909,8 @@ fn main() {
             .and_then(|count| reconnects(bundle, data, fixture, count)),
         _ => {
             eprintln!(
-                "usage: tracer-check record|legacy|reconnects BUNDLE NEW_DATA_DIR FIXTURE [COUNT]"
+                "usage: tracer-check record|legacy|reconnects BUNDLE NEW_DATA_DIR FIXTURE [COUNT]\n       \
+                 tracer-check ia32 BUNDLE NEW_DATA_DIR IA32_FIXTURE X86_64_FIXTURE"
             );
             std::process::exit(2);
         }
