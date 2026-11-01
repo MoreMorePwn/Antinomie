@@ -2737,10 +2737,13 @@ fn state_tags_line_up_in_one_column_and_a_timeout_is_its_own_tag() {
         "Not requested",
     ]
     .map(tag);
-    // Every tag sits in a pill of one width at one place, so they share a
-    // column however long the word is.
+    // Every tag sits in a pill of one width at one place, its word centred
+    // (round 6 item 7), so they share a column however long the word is.
     for rect in &tags[1..] {
-        assert!((rect.min.x - tags[0].min.x).abs() < 0.6, "{tags:?}");
+        assert!(
+            (rect.center().x - tags[0].center().x).abs() < 0.6,
+            "{tags:?}"
+        );
     }
     assert!(shown.iter().any(|(text, _)| text == "Unavailable"));
 }
