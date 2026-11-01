@@ -30,14 +30,23 @@
 //!   metadata address is silent, and a route cannot be chosen.
 //! * none: no network card: no route, no capture, nothing reaches out.
 //!
-//! CASE names limit the VMs (`routed`, `nat`, `none`). Every check prints a
-//! PASS or FAIL line; `route-check.md` in the data folder holds the table.
+//! * filter (only when named): the egress abuse filter on a Routed VM,
+//!   against an address only the local fake proxies answer for, so nothing
+//!   leaves this machine: mail ports refused on the SOCKS5, Tor and VPN
+//!   routes and counted by port, ordinary ports carried, a fast connect loop
+//!   cut at the rate limit, a scan of distinct addresses cut at the
+//!   per-minute limit, the open-connection cap, a browser-like burst, the
+//!   filter turned off, and the route time limit.
+//!
+//! CASE names limit the VMs (`routed`, `nat`, `none`, `filter`; without
+//! names the first three). Every check prints a PASS or FAIL line; `route-check.md` in the data folder holds the table.
 //! The data folder must be new and disposable.
 //!
 //! Started as `route-check -c CONFIG` the program is the fake wireproxy of
 //! the VPN route: a SOCKS5 server on the `BindAddress` of CONFIG.
 use antinomie_monitor_core::route::{
-    RouteConfig, RouteKind, RouteStats, RouteVia, Socks5Config, TorConfig, TorMode, VpnConfig,
+    EgressFilter, RouteConfig, RouteKind, RouteStats, RouteVia, Socks5Config, TorConfig, TorMode,
+    VpnConfig,
 };
 use antinomie_monitor_core::stealth::{CLOUDS, StealthProfile};
 use antinomie_monitor_core::*;
@@ -1350,7 +1359,13 @@ fn check(bundle: &str, data: &str, probe: &str, only: &[&str]) -> Result<(), Str
     let mut d = Driver::new(bundle, &data)?;
     d.probe = PathBuf::from(probe);
     let mut table = Table::default();
-    let wanted = |name: &str| only.is_empty() || only.contains(&name);
+    let wanted = |name: &str| {
+        if only.is_empty() {
+            name != "filter"
+        } else {
+            only.contains(&name)
+        }
+    };
     let mut errors = Vec::new();
     if wanted("routed")
         && let Err(error) = routed(&mut d, &mut table, &fakes, &data)
@@ -1368,6 +1383,12 @@ fn check(bundle: &str, data: &str, probe: &str, only: &[&str]) -> Result<(), Str
         && let Err(error) = none(&mut d, &mut table)
     {
         errors.push(format!("none: {error}"));
+        let _ = d.stop();
+    }
+    if wanted("filter")
+        && let Err(error) = filter(&mut d, &mut table, &fakes, &data)
+    {
+        errors.push(format!("filter: {error}"));
         let _ = d.stop();
     }
     let _ = d.command_for(Command::Close, 30);
@@ -1389,7 +1410,9 @@ fn main() {
         ["-c", config] => fake_wireproxy(config),
         [bundle, data, probe, only @ ..] => check(bundle, data, probe, only),
         _ => {
-            eprintln!("usage: route-check BUNDLE NEW_DATA_DIR ROUTE_PROBE [routed|nat|none...]");
+            eprintln!(
+                "usage: route-check BUNDLE NEW_DATA_DIR ROUTE_PROBE [routed|nat|none|filter...]"
+            );
             std::process::exit(2);
         }
     };
@@ -1397,4 +1420,309 @@ fn main() {
         eprintln!("FAIL {error}");
         std::process::exit(1);
     }
+}
+
+/// The address the filter case connects to: TEST-NET-1, which only the
+/// local fake proxies answer for (every route the case uses is one of them).
+const FAKE_HOST: &str = "192.0.2.10";
+
+/// The route's record as `artifacts.json` saved it: what the gateway counted
+/// and the ports the filter refused, with their counts.
+fn artifact_blocked_ports(run: &RunSummary) -> Vec<(u16, u64)> {
+    fs::read(run.directory.join("artifacts.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value.get("route")?.get("blocked_ports").cloned())
+        .and_then(|ports| serde_json::from_value(ports).ok())
+        .unwrap_or_default()
+}
+
+impl Driver {
+    /// The route probe with `args` on `route`, to its end.
+    fn probe_args(
+        &mut self,
+        route: RouteKind,
+        args: &[&str],
+        seconds: u64,
+    ) -> Result<Probed, String> {
+        let id = self.start(ExecRequest {
+            path: PROBE.into(),
+            args: args.iter().map(|a| (*a).to_owned()).collect(),
+            uid: 0,
+            gid: 0,
+            route: Some(route),
+            ..Default::default()
+        })?;
+        self.finish(id, seconds)
+    }
+}
+
+impl Probed {
+    fn number(&self, key: &str) -> i64 {
+        self.fact(key).parse().unwrap_or(-1)
+    }
+
+    fn stats(&self) -> RouteStats {
+        artifact_route_stats(&self.run).unwrap_or_default()
+    }
+
+    fn ended(&self) -> bool {
+        self.run.state == RunState::Finished
+    }
+}
+
+/// The egress abuse filter on a Routed VM, against the local fakes only.
+fn filter(d: &mut Driver, t: &mut Table, fakes: &Fakes, data: &Path) -> Result<(), String> {
+    let vm = "filter";
+    save_routes(data, &fakes.config())?;
+    let vm_id = d.create_and_boot(vm_config(
+        "route check filter",
+        VmNetwork::Routed,
+        StealthProfile::default(),
+    ))?;
+    let target = |port: u16| format!("{FAKE_HOST}:{port}");
+
+    // Mail ports are refused before the proxy hears of them, on every
+    // proxied route; ordinary ports to the same host are carried.
+    for (kind, label) in [
+        (RouteKind::Socks5, "socks5"),
+        (RouteKind::Tor, "tor"),
+        (RouteKind::Vpn, "vpn"),
+    ] {
+        let before = match kind {
+            RouteKind::Tor => seen(&fakes.tor.1).len(),
+            RouteKind::Socks5 => seen(&fakes.socks.1).len(),
+            _ => fakes.vpn_seen().len(),
+        };
+        let p = d.probe_args(
+            kind,
+            &["-p", FAKE_HOST, "25", "465", "587", "443", "80"],
+            120,
+        )?;
+        thread::sleep(Duration::from_millis(300));
+        let after = match kind {
+            RouteKind::Tor => seen(&fakes.tor.1),
+            RouteKind::Socks5 => seen(&fakes.socks.1),
+            _ => fakes.vpn_seen(),
+        };
+        let fresh: Vec<_> = after.iter().skip(before).cloned().collect();
+        let refused = ["25", "465", "587"]
+            .iter()
+            .all(|port| p.fact(&format!("port.{port}")) == "refused");
+        let carried = ["443", "80"]
+            .iter()
+            .all(|port| p.fact(&format!("port.{port}")) == "open");
+        t.check(
+            vm,
+            &format!("{label}: mail ports refused, 443 and 80 carried"),
+            refused && carried,
+            format!(
+                "25 {} / 465 {} / 587 {} / 443 {} / 80 {}",
+                p.fact("port.25"),
+                p.fact("port.465"),
+                p.fact("port.587"),
+                p.fact("port.443"),
+                p.fact("port.80")
+            ),
+        );
+        t.check(
+            vm,
+            &format!("{label}: the proxy never heard of the mail ports"),
+            !fresh.iter().any(|s| {
+                [25, 465, 587]
+                    .iter()
+                    .any(|port| s.split('|').next() == Some(target(*port).as_str()))
+            }) && fresh
+                .iter()
+                .any(|s| s.split('|').next() == Some(target(443).as_str()))
+                && fresh
+                    .iter()
+                    .any(|s| s.split('|').next() == Some(target(80).as_str())),
+            format!("{fresh:?}"),
+        );
+        let stats = p.stats();
+        let ports = artifact_blocked_ports(&p.run);
+        t.check(
+            vm,
+            &format!("{label}: counted by port"),
+            stats.filter_port == 3 && ports == vec![(25, 1), (465, 1), (587, 1)],
+            format!(
+                "filter_port {} blocked_ports {ports:?} tcp_blocked {}",
+                stats.filter_port, stats.tcp_blocked
+            ),
+        );
+        if kind == RouteKind::Socks5 {
+            let summary = stats.filter_summary(&ports).unwrap_or_default();
+            t.check(
+                vm,
+                "socks5: the route line names it",
+                summary.starts_with("Egress filter blocked 1 connection to port 25"),
+                summary,
+            );
+        }
+    }
+
+    // Ordinary traffic: the route probe's own lookup and GET, untouched.
+    let plain = d.probe_args(RouteKind::Socks5, &[NAME, "80", FALLBACK_IP], 120)?;
+    t.check(
+        vm,
+        "ordinary request carried, nothing filtered",
+        plain.fact("http.via") == "socks5" && plain.stats().filter_total() == 0,
+        format!(
+            "{} via {} / filtered {}",
+            plain.fact("http.status"),
+            plain.fact("http.via"),
+            plain.stats().filter_total()
+        ),
+    );
+
+    // A fast connect loop: about the first second's 30, the rest refused.
+    let p = d.probe_args(
+        RouteKind::Socks5,
+        &["-l", FAKE_HOST, "443", "200", "0"],
+        180,
+    )?;
+    let stats = p.stats();
+    let second = p.number("loop.second");
+    t.check(
+        vm,
+        "fast loop: cut at the rate limit",
+        (1..=30).contains(&second)
+            && p.number("loop.refused") > 0
+            && p.number("loop.refused") as u64 == stats.filter_rate
+            && p.ended(),
+        format!(
+            "{second} opened in the first second, {} in all, {} refused in {} ms (slowest {} ms, \
+             after every 20th: {}), filter_rate {}, run {:?}; {}",
+            p.fact("loop.open"),
+            p.fact("loop.refused"),
+            p.fact("loop.ms"),
+            p.fact("loop.slowest"),
+            p.fact("loop.every20"),
+            stats.filter_rate,
+            p.run.state,
+            p.fact("loop.trace")
+        ),
+    );
+
+    // A scan of 150 distinct addresses, paced under the rate limit.
+    let p = d.probe_args(
+        RouteKind::Socks5,
+        &["-d", "203.0.113", "1", "150", "443", "60"],
+        240,
+    )?;
+    let stats = p.stats();
+    t.check(
+        vm,
+        "distinct destinations: cut at 100 a minute, a repeat allowed",
+        p.number("dist.open") == 100
+            && p.number("dist.refused") == 50
+            && p.number("dist.first_refused") == 100
+            && p.fact("dist.repeat") == "open"
+            && stats.filter_destinations == 50,
+        format!(
+            "{} open, {} refused (first at {}), repeat {}, filter_destinations {}",
+            p.fact("dist.open"),
+            p.fact("dist.refused"),
+            p.fact("dist.first_refused"),
+            p.fact("dist.repeat"),
+            stats.filter_destinations
+        ),
+    );
+
+    // Connections held open: the 201st is refused.
+    let p = d.probe_args(
+        RouteKind::Socks5,
+        &["-o", FAKE_HOST, "443", "210", "50"],
+        240,
+    )?;
+    let stats = p.stats();
+    t.check(
+        vm,
+        "open connections: cut at 200",
+        p.number("open.open") == 200
+            && p.number("open.refused") == 10
+            && stats.filter_concurrent == 10,
+        format!(
+            "{} open, {} refused, {} other, filter_concurrent {}",
+            p.fact("open.open"),
+            p.fact("open.refused"),
+            p.fact("open.other"),
+            stats.filter_concurrent
+        ),
+    );
+
+    // A browser's first burst: 40 connections started together.
+    let p = d.probe_args(RouteKind::Socks5, &["-b", FAKE_HOST, "443", "40"], 120)?;
+    let stats = p.stats();
+    let limit = i64::from(EgressFilter::default().max_new_per_second);
+    t.check(
+        vm,
+        "burst of 40: within the rate limit or cut at it",
+        p.number("burst.open") == limit.min(40) && p.number("burst.refused") == (40 - limit).max(0),
+        format!(
+            "{} open, {} refused, {} other in {} ms, filter_rate {}",
+            p.fact("burst.open"),
+            p.fact("burst.refused"),
+            p.fact("burst.other"),
+            p.fact("burst.ms"),
+            stats.filter_rate
+        ),
+    );
+
+    // The filter off: a mail port reaches the proxy.
+    let mut off = fakes.config();
+    off.filter.enabled = false;
+    save_routes(data, &off)?;
+    let before = seen(&fakes.socks.1).len();
+    let p = d.probe_args(RouteKind::Socks5, &["-p", FAKE_HOST, "25"], 120)?;
+    thread::sleep(Duration::from_millis(300));
+    let fresh: Vec<_> = seen(&fakes.socks.1).into_iter().skip(before).collect();
+    t.check(
+        vm,
+        "filter off: port 25 reaches the proxy",
+        p.fact("port.25") == "open"
+            && fresh
+                .iter()
+                .any(|s| s.split('|').next() == Some(target(25).as_str()))
+            && p.stats().filter_total() == 0,
+        format!("25 {} / proxy got {fresh:?}", p.fact("port.25")),
+    );
+
+    // The route time limit: an open connection is reset at a minute, later
+    // connections and live DNS are refused.
+    let mut limited = fakes.config();
+    limited.filter.run_limit_minutes = 1;
+    save_routes(data, &limited)?;
+    let p = d.probe_args(RouteKind::Socks5, &["-t", FAKE_HOST, "443", "100"], 240)?;
+    let stats = p.stats();
+    let held = p.number("held.ms");
+    t.check(
+        vm,
+        "time limit: reset at a minute, then refused",
+        p.fact("held.connect") == "open"
+            && p.fact("held.end") == "reset"
+            && (50_000..=75_000).contains(&held)
+            && p.fact("after.connect") == "refused"
+            && p.fact("after.dns") == "(no answer)"
+            && stats.filter_time >= 2,
+        format!(
+            "held {held} ms, ended {}, then {}, DNS {}, filter_time {}",
+            p.fact("held.end"),
+            p.fact("after.connect"),
+            p.fact("after.dns"),
+            stats.filter_time
+        ),
+    );
+    save_routes(data, &fakes.config())?;
+    d.stop()?;
+    fs::remove_file(
+        d.options
+            .data_dir
+            .join("vms")
+            .join(&vm_id)
+            .join("disk.qcow2"),
+    )
+    .ok();
+    Ok(())
 }
