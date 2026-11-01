@@ -11,6 +11,10 @@
 //! (kexec_file_load, userfaultfd, transparent huge pages, the shadow stack, the
 //! persistent keyring, the log buffer size, the built-in file systems) answer
 //! as Debian's kernel does, not as the BusyBox kernel's.
+//! A result written as a set (`= 0|ESRCH`) accepts any one of those results:
+//! a race the fixture calls with WANT_ANY and whose outcomes its `why` names
+//! (process_mrelease on a target that may already have exited). `--bless`
+//! keeps such a set while the run's result is in it.
 use crate::{Context, judge::CaseResult, oracle, recording, render::Views, trace::GroupReport};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -287,6 +291,71 @@ fn line(
     .to_owned()
 }
 
+/// Where a golden line's result is: after the call's `) = `, up to the
+/// separator before the fields (` |`, its trailing blank trimmed when no field
+/// follows) or the end. A set's own `|` has no blank before it.
+fn result_span(line: &str) -> Option<(usize, usize)> {
+    let call = line.find(" | ")? + 3;
+    let start = call + line[call..].find(") = ")? + 4;
+    let end = line[start..].find(" |").map_or(line.len(), |at| start + at);
+    Some((start, end))
+}
+
+/// Whether a run's line matches a golden line. A golden result may name the
+/// set of results the fixture allows (`= 0|ESRCH`, a race the fixture calls
+/// with WANT_ANY and explains both outcomes of): the run's result must be
+/// one of them, and the rest of the line identical. Any other line must be
+/// identical.
+fn line_matches(golden: &str, run: &str) -> bool {
+    if golden == run {
+        return true;
+    }
+    let (Some((start, end)), Some((run_start, run_end))) = (result_span(golden), result_span(run))
+    else {
+        return false;
+    };
+    let allowed = &golden[start..end];
+    allowed.contains('|')
+        && golden[..start] == run[..run_start]
+        && golden[end..] == run[run_end..]
+        && allowed
+            .split('|')
+            .any(|result| result == &run[run_start..run_end])
+}
+
+/// Whether a run's golden text matches the golden file line for line.
+fn golden_matches(golden: &str, run: &str) -> bool {
+    golden.lines().count() == run.lines().count()
+        && golden
+            .lines()
+            .zip(run.lines())
+            .all(|(golden, run)| line_matches(golden, run))
+}
+
+/// The run's text as `--bless` writes it: a golden line whose allowed set the
+/// run's line matches is kept, so blessing never narrows a set to one result.
+fn blessed(golden: &str, run: &str) -> String {
+    let mut sets: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for line in golden
+        .lines()
+        .filter(|line| result_span(line).is_some_and(|(start, end)| line[start..end].contains('|')))
+    {
+        sets.entry(line.split(" | ").next().unwrap_or(line))
+            .or_default()
+            .push(line);
+    }
+    let mut out = String::with_capacity(run.len());
+    for line in run.lines() {
+        let label = line.split(" | ").next().unwrap_or(line);
+        let kept = sets
+            .get(label)
+            .and_then(|lines| lines.iter().find(|golden| line_matches(golden, line)));
+        out.push_str(kept.copied().unwrap_or(line));
+        out.push('\n');
+    }
+    out
+}
+
 /// Line-based diff: lines only in the golden file (-) and only in the run (+).
 fn diff(old: &str, new: &str) -> Vec<String> {
     let old: Vec<&str> = old.lines().collect();
@@ -295,7 +364,7 @@ fn diff(old: &str, new: &str) -> Vec<String> {
     let mut lcs = vec![vec![0u32; m + 1]; n + 1];
     for i in (0..n).rev() {
         for j in (0..m).rev() {
-            lcs[i][j] = if old[i] == new[j] {
+            lcs[i][j] = if line_matches(old[i], new[j]) {
                 lcs[i + 1][j + 1] + 1
             } else {
                 lcs[i + 1][j].max(lcs[i][j + 1])
@@ -304,7 +373,7 @@ fn diff(old: &str, new: &str) -> Vec<String> {
     }
     let (mut i, mut j, mut out) = (0, 0, Vec::new());
     while i < n || j < m {
-        if i < n && j < m && old[i] == new[j] {
+        if i < n && j < m && line_matches(old[i], new[j]) {
             i += 1;
             j += 1;
         } else if j < m && (i == n || lcs[i][j + 1] >= lcs[i + 1][j]) {
@@ -360,12 +429,13 @@ pub fn check(context: &Context, reports: &[GroupReport], views: &Views) -> Resul
         let path = directory.join(format!("{}.txt", report.group));
         if context.bless {
             std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
-            std::fs::write(&path, &text).map_err(|e| e.to_string())?;
+            let old = std::fs::read_to_string(&path).unwrap_or_default();
+            std::fs::write(&path, blessed(&old, &text)).map_err(|e| e.to_string())?;
             summary.push(format!("BLESSED golden {}", path.display()));
             continue;
         }
         let old = std::fs::read_to_string(&path).unwrap_or_default();
-        if old == text {
+        if golden_matches(&old, &text) {
             summary.push(format!("PASS golden {}", report.group));
             continue;
         }
@@ -392,6 +462,58 @@ mod tests {
     fn diff_shows_removed_and_added_lines() {
         assert_eq!(super::diff("a\nb\nc\n", "a\nc\nd\n"), ["-b", "+d"]);
         assert!(super::diff("a\n", "a\n").is_empty());
+    }
+
+    #[test]
+    fn a_golden_result_may_name_the_set_the_fixture_allows() {
+        let golden =
+            "process_mrelease.killed_target | process_mrelease(pidfd=<pid>, flags=0x0) = 0|ESRCH |";
+        let run = |result: &str| {
+            format!(
+                "process_mrelease.killed_target | process_mrelease(pidfd=<pid>, flags=0x0) = {result} |"
+            )
+        };
+        assert_eq!(
+            super::result_span(golden).map(|(start, end)| &golden[start..end]),
+            Some("0|ESRCH")
+        );
+        assert!(super::line_matches(golden, &run("0")));
+        assert!(super::line_matches(golden, &run("ESRCH")));
+        // Any other result, or another argument, still fails.
+        for other in ["EINVAL", "EPERM", "ENOSYS", "0|ESRCH|EINVAL", "ESRC"] {
+            assert!(!super::line_matches(golden, &run(other)), "{other}");
+        }
+        assert!(!super::line_matches(
+            golden,
+            "process_mrelease.killed_target | process_mrelease(pidfd=<pid>, flags=0x1) = 0 |"
+        ));
+        // A result without a set, and fields after the result, are compared exactly.
+        let plain = "a.b | read(fd=3, buf=<addr>, count=4) = 4 | arg1.data:complete:\"ab|c\"";
+        assert!(super::line_matches(plain, plain));
+        assert!(!super::line_matches(plain, &plain.replace("= 4", "= 5")));
+        assert_eq!(
+            super::result_span(plain).map(|(start, end)| &plain[start..end]),
+            Some("4")
+        );
+        let file = format!("x | y() = 1\n{golden}\n");
+        assert!(super::golden_matches(
+            &file,
+            &format!("x | y() = 1\n{}\n", run("ESRCH"))
+        ));
+        assert!(!super::golden_matches(
+            &file,
+            &format!("x | y() = 2\n{}\n", run("ESRCH"))
+        ));
+        assert!(super::diff(&file, &format!("x | y() = 1\n{}\n", run("0"))).is_empty());
+        // Blessing keeps the set where the run's result is in it.
+        assert_eq!(
+            super::blessed(&file, &format!("x | y() = 3\n{}\n", run("0"))),
+            format!("x | y() = 3\n{golden}\n")
+        );
+        assert_eq!(
+            super::blessed(&file, &format!("x | y() = 3\n{}\n", run("EINVAL"))),
+            format!("x | y() = 3\n{}\n", run("EINVAL"))
+        );
     }
 
     #[test]

@@ -78,7 +78,7 @@ pivot_root.missing_put_old | pivot_root(new_root="root-pr", put_old="root-pr/mis
 pivot_root.private_ns | pivot_root(new_root="root-pr", put_old="root-pr/old") = 0 | arg0.path:complete:"root-pr" arg1.path:complete:"root-pr/old"
 process_mrelease.bad_flags | process_mrelease(pidfd=<pid>, flags=0x1) = EINVAL |
 process_mrelease.badf | process_mrelease(pidfd=<pid>, flags=0x0) = EBADF |
-process_mrelease.killed_target | process_mrelease(pidfd=<pid>, flags=0x0) = 0 |
+process_mrelease.killed_target | process_mrelease(pidfd=<pid>, flags=0x0) = 0|ESRCH |
 process_mrelease.live_target | process_mrelease(pidfd=<pid>, flags=0x0) = EINVAL |
 process_mrelease.reaped_target | process_mrelease(pidfd=<pid>, flags=0x0) = ESRCH |
 quotactl.getfmt_root_device | quotactl(cmd=Q_GETFMT / USRQUOTA, special="<root-dev>", id=0, addr=<addr>) = ESRCH | arg1.special:complete:"<root-dev>"
