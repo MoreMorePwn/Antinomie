@@ -8,6 +8,23 @@ it runs.
 
 ### Host
 
+- **Security: zip 9.2, wasmtime 48.0.8 and one check for every untrusted zip.**
+  The zip crate moves from 8.6.0 to 9.2.0, which fixes RUSTSEC-2026-0367 to
+  RUSTSEC-2026-0369 (SUID/SGID bits kept on extraction, symlink targets outside the
+  destination, Unix permissions applied unsafely) and the parser-differential,
+  path-escape, symlink-target, legacy-decoder and AES-HMAC advisories fixed in 9.0.x.
+  Every zip the app reads from outside (sample library, sealed specimens, report
+  bundles, tool and rule downloads, abuse.ch and IOC feeds) is now opened through one
+  function that refuses duplicate entry names, local headers that disagree with the
+  central directory, overlapping entries and local headers the directory does not
+  list, so every reader sees the same single entry per name. Unpacking a tool zip no
+  longer creates symlink entries and never writes through an existing symlink.
+  YARA-X moves from 1.21.0 to 1.22.1, which brings wasmtime 48.0.8 and fixes
+  RUSTSEC-2026-0222, 0269, 0316, 0327, 0359, 0362, 0363, 0379 and 0424. The Sigma
+  tool's pip lock script now pins certifi 2026.10.18, as the lock file already did.
+  diskcache 5.6.3 (PYSEC-2026-2447, no fix) is a pySigma dependency that the
+  scanner never calls; see the task record for the assessment.
+
 - **Base builds started from the app find every file the kernel script reads.**
   The app's build kit lacked the kernel configuration fragments, the BTF and ABI
   checks and Debian's module-signing certificate, so a base build started from the

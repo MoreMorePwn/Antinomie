@@ -16,7 +16,7 @@ import urllib.request
 PINS = [
     ("pySigma", "2.0.1"),
     ("pySigma-backend-sqlite", "2.1.0"),
-    ("certifi", "2026.7.22"),
+    ("certifi", "2026.10.18"),
     ("charset-normalizer", "3.5.2"),
     ("diskcache", "5.6.3"),
     ("diskcache-stubs", "5.6.3.6.20240818"),
