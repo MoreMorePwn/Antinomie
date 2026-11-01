@@ -1031,10 +1031,23 @@ class DebianImageTests(unittest.TestCase):
     def test_a_foreign_bootstrap_runs_only_in_the_builder_vm(self):
         x86 = os.uname_result(("Linux", "h", "6", "#1", "x86_64"))
         with patch.object(image.os, "uname", return_value=x86), \
-                patch.dict(image.os.environ, {"ANTINOMIE_BUILDER": ""}):
+                patch.dict(image.os.environ, {"ANTINOMIE_BUILDER": "", "ANTINOMIE_FOREIGN_BINFMT": ""}):
             with self.assertRaisesRegex(RuntimeError, "only in the QEMU builder VM"):
                 image.foreign_bootstrap("arm64")
             image.foreign_bootstrap("x86_64")
+            # The container builder: the host's handler, checked by
+            # build-base.py, is named; a container sees no binfmt_misc.
+            with patch.dict(image.os.environ, {"ANTINOMIE_FOREIGN_BINFMT": "qemu-aarch64"}):
+                with self.assertRaisesRegex(RuntimeError, "only in the QEMU builder VM"):
+                    image.foreign_bootstrap("arm64")
+            with patch.dict(image.os.environ, {"ANTINOMIE_BUILDER": "1",
+                                               "ANTINOMIE_FOREIGN_BINFMT": "qemu-aarch64"}):
+                image.foreign_bootstrap("arm64")
+            with patch.dict(image.os.environ, {"ANTINOMIE_BUILDER": "1",
+                                               "ANTINOMIE_FOREIGN_BINFMT": "qemu-riscv64"}), \
+                    patch.object(image.Path, "is_file", return_value=False):
+                with self.assertRaisesRegex(RuntimeError, "needs the host's, with the F flag"):
+                    image.foreign_bootstrap("arm64")
         arm = os.uname_result(("Linux", "h", "6", "#1", "aarch64"))
         with patch.object(image.os, "uname", return_value=arm):
             image.foreign_bootstrap("arm64")

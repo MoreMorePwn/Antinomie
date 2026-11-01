@@ -6,8 +6,10 @@
 # only this pinned toolchain writes (see adapter.conf KERNEL_BANNER); an arm64
 # kernel's names the cross gcc-14 14.2.0-19cross1 and its binutils 2.44
 # (KERNEL_BANNER_ARM64). The 32-bit ARM cross compiler builds AArch32 test
-# programs, qemu-user-static runs foreign programs and maintainer scripts, and
-# the device tree compiler rewrites device trees of ARM device profiles.
+# programs, qemu-user-static runs foreign programs and maintainer scripts,
+# arch-test lets mmdebstrap bootstrap Debian arm64 (through the host's
+# qemu-aarch64 binfmt handler with the F flag), and the device tree compiler
+# rewrites device trees of ARM device profiles.
 #
 # The app and scripts/build-base.py tag the image
 # antinomie-builder:<first 12 hex digits of this file's SHA-256>, so a changed
@@ -20,6 +22,7 @@ RUN set -eux; \
     printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "5";\n' > /etc/apt/apt.conf.d/80antinomie-snapshot; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
+        arch-test=0.22-1 \
         bc=1.07.1-4 \
         binutils=2.44-3 \
         binutils-aarch64-linux-gnu=2.44-3 \

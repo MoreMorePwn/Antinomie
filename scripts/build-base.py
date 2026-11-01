@@ -84,8 +84,9 @@ ARCHES = {"x86_64": "KERNEL_BANNER", "arm64": "KERNEL_BANNER_ARM64"}
 ARM64_PROFILES = {"busybox", "debian-minimal"}
 # The machine name (uname -m) of each guest architecture: a Debian base of
 # another architecture than the build machine's runs that architecture's
-# maintainer scripts under emulation, which only the QEMU builder VM offers
-# (qemu-user-static's binfmt handlers in its own kernel), never a host.
+# maintainer scripts under emulation: in the QEMU builder VM (qemu-user-static's
+# binfmt handlers in its own kernel) or in a container through this host's
+# handler with the F flag (`require_foreign_builder`), never natively.
 MACHINES = {"x86_64": "x86_64", "arm64": "aarch64"}
 # The kernel image of each architecture in the build tree. Only x86-64 bases
 # carry a Volatility symbol table: memory analysis reads x86-64 guests only.
@@ -281,8 +282,9 @@ def ensure_container_image(engine):
     return tag
 
 
-def run_in_container(args, choice):
-    """Run this script in the container builder; the container is always removed."""
+def run_in_container(args, choice, binfmt=None):
+    """Run this script in the container builder; the container is always removed.
+    `binfmt`: the host's handler (qemu-<machine>) a foreign bootstrap uses."""
     engine, rootless = pick_container_engine(choice)
     tag = ensure_container_image(engine)
     # Containers of builds whose owner died (a crash) go; a running build's stay.
@@ -319,6 +321,9 @@ def run_in_container(args, choice):
     command = [engine, "run", "--rm", "--init", "--name", name, "--label", f"{CONTAINER_LABEL}={os.getpid()}",
                "--cap-add=SYS_ADMIN", "--cap-add=MKNOD", "--security-opt", "apparmor=unconfined",
                "-e", "ANTINOMIE_BUILDER=1", "-e", f"ANTINOMIE_BUILDER_IMAGE={tag}"]
+    # A foreign bootstrap: the host's handler, checked, serves the container.
+    if binfmt:
+        command += ["-e", f"ANTINOMIE_FOREIGN_BINFMT={binfmt}"]
     for host, inside, mode in mounts:
         command += ["-v", f"{host}:{inside}:{mode}"]
     command.append(tag)
@@ -428,16 +433,60 @@ def build_kernel(kernel_profile, tree, work, jobs, ccache=None, debian_image=Non
     return build
 
 
-def require_foreign_builder(profile, arch):
-    """Refuse a Debian base of another architecture than this machine's outside
-    the QEMU builder VM: its bootstrap runs the guest's maintainer scripts."""
-    if profile == "busybox" or MACHINES[arch] == os.uname().machine:
+# Where the kernel lists its binfmt handlers; a foreign Debian bootstrap in a
+# container needs this host's qemu-<machine> handler (BINFMT_COMMAND registers
+# one from a pinned image).
+BINFMT = Path("/proc/sys/fs/binfmt_misc")
+BINFMT_COMMAND = ("docker run --privileged --rm tonistiigi/binfmt@sha256:"
+                  "400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0 --install {arch}")
+
+
+def foreign(profile, arch):
+    """Whether a build of `profile` for `arch` bootstraps another architecture's
+    Debian here (its maintainer scripts need a CPU emulator)."""
+    return profile != "busybox" and MACHINES[arch] != os.uname().machine
+
+
+def binfmt_missing(machine, root=None):
+    """What keeps this host's qemu-<machine> binfmt handler from serving a
+    container, or None: it must exist, be enabled and have the F (fix-binary)
+    flag, so the kernel holds the emulator open and starts it inside the
+    container's root, where no emulator is installed."""
+    try:
+        lines = ((root or BINFMT) / f"qemu-{machine}").read_text().splitlines()
+    except OSError:
+        return f"this host has no qemu-{machine} binfmt handler"
+    if not lines or lines[0].strip() != "enabled":
+        return f"this host's qemu-{machine} binfmt handler is disabled"
+    flags = next((line.split(":", 1)[1].strip() for line in lines if line.startswith("flags:")), "")
+    if "F" not in flags:
+        return (f"this host's qemu-{machine} binfmt handler lacks the F (fix-binary) flag, "
+                "so a container cannot reach its emulator")
+    return None
+
+
+def require_foreign_builder(profile, arch, container=False):
+    """A Debian base of another architecture than this machine's runs that
+    architecture's maintainer scripts in its bootstrap, so it needs a CPU
+    emulator the kernel starts for them. The QEMU builder VM brings its own
+    (ANTINOMIE_BUILDER=1 inside it and inside the container builder). A
+    container shares this host's kernel: it can build one only when the host
+    has an enabled qemu-<machine> handler with the F flag (`binfmt_missing`).
+    A native build never runs them on this host."""
+    if not foreign(profile, arch) or os.environ.get("ANTINOMIE_BUILDER") == "1":
         return
-    if os.environ.get("ANTINOMIE_BUILDER") != "1":
+    machine = MACHINES[arch]
+    if not container:
         raise RuntimeError(
-            f"a Debian {arch} base is built in the QEMU builder: its bootstrap runs {arch} "
-            "maintainer scripts, which only the builder VM's own emulation runs (no binfmt "
-            "handler on this host or in a container)")
+            f"a Debian {arch} base is built in the QEMU builder (or a container on a host with "
+            f"a qemu-{machine} binfmt handler): its bootstrap runs {arch} maintainer scripts, "
+            "which a native build would run on this host")
+    missing = binfmt_missing(machine)
+    if missing:
+        raise RuntimeError(
+            f"a Debian {arch} base in a container needs this host's qemu-{machine} binfmt "
+            f"handler, enabled with the F flag: {missing}. Register it "
+            f"({BINFMT_COMMAND.format(arch=arch)}) or build in the QEMU builder")
 
 
 def debian_recipe():
@@ -662,8 +711,9 @@ def main():
         try:
             # A container shares this host's kernel and its binfmt handlers.
             profile, _, _, arch = load_job(args.job)
-            require_foreign_builder(profile, arch)
-            sys.exit(run_in_container(args, args.container))
+            require_foreign_builder(profile, arch, container=True)
+            binfmt = f"qemu-{MACHINES[arch]}" if foreign(profile, arch) else None
+            sys.exit(run_in_container(args, args.container, binfmt))
         except (RuntimeError, OSError, subprocess.SubprocessError) as error:
             print(f"::error {error}", flush=True)
             sys.exit(1)

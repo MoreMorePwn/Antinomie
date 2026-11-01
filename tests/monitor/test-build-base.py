@@ -84,14 +84,40 @@ class BuildBaseTests(unittest.TestCase):
             self.assertEqual(base.load_job(job)[3], "arm64")
             job.write_text(json.dumps({"format": 1, "profile": "debian-minimal", "arch": "arm64"}))
             self.assertEqual(base.load_job(job)[3], "arm64")
-            # A Debian arm64 bootstrap runs only in the QEMU builder VM.
+            # A Debian arm64 bootstrap runs in the QEMU builder VM, or in a
+            # container on a host whose qemu-aarch64 handler has the F flag;
+            # never natively.
+            handlers = Path(name) / "binfmt_misc"
+            handlers.mkdir()
             with unittest.mock.patch.dict(os.environ, {"ANTINOMIE_BUILDER": ""}), \
+                    unittest.mock.patch.object(base, "BINFMT", handlers), \
                     unittest.mock.patch.object(base.os, "uname",
                                                return_value=os.uname_result(("Linux", "h", "6", "#1", "x86_64"))):
                 with self.assertRaisesRegex(RuntimeError, "built in the QEMU builder"):
                     base.require_foreign_builder("debian-minimal", "arm64")
                 base.require_foreign_builder("busybox", "arm64")
                 base.require_foreign_builder("debian-minimal", "x86_64")
+                handler = handlers / "qemu-aarch64"
+                for text, missing in (
+                        (None, "this host has no qemu-aarch64 binfmt handler"),
+                        ("disabled\ninterpreter /usr/bin/qemu-aarch64\nflags: POCF\n", "is disabled"),
+                        ("enabled\ninterpreter /usr/bin/qemu-aarch64\nflags: POC\n",
+                         "lacks the F \\(fix-binary\\) flag")):
+                    if text is not None:
+                        handler.write_text(text)
+                    with self.assertRaisesRegex(RuntimeError, missing) as caught:
+                        base.require_foreign_builder("debian-minimal", "arm64", container=True)
+                    # Both ways out: register the handler, or the QEMU builder.
+                    message = str(caught.exception)
+                    self.assertIn("Register it (docker run --privileged --rm tonistiigi/binfmt@sha256:", message)
+                    self.assertIn("--install arm64) or build in the QEMU builder", message)
+                handler.write_text("enabled\ninterpreter /usr/bin/qemu-aarch64\nflags: POCF\n"
+                                   "offset 0\nmagic 7f454c46\n")
+                base.require_foreign_builder("debian-minimal", "arm64", container=True)
+                self.assertTrue(base.foreign("debian-minimal", "arm64"))
+                self.assertFalse(base.foreign("busybox", "arm64"))
+                with self.assertRaisesRegex(RuntimeError, "built in the QEMU builder"):
+                    base.require_foreign_builder("debian-minimal", "arm64")
             with unittest.mock.patch.dict(os.environ, {"ANTINOMIE_BUILDER": "1"}):
                 base.require_foreign_builder("debian-minimal", "arm64")
             for profile, arch, error in (("debian-xfce", "arm64", "no arm64 image recipe"),
@@ -156,7 +182,7 @@ exit 0
         # 32-bit ARM one for AArch32 fixtures, qemu-user and the DT compiler.
         for pin in ("gcc-14-aarch64-linux-gnu=14.2.0-19cross1", "binutils-aarch64-linux-gnu=2.44-3",
                     "libc6-dev-arm64-cross=", "gcc-14-arm-linux-gnueabihf=14.2.0-19cross1",
-                    "qemu-user-static=", "device-tree-compiler="):
+                    "qemu-user-static=", "device-tree-compiler=", "arch-test=0.22-1"):
             self.assertIn(pin, text)
 
     def test_a_container_build_mounts_its_folders_and_always_removes_the_container(self):
@@ -174,6 +200,11 @@ exit 0
                     image_cache=root / "i/rootfs.tar", ccache=root / "cc")
                 self.assertEqual(base.run_in_container(args, engine), 0)
                 calls = log.read_text().splitlines()
+                # Only a foreign bootstrap is handed the host's checked handler.
+                self.assertNotIn("ANTINOMIE_FOREIGN_BINFMT", log.read_text())
+                self.assertEqual(base.run_in_container(args, engine, "qemu-aarch64"), 0)
+                (_, foreign_run) = [c for c in log.read_text().splitlines() if c.startswith("run ")]
+                self.assertIn("-e ANTINOMIE_FOREIGN_BINFMT=qemu-aarch64 ", foreign_run)
                 tag = base.container_tag()
                 # The missing image is built from the kit's Dockerfile first.
                 self.assertTrue(any(c.startswith(f"build --label org.antinomie.builder=1 -t {tag}")

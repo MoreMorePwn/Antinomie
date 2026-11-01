@@ -1071,6 +1071,7 @@ impl BuildRun {
                             .and_then(|value| value.parse().ok()),
                         uid,
                         gid,
+                        binfmt: crate::build::container_binfmt(self.kind, self.arch).as_deref(),
                     },
                     &self.cancel,
                     &mut *line,

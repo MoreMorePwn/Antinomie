@@ -1634,18 +1634,25 @@ def uefi_layout(staging, bundle):
 
 
 def foreign_bootstrap(arch):
-    """Refuse a bootstrap of another architecture than this machine's unless it
-    runs in the QEMU builder VM with a binfmt handler for it: the guest's
-    maintainer scripts run under qemu-user there, never on a host."""
+    """Refuse a bootstrap of another architecture than this machine's unless a
+    CPU emulator runs its maintainer scripts: in the QEMU builder VM, whose own
+    qemu-user handler is registered there, or in the container builder on a
+    host whose qemu-<machine> handler (enabled, F flag) build-base.py checked
+    and named in ANTINOMIE_FOREIGN_BINFMT (a container sees no binfmt_misc of
+    its own). Never natively on a host."""
     machine = {"x86_64": "x86_64", "arm64": "aarch64"}[arch]
     if os.uname().machine == machine:
         return
     if os.environ.get("ANTINOMIE_BUILDER") != "1":
-        raise RuntimeError(f"a Debian {arch} base is bootstrapped only in the QEMU builder VM, "
-                           "whose own binfmt handler runs its maintainer scripts")
+        raise RuntimeError(f"a Debian {arch} base is bootstrapped only in the QEMU builder VM "
+                           "or the container builder, where an emulator runs its maintainer "
+                           "scripts")
+    if os.environ.get("ANTINOMIE_FOREIGN_BINFMT") == f"qemu-{machine}":
+        return
     if not Path(f"/proc/sys/fs/binfmt_misc/qemu-{machine}").is_file():
-        raise RuntimeError(f"the builder VM has no binfmt handler for {machine} "
-                           "(qemu-user-static registers it)")
+        raise RuntimeError(f"the builder has no binfmt handler for {machine} "
+                           "(qemu-user-static registers it in the builder VM; a container "
+                           "needs the host's, with the F flag)")
 
 
 def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=False,

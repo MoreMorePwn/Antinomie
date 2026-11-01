@@ -432,6 +432,9 @@ pub struct RunSpec<'a> {
     /// The host user, to hand the results back to under a root-equivalent engine.
     pub uid: u32,
     pub gid: u32,
+    /// The host's binfmt handler (`qemu-aarch64`) a foreign Debian bootstrap
+    /// runs its maintainer scripts through (`build::container_binfmt`).
+    pub binfmt: Option<&'a str>,
 }
 
 /// The `-v` arguments of a build: what the container sees of the host.
@@ -488,6 +491,9 @@ pub fn run_args(spec: &RunSpec) -> Vec<String> {
         "-e".into(),
         format!("ANTINOMIE_BUILDER_IMAGE={}", spec.image),
     ]);
+    if let Some(handler) = spec.binfmt {
+        args.extend(["-e".into(), format!("ANTINOMIE_FOREIGN_BINFMT={handler}")]);
+    }
     args.extend(mounts(spec));
     args.push(spec.image.to_owned());
     let output_name = spec
@@ -895,6 +901,7 @@ mod tests {
             nice,
             uid: 1000,
             gid: 1001,
+            binfmt: None,
         }
     }
 
@@ -903,6 +910,21 @@ mod tests {
         let args = run_args(&spec(true, None));
         let line = args.join(" ");
         assert_eq!(&args[..3], ["run", "--rm", "--init"]);
+        // Only a foreign Debian bootstrap is handed the host's binfmt handler.
+        assert!(!line.contains("ANTINOMIE_FOREIGN_BINFMT"));
+        let foreign = run_args(&RunSpec {
+            binfmt: Some("qemu-aarch64"),
+            ..spec(true, None)
+        });
+        let image = foreign
+            .iter()
+            .position(|arg| arg == "antinomie-builder:abc")
+            .unwrap();
+        let handler = foreign
+            .iter()
+            .position(|arg| arg == "ANTINOMIE_FOREIGN_BINFMT=qemu-aarch64")
+            .unwrap();
+        assert!(foreign[handler - 1] == "-e" && handler < image);
         assert!(line.contains("--name antinomie-build-1"));
         assert!(line.contains(&format!(
             "--label org.antinomie.build={}",

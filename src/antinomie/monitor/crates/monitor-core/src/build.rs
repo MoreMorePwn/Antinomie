@@ -557,14 +557,31 @@ pub struct BuildRequest {
 
 /// The build mode of a base of `kind` for `arch` ([`resolve_mode`] for this
 /// host's own architecture). An arm64 BusyBox base builds anywhere (a cross
-/// compiler and Debian's pinned arm64 programs); an arm64 Debian base on
-/// another machine only in the QEMU builder, whose own emulation runs the
-/// arm64 maintainer scripts: no binfmt handler on the host, which a container
-/// would use too. The Debian desktops have no arm64 recipe yet.
+/// compiler and Debian's pinned arm64 programs). An arm64 Debian base on
+/// another machine runs arm64 maintainer scripts in its bootstrap, so it needs
+/// a CPU emulator: the QEMU builder's own, or, in a container (which shares
+/// this host's kernel), this host's qemu-aarch64 binfmt handler with the F
+/// flag ([`foreign_handler`]); never a native build. Automatic picks a
+/// container only when that handler is ready, else the QEMU builder. The
+/// Debian desktops have no arm64 recipe yet.
 pub fn arch_mode(
     kind: Kind,
     arch: crate::api::GuestArch,
     requested: BuildMode,
+) -> Result<BuildMode, String> {
+    arch_mode_with(
+        kind,
+        arch,
+        requested,
+        foreign_handler(Path::new(BINFMT_DIR), "aarch64"),
+    )
+}
+
+fn arch_mode_with(
+    kind: Kind,
+    arch: crate::api::GuestArch,
+    requested: BuildMode,
+    handler: Result<String, String>,
 ) -> Result<BuildMode, String> {
     use crate::api::GuestArch;
     if arch == GuestArch::X86_64 {
@@ -577,17 +594,75 @@ pub fn arch_mode(
         Kind::BusyBox => resolve_mode(kind, requested),
         Kind::DebianXfce => Err("the Debian desktops have no arm64 recipe yet".into()),
         Kind::DebianMinimal if std::env::consts::ARCH == "aarch64" => resolve_mode(kind, requested),
-        Kind::DebianMinimal => match requested {
-            BuildMode::Automatic | BuildMode::Qemu => {
+        Kind::DebianMinimal => match (requested, handler) {
+            (BuildMode::Qemu, _) | (BuildMode::Automatic, Err(_)) => {
                 mode_obstacle(kind, BuildMode::Qemu).map_or(Ok(BuildMode::Qemu), Err)
             }
+            (BuildMode::Automatic, Ok(_)) => resolve_with(
+                requested,
+                |_| Ok(()),
+                |mode| match mode {
+                    BuildMode::Native => Some("an arm64 bootstrap never runs natively".into()),
+                    mode => mode_obstacle(kind, mode),
+                },
+            ),
+            (BuildMode::Podman | BuildMode::Docker, Ok(_)) => {
+                mode_obstacle(kind, requested).map_or(Ok(requested), Err)
+            }
+            (BuildMode::Podman | BuildMode::Docker, Err(missing)) => Err(format!(
+                "an arm64 Debian base in a container needs this host's qemu-aarch64 binfmt \
+                 handler, enabled with the F flag: {missing}. Register it ({}) or build in \
+                 the QEMU builder",
+                BINFMT_COMMAND.replace("{arch}", "arm64")
+            )),
             _ => Err(
-                "an arm64 Debian base is built in the QEMU builder: its arm64 maintainer \
-                 scripts run under emulation inside the builder VM, never on this host"
+                "an arm64 Debian base is built in the QEMU builder (or a container on a host \
+                 with a qemu-aarch64 binfmt handler): its arm64 maintainer scripts never run \
+                 natively on this host"
                     .into(),
             ),
         },
     }
+}
+
+/// Where the kernel lists its binfmt handlers, and the pinned command that
+/// registers a qemu-user handler with the F flag (as scripts/build-base.py
+/// names it).
+pub(crate) const BINFMT_DIR: &str = "/proc/sys/fs/binfmt_misc";
+const BINFMT_COMMAND: &str = "docker run --privileged --rm tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0 --install {arch}";
+
+/// This host's `qemu-<machine>` binfmt handler under `dir`, by name, when it
+/// can serve a container: enabled and with the F (fix-binary) flag, so the
+/// kernel holds the emulator open and starts it inside the container's root.
+/// Else what is missing.
+pub(crate) fn foreign_handler(dir: &Path, machine: &str) -> Result<String, String> {
+    let name = format!("qemu-{machine}");
+    let text = std::fs::read_to_string(dir.join(&name))
+        .map_err(|_| format!("this host has no {name} binfmt handler"))?;
+    if text.lines().next().map(str::trim) != Some("enabled") {
+        return Err(format!("this host's {name} binfmt handler is disabled"));
+    }
+    let flags = text
+        .lines()
+        .find_map(|line| line.strip_prefix("flags:"))
+        .unwrap_or_default();
+    if !flags.contains('F') {
+        return Err(format!(
+            "this host's {name} binfmt handler lacks the F (fix-binary) flag, so a container \
+             cannot reach its emulator"
+        ));
+    }
+    Ok(name)
+}
+
+/// The handler a container build of `kind` for `arch` hands the container
+/// (`ANTINOMIE_FOREIGN_BINFMT`): a Debian base of another architecture.
+pub(crate) fn container_binfmt(kind: Kind, arch: crate::api::GuestArch) -> Option<String> {
+    (kind == Kind::DebianMinimal
+        && arch == crate::api::GuestArch::AARCH64
+        && std::env::consts::ARCH != "aarch64")
+        .then(|| foreign_handler(Path::new(BINFMT_DIR), "aarch64").ok())
+        .flatten()
 }
 
 /// A host tool a build mode needs, with its Debian/Ubuntu package hint. `path`
@@ -955,15 +1030,72 @@ mod tests {
     use std::sync::Mutex;
 
     #[test]
-    fn an_arm64_debian_base_is_built_only_in_the_qemu_builder() {
+    fn an_arm64_debian_base_is_built_in_the_qemu_builder_or_a_container_with_the_handler() {
         use crate::api::GuestArch;
         if std::env::consts::ARCH == "aarch64" {
             return;
         }
+        let missing = || Err("this host has no qemu-aarch64 binfmt handler".to_owned());
         for mode in [BuildMode::Native, BuildMode::Podman, BuildMode::Docker] {
-            let error = arch_mode(Kind::DebianMinimal, GuestArch::AARCH64, mode).unwrap_err();
-            assert!(error.contains("built in the QEMU builder"), "{error}");
+            let error = arch_mode_with(Kind::DebianMinimal, GuestArch::AARCH64, mode, missing())
+                .unwrap_err();
+            assert!(error.contains("QEMU builder"), "{error}");
         }
+        // A container without the handler: what is missing and both ways out.
+        let error = arch_mode_with(
+            Kind::DebianMinimal,
+            GuestArch::AARCH64,
+            BuildMode::Docker,
+            missing(),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains(": this host has no qemu-aarch64 binfmt handler. Register it (docker run --privileged --rm tonistiigi/binfmt@sha256:")
+                && error.ends_with("--install arm64) or build in the QEMU builder"),
+            "{error}"
+        );
+        let ready = || Ok("qemu-aarch64".to_owned());
+        assert!(
+            arch_mode_with(
+                Kind::DebianMinimal,
+                GuestArch::AARCH64,
+                BuildMode::Native,
+                ready()
+            )
+            .unwrap_err()
+            .contains("never run")
+        );
+        // The handler file: absent, disabled, without F, ready.
+        let dir = std::env::temp_dir().join(format!("ant-binfmt-{}", crate::storage::unique_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(
+            foreign_handler(&dir, "aarch64")
+                .unwrap_err()
+                .contains("has no qemu-aarch64")
+        );
+        let handler = dir.join("qemu-aarch64");
+        for (text, expected) in [
+            (
+                "disabled\ninterpreter /usr/bin/qemu-aarch64\nflags: POCF\n",
+                Err("is disabled"),
+            ),
+            (
+                "enabled\ninterpreter /usr/bin/qemu-aarch64\nflags: POC\n",
+                Err("lacks the F"),
+            ),
+            (
+                "enabled\ninterpreter /usr/bin/qemu-aarch64\nflags: POCF\noffset 0\n",
+                Ok("qemu-aarch64"),
+            ),
+        ] {
+            std::fs::write(&handler, text).unwrap();
+            match (foreign_handler(&dir, "aarch64"), expected) {
+                (Ok(name), Ok(want)) => assert_eq!(name, want),
+                (Err(error), Err(want)) => assert!(error.contains(want), "{error}"),
+                (got, want) => panic!("{got:?} for {want:?}"),
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
         assert!(
             arch_mode(Kind::DebianXfce, GuestArch::AARCH64, BuildMode::Qemu)
                 .unwrap_err()
