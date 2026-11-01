@@ -43,6 +43,11 @@ versions; existing VMs keep their pinned base.
   and network triage use the installed `tshark` command with `prlimit`
   resource limits; Antinomie decodes no protocol itself. On Debian/Ubuntu install
   `tshark util-linux`; these tools are checked in **Tools > App dependencies**.
+  Ubuntu 25.10 and later enforce an AppArmor profile that lets TShark read only
+  `/tmp`, `/var/tmp` and Wireshark's own files; Antinomie runs TShark in a sandbox
+  that shows each capture under `/tmp`, so the profile needs no change. If a
+  message still says Ubuntu's AppArmor profile for TShark refused a file, it names
+  `/etc/apparmor.d/local/tshark` as the place to allow the folder.
 - Detection rules come from **Tools > Detection rules**, which downloads each
   pack from its publisher (GitHub, rules.emergingthreats.net, sslbl.abuse.ch),
   verifies it and filters it on your computer, only after you allow it; it

@@ -74,6 +74,53 @@ pub(super) fn cleanup_process(
     }
 }
 
+/// Where the sandbox shows capture number `index`.
+fn sandbox_capture_path(index: usize) -> PathBuf {
+    PathBuf::from(format!("/tmp/capture-{index}.pcap"))
+}
+
+/// Rewrites every `-r <capture>` argument to a name under the sandbox's
+/// `/tmp`; returns the (host path, sandbox path) read-only mounts and the
+/// arguments to run. Other arguments are kept as they are.
+pub(super) fn sandbox_capture_arguments<'a>(
+    arguments: impl Iterator<Item = &'a std::ffi::OsStr>,
+) -> (Vec<(PathBuf, PathBuf)>, Vec<std::ffi::OsString>) {
+    let mut mounts: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut rewritten = Vec::new();
+    let mut arguments = arguments;
+    while let Some(argument) = arguments.next() {
+        rewritten.push(argument.to_owned());
+        if argument == "-r"
+            && let Some(capture) = arguments.next()
+        {
+            let inner = match mounts.iter().find(|(host, _)| host == Path::new(capture)) {
+                Some((_, inner)) => inner.clone(),
+                None => {
+                    let inner = sandbox_capture_path(mounts.len());
+                    mounts.push((PathBuf::from(capture), inner.clone()));
+                    inner
+                }
+            };
+            rewritten.push(inner.into_os_string());
+        }
+    }
+    (mounts, rewritten)
+}
+
+/// The explanation for TShark's read refusal when Ubuntu's AppArmor profile is
+/// the likely cause; `None` for any other diagnostic.
+pub(super) fn apparmor_notice(diagnostics: &str) -> Option<String> {
+    if !diagnostics.contains("don't have permission to read the file") {
+        return None;
+    }
+    Some(format!(
+        "Ubuntu's AppArmor profile for TShark refused to read the capture ({diagnostics}). \
+         The profile /etc/apparmor.d/tshark only allows /tmp, /var/tmp and Wireshark's own files; \
+         add the capture's folder in /etc/apparmor.d/local/tshark and run \
+         'sudo apparmor_parser -r /etc/apparmor.d/tshark', or install TShark without the profile"
+    ))
+}
+
 pub(super) fn run_process<T: Send + 'static>(
     command: Command,
     shared: &Shared,
@@ -111,15 +158,13 @@ pub(super) fn run_process<T: Send + 'static>(
         .arg("--bind")
         .arg(&profile.path)
         .arg(&profile.path);
-    // The capture is the only input exposed, read-only, wherever it lives.
-    let mut arguments = command.get_args();
-    while let Some(argument) = arguments.next() {
-        if argument == "-r"
-            && let Some(capture) = arguments.next()
-        {
-            let capture = Path::new(capture);
-            bounded.arg("--ro-bind").arg(capture).arg(capture);
-        }
+    // The capture is the only input exposed, read-only. It appears at a fixed
+    // name under the sandbox's private /tmp: Ubuntu 25.10+ ships an enforced
+    // AppArmor profile that lets TShark read only /tmp, /var/tmp and its own
+    // files, so a capture under the data directory would be refused.
+    let (mounts, arguments) = sandbox_capture_arguments(command.get_args());
+    for (host, inner) in &mounts {
+        bounded.arg("--ro-bind").arg(host).arg(inner);
     }
     bounded.args(["--remount-ro", "/", "--setenv", "PATH", "/usr/bin:/bin"]);
     bounded.args(["--setenv", "LC_ALL", "C"]);
@@ -141,7 +186,7 @@ pub(super) fn run_process<T: Send + 'static>(
     bounded
         .arg("--")
         .arg(command.get_program())
-        .args(command.get_args());
+        .args(&arguments);
     if let Some(directory) = command.get_current_dir() {
         bounded.current_dir(directory);
     } else {
@@ -286,6 +331,8 @@ pub(super) fn run_process<T: Send + 'static>(
             format!(
                 "{diagnostics}. Install tshark, bubblewrap and util-linux (prlimit) to enable display filters"
             )
+        } else if let Some(notice) = apparmor_notice(&diagnostics) {
+            notice
         } else {
             format!("TShark failed (2 GiB memory limit, 128 open files): {diagnostics}")
         });

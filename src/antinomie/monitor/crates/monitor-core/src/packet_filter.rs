@@ -2090,4 +2090,117 @@ mod tests {
             println!("this process peak: {line}");
         }
     }
+
+    #[test]
+    fn captures_are_shown_under_the_sandbox_tmp_and_other_arguments_are_kept() {
+        let arguments = [
+            "-n",
+            "-2",
+            "-r",
+            "/home/u/data/a.pcap",
+            "-Y",
+            "dns",
+            "-r",
+            "/home/u/data/b.pcap",
+            "-r",
+            "/home/u/data/a.pcap",
+            "-T",
+            "fields",
+        ];
+        let (mounts, rewritten) =
+            process::sandbox_capture_arguments(arguments.iter().map(std::ffi::OsStr::new));
+        assert_eq!(
+            mounts,
+            [
+                (
+                    PathBuf::from("/home/u/data/a.pcap"),
+                    PathBuf::from("/tmp/capture-0.pcap")
+                ),
+                (
+                    PathBuf::from("/home/u/data/b.pcap"),
+                    PathBuf::from("/tmp/capture-1.pcap")
+                ),
+            ]
+        );
+        let rewritten: Vec<_> = rewritten.iter().map(|a| a.to_str().unwrap()).collect();
+        assert_eq!(
+            rewritten,
+            [
+                "-n",
+                "-2",
+                "-r",
+                "/tmp/capture-0.pcap",
+                "-Y",
+                "dns",
+                "-r",
+                "/tmp/capture-1.pcap",
+                "-r",
+                "/tmp/capture-0.pcap",
+                "-T",
+                "fields"
+            ]
+        );
+        let (none, same) =
+            process::sandbox_capture_arguments(["-v"].iter().map(std::ffi::OsStr::new));
+        assert!(none.is_empty() && same == ["-v"]);
+    }
+
+    #[test]
+    fn a_read_refusal_names_the_ubuntu_apparmor_profile() {
+        let refused = "tshark: You don't have permission to read the file \"/home/u/a.pcap\".";
+        let notice = process::apparmor_notice(refused).unwrap();
+        assert!(notice.contains("AppArmor profile for TShark"), "{notice}");
+        assert!(notice.contains("/etc/apparmor.d/local/tshark"), "{notice}");
+        assert!(process::apparmor_notice("tshark: The file does not exist").is_none());
+    }
+
+    /// Runs the real TShark through the sandbox on a capture under $HOME, where
+    /// Ubuntu 25.10+'s enforced AppArmor profile refuses a direct read. Where
+    /// TShark is missing the test returns; where no profile is enforced it
+    /// still proves the path works.
+    #[test]
+    fn real_tshark_reads_a_capture_under_home_despite_the_apparmor_profile() {
+        if !installed() {
+            return;
+        }
+        let (_fixture, source) = fixture();
+        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        let directory = home.join(format!(".ant-apparmor-{}", std::process::id()));
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
+        let path = directory.join("under-home.pcap");
+        fs::copy(&source, &path).unwrap();
+        let direct = Command::new("tshark")
+            .args(["-n", "-r"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        println!(
+            "direct tshark under $HOME: success={} stderr={}",
+            direct.status.success(),
+            String::from_utf8_lossy(&direct.stderr).trim()
+        );
+        let identity = CaptureIdentity::read(&path).unwrap();
+        let names = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&names);
+        let result = stream_fields(
+            &identity,
+            "dns",
+            &["dns.qry.name"],
+            false,
+            Arc::new(AtomicBool::new(false)),
+            move |line| {
+                seen.lock().unwrap().push(line.to_owned());
+                Ok(())
+            },
+        );
+        fs::remove_dir_all(&directory).unwrap();
+        result.unwrap();
+        let names = names.lock().unwrap();
+        println!("sandboxed tshark dns names: {names:?}");
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert!(names.iter().all(|n| n.contains("example.com")), "{names:?}");
+    }
 }

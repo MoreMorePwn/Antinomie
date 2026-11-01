@@ -14,6 +14,14 @@ it runs.
   app (native, container or QEMU builder) stopped at the kernel stage. A test now
   reads the kit's scripts and fails when one names a file the kit does not carry.
 
+- **Fixed: TShark could not read captures on Ubuntu 25.10 and later.** Ubuntu's
+  enforced AppArmor profile for TShark allows only `/tmp`, `/var/tmp` and
+  Wireshark's own files, so every read of a capture in the data directory was
+  refused: Triage had no network index (no DNS or HTTP events, silent Sigma DNS
+  and HTTP rules) and display filters failed. TShark now runs in its sandbox with
+  each capture bound read-only under the sandbox's private `/tmp`, and a refusal
+  that still happens names the AppArmor profile instead of the raw message.
+
 - **UI round 5: the 0.8.0 review list.** Notes can now point at one entry of a
   run's Syscall Trace (the run and the record's event sequence), beside the run as a
   whole; right-click a Syscall Trace row, a Triage process, evidence or IOC row, a
