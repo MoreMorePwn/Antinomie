@@ -197,8 +197,11 @@ impl Driver {
 }
 /// A snapshot is restored under the stealth profile it was taken with: take
 /// one, give the VM another profile, see the restore refused, switch back and
-/// restore. The VM is stopped.
-fn profile_phase(driver: &mut Driver, vm: &str) -> Result<(), String> {
+/// restore. The VM is stopped. `keep_firmware`: a disk installed for its
+/// firmware (an arm64 Debian VM, whose realistic presets boot UEFI) gets
+/// another profile of the same firmware instead of the desktop preset, which
+/// its VM refuses ("create a new VM").
+fn profile_phase(driver: &mut Driver, vm: &str, keep_firmware: bool) -> Result<(), String> {
     use antinomie_monitor_core::stealth::{StealthPreset, StealthProfile, host_cpu_vendor};
     let mut config = driver
         .snapshot
@@ -209,7 +212,12 @@ fn profile_phase(driver: &mut Driver, vm: &str) -> Result<(), String> {
         .ok_or("VM missing")?;
     let original = config.stealth.clone();
     let taken = driver.snapshot(vm, "Profile A", VmSnapshotMode::Disk)?;
-    config.stealth = StealthProfile::realistic(StealthPreset::RealisticDesktop, &host_cpu_vendor());
+    if keep_firmware {
+        config.stealth.hide_hypervisor = !config.stealth.hide_hypervisor;
+    } else {
+        config.stealth =
+            StealthProfile::realistic(StealthPreset::RealisticDesktop, &host_cpu_vendor());
+    }
     driver.command(Command::Save(config))?;
     driver.command(Command::RefreshVmSnapshots { vm_id: vm.into() })?;
     let node = |driver: &Driver| {
@@ -256,8 +264,15 @@ fn profile_phase(driver: &mut Driver, vm: &str) -> Result<(), String> {
 }
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    // `debian`, or a base that asks for an account (Debian, as vm-regress
+    // passes an arm64 one without the word).
     let debian = match args.get(2).and_then(|arg| arg.to_str()) {
-        None if args.len() == 2 => false,
+        None if args.len() == 2 => {
+            std::fs::read_to_string(PathBuf::from(&args[0]).join("bundle.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .is_some_and(|bundle| bundle["guest"]["requires_credentials"] == true)
+        }
         Some("debian") if args.len() == 3 => true,
         _ => return Err("usage: snapshot-check BUNDLE WORK_DIR [debian]".into()),
     };
@@ -283,7 +298,11 @@ fn run() -> Result<(), String> {
         backend: Backend::new(options)?,
         snapshot: Snapshot::default(),
         terminal: BTreeMap::new(),
-        ready: if debian {
+        // An arm64 Debian guest's kernel stays quiet on the serial port; its
+        // getty's prompt there says it is up.
+        ready: if debian && emulated {
+            " login: "
+        } else if debian {
             "systemd["
         } else {
             "BusyBox guest ready"
@@ -422,7 +441,7 @@ fn run() -> Result<(), String> {
     })?;
     driver.marker(&rebooted, "A\r\nDISK_REBOOT_DONE")?;
     driver.command(Command::Stop)?;
-    profile_phase(&mut driver, &vm)?;
+    profile_phase(&mut driver, &vm, debian && emulated)?;
     driver.command(Command::DeleteVmSnapshot {
         vm_id: vm.clone(),
         snapshot_id: full.clone(),

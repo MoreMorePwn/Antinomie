@@ -9,7 +9,8 @@
 //!   debug-check p3 BUNDLE NEW_DATA_DIR FIXTURE_DIR [test ...]   (phase 3, see debug-p3/mod.rs)
 //!
 //! FIXTURE is the static `tests/monitor/debug-fixture` program. The data folder
-//! must be new and disposable. One BusyBox VM, one vCPU.
+//! must be new and disposable. One BusyBox VM, one vCPU (a Debian base: its
+//! minimum RAM and disk and a throwaway account).
 use antinomie_monitor_core::{
     debug::{
         BreakpointKind, DebugBackend, DebugError, DetachMode, KernelDebugBackend, ResumeAction,
@@ -60,8 +61,11 @@ impl Driver {
         }
     }
     fn command(&mut self, command: Command) -> Result<String, String> {
+        self.command_within(command, 120)
+    }
+    fn command_within(&mut self, command: Command, seconds: u64) -> Result<String, String> {
         let id = self.backend.send(command)?;
-        let deadline = Instant::now() + Duration::from_secs(120);
+        let deadline = Instant::now() + Duration::from_secs(seconds);
         loop {
             self.receive();
             if let Some(reply) = self.replies.remove(&id) {
@@ -135,9 +139,19 @@ fn symbol(line: &str, name: &str) -> Result<u64, String> {
     u64::from_str_radix(value, 16).map_err(|e| e.to_string())
 }
 
-/// A running disposable VM with the BusyBox base, one vCPU.
+/// A running disposable VM with the BusyBox base, one vCPU (or a Debian base:
+/// its minimum RAM and disk, a throwaway account, ready at its serial login).
 fn boot(bundle: &str, data: &str) -> Result<Driver, String> {
     boot_with(bundle, data, None)
+}
+
+/// The base's guest profile when it asks for an account (Debian).
+fn account_guest(bundle: &str) -> Option<GuestProfile> {
+    fs::read_to_string(PathBuf::from(bundle).join("bundle.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|bundle| serde_json::from_value::<GuestProfile>(bundle["guest"].clone()).ok())
+        .filter(|guest| guest.requires_credentials)
 }
 
 fn boot_with(bundle: &str, data: &str, stop_grace: Option<Duration>) -> Result<Driver, String> {
@@ -146,6 +160,7 @@ fn boot_with(bundle: &str, data: &str, stop_grace: Option<Duration>) -> Result<D
         return Err("qualification needs a new disposable data folder".into());
     }
     let _ = ARCH.set(read_bundle_arch(bundle));
+    let guest = account_guest(bundle);
     let mut driver = Driver {
         backend: Backend::new(BackendOptions {
             bundle_dir: PathBuf::from(bundle),
@@ -155,34 +170,66 @@ fn boot_with(bundle: &str, data: &str, stop_grace: Option<Duration>) -> Result<D
             stop_grace,
             // A host without KVM (a cloud VM) runs x86-64 guests under TCG.
             force_tcg: std::env::var_os("ANTINOMIE_FORCE_TCG").is_some(),
+            // A Debian guest's login prompt on the serial port says it is up.
+            serial_console: guest.is_some(),
             ..Default::default()
         })?,
         snapshot: Snapshot::default(),
         replies: BTreeMap::new(),
         output: BTreeMap::new(),
     };
-    driver.command(Command::Create(VmConfig {
+    let vm = VmConfig {
         name: "Debugger qualification".into(),
         cpus: 1,
-        ram_mib: 512,
-        disk_gib: 1,
+        ram_mib: guest
+            .as_ref()
+            .map_or(512, |guest| guest.min_ram_mib.max(512)),
+        disk_gib: guest.as_ref().map_or(1, |guest| guest.min_disk_gib.max(1)),
         ..Default::default()
-    }))?;
+    };
+    let (create, seconds) = match &guest {
+        Some(_) => {
+            let mut random = [0u8; 16];
+            fs::File::open("/dev/urandom")
+                .and_then(|mut source| std::io::Read::read_exact(&mut source, &mut random))
+                .map_err(|error| error.to_string())?;
+            let password = random.iter().map(|byte| format!("{byte:02x}")).collect();
+            (
+                Command::CreateWithCredentials {
+                    vm,
+                    credentials: GuestCredentials::new("debugqa".into(), password)?,
+                },
+                // The account is made offline (x86-64) or in a provisioning boot (arm64).
+                900,
+            )
+        }
+        None => (Command::Create(vm), 60),
+    };
+    driver.command_within(create, seconds)?;
     driver.wait("VM publication", 10, |snapshot| !snapshot.vms.is_empty())?;
     let vm_id = driver.snapshot.vms[0].id.clone();
     driver.command(Command::Start { vm_id })?;
-    driver.wait("revision-17 guest", 90, |snapshot| {
-        snapshot
-            .guest_kernel
-            .as_ref()
-            .and_then(|kernel| kernel.revision)
-            .is_some_and(|revision| revision >= 17)
-            && snapshot
-                .serial_log
+    let marker: &[u8] = if guest.is_some() {
+        b" login: "
+    } else {
+        b"BusyBox guest ready"
+    };
+    driver.wait(
+        "revision-17 guest",
+        if guest.is_some() { 300 } else { 90 },
+        |snapshot| {
+            snapshot
+                .guest_kernel
                 .as_ref()
-                .and_then(|path| fs::read(path).ok())
-                .is_some_and(|log| log.windows(19).any(|part| part == b"BusyBox guest ready"))
-    })?;
+                .and_then(|kernel| kernel.revision)
+                .is_some_and(|revision| revision >= 17)
+                && snapshot
+                    .serial_log
+                    .as_ref()
+                    .and_then(|path| fs::read(path).ok())
+                    .is_some_and(|log| log.windows(marker.len()).any(|part| part == marker))
+        },
+    )?;
     Ok(driver)
 }
 
