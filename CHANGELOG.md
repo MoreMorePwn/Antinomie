@@ -26,6 +26,36 @@ it runs.
   and downloads it started. Base downloads no longer resume after a cancel
   (they still resume after a network failure).
 
+- **UI round 6: the sample window, Triage and the install pages fixed after
+  the RC1 walk.** Install, download and catalog sizes show only the rounded unit
+  (12.4 MiB). Activity rows show the date with the time. Centred dialogs such as
+  Getting started stay centred while the main window settles. The Run program
+  window no longer widens itself at fractional text sizes (egui columns fed a
+  rounding overshoot back into the resizable window). Every chip, tag and state
+  pill is drawn by one painter: text centred, fixed height, never squeezed to one
+  character, and a row of them wraps whole chips (the Triage Summary ATT&CK row
+  and the sample window's technique rows, which ran off the window and pushed
+  the Summary tables' right columns out of view). The All samples back link uses
+  the normal link colour. Evasion check summaries drop the "would show a VM"
+  wording; each check's run line keeps its evidence calls and offers Show in
+  Syscall Trace. The sample window's Interesting strings and Regex matches page
+  10 rows at a time with links to the full views; its Static analysis lines carry
+  a state chip in the state's colour (Partial is no longer green); Identity no
+  longer leaves half its box empty; the Edit tags window fits the screen; the
+  Artifacts section says where the files a sample wrote are. The lineage graph
+  wraps a level with many nodes into side-by-side columns and grows its viewport,
+  so a sample that wrote dozens of files is a readable graph instead of a strip
+  at 20%. An IDS scan with no packets and a Sigma scan that evaluated nothing say
+  why (no packets captured, Suricata or pySigma missing) instead of a bare
+  Complete or Unavailable. A string kept only at its start leaves Strings and the
+  run Complete with an Info note. Triage > Detection shows saved results at once
+  when a run is shown again instead of the preparing bar, its rule text is in a
+  taller resizable monospace box with wrap, Copy and Open in a window, and the
+  rules window's pack table no longer jitters sideways. File reconstruction
+  drops the "What this call changed" panel and labels positions "Offset 0x…";
+  Per-file history keeps its filters in one collapsible section with a "Name:
+  Last name / First name" choice for renamed files.
+
 - **Fewer warnings: setup hints, optional features and confirmations are now
   information.** 60 messages that described a normal state (Stop the VM to
   change these, Install a base image first, an optional tool or dataset that is
