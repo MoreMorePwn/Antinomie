@@ -301,7 +301,7 @@ impl MonitorApp {
                 .max_width((viewport.width() - 50.0).max(300.0))
                 .max_height((viewport.height() - 90.0).max(200.0))
                 .show(ctx, |ui| {
-                    self.launch_form(ui);
+                    crate::widgets::fixed_width_body(ui, |ui| self.launch_form(ui));
                 });
             self.launch_open &= open;
             if !self.launch_open {

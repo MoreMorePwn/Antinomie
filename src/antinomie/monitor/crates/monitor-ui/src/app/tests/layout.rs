@@ -185,3 +185,81 @@ fn vm_network_section_warns_only_for_disconnected_mode() {
         );
     }
 }
+
+#[test]
+fn run_program_does_not_widen_itself_at_fractional_text_sizes() {
+    // At 18 pt the two form columns are a fraction of a point wide; egui's
+    // own columns then reported a rounding step more each frame and the
+    // window grew by itself (1/16 pt a frame, "1 pixel per half second").
+    for (size, font_size) in [
+        (egui::vec2(1920.0, 1080.0), 16.0),
+        (egui::vec2(1920.0, 1080.0), 18.0),
+        (egui::vec2(1280.0, 720.0), 18.0),
+        (egui::vec2(1100.0, 700.0), 20.0),
+    ] {
+        let mut app = app();
+        observer_fixture(&mut app);
+        app.snapshot.guest_kernel = Some(antinomie_monitor_core::GuestKernel {
+            revision: Some(17),
+            ..Default::default()
+        });
+        app.exec.path = "/tmp/df11f34c-demo-all".into();
+        app.args = "--host\n127.0.0.1\n--port\n9\n--rounds\n1\n--delay\n0\n--gap\n0".into();
+        app.exec.analysis.enabled = true;
+        app.exec.capture_network = true;
+        app.launch_open = true;
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        theme::text_size(&ctx, font_size);
+        let mut first = None;
+        for frame in 0..120 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    time: Some(frame as f64 / 2.0),
+                    ..Default::default()
+                },
+                |ctx| app.draw(ctx),
+            );
+            let rect = ctx
+                .memory(|memory| memory.area_rect(Dialog::Launch.window_id()))
+                .expect("Run program window");
+            if frame == 10 {
+                first = Some(rect.size());
+            } else if let Some(first) = first {
+                assert!(
+                    (rect.width() - first.x).abs() < 0.01 && (rect.height() - first.y).abs() < 0.01,
+                    "Run program grows at {size:?}/{font_size}, frame {frame}: {first:?} -> {:?}",
+                    rect.size()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_centred_dialog_stays_centred_while_the_app_window_grows_until_moved() {
+    // Item 3: Getting started (and the dependencies dialog) opened during the
+    // first frames of a start, in the smaller window, and stayed there when
+    // the window grew to its full size.
+    let mut app = app();
+    app.getting_started.open = true;
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    for size in [egui::vec2(800.0, 600.0); 3] {
+        render(&mut app, &ctx, size);
+    }
+    let big = egui::vec2(1920.0, 1080.0);
+    for _ in 0..5 {
+        render(&mut app, &ctx, big);
+    }
+    let rect = ctx
+        .memory(|memory| memory.area_rect(Dialog::GettingStarted.window_id()))
+        .expect("Getting started");
+    let area = crate::title_bar::content_rect(&ctx);
+    assert!(
+        rect.center().distance(area.center()) < 2.0,
+        "{:?} is not centred in {area:?}",
+        rect
+    );
+}

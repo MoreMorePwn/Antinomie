@@ -773,7 +773,7 @@ impl MonitorApp {
                             }
                         };
                         if wide {
-                            ui.columns(2, |columns| {
+                            crate::widgets::columns(ui, 2, |columns| {
                                 machine(self, &mut columns[0], &mut credentials_required);
                                 storage(self, &mut columns[1], credentials_required);
                             });

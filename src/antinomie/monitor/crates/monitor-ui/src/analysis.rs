@@ -63,7 +63,7 @@ pub(crate) fn launch_fields(
     let spacing = ui.spacing().item_spacing.x;
     let min_pane = ui.text_style_height(&egui::TextStyle::Body) * 22.0;
     if ui.available_width() >= min_pane * 2.0 + spacing {
-        ui.columns(2, |columns| {
+        crate::widgets::columns(ui, 2, |columns| {
             outcome.source = fields(
                 &mut columns[0],
                 request,

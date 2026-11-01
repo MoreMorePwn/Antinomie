@@ -17,6 +17,7 @@ pub fn window<'open>(title: impl Into<String>) -> Dialog<'open> {
     Dialog {
         window: egui::Window::new(&title).title_bar(false).resizable(true),
         title,
+        id: None,
         open: None,
         positioned: false,
         fixed: false,
@@ -29,6 +30,8 @@ pub fn window<'open>(title: impl Into<String>) -> Dialog<'open> {
 pub struct Dialog<'open> {
     window: egui::Window<'open>,
     title: String,
+    /// The window's id, when the caller gave one (else egui's: the title).
+    id: Option<egui::Id>,
     open: Option<&'open mut bool>,
     /// The caller placed the window; otherwise it opens centred.
     positioned: bool,
@@ -54,8 +57,13 @@ impl<'open> Dialog<'open> {
         self
     }
 
+    pub fn id(mut self, id: egui::Id) -> Self {
+        self.id = Some(id);
+        self.window = self.window.id(id);
+        self
+    }
+
     forward! {
-        id(id: egui::Id);
         resizable(resizable: impl Into<egui::Vec2b>);
         /// Kept for call-site compatibility: the mockup's windows never collapse.
         collapsible(collapsible: bool);
@@ -133,6 +141,7 @@ impl<'open> Dialog<'open> {
         let Dialog {
             window,
             title,
+            id,
             open,
             positioned,
             fixed,
@@ -152,10 +161,26 @@ impl<'open> Dialog<'open> {
                     .min(area.height() - 24.0),
             ))
         };
+        // A window that opens centred stays centred while the app window
+        // grows to its final size (the first frames of a start run in a
+        // smaller one) until the person moves it.
+        let id = id.unwrap_or_else(|| egui::Id::new(&title));
+        let centre_key = id.with("dialog-centred-in");
         if !positioned {
             window = window
                 .pivot(egui::Align2::CENTER_CENTER)
                 .default_pos(area.center());
+            let last: Option<(egui::Rect, egui::Pos2)> = ctx.data(|data| data.get_temp(centre_key));
+            let now = ctx
+                .memory(|memory| memory.area_rect(id))
+                .map(|rect| rect.center());
+            let moved =
+                ctx.data(|data| data.get_temp::<bool>(id.with("dialog-moved"))) == Some(true);
+            if let (Some((last_area, last_centre)), Some(now), false) = (last, now, moved) {
+                if last_area != area && now.distance(last_centre) < 2.0 {
+                    window = window.current_pos(area.center());
+                }
+            }
         }
         let shown = window.constrain_to(area).show(ctx, |ui| {
             let rule = ui.painter().add(egui::Shape::Noop);
@@ -226,6 +251,23 @@ impl<'open> Dialog<'open> {
                 *open = false;
             }
         }
+        if !positioned {
+            let moved_key = id.with("dialog-moved");
+            match shown.as_ref() {
+                Some(shown) => {
+                    if shown.response.dragged() {
+                        // Moved by hand: it keeps its place from now on.
+                        ctx.data_mut(|data| data.insert_temp(moved_key, true));
+                    }
+                    let centre = shown.response.rect.center();
+                    ctx.data_mut(|data| data.insert_temp(centre_key, (area, centre)));
+                }
+                None => ctx.data_mut(|data| {
+                    data.remove::<(egui::Rect, egui::Pos2)>(centre_key);
+                    data.remove::<bool>(moved_key);
+                }),
+            }
+        }
         shown
     }
 }
@@ -260,4 +302,75 @@ fn rule(ui: &mut egui::Ui) {
     ui.painter()
         .hline(x, y, egui::Stroke::new(1.0_f32, theme::line_soft()));
     ui.add_space(8.0);
+}
+
+/// `ui.columns(count, ..)` for the body of a resizable window. egui's own
+/// columns report the widest column times `count` as their width, so a
+/// column whose content overshoots by a rounding step (a text box that fills
+/// its column at a fractional width) widens the window by that much on every
+/// frame. These columns are whole points wide and never report more than the
+/// width they were given.
+pub fn columns<R>(
+    ui: &mut egui::Ui,
+    count: usize,
+    add_contents: impl FnOnce(&mut [egui::Ui]) -> R,
+) -> R {
+    let spacing = ui.spacing().item_spacing.x;
+    let total = ui.available_width();
+    let width = ((total - spacing * (count as f32 - 1.0)) / count as f32)
+        .floor()
+        .max(0.0);
+    let top_left = ui.cursor().min;
+    let bottom = ui.max_rect().bottom();
+    let mut columns: Vec<egui::Ui> = (0..count)
+        .map(|index| {
+            let left = top_left.x + index as f32 * (width + spacing);
+            let rect = egui::Rect::from_min_max(
+                egui::pos2(left, top_left.y),
+                egui::pos2(left + width, bottom),
+            );
+            let mut column = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(rect)
+                    .layout(egui::Layout::top_down_justified(egui::Align::LEFT)),
+            );
+            column.set_width(width);
+            column
+        })
+        .collect();
+    let result = add_contents(&mut columns);
+    let height = columns
+        .iter()
+        .map(|column| column.min_size().y)
+        .fold(0.0, f32::max);
+    ui.advance_cursor_after_rect(egui::Rect::from_min_size(
+        top_left,
+        egui::vec2(total, height),
+    ));
+    result
+}
+
+/// The body of a resizable window, laid out in exactly the width it has. A
+/// widget that fills its row (a text box, a right-aligned footer) can come
+/// out a rounding step wider than the row at a fractional text size; reported
+/// back, that step widens the window, and again on the next frame. The body
+/// keeps its own height but never reports more than the width it was given.
+pub fn fixed_width_body<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let rect = ui.available_rect_before_wrap();
+    let width = rect.width().floor().max(0.0);
+    let mut body = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(egui::Rect::from_min_size(
+                rect.min,
+                egui::vec2(width, rect.height()),
+            ))
+            .layout(*ui.layout()),
+    );
+    let result = add_contents(&mut body);
+    let height = body.min_rect().height();
+    ui.advance_cursor_after_rect(egui::Rect::from_min_size(
+        rect.min,
+        egui::vec2(width, height),
+    ));
+    result
 }
