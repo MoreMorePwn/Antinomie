@@ -311,14 +311,19 @@ impl SamplesView {
                         }
                     });
                     row.col(|ui| {
-                        ui.label(
+                        // The rounded unit only (round 6 item 1); the exact
+                        // count is in the hover text.
+                        let cell = ui.label(
                             RichText::new(if sample.file_size == 0 {
                                 "-".to_string()
                             } else {
-                                crate::values::file_size(sample.file_size)
+                                crate::values::short_size(sample.file_size)
                             })
                             .color(theme::value(ValueKind::Number)),
                         );
+                        if sample.file_size > 0 {
+                            cell.on_hover_text(crate::values::file_size(sample.file_size));
+                        }
                     });
                     row.col(|ui| {
                         ui.add(egui::Label::new(sample.tags.join(", ")).truncate())
@@ -497,7 +502,8 @@ impl SamplesView {
                         });
                     });
                     row.col(|ui| {
-                        ui.colored_label(theme::muted(), crate::values::file_size(info.file_size));
+                        ui.colored_label(theme::muted(), crate::values::short_size(info.file_size))
+                            .on_hover_text(crate::values::file_size(info.file_size));
                     });
                     row.col(|ui| {
                         ui.colored_label(
