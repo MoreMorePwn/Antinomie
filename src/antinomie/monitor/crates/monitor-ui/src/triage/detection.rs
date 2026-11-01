@@ -13,6 +13,7 @@ mod header;
 pub(in crate::triage) use header::ScanActivity;
 mod inputs;
 mod journal;
+mod kept;
 mod selection;
 
 use cards::{card_summary, match_cards, severity_color};
@@ -70,21 +71,6 @@ fn attribution(author: &str) -> &str {
     }
 }
 
-fn evidence_note(key: &str) -> String {
-    match key {
-        "wait:sample" => {
-            "The scan starts once the sample file is verified (hash check pending).".into()
-        }
-        "wait:pcap" => "Waiting for the PCAP segment to finish.".into(),
-        "wait:journal" => "Waiting for the run to finish its event journal.".into(),
-        "wait:digest" => "Hashing retained evidence before the scan.".into(),
-        "missing:pcap" => {
-            "Collection disabled or no PCAP was saved. This is not a clean result.".into()
-        }
-        _ => String::new(),
-    }
-}
-
 #[derive(Clone, Default)]
 struct AttemptBudget {
     attempts: u8,
@@ -117,9 +103,6 @@ impl AttemptBudget {
         self.ready_at = None;
     }
 }
-
-/// Runs whose saved results are kept in memory.
-const KEPT_RUNS: usize = 6;
 
 /// How long the size and time of an evidence file are trusted before the
 /// disk is asked again. Detection looks at them every frame.
@@ -268,40 +251,6 @@ impl View {
         self.kept.clear();
     }
 
-    /// Show `identity`'s run. Its saved results come from memory when the
-    /// run was shown a moment ago (true: nothing to read); otherwise they are
-    /// to be read from disk (false). Nothing is re-scanned here: whether a
-    /// scan is due is decided as before, from the selection digest and the
-    /// evidence key the results carry.
-    fn switch_identity(&mut self, identity: Option<(PathBuf, Identity)>) -> bool {
-        if let Some((_, old)) = self.identity.take() {
-            let saved = self
-                .results
-                .clone()
-                .map(|result| result.and_then(Result::ok));
-            if saved.iter().any(Option::is_some) {
-                self.kept.retain(|(kept, _)| *kept != old);
-                self.kept.push((old, saved));
-                if self.kept.len() > KEPT_RUNS {
-                    self.kept.remove(0);
-                }
-            }
-        }
-        self.reset();
-        self.identity = identity;
-        let Some((_, new)) = self.identity.as_ref() else {
-            return false;
-        };
-        let Some(at) = self.kept.iter().position(|(kept, _)| kept == new) else {
-            return true;
-        };
-        let (_, saved) = self.kept.remove(at);
-        self.results = saved.map(|report| report.map(Ok));
-        for index in 0..3 {
-            self.rows(index);
-        }
-        false
-    }
     fn reset(&mut self) {
         if let Some(cancel) = self.cancel.take() {
             cancel.store(true, Ordering::Relaxed);
@@ -784,7 +733,7 @@ impl View {
         for (index, engine) in ENGINES.iter().enumerate() {
             let key = self.evidence_identity(ctx, *engine, input);
             self.ready_key[index] = key.clone();
-            self.notes[index] = evidence_note(&key);
+            self.notes[index] = header::evidence_note(&key);
             let digest = self.current_digest(ctx, index);
             if digest == "preparing" {
                 // Saved results stay on screen while the rule sets are
@@ -1238,6 +1187,7 @@ impl Drop for View {
 
 #[cfg(test)]
 mod tests {
+    use super::kept::KEPT_RUNS;
     use super::*;
 
     #[test]

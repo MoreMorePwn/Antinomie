@@ -9,9 +9,6 @@ use crate::{
 };
 use antinomie_monitor_core::{samples::TagKind, AnalysisKind, AnalysisSection};
 
-/// Rows a page of a string table shows.
-const PAGE: usize = 10;
-
 /// What a click in the Summary asks of the app.
 enum Go {
     /// Open the run in Triage (or Run History for a deleted folder).
@@ -444,7 +441,8 @@ fn strings(ui: &mut egui::Ui, data: &Data, scanned: &Scanned, go: &mut Option<Go
                 ui.colored_label(theme::error(), error);
             }
             (Scanned::Done(strings), Some(reference)) => {
-                let range = pager_range(ui, "sample_summary_strings", strings.interesting.len());
+                let range =
+                    parts::pager_range(ui, "sample_summary_strings", strings.interesting.len());
                 string_table(
                     ui,
                     "sample_summary_strings",
@@ -455,7 +453,7 @@ fn strings(ui: &mut egui::Ui, data: &Data, scanned: &Scanned, go: &mut Option<Go
                     "No URLs, IPs, domains, paths or keys.",
                 );
                 let total = strings_total(&reference.report);
-                if pager(
+                if parts::pager(
                     ui,
                     "sample_summary_strings",
                     strings.interesting.len(),
@@ -471,7 +469,7 @@ fn strings(ui: &mut egui::Ui, data: &Data, scanned: &Scanned, go: &mut Option<Go
         return;
     };
     parts::section(ui, "Regex matches", Some(strings.total as usize), |ui| {
-        let range = pager_range(ui, "sample_summary_regex", strings.matches.len());
+        let range = parts::pager_range(ui, "sample_summary_regex", strings.matches.len());
         string_table(
             ui,
             "sample_summary_regex",
@@ -489,7 +487,7 @@ fn strings(ui: &mut egui::Ui, data: &Data, scanned: &Scanned, go: &mut Option<Go
             },
             "No regex matches.",
         );
-        if pager(
+        if parts::pager(
             ui,
             "sample_summary_regex",
             strings.matches.len(),
@@ -501,64 +499,6 @@ fn strings(ui: &mut egui::Ui, data: &Data, scanned: &Scanned, go: &mut Option<Go
             *go = Some(Go::Report(AnalysisKind::Regex));
         }
     });
-}
-
-/// The rows of the current page of the table `id` of `len` rows.
-fn pager_range(ui: &egui::Ui, id: &str, len: usize) -> std::ops::Range<usize> {
-    let page = ui
-        .ctx()
-        .data(|data| data.get_temp::<usize>(egui::Id::new((id, "page"))))
-        .unwrap_or(0);
-    let pages = len.div_ceil(PAGE).max(1);
-    let start = page.min(pages - 1) * PAGE;
-    start..(start + PAGE).min(len)
-}
-
-/// Under a paged table: Previous, "11–20 of 40", Next, and a button that
-/// opens the whole list. True when that button was clicked.
-fn pager(ui: &mut egui::Ui, id: &str, len: usize, open: &str) -> bool {
-    let key = egui::Id::new((id, "page"));
-    let pages = len.div_ceil(PAGE).max(1);
-    let mut page = ui
-        .ctx()
-        .data(|data| data.get_temp::<usize>(key))
-        .unwrap_or(0)
-        .min(pages - 1);
-    let mut opened = false;
-    ui.add_space(4.0);
-    ui.horizontal_wrapped(|ui| {
-        if pages > 1 {
-            if ui
-                .add_enabled(page > 0, egui::Button::new("‹ Previous"))
-                .clicked()
-            {
-                page -= 1;
-            }
-            let start = page * PAGE;
-            ui.label(
-                RichText::new(format!(
-                    "{}–{} of {}",
-                    start + 1,
-                    (start + PAGE).min(len),
-                    crate::values::thousands(len as u64)
-                ))
-                .color(theme::muted()),
-            );
-            if ui
-                .add_enabled(page + 1 < pages, egui::Button::new("Next ›"))
-                .clicked()
-            {
-                page += 1;
-            }
-            ui.add_space(8.0);
-        }
-        opened = ui
-            .button(open)
-            .on_hover_text("Open the whole list in Static analysis")
-            .clicked();
-    });
-    ui.ctx().data_mut(|data| data.insert_temp(key, page));
-    opened
 }
 
 /// How many strings the report's Strings tab lists.

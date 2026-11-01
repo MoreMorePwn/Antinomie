@@ -495,6 +495,23 @@ fn evaluated_text(report: &Report) -> (String, String) {
     )
 }
 
+/// Why a scan waits, shown under its progress bar; empty for a key that
+/// needs no words.
+pub(super) fn evidence_note(key: &str) -> String {
+    match key {
+        "wait:sample" => {
+            "The scan starts once the sample file is verified (hash check pending).".into()
+        }
+        "wait:pcap" => "Waiting for the PCAP segment to finish.".into(),
+        "wait:journal" => "Waiting for the run to finish its event journal.".into(),
+        "wait:digest" => "Hashing retained evidence before the scan.".into(),
+        "missing:pcap" => {
+            "Collection disabled or no PCAP was saved. This is not a clean result.".into()
+        }
+        _ => String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::tests::{finding, frames, rendered_text, report};

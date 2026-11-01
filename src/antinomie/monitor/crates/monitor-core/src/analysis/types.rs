@@ -605,6 +605,12 @@ impl AnalysisReport {
             self.state = AnalysisState::Complete;
         }
     }
+
+    /// The report after [`Self::settle_value_limits`].
+    pub fn settled(mut self) -> Self {
+        self.settle_value_limits();
+        self
+    }
 }
 
 impl AnalysisSection {
