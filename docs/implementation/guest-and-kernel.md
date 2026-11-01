@@ -803,7 +803,8 @@ revision 20 is unchanged: the wire carried the architecture since 0.8.0.
   `"arch": "arm64"`.
 * **Launch.** `vm/virt.rs` builds QEMU's `virt` machine under TCG:
   `cortex-a72` with the device tree, `neoverse-n1` with AAVMF (pflash code and a
-  per-VM variable store), SATA through ich9-ahci, virtio-gpu with xHCI keyboard
+  per-VM variable store; a device profile's machine sets its own CPU, see
+  "arm64 device profiles"), SATA through ich9-ahci, virtio-gpu with xHCI keyboard
   and tablet. The shutdown deadline scales by `Machine::time_scale()`.
   `VmLaunchOptions::fast_emulation` (serialized only when set, so x86 VM files
   and snapshot identities are unchanged) boots with `antinomie_kpti=off`; the VM
@@ -937,6 +938,69 @@ revision 20 is unchanged; one breakpoint kind is new within it (below).
   anti-debug probe counts the enabled NT_ARM_HW_BREAK/WATCH slots of a traced
   child and looks for BRK, not INT3, in its code.
 * **Not supported.** AArch32 programs on an arm64 guest are not debugged.
+
+### arm64 device profiles (0.9.0)
+
+Multi-arch plan cards MA-17 and MA-18: what an arm64 VM presents of the
+machine. The x86 catalog's machines are PCs, so an arm64 VM presents an arm64
+machine of its profile's kind instead (`stealth/arm64.rs`, catalog
+`stealth/catalog/arm64.rs`, sources and classes in `SOURCES-arm64.md`):
+
+* **Which machine.** Realistic server: an Ampere Altra server (Giga Computing
+  R272-P33, HPE ProLiant RL300 Gen11). Cloud VPS: an AWS EC2 Graviton2
+  instance, its type (`t4g.nano` ... `t4g.2xlarge`) from the VM's vCPUs and
+  memory. Desktop, laptop and custom profiles: the ADLINK Ampere Altra
+  Developer Platform with UEFI, a Raspberry Pi 4 Model B or Pi 5 when the
+  profile's firmware is BIOS. The pick is stable for a VM (its UUID), and an
+  identity whose `profile` names an arm64 machine keeps it. Transparent, or the
+  identity turned off, keeps QEMU's own identity as before.
+* **UEFI machines** (servers, workstation, cloud) boot AAVMF whatever the
+  firmware entry says (the host check finds AAVMF, `HostSupport::detect_arm64`;
+  before, the x86 OVMF check made every arm64 VM fall back to the device tree).
+  The CPU is QEMU's `neoverse-n1` with the machine's MIDR (Neoverse N1 r3p1)
+  and timer frequency (`-cpu neoverse-n1,midr=,cntfrq=`); `-machine
+  virt,x-oem-id=,x-oem-table-id=` sets the ACPI OEM IDs; SMBIOS types 0, 3, 4
+  (ID = MIDR, family ARMv8, the machine's maker, version and speed, Neoverse
+  N1's caches as type 7), 16 and 17 are written whole and types 1 and 2 given
+  as options, so no field keeps QEMU's value and none is the host's. The disk
+  is SATA with the machine's model (QEMU's NVMe controller names itself QEMU),
+  the network card Intel's 82576 (`igb`, the driver of the boards' I350 and
+  I210) with the machine's MAC prefix (a cloud's: random, locally
+  administered). An x86 cloud provider's metadata service and instance state
+  are not used for arm64 VMs (a start-log note says so).
+* **Boards** boot on QEMU's device tree, disguised: the launch dumps the tree of
+  the same machine, CPUs and memory (`-machine dumpdtb=`), `stealth/fdt.rs`
+  reads it, the root gets the board's model, compatible list and serial number,
+  the nodes only QEMU's virt has (fw_cfg, the virtio-mmio slots, the platform
+  bus, flash, PL061 and its power key) are taken out, the UART, RTC and GIC
+  nodes get a board tree's names (`serial@`, `rtc@`, `interrupt-controller@`,
+  with `stdout-path` and the aliases following), and QEMU boots it with `-dtb`
+  (it still writes `/chosen`). The CPU is the board's (`cortex-a72` r0p3 or
+  `cortex-a76` r4p1) at 54 MHz. A UEFI machine whose UEFI cannot boot (no AAVMF,
+  or a base without UEFI support) is shown as a board.
+* **Guest facade** (patch 0040). `/proc/device-tree/chosen/bootargs` already
+  showed the kept command line (0033); root's `/sys/firmware/fdt`, the
+  flattened tree as the boot loader gave it, now shows a copy with the same
+  bootargs (`ant_fdt_shown()`, from `of_fdt_raw_init()`), on device-tree and
+  UEFI boots alike (the EFI stub writes the command line there too). The virt
+  machine's ACPI virtio-mmio slots and flash (LNRO0005, LNRO0015) are not
+  scanned, as QEMU's own devices are not. The arm64 minimal kernel has no KVM:
+  under TCG it boots at EL1, and KVM's init line would say "HYP mode not
+  available".
+* **One identity.** `/proc/cpuinfo`'s CPU part and revision, the SMBIOS
+  processor and DMI name the same machine; a run's machine record and the VM
+  summary name the arm64 machine (`arm64::shown_profile`).
+* **What stays** (`StealthProfile::giveaways_for`, `arm64::giveaways`): TCG
+  timing; QEMU's ACPI tables to root (BXPC creator ID, virt's DSDT); the
+  network card and the ICH9 AHCI controller are not the machine's (no ENA or
+  NVMe for EC2); a board's tree still has virt's GICv3, ECAM PCIe host and
+  devices; the virt PCIe host bridge (Red Hat ID); virtio-gpu; a fresh boot.
+* **Measured** by `stealth-check measure` with the probe's aarch64 checks
+  (`arm.cpu` MIDR against the firmware's processor, `arm.cntfrq` (62.5 MHz is
+  QEMU's), `dt.model`, `dt.nodes`, `fdt.raw`, the LNRO ACPI names); on arm64 an
+  L2 without L3 (Neoverse N1) and EDK II firmware (Ampere's, AWS's) are not
+  giveaways, and neither is the absence of SMBIOS and EFI on a device-tree
+  boot. The x86 probe is byte-identical (.text, .rodata, .data).
 
 ### Fair, progress-sensitive send waits (0.8.0)
 
