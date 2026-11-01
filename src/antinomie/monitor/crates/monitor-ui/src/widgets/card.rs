@@ -41,10 +41,9 @@ pub fn link(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
 }
 
 /// The link back to a list from the page of one of its items ("‹ All
-/// samples"), in the identity color so it stands apart from ordinary links.
+/// samples"): an ordinary link, in the accent color like every other one.
 pub fn back_link(ui: &mut egui::Ui, text: impl Into<String>) -> egui::Response {
-    ui.add(egui::Button::new(RichText::new(text).color(theme::identity())).frame(false))
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
+    link(ui, text)
 }
 
 /// Detail text that sits under a table or list (a pack's source and license,
