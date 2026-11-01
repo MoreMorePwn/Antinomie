@@ -235,27 +235,78 @@ pub(super) fn techniques(ui: &mut egui::Ui, data: &Data) {
                     },
                 );
                 ui.vertical(|ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing = egui::vec2(10.0, 6.0);
-                        for technique in &tactic.techniques {
-                            let label =
-                                antinomie_monitor_core::mitre::technique_label(&technique.id);
-                            // The tag and its run count stay together.
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 5.0;
-                                crate::sample_tags::tag(ui, &Tag::new(TagKind::Technique, label));
-                                ui.label(
-                                    RichText::new(format!(
-                                        "{}/{}",
-                                        technique.runs.len(),
-                                        rollup.triaged
-                                    ))
-                                    .color(theme::text()),
-                                )
-                                .on_hover_text(run_list(&technique.runs));
+                    // Each technique and its run count are one group, laid
+                    // out in rows by hand: a group that does not fit what is
+                    // left of a row starts the next one, whole, and one wider
+                    // than a whole row is cut (its tooltip has all of it).
+                    let width = ui.available_width();
+                    let gap = 10.0;
+                    let groups: Vec<(Tag, RichText, f32, f32)> = tactic
+                        .techniques
+                        .iter()
+                        .map(|technique| {
+                            let tag = Tag::new(
+                                TagKind::Technique,
+                                antinomie_monitor_core::mitre::technique_label(&technique.id),
+                            );
+                            let count = RichText::new(format!(
+                                "{}/{}",
+                                technique.runs.len(),
+                                rollup.triaged
+                            ))
+                            .color(theme::text());
+                            let count_width = ui.fonts(|fonts| {
+                                fonts
+                                    .layout_no_wrap(
+                                        count.text().to_owned(),
+                                        egui::TextStyle::Body.resolve(ui.style()),
+                                        egui::Color32::PLACEHOLDER,
+                                    )
+                                    .size()
+                                    .x
                             });
+                            let tag_width = crate::sample_tags::width_of(ui, &tag);
+                            (tag, count, tag_width, count_width)
+                        })
+                        .collect();
+                    let mut rows: Vec<Vec<usize>> = vec![Vec::new()];
+                    let mut used = 0.0;
+                    for (index, (_, _, tag_width, count_width)) in groups.iter().enumerate() {
+                        let group = tag_width + 5.0 + count_width;
+                        let row = rows.last_mut().expect("one row");
+                        if !row.is_empty() && used + gap + group > width {
+                            rows.push(vec![index]);
+                            used = group;
+                        } else {
+                            used += if row.is_empty() { group } else { gap + group };
+                            row.push(index);
                         }
-                    });
+                    }
+                    for row in rows {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = gap;
+                            for index in row {
+                                let (tag, count, tag_width, count_width) = &groups[index];
+                                let technique = &tactic.techniques[index];
+                                ui.scope(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 5.0;
+                                    let room = (ui.available_width() - count_width - 5.0).max(60.0);
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(
+                                            tag_width.min(room),
+                                            ui.spacing().interact_size.y,
+                                        ),
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |ui| {
+                                            crate::sample_tags::tag(ui, tag);
+                                        },
+                                    );
+                                    ui.add(egui::Label::new(count.clone()).extend())
+                                        .on_hover_text(run_list(&technique.runs));
+                                });
+                            }
+                        });
+                    }
                 });
             });
         }
@@ -303,8 +354,9 @@ fn disclosure(
 /// categories. A check is *tripped* in a run when the sample quit right after
 /// it (the one answer Triage has); every other check says what the sample saw
 /// and is never marked.
-pub(super) fn evasion(ui: &mut egui::Ui, data: &Data) {
+pub(super) fn evasion(ui: &mut egui::Ui, data: &Data) -> Option<(usize, String)> {
     let rollup = &data.rollup;
+    let mut trace = None;
     let total: usize = rollup.evasion.iter().map(|row| row.checks.len()).sum();
     parts::section(ui, "Evasion attempts", Some(total), |ui| {
         if not_triaged(ui, rollup) {
@@ -363,22 +415,44 @@ pub(super) fn evasion(ui: &mut egui::Ui, data: &Data) {
                 },
                 |ui| {
                     for check in &category.checks {
-                        check_rows(ui, &category.category, check, rollup.triaged);
+                        if let Some(asked) =
+                            check_rows(ui, &category.category, check, rollup.triaged)
+                        {
+                            trace = Some(asked);
+                        }
                     }
                 },
             );
             header.on_hover_text(run_list(&seen));
         }
     });
+    trace
 }
 
-/// One check of a category: its header and one line per run.
+/// The Syscall Trace filter that shows `calls` of the process `cookie`.
+fn evidence_filter(cookie: u64, calls: &[u64]) -> String {
+    let set = calls
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if cookie == 0 {
+        format!("call.id in {{{set}}}")
+    } else {
+        format!("process.cookie == {cookie} && call.id in {{{set}}}")
+    }
+}
+
+/// One check of a category: its header and one line per run, each with a
+/// link to its evidence calls in that run's Syscall Trace when the run kept
+/// them. Returns the run and Trace filter asked for.
 fn check_rows(
     ui: &mut egui::Ui,
     category: &str,
     check: &antinomie_monitor_core::samples::CheckRow,
     triaged: usize,
-) {
+) -> Option<(usize, String)> {
+    let mut trace = None;
     let name = if check.object.is_empty() {
         &check.rule
     } else {
@@ -405,11 +479,33 @@ fn check_rows(
                     } else {
                         ui.label(theme::hint_text("no change seen"));
                     }
+                    match check.evidence.iter().find(|(run, ..)| run == number) {
+                        Some((_, cookie, calls)) => {
+                            if parts::more_inline(ui, "Show in Syscall Trace ›")
+                                .on_hover_text(format!(
+                                    "Open {} in Syscall Trace at the {} {} behind this line",
+                                    parts::run_name(*number),
+                                    calls.len(),
+                                    if calls.len() == 1 { "call" } else { "calls" }
+                                ))
+                                .clicked()
+                            {
+                                trace = Some((*number, evidence_filter(*cookie, calls)));
+                            }
+                        }
+                        None => {
+                            ui.label(theme::hint_text("triage this run again to link its calls"))
+                                .on_hover_text(
+                                    "This run's digest was written before checks kept their calls",
+                                );
+                        }
+                    }
                 });
             }
         },
     )
     .on_hover_text(&check.rule);
+    trace
 }
 
 /// Indicators: how many, of what kind, how many every run had and how many a

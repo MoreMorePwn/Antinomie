@@ -248,6 +248,26 @@ pub(in crate::app::samples_page) fn section(
         .filter(|output| output.is_present())
         .count();
     parts::section(ui, "Artifacts", Some(present), |ui| {
+        // Artifacts are the files a run saved on purpose (dumps, cores,
+        // captures, snapshots, files a rule kept). What the sample itself
+        // wrote is in each run's Files tab, which this says rather than
+        // leaving the list to look like all there is.
+        if let Some(newest) = data.runs.iter().rev().find(|entry| entry.folder) {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(
+                        "Files the sample wrote or changed are not artifacts: they are in each run's Triage › Files.",
+                    )
+                    .color(theme::muted()),
+                );
+                if parts::more_inline(ui, &format!("Open {} ›", parts::run_name(newest.number)))
+                    .on_hover_text("Open the newest run in Triage")
+                    .clicked()
+                {
+                    act = Some(Act::GoToRun(newest.number));
+                }
+            });
+        }
         if data.outputs.is_empty() {
             parts::muted_line(ui, "None.");
             return;

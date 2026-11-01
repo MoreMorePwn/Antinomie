@@ -137,6 +137,8 @@ pub(super) fn save_digest(run: &RunSummary, tier: &str, hit: bool) {
                 summary: "read: Standard PC (Q35 + ICH9, 2009)".into(),
                 process: "/bin/sh".into(),
                 count: 1,
+                cookie: 7,
+                calls: vec![41, 42],
             }],
         });
         digest.detections = Some(if hit {
@@ -596,4 +598,151 @@ fn selecting_a_run_opens_the_details_panel_and_a_broken_custody_log_is_marked_in
             .any(|(sha, ok)| *sha == script && !*ok)
     });
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn the_sample_window_has_no_widget_id_clash_on_any_tab() {
+    // Item 12: egui's red "Second use of widget ID" boxes in the sample
+    // window. With the debug warnings on, no tab paints one, at a wide and a
+    // narrow size, with digests (evasion, techniques, rules) and strings.
+    let root = super::samples_list::temp("detail-clash");
+    let (script, _, _) = super::samples_list::fixture(&root);
+    let first = save_run(&root, &script, "install.sh", "r1", 1_000, true);
+    let second = save_run(&root, &script, "install.sh", "r2", 9_000, true);
+    save_digest(&first, "medium", true);
+    save_digest(&second, "high", true);
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    ctx.options_mut(|options| options.warn_on_id_clash = true);
+    let mut app = app();
+    app.options.data_dir = root.clone();
+    app.snapshot.vms.push(VmConfig {
+        id: "vm".into(),
+        name: "Debian".into(),
+        ..VmConfig::default()
+    });
+    app.rules_ui.set_packs_for_test(Vec::new());
+    app.open_library(crate::workspace::LibraryPage::Samples);
+    until(&mut app, &ctx, |app| app.samples_page.is_loaded());
+    app.samples_page.open_detail(&script);
+    until(&mut app, &ctx, |app| {
+        matches!(app.samples_page.detail_probe(), Some((_, _, Some(_))))
+    });
+    for size in [SIZE, egui::vec2(1100.0, 700.0)] {
+        for tab in ["summary", "runs", "custody", "notes", "summary"] {
+            app.samples_page.show_detail_tab(tab);
+            for frame in 0..4 {
+                let output = render(&mut app, &ctx, size);
+                let clashes: Vec<String> = texts(&output)
+                    .into_iter()
+                    .map(|(text, _)| text)
+                    .filter(|text| text.contains('🔥'))
+                    .collect();
+                assert!(
+                    clashes.is_empty(),
+                    "{tab} at {size:?}, frame {frame}: {clashes:?}"
+                );
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn many_techniques_wrap_whole_chips_and_nothing_passes_the_window_edge() {
+    // Items 6 and 9: the ATT&CK rows ran past the right edge (no wrap, no
+    // scroll) and pushed every table of the Summary off the window with them.
+    use antinomie_monitor_core::run_digest::{Behaviour, BehaviourHit, RunDigest};
+    let root = super::samples_list::temp("detail-techniques");
+    let (script, _, _) = super::samples_list::fixture(&root);
+    let run = save_run(&root, &script, "install.sh", "r1", 1_000, true);
+    save_digest(&run, "high", false);
+    let ids = [
+        "T1027.004",
+        "T1059.004",
+        "T1105",
+        "T1129",
+        "T1053.002",
+        "T1053.006",
+        "T1098.004",
+        "T1543.002",
+        "T1068",
+        "T1548.001",
+        "T1610",
+        "T1611",
+        "T1014",
+        "T1027.002",
+        "T1036.005",
+        "T1003.007",
+        "T1005",
+        "T1552.001",
+        "T1016",
+        "T1046",
+        "T1049",
+    ];
+    RunDigest::update(&run.directory, |digest| {
+        let behaviour = digest.behaviour.get_or_insert_with(Behaviour::default);
+        behaviour.rules.push(BehaviourHit {
+            rule: "execution.many".into(),
+            tier: "high".into(),
+            category: "execution".into(),
+            attack: ids.iter().map(|id| (*id).to_owned()).collect(),
+            count: 1,
+            first_ns: 1,
+        });
+    })
+    .unwrap();
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut app = app();
+    app.options.data_dir = root.clone();
+    app.snapshot.vms.push(VmConfig {
+        id: "vm".into(),
+        name: "Debian".into(),
+        ..VmConfig::default()
+    });
+    app.rules_ui.set_packs_for_test(Vec::new());
+    app.open_library(crate::workspace::LibraryPage::Samples);
+    until(&mut app, &ctx, |app| app.samples_page.is_loaded());
+    app.samples_page.open_detail(&script);
+    until(&mut app, &ctx, |app| {
+        app.samples_page.detail_probe().is_some()
+    });
+    for size in [egui::vec2(1920.0, 1080.0), egui::vec2(1100.0, 700.0)] {
+        for font in [16.0, 18.0, 20.0] {
+            theme::text_size(&ctx, font);
+            for _ in 0..4 {
+                render(&mut app, &ctx, size);
+            }
+            crate::app::samples_page::SamplesPage::scroll_detail_to(&ctx, "ATT&CK techniques");
+            for _ in 0..3 {
+                render(&mut app, &ctx, size);
+            }
+            let output = render(&mut app, &ctx, size);
+            let mut past = Vec::new();
+            for shape in &output.shapes {
+                let mut found = |text: &str, rect: egui::Rect| {
+                    // The page, not the app's toolbar and dock tabs (which
+                    // scroll on their own).
+                    if rect.right() > size.x + 0.5 && rect.top() > 150.0 && rect.top() < size.y {
+                        past.push(format!("{text} @ {:.0}", rect.right()));
+                    }
+                };
+                galleys(&shape.shape, &mut found);
+            }
+            assert!(
+                past.is_empty(),
+                "past the edge at {size:?}/{font}: {past:?}"
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+fn galleys(shape: &egui::Shape, found: &mut impl FnMut(&str, egui::Rect)) {
+    match shape {
+        egui::Shape::Text(text) => found(text.galley.text(), text.visual_bounding_rect()),
+        egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| galleys(shape, found)),
+        _ => {}
+    }
 }

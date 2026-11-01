@@ -9,8 +9,8 @@ use crate::{
 };
 use antinomie_monitor_core::{samples::TagKind, AnalysisKind, AnalysisSection};
 
-/// Rows the string tables show before they say "Showing 6 of N".
-const CAP: usize = 6;
+/// Rows a page of a string table shows.
+const PAGE: usize = 10;
 
 /// What a click in the Summary asks of the app.
 enum Go {
@@ -30,6 +30,8 @@ enum Go {
     View,
     /// The Notes tab.
     Notes,
+    /// Open the run in Syscall Trace with this filter (a check's evidence).
+    Trace(usize, String),
 }
 
 impl MonitorApp {
@@ -87,7 +89,9 @@ impl MonitorApp {
                     go = Some(Go::Rule(number, engine, rule));
                 }
                 super::triage_parts::techniques(ui, data);
-                super::triage_parts::evasion(ui, data);
+                if let Some((number, filter)) = super::triage_parts::evasion(ui, data) {
+                    go = Some(Go::Trace(number, filter));
+                }
                 recent_runs(ui, data, &mut go, self.settings.font_size);
                 super::triage_parts::indicators(ui, data);
                 if let Some(scanned) = scanned {
@@ -164,6 +168,11 @@ impl MonitorApp {
             Some(Go::Run(number)) => {
                 if let Some(entry) = data.runs.iter().find(|entry| entry.number == number) {
                     self.open_sample_run(&entry.run, crate::workspace::Panel::Triage, None);
+                }
+            }
+            Some(Go::Trace(number, filter)) => {
+                if let Some(entry) = data.runs.iter().find(|entry| entry.number == number) {
+                    self.open_sample_run(&entry.run, crate::workspace::Panel::Trace, Some(filter));
                 }
             }
             Some(Go::Rule(number, engine, rule)) => {
@@ -435,25 +444,23 @@ fn strings(ui: &mut egui::Ui, data: &Data, scanned: &Scanned, go: &mut Option<Go
                 ui.colored_label(theme::error(), error);
             }
             (Scanned::Done(strings), Some(reference)) => {
+                let range = pager_range(ui, "sample_summary_strings", strings.interesting.len());
                 string_table(
                     ui,
                     "sample_summary_strings",
-                    &strings.interesting,
+                    &strings.interesting[range.clone()],
                     &["Type", "String", "Offset"],
                     font,
                     |row| vec![row.kind.clone(), row.shown.clone(), row.found_in.clone()],
                     "No URLs, IPs, domains, paths or keys.",
                 );
                 let total = strings_total(&reference.report);
-                let label = format!(
-                    "{}Strings ({total}) ›",
-                    if strings.interesting.len() > CAP {
-                        format!("Showing {CAP} of {} · ", strings.interesting.len())
-                    } else {
-                        String::new()
-                    }
-                );
-                if parts::more(ui, &label).clicked() {
+                if pager(
+                    ui,
+                    "sample_summary_strings",
+                    strings.interesting.len(),
+                    &format!("Open Strings ({})", crate::values::thousands(total)),
+                ) {
                     *go = Some(Go::Report(AnalysisKind::Strings));
                 }
             }
@@ -464,10 +471,11 @@ fn strings(ui: &mut egui::Ui, data: &Data, scanned: &Scanned, go: &mut Option<Go
         return;
     };
     parts::section(ui, "Regex matches", Some(strings.total as usize), |ui| {
+        let range = pager_range(ui, "sample_summary_regex", strings.matches.len());
         string_table(
             ui,
             "sample_summary_regex",
-            &strings.matches,
+            &strings.matches[range],
             &["Category", "Type", "Match", "Found in", "Seen"],
             font,
             |row| {
@@ -481,20 +489,76 @@ fn strings(ui: &mut egui::Ui, data: &Data, scanned: &Scanned, go: &mut Option<Go
             },
             "No regex matches.",
         );
-        let shown = strings.matches.len().min(CAP);
-        let label = format!(
-            "{}Regex matches ({}) ›",
-            if strings.total as usize > shown && shown > 0 {
-                format!("Showing {shown} of {} · ", strings.total)
-            } else {
-                String::new()
-            },
-            strings.total
-        );
-        if parts::more(ui, &label).clicked() {
+        if pager(
+            ui,
+            "sample_summary_regex",
+            strings.matches.len(),
+            &format!(
+                "Open Regex matches ({})",
+                crate::values::thousands(strings.total)
+            ),
+        ) {
             *go = Some(Go::Report(AnalysisKind::Regex));
         }
     });
+}
+
+/// The rows of the current page of the table `id` of `len` rows.
+fn pager_range(ui: &egui::Ui, id: &str, len: usize) -> std::ops::Range<usize> {
+    let page = ui
+        .ctx()
+        .data(|data| data.get_temp::<usize>(egui::Id::new((id, "page"))))
+        .unwrap_or(0);
+    let pages = len.div_ceil(PAGE).max(1);
+    let start = page.min(pages - 1) * PAGE;
+    start..(start + PAGE).min(len)
+}
+
+/// Under a paged table: Previous, "11–20 of 40", Next, and a button that
+/// opens the whole list. True when that button was clicked.
+fn pager(ui: &mut egui::Ui, id: &str, len: usize, open: &str) -> bool {
+    let key = egui::Id::new((id, "page"));
+    let pages = len.div_ceil(PAGE).max(1);
+    let mut page = ui
+        .ctx()
+        .data(|data| data.get_temp::<usize>(key))
+        .unwrap_or(0)
+        .min(pages - 1);
+    let mut opened = false;
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        if pages > 1 {
+            if ui
+                .add_enabled(page > 0, egui::Button::new("‹ Previous"))
+                .clicked()
+            {
+                page -= 1;
+            }
+            let start = page * PAGE;
+            ui.label(
+                RichText::new(format!(
+                    "{}–{} of {}",
+                    start + 1,
+                    (start + PAGE).min(len),
+                    crate::values::thousands(len as u64)
+                ))
+                .color(theme::muted()),
+            );
+            if ui
+                .add_enabled(page + 1 < pages, egui::Button::new("Next ›"))
+                .clicked()
+            {
+                page += 1;
+            }
+            ui.add_space(8.0);
+        }
+        opened = ui
+            .button(open)
+            .on_hover_text("Open the whole list in Static analysis")
+            .clicked();
+    });
+    ui.ctx().data_mut(|data| data.insert_temp(key, page));
+    opened
 }
 
 /// How many strings the report's Strings tab lists.
@@ -513,7 +577,7 @@ fn counted(section: &AnalysisSection) -> u64 {
         .map_or(section.entries.len() as u64, |listing| listing.rows)
 }
 
-/// Up to [`CAP`] rows of text cells, the last column of a numeric table
+/// One page of rows of text cells, the last column of a numeric table
 /// right-aligned; one line each with the full text in the tooltip.
 fn string_table(
     ui: &mut egui::Ui,
@@ -528,7 +592,7 @@ fn string_table(
         parts::muted_line(ui, empty);
         return;
     }
-    let shown = &rows[..rows.len().min(CAP)];
+    let shown = rows;
     let wide = if titles.len() == 3 { 1 } else { 2 };
     // Text columns are as wide as their longest name (header and shown rows),
     // so "Linux behaviour" and "Persistence path" are not cut; the string
@@ -661,7 +725,9 @@ fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go
                         .map_or("during the run", |source| source.label())
                 ));
             }
-            widgets::chip(ui, format!("{:?}", report.state), Tone::Good);
+            // The report's own state: green only when every check finished.
+            let (word, tone) = report_state(report.state);
+            widgets::chip(ui, word, tone);
             if ui
                 .button("Open Static analysis")
                 .on_hover_text("Open this report in the Static analysis tab")
@@ -693,6 +759,22 @@ fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go
                         .button("Open")
                         .on_hover_text(format!("Open {name} in Static analysis"))
                         .clicked();
+                    let (word, tone) = section_state(section.state);
+                    let chip = widgets::chip_wide(ui, word, tone, state_width(ui));
+                    // Why a check is not Complete: its limits, else its summary.
+                    let why: Vec<String> = section
+                        .limits
+                        .iter()
+                        .map(|limit| limit.text.clone())
+                        .collect();
+                    if !why.is_empty() {
+                        chip.on_hover_text(why.join("\n"));
+                    } else if section.state
+                        != antinomie_monitor_core::AnalysisSectionState::Complete
+                        && !section.summary.is_empty()
+                    {
+                        chip.on_hover_text(&section.summary);
+                    }
                     ui.add(
                         egui::Label::new(RichText::new(&value).monospace())
                             .truncate()
@@ -723,6 +805,48 @@ fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go
             }
         }
     });
+}
+
+/// A static report's state as a word and a tone: green only for Complete.
+fn report_state(state: antinomie_monitor_core::AnalysisState) -> (&'static str, Tone) {
+    use antinomie_monitor_core::AnalysisState as S;
+    match state {
+        S::Complete => ("Complete", Tone::Good),
+        S::Partial => ("Partial", Tone::Warn),
+        S::Unavailable => ("Unavailable", Tone::Error),
+        S::Cancelled => ("Cancelled", Tone::Neutral),
+        S::Acquiring => ("Acquiring", Tone::Info),
+        S::Queued => ("Queued", Tone::Neutral),
+        S::Running => ("Running", Tone::Info),
+    }
+}
+
+/// One category's state, as the Static analysis tab colours it.
+fn section_state(state: antinomie_monitor_core::AnalysisSectionState) -> (&'static str, Tone) {
+    use antinomie_monitor_core::AnalysisSectionState as S;
+    match state {
+        S::Complete => ("Complete", Tone::Good),
+        S::Partial => ("Partial", Tone::Warn),
+        S::Timeout => ("Timeout", Tone::Warn),
+        S::Unavailable => ("Unavailable", Tone::Error),
+        S::Pending => ("Pending", Tone::Neutral),
+        S::Running => ("Running", Tone::Info),
+    }
+}
+
+/// The width of a state chip, so the column of them lines up.
+fn state_width(ui: &egui::Ui) -> f32 {
+    widgets::chip_width(
+        ui,
+        &[
+            "Complete",
+            "Partial",
+            "Timeout",
+            "Unavailable",
+            "Pending",
+            "Running",
+        ],
+    )
 }
 
 fn short_id(id: &str) -> String {
@@ -949,11 +1073,23 @@ fn identity(
                 }
             });
         };
-        // Side by side when the window is wide enough, else one above the other.
+        // Side by side when the window is wide enough, else one above the
+        // other. Side by side, the names the sample went by sit under the
+        // description and facts, so neither column ends in an empty box.
         if ui.available_width() >= SIDE_BY_SIDE {
             ui.columns(2, |columns| {
-                parts::equal_boxes(columns, left_body, right_body)
+                parts::panel_frame().show(&mut columns[0], |ui| {
+                    ui.set_width(ui.available_width());
+                    left_body(ui);
+                });
+                columns[0].add_space(8.0);
+                aliases(&mut columns[0], data, font);
+                parts::panel_frame().show(&mut columns[1], |ui| {
+                    ui.set_width(ui.available_width());
+                    right_body(ui);
+                });
             });
+            ui.spacing_mut().item_spacing.x = spacing;
         } else {
             parts::panel_frame().show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -964,10 +1100,10 @@ fn identity(
                 ui.set_width(ui.available_width());
                 right_body(ui);
             });
+            ui.spacing_mut().item_spacing.x = spacing;
+            ui.add_space(8.0);
+            aliases(ui, data, font);
         }
-        ui.spacing_mut().item_spacing.x = spacing;
-        ui.add_space(8.0);
-        aliases(ui, data, font);
     });
 }
 

@@ -600,6 +600,10 @@ impl MonitorApp {
             .id(egui::Id::new("samples_edit_tags"))
             .open(&mut open)
             .default_width(480.0)
+            // An auto-sized window lets a wrapping row grow to its widest
+            // allowed width: the technique tags then ran past the screen.
+            // They wrap within this width instead.
+            .max_width(560.0)
             .resizable(false)
             .show(ctx, |ui| {
                 picker.show(ui, &suggested, known_custom);

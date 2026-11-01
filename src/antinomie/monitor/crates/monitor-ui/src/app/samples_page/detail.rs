@@ -268,7 +268,11 @@ pub(super) fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &
                 run_id: run.id.clone(),
                 number,
                 directory: run.directory.join("analysis"),
-                report: found.clone(),
+                report: {
+                    let mut report = found.clone();
+                    report.settle_value_limits();
+                    report
+                },
             });
         }
         let deleted = retained.contains(&run.id);

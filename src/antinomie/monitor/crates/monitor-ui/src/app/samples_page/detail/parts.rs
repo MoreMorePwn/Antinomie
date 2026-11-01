@@ -91,38 +91,6 @@ pub(super) fn panel_frame() -> egui::Frame {
         .inner_margin(14)
 }
 
-/// Two panels side by side in `columns`, one height (the taller one's), the
-/// same margin and border as [`panel_frame`].
-pub(super) fn equal_boxes(
-    columns: &mut [egui::Ui],
-    left: impl FnOnce(&mut egui::Ui),
-    right: impl FnOnce(&mut egui::Ui),
-) {
-    let frame = panel_frame();
-    let mut first = frame.begin(&mut columns[0]);
-    first
-        .content_ui
-        .set_width(first.content_ui.available_width());
-    left(&mut first.content_ui);
-    let mut second = frame.begin(&mut columns[1]);
-    second
-        .content_ui
-        .set_width(second.content_ui.available_width());
-    right(&mut second.content_ui);
-    let height = first
-        .content_ui
-        .min_rect()
-        .height()
-        .max(second.content_ui.min_rect().height());
-    // `set_min_height` counts from the cursor, which would add the content's
-    // own height again: grow each box down to the taller one's bottom.
-    for ui in [&mut first.content_ui, &mut second.content_ui] {
-        ui.expand_to_include_y(ui.min_rect().min.y + height);
-    }
-    first.end(&mut columns[0]);
-    second.end(&mut columns[1]);
-}
-
 /// The width a grid's value column may take in `ui`: what is left after the
 /// widest of `labels`, the gap between the columns and `extra` (a button
 /// beside the value). Values wrap at it instead of widening the grid.
