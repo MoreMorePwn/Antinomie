@@ -432,6 +432,7 @@ impl View {
             self.open_pick(ctx, scanned, pick);
         }
         self.journal.show(ctx, self.identity.as_ref(), self.clock);
+        show_rule_window(ctx);
     }
 }
 
@@ -483,7 +484,9 @@ fn finding_body(
             }
             if !parsed.summary.is_empty() {
                 section(ui, "Description");
-                ui.add(egui::Label::new(RichText::new(&parsed.summary).color(theme::text())).wrap());
+                ui.add(
+                    egui::Label::new(RichText::new(&parsed.summary).color(theme::text())).wrap(),
+                );
             }
             if !parsed.rows.is_empty() {
                 section(ui, "Rule metadata");
@@ -495,39 +498,148 @@ fn finding_body(
                 rows_grid(ui, "detection-finding-metadata", &rows);
             }
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(theme::section_title(ui, "Rule"));
-                if !finding.rule_text.is_empty() && ui.button("Copy rule").clicked() {
-                    ui.ctx().copy_text(finding.rule_text.clone());
-                }
-            });
-            if finding.rule_text.is_empty() {
-                ui.weak("The rule text was not retained for results saved before this version. Scan again to keep it.");
-            } else {
-                egui::ScrollArea::vertical()
-                    .id_salt("detection-finding-rule")
-                    .max_height(260.0)
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        let mut text: &str = &finding.rule_text;
-                        ui.add(
-                            egui::TextEdit::multiline(&mut text)
-                                .font(egui::TextStyle::Monospace)
-                                .desired_width(f32::INFINITY),
-                        );
-                    });
-            }
+            rule_text(
+                ui,
+                egui::Id::new(("detection-finding-rule", &finding.rule_id, &finding.title)),
+                &format!("{} · {}", name(report.engine), finding.title),
+                &finding.rule_text,
+            );
             section(
                 ui,
                 &format!("Evidence locations ({})", finding.evidence.len()),
             );
-            if let Some(pick) = evidence_list(ui, report.engine, finding, "detection-finding-hits", 240.0)
+            if let Some(pick) =
+                evidence_list(ui, report.engine, finding, "detection-finding-hits", 240.0)
             {
                 clicked = Some(pick);
             }
             byte_preview(ui, preview, loading, finding);
         });
     clicked
+}
+
+/// The rule as written: monospace, in a box the person can make taller
+/// (drag its lower edge), long lines wrapped or scrolled sideways, with Copy
+/// and a button that opens the whole rule in a large window of its own.
+fn rule_text(ui: &mut egui::Ui, id: egui::Id, title: &str, text: &str) {
+    let wrap_id = id.with("wrap");
+    let mut wrap = ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(wrap_id))
+        .unwrap_or(false);
+    ui.horizontal_wrapped(|ui| {
+        ui.label(theme::section_title(ui, "Rule"));
+        if text.is_empty() {
+            return;
+        }
+        if ui.button("Copy rule").clicked() {
+            ui.ctx().copy_text(text.to_owned());
+        }
+        if ui
+            .checkbox(&mut wrap, "Wrap lines")
+            .on_hover_text("Wrap long lines, or keep each on one line and scroll sideways")
+            .changed()
+        {
+            ui.ctx().data_mut(|data| data.insert_temp(wrap_id, wrap));
+        }
+        if ui
+            .button(format!(
+                "{} Open in a window",
+                egui_phosphor::regular::ARROWS_OUT
+            ))
+            .on_hover_text("Show the whole rule in a large window of its own")
+            .clicked()
+        {
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(
+                    RULE_WINDOW.into(),
+                    Some((title.to_owned(), text.to_owned())),
+                )
+            });
+        }
+    });
+    if text.is_empty() {
+        ui.weak("The rule text was not retained for results saved before this version. Scan again to keep it.");
+        return;
+    }
+    let lines = text.lines().count().max(1) as f32;
+    let row = ui.text_style_height(&egui::TextStyle::Monospace);
+    // Tall enough for a whole short rule; a long one starts at about twenty
+    // lines and grows by dragging.
+    let natural = (lines * row + 16.0).clamp(row * 6.0, row * 22.0);
+    egui::Resize::default()
+        .id_salt(id.with("resize"))
+        .resizable([false, true])
+        .default_size([ui.available_width(), natural])
+        .min_height(row * 4.0)
+        .max_width(ui.available_width())
+        .show(ui, |ui| {
+            egui::Frame::new()
+                .fill(ui.visuals().code_bg_color)
+                .corner_radius(4)
+                .inner_margin(egui::Margin::same(6))
+                .show(ui, |ui| {
+                    ui.set_min_size(ui.available_size());
+                    rule_lines(ui, id.with("scroll"), text, wrap);
+                });
+        });
+}
+
+/// The rule's lines, selectable, in a scroll area of the space given.
+fn rule_lines(ui: &mut egui::Ui, id: egui::Id, text: &str, wrap: bool) {
+    egui::ScrollArea::new([!wrap, true])
+        .id_salt(id)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let label = egui::Label::new(RichText::new(text).monospace().color(theme::text()))
+                .selectable(true);
+            ui.add(if wrap { label.wrap() } else { label.extend() });
+        });
+}
+
+/// The temp-memory key of the large rule window: its title and the rule.
+const RULE_WINDOW: &str = "detection-rule-window";
+
+/// The large window "Open in a window" asks for, while it is open.
+pub(super) fn show_rule_window(ctx: &egui::Context) {
+    let key = egui::Id::new(RULE_WINDOW);
+    let Some((title, text)) = ctx
+        .data(|data| data.get_temp::<Option<(String, String)>>(key))
+        .flatten()
+    else {
+        return;
+    };
+    let mut open = true;
+    let area = crate::title_bar::content_rect(ctx);
+    crate::widgets::window(format!("Rule · {title}"))
+        .id(key.with("window"))
+        .open(&mut open)
+        .default_size([
+            (area.width() * 0.7).max(480.0),
+            (area.height() * 0.8).max(360.0),
+        ])
+        .resizable(true)
+        .show(ctx, |ui| {
+            let wrap_id = key.with("wrap");
+            let mut wrap = ui
+                .ctx()
+                .data(|data| data.get_temp::<bool>(wrap_id))
+                .unwrap_or(false);
+            ui.horizontal(|ui| {
+                if ui.button("Copy rule").clicked() {
+                    ui.ctx().copy_text(text.clone());
+                }
+                if ui.checkbox(&mut wrap, "Wrap lines").changed() {
+                    ui.ctx().data_mut(|data| data.insert_temp(wrap_id, wrap));
+                }
+                ui.weak(format!("{} lines", text.lines().count()));
+            });
+            ui.add_space(4.0);
+            rule_lines(ui, key.with("scroll"), &text, wrap);
+        });
+    if !open {
+        ctx.data_mut(|data| data.remove::<Option<(String, String)>>(key));
+    }
 }
 
 fn section(ui: &mut egui::Ui, title: &str) {

@@ -118,6 +118,9 @@ impl AttemptBudget {
     }
 }
 
+/// Runs whose saved results are kept in memory.
+const KEPT_RUNS: usize = 6;
+
 /// How long the size and time of an evidence file are trusted before the
 /// disk is asked again. Detection looks at them every frame.
 const STAT_KEEP: Duration = Duration::from_secs(1);
@@ -183,6 +186,9 @@ enum Admit {
 
 #[derive(Default)]
 pub(super) struct View {
+    /// The saved results of the last runs shown, so a run shown again has
+    /// them at once instead of reading them back behind a progress bar.
+    kept: Vec<(Identity, [Option<Report>; 3])>,
     pub settings: engine::Settings,
     pub selected: Engine,
     identity: Option<(PathBuf, Identity)>,
@@ -259,6 +265,42 @@ impl View {
     /// Saved evidence was deleted: look at the listed captures and cores again.
     pub(super) fn evidence_deleted(&mut self) {
         self.presence.invalidate();
+        self.kept.clear();
+    }
+
+    /// Show `identity`'s run. Its saved results come from memory when the
+    /// run was shown a moment ago (true: nothing to read); otherwise they are
+    /// to be read from disk (false). Nothing is re-scanned here: whether a
+    /// scan is due is decided as before, from the selection digest and the
+    /// evidence key the results carry.
+    fn switch_identity(&mut self, identity: Option<(PathBuf, Identity)>) -> bool {
+        if let Some((_, old)) = self.identity.take() {
+            let saved = self
+                .results
+                .clone()
+                .map(|result| result.and_then(Result::ok));
+            if saved.iter().any(Option::is_some) {
+                self.kept.retain(|(kept, _)| *kept != old);
+                self.kept.push((old, saved));
+                if self.kept.len() > KEPT_RUNS {
+                    self.kept.remove(0);
+                }
+            }
+        }
+        self.reset();
+        self.identity = identity;
+        let Some((_, new)) = self.identity.as_ref() else {
+            return false;
+        };
+        let Some(at) = self.kept.iter().position(|(kept, _)| kept == new) else {
+            return true;
+        };
+        let (_, saved) = self.kept.remove(at);
+        self.results = saved.map(|report| report.map(Ok));
+        for index in 0..3 {
+            self.rows(index);
+        }
+        false
     }
     fn reset(&mut self) {
         if let Some(cancel) = self.cancel.take() {
@@ -404,9 +446,7 @@ impl View {
                     },
                 )
             });
-        if self.identity != identity {
-            self.reset();
-            self.identity = identity;
+        if self.identity != identity && self.switch_identity(identity) {
             if let Some(request) = self.request(Engine::Yara, None) {
                 let (tx, rx) = mpsc::sync_channel(1);
                 let ctx = ctx.clone();
@@ -747,7 +787,11 @@ impl View {
             self.notes[index] = evidence_note(&key);
             let digest = self.current_digest(ctx, index);
             if digest == "preparing" {
-                self.phase[index] = "preparing".into();
+                // Saved results stay on screen while the rule sets are
+                // checked again in the background: no bar over them.
+                if !matches!(self.results[index], Some(Ok(_))) {
+                    self.phase[index] = "preparing".into();
+                }
                 continue;
             }
             if key.starts_with("ready:") {
@@ -1222,6 +1266,52 @@ mod tests {
             view.auto_key[0].is_empty(),
             "run-specific scan identity must reset"
         );
+    }
+
+    fn run(id: &str) -> Option<(PathBuf, Identity)> {
+        Some((
+            PathBuf::from(format!("/runs/{id}")),
+            Identity {
+                vm_id: "v".into(),
+                boot_id: "b".into(),
+                run_id: id.into(),
+                root_cookie: 1,
+            },
+        ))
+    }
+
+    #[test]
+    fn a_run_shown_again_has_its_saved_results_at_once_and_deleted_evidence_forgets_them() {
+        // Item 22: coming back to a run read its results again behind the
+        // preparing bar. A run shown a moment ago needs no read.
+        let mut view = View::default();
+        assert!(view.switch_identity(run("a")), "first time: read from disk");
+        view.results[0] = Some(Ok(report(vec![finding("r1", "Rule one", Vec::new())])));
+        assert!(
+            view.switch_identity(run("b")),
+            "another run: read from disk"
+        );
+        assert!(view.results.iter().all(Option::is_none));
+        assert!(!view.switch_identity(run("a")), "back to a: from memory");
+        assert!(matches!(&view.results[0], Some(Ok(report)) if report.findings.len() == 1));
+        assert!(view.results[1].is_none());
+        // Run b showed nothing saved, so it is not kept.
+        assert!(view.switch_identity(run("b")));
+        // Deleted evidence: every kept result is read again.
+        view.evidence_deleted();
+        assert!(view.switch_identity(run("a")));
+        // A failed read is never kept as a result.
+        view.results[0] = Some(Err("unreadable".into()));
+        view.switch_identity(run("b"));
+        assert!(view.switch_identity(run("a")));
+        // At most KEPT_RUNS runs are kept; the oldest goes first.
+        for index in 0..=KEPT_RUNS {
+            view.switch_identity(run(&format!("r{index}")));
+            view.results[0] = Some(Ok(report(Vec::new())));
+        }
+        view.switch_identity(run("last"));
+        assert!(view.switch_identity(run("r0")), "the oldest was dropped");
+        assert!(!view.switch_identity(run(&format!("r{KEPT_RUNS}"))));
     }
 
     pub(super) fn finding(rule: &str, title: &str, evidence: Vec<Evidence>) -> Finding {
