@@ -65,27 +65,8 @@ pub(crate) fn fail_next_provision() {
     FAIL_PROVISION.with(|fail| fail.set(true));
 }
 
-/// A guest account is made by running the guest's own programs on its disk in
-/// the x86-64 libguestfs appliance, which cannot run another architecture's:
-/// a base that needs one (Debian) is refused for arm64 until it is made inside
-/// the guest.
-pub(crate) fn foreign_account(
-    guest: &crate::api::GuestProfile,
-    arch: crate::api::GuestArch,
-) -> Result<(), String> {
-    if guest.requires_credentials && arch != crate::api::GuestArch::X86_64 {
-        return Err(format!(
-            "{} VMs of {} cannot have their guest account made yet (it is made with the \
-             guest's own programs, which this host's disk tools cannot run for {}); use a \
-             BusyBox {} base",
-            arch.label(),
-            guest.label,
-            arch.label(),
-            arch.label()
-        ));
-    }
-    Ok(())
-}
+mod foreign;
+pub(crate) use foreign::ProvisionBoot;
 
 mod cloud_state;
 pub(crate) use cloud_state::ensure as ensure_cloud_state;
@@ -369,15 +350,23 @@ fn fish_quote(text: &str) -> String {
 
 /// The interface provisioning configures for a VM with `profile` on a base
 /// whose `stealth_support` names its NIC by PCI slot (`onboardnic`): the
-/// profile's slot's name. None on other bases (they configure their NIC
-/// themselves).
+/// profile's slot's name; on arm64 (`virt`, whose PC slots mean nothing and
+/// whose display takes the first free ones) always 00:19.0's. None on other
+/// bases (they configure their NIC themselves).
 pub(crate) fn provisioned_interface(
     stealth_support: &[String],
     profile: &crate::stealth::StealthProfile,
+    arch: crate::api::GuestArch,
 ) -> Option<&'static str> {
     crate::stealth::BaseSupport::from_list(stealth_support)
         .onboard_nic
-        .then(|| profile.nic_slot().interface())
+        .then(|| {
+            if arch == crate::api::GuestArch::X86_64 {
+                profile.nic_slot().interface()
+            } else {
+                crate::stealth::NicSlot::Ich.interface()
+            }
+        })
 }
 
 /// A provisioned account for tests that need a record but no disk.
@@ -552,24 +541,26 @@ impl GuestAccount {
     /// Create the account on a VM's new disk (see [`provision`](Self::provision)):
     /// the guest's own chpasswd hashes the password, so the hash is the one
     /// the guest's Debian makes (yescrypt on Debian 13), and the record keeps
-    /// that hash for later resets.
+    /// that hash for later resets. `boot`: a foreign-architecture base's
+    /// provisioning boot, which runs the guest's programs.
     pub(crate) fn create(
         credentials: GuestCredentials,
         disk: &Path,
         ram_mib: u32,
         interface: Option<&str>,
         boot_disk: &str,
+        boot: Option<&ProvisionBoot>,
     ) -> Result<Self, String> {
         let mut account = Self::unprovisioned(credentials.username)?;
         account.boot_disk = Some(boot_disk.to_owned());
         let executable = Self::provision_tool()?;
-        account.provision_with(
-            disk,
-            &executable,
-            ram_mib,
-            &Password::Plain(&credentials.password),
-            interface,
-        )?;
+        let password = Password::Plain(&credentials.password);
+        match boot {
+            Some(boot) => {
+                account.provision_foreign(disk, &executable, ram_mib, &password, interface, boot)?
+            }
+            None => account.provision_with(disk, &executable, ram_mib, &password, interface)?,
+        }
         Ok(account)
     }
     fn unprovisioned(username: String) -> Result<Self, String> {
@@ -671,17 +662,18 @@ impl GuestAccount {
         ram_mib: u32,
         interface: Option<&str>,
         boot_disk: &str,
+        boot: Option<&ProvisionBoot>,
     ) -> Result<(), String> {
         let executable = Self::provision_tool()?;
         self.boot_disk = Some(boot_disk.to_owned());
         let hash = self.password_hash.clone();
-        self.provision_with(
-            disk,
-            &executable,
-            ram_mib,
-            &Password::Hashed(&hash),
-            interface,
-        )
+        let password = Password::Hashed(&hash);
+        match boot {
+            Some(boot) => {
+                self.provision_foreign(disk, &executable, ram_mib, &password, interface, boot)
+            }
+            None => self.provision_with(disk, &executable, ram_mib, &password, interface),
+        }
     }
     fn provision_with(
         &mut self,
@@ -751,10 +743,20 @@ impl GuestAccount {
         Ok(())
     }
     /// Point the disk's network configuration at `interface` (the VM off):
-    /// the device profile moved the NIC to another PCI slot.
-    pub(crate) fn set_interface(&mut self, disk: &Path, interface: &str) -> Result<(), String> {
+    /// the device profile moved the NIC to another PCI slot. On a
+    /// foreign-architecture disk the appliance edits the file itself.
+    pub(crate) fn set_interface(
+        &mut self,
+        disk: &Path,
+        interface: &str,
+        arch: crate::api::GuestArch,
+    ) -> Result<(), String> {
         let executable = Self::provision_tool()?;
-        self.set_interface_with(disk, &executable, interface)
+        if arch == crate::api::GuestArch::X86_64 {
+            self.set_interface_with(disk, &executable, interface)
+        } else {
+            self.set_interface_foreign(disk, &executable, interface)
+        }
     }
     fn set_interface_with(
         &mut self,
@@ -772,8 +774,21 @@ impl GuestAccount {
         Ok(())
     }
     /// Point grub-pc's debconf answer at `device` (the VM off): the device
-    /// profile moved the disk to another bus. A UEFI disk has no such answer.
-    pub(crate) fn set_boot_disk(&mut self, disk: &Path, device: &str) -> Result<(), String> {
+    /// profile moved the disk to another bus. A UEFI disk has no such answer,
+    /// nor has an arm64 disk (no GRUB for BIOS): only the record follows.
+    pub(crate) fn set_boot_disk(
+        &mut self,
+        disk: &Path,
+        device: &str,
+        arch: crate::api::GuestArch,
+    ) -> Result<(), String> {
+        if arch != crate::api::GuestArch::X86_64 {
+            if !valid_boot_disk(device) {
+                return Err("invalid boot disk name".into());
+            }
+            self.boot_disk = Some(device.to_owned());
+            return Ok(());
+        }
         let executable = Self::provision_tool()?;
         self.set_boot_disk_with(disk, &executable, device)
     }

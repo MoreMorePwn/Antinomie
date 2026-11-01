@@ -300,7 +300,7 @@ fn name_option(name: &str) -> String {
     format!("guest={}", crate::stealth::escape(name))
 }
 
-fn qemu_command(qemu: &Path) -> Command {
+pub(crate) fn qemu_command(qemu: &Path) -> Command {
     match crate::dependencies::executable(Path::new("setpriv")) {
         Some(setpriv) => {
             let mut command = Command::new(setpriv);
@@ -776,9 +776,18 @@ impl VmProcess {
         if let Some(initrd) = &bundle.initrd {
             cmd.arg("-initrd").arg(initrd);
         }
-        let nic = match arm_machine {
-            Some(_) => crate::stealth::arm64::nic_option(&stealth),
-            None => crate::stealth::nic_option_for(&stealth, nic_slot),
+        // An arm64 machine's card sits where the disk's configuration names
+        // it too, on a base that names its NIC by slot (Debian).
+        let nic = match (arm_machine, nic_slot) {
+            (Some(_), Some(slot)) => {
+                format!(
+                    "{},{}",
+                    crate::stealth::arm64::nic_option(&stealth),
+                    slot.address()
+                )
+            }
+            (Some(_), None) => crate::stealth::arm64::nic_option(&stealth),
+            (None, _) => crate::stealth::nic_option_for(&stealth, nic_slot),
         };
         if let Some(netdev) = user_network_backend(vm) {
             // Network captures attach a filter-dump to net0 over QMP.

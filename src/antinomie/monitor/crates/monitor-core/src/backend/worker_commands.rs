@@ -371,8 +371,11 @@ impl Worker {
                     crate::guest_account::provisioned_interface(
                         &bundle.stealth_support,
                         &vm.stealth,
+                        bundle.arch,
                     ),
                     crate::guest_account::boot_disk(&vm.stealth),
+                    crate::guest_account::ProvisionBoot::for_bundle(&worker.options, &bundle)?
+                        .as_ref(),
                 )?;
                 account.save(dir)?;
             }

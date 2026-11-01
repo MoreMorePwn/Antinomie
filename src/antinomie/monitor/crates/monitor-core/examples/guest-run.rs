@@ -19,6 +19,8 @@
 //!  "screenshot": "/tmp/screen.png", "screenshot_after": 20}
 //! ```
 //!
+//! `"create_timeout"` (seconds, default 900) bounds the creation of a VM with
+//! an account (an arm64 Debian VM's includes its provisioning boot).
 //! `"vm": {"nat": true}` gives the VM NAT networking.
 //! `"vm": {"isolated_network": true}` uses restricted networking without
 //! outbound forwarding and overrides NAT, as in the application.
@@ -378,7 +380,7 @@ fn run() -> Result<Value, String> {
                         vm: config,
                         credentials: GuestCredentials::new(username, password)?,
                     },
-                    900,
+                    number(&plan, "create_timeout", 900),
                 )?,
                 _ => session.command(Command::Create(config), 60)?,
             };

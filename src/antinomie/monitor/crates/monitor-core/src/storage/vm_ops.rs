@@ -59,13 +59,17 @@ pub(crate) fn reset_vm_disk(
     } else {
         None
     };
+    let boot = crate::guest_account::ProvisionBoot::for_bundle(options, bundle)?;
     let staging = directory.join(format!("reset-{}", unique_id()));
     private_dir(&staging).map_err(|e| e.to_string())?;
     let result = (|| -> Result<(), String> {
         create_overlay(options, &staging, vm.disk_gib, bundle)?;
         let disk = staging.join("disk.qcow2");
-        let interface =
-            crate::guest_account::provisioned_interface(&bundle.stealth_support, &vm.stealth);
+        let interface = crate::guest_account::provisioned_interface(
+            &bundle.stealth_support,
+            &vm.stealth,
+            bundle.arch,
+        );
         let account = account
             .map(|mut account| {
                 account
@@ -74,6 +78,7 @@ pub(crate) fn reset_vm_disk(
                         vm.ram_mib,
                         interface,
                         crate::guest_account::boot_disk(&vm.stealth),
+                        boot.as_ref(),
                     )
                     .map(|()| account)
             })

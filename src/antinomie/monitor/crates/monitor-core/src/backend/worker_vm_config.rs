@@ -80,15 +80,19 @@ impl Worker {
         // machine has its LAN elsewhere moves the NIC, and the disk's
         // network configuration follows. (A disk provisioned before
         // keeps the interface its record names until then.)
-        let moved =
-            crate::guest_account::provisioned_interface(&boot_bundle.stealth_support, &vm.stealth)
-                .filter(|interface| {
-                    Some(*interface)
-                        != crate::guest_account::provisioned_interface(
-                            &boot_bundle.stealth_support,
-                            &current.stealth,
-                        )
-                });
+        let moved = crate::guest_account::provisioned_interface(
+            &boot_bundle.stealth_support,
+            &vm.stealth,
+            boot_bundle.arch,
+        )
+        .filter(|interface| {
+            Some(*interface)
+                != crate::guest_account::provisioned_interface(
+                    &boot_bundle.stealth_support,
+                    &current.stealth,
+                    boot_bundle.arch,
+                )
+        });
         if disk_bundle
             .guest
             .as_ref()
@@ -111,7 +115,7 @@ impl Worker {
                     ));
                 }
                 let disk = crate::snapshots::active_disk(&self.options, current)?;
-                account.set_interface(&disk, interface)?;
+                account.set_interface(&disk, interface, disk_bundle.arch)?;
                 account.save(&dir)?;
             }
         }
@@ -130,7 +134,7 @@ impl Worker {
             let mut account = crate::guest_account::GuestAccount::load(&dir)?;
             if account.boot_disk() != boot_disk {
                 let disk = crate::snapshots::active_disk(&self.options, current)?;
-                account.set_boot_disk(&disk, boot_disk)?;
+                account.set_boot_disk(&disk, boot_disk, disk_bundle.arch)?;
                 account.save(&dir)?;
             }
         }
