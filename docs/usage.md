@@ -326,6 +326,32 @@ container image and the toolchain chroot have it) and takes its programs from
 Debian's pinned arm64 packages, so no arm64 program runs on the build host.
 A run's details name the guest's architecture.
 
+**Debian 13 arm64 Minimal.** Its bootstrap runs arm64 maintainer scripts, so
+it needs a CPU emulator for them and is never built natively on an x86-64
+host. It builds in the container builder when the host has an enabled
+`qemu-aarch64` binfmt handler with the F (fix-binary) flag, which a container
+shares with the host kernel; register one with
+
+    docker run --privileged --rm tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0 --install arm64
+
+(qemu 10.2.3; it lasts until the next reboot, and `--uninstall qemu-aarch64`
+removes it), then `scripts/build-base.py --job job.json --container docker ...`
+with `"profile": "debian-minimal", "arch": "arm64"` in the job (about 25
+minutes on a 16-vCPU host, kernel included). Without the handler a container
+build is refused with what is missing, and it builds in the QEMU builder VM,
+which brings its own emulator: from a source checkout,
+`ANTINOMIE_BUILD_ARCH=arm64` with the `build-base` example (`build-base DATA
+debian-minimal qemu`) builds it and installs it in the data folder DATA (more
+than five hours on a 16-vCPU x86-64 host without KVM: the builder VM is
+emulated and the arm64 programs are emulated again inside it). Creating a VM of
+it asks for the account as on x86-64 and takes longer: the host's disk tools do
+what needs no guest program, then the VM boots once by itself, without a
+network card, to make the account, GRUB (on a UEFI disk) and the initramfs with
+its own arm64 programs, and powers off (about half a minute under TCG). The
+password goes in over QEMU's fw_cfg and is never written to the disk. If that
+boot fails or takes more than 15 minutes, the creation fails with the reason
+and leaves no VM. Then start the VM and log in with the account, as on x86-64.
+
 **What works.** Everything an x86-64 BusyBox VM records: every system call
 (by arm64's own numbers and names), file activity and contents, captured
 programs, packets and routes, io_uring and AIO, notes, Triage, Sigma, the Files
@@ -360,8 +386,6 @@ says so.
   and the Run form warns when they are chosen on an arm64 VM. The other checks
   (metadata, structures, strings, entropy, hardening, rules, identification,
   disassembly) read arm64 programs.
-- **Debian arm64 bases** are not offered yet (see the 0.9.0 notes in
-  `docs/implementation.md`).
 
 An app older than 0.9.0 refuses an arm64 base before it starts QEMU ("this
 Antinomie does not start arm64 VMs yet").

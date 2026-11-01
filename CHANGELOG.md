@@ -7,9 +7,9 @@ it runs.
 ## 0.9.0 — 2026-MM-DD
 
 Runs the bases 0.8.3 runs (contract revision 20, unchanged) and arm64 BusyBox
-bases built by this release. An app older than 0.9.0 refuses an arm64 base
-before it starts a VM. x86-64 bases built by this release also record 32-bit
-x86 programs by their own table.
+and Debian 13 Minimal bases built by this release. An app older than 0.9.0
+refuses an arm64 base before it starts a VM. x86-64 bases built by this
+release also record 32-bit x86 programs by their own table.
 
 ### Host
 
@@ -57,14 +57,31 @@ x86 programs by their own table.
   test checks both certificates.
 - **Debian 13 arm64 Minimal (recipe).** `build-base.py` and the image recipe
   build a Debian arm64 console base with Debian's own arm64 kernel packages,
-  banner and signed modules, bootstrapped only inside the QEMU builder VM
-  (whose own qemu-user runs the arm64 maintainer scripts; no binfmt handler on
-  the host or in a container). Its kernel is built as Debian's arm64 kernel is,
+  banner and signed modules, bootstrapped where an emulator runs the arm64
+  maintainer scripts: in the QEMU builder VM (its own qemu-user) or in a
+  container (below), never natively. Its kernel is built as Debian's arm64 kernel is,
   with the 32-bit ARM compiler for the AArch32 vDSO, and the ABI check reads
   Debian's arm64 Image by its BTF header and its exports from the pinned
   `linux-headers-6.12.94+deb13-arm64` Module.symvers (Debian's arm64 System.map
-  is a stub). VMs of such a base are refused for now: their guest account is
-  made with the guest's own programs, which the x86-64 disk tools cannot run.
+  is a stub). The QEMU builder installs `arch-test` for it (mmdebstrap refused
+  the arm64 bootstrap without it).
+- **Debian arm64 in a container.** The container builder (`build-base.py
+  --container`, and the app's Podman/Docker modes) builds a Debian arm64 base
+  when the host has an enabled `qemu-aarch64` binfmt handler with the F flag
+  (`docker run --privileged --rm tonistiigi/binfmt@sha256:400a4873... --install
+  arm64`); without it the build is refused with what is missing and the QEMU
+  builder stays the default. The builder image pins `arch-test`.
+- **Debian arm64 VMs.** A VM of a Debian arm64 base asks for its account as on
+  x86-64; the account, GRUB (on a UEFI disk) and the initramfs's resume device
+  are made by the guest's own arm64 programs in one provisioning boot of the
+  VM (no network card, serial console only, about half a minute under TCG), after
+  the x86-64 disk tools did everything that needs no guest program. The
+  password reaches the guest over QEMU's fw_cfg from a private file and never
+  touches the disk; the guest reports the hash it stored, the VM powers off and
+  the disk tools remove what that boot left. A failed or overlong (15 minutes)
+  provisioning boot fails the creation with its reason. On arm64 the NIC of
+  such a VM sits at PCI 00:19.0 (`enp0s25`) on every profile. The x86-64
+  provisioning is unchanged (a test pins it byte for byte).
 - **Tests.** `vm-regress.py --arch arm64` runs the full tier on an arm64 base
   (the cloud check expects the arm64 instance; the route and specimen probes
   are built for arm64) and checks that an old host refuses the base

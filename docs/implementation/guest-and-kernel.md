@@ -1147,10 +1147,99 @@ Multi-arch plan cards MA-19 and the Debian half of MA-15. No contract change.
   (`ANTINOMIE_BUILDER=1` and its qemu-user binfmt handler): `build-base.py`
   refuses it natively and before a container starts, and the app picks the
   QEMU builder for it (`build::arch_mode`; `BuildRequest.arch`, a job's
-  `"arch"`, kernel and root filesystem caches of their own). VMs of such a base
-  are refused (`guest_account::foreign_account`): the account, GRUB and
-  initramfs steps run the guest's own programs in the x86-64 libguestfs
-  appliance, which cannot run arm64 ones.
+  `"arch"`, kernel and root filesystem caches of their own); its builder VM
+  installs `arch-test`, without which mmdebstrap refuses a foreign bootstrap.
+  The container builder builds it too when this host has an enabled
+  `qemu-aarch64` binfmt handler with the F flag (the kernel holds the emulator
+  open and starts it inside the container's root, where none is installed):
+  `build-base.py require_foreign_builder(.., container=True)` and
+  `build::arch_mode` (`foreign_handler`) check it and refuse otherwise with
+  what is missing and both ways out (the pinned `tonistiigi/binfmt` command or
+  the QEMU builder); Automatic picks a container only with the handler, else
+  the QEMU builder. The container gets `ANTINOMIE_FOREIGN_BINFMT=qemu-aarch64`,
+  which `build-debian-image.py foreign_bootstrap` accepts in place of a
+  visible handler (a container has no binfmt_misc of its own), and the image
+  pins `arch-test`. A native build still never bootstraps another
+  architecture.
+  A VM of such a base gets its account in a provisioning boot of its own (next
+  section): the x86-64 libguestfs appliance cannot run the guest's arm64
+  programs.
+
+### Guest accounts on Debian arm64: the provisioning boot (0.9.0)
+
+Multi-arch plan card MA-15 (Debian half). No contract change; the x86-64
+provisioning is unchanged byte for byte (`guest_account/tests.rs`
+`the_x86_appliance_script_is_pinned` hashes the appliance's script for a
+whole-disk, a BIOS and a UEFI disk, the later edits, the probe and the
+uploaded helpers, against the digest of the 0.8.0 code).
+
+On x86-64 the appliance runs the guest's own programs on the disk (`sh` with
+adduser, chpasswd, grub-install, the initramfs helper). For a base of another
+architecture (`GuestAccount::create`/`provision` with a
+`guest_account::ProvisionBoot`, made from the bundle by `for_bundle`: None for
+x86-64) `guest_account/foreign.rs` splits the work:
+
+* **Appliance, offline (no guest program).** The probe; a read-only pass that
+  downloads fstab and `/etc/network/interfaces` to a private host folder and
+  asks which of `BOOT_TRACES` the disk already has; then one writable pass:
+  the layout (`layout_commands`, the same as x86-64), the ESP's `mkfs vfat` on
+  a GPT disk, `e2fsck-f`, `set-uuid` and the debugfs hash-seed reseed, fstab
+  with the root's new UUID and the swap line (`fstab_text`, edited on the host
+  as the x86-64 sed and awk do; a test runs both over the same files), the
+  NIC stanza (`interfaces_text`, likewise), the machine ID, the staging script
+  in a 0700 `/root/.provision-<id>` with the initramfs helper, a oneshot
+  service and a target (`unit_files`) linked with `ln-s`, and the GPT GUIDs or
+  MBR disk identifier.
+* **The provisioning boot.** QEMU `virt` under TCG, two `cortex-a72` vCPUs (no
+  pointer authentication to emulate), 1 GiB, the base's kernel and initrd with
+  the disk's command line (`vm_kernel_append` with the new UUID) plus
+  `console=ttyAMA0 panic=-1 antinomie_kpti=off
+  systemd.unit=provision-<id>.target`, the disk on virtio, `-nic none`, no
+  display, `-no-reboot`, nothing recording it (no bootstrap page). The target
+  isolates the service (`DefaultDependencies=no`, `ConditionPathExists=` on
+  the script, `SuccessAction=`/`FailureAction=poweroff-force`, output to the
+  serial console only), so no journal, utmp, random seed, timer or tmpfiles
+  unit runs. The script (`guest_script`) does the x86-64 script's guest part
+  in its order: root remounted read-write, the account as the installer's
+  adduser makes it, `passwd -l root`; on a GPT disk the ESP's UUID into fstab
+  and `grub-install --target=arm64-efi --force-extra-removable --no-nvram`
+  with `update-grub` (the device-tree disk has no boot loader, as the base);
+  on a partitioned disk the initramfs's resume device (`initrd_resume.py`);
+  then `modprobe qemu_fw_cfg` and the password (a reset: the recorded hash,
+  `chpasswd -e`) read once from
+  `/sys/firmware/qemu_fw_cfg/by_name/opt/antinomie/provision/raw` straight
+  into chpasswd. The host passes it with `-fw_cfg
+  name=opt/antinomie/provision,file=<private 0600 file>` (`fw_cfg_option`) and
+  deletes the file as soon as the guest prints (QEMU has read it at machine
+  creation), and at the end in any case: the password is never on the disk,
+  a command line or the console (the private console log goes with the
+  host folder). The script prints the hash the guest stored between
+  `provision-hash-begin` and `provision-hash-end`, or `provision-failed
+  <step>` when a step fails, and the VM powers off.
+* **Host.** `console_report` takes the hash only from between the markers (the
+  last pair, one line); a failed step, a boot without a report, a QEMU error
+  or more than `BOOT_TIMEOUT` (15 minutes) is a plain error naming the step or
+  the time, and creation removes the VM. The hash is validated (and on a reset
+  must equal the record's); then the appliance removes what the boot left
+  (`trace_commands`: the staging folder, the unit, its target and link, the
+  journal folder of the VM's machine ID, and each `BOOT_TRACES` path the disk
+  did not have before), so the first boot the user sees is the disk's first
+  after the installer.
+
+Measured on the VPS (16 vCPUs, no KVM, loaded): the provisioning boot took 22 s on
+the device-tree (MBR) disk and 28 s on the UEFI disk (grub-install included),
+from QEMU's start to its power-off, while another TCG VM ran beside it;
+creating the VM through the app (probe, read, write and trace passes, the
+boot) and starting it took 75 s and 147 s (the second laying out the base's
+UEFI disk first). The 15-minute `BOOT_TIMEOUT` leaves a slow host ample room.
+
+After creation an arm64 disk is edited by the appliance alone: a moved NIC's
+stanza is downloaded, rewritten and uploaded (`set_interface_foreign`); a new
+disk bus changes only the record (arm64 has no GRUB for BIOS, so no debconf
+answer). On `virt` the NIC of a base that names it by slot sits at 00:19.0
+(`enp0s25`) whatever the profile, also beside an arm64 machine's own card
+model (`provisioned_interface` with the base's architecture; the PC slots mean
+nothing there and the display takes the first free slots).
 
 ### Fair, progress-sensitive send waits (0.8.0)
 
