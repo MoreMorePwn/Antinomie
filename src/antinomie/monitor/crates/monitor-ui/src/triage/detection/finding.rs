@@ -407,6 +407,7 @@ impl View {
                 return false;
             };
             let mut open = true;
+            let area = crate::title_bar::content_rect(ctx);
             crate::widgets::window(format!("{} · {}", name(report.engine), finding.title))
                 .id(egui::Id::new((
                     "detection-finding",
@@ -415,7 +416,9 @@ impl View {
                     &key.title,
                 )))
                 .open(&mut open)
-                .default_size([680.0, 560.0])
+                // Tall enough for the rule box to show a whole short rule
+                // (round 6 item 19); the window clamps it to the app area.
+                .default_size([760.0, (area.height() * 0.85).max(560.0)])
                 .resizable(true)
                 .collapsible(true)
                 .show(ctx, |ui| {
