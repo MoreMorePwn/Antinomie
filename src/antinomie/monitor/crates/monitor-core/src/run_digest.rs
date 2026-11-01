@@ -51,6 +51,21 @@ pub struct EvasionCheck {
     pub summary: String,
     pub process: String,
     pub count: u64,
+    /// The task cookie of the process whose calls are the evidence (0 when
+    /// unknown); digests written before 0.8.0 have none.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub cookie: u64,
+    /// The call ids that are the evidence, first first, at most
+    /// [`EVIDENCE_CALLS`], so Syscall Trace can show them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub calls: Vec<u64>,
+}
+
+/// Evidence calls a check keeps for its link into Syscall Trace.
+pub const EVIDENCE_CALLS: usize = 32;
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 /// What the behaviour engine found in the whole run.

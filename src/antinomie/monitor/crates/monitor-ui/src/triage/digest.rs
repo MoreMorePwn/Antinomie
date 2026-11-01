@@ -68,6 +68,8 @@ pub(super) fn behaviour(findings: &[Finding]) -> Behaviour {
                 summary: text(values, "finding.summary").to_owned(),
                 process: text(values, "process.exe").to_owned(),
                 count: number(values, "finding.count"),
+                cookie: number(values, "process.cookie"),
+                calls: evidence_calls(values),
             });
         }
     }
@@ -75,6 +77,38 @@ pub(super) fn behaviour(findings: &[Finding]) -> Behaviour {
         out.highest = tier.tag().to_owned();
     }
     out
+}
+
+/// The calls a finding names as its evidence: its first call, the calls its
+/// detail lines cite ("(call 12)", "Occurrences: calls 12, 40, 41"), first
+/// first and without repeats, at most [`run_digest::EVIDENCE_CALLS`].
+fn evidence_calls(values: &[(&'static str, RowValue)]) -> Vec<u64> {
+    let mut calls = Vec::new();
+    let mut add = |call: u64| {
+        if call != 0 && !calls.contains(&call) && calls.len() < run_digest::EVIDENCE_CALLS {
+            calls.push(call);
+        }
+    };
+    add(number(values, "event.id"));
+    for line in list(values, "finding.detail") {
+        for (marker, many) in [("(call ", false), ("calls ", true)] {
+            let mut rest = line.as_str();
+            while let Some(at) = rest.find(marker) {
+                rest = &rest[at + marker.len()..];
+                for part in rest.split(", ") {
+                    let digits: String = part.chars().take_while(char::is_ascii_digit).collect();
+                    match digits.parse() {
+                        Ok(call) => add(call),
+                        Err(_) => break,
+                    }
+                    if !many || digits.len() != part.len() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    calls
 }
 
 /// The indicators with the stored datasets' answer, no false-positive list
@@ -260,5 +294,27 @@ mod tests {
         assert_eq!(yara_family(Engine::Yara, rule), "XMRig");
         assert_eq!(yara_family(Engine::Ids, rule), "");
         assert_eq!(yara_family(Engine::Yara, "rule a { condition: true }"), "");
+    }
+}
+
+#[cfg(test)]
+mod evidence_tests {
+    use super::*;
+
+    #[test]
+    fn a_finding_names_its_first_call_and_the_calls_its_detail_cites() {
+        let values = vec![
+            ("event.id", RowValue::Number(12)),
+            (
+                "finding.detail",
+                RowValue::List(vec![
+                    "DMI: product_name [read] → \"Q35\"  (gives it away)  (call 12)".into(),
+                    "MAC: address [read] → \"52:54\"  (call 40)".into(),
+                    "Occurrences: calls 12, 41, 43, … (9 in all)".into(),
+                ]),
+            ),
+        ];
+        assert_eq!(evidence_calls(&values), [12, 40, 41, 43]);
+        assert!(evidence_calls(&[]).is_empty());
     }
 }

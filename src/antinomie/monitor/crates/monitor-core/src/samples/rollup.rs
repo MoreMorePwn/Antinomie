@@ -52,6 +52,9 @@ pub struct CheckRow {
     pub runs: Vec<usize>,
     /// What the sample saw, per run.
     pub lines: Vec<(usize, String)>,
+    /// The calls behind each run's line (run, task cookie, call ids), for a
+    /// link into Syscall Trace; a run whose digest kept none is not listed.
+    pub evidence: Vec<(usize, u64, Vec<u64>)>,
     /// The runs in which the check changed what the sample did: it quit
     /// right after probing (`evasion.probe_then_exit`). Triage knows no other
     /// answer, so no other check is ever marked.
@@ -195,11 +198,16 @@ pub fn rollup(runs: &[RunInput<'_>]) -> Rollup {
                         object: check.object.clone(),
                         runs: Vec::new(),
                         lines: Vec::new(),
+                        evidence: Vec::new(),
                         tripped: Vec::new(),
                     });
                 if !row.runs.contains(&run.number) {
                     row.runs.push(run.number);
                     row.lines.push((run.number, check.summary.clone()));
+                    if !check.calls.is_empty() {
+                        row.evidence
+                            .push((run.number, check.cookie, check.calls.clone()));
+                    }
                     if check.rule == run_digest::TRIPPING_CHECK {
                         row.tripped.push(run.number);
                     }
@@ -373,6 +381,7 @@ mod tests {
             summary: summary.into(),
             process: "sh".into(),
             count: 1,
+            ..Default::default()
         }
     }
 
