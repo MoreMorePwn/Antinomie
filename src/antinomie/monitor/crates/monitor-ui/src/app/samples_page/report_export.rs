@@ -343,7 +343,7 @@ impl ReportDialog {
                     ui.label(theme::section_title(ui, "Folder"));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.choices.folder)
-                            .hint_text(hint)
+                            .hint_text(theme::hint_text(hint))
                             .desired_width(f32::INFINITY),
                     );
                 });
