@@ -425,6 +425,7 @@ impl Worker {
         // Everything left is disk work. It goes to a flush job, so the VM is
         // Stopped now and the host's `fsync`s are not a wait for the user.
         let steps = session.seal(final_state, &mut self.snapshot);
+        self.carry_analyses(&mut session);
         self.submit_sealed_flush(session.boot_id.clone(), steps);
         if let Err(e) = end_network_capture(&mut self.snapshot) {
             issues.push(e);

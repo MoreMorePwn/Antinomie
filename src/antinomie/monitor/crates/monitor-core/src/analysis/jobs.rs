@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use super::progress::worker_deadline;
+use super::sealed;
 use super::worker::REPORT_MAX_SIZE;
 use super::*;
 use crate::{
@@ -88,6 +89,12 @@ pub(crate) struct Jobs {
     /// Room the last submitter said the recordings have, for the analyses of
     /// unpacked layers that follow an analysis.
     available: u64,
+    /// Ids of the jobs handed on by `detach_host_side`: still running, no
+    /// longer this queue's, so not orphans.
+    detached: Vec<String>,
+    /// Queues of finished VM sessions whose analyses go on: host-side work
+    /// does not depend on the VM that produced the specimen.
+    carried: Vec<Jobs>,
 }
 pub(crate) enum Action {
     Read {
@@ -168,6 +175,8 @@ impl Jobs {
             .chain(self.active.iter())
             .chain(self.acquiring.iter())
             .any(|job| job.report.id == id)
+            || self.detached.iter().any(|d| d == id)
+            || self.carried.iter().any(|c| c.tracks(id))
     }
     pub fn with_tools(tools_dir: PathBuf) -> Self {
         let mut jobs = Self::default();
@@ -175,13 +184,18 @@ impl Jobs {
         jobs
     }
     pub fn stored_len(&self) -> u64 {
-        self.retained_len
+        self.carried
+            .iter()
+            .map(Jobs::stored_len)
+            .sum::<u64>()
+            .saturating_add(self.retained_len)
             .saturating_add(self.active.as_ref().map_or(0, |j| j.reserved_len))
             .saturating_add(self.acquiring.as_ref().map_or(0, |j| j.reserved_len))
             .saturating_add(self.queue.iter().map(|j| j.reserved_len).sum::<u64>())
     }
     pub fn persisted_len(&self) -> u64 {
-        self.retained_len.saturating_add(
+        let carried: u64 = self.carried.iter().map(Jobs::persisted_len).sum();
+        self.retained_len.saturating_add(carried).saturating_add(
             self.active
                 .iter()
                 .chain(self.acquiring.iter())
@@ -241,6 +255,7 @@ impl Jobs {
                 .mode(0o600)
                 .open(directory.join("specimen.partial"))
                 .map_err(|e| e.to_string())?;
+            sealed::claim(&directory);
             let job = Job {
                 run_id: run_id.clone(),
                 report: report.clone(),
@@ -350,6 +365,8 @@ impl Jobs {
                 return;
             }
         }
+        job.seal_specimen();
+        sealed::release(&job.directory);
         job.merge_supplement();
         super::capa::trim_cache(self.tools_dir.as_deref());
         self.queue_layers(&mut job);
@@ -370,6 +387,7 @@ impl Jobs {
         }
         let action = self.acquire_next();
         self.worker_tick();
+        self.tick_carried();
         action
     }
     fn worker_tick(&mut self) {
@@ -532,9 +550,74 @@ impl Jobs {
         }
     }
     pub fn updates(&mut self) -> Vec<(Option<String>, AnalysisReport)> {
-        std::mem::take(&mut self.updates)
+        let mut updates = std::mem::take(&mut self.updates);
+        for carried in &mut self.carried {
+            updates.extend(carried.updates());
+        }
+        updates
+    }
+    /// A job is host-side when its specimen is whole on the host: nothing it
+    /// still has to do reads the guest.
+    fn host_side(job: &Job) -> bool {
+        job.child.is_some()
+            || (job.handle.is_none()
+                && job.received_len >= job.total_len
+                && matches!(
+                    job.report.state,
+                    AnalysisState::Queued | AnalysisState::Running
+                ))
+    }
+    /// Take out the analyses that no longer need the guest (specimen already
+    /// on the host: queued for a worker, or running one), so a VM stop or a
+    /// transport reconnect does not invalidate them. What still reads the
+    /// guest stays for `shutdown`. `None` when there is nothing to carry.
+    pub(crate) fn detach_host_side(&mut self) -> Option<Jobs> {
+        let mut carried = Jobs::default();
+        carried.tools_dir = self.tools_dir.clone();
+        carried.available = self.available;
+        if self.active.as_ref().is_some_and(Self::host_side) {
+            carried.active = self.active.take();
+        }
+        let (take, keep): (VecDeque<Job>, VecDeque<Job>) = std::mem::take(&mut self.queue)
+            .into_iter()
+            .partition(Self::host_side);
+        self.queue = keep;
+        carried.queue = take;
+        if carried.active.is_none() && carried.queue.is_empty() {
+            return None;
+        }
+        self.detached.extend(
+            carried
+                .active
+                .iter()
+                .chain(carried.queue.iter())
+                .map(|job| job.report.id.clone()),
+        );
+        Some(carried)
+    }
+    /// Hand over the carried queues (after `adopt`), before the owner drops.
+    pub(crate) fn take_carried(&mut self) -> Vec<Jobs> {
+        std::mem::take(&mut self.carried)
+    }
+    /// Continue the analyses of a finished session beside this queue's own.
+    pub(crate) fn adopt(&mut self, carried: Jobs) {
+        self.carried.push(carried);
+    }
+    fn tick_carried(&mut self) {
+        for carried in &mut self.carried {
+            // Carried jobs never ask for guest reads or handle releases.
+            let _ = carried.next();
+        }
+        let updates: Vec<_> = self.carried.iter_mut().flat_map(Jobs::updates).collect();
+        self.updates.extend(updates);
+        self.carried.retain(|carried| {
+            carried.active.is_some() || !carried.queue.is_empty()
+        });
     }
     pub fn cancel(&mut self, id: &str) -> Result<(), String> {
+        if let Some(carried) = self.carried.iter_mut().find(|c| c.tracks(id)) {
+            return carried.cancel(id);
+        }
         if self.acquiring.as_ref().is_some_and(|j| j.report.id == id) {
             if let Some(mut job) = self.acquiring.take() {
                 fail(
@@ -644,6 +727,9 @@ impl Jobs {
                                     }
                                 }
                                 if done {
+                                    if let Err(error) = sealed::seal(&owner.directory) {
+                                        eprintln!("retained specimen sealing failed: {error}");
+                                    }
                                     CLEANUP_PENDING.store(false, Ordering::Release);
                                     break;
                                 }
@@ -674,6 +760,24 @@ fn cleanup_message(reason: &str, detail: &str) -> String {
         detail.into()
     } else {
         format!("{reason}; {detail}")
+    }
+}
+
+impl Job {
+    /// The analysis is over: keep the specimen only as its encrypted archive
+    /// and drop a half-received transfer, so no plain copy of the program
+    /// outlives the work on it.
+    fn seal_specimen(&mut self) {
+        let _ = fs::remove_file(self.directory.join("specimen.partial"));
+        if let Err(error) = sealed::seal(&self.directory) {
+            let note = format!(
+                "the retained specimen could not be encrypted ({error}); it is sealed when the run is opened again"
+            );
+            self.report.reason = Some(cleanup_message(
+                self.report.reason.as_deref().unwrap_or_default(),
+                &note,
+            ));
+        }
     }
 }
 
@@ -736,6 +840,9 @@ fn spawn_worker_binary(
     if CLEANUP_PENDING.load(Ordering::Acquire) {
         return Err("a previous worker still awaits reap; isolation worker unavailable".into());
     }
+    // The worker is bound to a plain file; it exists only for this run of it
+    // and `finish` seals it again.
+    sealed::materialize(&job.directory)?;
     let account = sandbox_passwd(&job.directory)?;
     let output = job.directory.join("output");
     fs::create_dir(&output).map_err(|e| e.to_string())?;
@@ -1281,6 +1388,8 @@ mod tests {
                 updates: Vec::new(),
                 tools_dir: None,
                 available: 0,
+                detached: Vec::new(),
+                carried: Vec::new(),
             };
             let launcher = jobs.active.as_ref().unwrap().child.as_ref().unwrap().id();
             let children = PathBuf::from(format!("/proc/{launcher}/task/{launcher}/children"));

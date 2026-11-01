@@ -545,7 +545,11 @@ fn copy_reports(from: &Path, to: &Path, budget: &mut u64) -> Result<(), String> 
             continue;
         };
         let name = entry.file_name();
-        if meta.file_type().is_symlink() || name == "specimen" {
+        if meta.file_type().is_symlink()
+            || name == "specimen"
+            || name == "specimen.zip"
+            || name == "specimen.partial"
+        {
             continue;
         }
         if meta.is_dir() {

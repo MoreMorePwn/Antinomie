@@ -283,6 +283,86 @@ mod tests {
     }
 
     #[test]
+    fn a_vm_stop_keeps_analyses_whose_specimen_is_already_on_the_host() {
+        let root = std::env::temp_dir().join(format!("ant-carry-{}", storage::unique_id()));
+        let mut jobs = Jobs::default();
+        let kept = submit(&mut jobs, &root, 1, 3);
+        let cut = submit(&mut jobs, &root, 2, 3);
+        // The first specimen is whole on the host and waits for a worker.
+        jobs.queue[0].handle = None;
+        jobs.queue[0].file = None;
+        jobs.queue[0].received_len = 3;
+        jobs.queue[0].report.state = AnalysisState::Queued;
+        let carried = jobs.detach_host_side().expect("one job is host-side");
+        jobs.adopt(carried);
+        jobs.shutdown();
+        // The transfer that still needed the guest ends with it; the other does not.
+        assert_eq!(
+            open_report(&root.join("2")).unwrap().state,
+            AnalysisState::Unavailable
+        );
+        assert!(jobs.tracks(&kept.id), "the host-side job is not an orphan");
+        assert!(!jobs.tracks(&cut.id));
+        let mut carried = jobs.take_carried();
+        assert_eq!(carried.len(), 1);
+        assert_eq!(carried[0].queue.len(), 1);
+        assert_eq!(carried[0].queue[0].report.state, AnalysisState::Queued);
+        // The host queue goes on with it, and can cancel it.
+        let mut host = Jobs::default();
+        host.adopt(carried.pop().unwrap());
+        assert!(host.tracks(&kept.id));
+        assert_eq!(host.cancel(&kept.id), Ok(()));
+        let _ = host.next();
+        assert!(!host.tracks(&kept.id));
+        assert!(
+            host.updates()
+                .iter()
+                .any(|(_, report)| report.id == kept.id && report.state == AnalysisState::Cancelled)
+        );
+        drop(jobs);
+        drop(host);
+        storage::settle_json_under(&root);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_finished_job_leaves_the_specimen_only_as_an_encrypted_archive() {
+        let root = std::env::temp_dir().join(format!("ant-seal-job-{}", storage::unique_id()));
+        let mut jobs = Jobs::default();
+        let report = submit(&mut jobs, &root, 1, 3);
+        let directory = root.join("1");
+        let Some(Action::Read {
+            offset,
+            total,
+            capacity,
+            ..
+        }) = jobs.next()
+        else {
+            panic!("no read");
+        };
+        jobs.chunk(Ok(reply(0, 3, b"abc")), offset, total, capacity);
+        assert!(jobs.next().is_none());
+        // Received: the plain file exists for a worker, the report is Queued.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !directory.join("specimen").exists() {
+            assert!(Instant::now() < deadline);
+            let _ = jobs.next();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Cancel before a worker takes it: finish seals.
+        let _ = jobs.cancel(&report.id);
+        assert!(!directory.join("specimen").exists(), "no plain copy remains");
+        assert!(!directory.join("specimen.partial").exists());
+        let (bytes, _) = super::super::sealed::read_sealed(&directory).unwrap();
+        assert_eq!(bytes, b"abc");
+        let archive = fs::read(directory.join("specimen.zip")).unwrap();
+        assert!(!archive.windows(3).any(|w| w == b"abc"));
+        drop(jobs);
+        storage::settle_json_under(&root);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn expired_acquisition_is_not_restarted_or_analyzed() {
         let root =
             std::env::temp_dir().join(format!("ant-acquisition-expired-{}", storage::unique_id()));

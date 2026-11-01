@@ -895,6 +895,7 @@ impl Worker {
             }
             let boot_id = old.boot_id.clone();
             let steps = old.seal("snapshot-branch-sealed", &mut self.snapshot);
+            self.carry_analyses(&mut old);
             let stop = old.process.force_stop();
             drop(old);
             self.submit_sealed_flush(boot_id, steps);
@@ -1087,6 +1088,7 @@ impl Worker {
         // the background; the new timeline records into fresh directories.
         phases.mark("checkpoint");
         let steps = old.seal("reconnect-boundary", &mut self.snapshot);
+        self.carry_analyses(&mut old);
         self.submit_sealed_flush(old.boot_id.clone(), steps);
         phases.mark("seal");
         let mut fresh = match Session::restored(

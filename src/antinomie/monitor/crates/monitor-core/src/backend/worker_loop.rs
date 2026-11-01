@@ -151,6 +151,13 @@ impl Worker {
     /// Submit finalizers for a sealed boot. The session-start admission check
     /// reserves capacity for this job; if that invariant is ever violated,
     /// retain the complete step list and retry on a later worker pass.
+    /// Move the analyses a sealed session left running to the host queue, which
+    /// does not end with the VM or its transport.
+    pub(super) fn carry_analyses(&mut self, session: &mut Session) {
+        for carried in session.analysis.take_carried() {
+            self.host_analysis.adopt(carried);
+        }
+    }
     pub(super) fn submit_sealed_flush(
         &mut self,
         boot_id: String,
@@ -618,6 +625,7 @@ impl Worker {
             if exited {
                 if let Some(mut session) = self.session.take() {
                     let steps = session.seal("unexpected-exit", &mut self.snapshot);
+                    self.carry_analyses(&mut session);
                     self.submit_sealed_flush(session.boot_id.clone(), steps);
                     crate::snapshots::run_layer::ended(&session.vm.id);
                     crate::snapshots::run_layer::mark_due(&session.vm.id);

@@ -877,6 +877,11 @@ impl Session {
                 }),
             ));
         }
+        // Host-side analyses (specimen already on the host) go on without the
+        // VM: the worker takes them from here (`Worker::carry_analyses`).
+        if let Some(carried) = self.analysis.detach_host_side() {
+            self.analysis.adopt(carried);
+        }
         self.analysis.shutdown();
         self.analysis_updates(snapshot, &mpsc::sync_channel(1).0);
         self.settle_orphaned_analyses(&format!(

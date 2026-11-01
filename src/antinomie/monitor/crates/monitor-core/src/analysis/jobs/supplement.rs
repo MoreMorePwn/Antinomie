@@ -129,9 +129,8 @@ impl Jobs {
             .map(|s| s.kind)
             .filter(|kind| !kinds.contains(kind))
             .collect();
-        let specimen = crate::archive_io::open_regular(base, &base.join("specimen"))
+        let (specimen, size) = crate::analysis::sealed::open_plain(base)
             .map_err(|error| format!("the retained specimen cannot be opened: {error}"))?;
-        let size = specimen.metadata().map_err(|e| e.to_string())?.len();
         if saved.specimen_len != Some(size) {
             return Err("the retained specimen is not the size the report says".into());
         }

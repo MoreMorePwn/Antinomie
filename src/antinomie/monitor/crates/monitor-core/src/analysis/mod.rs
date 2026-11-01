@@ -20,6 +20,7 @@ mod listing;
 mod progress;
 pub mod properties;
 mod rules;
+mod sealed;
 mod segments;
 mod specimen;
 mod strings;
@@ -34,6 +35,10 @@ pub use listing::{
     read_listing_page_sorted, read_listing_page_with,
 };
 pub use specimen::read_specimen_range;
+/// Keep the retained specimens under `directory` only as encrypted archives.
+pub fn seal_retained_specimens(directory: &std::path::Path) -> Vec<String> {
+    sealed::seal_tree(directory)
+}
 pub(crate) use strings::find_strings;
 pub use unpack::{PackerVerdict, UnpackLayer, packer_verdict, unpack_layers};
 pub use worker::worker_main_if_requested;

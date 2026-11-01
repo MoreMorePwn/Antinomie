@@ -116,6 +116,16 @@ fn read_verified_range(
     if expected.len() != 64 || !expected.bytes().all(|c| c.is_ascii_hexdigit()) {
         return Err("saved specimen digest malformed".into());
     }
+    if !root_has(&root, "specimen") && root_has(&root, super::sealed::SEALED) {
+        return read_sealed_range(
+            directory,
+            &root,
+            (report_file, report_before),
+            report,
+            offset,
+            data_len,
+        );
+    }
     let mut specimen = open_member(&root, "specimen")?;
     let before = specimen.metadata().map_err(|e| e.to_string())?;
     if before.len() != total_len {
@@ -160,6 +170,59 @@ fn read_verified_range(
         || !same_metadata(&before, &path_after)
         || !same_metadata(&report_before, &report_after)
         || !same_metadata(&report_before, &report_path_after)
+    {
+        return Err("saved analysis evidence changed during preview verification".into());
+    }
+    Ok(AnalysisSpecimenPage {
+        report_id: report.id,
+        offset,
+        total_len,
+        data,
+    })
+}
+fn root_has(root: &File, name: &str) -> bool {
+    rustix::fs::statat(root, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW).is_ok()
+}
+/// The same checked range read for a specimen kept only as its encrypted
+/// archive: decrypted whole into memory (bounded), length and digest verified
+/// against the saved report, and the archive and report checked unchanged.
+fn read_sealed_range(
+    directory: &Path,
+    root: &File,
+    (report_file, report_before): (File, Metadata),
+    report: AnalysisReport,
+    offset: u64,
+    data_len: usize,
+) -> Result<AnalysisSpecimenPage, String> {
+    let total_len = report
+        .specimen_len
+        .ok_or("complete specimen length unavailable")?;
+    let expected = report
+        .specimen_sha256
+        .as_ref()
+        .ok_or("complete specimen digest unavailable")?;
+    let archive = super::sealed::sealed_file(directory)?;
+    let before = archive.metadata().map_err(|e| e.to_string())?;
+    let (bytes, sha256) = super::sealed::read_sealed(directory)?;
+    if bytes.len() as u64 != total_len {
+        return Err("saved specimen length mismatch".into());
+    }
+    if !sha256.eq_ignore_ascii_case(expected) {
+        return Err("saved specimen digest mismatch".into());
+    }
+    let start = offset as usize;
+    let data = bytes
+        .get(start..start + data_len)
+        .ok_or("specimen preview range exceeds saved length")?
+        .to_vec();
+    let after = archive.metadata().map_err(|e| e.to_string())?;
+    let path_after = open_member(root, super::sealed::SEALED)?
+        .metadata()
+        .map_err(|e| e.to_string())?;
+    let report_after = report_file.metadata().map_err(|e| e.to_string())?;
+    if !same_metadata(&before, &after)
+        || !same_metadata(&before, &path_after)
+        || !same_metadata(&report_before, &report_after)
     {
         return Err("saved analysis evidence changed during preview verification".into());
     }
@@ -252,6 +315,32 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.directory);
         }
+    }
+    #[test]
+    fn a_sealed_specimen_is_previewed_and_read_whole_with_the_same_checks() {
+        let mut fixture = Fixture::new();
+        assert_eq!(
+            crate::analysis::sealed::seal(&fixture.directory),
+            Ok(true)
+        );
+        assert!(!fixture.directory.join("specimen").exists());
+        let page = fixture.read(9, 8).unwrap();
+        assert_eq!(page.data, b"archived");
+        assert_eq!(page.total_len, 26);
+        let (_, whole) = read_all(&fixture.directory, "report").unwrap();
+        assert_eq!(whole, b"verified archived specimen");
+        for (offset, len) in [(0, 0), (0, 4097), (26, 1)] {
+            assert!(fixture.read(offset, len).is_err());
+        }
+        // The saved digest and length still gate it.
+        fixture.report.specimen_sha256 = Some("00".repeat(32));
+        fixture.save();
+        assert!(fixture.read(0, 1).is_err());
+        fixture.report.specimen_sha256 =
+            Some(format!("{:x}", Sha256::digest(b"verified archived specimen")));
+        fixture.report.specimen_len = Some(25);
+        fixture.save();
+        assert!(fixture.read(0, 1).is_err());
     }
     #[test]
     fn retained_preview_checks_identity_bounds_complete_length_and_hash() {

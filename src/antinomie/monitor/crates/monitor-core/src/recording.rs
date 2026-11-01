@@ -1014,6 +1014,11 @@ fn settle_stale_analysis(run: &mut RunSummary) {
             report,
             "the analysis was interrupted before it finished: the app or the VM ended first",
         );
+        // A saved run keeps its specimen only encrypted: runs saved before
+        // that, or cut off with a plain copy, are sealed when opened.
+        for problem in crate::analysis::seal_retained_specimens(&run.directory.join("analysis")) {
+            eprintln!("retained specimen not sealed: {problem}");
+        }
     }
 }
 fn reopen_analysis_sidecar(root: &Path, run: &mut RunSummary) -> Result<(), RecordingError> {
@@ -1235,11 +1240,18 @@ mod tests {
             "analysis": stuck,
         });
         fs::write(directory.join("run.json"), run.to_string()).unwrap();
+        // A run saved before specimens were encrypted at rest.
+        fs::create_dir_all(directory.join("analysis")).unwrap();
+        fs::write(directory.join("analysis/specimen"), b"benign old bytes").unwrap();
+        fs::write(directory.join("analysis/specimen.partial"), b"half").unwrap();
         let root = fs::canonicalize(&root).unwrap();
         let loaded = saved_run(&root, &root.join("runs/run"), "vm")
             .unwrap()
             .unwrap();
         assert_eq!(loaded.analysis.unwrap().state, AnalysisState::Unavailable);
+        assert!(!directory.join("analysis/specimen").exists());
+        assert!(!directory.join("analysis/specimen.partial").exists());
+        assert!(directory.join("analysis/specimen.zip").is_file());
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
