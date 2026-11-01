@@ -153,6 +153,20 @@ static int antinomie_word(const char *text)
 	return contains_ci(text, "antinomie");
 }
 
+#if defined(__aarch64__)
+/* A device-tree boot (a single-board computer's): no UEFI and so no SMBIOS,
+ * which is how such a machine is, not a giveaway. */
+static int dt_boot(void)
+{
+	struct stat st;
+
+	return !stat("/proc/device-tree", &st) && stat("/sys/firmware/efi", &st);
+}
+#define ABSENT(error) ((error) == EACCES ? "skip" : dt_boot() ? "info" : "fail")
+#else
+#define ABSENT(error) ((error) == EACCES ? "skip" : "fail")
+#endif
+
 /* --- CPUID ------------------------------------------------------------ */
 
 static void check_cpuid(void)
@@ -304,7 +318,7 @@ static void check_dmi(void)
 		snprintf(path, sizeof(path), "/sys/class/dmi/id/%s", fields[i]);
 		snprintf(key, sizeof(key), "dmi.%s", fields[i]);
 		if (read_line(path, value, sizeof(value)) < 0) {
-			report(errno == EACCES ? "skip" : "fail", key, strerror(errno));
+			report(ABSENT(errno), key, strerror(errno));
 			continue;
 		}
 		if (!strcmp(fields[i], "chassis_type"))
@@ -324,8 +338,8 @@ static void check_smbios_raw(void)
 	int vm_bit = -1, types = 0, oem_strings = -1;
 
 	if (len < 0) {
-		report(errno == EACCES ? "skip" : "fail", "smbios.vm-bit", strerror(errno));
-		report(errno == EACCES ? "skip" : "fail", "smbios.strings", strerror(errno));
+		report(ABSENT(errno), "smbios.vm-bit", strerror(errno));
+		report(ABSENT(errno), "smbios.strings", strerror(errno));
 		return;
 	}
 	while (at + 4 <= len) {
@@ -435,7 +449,12 @@ static void check_acpi(void)
 	dir = opendir("/sys/bus/acpi/devices");
 	if (dir) {
 		while ((entry = readdir(dir)))
-			if ((!strncmp(entry->d_name, "QEMU", 4) || !strncmp(entry->d_name, "VMBUS", 5)) &&
+			if ((!strncmp(entry->d_name, "QEMU", 4) || !strncmp(entry->d_name, "VMBUS", 5)
+#if defined(__aarch64__)
+			     /* virt's virtio-mmio slots and its flash (Linaro IDs). */
+			     || !strncmp(entry->d_name, "LNRO0005", 8) || !strncmp(entry->d_name, "LNRO0015", 8)
+#endif
+			     ) &&
 			    strlen(found) + strlen(entry->d_name) + 2 < sizeof(found))
 				snprintf(found + strlen(found), sizeof(found) - strlen(found), "%s%s",
 					 *found ? " " : "", entry->d_name);
@@ -1340,6 +1359,12 @@ static void check_firmware(void)
 	ssize_t len;
 
 	if (stat("/sys/firmware/efi", &st)) {
+#if defined(__aarch64__)
+		if (dt_boot()) {
+			report("info", "firmware.type", "device tree (no /sys/firmware/efi)");
+			return;
+		}
+#endif
 		/* A current PC boots UEFI; SeaBIOS boots leave no EFI tables. */
 		report("fail", "firmware.type", "BIOS (no /sys/firmware/efi)");
 		return;
@@ -1359,7 +1384,12 @@ static void check_firmware(void)
 			line = strstr(log, "efi: EFI v");
 			if (line && (line = strstr(line, " by ")))
 				sscanf(line + 4, "%95[^\n]", vendor);
+#if defined(__aarch64__)
+			/* arm64 server and cloud firmware is EDK II's (Ampere's, AWS's). */
+			report(!*vendor ? "info" : vm_word(vendor) ? "fail" : "pass",
+#else
 			report(!*vendor ? "info" : contains_ci(vendor, "EDK") || vm_word(vendor) ? "fail" : "pass",
+#endif
 			       "firmware.vendor", *vendor ? vendor : "not in the kernel log");
 		}
 	}
@@ -1387,10 +1417,168 @@ static void check_topology(void)
 		reportf("info", "cpu.threads", "cpu0 siblings %s (%s)", siblings,
 			strpbrk(siblings, ",-") ? "two threads per core" : "one thread per core");
 	if (read_line("/sys/devices/system/cpu/cpu0/cache/index3/size", cache, sizeof(cache)))
+#if defined(__aarch64__)
+		/* Neoverse N1 machines (Ampere Altra) list an L1 and an L2 only. */
+		report(read_line("/sys/devices/system/cpu/cpu0/cache/index2/size", cache,
+				 sizeof(cache)) ? "fail" : "info",
+		       "cpu.l3-cache", *cache ? "none (an L2 only)" : "none");
+#else
 		report("fail", "cpu.l3-cache", "none");
+#endif
 	else
 		report("pass", "cpu.l3-cache", cache);
 }
+
+#if defined(__aarch64__)
+/* --- arm64: the CPU's identity, the generic timer, the device tree -------- */
+
+/* A field of the first CPU in /proc/cpuinfo, as a number (-1: none). */
+static long cpuinfo_number(const char *text, const char *key)
+{
+	const char *line = strstr(text, key);
+
+	if (!line || !(line = strchr(line, ':')))
+		return -1;
+	return strtol(line + 1, NULL, 0);
+}
+
+/* The processor version string of the first SMBIOS type 4 structure (the
+ * table is root's); "" if none. */
+static void dmi_processor_version(char *out, size_t size)
+{
+	static unsigned char table[65536];
+	ssize_t len = read_all("/sys/firmware/dmi/tables/DMI", (char *)table, sizeof(table));
+	ssize_t at = 0;
+
+	out[0] = 0;
+	while (len > 0 && at + 4 <= len && table[at + 1] >= 4) {
+		ssize_t strings = at + table[at + 1], next = strings;
+
+		while (next + 1 < len && (table[next] || table[next + 1]))
+			next++;
+		if (table[at] == 4 && table[at + 1] > 0x10 && strings < len) {
+			const char *string = (const char *)table + strings;
+			int number = table[at + 0x10], i;
+
+			for (i = 1; number && i < number && string < (const char *)table + next; i++)
+				string += strlen(string) + 1;
+			if (number && string < (const char *)table + next)
+				snprintf(out, size, "%s", string);
+			return;
+		}
+		if (table[at] == 127)
+			return;
+		at = next + 2;
+	}
+}
+
+static void check_arm_cpu(void)
+{
+	static char text[1 << 16];
+	static const struct {
+		long part;
+		const char *name;
+	} parts[] = {
+		{ 0xd0c, "Altra" }, { 0xd0c, "Graviton2" }, { 0xd40, "Graviton3" },
+		{ 0xd4f, "Graviton4" }, { 0xd08, "BCM2711" }, { 0xd0b, "BCM2712" },
+	};
+	long implementer, part, variant, revision;
+	char version[128];
+	const char *verdict = "info";
+	uint64_t frequency;
+	size_t i;
+
+	if (read_all("/proc/cpuinfo", text, sizeof(text)) < 0) {
+		report("skip", "arm.cpu", strerror(errno));
+		return;
+	}
+	implementer = cpuinfo_number(text, "CPU implementer");
+	part = cpuinfo_number(text, "CPU part");
+	variant = cpuinfo_number(text, "CPU variant");
+	revision = cpuinfo_number(text, "CPU revision");
+	dmi_processor_version(version, sizeof(version));
+	/* The firmware's processor must be the one the CPU's ID register names. */
+	for (i = 0; i < sizeof(parts) / sizeof(parts[0]); i++)
+		if (*version && contains_ci(version, parts[i].name))
+			verdict = parts[i].part == part ? "pass" : "fail";
+	if (*version && vm_word(version))
+		verdict = "fail";
+	reportf(verdict, "arm.cpu", "implementer 0x%02lx part 0x%03lx r%ldp%ld, firmware: %s",
+		implementer, part, variant, revision, *version ? version : "-");
+	__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
+	/* 62.5 MHz is QEMU's own counter frequency for its virt machine. */
+	reportf(frequency == 62500000 ? "fail" : "pass", "arm.cntfrq", "%.3f MHz",
+		frequency / 1e6);
+}
+
+/* Names in the device tree that only QEMU's virt machine has. */
+static const char *qemu_dt_word(const char *text, size_t len)
+{
+	static const char *const words[] = { "dummy-virt", "qemu,", "virtio,mmio", "fw-cfg",
+		"virtio_mmio", "platform-bus", NULL };
+	int i;
+
+	for (i = 0; words[i]; i++)
+		if (memmem(text, len, words[i], strlen(words[i])))
+			return words[i];
+	return NULL;
+}
+
+static void check_device_tree(void)
+{
+	static char data[1 << 21];
+	char model[128] = "", found[512] = "";
+	struct dirent *entry;
+	ssize_t len;
+	DIR *dir = opendir("/proc/device-tree");
+
+	if (!dir) {
+		report("pass", "dt.model", "no device tree (ACPI)");
+	} else {
+		const char *word;
+
+		len = read_all("/proc/device-tree/model", model, sizeof(model));
+		/* Every node and property is world-readable. */
+		while ((entry = readdir(dir))) {
+			char path[300], value[512];
+			ssize_t size;
+
+			if (entry->d_name[0] == '.')
+				continue;
+			snprintf(path, sizeof(path), "/proc/device-tree/%.64s/compatible", entry->d_name);
+			size = read_all(path, value, sizeof(value));
+			if (qemu_dt_word(entry->d_name, strlen(entry->d_name)) ||
+			    (size > 0 && qemu_dt_word(value, size)))
+				if (strlen(found) + strlen(entry->d_name) + 2 < sizeof(found))
+					snprintf(found + strlen(found), sizeof(found) - strlen(found),
+						 "%s%s", *found ? " " : "", entry->d_name);
+		}
+		closedir(dir);
+		len = read_all("/proc/device-tree/compatible", data, 512);
+		word = len > 0 ? qemu_dt_word(data, len) : NULL;
+		if (len > 0)
+			for (ssize_t i = 0; i + 1 < len; i++)
+				if (!data[i])
+					data[i] = ' ';
+		reportf(word || vm_word(model) ? "fail" : "pass", "dt.model", "%s (%s)",
+			*model ? model : "no model", len > 0 ? data : "no compatible");
+		report(*found ? "fail" : "pass", "dt.nodes", *found ? found : "no QEMU nodes");
+	}
+	/* The boot loader's flattened tree as it came (root only). */
+	len = read_all("/sys/firmware/fdt", data, sizeof(data));
+	if (len < 0) {
+		report(errno == ENOENT ? "info" : "skip", "fdt.raw", strerror(errno));
+	} else {
+		const char *word = qemu_dt_word(data, len);
+
+		if (memmem(data, len, "antinomie_", 10))
+			reportf("fail", "fdt.raw", "%zd bytes, antinomie_ boot options", len);
+		else
+			reportf(word ? "fail" : "pass", "fdt.raw", "%zd bytes%s%s", len,
+				word ? ", names " : "", word ? word : "");
+	}
+}
+#endif
 
 int main(int argc, char **argv)
 {
@@ -1402,6 +1590,10 @@ int main(int argc, char **argv)
 	check_residency();
 	check_cpuid();
 	check_topology();
+#if defined(__aarch64__)
+	check_arm_cpu();
+	check_device_tree();
+#endif
 	check_firmware();
 	check_dmi();
 	check_smbios_raw();
