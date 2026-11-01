@@ -283,7 +283,44 @@ fn finding_details(ui: &mut egui::Ui, values: &[(&'static str, RowValue)]) {
         "Details"
     };
     section(ui, title, lines("finding.detail"));
+    evidence_link(ui, values);
     section(ui, "Why this tier", lines("finding.why"));
+}
+
+/// The Trace filter that shows the calls a finding cites, in its process when
+/// the task cookie is known.
+fn evidence_filter(cookie: Option<u64>, calls: &[u64]) -> String {
+    let set = calls
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    match cookie.filter(|cookie| *cookie != 0) {
+        Some(cookie) => format!("process.cookie == {cookie} && call.id in {{{set}}}"),
+        None => format!("call.id in {{{set}}}"),
+    }
+}
+
+/// "Show the N calls in Syscall Trace" for a finding whose detail lines cite
+/// more calls than its own (an anti-analysis row lists each check's call):
+/// Open original syscall below goes to the first one only.
+fn evidence_link(ui: &mut egui::Ui, values: &[(&'static str, RowValue)]) {
+    let calls = super::digest::evidence_calls(values);
+    if calls.len() < 2 {
+        return;
+    }
+    let label = format!("Show the {} calls in Syscall Trace", calls.len());
+    if ui
+        .button(label)
+        .on_hover_text("Open Syscall Trace filtered to the calls these lines cite")
+        .clicked()
+    {
+        let filter = evidence_filter(files::number(values, "process.cookie"), &calls);
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(egui::Id::new(process_details::TRACE_SCOPE), filter);
+        });
+    }
+    ui.add_space(8.0);
 }
 
 fn scan_clock(view: &TriageView) -> Option<antinomie_monitor_core::HostClockAnchor> {
@@ -296,6 +333,28 @@ fn scan_clock(view: &TriageView) -> Option<antinomie_monitor_core::HostClockAnch
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_finding_citing_several_calls_offers_them_all_in_trace() {
+        let values = vec![
+            ("event.id", RowValue::Number(12)),
+            ("process.cookie", RowValue::Number(7)),
+            (
+                "finding.detail",
+                RowValue::List(vec![
+                    "DMI: product_name [read] → \"Q35\"  (call 12)".into(),
+                    "MAC: address [read] → \"52:54\"  (call 40)".into(),
+                ]),
+            ),
+        ];
+        let calls = super::super::digest::evidence_calls(&values);
+        assert_eq!(calls, vec![12, 40]);
+        assert_eq!(
+            evidence_filter(files::number(&values, "process.cookie"), &calls),
+            "process.cookie == 7 && call.id in {12, 40}"
+        );
+        assert_eq!(evidence_filter(Some(0), &[5]), "call.id in {5}");
+    }
 
     #[test]
     fn row_clicks_show_information_only_in_the_shared_details_area() {

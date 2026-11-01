@@ -82,7 +82,7 @@ pub(super) fn behaviour(findings: &[Finding]) -> Behaviour {
 /// The calls a finding names as its evidence: its first call, the calls its
 /// detail lines cite ("(call 12)", "Occurrences: calls 12, 40, 41"), first
 /// first and without repeats, at most [`run_digest::EVIDENCE_CALLS`].
-fn evidence_calls(values: &[(&'static str, RowValue)]) -> Vec<u64> {
+pub(super) fn evidence_calls(values: &[(&'static str, RowValue)]) -> Vec<u64> {
     let mut calls = Vec::new();
     let mut add = |call: u64| {
         if call != 0 && !calls.contains(&call) && calls.len() < run_digest::EVIDENCE_CALLS {
