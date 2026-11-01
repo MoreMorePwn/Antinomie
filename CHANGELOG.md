@@ -8,6 +8,17 @@ it runs.
 
 ### Host
 
+- **Fixed: multi-threaded ransomware is triaged as one process.** The stateful
+  Triage rules (mass rewrite, mass delete, ransom rewrite and note, file search,
+  process and user enumeration, scans, kill lists, fork bombs, uploads, floods,
+  dirty pipe, write-then-execute) kept their counters per thread, so a program
+  that shares twelve renames over five worker threads never reached any
+  threshold; they now count per process (thread group). Worker threads are named
+  by their process in the file tables, findings and the report (they showed as
+  "Unknown (pid / tid)"). The Summary's ATT&CK row and the export now come from
+  one function, the union of the behaviour rules' and the detection engines'
+  techniques, so they cannot disagree.
+
 - **Security: zip 9.2, wasmtime 48.0.8 and one check for every untrusted zip.**
   The zip crate moves from 8.6.0 to 9.2.0, which fixes RUSTSEC-2026-0367 to
   RUSTSEC-2026-0369 (SUID/SGID bits kept on extraction, symlink targets outside the
