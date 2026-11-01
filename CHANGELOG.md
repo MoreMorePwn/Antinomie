@@ -51,6 +51,13 @@ it runs.
   trace, Triage and Run History details, and its report says so first in the
   run overview.
 
+- **Faster whole-run export.** Reading a recording's packets and checking its
+  archived fields against them takes far fewer filesystem calls (the archive
+  root is resolved once instead of for every field chunk, packets are read
+  through one window): Export report on a 158,000-call run takes 17 to 19 s
+  instead of 43 to 46 s once the run's index is built (B16 of the 2026-11
+  evaluation).
+
 - **Sources for the downloadable bases.** The `sources/` folder of the base
   bucket now holds the corresponding source of every listed base: the Debian
   `linux` source package, the Antinomie patch series and exact kernel

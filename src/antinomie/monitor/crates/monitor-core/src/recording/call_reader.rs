@@ -75,10 +75,17 @@ struct Queries<'a> {
     saved: rusqlite::Statement<'a>,
 }
 
+/// Bytes of the raw archive read at once. A walk reads calls in archive
+/// order, so most packets are in the window the previous one loaded.
+const WINDOW_SIZE: usize = 512 * 1024;
+
 /// The raw archive and the objects it was recorded with.
 struct Source {
     objects: PathBuf,
-    reader: BufReader<File>,
+    file: File,
+    /// Archive bytes from `window_start`, read with one positioned read.
+    window: Vec<u8>,
+    window_start: u64,
     boundary: u64,
     issues: Vec<String>,
 }
@@ -93,23 +100,46 @@ impl Source {
     ) -> Result<(), RecordingError> {
         let offset = u64::try_from(offset)
             .map_err(|_| RecordingError::Limit("negative cached packet offset"))?;
-        self.reader.seek(SeekFrom::Start(offset))?;
-        let (_, packet) = next_packet(&mut self.reader)?
-            .ok_or(RecordingError::Limit("indexed packet is missing"))?;
-        if self.reader.stream_position()? > self.boundary {
-            return Err(RecordingError::Limit(
-                "indexed packet exceeds retained boundary",
-            ));
+        let prefix = self.bytes(offset, 4)?;
+        let size = u32::from_le_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]) as usize;
+        if !(128..=262112).contains(&size) {
+            return Err(RecordingError::Limit("invalid raw packet length"));
         }
-        if invocation_key(&packet).map(key_blob).as_deref() != Some(key) {
+        let packet = self.bytes(offset + 4, size)?;
+        if invocation_key(packet).map(key_blob).as_deref() != Some(key) {
             return Err(RecordingError::Limit("indexed packet identity changed"));
         }
+        let packet = packet.to_vec();
         match preview.assembler.ingest(&packet) {
             Ok(Some(event)) => preview.put(event)?,
             Ok(None) => {}
             Err(error) => push_issue(&mut self.issues, error.to_string()),
         }
         Ok(())
+    }
+
+    /// `len` archive bytes at `offset`, all inside the indexed boundary.
+    fn bytes(&mut self, offset: u64, len: usize) -> Result<&[u8], RecordingError> {
+        let end = offset
+            .checked_add(len as u64)
+            .ok_or(RecordingError::Limit("raw packet extent overflows"))?;
+        if end > self.boundary {
+            return Err(if offset >= self.boundary {
+                RecordingError::Limit("indexed packet is missing")
+            } else {
+                RecordingError::Limit("indexed packet exceeds retained boundary")
+            });
+        }
+        let window_end = self.window_start + self.window.len() as u64;
+        if offset < self.window_start || end > window_end {
+            use std::os::unix::fs::FileExt;
+            let want = (self.boundary - offset).min(WINDOW_SIZE.max(len) as u64) as usize;
+            self.window.resize(want, 0);
+            self.file.read_exact_at(&mut self.window, offset)?;
+            self.window_start = offset;
+        }
+        let start = (offset - self.window_start) as usize;
+        Ok(&self.window[start..start + len])
     }
 }
 
@@ -174,8 +204,9 @@ impl<'a> CallReader<'a> {
             },
             source: Source {
                 objects,
-                // Packets are read at scattered offsets: a small buffer.
-                reader: BufReader::with_capacity(1024, file),
+                file,
+                window: Vec::new(),
+                window_start: 0,
                 boundary,
                 issues: Vec::new(),
             },

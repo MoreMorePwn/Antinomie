@@ -74,7 +74,7 @@ fn cache_path(objects: &Path) -> io::Result<PathBuf> {
     };
     let root = cache_root.join("antinomie/object-pack");
     storage::private_dir(&root).map_err(retained_cache_error)?;
-    let path = fs::canonicalize(objects)?;
+    let path = archive_io::canonical_dir(objects, false)?;
     let digest = Sha256::digest(path.as_os_str().as_bytes());
     let name = digest
         .iter()
@@ -253,7 +253,8 @@ fn update_piece(
             if file.metadata()?.len() < source_len {
                 return Err(invalid_cache("object index shrank while being read"));
             }
-            verify_source(objects, identity, source_len)?;
+            // `with_index` checks the source again after its query, which
+            // covers a replacement before it as well.
             return Ok((true, false));
         }
     }
