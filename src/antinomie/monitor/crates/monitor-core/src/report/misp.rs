@@ -224,7 +224,12 @@ pub fn render(report: &Report) -> Result<String, String> {
         }
     }
     let mut dropped_seen = std::collections::BTreeSet::new();
-    for indicator in report.indicators.iter().flatten() {
+    for indicator in report
+        .indicators
+        .iter()
+        .flatten()
+        .filter(|i| i.base_noise.is_empty())
+    {
         for attr in attributes(indicator, &seed, at) {
             // One attribute per value, even when two indicators give it.
             if dropped_seen.insert((attr["type"].to_string(), attr["value"].to_string())) {

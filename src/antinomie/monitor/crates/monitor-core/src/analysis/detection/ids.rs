@@ -475,8 +475,27 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     scan_with(staged, work, &tool)
 }
 
+/// Time the whole scan may take before the remaining segments are left out.
+pub(super) const IDS_BUDGET: Duration = Duration::from_secs(100);
+/// The limit of the one retry of a segment that timed out: a loaded host
+/// (another scan, a build) can stretch a run that normally takes seconds.
+pub(super) const IDS_RETRY: Duration = Duration::from_secs(200);
+/// How long the sandboxed worker may run: the budget, one retry and the setup.
+pub(super) const IDS_SANDBOX: Duration = Duration::from_secs(360);
+
 /// The scan proper, with the Suricata executable already found.
 fn scan_with(staged: &Staged, work: &Path, tool: &str) -> Result<Report, String> {
+    scan_budgeted(staged, work, tool, IDS_BUDGET, IDS_RETRY)
+}
+
+/// [`scan_with`] with its time limits given, for the tests.
+fn scan_budgeted(
+    staged: &Staged,
+    work: &Path,
+    tool: &str,
+    time_limit: Duration,
+    retry_limit: Duration,
+) -> Result<Report, String> {
     let libs = std::env::var("ANTINOMIE_SURICATA_LIBS").unwrap_or_default();
     let pair = [("LD_LIBRARY_PATH", libs.as_str())];
     let tool_env: &[(&str, &str)] = if libs.is_empty() { &[] } else { &pair };
@@ -577,7 +596,8 @@ fn scan_with(staged: &Staged, work: &Path, tool: &str) -> Result<Report, String>
         "HOME_NET is the private address ranges because this scan has no recorded guest address set. Rules that negate those groups can load; matches are limited to that assumption. VM-wide PCAP is not process attribution.".into(),
     );
     fs::write(&config, config_text).map_err(|error| error.to_string())?;
-    let deadline = Instant::now() + Duration::from_secs(100);
+    let deadline = Instant::now() + time_limit;
+    let mut retried = false;
     let mut successful = 0;
     let mut failed = 0;
     let capture_total = staged.captures.len() as u64;
@@ -609,28 +629,46 @@ fn scan_with(staged: &Staged, work: &Path, tool: &str) -> Result<Report, String>
             .map(|path| path.to_str().ok_or("IDS path is not UTF-8"))
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
-        let result = super::super::tools::run_with(
-            tool,
-            &[
-                "-v",
-                "-c",
-                strings[0],
-                "-r",
-                strings[1],
-                "-S",
-                strings[2],
-                "-l",
-                strings[3],
-                "--runmode",
-                "single",
-                "-k",
-                "none",
-            ],
-            tool_env,
-            remaining,
-            1024 * 1024,
-            true,
-        )?;
+        let arguments = [
+            "-v",
+            "-c",
+            strings[0],
+            "-r",
+            strings[1],
+            "-S",
+            strings[2],
+            "-l",
+            strings[3],
+            "--runmode",
+            "single",
+            "-k",
+            "none",
+        ];
+        let mut limit = remaining;
+        let mut result =
+            super::super::tools::run_with(tool, &arguments, tool_env, limit, 1024 * 1024, true)?;
+        if result.timed_out && !retried {
+            // Once per scan: a segment that ran out of time on a loaded host
+            // gets a longer limit before it counts as unavailable.
+            retried = true;
+            report.warnings.push(format!(
+                "Segment {}: Suricata timed out after {} s; retried once with a {} s limit",
+                index + 1,
+                limit.as_secs().max(1),
+                retry_limit.as_secs()
+            ));
+            let _ = fs::remove_dir_all(&output);
+            crate::storage::private_dir(&output).map_err(|error| error.to_string())?;
+            limit = retry_limit;
+            result = super::super::tools::run_with(
+                tool,
+                &arguments,
+                tool_env,
+                limit,
+                1024 * 1024,
+                true,
+            )?;
+        }
         let tool_log = format!("{}\n{}", result.stderr, result.stdout);
         let loaded = suricata_loaded(&tool_log);
         if loaded.is_some() {
@@ -660,7 +698,7 @@ fn scan_with(staged: &Staged, work: &Path, tool: &str) -> Result<Report, String>
                 report.skipped.push(line.chars().take(300).collect());
             }
         }
-        let failure = result.failure_text("Suricata", remaining);
+        let failure = result.failure_text("Suricata", limit);
         if let Some(reason) = failure {
             failed += 1;
             report
@@ -1071,6 +1109,67 @@ mod tests {
             all.contains("Segment 1: Suricata exited with code 1"),
             "{all}"
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_segment_that_times_out_is_retried_once_with_a_longer_limit() {
+        let dir = temp_dir("retry");
+        let pcap = dir.join("capture.pcap");
+        fs::write(&pcap, pcap_header()).unwrap();
+        let marker = dir.join("ran-once");
+        // The first run is too slow for the budget; the second is not.
+        let tool = fake_suricata(
+            &dir,
+            &format!(
+                "case \"$ARGS\" in *\" -r \"*) if [ ! -e '{m}' ]; then : > '{m}'; exec sleep 3; fi;; esac\n{LOADS_ONE_RULE}",
+                m = marker.display()
+            ),
+        );
+        let staged = staged_over(&dir, &[(&pcap, 3, true)]);
+        let report = scan_budgeted(
+            &staged,
+            &dir,
+            &tool,
+            Duration::from_millis(1200),
+            Duration::from_secs(20),
+        )
+        .unwrap();
+        let row = &report.inputs.as_ref().unwrap()[0];
+        assert_eq!(row.outcome, InputOutcome::Succeeded, "{:?}", row.reason);
+        let all = report.warnings.join("\n");
+        assert!(all.contains("retried once with a 20 s limit"), "{all}");
+        assert_ne!(report.state, State::Unavailable);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_segment_that_times_out_twice_is_unavailable_after_one_retry_only() {
+        let dir = temp_dir("retry-fails");
+        let pcap = dir.join("capture.pcap");
+        fs::write(&pcap, pcap_header()).unwrap();
+        let counter = dir.join("runs");
+        let tool = fake_suricata(
+            &dir,
+            &format!(
+                "case \"$ARGS\" in *\" -r \"*) echo x >> '{c}'; exec sleep 4;; esac",
+                c = counter.display()
+            ),
+        );
+        let staged = staged_over(&dir, &[(&pcap, 3, true)]);
+        let report = scan_budgeted(
+            &staged,
+            &dir,
+            &tool,
+            Duration::from_millis(1100),
+            Duration::from_millis(1100),
+        )
+        .unwrap();
+        let row = &report.inputs.as_ref().unwrap()[0];
+        assert_eq!(row.outcome, InputOutcome::Failed);
+        assert!(row.reason.contains("timed out"), "{}", row.reason);
+        assert_eq!(report.state, State::Unavailable);
+        assert_eq!(fs::read_to_string(&counter).unwrap().lines().count(), 2);
         fs::remove_dir_all(dir).unwrap();
     }
 

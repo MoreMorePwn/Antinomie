@@ -430,3 +430,70 @@ fn archiving_home_data_into_a_staging_directory_is_medium() {
         "collection.archive_staging"
     ));
 }
+
+/// A decoy datastore as a ransomware pass leaves it: each file opened without
+/// O_CREAT, overwritten, then renamed to one new extension.
+fn encrypt_in_place(count: u64, extension: &str, rename_them: bool) -> Calls {
+    let mut calls: Calls = Vec::new();
+    for n in 0..count {
+        let path = format!("/srv/data/dir{}/record{n}.dat", n % 3);
+        let fd = 3 + (n % 5) as i64;
+        calls.push(open(1, &path, 1, fd));
+        calls.push(write(1, fd as u64, &[0x9c; 64]));
+        calls.push(close(1, fd as u64));
+        if rename_them {
+            calls.push(rename(1, &path, &format!("{path}.{extension}")));
+        }
+    }
+    calls
+}
+
+#[test]
+fn files_rewritten_in_place_and_renamed_to_one_extension_are_a_mass_rewrite() {
+    // Twelve files: below the 20 renames of impact.ransom_rewrite.
+    let out = run(encrypt_in_place(12, "INC", true));
+    assert_eq!(tier(&out, "impact.mass_rewrite").as_deref(), Some("high"));
+    let row = rows(&out, "impact.mass_rewrite")[0];
+    assert_eq!(list(row, "finding.technique"), ["T1486", "DET0215"]);
+    assert!(
+        text(row, "finding.summary").contains(".INC"),
+        "{}",
+        text(row, "finding.summary")
+    );
+    assert!(!has(&out, "impact.ransom_rewrite"));
+    // Renames alone, ten of them, are enough too.
+    let renames: Calls = (0..10)
+        .map(|n| rename(1, &format!("/srv/a{n}.txt"), &format!("/srv/a{n}.txt.INC")))
+        .collect();
+    assert!(has(&run(renames), "impact.mass_rewrite"));
+}
+
+#[test]
+fn ordinary_rewrites_and_renames_are_not_a_mass_rewrite() {
+    // Five files encrypted: too few.
+    assert!(!has(
+        &run(encrypt_in_place(5, "INC", true)),
+        "impact.mass_rewrite"
+    ));
+    // Many files rewritten and not renamed, in few directories: a build or an upgrade.
+    assert!(!has(
+        &run(encrypt_in_place(40, "INC", false)),
+        "impact.mass_rewrite"
+    ));
+    // Files the run made itself and then renamed are its own work.
+    let mut own: Calls = Vec::new();
+    for n in 0..15 {
+        own.push(open_write(1, &format!("/tmp/o{n}.tmp"), 3));
+        own.push(rename(
+            1,
+            &format!("/tmp/o{n}.tmp"),
+            &format!("/tmp/o{n}.out"),
+        ));
+    }
+    assert!(!has(&run(own), "impact.mass_rewrite"));
+    // Ten files moved to ten different extensions.
+    let varied: Calls = (0..10)
+        .map(|n| rename(1, &format!("/srv/v{n}.txt"), &format!("/srv/v{n}.e{n}")))
+        .collect();
+    assert!(!has(&run(varied), "impact.mass_rewrite"));
+}

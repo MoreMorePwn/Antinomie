@@ -228,7 +228,7 @@ fn shorten(text: &str, limit: usize) -> String {
 }
 
 /// What the bytes a check read say, and whether they would give a VM, container or debugger away.
-fn judge(class: Class, path: &str, bytes: &[u8]) -> (String, Option<bool>) {
+fn judge(class: Class, path: &str, bytes: &[u8], cloud: bool) -> (String, Option<bool>) {
     let text = String::from_utf8_lossy(bytes);
     match class {
         Class::Dmi => {
@@ -255,12 +255,16 @@ fn judge(class: Class, path: &str, bytes: &[u8]) -> (String, Option<bool>) {
             } else {
                 format!("model name \"{shown}\"; ")
             };
-            let answer = if hypervisor {
+            // A cloud profile is a virtual machine by design: its hypervisor flag is
+            // what a real instance shows, so only a VM name in the model gives it away.
+            let answer = if hypervisor && cloud {
+                format!("{model}flags include hypervisor (expected under a cloud profile)")
+            } else if hypervisor {
                 format!("{model}flags include hypervisor")
             } else {
                 format!("{model}no hypervisor flag")
             };
-            (answer, Some(hypervisor || named))
+            (answer, Some((hypervisor && !cloud) || named))
         }
         Class::Storage | Class::Hypervisor => {
             if base(path) == "vendor" || base(path) == "subsystem_vendor" {
@@ -409,6 +413,22 @@ fn probe_via(name: &str) -> &'static str {
     }
 }
 
+/// The caller is a program of the base system, not one the run brought.
+fn system_program(cx: &Ctx) -> bool {
+    cx.image.is_some_and(|image| {
+        [
+            "/usr/bin/",
+            "/bin/",
+            "/usr/sbin/",
+            "/sbin/",
+            "/usr/libexec/",
+            "/usr/lib/",
+        ]
+        .iter()
+        .any(|dir| image.starts_with(dir))
+    })
+}
+
 fn task<'a>(st: &'a mut State, cx: &Ctx) -> &'a mut TaskProbes {
     let entry = st.probes.tasks.entry(cx.call.task_cookie).or_default();
     entry.pid = cx.event.pid;
@@ -438,7 +458,10 @@ pub(super) fn path(cx: &Ctx, st: &mut State, touch: &Touch, _out: &mut Vec<Hit>)
                 return;
             }
             let fd = cx.ret.unwrap_or(-1) as u64;
-            let existence_only = matches!(class, Class::Container) || own.starts_with("/dev/");
+            // A cgroup file always exists; what it says decides. The other files
+            // (`/.dockerenv`) are checks of existence.
+            let existence_only = (matches!(class, Class::Container) && !own.ends_with("/cgroup"))
+                || own.starts_with("/dev/");
             let answer = existence_only.then(|| existence(cx, class));
             let tp = task(st, cx);
             let index = tp.record(new_probe(cx, class, &own, answer));
@@ -451,11 +474,12 @@ pub(super) fn path(cx: &Ctx, st: &mut State, touch: &Touch, _out: &mut Vec<Hit>)
             task(st, cx).record(new_probe(cx, class, &own, Some(answer)));
         }
         Op::Read if cx.ok => {
+            let cloud = st.cloud_profile;
             let fd = cx.args[0];
             let bytes = cx.payload(true);
             let tp = task(st, cx);
             let index = tp.pending.get(&fd).copied();
-            let (text, shows) = judge(class, &own, &bytes);
+            let (text, shows) = judge(class, &own, &bytes, cloud);
             // Runtimes read their own memory map for stack bounds: only a map naming a tool is a check.
             if own == "/proc/self/maps" && shows != Some(true) {
                 return;
@@ -537,7 +561,8 @@ pub(super) fn call(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
                 ));
             }
         }
-        "sysinfo" if cx.ok => {
+        // coreutils (`sort`, `df`) ask sysinfo for the memory size: not a check of uptime.
+        "sysinfo" if cx.ok && !system_program(cx) => {
             let seconds = cx.word(0, "", 0).unwrap_or(u64::MAX);
             if seconds != u64::MAX {
                 let answer = (format!("up {seconds} s"), Some(seconds < 1800));
@@ -556,7 +581,7 @@ pub(super) fn call(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
                         .join(":")
                 });
             let answer = mac.map(|text| {
-                let vm = judge(Class::Mac, "", text.as_bytes()).1;
+                let vm = judge(Class::Mac, "", text.as_bytes(), false).1;
                 (text, vm)
             });
             task(st, cx).record(new_probe(cx, Class::Mac, "ioctl SIOCGIFHWADDR", answer));

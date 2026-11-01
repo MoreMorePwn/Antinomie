@@ -182,6 +182,10 @@ pub struct Indicator {
     /// ("hashed from the starting disk", "empty file", "no hash: ...").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hash_note: Option<String>,
+    /// Why this is the base image's own traffic and not the sample's
+    /// (clock sync, DHCP, apt); `None` for the run's indicators.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub noise: Option<String>,
 }
 
 impl Indicator {
@@ -206,6 +210,7 @@ impl Indicator {
             roles: Vec::new(),
             not_checked: None,
             hash_note: None,
+            noise: None,
         }
     }
 
@@ -605,6 +610,7 @@ impl Collector {
             indicator.first_us = entry.tallies.values().filter_map(|t| t.first_us).min();
             indicator.last_us = entry.tallies.values().filter_map(|t| t.last_us).max();
             describe(&mut indicator, &entry);
+            indicator.noise = super::baseline::noise(&indicator);
             set_lookups(&mut indicator, &entry);
             out.push(indicator);
         }

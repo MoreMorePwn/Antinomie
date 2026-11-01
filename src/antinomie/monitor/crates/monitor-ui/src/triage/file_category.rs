@@ -78,13 +78,16 @@ impl Category {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Hit {
     pub category: Category,
-    /// Only the first sighting of the path says it is new.
+    /// Created: only the first sighting of the path says it is new. Renamed:
+    /// the destination was seen earlier in the run, so the rename replaced it.
+    /// Both are read before the call is tracked; afterwards the call's own
+    /// destination is "known".
     pub inferred: bool,
 }
 
 impl Hit {
     pub(super) fn label(self) -> String {
-        if self.inferred {
+        if self.inferred && self.category == Category::Created {
             format!("{} (inferred)", self.category.label())
         } else {
             self.category.label().to_owned()
@@ -243,7 +246,12 @@ pub(super) fn classify(
         _ if WRITES.contains(&name) => vec![hit(Category::Written)],
         "truncate" | "ftruncate" | "fallocate" => vec![hit(Category::Truncated)],
         "unlink" | "unlinkat" | "rmdir" => vec![hit(Category::Deleted)],
-        "rename" | "renameat" | "renameat2" => vec![hit(Category::Renamed)],
+        "rename" | "renameat" | "renameat2" => vec![Hit {
+            category: Category::Renamed,
+            inferred: sigma_events::paths(files, call, event).iter().any(|used| {
+                used.role == sigma_events::Role::New && files.journal.knows(&used.name)
+            }),
+        }],
         "link" | "linkat" | "symlink" | "symlinkat" => vec![hit(Category::Linked)],
         "chmod" | "fchmod" | "fchmodat" | "fchmodat2" | "chown" | "fchown" | "lchown"
         | "fchownat" => vec![hit(Category::Permissions)],
@@ -428,7 +436,7 @@ pub(super) fn detail(
             };
             if name == "renameat2" && arg(4) & 2 != 0 {
                 text.push_str(" (exchange)");
-            } else if new.as_deref().is_some_and(|new| files.journal.knows(new)) {
+            } else if hit.inferred {
                 text.push_str(" (destination seen earlier; overwritten)");
             }
             text

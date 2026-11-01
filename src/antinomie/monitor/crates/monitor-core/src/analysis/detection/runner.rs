@@ -627,7 +627,11 @@ fn run_program(
             &work,
             &read_only,
             &[("ANTINOMIE_ISOLATED_WORKER", "1")],
-            Duration::from_secs(180),
+            if request.engine == Engine::Ids {
+                super::ids::IDS_SANDBOX
+            } else {
+                Duration::from_secs(180)
+            },
             cancel,
         )?;
         let data = read_bounded(&work, Path::new("report.json"), REPORT_LIMIT)?;

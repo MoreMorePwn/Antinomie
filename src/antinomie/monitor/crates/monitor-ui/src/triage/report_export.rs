@@ -9,6 +9,7 @@ use antinomie_monitor_core::report::{self, export::Written, Choices, Format, Par
 use std::path::PathBuf;
 
 mod build;
+mod families;
 #[cfg(test)]
 mod tests;
 

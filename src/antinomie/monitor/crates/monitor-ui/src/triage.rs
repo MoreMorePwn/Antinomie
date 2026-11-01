@@ -67,6 +67,8 @@ mod pcap_scan;
 mod presentation;
 mod process_details;
 mod process_tree;
+#[cfg(test)]
+mod process_tree_tests;
 mod properties;
 mod refresh;
 #[cfg(test)]
@@ -985,6 +987,10 @@ struct TaskNode {
     argv: Vec<String>,
     state: String,
     exec_history: Vec<String>,
+    renames: Vec<String>,
+    in_call: Option<(String, u64)>,
+    /// Descriptors this task holds open on a `comm` file.
+    comm_fds: Vec<i64>,
     /// Joined argv of the committed exec, only when the whole vector was captured.
     command_line: Option<String>,
     /// The same vector kept as arguments, for the auditd `PROCTITLE` record.
@@ -1012,6 +1018,13 @@ struct ProcessNode {
     last_ns: Option<u64>,
     state: String,
     exec_history: Vec<String>,
+    /// A thread of the process with this pid, not a process of its own.
+    thread: bool,
+    /// Names the task gave itself after its last exec (`prctl(PR_SET_NAME)`, a write to `comm`).
+    renames: Vec<String>,
+    /// The call the task was in at its last record, with its start: the entry
+    /// was recorded and no exit followed (a call still blocking at the stop).
+    in_call: Option<(String, u64)>,
 }
 
 const FINDING_FIELDS: &[FieldSpec<'static>] = &[
@@ -1219,6 +1232,9 @@ struct ArchiveScan {
     /// The IOC window's list of the run and the datasets' answer.
     ioc: Option<Arc<ioc_scan::IocScan>>,
     network_warning: Option<String>,
+    /// The run's program died of a signal before its first recorded system
+    /// call: "the sample crashed before its first system call: SIGSEGV".
+    root_crash: Option<String>,
 }
 
 /// The rows of the rebuilt Network tabs and what their pages left out.

@@ -138,6 +138,47 @@ pub struct JournalSummary {
     pub reasons: Vec<String>,
 }
 
+/// How long an index temporary file must lie untouched before a later scan
+/// calls it abandoned.
+pub const STALE_TEMPORARY: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// Delete the index temporaries (`.triage-events-*`, `.triage-findings-*.tmp`)
+/// that a scan left in `directory` when it was killed (a cancelled or
+/// timed-out export that ended the process, a crash): the journals remove
+/// their own file when dropped, which a kill does not run. Only files idle for
+/// `idle` go, so a scan that is still writing keeps its file. Returns how many
+/// were removed.
+pub fn remove_stale_temporaries(directory: &Path, idle: std::time::Duration) -> usize {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return 0;
+    };
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let ours = name.starts_with(".triage-events-")
+            || (name.starts_with(".triage-findings-") && name.ends_with(".tmp"));
+        if !ours {
+            continue;
+        }
+        let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        let idle_for = meta
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok());
+        if meta.is_file()
+            && idle_for.is_some_and(|age| age >= idle)
+            && fs::remove_file(entry.path()).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 /// A bounded derived event index, independent of table filters and pagination.
 pub struct EventJournal {
     file: File,
@@ -671,6 +712,38 @@ pub fn mitre_references(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn index_temporaries_left_by_a_killed_scan_are_removed_when_idle() {
+        let directory =
+            std::env::temp_dir().join(format!("ant-stale-temps-{}", crate::storage::unique_id()));
+        fs::create_dir_all(&directory).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let write = |name: &str, age: Option<std::time::SystemTime>| {
+            let path = directory.join(name);
+            fs::write(&path, b"x").unwrap();
+            if let Some(time) = age {
+                File::options()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_modified(time)
+                    .unwrap();
+            }
+        };
+        write(".triage-events-abc", Some(old));
+        write(".triage-findings-12-0.tmp", Some(old));
+        write(".triage-events-fresh", None);
+        write("triage-events.jsonl", Some(old));
+        write("report.json", Some(old));
+        assert_eq!(remove_stale_temporaries(&directory, STALE_TEMPORARY), 2);
+        assert!(!directory.join(".triage-events-abc").exists());
+        assert!(!directory.join(".triage-findings-12-0.tmp").exists());
+        assert!(directory.join(".triage-events-fresh").exists(), "in use");
+        assert!(directory.join("triage-events.jsonl").exists());
+        assert!(directory.join("report.json").exists());
+        let _ = fs::remove_dir_all(&directory);
+    }
 
     #[test]
     fn a_saved_report_drops_only_the_known_sigma_caveat() {

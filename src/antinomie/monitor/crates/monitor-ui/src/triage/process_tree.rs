@@ -29,6 +29,8 @@ pub(super) fn process_rows(
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
     suspicious: &Suspicious,
 ) -> Vec<Vec<Cell>> {
+    // The latest moment any task was recorded: how long a call had been in progress.
+    let end = nodes.iter().filter_map(|node| node.last_ns).max();
     nodes
         .iter()
         .map(|node| {
@@ -55,8 +57,8 @@ pub(super) fn process_rows(
                     theme::text(),
                     true,
                 ),
-                cell(&node.state, theme::text(), false),
-                cell(node.exec_history.join(" → "), theme::text(), false),
+                cell(state_text(node, end, clock), theme::text(), false),
+                cell(history_text(node), theme::text(), false),
             ];
             row[0].values = vec![
                 (
@@ -119,7 +121,10 @@ pub(super) fn process_rows(
                         RowValue::List(node.argv.clone())
                     },
                 ),
-                ("process.state", RowValue::Text(node.state.clone())),
+                (
+                    "process.state",
+                    RowValue::Text(state_text(node, end, clock)),
+                ),
                 (
                     "process.first_ns",
                     node.first_ns
@@ -228,6 +233,17 @@ pub(super) fn observe_processes(
                     time.max(observed.timestamp_ns)
                 }));
             }
+            if let Some(start) = entry {
+                // A call with an entry and no exit: where the task was when the
+                // recording ended, unless it is a call that does not return.
+                node.in_call = (exit.is_none()
+                    && invocation.task_exit.is_none()
+                    && !matches!(
+                        start.syscall_name.as_str(),
+                        "exit" | "exit_group" | "execve" | "execveat" | "rt_sigreturn"
+                    ))
+                .then(|| (start.syscall_name.clone(), start.timestamp_ns));
+            }
             if invocation.task_exit.is_some() {
                 node.state = format!("task exit {:?}", invocation.task_exit_status());
             } else if node.state.is_empty() {
@@ -268,17 +284,18 @@ pub(super) fn observe_processes(
                             .push("further exec history omitted".into());
                     }
                 }
-                node.argv = entry
-                    .into_iter()
-                    .chain(exit)
-                    .chain(invocation.async_events.iter())
-                    .flat_map(|event| &event.fields)
-                    .filter(|field| field.key.contains("argv"))
-                    .filter_map(path_text)
-                    .collect();
+                node.argv = exec_argv(invocation, event);
+                node.renames.clear();
                 node.command_line = normalized::command_line(invocation, event);
                 node.proctitle = normalized::complete_argv(invocation, event);
             }
+        }
+        observe_rename(nodes, key, invocation, event);
+        // The guest says which pid a fork, vfork or process-clone created, also
+        // when the call's own flags were not captured.
+        if let Some(child) = lifecycle_child(invocation) {
+            link_child(nodes, key, child);
+            continue;
         }
         let args = entry
             .and_then(|event| event.args)
@@ -302,8 +319,9 @@ pub(super) fn observe_processes(
 }
 
 pub(super) fn finish_processes(
-    nodes: std::collections::BTreeMap<TaskKey, TaskNode>,
+    mut nodes: std::collections::BTreeMap<TaskKey, TaskNode>,
 ) -> Vec<ProcessNode> {
+    let threads = attach_threads(&mut nodes);
     let mut children: std::collections::BTreeMap<TaskKey, Vec<TaskKey>> =
         std::collections::BTreeMap::new();
     let mut roots = Vec::new();
@@ -324,6 +342,7 @@ pub(super) fn finish_processes(
         children: &std::collections::BTreeMap<TaskKey, Vec<TaskKey>>,
         found: &mut Vec<ProcessNode>,
         seen: &mut std::collections::BTreeSet<TaskKey>,
+        threads: &std::collections::BTreeSet<TaskKey>,
     ) {
         let mut pending = vec![(key, depth)];
         while let Some((key, depth)) = pending.pop() {
@@ -340,13 +359,16 @@ pub(super) fn finish_processes(
                 pid: key.pid,
                 cookie: key.cookie,
                 comm: node.comm.clone(),
-                parent_missing: depth == 0 && !node.root,
+                parent_missing: depth == 0 && !node.root && !threads.contains(&key),
                 tid: node.tid,
                 argv: node.argv.clone(),
                 first_ns: node.first_ns,
                 last_ns: node.last_ns,
                 state: node.state.clone(),
                 exec_history: node.exec_history.clone(),
+                thread: threads.contains(&key),
+                renames: node.renames.clone(),
+                in_call: node.in_call.clone(),
             });
             if let Some(kids) = children.get(&key) {
                 for child in kids.iter().rev() {
@@ -357,11 +379,11 @@ pub(super) fn finish_processes(
     }
     let mut seen = std::collections::BTreeSet::new();
     for key in roots {
-        walk(key, 0, &nodes, &children, &mut found, &mut seen);
+        walk(key, 0, &nodes, &children, &mut found, &mut seen, &threads);
     }
     for key in nodes.keys() {
         if !seen.contains(key) {
-            walk(*key, 0, &nodes, &children, &mut found, &mut seen);
+            walk(*key, 0, &nodes, &children, &mut found, &mut seen, &threads);
         }
     }
     found
@@ -426,11 +448,23 @@ fn link_child(
                 node.proctitle.clone(),
             )
         });
-    let candidates: Vec<TaskKey> = nodes
+    let mut candidates: Vec<TaskKey> = nodes
         .iter()
         .filter(|(key, node)| key.pid == child_pid && **key != parent && node.parent.is_none())
         .map(|(key, _)| *key)
         .collect();
+    if candidates.len() > 1 {
+        // The forked process's own threads share its pid: only the task whose
+        // tid is the pid is the child.
+        let leaders: Vec<TaskKey> = candidates
+            .iter()
+            .copied()
+            .filter(|key| nodes.get(key).is_some_and(|node| node.tid == child_pid))
+            .collect();
+        if leaders.len() == 1 {
+            candidates = leaders;
+        }
+    }
     match candidates.as_slice() {
         [child] => {
             if let Some(node) = nodes.get_mut(child) {
@@ -573,6 +607,9 @@ pub(super) fn process_label(node: &ProcessNode) -> String {
         node.cookie.to_string()
     };
     let mut text = format!("pid {} cookie {cookie}", node.pid);
+    if node.thread {
+        text.push_str("  thread");
+    }
     if node.parent_missing {
         text.push_str("  parent not in this trace");
     }
@@ -592,4 +629,224 @@ pub(super) fn process_tree_lines(invocations: &[InvocationSummary]) -> Vec<Strin
             )
         })
         .collect()
+}
+
+/// The pid a fork, vfork or process clone created, from the guest's own
+/// lifecycle record on the call.
+fn lifecycle_child(invocation: &InvocationSummary) -> Option<u32> {
+    invocation
+        .entry
+        .iter()
+        .chain(invocation.exit.iter())
+        .chain(invocation.async_events.iter())
+        .flat_map(|event| &event.fields)
+        .filter(|field| field.key == "lifecycle.child_tgid" && field.complete)
+        .find_map(|field| {
+            let bytes = trace::covered_preview(field);
+            let word = u64::from_le_bytes(bytes.get(..8)?.try_into().ok()?);
+            u32::try_from(word).ok().filter(|pid| *pid != 0)
+        })
+}
+
+/// The arguments the exec was given: every string that was captured whole, a
+/// gap where one was not.
+fn exec_argv(invocation: &InvocationSummary, event: &EventSummary) -> Vec<String> {
+    if let Some(vector) = normalized::argument_vector(invocation, event) {
+        if !vector.arguments.is_empty() {
+            return vector
+                .arguments
+                .into_iter()
+                .map(|argument| argument.unwrap_or_else(|| "\u{2026}".into()))
+                .collect();
+        }
+    }
+    invocation
+        .entry
+        .iter()
+        .chain(invocation.exit.iter())
+        .chain(invocation.async_events.iter())
+        .flat_map(|event| &event.fields)
+        .filter(|field| field.key.contains("argv"))
+        .filter_map(path_text)
+        .collect()
+}
+
+/// The text a captured buffer argument held, up to its first NUL or newline.
+fn argument_text(invocation: &InvocationSummary, index: usize) -> Option<String> {
+    let prefix = format!("arg{index}.");
+    let field = invocation
+        .entry
+        .iter()
+        .chain(invocation.exit.iter())
+        .flat_map(|event| &event.fields)
+        .find(|field| field.key.starts_with(&prefix) && !field.key.contains('['))?;
+    let bytes = trace::covered_preview(field);
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0 || *byte == b'\n')
+        .unwrap_or(bytes.len());
+    let text = std::str::from_utf8(&bytes[..end]).ok()?.trim();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
+/// A name the task gave itself: `prctl(PR_SET_NAME)`, or a write to a `comm`
+/// file it opened (`/proc/self/comm`, `/proc/<pid>/task/<tid>/comm`).
+fn observe_rename(
+    nodes: &mut std::collections::BTreeMap<TaskKey, TaskNode>,
+    key: TaskKey,
+    invocation: &InvocationSummary,
+    event: &EventSummary,
+) {
+    let args = event.args.unwrap_or_default();
+    let result = invocation
+        .exit
+        .as_ref()
+        .and_then(|exit| exit.result)
+        .or(event.result);
+    let name = match event.syscall_name.as_str() {
+        "prctl" if args[0] == 15 => argument_text(invocation, 1),
+        "open" | "openat" | "openat2" | "creat" => {
+            let comm = invocation
+                .entry
+                .iter()
+                .chain(invocation.exit.iter())
+                .flat_map(|event| &event.fields)
+                .filter(|field| path_key(&field.key))
+                .find_map(path_text)
+                .is_some_and(|path| path.starts_with("/proc/") && path.ends_with("/comm"));
+            if let (true, Some(fd @ 0..)) = (comm, result) {
+                if let Some(node) = nodes.get_mut(&key) {
+                    node.comm_fds.push(fd);
+                }
+            }
+            None
+        }
+        "close" => {
+            if let Some(node) = nodes.get_mut(&key) {
+                node.comm_fds.retain(|fd| *fd as u64 != args[0]);
+            }
+            None
+        }
+        "write" | "pwrite64"
+            if nodes
+                .get(&key)
+                .is_some_and(|node| node.comm_fds.iter().any(|fd| *fd as u64 == args[0])) =>
+        {
+            argument_text(invocation, 1)
+        }
+        _ => None,
+    };
+    if let (Some(name), Some(node)) = (name, nodes.get_mut(&key)) {
+        if node.renames.last() != Some(&name) && node.renames.len() < 16 {
+            node.renames.push(name);
+        }
+    }
+}
+
+/// The task's outcome, with the call it was still in at the end of the
+/// recording when its exit was not recorded.
+fn state_text(
+    node: &ProcessNode,
+    end: Option<u64>,
+    clock: Option<antinomie_monitor_core::HostClockAnchor>,
+) -> String {
+    let Some((name, start)) = &node.in_call else {
+        return node.state.clone();
+    };
+    let for_how_long = end
+        .filter(|end| end > start)
+        .map(|end| {
+            format!(
+                ", {:.1} s before the last record",
+                (end - start) as f64 / 1e9
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "{}; still in progress at the stop: {name} since {}{for_how_long}",
+        node.state,
+        crate::time_format::guest_ns(clock, Some(*start))
+    )
+}
+
+/// The exec history, then the names the task took after the last exec.
+fn history_text(node: &ProcessNode) -> String {
+    let mut text = node.exec_history.join(" \u{2192} ");
+    for name in &node.renames {
+        if !text.is_empty() {
+            text.push_str("; ");
+        }
+        text.push_str(&format!("renamed to {name:?}"));
+    }
+    text
+}
+
+/// A task whose tid is not its pid is a thread of that process. Threads that
+/// no fork call claimed go under the process (the task with tid = pid, else
+/// the earliest task of the pid) and take its image. Returns the threads.
+fn attach_threads(
+    nodes: &mut std::collections::BTreeMap<TaskKey, TaskNode>,
+) -> std::collections::BTreeSet<TaskKey> {
+    let mut by_pid: std::collections::BTreeMap<u32, Vec<TaskKey>> = Default::default();
+    for key in nodes.keys() {
+        if key.pid != 0 && key.cookie != 0 {
+            by_pid.entry(key.pid).or_default().push(*key);
+        }
+    }
+    let mut threads = std::collections::BTreeSet::new();
+    for (pid, group) in by_pid {
+        let is_thread = |nodes: &std::collections::BTreeMap<TaskKey, TaskNode>, key: &TaskKey| {
+            nodes
+                .get(key)
+                .is_some_and(|node| node.tid != 0 && node.tid != pid)
+        };
+        if group.len() < 2 {
+            // A lone task whose tid is not its pid is still a thread of a
+            // process that is not in the trace; it stays where it is.
+            continue;
+        }
+        let early = |nodes: &std::collections::BTreeMap<TaskKey, TaskNode>, key: &TaskKey| {
+            nodes
+                .get(key)
+                .and_then(|node| node.first_ns)
+                .unwrap_or(u64::MAX)
+        };
+        let leader = group
+            .iter()
+            .filter(|key| !is_thread(nodes, key))
+            .min_by_key(|key| early(nodes, key))
+            .or_else(|| group.iter().min_by_key(|key| early(nodes, key)))
+            .copied();
+        let Some(leader) = leader else { continue };
+        let image = nodes
+            .get(&leader)
+            .filter(|node| node.comm != "?")
+            .map(|node| {
+                (
+                    node.comm.clone(),
+                    node.argv.clone(),
+                    node.command_line.clone(),
+                    node.proctitle.clone(),
+                )
+            });
+        for key in group {
+            if key == leader
+                || !is_thread(nodes, &key)
+                || nodes.get(&key).is_some_and(|node| node.parent.is_some())
+            {
+                continue;
+            }
+            threads.insert(key);
+            if let Some(node) = nodes.get_mut(&key) {
+                node.parent = Some(leader);
+                if let (true, Some((comm, argv, line, title))) = (node.comm == "?", &image) {
+                    node.comm.clone_from(comm);
+                    node.argv.clone_from(argv);
+                    node.command_line.clone_from(line);
+                    node.proctitle.clone_from(title);
+                }
+            }
+        }
+    }
+    threads
 }

@@ -147,8 +147,11 @@ pub struct Summary {
     /// The assessment in words, with its basis.
     pub statement: String,
     pub highest_tier: String,
-    /// Families the stored datasets name for matched indicators.
+    /// Families named by matched indicators (stored datasets), YARA rule
+    /// metadata and IDS signature messages.
     pub families: Vec<String>,
+    /// Who named each family: `Kaiji: IDS: ET MALWARE Kaiji Variant Activity (15)`.
+    pub family_sources: Vec<String>,
     /// HIGH and MEDIUM rules that matched, worst first.
     pub key_behaviours: Vec<Behaviour>,
     pub counts: Counts,
@@ -188,6 +191,10 @@ pub struct Indicator {
     pub sha256: String,
     pub md5: String,
     pub sha1: String,
+    /// Why this is the base image's own traffic (clock sync, DHCP, apt) and not
+    /// the sample's; empty for the run's indicators. Such rows are listed in the
+    /// JSON only, not in the document tables, MISP or STIX.
+    pub base_noise: String,
 }
 
 /// An ATT&CK technique the run's rules cite.

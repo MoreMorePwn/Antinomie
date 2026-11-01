@@ -190,13 +190,31 @@ impl View {
                 ],
                 outcome,
             );
+            let noisy = ioc
+                .indicators
+                .iter()
+                .filter(|item| item.ty == ty && item.noise.is_some())
+                .count();
+            if noisy > 0 || self.noise {
+                let chip = ui
+                    .selectable_label(self.noise, format!("Base image noise {noisy}"))
+                    .on_hover_text(
+                        "The guest's own clock sync, DHCP and apt traffic. Not the sample's; listed here, not dropped.",
+                    );
+                if chip.clicked() {
+                    self.noise = !self.noise;
+                }
+            }
         });
         let filter = self.drafts.get(&ty).cloned().unwrap_or_default();
         let compiled = query::compile_table(&filter, FIELDS);
         if let Some(error) = &compiled.error {
             crate::activity::warning(ui, format!("{error}; showing every row"));
         }
-        let key = format!("{:?}|{:?}|{filter}", self.made_from, self.outcome);
+        let key = format!(
+            "{:?}|{:?}|{}|{filter}",
+            self.made_from, self.outcome, self.noise
+        );
         let stale = self
             .listings
             .get(&ty)
@@ -206,6 +224,7 @@ impl View {
                 .filter(|&at| {
                     let (indicator, verdict) = (&ioc.indicators[at], &self.verdicts[at]);
                     indicator.ty == ty
+                        && indicator.noise.is_some() == self.noise
                         && self.outcome.is_none_or(|wanted| verdict.outcome == wanted)
                         && (compiled.error.is_some()
                             || compiled.keep_table(&values(indicator, verdict)))

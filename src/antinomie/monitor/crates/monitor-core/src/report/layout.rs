@@ -4,7 +4,7 @@
 //! paragraphs, fact lists, tables and notes, in the same order for both. A
 //! [`Report`] becomes a [`Document`] here, with indicators defanged on
 //! request and long tables cut to [`DOCUMENT_ROWS`].
-use super::{DOCUMENT_ROWS, IndicatorKind, NamedTable, Report, Table, defang, iso};
+use super::{DOCUMENT_ROWS, Indicator, IndicatorKind, NamedTable, Report, Table, defang, iso};
 
 /// One drawn element.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -194,8 +194,12 @@ pub fn document(report: &Report, defang: bool) -> Document {
         )];
         if !summary.families.is_empty() {
             facts.push((
-                "Family named by datasets".into(),
-                summary.families.join(", "),
+                "Family named by".into(),
+                if summary.family_sources.is_empty() {
+                    summary.families.join(", ")
+                } else {
+                    summary.family_sources.join("; ")
+                },
             ));
         }
         let c = &summary.counts;
@@ -239,7 +243,9 @@ pub fn document(report: &Report, defang: bool) -> Document {
         b.section("summary", "Summary", blocks);
     }
 
-    if let Some(indicators) = &report.indicators {
+    if let Some(all) = &report.indicators {
+        let indicators: Vec<&Indicator> = all.iter().filter(|i| i.base_noise.is_empty()).collect();
+        let noisy = all.len() - indicators.len();
         let mut blocks = Vec::new();
         if indicators.is_empty() {
             blocks.push(Block::Note("The run produced no indicators.".into()));
@@ -286,6 +292,12 @@ pub fn document(report: &Report, defang: bool) -> Document {
                     indicators.len() - DOCUMENT_ROWS
                 )));
             }
+        }
+        if noisy > 0 {
+            blocks.push(Block::Note(format!(
+                "{noisy} more are the base image's own traffic (clock sync, DHCP, package \
+                 indexes), not the sample's. They are in the JSON export under base_noise."
+            )));
         }
         b.section("indicators", "Indicators of compromise", blocks);
     }

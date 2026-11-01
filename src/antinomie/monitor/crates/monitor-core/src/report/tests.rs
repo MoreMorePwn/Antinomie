@@ -45,6 +45,7 @@ pub(super) fn fixture() -> Report {
         statement: "Triage observed: 1 indicator(s) matched a stored dataset. Fetched http://evil.example/x.".into(),
         highest_tier: "high".into(),
         families: vec!["Mirai".into()],
+        family_sources: vec!["Mirai: dataset threatfox".into()],
         key_behaviours: vec![Behaviour {
             rule: "exec-from-tmp".into(),
             tier: "high".into(),

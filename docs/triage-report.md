@@ -98,8 +98,8 @@ does not change it, so read with unknown fields ignored.
 |---|---|
 | `generated_ms`, `app`, `run` | When, by which version, for which run (`vm_id`, `boot_id`, `run_id`, `started_ms`, `finished`). |
 | `sample` | `name`, `sha256`, `size` of the sample the run executed, when known. |
-| `summary` | `assessment` (`matched_indicators`, `suspicious_behaviour`, `observed_only`, `no_findings`), `statement`, `highest_tier`, `families` (named by dataset matches), `key_behaviours` (HIGH and MEDIUM rules), `counts`. |
-| `indicators` | `kind` (`endpoint`, `domain`, `url`, `tls`, `file`), `value`, the dataset answer (`verdict`, `matched`, `dataset`, `record_id`, `family`, `confidence`, `reference`), where it was seen, and per kind `url`, `sni`/`ja3`/`ja4`/`cert_sha1`, `sha256`/`md5`/`sha1`/`path`. Raw values. |
+| `summary` | `assessment` (`matched_indicators`, `suspicious_behaviour`, `observed_only`, `no_findings`), `statement`, `highest_tier`, `families` (named by dataset matches, YARA rule metadata or IDS signature messages) with `family_sources` (who named each), `key_behaviours` (HIGH and MEDIUM rules), `counts`. |
+| `indicators` | `kind` (`endpoint`, `domain`, `url`, `tls`, `file`), `value`, the dataset answer (`verdict`, `matched`, `dataset`, `record_id`, `family`, `confidence`, `reference`), where it was seen, and per kind `url`, `sni`/`ja3`/`ja4`/`cert_sha1`, `sha256`/`md5`/`sha1`/`path`, and `base_noise` (the reason, when the row is the base image's own clock sync, DHCP or apt traffic; such rows are left out of the document tables, MISP and STIX). Raw values. |
 | `attack` | Techniques the run's rules cite: `id`, `name`, `rules`, `count`. |
 | `processes`, `findings` | A table: `columns`, `rows` (text), `omitted`, `indicator_columns`. |
 | `files` | `tabs`: one named table for each Files tab. |

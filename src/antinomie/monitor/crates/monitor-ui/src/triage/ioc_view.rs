@@ -47,6 +47,8 @@ pub(super) struct View {
     tab: Tab,
     drafts: BTreeMap<Type, String>,
     outcome: Option<Outcome>,
+    /// List the base image's own traffic instead of the run's indicators.
+    noise: bool,
     selected: BTreeMap<Type, String>,
     /// What the verdicts below were made from.
     made_from: Option<(usize, u64, usize)>,

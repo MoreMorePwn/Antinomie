@@ -636,3 +636,32 @@ fn written_content_names_why_bytes_have_no_place_and_the_caps_only_when_hit() {
     assert!(text.contains("per run"), "{text}");
     assert!(!text.contains("per file)"), "{text}");
 }
+
+#[test]
+fn a_file_the_run_created_starts_empty_whatever_the_starting_disk_says() {
+    let mut created = file("/srv/INC-README.txt", 1, vec![event(1, Kind::Write, 1)]);
+    created.created = true;
+    // The starting disk has no such file (another mount): "elsewhere".
+    created.earlier = Some(Earlier {
+        before: antinomie_monitor_core::file_before::Before::Elsewhere("tmpfs".into()),
+        file: None,
+    });
+    let start = start_of(&created);
+    assert_eq!(start.size, Some(0));
+    // A file that was there before keeps the size the disk gave.
+    created.created = false;
+    created.earlier = Some(Earlier {
+        before: antinomie_monitor_core::file_before::Before::OnDisk {
+            size: 9,
+            exact: true,
+        },
+        file: None,
+    });
+    assert_eq!(start_of(&created).size, Some(9));
+    // Unknown stays unknown for a file the run did not create.
+    created.earlier = Some(Earlier {
+        before: antinomie_monitor_core::file_before::Before::Elsewhere("tmpfs".into()),
+        file: None,
+    });
+    assert_eq!(start_of(&created).size, None);
+}

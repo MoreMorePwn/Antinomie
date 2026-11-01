@@ -606,8 +606,12 @@ fn rename_detail_names_both_paths_and_an_overwritten_destination() {
     let seen = op(2, "open", 3, Some("/tmp/b"), [0; 6]);
     let seen_event = trace::representative(&seen).unwrap().clone();
     sigma_events::track(&mut files, &seen, &seen_event);
+    // The hit is made before the rename is tracked, and says whether the
+    // destination was known then.
+    let hits = file_category::classify(&files, &rename, event);
+    assert!(hits[0].inferred, "{hits:?}");
     assert_eq!(
-        file_category::detail(&files, &rename, event, hit),
+        file_category::detail(&files, &rename, event, hits[0]),
         "/tmp/a → /tmp/b (destination seen earlier; overwritten)"
     );
 }
@@ -741,4 +745,28 @@ fn an_exec_of_a_script_says_its_interpreter_ran_without_naming_one() {
         executed_detail(run(), Some(1)),
         "script run through its interpreter, path not recorded"
     );
+}
+
+#[test]
+fn a_rename_to_a_new_name_does_not_say_it_overwrote_anything() {
+    let mut files = FdState::default();
+    let mut rename = op(82, "rename", 0, Some("/tmp/a"), [0; 6]);
+    rename
+        .entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured("arg1.newname", "", b"/tmp/a.INC\0"));
+    let event = trace::representative(&rename).unwrap().clone();
+    let hits = file_category::classify(&files, &rename, &event);
+    assert!(!hits[0].inferred);
+    // The scan classifies, tracks the call, then builds the row: the call's
+    // own destination is known by then and must not read as an earlier one.
+    sigma_events::track(&mut files, &rename, &event);
+    assert!(files.journal.knows("/tmp/a.INC"));
+    assert_eq!(
+        file_category::detail(&files, &rename, &event, hits[0]),
+        "/tmp/a → /tmp/a.INC"
+    );
+    assert_eq!(hits[0].label(), "Renamed / moved");
 }

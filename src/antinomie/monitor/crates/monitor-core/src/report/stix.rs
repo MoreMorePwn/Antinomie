@@ -157,7 +157,12 @@ pub fn render(report: &Report) -> Result<String, String> {
         ));
     }
 
-    for indicator in report.indicators.iter().flatten() {
+    for indicator in report
+        .indicators
+        .iter()
+        .flatten()
+        .filter(|i| i.base_noise.is_empty())
+    {
         let Some(pattern) = pattern(indicator) else {
             continue;
         };

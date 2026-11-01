@@ -17,6 +17,12 @@ const WINDOW_ITEMS: usize = 8_192;
 const NS: u64 = 1_000_000_000;
 const MASS_DELETE: (u64, usize) = (30 * NS, 100);
 const RANSOM: (u64, usize) = (30 * NS, 20);
+/// Files rewritten in place and/or renamed to one new extension within 60 s.
+const MASS_REWRITE: (u64, usize) = (60 * NS, 10);
+/// Renames to one extension that are enough alone, and with a rewrite.
+const MASS_RENAMES: (usize, usize) = (10, 5);
+/// Files rewritten in place, with no rename, that are enough alone.
+const MASS_INPLACE: (usize, usize) = (100, 5);
 const FILE_SEARCH: (u64, usize) = (60 * NS, 200);
 const PROCESSES: usize = 10;
 const DOCUMENTS: usize = 50;
@@ -94,6 +100,11 @@ pub(super) struct Task {
     delete_done: bool,
     pub renamed: Window<(String, String)>,
     ransom_done: bool,
+    /// Files the run did not make that were written or cut in place.
+    rewrites: Window<String>,
+    /// Source file and new extension of renames to a different extension.
+    moved: Window<(String, String)>,
+    mass_done: bool,
     notes: BTreeMap<String, BTreeSet<String>>,
     note_done: BTreeSet<String>,
     passwd: bool,
@@ -122,6 +133,75 @@ pub(super) struct Task {
     pub spliced: BTreeMap<u64, String>,
     /// An ELF image came in over a socket.
     pub net_elf: bool,
+}
+
+impl Task {
+    /// Whether the files rewritten and renamed lately add up to a ransomware
+    /// pass: renamed to one new extension, or rewritten in place on a large scale.
+    fn mass_check(&mut self, now: u64, out: &mut Vec<Hit>) {
+        let total = self.rewrites.len() + self.moved.len();
+        if total < MASS_REWRITE.1 || !total.is_multiple_of(2) {
+            return;
+        }
+        if let Some(hit) = self.mass_rewrite(now) {
+            self.mass_done = true;
+            out.push(hit);
+        }
+    }
+
+    fn mass_rewrite(&self, now: u64) -> Option<Hit> {
+        let span = MASS_REWRITE.0;
+        let rewritten: BTreeSet<&String> = self.rewrites.items_since(now, span).collect();
+        let mut by_extension: BTreeMap<&str, BTreeSet<&String>> = BTreeMap::new();
+        for (file, extension) in self.moved.items_since(now, span) {
+            by_extension.entry(extension).or_default().insert(file);
+        }
+        let best = by_extension
+            .iter()
+            .max_by_key(|(_, files)| files.len())
+            .map(|(extension, files)| (*extension, files));
+        if let Some((extension, renamed)) = best {
+            let files = renamed.union(&rewritten.iter().copied().collect()).count();
+            if renamed.len() >= MASS_RENAMES.0
+                || (renamed.len() >= MASS_RENAMES.1 && files >= MASS_REWRITE.1)
+            {
+                let both = rewritten
+                    .iter()
+                    .filter(|file| renamed.contains(**file))
+                    .count();
+                return Some(
+                    Hit::new(
+                        "impact.mass_rewrite",
+                        extension,
+                        format!(
+                            "{files} files renamed to the extension .{extension} and/or rewritten in place within 60 s"
+                        ),
+                    )
+                    .detail(format!(
+                        "{} renamed to .{extension}, {} rewritten in place, {both} of them both. \
+                         Rename and write pattern only: the written bytes' entropy is not judged.",
+                        renamed.len(),
+                        rewritten.len()
+                    )),
+                );
+            }
+        }
+        if rewritten.len() < MASS_INPLACE.0 {
+            return None;
+        }
+        let folders: BTreeSet<&str> = rewritten.iter().map(|file| parent(file)).collect();
+        (folders.len() >= MASS_INPLACE.1).then(|| {
+            Hit::new(
+                "impact.mass_rewrite",
+                "in place",
+                format!(
+                    "{} files the run did not create were rewritten in place within 60 s, in {} directories",
+                    rewritten.len(),
+                    folders.len()
+                ),
+            )
+        })
+    }
 }
 
 /// A task that reached an address with its own calls.
@@ -157,7 +237,11 @@ pub(super) struct State {
     pub sample: Option<String>,
     /// The packer verdict Static analysis gave the launched program.
     pub packed: Option<super::engine::PackedImage>,
+    /// The run's guest was a cloud profile: a hypervisor flag is expected there.
+    pub cloud_profile: bool,
     pub written: BTreeSet<String>,
+    /// Files the run made (a create the call classification saw).
+    created: BTreeSet<String>,
     pub written_names: BTreeSet<String>,
     pub written_keys: BTreeSet<FileKey>,
     /// Files a compiler started by the run wrote.
@@ -249,9 +333,22 @@ impl State {
     }
 
     /// The call changed `path`: remember that the run wrote it.
-    pub(super) fn wrote(&mut self, cx: &Ctx, path: &str, touch: &Touch) {
+    pub(super) fn wrote(&mut self, cx: &Ctx, path: &str, touch: &Touch, out: &mut Vec<Hit>) {
+        if touch.op == Op::Created && self.created.len() < LIMIT {
+            self.created.insert(path.to_owned());
+        }
+        let fresh = !self.created.contains(path);
         let task = self.task(cx);
         task.active = true;
+        if fresh
+            && matches!(touch.op, Op::Written | Op::Truncated)
+            && !is_compiler(cx.image_name())
+            && !task.mass_done
+        {
+            task.rewrites
+                .push(cx.time(), MASS_REWRITE.0, path.to_owned());
+            task.mass_check(cx.time(), out);
+        }
         let new_file = matches!(
             touch.op,
             Op::Created | Op::Written | Op::Truncated | Op::Renamed | Op::Linked
@@ -332,6 +429,14 @@ impl State {
         {
             let (old, new) = (extension(path), extension(&target));
             if old != new && !new.is_empty() {
+                if (!made || task.rewrites.items().any(|file| file == path))
+                    && !task.mass_done
+                    && !is_compiler(cx.image_name())
+                {
+                    task.moved
+                        .push(time, MASS_REWRITE.0, (path.to_owned(), new.clone()));
+                    task.mass_check(time, out);
+                }
                 task.renamed
                     .push(time, RANSOM.0, (path.to_owned(), new.clone()));
                 let same = if task.renamed.len() >= RANSOM.1 && task.renamed.len().is_multiple_of(4)

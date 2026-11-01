@@ -143,6 +143,7 @@ fn indicators(job: &Job, scan: &ArchiveScan) -> Vec<(report::Indicator, bool)> {
                 sha256: hashes.sha256,
                 md5: hashes.md5,
                 sha1: hashes.sha1,
+                base_noise: indicator.noise.clone().unwrap_or_default(),
             };
             (item, matched)
         })
@@ -153,15 +154,30 @@ fn summary(
     scan: &ArchiveScan,
     behaviour: &digest_types::Behaviour,
     indicators: &[(report::Indicator, bool)],
+    detections: &[antinomie_monitor_core::run_digest::DetectionHit],
     techniques: usize,
 ) -> Summary {
     let matched = indicators.iter().filter(|(_, m)| *m).count();
-    let families: BTreeSet<String> = indicators
+    // Families come from matched indicators (stored datasets), from YARA rule
+    // metadata and from IDS signature messages; each with who named it.
+    let mut named: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (indicator, _) in indicators.iter().filter(|(_, m)| *m) {
+        if !indicator.family.is_empty() {
+            let sources = named.entry(indicator.family.clone()).or_default();
+            let source = format!("dataset {}", indicator.dataset);
+            if !sources.contains(&source) {
+                sources.push(source);
+            }
+        }
+    }
+    for (family, sources) in families::from_detections(detections) {
+        named.entry(family).or_default().extend(sources);
+    }
+    let family_sources: Vec<String> = named
         .iter()
-        .filter(|(_, m)| *m)
-        .map(|(i, _)| i.family.clone())
-        .filter(|f| !f.is_empty())
+        .map(|(family, sources)| format!("{family}: {}", sources.join("; ")))
         .collect();
+    let families: BTreeSet<String> = named.keys().cloned().collect();
     let mut key: Vec<_> = behaviour
         .rules
         .iter()
@@ -211,8 +227,8 @@ fn summary(
             String::new()
         } else {
             format!(
-                " The datasets name the family {}.",
-                families.iter().cloned().collect::<Vec<_>>().join(", ")
+                " Family named by {}. A family is the name a rule or dataset gave, not a verdict.",
+                family_sources.join("; ")
             )
         }
     );
@@ -231,6 +247,7 @@ fn summary(
             behaviour.highest.clone()
         },
         families: families.into_iter().collect(),
+        family_sources,
         key_behaviours: key,
         counts: Counts {
             processes: scan.process.len() as u64,
@@ -625,10 +642,36 @@ pub(super) fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
     let mut report = Report::new(job.run.clone(), job.now_ms);
     report.sample = job.sample.clone();
     let behaviour = digest::behaviour(&scan.findings);
+    // `None` when no detection engine has run for the run (stored with the run).
+    let digest_detections = RunDigest::read(&job.archive).and_then(|digest| digest.detections);
     let indicator_rows = indicators(job, scan);
     let techniques = attack(&behaviour);
     if choices.has(Part::Summary) {
-        report.summary = Some(summary(scan, &behaviour, &indicator_rows, techniques.len()));
+        report.summary = Some(summary(
+            scan,
+            &behaviour,
+            &indicator_rows,
+            digest_detections.as_deref().unwrap_or_default(),
+            techniques.len(),
+        ));
+        if let (Some(summary), Some(crash)) = (report.summary.as_mut(), &scan.root_crash) {
+            summary.statement = format!(
+                "The sample crashed before its first system call: {crash}. {}",
+                summary.statement
+            );
+        }
+    }
+    if let Some(crash) = &scan.root_crash {
+        report.notes.push(format!(
+            "The sample crashed before its first system call: {crash}. No calls of its program were recorded, so the process table, files and findings below are empty because there was nothing to record, not because it did nothing."
+        ));
+    }
+    if (choices.has(Part::Summary) || choices.has(Part::Detections)) && digest_detections.is_none()
+    {
+        report.notes.push(
+            "YARA, Sigma and IDS had not run for this run when the report was made, so it holds no detections and names no family from them. To include them: open this run's Detection tab, press Scan, then export again."
+                .into(),
+        );
     }
     if choices.has(Part::Indicators) {
         report.indicators = Some(indicator_rows.iter().map(|(i, _)| i.clone()).collect());

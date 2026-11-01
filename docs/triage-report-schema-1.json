@@ -56,6 +56,7 @@
         "statement": {"type": "string"},
         "highest_tier": {"enum": ["high", "medium", "low", "info", "none"]},
         "families": {"type": "array", "items": {"type": "string"}},
+        "family_sources": {"type": "array", "items": {"type": "string"}},
         "key_behaviours": {
           "type": "array",
           "items": {
@@ -103,7 +104,8 @@
         "cert_sha1": {"type": "string"},
         "sha256": {"$ref": "#/$defs/sha256"},
         "md5": {"type": "string"},
-        "sha1": {"type": "string"}
+        "sha1": {"type": "string"},
+        "base_noise": {"type": "string"}
       }
     },
     "technique": {

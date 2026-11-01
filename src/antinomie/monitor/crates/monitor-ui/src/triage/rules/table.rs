@@ -150,6 +150,7 @@ const SERVICES: &[&str] = &[
 pub(in crate::triage) const SPECS: &[Spec] = &[
     // Execution
     rule("process.exec", 2, T::Info, C::Execution, &[]),
+    rule("process.crashed_at_start", 1, T::Low, C::Execution, &[]),
     rule(
         "process.interpreter",
         2,
@@ -1001,6 +1002,13 @@ pub(in crate::triage) const SPECS: &[Spec] = &[
     // Impact
     rule(
         "impact.ransom_rewrite",
+        1,
+        T::High,
+        C::Impact,
+        &["T1486", "DET0215"],
+    ),
+    rule(
+        "impact.mass_rewrite",
         1,
         T::High,
         C::Impact,

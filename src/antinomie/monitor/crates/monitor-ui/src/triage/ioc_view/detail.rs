@@ -83,6 +83,9 @@ impl View {
                         row(ui, "Cert SHA-1", if tls.cert_sha1.is_empty() { "(not seen: TLS 1.3 encrypts it)" } else { &tls.cert_sha1 }, true);
                         row(ui, "ALPN", &tls.alpn, false);
                     }
+                    if let Some(why) = &indicator.noise {
+                        row(ui, "Base image noise", why, false);
+                    }
                     row(ui, "Seen as", &indicator.sub, false);
                     row(ui, "Count", &indicator.count, false);
                     let process = match (&indicator.process, indicator.candidates.is_empty()) {

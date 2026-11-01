@@ -160,6 +160,7 @@ pub(super) fn scan_archive_query(
         show_info: request.finding_view.show_info,
         capture_all: request.root_cookie == 0,
         packed: request.packed.clone(),
+        cloud_profile: cloud_profile(&directory),
     });
     let mut scoped_count = 0;
     // Calls whose saved async observations the pages only preview, and how many.
@@ -247,6 +248,12 @@ pub(super) fn scan_archive_query(
                 }
             }
         });
+    // A scan that was killed (a timed-out export that ended the process) left
+    // its temporary files; the journals clean up after themselves otherwise.
+    antinomie_monitor_core::analysis::detection::remove_stale_temporaries(
+        &recording.directory,
+        antinomie_monitor_core::analysis::detection::STALE_TEMPORARY,
+    );
     let (mut journal, mut journal_error) = match FindingJournal::new(&recording.directory) {
         Ok(journal) => (Some(journal), None),
         Err(error) => (None, Some(error)),
@@ -546,6 +553,14 @@ pub(super) fn scan_archive_query(
     {
         engine.cloud_report(&report, clock_anchor);
     }
+    // A program that died of a signal before its first recorded call leaves no
+    // calls to judge: say so, with the signal, instead of an empty report.
+    let root_crash = (scoped_count == 0)
+        .then(|| root_exit_signal(&directory))
+        .flatten();
+    if let Some(text) = &root_crash {
+        engine.root_crash(text, clock_anchor);
+    }
     // The IOC list: the capture's indicators, the calls', the sample's and the
     // files'; matched against the datasets, and the matches listed as findings.
     let capture_state = match (pcap, network.counts) {
@@ -746,6 +761,7 @@ pub(super) fn scan_archive_query(
         new_tabs: network.new_tabs,
         ioc: Some(Arc::new(ioc)),
         network_warning: network.network_warning,
+        root_crash,
     })
 }
 
@@ -810,6 +826,57 @@ fn incomplete_reasons(source: &Source<'_>) -> Vec<String> {
         ));
     }
     reasons
+}
+
+/// Whether the run's guest looked like a cloud instance (the machine record in
+/// `run.json` names a `cloud-` profile).
+fn cloud_profile(directory: &Path) -> bool {
+    std::fs::read(directory.join("run.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|run| {
+            run.pointer("/machine/profile")
+                .and_then(|profile| profile.as_str().map(|text| text.starts_with("cloud-")))
+        })
+        .unwrap_or(false)
+}
+
+/// The signal that ended the run's program and whether it dumped core, from
+/// the run's `run.json` (`execution.root_exit`).
+fn root_exit_signal(directory: &Path) -> Option<String> {
+    let run: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.join("run.json")).ok()?).ok()?;
+    let status: antinomie_monitor_core::WaitStatus =
+        serde_json::from_value(run.pointer("/execution/root_exit")?.clone()).ok()?;
+    crash_text(&status)
+}
+
+/// The words for a fatal signal; `None` for a normal exit.
+pub(super) fn crash_text(status: &antinomie_monitor_core::WaitStatus) -> Option<String> {
+    let antinomie_monitor_core::WaitStatus::Signaled {
+        signal,
+        core_dumped,
+    } = status
+    else {
+        return None;
+    };
+    let name = match signal {
+        4 => "SIGILL (illegal instruction)",
+        5 => "SIGTRAP",
+        6 => "SIGABRT",
+        7 => "SIGBUS (bus error)",
+        8 => "SIGFPE (arithmetic error)",
+        9 => "SIGKILL",
+        11 => "SIGSEGV (segmentation fault)",
+        15 => "SIGTERM",
+        31 => "SIGSYS (bad system call)",
+        other => return Some(format!("signal {other}")),
+    };
+    Some(if *core_dumped {
+        format!("{name}, core dumped")
+    } else {
+        name.to_owned()
+    })
 }
 
 #[cfg(test)]

@@ -45,6 +45,71 @@ fn token_end(c: char) -> bool {
         ))
 }
 
+/// Section names of an ELF file; in a string dump `.gnu.hash` reads as a domain.
+const ELF_SECTIONS: &[&str] = &[
+    "gnu.hash",
+    "gnu.version",
+    "gnu.version_r",
+    "gnu.version_d",
+    "gnu.build-id",
+    "gnu.warning",
+    "gnu.liblist",
+    "gnu.prelink_undo",
+    "got.plt",
+    "plt.got",
+    "plt.sec",
+    "rela.dyn",
+    "rela.plt",
+    "rela.text",
+    "rela.data",
+    "rela.init",
+    "rela.fini",
+    "rel.dyn",
+    "rel.plt",
+    "rel.text",
+    "data.rel.ro",
+    "data.rel",
+    "note.abi-tag",
+    "note.gnu.build-id",
+    "note.gnu.property",
+    "note.go.buildid",
+    "interp",
+    "dynsym",
+    "dynstr",
+    "dynamic",
+    "eh_frame",
+    "eh_frame_hdr",
+    "init_array",
+    "fini_array",
+    "tbss",
+    "tdata",
+    "comment",
+    "symtab",
+    "strtab",
+    "shstrtab",
+    "debug_info",
+    "debug_abbrev",
+    "debug_line",
+    "debug_str",
+    "gopclntab",
+    "go.buildinfo",
+    "noptrdata",
+    "noptrbss",
+    "typelink",
+    "itablink",
+];
+
+/// Whether the name is an ELF section name or one of its few-letter pieces,
+/// or a one-letter label before a short suffix (`b.ad`), which strings of
+/// compiled code produce and no one registers.
+fn not_a_host(domain: &str) -> bool {
+    if ELF_SECTIONS.contains(&domain) {
+        return true;
+    }
+    let labels: Vec<&str> = domain.split('.').collect();
+    labels.len() == 2 && labels[0].len() == 1 && labels[1] != "co"
+}
+
 /// What `text` names, at most `limit` values, without repeats.
 pub fn scan(text: &str, limit: usize) -> Vec<Found> {
     let mut out: Vec<Found> = Vec::new();
@@ -89,6 +154,7 @@ pub fn scan(text: &str, limit: usize) -> Vec<Found> {
             if letters
                 && !NOT_TLDS.contains(&tld)
                 && !domain.contains('_')
+                && !not_a_host(&domain)
                 && domain.split('.').all(|label| {
                     !label.is_empty() && !label.starts_with('-') && !label.ends_with('-')
                 })
@@ -139,6 +205,18 @@ mod tests {
                 .filter(|f| **f == Found::Domain("c2.update-cdn.example".into()))
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn elf_section_names_and_short_fragments_are_not_domains() {
+        let text = ".gnu.hash .got.plt .rela.dyn .rela.plt .note.ABI-tag .data.rel.ro \
+                    b.ad t.etd c2.real-host.example";
+        let found = scan(text, 100);
+        assert_eq!(
+            found,
+            [Found::Domain("c2.real-host.example".into())],
+            "{found:?}"
         );
     }
 

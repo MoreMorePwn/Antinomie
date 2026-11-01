@@ -566,7 +566,7 @@ fn changed(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) -> bool 
         super::probes::note_write(cx, st);
     }
     if cx.ok && !via_pseudo(path) {
-        st.wrote(cx, path, touch);
+        st.wrote(cx, path, touch, out);
     }
     if cx.ok && touch.op == Op::Written {
         elf_into_memfd(cx, st, out);

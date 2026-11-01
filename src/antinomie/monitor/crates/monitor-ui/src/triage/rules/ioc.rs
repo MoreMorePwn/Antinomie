@@ -281,6 +281,31 @@ impl Engine {
 
     /// One row for something the host saw, not a task: VM-wide, from the
     /// gateway's report.
+    /// The run's program died of a signal before its first recorded system call.
+    pub(in crate::triage) fn root_crash(
+        &mut self,
+        signal: &str,
+        clock: Option<antinomie_monitor_core::HostClockAnchor>,
+    ) {
+        let at = clock.map_or(0, |clock| clock.guest_ns);
+        self.host_row_as(
+            "process.crashed_at_start",
+            "the sample's program".to_owned(),
+            format!("the sample crashed before its first system call: {signal}"),
+            at,
+            (1, at),
+            vec![
+                "No system call of the program was recorded, so there is nothing to judge: the \
+                 program died while loading or in its first instructions."
+                    .into(),
+                "Common causes: a binary built for another kernel or CPU, an ELF the guest's \
+                 loader cannot map, or legacy static code that needs vsyscall."
+                    .into(),
+            ],
+            "the run's program (no task was recorded)",
+        );
+    }
+
     fn host_row(
         &mut self,
         rule: &'static str,
@@ -289,6 +314,28 @@ impl Engine {
         first_ns: u64,
         (count, last_ns): (u64, u64),
         detail: Vec<String>,
+    ) {
+        self.host_row_as(
+            rule,
+            object,
+            summary,
+            first_ns,
+            (count, last_ns),
+            detail,
+            "VM-wide (seen by the host's cloud metadata service)",
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn host_row_as(
+        &mut self,
+        rule: &'static str,
+        object: String,
+        summary: String,
+        first_ns: u64,
+        (count, last_ns): (u64, u64),
+        detail: Vec<String>,
+        process: &str,
     ) {
         let Some(spec) = spec(rule) else {
             debug_assert!(false, "unclassified rule {rule}");
@@ -316,7 +363,7 @@ impl Engine {
             cookie: 0,
             pid: 0,
             tid: 0,
-            process: "VM-wide (seen by the host's cloud metadata service)".to_owned(),
+            process: process.to_owned(),
             flags: 0,
             image: None,
             object,
@@ -429,6 +476,7 @@ mod tests {
             show_info: true,
             capture_all: false,
             packed: None,
+            cloud_profile: false,
         });
         let mut sets = std::collections::BTreeMap::new();
         note_cookie_sets(&mut sets, &calls);

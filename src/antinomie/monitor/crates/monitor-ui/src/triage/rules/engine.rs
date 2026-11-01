@@ -18,6 +18,8 @@ pub(in crate::triage) struct Options {
     /// What Static analysis found about the program the run starts, for
     /// `evasion.packed_image`.
     pub packed: Option<PackedImage>,
+    /// The run's device profile is a cloud instance.
+    pub cloud_profile: bool,
 }
 
 /// The packer verdict of the run's program, from its Static analysis.
@@ -101,7 +103,8 @@ pub(in crate::triage) struct Engine {
 
 impl Engine {
     pub(in crate::triage) fn new(options: Options) -> Self {
-        let state = State::with_packed(options.packed.clone());
+        let mut state = State::with_packed(options.packed.clone());
+        state.cloud_profile = options.cloud_profile;
         Self {
             options,
             aggs: Vec::new(),

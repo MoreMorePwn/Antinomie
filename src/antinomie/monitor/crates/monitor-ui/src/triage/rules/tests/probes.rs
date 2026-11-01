@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Evasion category: every anti-analysis check, the answer the guest gave, and what the task did next.
 use super::support::*;
+use crate::triage::rules::Options;
 
 /// A task that opens a file, reads it and gets `answer`.
 fn probe(pid: u32, path: &str, fd: i64, answer: &[u8]) -> Calls {
@@ -469,4 +470,76 @@ fn a_debuggers_child_calling_traceme_before_its_exec_is_not_a_check() {
     assert!(!has(&out, "evasion.debugger_check"));
     let alone = run(vec![sys(1, 101, "ptrace", [0; 6], 0)]);
     assert!(has(&alone, "evasion.traceme") && has(&alone, "evasion.debugger_check"));
+}
+
+fn sysinfo_up(seconds: u64) -> InvocationSummary {
+    with_exit(
+        sys(1, 99, "sysinfo", [0x1000, 0, 0, 0, 0, 0], 0),
+        "arg0.data",
+        &seconds.to_le_bytes().repeat(14),
+    )
+}
+
+#[test]
+fn a_cgroup_file_that_names_no_container_is_not_a_container_check_that_shows_it() {
+    // pgrep and pkill read /proc/<pid>/cgroup of every process; it always exists.
+    let mut calls = vec![exec(1, "/usr/bin/pgrep", &["pgrep", "sshd"])];
+    calls.extend(probe(
+        1,
+        "/proc/self/cgroup",
+        3,
+        b"0::/system.slice/ssh.service\n",
+    ));
+    calls.push(at(sys(1, 231, "exit_group", [0; 6], 0), SECOND));
+    let out = run(calls);
+    let lines = detail(rows(&out, "evasion.container_check")[0]).join("\n");
+    assert!(
+        lines.contains("0 would show") || lines.contains("does not show it"),
+        "{lines}"
+    );
+    assert!(!lines.contains("(would show it)"), "{lines}");
+    assert!(!has(&out, "evasion.probe_then_exit"));
+    // The same file naming a container still shows it.
+    let docker = run(probe(1, "/proc/self/cgroup", 3, b"0::/docker/abc\n"));
+    assert!(detail(rows(&docker, "evasion.container_check")[0])
+        .join("\n")
+        .contains("would show it"));
+}
+
+#[test]
+fn coreutils_asking_sysinfo_is_not_a_check_but_a_sample_doing_so_is() {
+    let mut sort = vec![exec(1, "/usr/bin/sort", &["sort", "-u"]), sysinfo_up(45)];
+    sort.push(at(sys(1, 231, "exit_group", [0; 6], 0), SECOND));
+    let out = run(sort);
+    assert!(!has(&out, "evasion.sandbox_probe"));
+    assert!(!has(&out, "evasion.probe_then_exit"));
+    let mut sample = vec![exec(1, "/tmp/.kd", &[".kd"]), sysinfo_up(45)];
+    sample.push(at(sys(1, 231, "exit_group", [0; 6], 0), SECOND));
+    let out = run(sample);
+    assert!(has(&out, "evasion.sandbox_probe"));
+    assert!(has(&out, "evasion.probe_then_exit"));
+}
+
+#[test]
+fn the_hypervisor_flag_is_expected_under_a_cloud_profile() {
+    let mut calls = probe(
+        1,
+        "/proc/cpuinfo",
+        4,
+        b"model name\t: Intel Xeon\nflags\t: fpu hypervisor\n",
+    );
+    calls.push(at(sys(1, 231, "exit_group", [0; 6], 0), SECOND));
+    let options = |cloud| Options {
+        show_info: true,
+        capture_all: false,
+        cloud_profile: cloud,
+        ..Default::default()
+    };
+    let default = run_with(calls.clone(), options(false));
+    assert!(has(&default, "evasion.probe_then_exit"));
+    let cloud = run_with(calls, options(true));
+    assert!(!has(&cloud, "evasion.probe_then_exit"));
+    let lines = detail(rows(&cloud, "evasion.sandbox_probe")[0]).join("\n");
+    assert!(lines.contains("expected under a cloud profile"), "{lines}");
+    assert!(lines.contains("does not show it"), "{lines}");
 }
