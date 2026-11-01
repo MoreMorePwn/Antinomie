@@ -45,11 +45,10 @@ pub(super) fn notes(
         // The first note's sentence stands at the badge; its buttons stay here.
         if limit.kind == AnalysisLimitKind::Text {
             // How much of a long value the report keeps is information, not
-            // a limit of the check: a muted Info note, never a warning.
+            // a limit of the check: a muted Info note, never a warning. The
+            // setting that keeps more stays one click away.
             crate::activity::info(ui, value_note(&limit.text));
-            continue;
-        }
-        if !(first_shown && at == 0) {
+        } else if !(first_shown && at == 0) {
             crate::activity::warning(ui, &limit.text);
         }
         if limit.kind != AnalysisLimitKind::Time {
@@ -235,10 +234,13 @@ mod tests {
                 setting: Some(setting),
             });
             let (shown, action) = press(&report, at, "Analysis settings…");
-            assert!(
-                shown.iter().any(|text| text == "A bound was met."),
-                "{shown:?}"
-            );
+            // A shortened value's note also says where the whole value is.
+            let note = if kind == AnalysisLimitKind::Text {
+                value_note("A bound was met.")
+            } else {
+                "A bound was met.".to_owned()
+            };
+            assert!(shown.contains(&note), "{shown:?}");
             assert!(
                 matches!(action, Some(ReportAction::OpenAnalysisLimit(found)) if found == setting),
                 "{kind:?}: {shown:?}"
