@@ -5,7 +5,8 @@
 //! `<pid>`, addresses `<addr>`, and content the program could not predict
 //! (`volatile` cases, exit-time buffers) is left out. The files live in
 //! tests/monitor/conformance/trace/golden/GROUP.txt; `--bless` rewrites them.
-//! A Debian base has its own (`golden/debian-minimal/GROUP.txt`): its
+//! A Debian base has its own (`golden/debian-minimal/GROUP.txt`, on arm64
+//! `golden/aarch64/debian-minimal/GROUP.txt`): its
 //! kernel has Debian's configuration, so calls whose result depends on it
 //! (kexec_file_load, userfaultfd, transparent huge pages, the shadow stack, the
 //! persistent keyring, the log buffer size, the built-in file systems) answer

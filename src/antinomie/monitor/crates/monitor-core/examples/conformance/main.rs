@@ -113,24 +113,26 @@ impl Context {
     }
     /// Where the goldens of the base live: x86-64's in `golden/`, as always,
     /// with the Debian bases' own in `golden/debian-minimal/`; another
-    /// architecture's in `golden/<arch>/`.
+    /// architecture's in `golden/<arch>/` (its Debian bases' in
+    /// `golden/<arch>/debian-minimal/`).
     pub fn golden_dir(&self) -> PathBuf {
         let directory = self.repo.join("tests/monitor/conformance/trace/golden");
-        match self.arch() {
-            antinomie_monitor_core::GuestArch::X86_64 => {
-                let guest = antinomie_monitor_core::storage::Bundle::load(&self.base)
-                    .ok()
-                    .and_then(|bundle| bundle.guest)
-                    .map(|guest| guest.id);
-                // Every Debian base (Minimal and the desktops) runs the same
-                // stock kernel with Debian's configuration.
-                match guest.as_deref() {
-                    Some(id) if id.starts_with("debian-") => directory.join("debian-minimal"),
-                    _ => directory,
-                }
-            }
+        let guest = antinomie_monitor_core::storage::Bundle::load(&self.base)
+            .ok()
+            .and_then(|bundle| bundle.guest)
+            .map(|guest| guest.id);
+        // Every Debian base (Minimal and the desktops) runs the same stock
+        // kernel with Debian's configuration (arm64: Debian's arm64 one).
+        let debian = guest.as_deref().is_some_and(|id| id.starts_with("debian-"));
+        let directory = match self.arch() {
+            antinomie_monitor_core::GuestArch::X86_64 => directory,
             antinomie_monitor_core::GuestArch::AARCH64 => directory.join("aarch64"),
             other => directory.join(format!("machine-{}", other.machine)),
+        };
+        if debian {
+            directory.join("debian-minimal")
+        } else {
+            directory
         }
     }
     pub fn group_dir(&self, group: &str) -> PathBuf {
