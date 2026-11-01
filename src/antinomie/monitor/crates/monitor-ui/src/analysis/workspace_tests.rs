@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+use super::chosen::details;
 use super::*;
 use crate::analysis::row_menu::preview_matches;
 use antinomie_monitor_core::{

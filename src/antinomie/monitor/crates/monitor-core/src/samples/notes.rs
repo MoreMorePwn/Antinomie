@@ -202,7 +202,7 @@ impl NoteRef {
     /// `imported/<folder name>`).
     pub fn item(&self) -> Option<&str> {
         match self.kind {
-            RefKind::Packet => self.target.splitn(3, '/').nth(1),
+            RefKind::Packet => self.target.split('/').nth(1),
             RefKind::Capture | RefKind::MemoryDump | RefKind::DiskDump | RefKind::ProcessCore => {
                 self.target.split_once('/').map(|(_, rest)| rest)
             }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Native retained-evidence workspace; all acquisition remains outside rendering.
 mod capa_matrix;
+pub(crate) mod chosen;
 pub(crate) mod content;
 mod export;
 mod limits;
@@ -55,33 +56,6 @@ pub(crate) struct WorkspaceState {
     row_query: Option<(AnalysisKind, String)>,
 }
 
-/// The row the Details panel shows for Static analysis.
-#[derive(Clone)]
-struct ChosenRow {
-    entry: AnalysisEntry,
-    specimen_len: Option<u64>,
-    category: &'static str,
-}
-
-const CHOSEN_ROW: &str = "static-details-row";
-
-/// The Details panel body: the row selected last in a Static analysis pane.
-pub(crate) fn details(ui: &mut egui::Ui) {
-    let chosen = ui
-        .ctx()
-        .data(|data| data.get_temp::<ChosenRow>(egui::Id::new(CHOSEN_ROW)));
-    let Some(chosen) = chosen else {
-        ui.weak("Select a row to see its details.");
-        return;
-    };
-    ui.horizontal_wrapped(|ui| {
-        ui.label(egui::RichText::new(&chosen.entry.label).strong());
-        ui.weak(format!("from Static · {}", chosen.category));
-    });
-    ui.separator();
-    row_menu::details(ui, chosen.specimen_len, &chosen.entry);
-}
-
 /// A view inside a category pane that a link from another window names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SubTab {
@@ -121,13 +95,13 @@ impl WorkspaceState {
         if self.published.as_ref() == Some(entry) {
             return;
         }
-        let chosen = ChosenRow {
+        let chosen = chosen::ChosenRow {
             entry: entry.clone(),
             specimen_len: report.specimen_len,
             category: section_title(kind),
         };
         self.published = Some(chosen.entry.clone());
-        ctx.data_mut(|data| data.insert_temp(egui::Id::new(CHOSEN_ROW), chosen));
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new(chosen::CHOSEN_ROW), chosen));
     }
 
     /// The report whose regex scan the Regex matches tab asked for, once.

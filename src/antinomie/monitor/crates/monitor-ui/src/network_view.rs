@@ -367,7 +367,7 @@ impl NetworkView {
         // A record filter that hides the capture would close it again.
         self.record_filter.clear();
         self.open(Some(capture.file.clone()));
-        self.capture_details = frame.is_none().then(|| (capture, live));
+        self.capture_details = frame.is_none().then_some((capture, live));
         if let Some(frame) = frame {
             if let Err(error) = self.jump_to_evidence(frame) {
                 self.display_jump_note = Some(error);

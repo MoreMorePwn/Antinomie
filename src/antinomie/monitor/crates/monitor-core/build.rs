@@ -61,10 +61,11 @@ fn build_commit(repo: &Path) -> String {
             .filter(|out| out.status.success())
             .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
     };
-    if repo.join(".git").exists() {
-        if let Some(commit) = git(&["rev-parse", "HEAD"])
+    if repo.join(".git").exists()
+        && let Some(commit) = git(&["rev-parse", "HEAD"])
             .as_deref()
             .and_then(short_commit)
+    {
         {
             if let Some(dir) = git(&["rev-parse", "--absolute-git-dir"]) {
                 // Only files that exist: cargo reruns every build for a missing one.

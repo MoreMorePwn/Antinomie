@@ -18,7 +18,8 @@ pub(crate) use row_menu::{key_query, kind_of_name};
 #[cfg(test)]
 pub(crate) use source::ARGUMENT_PLACEHOLDER;
 pub(crate) use source::{LaunchSource, ProgramSource, SourceOutcome, UploadFields};
-pub(crate) use workspace::{details, workspace, workspace_section, SubTab, WorkspaceState};
+pub(crate) use workspace::chosen::details;
+pub(crate) use workspace::{workspace, workspace_section, SubTab, WorkspaceState};
 
 #[derive(Clone, Copy)]
 pub(crate) struct LaunchCapabilities {
