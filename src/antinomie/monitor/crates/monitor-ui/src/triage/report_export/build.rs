@@ -684,6 +684,10 @@ pub(super) fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
             .notes
             .push("The recording was still being written; this report covers what was saved when it was read.".into());
     }
+    // First, since every part above misses what was lost.
+    if let Some(note) = telemetry_loss_note(&job.archive) {
+        report.notes.insert(0, note);
+    }
     if let Some(warning) = &scan.network_warning {
         report.notes.push(format!("Network: {warning}"));
     }
@@ -719,4 +723,17 @@ pub(super) fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
         }
     });
     Ok(Built { report, bundle })
+}
+
+/// What the run's final manifest says of its lost telemetry, as the run's
+/// note words it; `None` for a run that lost none, is not final yet, or was
+/// recorded before the count existed.
+pub(super) fn telemetry_loss_note(archive: &Path) -> Option<String> {
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(archive.join("manifest.json")).ok()?).ok()?;
+    serde_json::from_value::<antinomie_monitor_core::TelemetryLoss>(
+        manifest.get("telemetry_loss")?.clone(),
+    )
+    .ok()?
+    .note()
 }

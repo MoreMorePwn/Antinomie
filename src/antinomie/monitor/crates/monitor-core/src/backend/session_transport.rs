@@ -98,6 +98,8 @@ impl Session {
             let mut saved = if let Some(run) = self.runs.get_mut(&root) {
                 if let Some(header) = &header {
                     run.observe_clock(header.timestamp_ns);
+                    run.telemetry_loss
+                        .packet(header.task_cookie, header.packet_seq);
                 }
                 let saved = run
                     .capture

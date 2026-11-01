@@ -496,6 +496,8 @@ impl Worker {
                 for packet in claim.packets {
                     if let Ok((header, _)) = crate::parser::parse_packet(&packet) {
                         run.observe_clock(header.timestamp_ns);
+                        run.telemetry_loss
+                            .packet(header.task_cookie, header.packet_seq);
                     }
                     let reserved = session.stored_len() + run.stored_len() - run.capture.bytes;
                     if !run.capture.append_with_reserved(&packet, reserved) {

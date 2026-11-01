@@ -307,6 +307,8 @@ impl Session {
             // RUN_STATUS can authorize post-restore exit actions.
             summary.execution = None;
             let mut run = ProgramRun::new(summary, options.capture_quota_size)?;
+            // Packet numbers carry on from the earlier segment.
+            run.telemetry_loss = crate::telemetry_loss::LossTracker::continuing();
             // Run History lists both records; this one says which it continues.
             if reconnect {
                 run.add_note(format!(

@@ -88,7 +88,8 @@ pub(crate) fn show_removable(ui: &mut egui::Ui, run: &RunSummary, in_run_list: b
             remove = true;
         }
     }
-    for note in &run.notes {
+    show_loss(ui, run);
+    for note in quiet_notes(run) {
         ui.add(
             egui::Label::new(
                 RichText::new(format!("Note: {}", run_note_text(note))).color(theme::muted()),
@@ -99,17 +100,33 @@ pub(crate) fn show_removable(ui: &mut egui::Ui, run: &RunSummary, in_run_list: b
     remove
 }
 
-/// Only the warning of `show`: Triage lists the notes in its own section.
+/// Only the warnings of `show`: Triage lists the notes in its own section.
 pub(crate) fn show_warning(ui: &mut egui::Ui, run: &RunSummary) {
     if let Some(message) = warning_message(run) {
         crate::activity::warning(ui, message);
     }
+    show_loss(ui, run);
 }
 
-/// The run's notes, one line each, as plain text.
-pub(crate) fn note_lines(run: &RunSummary) -> Vec<String> {
+/// Lost telemetry is a warning over the run, not a muted note: the trace and
+/// the findings miss what was lost, though saving went on.
+fn show_loss(ui: &mut egui::Ui, run: &RunSummary) {
+    if let Some(note) = run.telemetry_loss_note() {
+        crate::activity::warning(ui, note);
+    }
+}
+
+/// The notes shown as muted lines: all but the telemetry loss.
+fn quiet_notes(run: &RunSummary) -> impl Iterator<Item = &String> {
+    let loss = run.telemetry_loss_note();
     run.notes
         .iter()
+        .filter(move |note| Some(note.as_str()) != loss)
+}
+
+/// The run's notes but the telemetry loss (a warning), one line each, as plain text.
+pub(crate) fn note_lines(run: &RunSummary) -> Vec<String> {
+    quiet_notes(run)
         .map(|note| run_note_text(note).to_owned())
         .collect()
 }

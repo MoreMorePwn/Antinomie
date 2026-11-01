@@ -40,6 +40,8 @@ pub(crate) struct ProgramRun {
     ended_ms: Option<u64>,
     /// The library sample this run runs, whose custody log the run writes to.
     pub custody: Option<crate::samples::RunLog>,
+    /// Packets of the run that never arrived, from the guest's numbering.
+    pub(crate) telemetry_loss: crate::telemetry_loss::LossTracker,
 }
 
 impl ProgramRun {
@@ -78,6 +80,7 @@ impl ProgramRun {
             started_ms,
             ended_ms: None,
             custody: None,
+            telemetry_loss: Default::default(),
         };
         run.refresh_analysis_metadata()?;
         run.persist_summary()?;
@@ -377,6 +380,10 @@ impl ProgramRun {
         if !matches!(self.summary.state, RunState::Finished | RunState::Stopped) {
             self.summary.state = RunState::Finalized;
         }
+        // Said once, at the end, where every view of the run shows its notes.
+        if let Some(note) = self.telemetry_loss.totals().note() {
+            self.add_note(note);
+        }
         let screen = self.screen_bytes(available);
         if let Ok(screen) = &screen {
             self.screen_len = screen.len() as u64;
@@ -416,7 +423,7 @@ impl ProgramRun {
         let (rows, cols) = self.terminal.screen().size();
         storage::atomic_json(
             &self.summary.directory.join("manifest.json"),
-            &serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"final_state":state,"health":health,"terminal_rows":rows,"terminal_cols":cols,"terminal_complete":self.terminal_complete(),"terminal_issue":self.terminal_issue(),"quota_scope":"VM boot shared raw, fields, transcript, journal and screen","boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity,"tracer_hashing":self.tracer_hashing,"started_ms":self.started_ms,"ended_ms":self.ended_ms}),
+            &serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"final_state":state,"health":health,"terminal_rows":rows,"terminal_cols":cols,"terminal_complete":self.terminal_complete(),"terminal_issue":self.terminal_issue(),"quota_scope":"VM boot shared raw, fields, transcript, journal and screen","boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity,"tracer_hashing":self.tracer_hashing,"started_ms":self.started_ms,"ended_ms":self.ended_ms,"telemetry_loss":self.telemetry_loss.totals()}),
         )?;
         result
     }

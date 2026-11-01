@@ -2151,6 +2151,21 @@ and contract revision unchanged (nothing changes on the wire).
   Before, the threads waited all the time with an almost empty ring; after, they
   wait because the ring is full: the host's drain (85.6 MiB/s here) is the limit.
 
+### Lost telemetry per run (0.8.0)
+
+The guest numbers every packet a task tries to send (`packet_seq`, per task),
+whether or not it is sent. The host follows the numbers of each run's tasks
+(`telemetry_loss.rs`, up to 1,048,576 tasks) in the pump and in the pre-ack
+claim; a number missing between two that arrived is a lost packet. Packets after
+a task's last arrived one, and tasks none of whose packets arrived, leave no gap,
+so the count is a lower bound; a run continued after a transport reconnect
+starts a new count. At the end of the run the count goes into the final
+`manifest.json` (`telemetry_loss`: `received_packets`, `lost_packets`,
+`untracked_packets`) and, when packets were lost, into a run note starting
+`Telemetry lost:`. The views show that note as a warning over the run (Trace,
+Run History details, Triage) instead of a muted note, and the run report puts
+it first in the run overview (HTML, PDF, Markdown, JSON `notes`).
+
 ### Telemetry read gaps (0.8.0)
 
 Host only; the guest and the contract are unchanged (`transport/host.c` gained

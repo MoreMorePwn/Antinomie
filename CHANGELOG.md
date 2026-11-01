@@ -44,6 +44,13 @@ it runs.
   record that a sample was sent into a VM, are written by a background thread,
   so their disk sync no longer pauses the telemetry drain.
 
+- **Each run says how much of its telemetry was lost.** The host counts the
+  packets a run's tasks numbered that never arrived (a lower bound, from the
+  guest's per-task packet numbers) and keeps the count in the run's final
+  manifest (`telemetry_loss`). A run that lost some shows a warning over its
+  trace, Triage and Run History details, and its report says so first in the
+  run overview.
+
 - **Sources for the downloadable bases.** The `sources/` folder of the base
   bucket now holds the corresponding source of every listed base: the Debian
   `linux` source package, the Antinomie patch series and exact kernel

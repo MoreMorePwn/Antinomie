@@ -187,6 +187,12 @@ fn unchecked_sections_and_formats_are_left_out_and_defanging_touches_only_html_a
     };
     choices.set(Part::Network, false);
     choices.set(Part::Files, false);
+    // A final manifest that counted lost telemetry: the report says so first.
+    std::fs::write(
+        temp.directory.join("manifest.json"),
+        r#"{"telemetry_loss":{"received_packets":95,"lost_packets":5}}"#,
+    )
+    .unwrap();
     let written = run_job(
         &job(&temp, &pcap, choices),
         &Arc::new(AtomicBool::new(false)),
@@ -199,7 +205,16 @@ fn unchecked_sections_and_formats_are_left_out_and_defanging_touches_only_html_a
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert!(value["network"].is_null() && value["files"].is_null());
     assert!(value["processes"].is_object());
+    assert!(
+        value["notes"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("Telemetry lost: 5.0 % of this run's telemetry never reached the host"),
+        "{}",
+        value["notes"]
+    );
     let html = read(&written.files.iter().find(|(l, _)| l == "HTML").unwrap().1);
+    assert!(html.contains("Telemetry lost: 5.0 %"));
     assert!(!html.contains(">Network<") && !html.contains(">Files<"));
     // The fixture's indicators: raw in the JSON, defanged in the HTML.
     assert!(json.contains("example.com"));
@@ -491,4 +506,18 @@ fn the_dialog_lists_every_section_and_format_remembers_changes_and_exports() {
             .any(|(t, _)| t.contains(".html")),
         "paths are listed"
     );
+}
+
+#[test]
+fn a_run_without_a_loss_count_gets_no_loss_line() {
+    let temp = PacketSpool::new().unwrap();
+    assert_eq!(super::build::telemetry_loss_note(&temp.directory), None);
+    std::fs::write(temp.directory.join("manifest.json"), r#"{"packets":3}"#).unwrap();
+    assert_eq!(super::build::telemetry_loss_note(&temp.directory), None);
+    std::fs::write(
+        temp.directory.join("manifest.json"),
+        r#"{"telemetry_loss":{"received_packets":3,"lost_packets":0}}"#,
+    )
+    .unwrap();
+    assert_eq!(super::build::telemetry_loss_note(&temp.directory), None);
 }

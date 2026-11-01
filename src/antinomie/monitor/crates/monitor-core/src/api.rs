@@ -949,6 +949,15 @@ impl RunSummary {
             .is_some_and(RunExecution::has_async_loss)
             || self.notes.iter().any(|note| async_loss_note(note))
     }
+
+    /// The note saying how much of the run's telemetry never reached the
+    /// host, when some was seen missing; the views show it as a warning.
+    pub fn telemetry_loss_note(&self) -> Option<&str> {
+        self.notes
+            .iter()
+            .find(|note| note.starts_with(crate::TELEMETRY_LOSS_NOTE_PREFIX))
+            .map(String::as_str)
+    }
 }
 
 impl RunExecution {
