@@ -115,7 +115,7 @@ fn hex(digest: Sha256) -> String {
 /// Decrypt the archive `file` into `sink`, returning the plaintext's SHA-256
 /// and length. The zip crate checks the AES authentication code and CRC.
 fn decrypt_into(file: File, sink: &mut dyn Write, limit: u64) -> Result<(String, u64), String> {
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("sealed specimen: {e}"))?;
+    let mut zip = crate::zip_safe::open(file).map_err(|e| format!("sealed specimen: {e}"))?;
     if zip.len() != 1 {
         return Err("the sealed specimen archive does not hold exactly one file".into());
     }

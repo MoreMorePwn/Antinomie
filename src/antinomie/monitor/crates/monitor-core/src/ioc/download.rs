@@ -97,14 +97,17 @@ fn unpack(download: &Path, text: &Path, feed: &Feed) -> Result<(u64, String), St
         return copy_limited(file, text, feed.text_limit(), feed.file);
     }
     let file = File::open(download).map_err(|error| error.to_string())?;
-    let mut archive = zip::ZipArchive::new(file)
+    let mut archive = crate::zip_safe::open(file)
         .map_err(|error| format!("the zip download cannot be read: {error}"))?;
     if archive.len() > MAX_ZIP_ENTRIES {
         return Err("the zip download holds too many entries".into());
     }
     let wanted = (0..archive.len()).find(|&at| {
         archive.by_index_raw(at).is_ok_and(|entry| {
-            let name = entry.name().to_ascii_lowercase();
+            let Ok(name) = crate::zip_safe::name(&entry).map(|name| name.to_ascii_lowercase())
+            else {
+                return false;
+            };
             !entry.is_dir()
                 && [".csv", ".txt", ".json"]
                     .iter()

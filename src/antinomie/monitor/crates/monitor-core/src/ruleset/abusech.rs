@@ -442,7 +442,7 @@ fn rules_text(download: &Path) -> Result<Vec<u8>, String> {
         }
     } else if magic.starts_with(b"PK") {
         let file = fs::File::open(download).map_err(|error| error.to_string())?;
-        let mut archive = zip::ZipArchive::new(file)
+        let mut archive = crate::zip_safe::open(file)
             .map_err(|error| format!("the archive cannot be read: {error}"))?;
         if archive.len() > MAX_ARCHIVE_ENTRIES {
             return Err("the archive holds too many entries".into());
@@ -451,7 +451,8 @@ fn rules_text(download: &Path) -> Result<Vec<u8>, String> {
             let mut member = archive
                 .by_index(at)
                 .map_err(|error| format!("the archive cannot be read: {error}"))?;
-            let name = member.name().to_owned();
+            let name = crate::zip_safe::name(&member)
+                .map_err(|error| format!("the archive cannot be read: {error}"))?;
             if !member.is_file()
                 || member
                     .unix_mode()

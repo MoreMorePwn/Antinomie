@@ -497,7 +497,7 @@ pub fn archive_path(data_dir: &Path, sha256: &str) -> Result<PathBuf, String> {
 pub fn open_sample(archive: &Path, sha256: &str) -> Result<Vec<u8>, String> {
     use sha2::{Digest, Sha256};
     let file = fs::File::open(archive).map_err(|e| format!("{}: {e}", archive.display()))?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("sample archive: {e}"))?;
+    let mut zip = crate::zip_safe::open(file).map_err(|e| format!("sample archive: {e}"))?;
     if zip.len() != 1 {
         return Err(format!(
             "the archive holds {} files, not one sample",

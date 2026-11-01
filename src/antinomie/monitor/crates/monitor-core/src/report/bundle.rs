@@ -322,7 +322,7 @@ fn write_into(out: File, temp: &Path, input: BundleInput, path: &Path) -> Result
 /// value there, and `manifest.json` lists the same hashes. Returns the files
 /// the manifest lists.
 pub fn verify(path: &Path) -> Result<Vec<ManifestFile>, String> {
-    let mut archive = zip::ZipArchive::new(File::open(path).map_err(|e| e.to_string())?)
+    let mut archive = crate::zip_safe::open(File::open(path).map_err(|e| e.to_string())?)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     let mut read = |name: &str| -> Result<Vec<u8>, String> {
         let mut bytes = Vec::new();
@@ -367,7 +367,7 @@ pub fn open_dropped(path: &Path, entry: &str) -> Result<Vec<u8>, String> {
     let name = entry
         .strip_prefix("dropped-files.zip/")
         .ok_or_else(|| format!("{entry} is not an entry of dropped-files.zip"))?;
-    let mut outer = zip::ZipArchive::new(File::open(path).map_err(|e| e.to_string())?)
+    let mut outer = crate::zip_safe::open(File::open(path).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     let mut inner_bytes = Vec::new();
     outer
@@ -376,7 +376,7 @@ pub fn open_dropped(path: &Path, entry: &str) -> Result<Vec<u8>, String> {
         .read_to_end(&mut inner_bytes)
         .map_err(|e| e.to_string())?;
     let mut inner =
-        zip::ZipArchive::new(io::Cursor::new(inner_bytes)).map_err(|e| e.to_string())?;
+        crate::zip_safe::open(io::Cursor::new(inner_bytes)).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
     inner
         .by_name_decrypt(name, DROPPED_PASSWORD.as_bytes())

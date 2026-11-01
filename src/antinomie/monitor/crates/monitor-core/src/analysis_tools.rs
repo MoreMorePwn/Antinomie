@@ -582,10 +582,11 @@ fn safe_link(link: &Path, target: &Path) -> bool {
 
 fn unpack_zip(archive: &Path, target: &Path, strip: usize) -> Result<(), String> {
     let file = File::open(archive).map_err(|e| e.to_string())?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("zip: {e}"))?;
+    let mut zip = crate::zip_safe::open(file).map_err(|e| format!("zip: {e}"))?;
     for index in 0..zip.len() {
         let mut entry = zip.by_index(index).map_err(|e| format!("zip: {e}"))?;
-        let Some(relative) = inside(Path::new(entry.name()), strip)? else {
+        let name = crate::zip_safe::name(&entry).map_err(|e| format!("zip: {e}"))?;
+        let Some(relative) = inside(Path::new(&name), strip)? else {
             continue;
         };
         let path = target.join(&relative);
@@ -597,15 +598,17 @@ fn unpack_zip(archive: &Path, target: &Path, strip: usize) -> Result<(), String>
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let mode = entry.unix_mode().unwrap_or(0o644);
-        if mode & 0o170000 == 0o120000 {
-            let mut link = String::new();
-            entry.read_to_string(&mut link).map_err(|e| e.to_string())?;
-            if safe_link(&relative, Path::new(&link)) {
-                std::os::unix::fs::symlink(&link, &path).map_err(|e| e.to_string())?;
-            }
+        if mode & 0o170000 == 0o120000 || entry.is_symlink() {
+            // A symlink entry is never created: a later entry could be written
+            // through it, and a zip has no need for one.
             continue;
         }
-        let mut out = File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        // create_new fails on an existing path and never follows a symlink there.
+        let mut out = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
         io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&path, fs::Permissions::from_mode(mode & 0o755 | 0o400))
@@ -1594,6 +1597,96 @@ mod tests {
                 .all(|status| status.installed.is_none())
         );
         remove(&data, "capa").unwrap();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("ant-{tag}-{}", crate::storage::unique_id()));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn a_traversing_or_absolute_entry_name_writes_nothing_outside_the_target() {
+        use crate::zip_safe::tests::renamed;
+        for hostile in [
+            "../evil.sh",
+            "top/../../evil2",
+            "/tmp/evil3",
+            "top/../..//e4",
+        ] {
+            let placeholder = "q".repeat(hostile.len());
+            let root = scratch("zip-slip");
+            let target = root.join("out");
+            let zip_path = root.join("t.zip");
+            fs::write(&zip_path, renamed(&[placeholder.as_str()], &[hostile])).unwrap();
+            let result = unpack_zip(&zip_path, &target, 0);
+            assert!(result.is_err(), "{hostile} was accepted");
+            let names: Vec<_> = fs::read_dir(&root)
+                .unwrap()
+                .map(|e| e.unwrap().file_name())
+                .filter(|name| name != "t.zip" && name != "out")
+                .collect();
+            assert!(names.is_empty(), "{hostile} left {names:?}");
+            assert!(!root.join("evil.sh").exists() && !root.join("evil2").exists());
+            let _ = fs::remove_dir_all(&root);
+        }
+    }
+
+    #[test]
+    fn a_symlink_entry_is_not_created_and_nothing_is_written_through_it() {
+        let root = scratch("zip-link");
+        let outside = scratch("zip-link-outside");
+        let target = root.join("out");
+        let zip_path = root.join("t.zip");
+        let mut writer = zip::ZipWriter::new(File::create(&zip_path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        writer
+            .add_symlink("top/link", outside.to_str().unwrap(), options)
+            .unwrap();
+        writer.start_file("top/link/payload", options).unwrap();
+        std::io::Write::write_all(&mut writer, b"benign").unwrap();
+        writer.start_file("top/plain", options).unwrap();
+        std::io::Write::write_all(&mut writer, b"ok").unwrap();
+        writer.finish().unwrap();
+        let _ = unpack_zip(&zip_path, &target, 1);
+        // The name "link" is at most an ordinary directory made for the payload.
+        assert!(fs::symlink_metadata(target.join("link")).is_ok_and(|meta| !meta.is_symlink()));
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn an_existing_symlink_at_the_destination_is_not_followed() {
+        let root = scratch("zip-pre");
+        let outside = scratch("zip-pre-outside");
+        let target = root.join("out");
+        fs::create_dir_all(&target).unwrap();
+        std::os::unix::fs::symlink(outside.join("victim"), target.join("tool")).unwrap();
+        let zip_path = root.join("t.zip");
+        fs::write(
+            &zip_path,
+            crate::zip_safe::tests::build(&[("top/tool", b"payload")]),
+        )
+        .unwrap();
+        assert!(unpack_zip(&zip_path, &target, 1).is_err());
+        assert!(!outside.join("victim").exists());
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn a_duplicate_name_archive_is_refused_before_anything_is_written() {
+        let root = scratch("zip-dup");
+        let target = root.join("out");
+        let zip_path = root.join("t.zip");
+        let mut bytes = crate::zip_safe::tests::build(&[("top/a", b"one"), ("top/b", b"two")]);
+        crate::zip_safe::tests::patch_name(&mut bytes, "top/b", "top/a", 0);
+        crate::zip_safe::tests::patch_name(&mut bytes, "top/b", "top/a", 0);
+        fs::write(&zip_path, bytes).unwrap();
+        assert!(unpack_zip(&zip_path, &target, 1).is_err());
+        assert!(!target.join("a").exists());
         let _ = fs::remove_dir_all(&root);
     }
 }

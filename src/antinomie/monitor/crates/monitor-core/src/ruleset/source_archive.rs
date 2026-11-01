@@ -179,7 +179,7 @@ fn extract_zip(
 ) -> Result<(), String> {
     let file = fs::File::open(download).map_err(|error| error.to_string())?;
     let mut archive =
-        zip::ZipArchive::new(file).map_err(|error| format!("{}: {error}", source.url))?;
+        crate::zip_safe::open(file).map_err(|error| format!("{}: {error}", source.url))?;
     if archive.len() > MAX_SCANNED_MEMBERS {
         return Err(format!("{} has too many members", source.url));
     }
@@ -196,7 +196,9 @@ fn extract_zip(
         {
             continue;
         }
-        let Some(path) = member_path(member.name(), source.strip) else {
+        let name =
+            crate::zip_safe::name(&member).map_err(|error| format!("{}: {error}", source.url))?;
+        let Some(path) = member_path(&name, source.strip) else {
             continue;
         };
         if !wanted(&path) {

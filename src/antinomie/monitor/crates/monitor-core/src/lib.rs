@@ -84,6 +84,7 @@ mod uefi_disk;
 pub mod update_check;
 mod vm;
 pub mod writer;
+mod zip_safe;
 
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
