@@ -34,6 +34,16 @@ it runs.
   chips and every placeholder read in light and dark; the sample name and its back
   link have their own colour; Samples section titles are a step larger.
 
+- **A launch's first telemetry stays with its run.** Telemetry a program sends
+  before the host has taken in its launch reply is held for the run; it used to
+  be dropped once it was 5 s old, so a host held up between the reply and the
+  run's start (a slow disk) lost the run's start, the root's execve among it
+  (1,537 packets of a Gafgyt run in the 2026-11 evaluation). Nothing that arrives
+  while a launch waits for its reply ages out now, and the run takes all of its
+  own packets however late. A library sample's custody-log entries, and the
+  record that a sample was sent into a VM, are written by a background thread,
+  so their disk sync no longer pauses the telemetry drain.
+
 - **Sources for the downloadable bases.** The `sources/` folder of the base
   bucket now holds the corresponding source of every listed base: the Debian
   `linux` source package, the Antinomie patch series and exact kernel

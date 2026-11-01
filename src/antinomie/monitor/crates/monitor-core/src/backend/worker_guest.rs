@@ -9,6 +9,17 @@ type Acknowledged = (Vec<u8>, u64, u64, u32);
 
 impl Worker {
     pub(super) fn guest_command(&mut self, command: Command) -> Result<String, String> {
+        let launch = matches!(&command, Command::Execute(_));
+        let result = self.guest_command_once(command);
+        // Whatever became of a launch, the telemetry still waiting for an
+        // acknowledgement ages again from here.
+        if launch && let Some(session) = self.session.as_mut() {
+            session.pre_ack.launch_answered();
+        }
+        result
+    }
+
+    fn guest_command_once(&mut self, command: Command) -> Result<String, String> {
         if matches!(&command, Command::Execute(request) if request.debug_on_start) {
             self.debug_reap_ended();
         }
@@ -353,6 +364,10 @@ impl Worker {
                 }
                 // Every error text below is final: a guest rejection says the launch
                 // did not happen, only an unanswered or malformed one leaves it unknown.
+                // Telemetry of the new program can arrive before this reply,
+                // and the claim below can be late (the disk can hold this
+                // thread up): until then none of it ages out.
+                session.pre_ack.launch_sent(Instant::now());
                 let acknowledged = (|| -> Result<Acknowledged, (RunState, String)> {
                     let reply = session
                         .request_typed(
@@ -693,7 +708,11 @@ impl Worker {
                     (&destination, overwrite, executable),
                 )? + &note;
                 drop(bytes);
-                library.record_push(
+                drop(library);
+                // Written by the custody thread: a commit here held the
+                // transport thread for seconds on a busy disk (ANT-T0203).
+                crate::samples::record_push_later(
+                    &self.options.data_dir,
                     &sha256,
                     crate::samples::Push {
                         vm_id: session.vm.id.clone(),
@@ -701,7 +720,7 @@ impl Worker {
                         path: destination.clone(),
                         at_ms: 0,
                     },
-                )?;
+                );
                 Ok(message)
             }
             Command::UploadSample {
@@ -730,7 +749,7 @@ impl Worker {
                     (&destination, true, executable),
                 )? + &note;
                 drop(bytes);
-                crate::samples::record_push(
+                crate::samples::record_push_later(
                     &self.options.data_dir,
                     &sha256,
                     crate::samples::Push {
@@ -739,7 +758,7 @@ impl Worker {
                         path: destination.clone(),
                         at_ms: 0,
                     },
-                )?;
+                );
                 Ok(message)
             }
             Command::TerminalInput { run_id, data } => {

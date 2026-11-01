@@ -904,26 +904,33 @@ impl Library {
         Ok(counts)
     }
 
-    /// Note that a sample was sent into a VM.
+    /// Note that a sample was sent into a VM, at `push.at_ms` (now when 0).
     pub fn record_push(&mut self, sha256: &str, push: super::Push) -> Result<(), String> {
         let sha256 = sha256.to_ascii_lowercase();
         if self.get(&sha256)?.is_none() {
             return Err("no such sample".into());
         }
+        let at_ms = if push.at_ms == 0 {
+            now_ms()
+        } else {
+            push.at_ms
+        };
         self.connection
             .execute(
                 "INSERT INTO push(sha256, vm_id, vm_name, path, at_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![sha256, push.vm_id, push.vm_name, push.path, now_ms() as i64],
+                params![sha256, push.vm_id, push.vm_name, push.path, at_ms as i64],
             )
             .map_err(|e| e.to_string())?;
-        self.note(
+        self.record_at(
             &sha256,
             "app",
-            CustodyEvent::Sent {
+            at_ms,
+            &CustodyEvent::Sent {
                 vm: push.vm_name,
                 path: push.path,
             },
         )
+        .map_err(|e| format!("saved, but its custody event was not recorded: {e}"))
     }
 }
 

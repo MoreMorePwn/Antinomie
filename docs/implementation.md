@@ -2927,7 +2927,7 @@ root cookie until the reply claims them.
 | --- | --- |
 | Per-cookie size | 16 MiB (`PreAckLimits::cookie_size`) |
 | Size for all cookies | 32 MiB (`PreAckLimits::total_size`) |
-| Age limit | 5 s (`PreAckLimits::max_age`); older packets are dropped |
+| Age limit | 5 s (`PreAckLimits::max_age`); older packets are dropped, except while a launch waits for its reply (below) |
 | Cookies tracked | 64; the one quiet longest is forgotten first |
 | Never buffered | Cookie 0 and the app's own resource collector |
 | On claim | The cookie's entry is removed, so an overflow never outlives it |
@@ -2936,6 +2936,15 @@ A cookie that overflows or ages out only counts its own loss. When that cookie
 is claimed the loss becomes an entry in the run's `notes` (a field separate
 from `recording_error`, which gates terminal journaling); the lost packets
 remain in the boot's raw archives. A cookie nobody claims disappears.
+
+The age limit counts time the host could answer in, not time a packet waited
+(0.8.0, ANT-T0203). From the moment an EXEC is sent until the launch command
+ends, packets that arrived since the send do not age (they are bounded by size
+only), and a claim never ages the cookie it claims. Before this, a Gafgyt run
+on a busy host lost its first 1,537 packets (1.1 MB, the root's execve among
+them): the transport thread was held for 42.8 s between the reply and the
+claim (a custody-log commit that synced the disk), and the claim's own expiry
+pass dropped every packet older than 5 s.
 
 ## Recording disk work off the transport thread (0.6.2)
 
@@ -2948,6 +2957,7 @@ the disk.
 | --- | --- | --- |
 | Small JSON publications (`artifacts.json`, capture summaries, process lists) | A bounded queue drained by one writer thread (`storage/json_queue.rs`) | Published within the disk's latency, not when the call returns. A later value of a path replaces a pending earlier one and is never overwritten by it; a direct write to the same path waits for the queued one first. Queued values are capped at 8 MiB and the queue at 64 MiB / 4,096 paths; direct writes have no cap. |
 | Raw packets and object chunks | The recording writer thread (`writer.rs`) | Ordered per archive; payload before the index records that name it. |
+| A library sample's custody-log entries for a run (start, typing, actions, end), and the record that a sample was sent into a VM (Upload, Run sample) | One custody writer thread (`samples/runlog.rs`, a queue of 4,096 entries; `record_push_later` keeps the time of the send) | Written in the order they were made; the commit syncs the disk, which on a busy disk held the transport thread for seconds (5.4 s and 42.8 s in the 2026-11 evaluation). Best effort as before: a full queue drops the entry like a refused write, and the Samples page's Verify shows what is missing. The app waits for the queue when it closes. |
 | Durability of a stopped boot (fsync of archives, final manifest) | One bounded background flush worker (`recording_flush.rs`) | Done after the guest is told to stop; the boot manifest is written after the archives it lists. |
 
 **Object packs.** Captured buffers of an archive are stored in append-only

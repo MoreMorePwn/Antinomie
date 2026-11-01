@@ -390,6 +390,7 @@ impl Worker {
                     self.publish();
                 }
                 crate::writer::barrier();
+                crate::samples::settle_custody();
                 break;
             }
             // While telemetry is flowing, take waiting commands without

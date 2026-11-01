@@ -72,7 +72,7 @@ pub use rollup::{
     CheckRow, EvasionRow, IndicatorRow, Rollup, RuleRow, RunInput, TacticRow, TechniqueRow, rollup,
     tactic_of,
 };
-pub use runlog::{RunLog, file_sha256};
+pub use runlog::{RunLog, file_sha256, record_push_later, settle_custody};
 pub use similar::{Shared, Similar};
 pub use summary::{StringRow, defang, interesting_strings, regex_matches};
 
@@ -873,6 +873,39 @@ mod tests {
         assert_eq!(elf_arch(b"MZ"), None);
         // Only the archive is on disk.
         assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_push_recorded_later_is_written_in_order_with_its_time() {
+        let root = temp("push-later");
+        let bytes = b"sample later";
+        let hash = sha256(bytes);
+        let info = SampleInfo {
+            sha256_hash: hash.clone(),
+            ..SampleInfo::default()
+        };
+        store_bytes(&root, &info, bytes, "MalwareBazaar").unwrap();
+        let before = library::now_ms();
+        record_push_later(
+            &root,
+            &hash.to_ascii_uppercase(),
+            Push {
+                vm_id: "vm".into(),
+                vm_name: "Debian".into(),
+                path: "/tmp/later".into(),
+                at_ms: 0,
+            },
+        );
+        settle_custody();
+        let found = stored(&root);
+        assert_eq!(found[0].pushes.len(), 1);
+        assert_eq!(found[0].pushes[0].path, "/tmp/later");
+        assert!(found[0].pushes[0].at_ms >= before);
+        // An unknown sample is dropped, like a custody entry the database refuses.
+        record_push_later(&root, &"0".repeat(64), Push::default());
+        settle_custody();
+        assert_eq!(stored(&root)[0].pushes.len(), 1);
         fs::remove_dir_all(root).unwrap();
     }
 

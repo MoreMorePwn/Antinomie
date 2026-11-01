@@ -7,20 +7,128 @@
 //! Every write is best effort. A custody log that cannot be written (the
 //! library is locked, the disk is full) must never fail or slow a run, so the
 //! error is dropped here and the Samples page's Verify says what is missing.
+//!
+//! The entries, and the record that a sample was sent into a VM
+//! ([`record_push_later`]), are written by one background thread, in the
+//! order they were made: a database commit syncs the disk, and on a busy disk
+//! that took tens of seconds on the transport thread (ANT-T0203), long enough
+//! for the guest to drop telemetry. [`settle_custody`] waits for what is
+//! queued.
 use super::{
-    SampleRef,
+    Library, Push, SampleRef,
     chain::ChainedEvents,
     custody::{ActionKind, CustodyEvent, CustodySink},
     library::{DATABASE, now_ms},
     samples_dir,
 };
 use sha2::{Digest, Sha256};
-use std::{io::Read, path::Path, path::PathBuf};
+use std::{
+    io::Read,
+    path::Path,
+    path::PathBuf,
+    sync::{OnceLock, mpsc},
+};
 
 /// The analyst, as the log names them.
 const ANALYST: &str = "analyst";
 /// The app, as the log names it.
 const APP: &str = "app";
+/// Entries that may wait for the custody writer; past that, an entry is
+/// dropped like one the database refused.
+const QUEUED_ENTRIES: usize = 4096;
+
+/// Work for the custody writer thread.
+enum Job {
+    Entry {
+        database: PathBuf,
+        sha256: String,
+        by: &'static str,
+        at_ms: u64,
+        event: CustodyEvent,
+    },
+    /// A sample was sent into a VM: its push record and custody entry.
+    Push {
+        data_dir: PathBuf,
+        sha256: String,
+        push: Push,
+    },
+    /// Answered once everything queued before it is written.
+    Settle(mpsc::SyncSender<()>),
+}
+
+/// The custody writer's queue; `None` when its thread could not start, and
+/// entries are then written by their caller.
+fn queue() -> Option<&'static mpsc::SyncSender<Job>> {
+    static QUEUE: OnceLock<Option<mpsc::SyncSender<Job>>> = OnceLock::new();
+    QUEUE
+        .get_or_init(|| {
+            let (sender, jobs) = mpsc::sync_channel::<Job>(QUEUED_ENTRIES);
+            std::thread::Builder::new()
+                .name("antinomie-custody".into())
+                .spawn(move || {
+                    for job in jobs {
+                        match job {
+                            Job::Entry {
+                                database,
+                                sha256,
+                                by,
+                                at_ms,
+                                event,
+                            } => write(&database, &sha256, by, at_ms, &event),
+                            Job::Push {
+                                data_dir,
+                                sha256,
+                                push,
+                            } => write_push(&data_dir, &sha256, push),
+                            Job::Settle(done) => {
+                                let _ = done.send(());
+                            }
+                        }
+                    }
+                })
+                .ok()
+                .map(|_| sender)
+        })
+        .as_ref()
+}
+
+fn write(database: &Path, sha256: &str, by: &str, at_ms: u64, event: &CustodyEvent) {
+    let _ = ChainedEvents::new(database).record(sha256, by, at_ms, event);
+}
+
+fn write_push(data_dir: &Path, sha256: &str, push: Push) {
+    let _ = Library::open(data_dir).and_then(|mut library| library.record_push(sha256, push));
+}
+
+/// Record that a sample was sent into a VM, now, without waiting for the
+/// database: written in order with the run entries that follow it, and
+/// dropped like them when it cannot be written.
+pub fn record_push_later(data_dir: &Path, sha256: &str, push: Push) {
+    let push = Push {
+        at_ms: now_ms(),
+        ..push
+    };
+    let Some(queue) = queue() else {
+        write_push(data_dir, sha256, push);
+        return;
+    };
+    let _ = queue.try_send(Job::Push {
+        data_dir: data_dir.to_path_buf(),
+        sha256: sha256.to_ascii_lowercase(),
+        push,
+    });
+}
+
+/// Wait until every custody entry made so far is written (or refused).
+pub fn settle_custody() {
+    let Some(queue) = queue() else {
+        return;
+    };
+    let (done, settled) = mpsc::sync_channel(1);
+    if queue.send(Job::Settle(done)).is_ok() {
+        let _ = settled.recv();
+    }
+}
 
 pub struct RunLog {
     database: PathBuf,
@@ -42,8 +150,19 @@ impl RunLog {
         }
     }
 
-    fn note(&self, by: &str, event: CustodyEvent) {
-        let _ = ChainedEvents::new(&self.database).record(&self.sha256, by, now_ms(), &event);
+    fn note(&self, by: &'static str, event: CustodyEvent) {
+        let at_ms = now_ms();
+        let Some(queue) = queue() else {
+            write(&self.database, &self.sha256, by, at_ms, &event);
+            return;
+        };
+        let _ = queue.try_send(Job::Entry {
+            database: self.database.clone(),
+            sha256: self.sha256.clone(),
+            by,
+            at_ms,
+            event,
+        });
     }
 
     /// The run started: what it ran on and under.

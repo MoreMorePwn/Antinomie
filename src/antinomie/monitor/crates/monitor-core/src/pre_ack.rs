@@ -9,6 +9,12 @@
 //! dropped, a cookie is bounded by its own size, and a cookie nobody claims
 //! disappears. A cookie that overflows or ages out only notes the loss for
 //! itself; the loss is reported when (and only if) that cookie is claimed.
+//!
+//! The age limit measures how long the host has been able to answer, not how
+//! long a packet sat here: nothing ages while a launch is waiting for its
+//! reply (the packets that arrive then are most likely that launch's), and a
+//! claim never ages the cookie it claims, so a transport thread that was held
+//! up between the reply and the claim (a slow disk) loses nothing.
 use std::{
     collections::{BTreeMap, VecDeque},
     time::{Duration, Instant},
@@ -81,6 +87,9 @@ pub(crate) struct PreAckBuffer {
     limits: PreAckLimits,
     cookies: BTreeMap<u64, Waiting>,
     total_len: usize,
+    /// When the launch now waiting for its reply was sent: packets that
+    /// arrived since then do not age until the reply is in.
+    launch_sent: Option<Instant>,
 }
 
 impl PreAckBuffer {
@@ -89,7 +98,18 @@ impl PreAckBuffer {
             limits,
             cookies: BTreeMap::new(),
             total_len: 0,
+            launch_sent: None,
         }
+    }
+    /// A launch was sent at `now`; until [`Self::launch_answered`], packets
+    /// arriving from now on are kept regardless of their age (still bounded by
+    /// size).
+    pub fn launch_sent(&mut self, now: Instant) {
+        self.launch_sent = Some(now);
+    }
+    /// The launch's reply (or its failure) is in; ageing resumes.
+    pub fn launch_answered(&mut self) {
+        self.launch_sent = None;
     }
     /// Bytes buffered for all cookies.
     #[cfg(test)]
@@ -170,15 +190,27 @@ impl PreAckBuffer {
     /// Drop packets older than the age limit and forget cookies that nothing
     /// holds any more.
     pub fn expire(&mut self, now: Instant) {
+        self.expire_except(now, None);
+    }
+    fn expire_except(&mut self, now: Instant, keep: Option<u64>) {
         let max_age = self.limits.max_age;
         let tombstone_age = max_age.saturating_mul(TOMBSTONE_AGES);
-        let cookies: Vec<u64> = self.cookies.keys().copied().collect();
+        let launch_sent = self.launch_sent;
+        let cookies: Vec<u64> = self
+            .cookies
+            .keys()
+            .copied()
+            .filter(|cookie| Some(*cookie) != keep)
+            .collect();
         for cookie in cookies {
             while self
                 .cookies
                 .get(&cookie)
                 .and_then(|waiting| waiting.packets.front())
-                .is_some_and(|(at, _)| now.saturating_duration_since(*at) > max_age)
+                .is_some_and(|(at, _)| {
+                    now.saturating_duration_since(*at) > max_age
+                        && launch_sent.is_none_or(|sent| *at < sent)
+                })
             {
                 self.evict_front(cookie);
             }
@@ -197,9 +229,11 @@ impl PreAckBuffer {
             }
         }
     }
-    /// Hand over everything buffered for `cookie`, and forget it.
+    /// Hand over everything buffered for `cookie`, and forget it. Other
+    /// cookies age as usual; this one does not: its run is known now, so
+    /// keeping its packets until here costs nothing more.
     pub fn claim(&mut self, cookie: u64, now: Instant) -> Claim {
-        self.expire(now);
+        self.expire_except(now, Some(cookie));
         let Some(waiting) = self.cookies.remove(&cookie) else {
             return Claim::default();
         };
@@ -381,6 +415,47 @@ mod tests {
         let claim = buffer.claim(3, ms(t0, 600));
         assert!(claim.packets.is_empty());
         assert_eq!(claim.lost, Lost { count: 1, len: 30 });
+    }
+
+    #[test]
+    fn a_claim_keeps_every_packet_of_its_cookie_however_late() {
+        // The transport thread was held up (a slow disk) between the launch's
+        // reply and the claim: the run's own packets are all still handed over.
+        let t0 = Instant::now();
+        let mut buffer = PreAckBuffer::new(limits(1000, 4000, 100));
+        buffer.push(1, &[1; 10], t0);
+        buffer.push(1, &[2; 10], ms(t0, 50));
+        buffer.push(2, &[3; 10], t0);
+        let claim = buffer.claim(1, ms(t0, 42_000));
+        assert_eq!(claim.packets, vec![vec![1; 10], vec![2; 10]]);
+        assert_eq!(claim.lost, Lost::default());
+        // Another cookie still ages at the same claim (and, long quiet, is forgotten).
+        assert_eq!(buffer.cookie_len(2), 0);
+        assert_eq!(buffer.cookie_count(), 0);
+        assert_eq!(buffer.len(), 0);
+    }
+
+    #[test]
+    fn nothing_sent_after_an_unanswered_launch_ages() {
+        let t0 = Instant::now();
+        let mut buffer = PreAckBuffer::new(limits(1000, 4000, 100));
+        buffer.push(5, &[0; 10], t0);
+        buffer.launch_sent(ms(t0, 10));
+        buffer.push(1, &[1; 10], ms(t0, 20));
+        buffer.push(1, &[2; 10], ms(t0, 30));
+        // Long past the age limit while the launch waits for its reply: the
+        // packet from before the launch ages, the ones since do not.
+        buffer.expire(ms(t0, 9_000));
+        assert_eq!(buffer.cookie_len(5), 0);
+        assert_eq!(buffer.cookie_len(1), 20);
+        assert_eq!(buffer.lost(1), Lost::default());
+        // Answered: they age again, so an unclaimed cookie still goes away.
+        buffer.launch_answered();
+        buffer.expire(ms(t0, 125));
+        assert_eq!(buffer.cookie_len(1), 10);
+        assert_eq!(buffer.lost(1).count, 1);
+        buffer.expire(ms(t0, 9_001));
+        assert_eq!(buffer.cookie_count(), 0);
     }
 
     #[test]

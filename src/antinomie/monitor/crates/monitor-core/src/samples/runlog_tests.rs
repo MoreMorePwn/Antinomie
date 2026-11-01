@@ -28,6 +28,7 @@ fn setup(name: &str) -> (PathBuf, Library, String, RunLog) {
 }
 
 fn kinds(library: &Library, sha: &str) -> Vec<(String, String, String)> {
+    settle_custody();
     library
         .custody_entries(sha)
         .unwrap()

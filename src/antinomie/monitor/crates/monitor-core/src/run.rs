@@ -1000,6 +1000,7 @@ mod tests {
         };
         run.custody = Some(crate::samples::RunLog::new(&data, &sample, "r1", "vm"));
         run.finalize(65536, "clean", &Health::default()).unwrap();
+        crate::samples::settle_custody();
         let entries = library.custody_entries(&sha).unwrap();
         let end = entries.last().unwrap();
         assert_eq!(end.kind, "run_ended");
