@@ -175,16 +175,33 @@ impl Worker {
                 let curl = self.options.curl.clone();
                 let remote = self.options.remote_base.clone();
                 let (sender, receiver) = mpsc::channel();
+                let cancel = crate::cancel::CancelToken::new();
+                let worker_cancel = cancel.clone();
                 thread::Builder::new()
                     .name("antinomie-catalog".into())
                     .spawn(move || {
-                        let _ = sender.send(distribution::fetch_catalog(&curl, &remote));
+                        let _ = sender.send(distribution::fetch_catalog(
+                            &curl,
+                            &remote,
+                            &worker_cancel,
+                        ));
                     })
                     .map_err(|e| e.to_string())?;
-                self.refresh = Some(receiver);
+                self.refresh = Some(RefreshJob {
+                    cancel,
+                    done: receiver,
+                });
                 self.snapshot.remote_refreshing = true;
                 self.snapshot.remote_error = None;
                 Ok("refreshing base catalog".into())
+            }
+            Command::CancelRefresh => {
+                let job = self
+                    .refresh
+                    .as_ref()
+                    .ok_or("no catalog refresh is running")?;
+                job.cancel.cancel();
+                Ok("cancelling the catalog refresh".into())
             }
             Command::DownloadBase { identity } => {
                 if self.download.is_some() {
@@ -225,7 +242,7 @@ impl Worker {
                 let (sender, receiver) = mpsc::channel();
                 let requested = base.clone();
                 let staging_thread = staging.clone();
-                let cancel = Arc::new(AtomicBool::new(false));
+                let cancel = crate::cancel::CancelToken::new();
                 let worker_cancel = cancel.clone();
                 let thread = thread::Builder::new()
                     .name("antinomie-download".into())
@@ -321,7 +338,7 @@ impl Worker {
                 let log_path = builds.join(format!("{}-{id}.log", spec.id));
                 let stage = Arc::new(Mutex::new("prepare".to_string()));
                 let log = Arc::new(Mutex::new(VecDeque::<String>::new()));
-                let cancel = Arc::new(AtomicBool::new(false));
+                let cancel = crate::cancel::CancelToken::new();
                 let (sender, receiver) = mpsc::channel();
                 let job = BuildRun {
                     kind: spec.kind,
@@ -342,6 +359,7 @@ impl Worker {
                     .name("antinomie-build".into())
                     .spawn(move || {
                         let output = job.output.clone();
+                        let log_path = job.log_path.clone();
                         let result = job.run().and_then(|()| {
                             let bundle = Bundle::load(&output)?;
                             require_supported(
@@ -353,6 +371,13 @@ impl Worker {
                             Ok(())
                         });
                         let _ = fs::remove_dir_all(&output);
+                        // A cancelled build leaves nothing: not even its log.
+                        if result
+                            .as_ref()
+                            .is_err_and(|e| crate::cancel::is_cancelled(e))
+                        {
+                            let _ = fs::remove_file(&log_path);
+                        }
                         let _ = sender.send(result);
                     })
                     .map_err(|e| e.to_string())?;
@@ -388,7 +413,7 @@ impl Worker {
                 let package = crate::analysis_tools::package(&id).ok_or("unknown analysis tool")?;
                 distribution::curl_version(&self.options.curl)?;
                 let progress = Arc::new(Mutex::new(("download".to_string(), 0, package.size())));
-                let cancel = Arc::new(AtomicBool::new(false));
+                let cancel = crate::cancel::CancelToken::new();
                 let (sender, receiver) = mpsc::channel();
                 let (curl, data_dir) = (self.options.curl.clone(), self.options.data_dir.clone());
                 let (worker_progress, worker_cancel) = (progress.clone(), cancel.clone());

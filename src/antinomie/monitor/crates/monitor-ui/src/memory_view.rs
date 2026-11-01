@@ -50,6 +50,8 @@ pub(crate) enum MemoryAction {
     InstallVolatility,
     /// Install MemNixFS (Tools → Analysis tools).
     InstallMemNixFs,
+    /// Stop the tool installation under way.
+    CancelInstall,
     /// Look up symbol tables online for dumps without one (a setting).
     OnlineSymbols(bool),
 }
@@ -328,6 +330,10 @@ impl MemoryView {
         for (id, result) in installed {
             self.catalog_status = Some(match result {
                 Ok(()) => (format!("{id} installed: its plugins are listed"), false),
+                Err(error) if antinomie_monitor_core::cancel::is_cancelled(&error) => (
+                    format!("{id}: installation cancelled; nothing was kept"),
+                    false,
+                ),
                 Err(error) => (format!("{id}: {error}"), true),
             });
             // List the plugins again, with the new ones.

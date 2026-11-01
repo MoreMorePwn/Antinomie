@@ -207,8 +207,8 @@ impl Worker {
         }
     }
     pub(super) fn poll_remote(&mut self) {
-        if let Some(receiver) = self.refresh.as_ref() {
-            match receiver.try_recv() {
+        if let Some(job) = self.refresh.as_ref() {
+            match job.done.try_recv() {
                 Ok(result) => {
                     self.refresh = None;
                     self.snapshot.remote_refreshing = false;
@@ -256,7 +256,7 @@ impl Worker {
                 self.snapshot.last_error = Some("download worker panicked".into());
             }
             // A cancel is the user's own action, not an error to flag.
-            if let Some(error) = error.as_ref().filter(|e| !e.contains("cancelled")) {
+            if let Some(error) = error.as_ref().filter(|e| !crate::cancel::is_cancelled(e)) {
                 self.snapshot.last_error = Some(error.clone());
             }
             if let Err(error) = self.refresh_locations() {
@@ -312,7 +312,8 @@ impl Worker {
         if let Some(result) = finished {
             let job = self.build.take().expect("build job present");
             let error = result.err();
-            if let Some(error) = &error {
+            // A cancel is the user's own action, not an error to flag.
+            if let Some(error) = error.as_ref().filter(|e| !crate::cancel::is_cancelled(e)) {
                 self.snapshot.last_error = Some(error.clone());
             }
             if let Err(error) = self.refresh_locations() {
@@ -366,11 +367,19 @@ impl Worker {
             if self.closing.load(Ordering::Relaxed) {
                 self.end_debug();
                 self.cancel_queued_commands();
+                // Every transfer stops now; each removes what it had fetched
+                // before the app ends (below), so quitting changes nothing.
                 if let Some(job) = self.download.as_ref() {
-                    job.cancel.store(true, Ordering::Relaxed);
+                    job.cancel.cancel();
                 }
                 if let Some(job) = self.build.as_ref() {
-                    job.cancel.store(true, Ordering::Relaxed);
+                    job.cancel.cancel();
+                }
+                if let Some(job) = self.tool.as_ref() {
+                    job.cancel.cancel();
+                }
+                if let Some(job) = self.refresh.as_ref() {
+                    job.cancel.cancel();
                 }
                 self.finish_evidence_deletes();
                 let result = self.stop();
@@ -382,6 +391,16 @@ impl Worker {
                     && job.thread.join().is_err()
                 {
                     self.snapshot.last_error = Some("download worker panicked".into());
+                }
+                let patience = Duration::from_secs(5);
+                if let Some(job) = self.tool.take() {
+                    let _ = job.done.recv_timeout(patience);
+                }
+                if let Some(job) = self.refresh.take() {
+                    let _ = job.done.recv_timeout(patience);
+                }
+                if let Some(job) = self.build.take() {
+                    let _ = job.done.recv_timeout(patience);
                 }
                 self.publish();
                 self.finish_flush();

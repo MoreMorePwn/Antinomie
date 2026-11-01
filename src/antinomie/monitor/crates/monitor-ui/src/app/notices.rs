@@ -41,7 +41,7 @@ impl MonitorApp {
         .into_iter()
         .flatten()
         {
-            emit(Level::Error, error.to_string());
+            emit(cancel_level(error), error.to_string());
         }
         for error in [
             snapshot
@@ -60,7 +60,7 @@ impl MonitorApp {
         .into_iter()
         .flatten()
         {
-            emit(Level::Error, error.to_string());
+            emit(cancel_level(error), error.to_string());
         }
         if let Some(resources) = &snapshot.vm_resources {
             for error in [
@@ -114,5 +114,14 @@ impl MonitorApp {
                 report_quiet(ctx, Level::Warn, reason);
             }
         }
+    }
+}
+
+/// A cancelled download, install or build is the person's own action: Info.
+fn cancel_level(error: &str) -> Level {
+    if antinomie_monitor_core::cancel::is_cancelled(error) {
+        Level::Info
+    } else {
+        Level::Error
     }
 }

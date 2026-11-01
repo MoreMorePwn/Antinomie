@@ -910,6 +910,9 @@ impl eframe::App for MonitorApp {
                 eprintln!("shutdown failed: {error}");
             }
         }
+        // Downloads started from windows (samples, rule packs, plugins, online
+        // checks) stop with the app and remove what they had fetched.
+        antinomie_monitor_core::cancel::shutdown(std::time::Duration::from_secs(2));
     }
 }
 

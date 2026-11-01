@@ -212,6 +212,8 @@ impl MemoryView {
                 if let Some((message, error)) = &self.catalog_status {
                     if *error {
                         crate::activity::error_toast(ui, message);
+                    } else if antinomie_monitor_core::cancel::is_cancelled(message) {
+                        crate::activity::info(ui, message);
                     } else {
                         ui.colored_label(theme::good(), message);
                     };
@@ -351,7 +353,7 @@ impl MemoryView {
             });
         if let Some(plugin) = install {
             let progress = Arc::new(Mutex::new((0, plugin.size())));
-            let cancel = Arc::new(AtomicBool::new(false));
+            let cancel = antinomie_monitor_core::cancel::flag();
             let (sender, done) = mpsc::channel();
             let (curl, staging) = (
                 cx.curl.to_path_buf(),

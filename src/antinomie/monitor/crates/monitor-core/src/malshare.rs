@@ -40,7 +40,13 @@ fn encode(text: &str) -> String {
 
 /// A GET to MalShare; at most `max` bytes of reply. The URL, which holds the
 /// key, is given to curl on its standard input.
-fn get(curl: &Path, key: &str, params: &[(&str, &str)], max: u64) -> Result<Vec<u8>, String> {
+fn get(
+    curl: &Path,
+    key: &str,
+    params: &[(&str, &str)],
+    max: u64,
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>, String> {
     crate::dependencies::require_tool(curl, "curl")?;
     let key = key.trim();
     if key.is_empty() {
@@ -81,20 +87,14 @@ fn get(curl: &Path, key: &str, params: &[(&str, &str)], max: u64) -> Result<Vec<
             return Err(format!("MalShare request configuration: {error}"));
         }
     }
-    let mut body = Vec::new();
-    if let Some(stdout) = child.stdout.take()
-        && let Err(error) = stdout.take(max + 6).read_to_end(&mut body)
-    {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(format!("MalShare response read: {error}"));
-    }
+    // A cancel kills curl at once, whatever MalShare is doing.
+    let Some(done) = crate::cancel::capture(&mut child, cancel, max + 6, 1 << 16)? else {
+        return Err("cancelled".into());
+    };
+    let mut body = done.stdout;
     if body.len() as u64 > max + 4 {
-        let _ = child.kill();
-        let _ = child.wait();
         return Err(format!("MalShare's reply is larger than {} MiB", max >> 20));
     }
-    let done = child.wait_with_output().map_err(|e| format!("curl: {e}"))?;
     if !done.status.success() {
         let message = String::from_utf8_lossy(&done.stderr).replace(key, "[redacted]");
         return Err(format!(
@@ -132,8 +132,8 @@ fn get(curl: &Path, key: &str, params: &[(&str, &str)], max: u64) -> Result<Vec<
 
 /// Ask MalShare for the key's daily limit: a cheap call that fails when the
 /// key is refused. Used by Tools > API keys > Test.
-pub fn check_key(curl: &Path, key: &str) -> Result<(), String> {
-    get(curl, key, &[("action", "getlimit")], 64 * 1024).map(|_| ())
+pub fn check_key(curl: &Path, key: &str, cancel: &AtomicBool) -> Result<(), String> {
+    get(curl, key, &[("action", "getlimit")], 64 * 1024, cancel).map(|_| ())
 }
 
 /// MalShare answers a refusal (a bad key, the daily limit, an unknown
@@ -415,8 +415,9 @@ fn of_type(
     key: &str,
     wanted: &str,
     limit: u32,
+    cancel: &AtomicBool,
 ) -> Result<Option<(String, Vec<SampleInfo>)>, String> {
-    let types = get(curl, key, &[("action", "gettypes")], MAX_REPLY)?;
+    let types = get(curl, key, &[("action", "gettypes")], MAX_REPLY, cancel)?;
     if let Some(refused) = refusal(&types) {
         return Err(refused);
     }
@@ -424,7 +425,13 @@ fn of_type(
     let Some(name) = name else {
         return Ok(None);
     };
-    let body = get(curl, key, &[("action", "type"), ("type", &name)], MAX_REPLY)?;
+    let body = get(
+        curl,
+        key,
+        &[("action", "type"), ("type", &name)],
+        MAX_REPLY,
+        cancel,
+    )?;
     Ok(Some((name.clone(), infos(&body, Some(&name), limit)?)))
 }
 
@@ -454,10 +461,11 @@ pub fn find(
     key: &str,
     text: &str,
     limit: u32,
+    cancel: &AtomicBool,
 ) -> Result<(String, Vec<SampleInfo>), String> {
     let text = text.trim();
     if text.is_empty() {
-        return Ok(match of_type(curl, key, "elf", limit)? {
+        return Ok(match of_type(curl, key, "elf", limit, cancel)? {
             Some((_, found)) => ("Last 24 hours, ELF samples (upstream order)".into(), found),
             None => ("No new ELF samples".into(), Vec::new()),
         });
@@ -468,12 +476,13 @@ pub fn find(
             key,
             &[("action", "details"), ("hash", text)],
             MAX_REPLY,
+            cancel,
         )?;
         return Ok((format!("Hash {text}"), infos(&body, None, limit)?));
     }
     if !text.contains(char::is_whitespace)
         && text.len() <= 16
-        && let Some((name, found)) = of_type(curl, key, text, limit)?
+        && let Some((name, found)) = of_type(curl, key, text, limit, cancel)?
     {
         return Ok((format!("Last 24 hours, file type {name}"), found));
     }
@@ -482,14 +491,20 @@ pub fn find(
         key,
         &[("action", "search"), ("query", text)],
         MAX_REPLY,
+        cancel,
     )?;
     Ok((format!("Search {text}"), infos(&body, None, limit)?))
 }
 
 /// The newest samples of every type: MalShare lists hashes only, so their
 /// type and name are unknown until a search or a download.
-pub fn newest_all(curl: &Path, key: &str, limit: u32) -> Result<(String, Vec<SampleInfo>), String> {
-    let body = get(curl, key, &[("action", "getlist")], MAX_REPLY)?;
+pub fn newest_all(
+    curl: &Path,
+    key: &str,
+    limit: u32,
+    cancel: &AtomicBool,
+) -> Result<(String, Vec<SampleInfo>), String> {
+    let body = get(curl, key, &[("action", "getlist")], MAX_REPLY, cancel)?;
     Ok((
         "Last 24 hours, all types (upstream order)".into(),
         infos(&body, None, limit)?,
@@ -826,6 +841,7 @@ fn fetch_public(curl: &Path, url: &str, max: u64, cancel: &AtomicBool) -> Result
     .stderr(Stdio::null())
     .spawn()
     .map_err(|error| format!("curl: {error}"))?;
+    let _recorded = crate::cancel::record(child.id());
     let Some(stdout) = child.stdout.take() else {
         let _ = child.kill();
         let _ = child.wait();
@@ -1014,6 +1030,7 @@ pub fn download(
     key: &str,
     data_dir: &Path,
     info: &SampleInfo,
+    cancel: &AtomicBool,
 ) -> Result<StoredSample, String> {
     use sha2::{Digest, Sha256};
     let mut record = info.clone();
@@ -1033,6 +1050,7 @@ pub fn download(
             key,
             &[("action", "details"), ("hash", &lookup)],
             MAX_REPLY,
+            cancel,
         )?;
         let hinted = (!record.file_type.is_empty()).then_some(record.file_type.as_str());
         let Some(resolved) = infos(&body, hinted, 1)?.into_iter().next() else {
@@ -1079,6 +1097,7 @@ pub fn download(
         key,
         &[("action", "getfile"), ("hash", &hash)],
         samples::MAX_SAMPLE,
+        cancel,
     )?;
     let digest: String = Sha256::digest(&bytes)
         .iter()

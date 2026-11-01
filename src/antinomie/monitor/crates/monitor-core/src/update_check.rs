@@ -3,14 +3,7 @@
 //! the person asks: one request for the latest release, nothing is downloaded
 //! or installed, and the answer is a version and a link to the release page.
 use serde_json::Value;
-use std::{
-    cmp::Ordering,
-    io::Read,
-    path::Path,
-    process::Stdio,
-    sync::atomic::{AtomicBool, Ordering as AtomicOrdering},
-    time::{Duration, Instant},
-};
+use std::{cmp::Ordering, path::Path, process::Stdio, sync::atomic::AtomicBool};
 
 /// The project's page; release pages live under it.
 pub const REPOSITORY_URL: &str = "https://github.com/MoreMorePwn/Antinomie";
@@ -87,45 +80,15 @@ impl Get for CurlGet<'_> {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| format!("curl: {error}"))?;
-        // The reader threads let the loop below watch the cancel flag.
-        let mut stdout = child.stdout.take();
-        let mut stderr = child.stderr.take();
-        let out = std::thread::spawn(move || {
-            let mut reply = Vec::new();
-            if let Some(stdout) = stdout.as_mut() {
-                let _ = stdout.take(MAX_REPLY + 8).read_to_end(&mut reply);
-            }
-            reply
-        });
-        let err = std::thread::spawn(move || {
-            let mut text = String::new();
-            if let Some(stderr) = stderr.as_mut() {
-                let _ = stderr.take(4096).read_to_string(&mut text);
-            }
-            text
-        });
-        let started = Instant::now();
-        let status = loop {
-            if cancel.load(AtomicOrdering::Relaxed) {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("cancelled".into());
-            }
-            match child.try_wait().map_err(|error| error.to_string())? {
-                Some(status) => break status,
-                None if started.elapsed() > Duration::from_secs(u64::from(TIMEOUT) + 10) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err("the request timed out".into());
-                }
-                None => std::thread::sleep(Duration::from_millis(50)),
-            }
+        // A cancel kills curl at once, whatever GitHub is doing.
+        let Some(done) = crate::cancel::capture(&mut child, cancel, MAX_REPLY + 8, 4096)? else {
+            return Err("cancelled".into());
         };
-        let reply = out.join().unwrap_or_default();
-        let message = err.join().unwrap_or_default();
-        if !status.success() {
+        if !done.status.success() {
+            let message = String::from_utf8_lossy(&done.stderr);
             return Err(offline_text(message.lines().last().unwrap_or("").trim()));
         }
+        let reply = done.stdout;
         split_reply(&reply)
     }
 }

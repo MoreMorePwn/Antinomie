@@ -393,6 +393,9 @@ impl MonitorApp {
                             id: "memnixfs".into(),
                         })
                     }
+                    Some(crate::memory_view::MemoryAction::CancelInstall) => {
+                        self.send(Command::CancelToolInstall)
+                    }
                     Some(crate::memory_view::MemoryAction::OnlineSymbols(on)) => {
                         self.settings.memory_online_symbols = on;
                     }

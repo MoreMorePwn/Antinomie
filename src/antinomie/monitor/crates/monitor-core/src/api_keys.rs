@@ -272,16 +272,22 @@ pub fn last_used(data_dir: &Path, key: ApiKey) -> Option<u64> {
 
 /// Ask the service whether it accepts the key. The one network call of this
 /// module; it runs when the person presses Test.
-pub fn test(curl: &Path, key: ApiKey, secret: &Secret) -> Result<String, String> {
+pub fn test(
+    curl: &Path,
+    key: ApiKey,
+    secret: &Secret,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<String, String> {
     let result = match key {
         ApiKey::Abusech => crate::samples::search(
             curl,
             secret.expose(),
             &crate::samples::Query::Tag("Mirai".into()),
             1,
+            cancel,
         )
         .map(|_| "abuse.ch accepted the Auth-Key".to_owned()),
-        ApiKey::MalShare => crate::malshare::check_key(curl, secret.expose())
+        ApiKey::MalShare => crate::malshare::check_key(curl, secret.expose(), cancel)
             .map(|()| "MalShare accepted the API key".to_owned()),
     };
     result.map_err(|error| redact(&error, &[secret]))

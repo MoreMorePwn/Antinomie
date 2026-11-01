@@ -332,8 +332,15 @@ impl SamplesView {
                                 .any(|item| item.info.sha256_hash == sample.sha256_hash);
                         if downloaded {
                             ui.colored_label(theme::good(), "Downloaded");
-                        } else if self.downloads.contains_key(identity) {
+                        } else if let Some((_, cancel)) = self.downloads.get(identity) {
                             crate::theme::spinner(ui);
+                            if ui
+                                .small_button("Cancel")
+                                .on_hover_text("Stop this download; nothing is kept")
+                                .clicked()
+                            {
+                                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                            }
                         } else if ui
                             .button(format!(
                                 "{} Download",
@@ -362,8 +369,10 @@ impl SamplesView {
                 (cx.curl.into(), self.key.clone(), cx.data_dir.into());
             let source = self.results_source;
             let hash = listed_hash(&sample).unwrap_or("").to_owned();
+            let cancel = antinomie_monitor_core::cancel::flag();
+            let worker_cancel = cancel.clone();
             std::thread::spawn(move || {
-                let done = source.download(&curl, &key, &data, &sample);
+                let done = source.download(&curl, &key, &data, &sample, &worker_cancel);
                 if done.is_ok() {
                     antinomie_monitor_core::api_keys::record_use(
                         &data,
@@ -372,7 +381,7 @@ impl SamplesView {
                 }
                 let _ = sender.send(done);
             });
-            self.downloads.insert(hash, receiver);
+            self.downloads.insert(hash, (receiver, cancel));
         }
     }
 

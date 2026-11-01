@@ -55,6 +55,9 @@ impl MonitorApp {
                     }
                     if self.snapshot.remote_refreshing {
                         crate::theme::loading(ui, "Fetching catalog…");
+                        if ui.button("Cancel").clicked() {
+                            command = Some(Command::CancelRefresh);
+                        }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_enabled(
@@ -68,7 +71,7 @@ impl MonitorApp {
                     });
                 });
                 if let Some(error) = &self.snapshot.remote_error {
-                    crate::activity::error_toast(ui, error);
+                    crate::activity::outcome(ui, error);
                 }
                 if let Some(next) = download_status(ui, download.as_ref()) {
                     command = Some(next);
@@ -149,14 +152,8 @@ pub(super) fn download_status(
     }
     if let Some(status) = download.filter(|status| status.finished) {
         match &status.error {
-            Some(error) if error.contains("cancelled") => {
-                ui.colored_label(
-                    theme::muted(),
-                    format!(
-                        "{}: download cancelled; it resumes where it stopped",
-                        status.label
-                    ),
-                );
+            Some(error) if antinomie_monitor_core::cancel::is_cancelled(error) => {
+                crate::activity::info(ui, format!("{}: cancelled; nothing was kept", status.label));
             }
             Some(error) => {
                 crate::activity::error_toast(ui, format!("{}: {error}", status.label));

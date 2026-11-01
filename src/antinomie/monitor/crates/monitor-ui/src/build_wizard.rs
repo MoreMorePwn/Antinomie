@@ -803,7 +803,7 @@ impl BuildWizard {
             }
         });
         if let Some(error) = &status.error {
-            crate::activity::error_toast(ui, error);
+            crate::activity::outcome(ui, error);
         } else if status.finished {
             ui.colored_label(theme::good(), "Base built and installed.");
         } else if let Some((_, label)) = stages.get(current) {

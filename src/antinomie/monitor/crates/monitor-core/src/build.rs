@@ -842,12 +842,16 @@ pub(crate) fn run_streaming(
     if cancel.load(Ordering::Relaxed) {
         return Err("build cancelled".into());
     }
+    // The child leads its own group: a cancel also stops what it started (the
+    // build's compilers, downloads and VM).
+    crate::cancel::lead_group(command);
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("{label}: cannot start: {error}"))?;
+    let _recorded = crate::cancel::record(child.id());
     let (sender, receiver) = mpsc::channel::<String>();
     let readers: Vec<_> = [
         child
@@ -878,8 +882,7 @@ pub(crate) fn run_streaming(
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
+            crate::cancel::kill_tree(&mut child);
             return Err("build cancelled".into());
         }
     }

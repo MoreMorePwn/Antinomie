@@ -34,6 +34,8 @@ pub(crate) struct ApiKeysWindow {
     /// The last message of each key and whether it is an error.
     messages: BTreeMap<ApiKey, (String, bool)>,
     testing: Option<(ApiKey, Receiver<TestResult>)>,
+    /// Stops the running test.
+    test_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     loaded: bool,
     /// Keys changed since the app last asked.
     changed: bool,
@@ -97,10 +99,12 @@ impl ApiKeysWindow {
         let (sender, receiver) = mpsc::channel();
         let (curl, data_dir) = (curl.to_path_buf(), data_dir.to_path_buf());
         let wake = ctx.clone();
+        let cancel = antinomie_monitor_core::cancel::flag();
+        self.test_cancel = Some(cancel.clone());
         let spawned = std::thread::Builder::new()
             .name("api-key-test".into())
             .spawn(move || {
-                let result = api_keys::test(&curl, key, &secret);
+                let result = api_keys::test(&curl, key, &secret, &cancel);
                 if result.is_ok() {
                     api_keys::record_use(&data_dir, key);
                 }
@@ -130,6 +134,9 @@ impl ApiKeysWindow {
                     key,
                     match result {
                         Ok(message) => (message, false),
+                        Err(error) if antinomie_monitor_core::cancel::is_cancelled(&error) => {
+                            ("Test cancelled.".into(), false)
+                        }
                         Err(error) => (error, true),
                     },
                 );
@@ -258,6 +265,15 @@ impl ApiKeysWindow {
                 .clicked()
             {
                 self.test(ctx, data_dir, curl, key);
+            }
+            if self.testing.is_some()
+                && ui
+                    .button("Cancel")
+                    .on_hover_text("Stop asking the service")
+                    .clicked()
+                && let Some(cancel) = &self.test_cancel
+            {
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             if ui
                 .add_enabled(state.masked.is_some(), egui::Button::new("Clear"))

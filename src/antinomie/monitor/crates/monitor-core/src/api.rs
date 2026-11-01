@@ -1818,11 +1818,13 @@ pub enum Command {
     },
     /// Fetch the remote base catalog from the public bucket (`curl`).
     RefreshRemoteBases,
+    /// Stop the catalog fetch; the catalog the app has stays as it was.
+    CancelRefresh,
     /// Download, verify and install one advertised base.
     DownloadBase {
         identity: String,
     },
-    /// Stop the running base download; finished files stay for a resume.
+    /// Stop the running base download and remove what it fetched.
     CancelDownload,
     /// Build a base with the app's kit, natively or in the QEMU builder VM.
     BuildBase {

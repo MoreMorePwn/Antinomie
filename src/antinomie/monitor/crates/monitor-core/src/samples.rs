@@ -15,6 +15,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     process::Stdio,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 mod activity;
@@ -116,10 +117,11 @@ impl Source {
         key: &str,
         text: &str,
         limit: u32,
+        cancel: &AtomicBool,
     ) -> Result<(String, Vec<SampleInfo>), String> {
         match self {
-            Source::MalwareBazaar => find(curl, key, text, limit),
-            Source::MalShare => crate::malshare::find(curl, key, text, limit),
+            Source::MalwareBazaar => find(curl, key, text, limit, cancel),
+            Source::MalShare => crate::malshare::find(curl, key, text, limit, cancel),
         }
     }
     /// The newest samples of every type. MalwareBazaar lists its latest 100
@@ -129,13 +131,14 @@ impl Source {
         curl: &Path,
         key: &str,
         limit: u32,
+        cancel: &AtomicBool,
     ) -> Result<(String, Vec<SampleInfo>), String> {
         match self {
             Source::MalwareBazaar => Ok((
                 "Newest uploads, all types (MalwareBazaar lists 100)".into(),
-                search(curl, key, &Query::Recent, limit)?,
+                search(curl, key, &Query::Recent, limit, cancel)?,
             )),
-            Source::MalShare => crate::malshare::newest_all(curl, key, limit),
+            Source::MalShare => crate::malshare::newest_all(curl, key, limit, cancel),
         }
     }
     /// Download one sample found in this source into the data folder.
@@ -145,10 +148,11 @@ impl Source {
         key: &str,
         data_dir: &Path,
         info: &SampleInfo,
+        cancel: &AtomicBool,
     ) -> Result<StoredSample, String> {
         match self {
-            Source::MalwareBazaar => download(curl, key, data_dir, info),
-            Source::MalShare => crate::malshare::download(curl, key, data_dir, info),
+            Source::MalwareBazaar => download(curl, key, data_dir, info, cancel),
+            Source::MalShare => crate::malshare::download(curl, key, data_dir, info, cancel),
         }
     }
 }
@@ -319,12 +323,16 @@ fn post(
     key: &str,
     form: &[(&str, String)],
     output: Option<&Path>,
+    cancel: &AtomicBool,
 ) -> Result<Vec<u8>, String> {
     crate::dependencies::require_tool(curl, "curl")?;
     if key.trim().is_empty() || key.contains(['\r', '\n']) {
         return Err("set a MalwareBazaar API key first".into());
     }
     // The reply carries its own status text, so HTTP errors are not failures.
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
     let mut command = crate::http_fetch::command(
         curl,
         &crate::http_fetch::Options {
@@ -351,7 +359,12 @@ fn post(
     if let Some(mut stdin) = child.stdin.take() {
         let _ = writeln!(stdin, "Auth-Key: {}", key.trim());
     }
-    let done = child.wait_with_output().map_err(|e| format!("curl: {e}"))?;
+    // The reply is a listing or, with `output`, an error in words; a sample
+    // goes to the file. A cancel kills curl at once.
+    let Some(done) = crate::cancel::capture(&mut child, cancel, MAX_SAMPLE + (1 << 20), 1 << 16)?
+    else {
+        return Err("cancelled".into());
+    };
     if !done.status.success() {
         let message = String::from_utf8_lossy(&done.stderr);
         return Err(format!(
@@ -368,8 +381,9 @@ pub fn search(
     key: &str,
     query: &Query,
     limit: u32,
+    cancel: &AtomicBool,
 ) -> Result<Vec<SampleInfo>, String> {
-    parse_reply(&post(curl, key, &query.form(limit), None)?)
+    parse_reply(&post(curl, key, &query.form(limit), None, cancel)?)
 }
 
 /// A SHA-256, SHA-1 or MD5 in hex.
@@ -386,14 +400,21 @@ pub fn find(
     key: &str,
     text: &str,
     limit: u32,
+    cancel: &AtomicBool,
 ) -> Result<(String, Vec<SampleInfo>), String> {
     let text = text.trim();
     if text.is_empty() {
         // What the guests run: ELF programs and shell scripts, newest first.
         // MalwareBazaar lists at most 100 per file type, whatever the limit;
         // families and tags go to 1000.
-        let mut found = search(curl, key, &Query::FileType("elf".into()), limit)?;
-        found.extend(search(curl, key, &Query::FileType("sh".into()), limit)?);
+        let mut found = search(curl, key, &Query::FileType("elf".into()), limit, cancel)?;
+        found.extend(search(
+            curl,
+            key,
+            &Query::FileType("sh".into()),
+            limit,
+            cancel,
+        )?);
         found.sort_by(|a, b| b.first_seen.cmp(&a.first_seen));
         return Ok((
             "Newest Linux samples: ELF and shell scripts (MalwareBazaar lists 100 of each; \
@@ -405,22 +426,22 @@ pub fn find(
     if is_hash(text) {
         return Ok((
             format!("Hash {text}"),
-            search(curl, key, &Query::Hash(text.into()), limit)?,
+            search(curl, key, &Query::Hash(text.into()), limit, cancel)?,
         ));
     }
-    let family = search(curl, key, &Query::Signature(text.into()), limit)?;
+    let family = search(curl, key, &Query::Signature(text.into()), limit, cancel)?;
     if !family.is_empty() {
         return Ok((format!("Family {text}"), family));
     }
     // A tag as large as `elf` can be more than MalwareBazaar answers in time;
     // the file type may still answer.
-    let tag = search(curl, key, &Query::Tag(text.into()), limit);
+    let tag = search(curl, key, &Query::Tag(text.into()), limit, cancel);
     if let Ok(found) = &tag
         && !found.is_empty()
     {
         return Ok((format!("Tag {text}"), found.clone()));
     }
-    match search(curl, key, &Query::FileType(text.into()), limit) {
+    match search(curl, key, &Query::FileType(text.into()), limit, cancel) {
         Ok(found) if !found.is_empty() => Ok((format!("File type {text}"), found)),
         _ => tag.map(|found| (format!("{text}: no family, tag or file type"), found)),
     }
@@ -561,6 +582,7 @@ pub fn download(
     key: &str,
     data_dir: &Path,
     info: &SampleInfo,
+    cancel: &AtomicBool,
 ) -> Result<StoredSample, String> {
     if !is_sha256(&info.sha256_hash) {
         return Err(format!("not a SHA-256: {:?}", info.sha256_hash));
@@ -576,7 +598,7 @@ pub fn download(
         ("sha256_hash", info.sha256_hash.to_ascii_lowercase()),
     ];
     let result = (|| {
-        post(curl, key, &form, Some(&partial))?;
+        post(curl, key, &form, Some(&partial), cancel)?;
         let body = fs::read(&partial).map_err(|e| e.to_string())?;
         if body.first() == Some(&b'{') {
             // An error answered as JSON instead of the archive.

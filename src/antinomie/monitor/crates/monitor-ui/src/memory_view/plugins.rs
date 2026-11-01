@@ -107,6 +107,9 @@ impl MemoryView {
                                 }
                             } else if cx.volatility_installing {
                                 theme::loading(ui, "Installing Volatility 3…");
+                                if ui.button("Cancel").clicked() {
+                                    action = Some(MemoryAction::CancelInstall);
+                                }
                             } else {
                                 ui.label(
                                     "Memory analysis runs Volatility 3 on the system Python 3. \

@@ -16,7 +16,7 @@ use super::{
 use crate::api_keys::{self, Secret};
 use serde_json::Value;
 use std::{
-    io::{Read, Write},
+    io::Write,
     path::{Path, PathBuf},
     process::Stdio,
     sync::atomic::{AtomicBool, Ordering},
@@ -39,7 +39,13 @@ pub enum Body<'a> {
 
 /// Sends one request and returns the reply text.
 pub trait Transport {
-    fn post(&self, url: &str, body: Body<'_>, key: &Secret) -> Result<String, String>;
+    fn post(
+        &self,
+        url: &str,
+        body: Body<'_>,
+        key: &Secret,
+        cancel: &AtomicBool,
+    ) -> Result<String, String>;
 }
 
 /// The system `curl`: the key goes on standard input, the reply is bounded.
@@ -48,7 +54,13 @@ pub struct CurlTransport {
 }
 
 impl Transport for CurlTransport {
-    fn post(&self, url: &str, body: Body<'_>, key: &Secret) -> Result<String, String> {
+    fn post(
+        &self,
+        url: &str,
+        body: Body<'_>,
+        key: &Secret,
+        cancel: &AtomicBool,
+    ) -> Result<String, String> {
         let host = crate::ruleset::https_host(url)?;
         if !crate::ruleset::is_abusech_host(&host) {
             return Err(format!("{host} is not an abuse.ch host"));
@@ -92,11 +104,11 @@ impl Transport for CurlTransport {
                 return Err(api_keys::redact(&format!("curl: {error}"), &[key]));
             }
         }
-        let mut reply = Vec::new();
-        if let Some(stdout) = child.stdout.take() {
-            let _ = stdout.take(MAX_REPLY + 8).read_to_end(&mut reply);
-        }
-        let done = child.wait_with_output().map_err(|e| format!("curl: {e}"))?;
+        // A cancel kills curl at once, whatever abuse.ch is doing.
+        let Some(done) = crate::cancel::capture(&mut child, cancel, MAX_REPLY + 8, 1 << 16)? else {
+            return Err("cancelled".into());
+        };
+        let mut reply = done.stdout;
         if !done.status.success() {
             let message = String::from_utf8_lossy(&done.stderr).into_owned();
             let message = api_keys::redact(&message, &[key]);
@@ -281,9 +293,10 @@ pub fn ask(
     transport: &dyn Transport,
     key: &Secret,
     lookup: &Lookup,
+    cancel: &AtomicBool,
 ) -> Result<Vec<OnlineRecord>, String> {
     let threatfox = |body: String| -> Result<Vec<OnlineRecord>, String> {
-        parse_threatfox(&transport.post(THREATFOX_API, Body::Json(&body), key)?)
+        parse_threatfox(&transport.post(THREATFOX_API, Body::Json(&body), key, cancel)?)
     };
     let search = |term: &str| {
         serde_json::json!({"query": "search_ioc", "search_term": term, "exact_match": true})
@@ -302,6 +315,7 @@ pub fn ask(
                 URLHAUS_HOST,
                 Body::Form(&[("host", host)]),
                 key,
+                cancel,
             )?)?);
         }
         Kind::Domain => {
@@ -310,6 +324,7 @@ pub fn ask(
                 URLHAUS_HOST,
                 Body::Form(&[("host", &lookup.value)]),
                 key,
+                cancel,
             )?)?);
         }
         Kind::Url => {
@@ -319,6 +334,7 @@ pub fn ask(
                 URLHAUS_URL,
                 Body::Form(&[("url", &url)]),
                 key,
+                cancel,
             )?)?);
         }
         Kind::Sha256 | Kind::Md5 => {
@@ -334,6 +350,7 @@ pub fn ask(
                 URLHAUS_PAYLOAD,
                 Body::Form(&[(field, &lookup.value)]),
                 key,
+                cancel,
             )?)?);
         }
         Kind::Sha1 | Kind::Ja3 | Kind::CertSha1 => {}
@@ -379,7 +396,7 @@ pub fn check(
             done.error = Some("cancelled".into());
             break;
         }
-        match ask(transport, key, lookup) {
+        match ask(transport, key, lookup, cancel) {
             Ok(records) => {
                 done.asked += 1;
                 done.found += usize::from(!records.is_empty());
@@ -427,7 +444,13 @@ mod tests {
     }
 
     impl Transport for Recorder {
-        fn post(&self, url: &str, body: Body<'_>, key: &Secret) -> Result<String, String> {
+        fn post(
+            &self,
+            url: &str,
+            body: Body<'_>,
+            key: &Secret,
+            _cancel: &AtomicBool,
+        ) -> Result<String, String> {
             assert!(!key.is_empty());
             let text = match body {
                 Body::Json(text) => text.to_owned(),
@@ -742,6 +765,7 @@ mod tests {
                 THREATFOX_API,
                 Body::Json("{\"query\":\"search_ioc\"}"),
                 &key,
+                &AtomicBool::new(false),
             )
             .unwrap();
         assert!(reply.contains("no_result"));
@@ -751,7 +775,12 @@ mod tests {
         assert!(stdin.contains("Auth-Key: curl-online-secret-77"));
         assert!(stdin.contains("Content-Type: application/json"));
         let error = transport
-            .post("https://example.com/api", Body::Json("{}"), &key)
+            .post(
+                "https://example.com/api",
+                Body::Json("{}"),
+                &key,
+                &AtomicBool::new(false),
+            )
             .unwrap_err();
         assert!(error.contains("not an abuse.ch host"), "{error}");
         let _ = std::fs::remove_dir_all(dir);

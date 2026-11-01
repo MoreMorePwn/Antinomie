@@ -104,6 +104,7 @@ fn http_failures_and_stderr_do_not_disclose_the_key() {
                 "temporarysecret",
                 &[("action", "getlist")],
                 MAX_REPLY,
+                &std::sync::atomic::AtomicBool::new(false),
             )
         })
         .unwrap_err();
@@ -116,7 +117,14 @@ fn http_failures_and_stderr_do_not_disclose_the_key() {
         "#!/bin/sh\ncat >/dev/null\nprintf '[]\\n200'\n",
     );
     assert_eq!(
-        retry_busy(|| get(&curl, "temporarysecret", &[], MAX_REPLY)).unwrap(),
+        retry_busy(|| get(
+            &curl,
+            "temporarysecret",
+            &[],
+            MAX_REPLY,
+            &std::sync::atomic::AtomicBool::new(false)
+        ))
+        .unwrap(),
         b"[]"
     );
     // File bytes ending with a newline are preserved exactly, not trimmed.
@@ -130,7 +138,8 @@ fn http_failures_and_stderr_do_not_disclose_the_key() {
             &curl,
             "temporarysecret",
             &[("action", "getfile")],
-            MAX_REPLY
+            MAX_REPLY,
+            &std::sync::atomic::AtomicBool::new(false)
         ))
         .unwrap(),
         b"file\n"

@@ -388,6 +388,16 @@ fn register_with(
 pub(crate) fn error_toast(ui: &egui::Ui, message: impl std::fmt::Display) {
     report(ui.ctx(), Level::Error, message);
 }
+/// How a finished job's error is shown: a cancel is the person's own action, so
+/// it is an Info row ("Cancelled" with what was kept), anything else an Error toast.
+pub(crate) fn outcome(ui: &mut egui::Ui, message: impl std::fmt::Display) {
+    let text = message.to_string();
+    if antinomie_monitor_core::cancel::is_cancelled(&text) {
+        info(ui, text);
+    } else {
+        error_toast(ui, text);
+    }
+}
 pub(crate) fn warning(ui: &mut egui::Ui, message: impl std::fmt::Display) -> egui::Response {
     notice(ui, Level::Warn, message)
 }

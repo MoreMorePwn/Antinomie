@@ -271,6 +271,16 @@ impl Model {
                         self.rows_key.clear();
                     }
                 }
+                // A cancel is the person's own action: information, not an error.
+                Err(error) if antinomie_monitor_core::cancel::is_cancelled(&error) => {
+                    self.changed |= !self.loaded;
+                    self.status_error = None;
+                    self.status = if error.starts_with("Cancelled") {
+                        error
+                    } else {
+                        "Cancelled. Nothing was changed.".into()
+                    };
+                }
                 Err(error) => {
                     self.changed |= !self.loaded;
                     self.status_error = Some(error.clone());
@@ -541,7 +551,7 @@ impl Model {
             self.status = "A rules job is already running.".into();
             return;
         }
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = antinomie_monitor_core::cancel::flag();
         let flag = Arc::clone(&cancel);
         let progress = Arc::new(Mutex::new(String::new()));
         let shown = Arc::clone(&progress);

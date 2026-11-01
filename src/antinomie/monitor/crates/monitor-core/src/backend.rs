@@ -750,7 +750,7 @@ struct Worker {
     /// Last successful remote catalog (full entries for downloads).
     catalog: distribution::Catalog,
     /// In-flight catalog fetch.
-    refresh: Option<Receiver<Result<distribution::Catalog, String>>>,
+    refresh: Option<RefreshJob>,
     /// In-flight base download.
     download: Option<DownloadJob>,
     /// In-flight local build.
@@ -788,10 +788,15 @@ fn stalled(error: &str) -> bool {
     error.starts_with("transport:") && error.contains("(os error 110)")
 }
 
+struct RefreshJob {
+    cancel: crate::cancel::CancelToken,
+    done: Receiver<Result<distribution::Catalog, String>>,
+}
+
 struct ToolJob {
     /// Stage, received and total octets.
     progress: Arc<Mutex<(String, u64, u64)>>,
-    cancel: Arc<AtomicBool>,
+    cancel: crate::cancel::CancelToken,
     done: Receiver<Result<(), String>>,
 }
 
@@ -801,7 +806,7 @@ struct DownloadJob {
     total: u64,
     /// Received octets and whether atomic installation has started.
     progress: Arc<Mutex<(u64, bool)>>,
-    cancel: Arc<AtomicBool>,
+    cancel: crate::cancel::CancelToken,
     done: Receiver<Result<(), String>>,
     thread: JoinHandle<()>,
 }
@@ -810,7 +815,7 @@ struct BuildJob {
     label: String,
     stage: Arc<Mutex<String>>,
     log: Arc<Mutex<std::collections::VecDeque<String>>>,
-    cancel: Arc<AtomicBool>,
+    cancel: crate::cancel::CancelToken,
     done: Receiver<Result<(), String>>,
 }
 /// One base build on its worker thread: kit, inputs, then native or QEMU.
@@ -828,7 +833,7 @@ struct BuildRun {
     log_path: PathBuf,
     stage: Arc<Mutex<String>>,
     log: Arc<Mutex<VecDeque<String>>>,
-    cancel: Arc<AtomicBool>,
+    cancel: crate::cancel::CancelToken,
 }
 impl BuildRun {
     /// Gets the container engine and its builder image ready: the engine

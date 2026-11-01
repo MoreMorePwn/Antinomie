@@ -53,6 +53,7 @@ impl MonitorApp {
         self.request_catalog();
         theme::section(ui, "Available bases");
         let mut command = None;
+        let mut cancel_refresh = false;
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(
@@ -66,13 +67,23 @@ impl MonitorApp {
             }
             if self.snapshot.remote_refreshing {
                 theme::loading(ui, "Fetching catalog…");
+                if ui.button("Cancel").clicked() {
+                    cancel_refresh = true;
+                }
             }
         });
         if let Some(error) = &self.getting_started.base_error {
             crate::activity::error_toast(ui, error);
         }
+        if cancel_refresh {
+            command = Some(Command::CancelRefresh);
+        }
         if let Some(error) = &self.snapshot.remote_error {
-            crate::activity::error(ui, error);
+            if antinomie_monitor_core::cancel::is_cancelled(error) {
+                crate::activity::info(ui, error);
+            } else {
+                crate::activity::error(ui, error);
+            }
         }
         let download = self.snapshot.download.clone();
         if let Some(next) = download_status(ui, download.as_ref()) {
@@ -389,7 +400,7 @@ impl MonitorApp {
             });
             if let Some(install) = install.as_ref().filter(|install| install.id == tool.id) {
                 if let Some(error) = install.error.as_ref().filter(|_| install.finished) {
-                    crate::activity::error_toast(ui, error);
+                    crate::activity::outcome(ui, error);
                 } else if !install.finished {
                     let fraction = if install.total > 0 {
                         install.received as f32 / install.total as f32
@@ -404,7 +415,7 @@ impl MonitorApp {
             }
         }
         if let Some(error) = &self.getting_started.tool_error {
-            crate::activity::error_toast(ui, error);
+            crate::activity::outcome(ui, error);
         }
         ui.separator();
         ui.horizontal(|ui| {

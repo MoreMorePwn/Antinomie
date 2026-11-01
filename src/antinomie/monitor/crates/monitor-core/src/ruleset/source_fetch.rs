@@ -162,6 +162,7 @@ impl Curl {
                 return Err(format!("curl: {}", redact_url(&error.to_string())));
             }
         }
+        let _recorded = crate::cancel::record(child.id());
         let started = Instant::now();
         let status = loop {
             if cancel.load(Ordering::Relaxed) {

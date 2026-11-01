@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::AtomicBool,
     time::Duration,
 };
 
@@ -254,21 +254,18 @@ pub fn install(
         for (index, file) in plugin.files.iter().enumerate() {
             let download = staging.join(format!(".download-{index}"));
             let url = plugin.file_url(file)?;
-            let mut child = crate::distribution::spawn_download(curl, &url, &download)?;
-            loop {
-                if cancel.load(Ordering::Relaxed) {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err("plugin installation cancelled".to_owned());
-                }
-                if let Ok(Some(_)) = child.try_wait() {
-                    break;
-                }
-                let received = fs::metadata(&download).map_or(0, |m| m.len());
-                progress((done + received).min(total), total);
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            crate::distribution::wait_download(&mut child, &url)?;
+            crate::distribution::fetch_file(
+                curl,
+                &url,
+                &download,
+                cancel,
+                "plugin installation",
+                Duration::from_millis(100),
+                || {
+                    let received = fs::metadata(&download).map_or(0, |m| m.len());
+                    progress((done + received).min(total), total);
+                },
+            )?;
             let bytes = fs::read(&download).map_err(|e| e.to_string())?;
             let _ = fs::remove_file(&download);
             let bytes = checked(plugin, file, bytes)?;

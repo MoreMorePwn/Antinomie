@@ -251,8 +251,12 @@ pub(crate) fn spawn_download(
     .map_err(|e| format!("starting curl: {e}"))
 }
 
-pub(crate) fn wait_download(child: &mut std::process::Child, url: &str) -> Result<(), String> {
-    let status = child.wait().map_err(|e| e.to_string())?;
+/// What a finished `curl` download means: `Ok`, or the end of its diagnostics.
+fn download_result(
+    child: &mut std::process::Child,
+    status: std::process::ExitStatus,
+    url: &str,
+) -> Result<(), String> {
     if status.success() {
         return Ok(());
     }
@@ -271,6 +275,26 @@ pub(crate) fn wait_download(child: &mut std::process::Child, url: &str) -> Resul
     ))
 }
 
+/// Download `url` to `destination` (see [`spawn_download`]) and wait for it,
+/// calling `tick` about every `interval` for progress. A set `cancel` kills
+/// curl within a few tens of milliseconds, whatever the server is doing, and
+/// the error is "`what` cancelled"; the caller removes what was written.
+pub(crate) fn fetch_file(
+    curl: &Path,
+    url: &str,
+    destination: &Path,
+    cancel: &AtomicBool,
+    what: &str,
+    interval: Duration,
+    tick: impl FnMut(),
+) -> Result<(), String> {
+    let mut child = spawn_download(curl, url, destination)?;
+    match crate::cancel::wait_every(&mut child, cancel, interval, tick)? {
+        None => Err(format!("{what} cancelled")),
+        Some(status) => download_result(&mut child, status, url),
+    }
+}
+
 fn file_len(path: &Path) -> u64 {
     fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)
 }
@@ -279,8 +303,27 @@ fn file_len(path: &Path) -> u64 {
 /// loaded (uninstalled) bundle. `progress` receives `(received, total)` bytes.
 ///
 /// If a resumed file fails its hash, the file is removed and retried once from
-/// scratch so a corrupted partial cannot wedge the download.
+/// scratch so a corrupted partial cannot wedge the download. A cancel removes
+/// `staging` with everything in it: a download you cancel changes nothing.
 pub fn download_base(
+    curl: &Path,
+    remote_base: &str,
+    base: &CatalogBase,
+    staging: &Path,
+    cancel: &AtomicBool,
+    progress: impl FnMut(u64, u64),
+) -> Result<Bundle, String> {
+    let result = download_files(curl, remote_base, base, staging, cancel, progress);
+    if result
+        .as_ref()
+        .is_err_and(|error| crate::cancel::is_cancelled(error))
+    {
+        let _ = fs::remove_dir_all(staging);
+    }
+    result
+}
+
+fn download_files(
     curl: &Path,
     remote_base: &str,
     base: &CatalogBase,
@@ -290,7 +333,17 @@ pub fn download_base(
 ) -> Result<Bundle, String> {
     let total: u64 = base.files.iter().map(|file| file.size).sum();
     fs::create_dir_all(staging).map_err(|e| format!("{}: {e}", staging.display()))?;
-
+    let finished_size = |except: Option<&str>| -> u64 {
+        base.files
+            .iter()
+            .filter(|other| Some(other.name.as_str()) != except)
+            .filter(|other| {
+                let path = staging.join(&other.name);
+                path.is_file() && file_len(&path) == other.size
+            })
+            .map(|other| other.size)
+            .sum()
+    };
     for file in &base.files {
         if cancel.load(Ordering::Relaxed) {
             return Err("download cancelled".into());
@@ -305,47 +358,33 @@ pub fn download_base(
                 .map(|hash| hash == file.sha256)
                 .unwrap_or(false);
         if !already_done {
-            let mut child = spawn_download(curl, &url, &destination)?;
-            loop {
-                if cancel.load(Ordering::Relaxed) {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err("download cancelled".into());
-                }
-                if let Ok(Some(_)) = child.try_wait() {
-                    break;
-                }
-                let completed: u64 = base
-                    .files
-                    .iter()
-                    .filter(|other| other.name != file.name)
-                    .filter(|other| {
-                        let path = staging.join(&other.name);
-                        path.is_file() && file_len(&path) == other.size
-                    })
-                    .map(|other| other.size)
-                    .sum::<u64>();
-                progress((completed + file_len(&destination)).min(total), total);
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            wait_download(&mut child, &url)?;
+            fetch_file(
+                curl,
+                &url,
+                &destination,
+                cancel,
+                "download",
+                Duration::from_millis(100),
+                || {
+                    let done = finished_size(Some(&file.name)) + file_len(&destination);
+                    progress(done.min(total), total);
+                },
+            )?;
         }
         // A resumed file can be complete but corrupt; retry once from scratch.
         let matches =
             file_len(&destination) == file.size && sha256_file(&destination)? == file.sha256;
         if !matches {
             let _ = fs::remove_file(&destination);
-            let mut child = spawn_download(curl, &url, &destination)?;
-            while child.try_wait().ok().flatten().is_none() {
-                if cancel.load(Ordering::Relaxed) {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err("download cancelled".into());
-                }
-                progress(file_len(&destination).min(total), total);
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            wait_download(&mut child, &url)?;
+            fetch_file(
+                curl,
+                &url,
+                &destination,
+                cancel,
+                "download",
+                Duration::from_millis(100),
+                || progress(file_len(&destination).min(total), total),
+            )?;
             if file_len(&destination) != file.size || sha256_file(&destination)? != file.sha256 {
                 return Err(format!(
                     "{} failed integrity check after download",
@@ -353,18 +392,7 @@ pub fn download_base(
                 ));
             }
         }
-        progress(
-            base.files
-                .iter()
-                .filter(|other| {
-                    staging.join(&other.name).is_file()
-                        && file_len(&staging.join(&other.name)) == other.size
-                })
-                .map(|other| other.size)
-                .sum::<u64>()
-                .min(total),
-            total,
-        );
+        progress(finished_size(None).min(total), total);
     }
     if cancel.load(Ordering::Relaxed) {
         return Err("download cancelled".into());
@@ -374,8 +402,13 @@ pub fn download_base(
     Ok(bundle)
 }
 
-/// Fetch and validate the catalog.
-pub fn fetch_catalog(curl: &Path, remote_base: &str) -> Result<Catalog, String> {
+/// Fetch and validate the catalog. A set `cancel` stops the transfer at once;
+/// nothing is kept, and the catalog the app already has stays as it was.
+pub fn fetch_catalog(
+    curl: &Path,
+    remote_base: &str,
+    cancel: &AtomicBool,
+) -> Result<Catalog, String> {
     curl_version(curl)?;
     let url = joined(remote_base, CATALOG_FILE);
     let temp = std::env::temp_dir().join(format!(
@@ -384,8 +417,15 @@ pub fn fetch_catalog(curl: &Path, remote_base: &str) -> Result<Catalog, String> 
         crate::storage::unique_id()
     ));
     let result = (|| -> Result<Catalog, String> {
-        let mut child = spawn_download(curl, &url, &temp)?;
-        wait_download(&mut child, &url)?;
+        fetch_file(
+            curl,
+            &url,
+            &temp,
+            cancel,
+            "catalog refresh",
+            Duration::from_secs(3600),
+            || {},
+        )?;
         let bytes = fs::read(&temp).map_err(|e| format!("{}: {e}", temp.display()))?;
         parse_catalog(&bytes)
     })();
@@ -682,7 +722,12 @@ mod tests {
         if crate::build::which("curl").is_none() {
             return;
         }
-        let catalog = fetch_catalog(Path::new("curl"), DEFAULT_REMOTE_BASE).expect("catalog");
+        let catalog = fetch_catalog(
+            Path::new("curl"),
+            DEFAULT_REMOTE_BASE,
+            &AtomicBool::new(false),
+        )
+        .expect("catalog");
         assert!(validate_catalog(&catalog).is_ok());
         // The newest BusyBox: the one for the current contract revision.
         let base = catalog

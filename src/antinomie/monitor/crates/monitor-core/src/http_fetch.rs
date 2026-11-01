@@ -41,9 +41,14 @@ impl Options {
 }
 
 /// Protocols a request may start with: HTTPS only. Tests alone also allow
+/// `http://` (a loopback test server) and
 /// `file://`, so download code can be exercised without a network.
 const fn protocols() -> &'static str {
-    if cfg!(test) { "=https,file" } else { "=https" }
+    if cfg!(test) {
+        "=https,http,file"
+    } else {
+        "=https"
+    }
 }
 
 /// The hardening arguments, in the order they are given to curl.
@@ -84,6 +89,8 @@ pub(crate) fn args(options: &Options) -> Vec<String> {
 pub(crate) fn command(curl: &Path, options: &Options) -> Command {
     let mut command = Command::new(curl);
     command.args(args(options));
+    // Its own process group: a cancel (see `crate::cancel`) reaches all of it.
+    crate::cancel::lead_group(&mut command);
     command
 }
 

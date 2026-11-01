@@ -8,6 +8,24 @@ it runs.
 
 ### Host
 
+- **Fixed: every download can be cancelled, and a cancel changes nothing.**
+  Cancel buttons were missing for the base catalog refresh, the Memory tab's
+  Volatility 3 and MemNixFS installs, MalwareBazaar and MalShare searches and
+  sample downloads, the online IOC check, the API key test and the update check;
+  those calls also could not be stopped (they blocked up to five minutes). All
+  downloads now share one mechanism: the wait loop watches a cancel flag every
+  50 ms, so a stalled, trickling or vanished server cannot delay it, and the
+  `curl` or `pip` child is killed with its whole process group. A cancelled
+  download removes its partial files and temporary folders (the base staging
+  folder, tool downloads, plugin staging, the kernel source and builder image
+  parts, a cancelled build's log), keeps an installed tool or base as it was and
+  leaves catalogs unchanged. The message is Information ("Cancelled"), not an
+  error toast or an Activity error. Quitting the app cancels every transfer,
+  waits for the clean-up and kills any child still running. Build steps run in
+  their own process group, so cancelling a native build also stops the compilers
+  and downloads it started. Base downloads no longer resume after a cancel
+  (they still resume after a network failure).
+
 - **Fewer warnings: setup hints, optional features and confirmations are now
   information.** 60 messages that described a normal state (Stop the VM to
   change these, Install a base image first, an optional tool or dataset that is

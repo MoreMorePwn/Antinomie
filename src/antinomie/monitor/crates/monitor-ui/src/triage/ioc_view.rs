@@ -308,7 +308,7 @@ impl View {
         let curl = self.curl.clone();
         let mut results = self.online.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = antinomie_monitor_core::cancel::flag();
         let flag = cancel.clone();
         let spawned = std::thread::Builder::new()
             .name("ioc-online".into())
@@ -372,7 +372,10 @@ impl View {
                     ));
                 }
                 match done.error {
-                    Some(error) => self.message(format!("{text} {error}"), true),
+                    Some(error) => {
+                        let failed = !antinomie_monitor_core::cancel::is_cancelled(&error);
+                        self.message(format!("{text} {error}"), failed);
+                    }
                     None => self.message(text, false),
                 }
             }

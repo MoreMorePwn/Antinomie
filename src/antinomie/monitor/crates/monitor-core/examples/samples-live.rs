@@ -125,6 +125,7 @@ fn run() -> Result<(), String> {
     // Host-only checks need the key only in memory, not in a test data folder.
     let key = key.trim().to_owned();
     let curl = Path::new(CURL);
+    let never = std::sync::atomic::AtomicBool::new(false);
     println!("source {}", source.label());
 
     // The searches the window makes, then candidates to download.
@@ -134,7 +135,7 @@ fn run() -> Result<(), String> {
     };
     for text in texts {
         // A large tag can be more than MalwareBazaar answers in time.
-        match source.find(curl, &key, text, 50) {
+        match source.find(curl, &key, text, 50, &never) {
             Ok((listing, found)) => println!(
                 "{listing}: {} samples, {} ELF",
                 found.len(),
@@ -145,9 +146,9 @@ fn run() -> Result<(), String> {
     }
     let mut candidates = match source {
         Source::MalwareBazaar => {
-            samples::search(curl, &key, &Query::Signature("Mirai".into()), 100)?
+            samples::search(curl, &key, &Query::Signature("Mirai".into()), 100, &never)?
         }
-        Source::MalShare => source.find(curl, &key, "", 100)?.1,
+        Source::MalShare => source.find(curl, &key, "", 100, &never)?.1,
     };
     candidates.retain(|s| s.is_elf() && s.file_size < 2 * 1024 * 1024);
     // MalShare lists no sizes (0): those keep its order.
@@ -156,7 +157,7 @@ fn run() -> Result<(), String> {
     // upload checks need an x86-64 candidate for the supported guest platform.
     let mut chosen = None;
     for info in candidates.iter().take(15) {
-        let stored = source.download(curl, &key, &data, info)?;
+        let stored = source.download(curl, &key, &data, info, &never)?;
         let archive = samples::archive_path(&data, &info.sha256_hash)?;
         let bytes = samples::open_sample(&archive, &info.sha256_hash)?;
         let arch = samples::elf_arch(&bytes);
@@ -184,7 +185,7 @@ fn run() -> Result<(), String> {
         stored.info.first_seen,
         stored.source
     );
-    let (_, by_hash) = source.find(curl, &key, &hash, 1)?;
+    let (_, by_hash) = source.find(curl, &key, &hash, 1, &never)?;
     if by_hash.first().map(|s| s.sha256_hash.as_str()) != Some(hash.as_str()) {
         return Err("hash lookup did not return the sample".into());
     }

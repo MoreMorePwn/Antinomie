@@ -580,10 +580,18 @@ fn safe_link(link: &Path, target: &Path) -> bool {
     true
 }
 
-fn unpack_zip(archive: &Path, target: &Path, strip: usize) -> Result<(), String> {
+fn unpack_zip(
+    archive: &Path,
+    target: &Path,
+    strip: usize,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
     let file = File::open(archive).map_err(|e| e.to_string())?;
     let mut zip = crate::zip_safe::open(file).map_err(|e| format!("zip: {e}"))?;
     for index in 0..zip.len() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(CANCELLED_INSTALL.into());
+        }
         let mut entry = zip.by_index(index).map_err(|e| format!("zip: {e}"))?;
         let name = crate::zip_safe::name(&entry).map_err(|e| format!("zip: {e}"))?;
         let Some(relative) = inside(Path::new(&name), strip)? else {
@@ -744,20 +752,43 @@ fn deb_data(path: &Path) -> Result<io::Take<File>, String> {
     Err("Debian package has no data.tar.xz".into())
 }
 
-fn unpack(download: &Download, archive: &Path, target: &Path) -> Result<(), String> {
+/// The error of an installation the user cancelled.
+const CANCELLED_INSTALL: &str = "tool installation cancelled";
+
+fn unpack(
+    download: &Download,
+    archive: &Path,
+    target: &Path,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
     let target = target.join(download.into);
     fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    // Checked before each archive entry, so a cancel stops an unpacking within
+    // one file.
+    let stopped = || -> Result<(), String> {
+        if cancel.load(Ordering::Relaxed) {
+            Err(CANCELLED_INSTALL.into())
+        } else {
+            Ok(())
+        }
+    };
     match download.archive {
-        Archive::Zip { strip } => unpack_zip(archive, &target, strip),
+        Archive::Zip { strip } => unpack_zip(archive, &target, strip, cancel),
         Archive::TarGz { strip } => unpack_tar(
             flate2::read::GzDecoder::new(File::open(archive).map_err(|e| e.to_string())?),
             &target,
-            |path| inside(path, strip),
+            |path| {
+                stopped()?;
+                inside(path, strip)
+            },
         ),
         Archive::TarXz { strip } => unpack_tar_xz(
             File::open(archive).map_err(|e| e.to_string())?,
             &target,
-            |path| inside(path, strip),
+            |path| {
+                stopped()?;
+                inside(path, strip)
+            },
         ),
         Archive::File => {
             let path = target.join(download.file);
@@ -766,6 +797,7 @@ fn unpack(download: &Download, archive: &Path, target: &Path) -> Result<(), Stri
             fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).map_err(|e| e.to_string())
         }
         Archive::DebFiles { prefix } => unpack_tar_xz(deb_data(archive)?, &target, |path| {
+            stopped()?;
             Ok(path
                 .to_string_lossy()
                 .starts_with(prefix)
@@ -777,17 +809,39 @@ fn unpack(download: &Download, archive: &Path, target: &Path) -> Result<(), Stri
 }
 
 /// Download, verify and unpack one package into `<data>/tools/<id>`.
-/// `progress` receives the stage and `(received, total)` octets. Downloads
-/// resume after an interruption; the tool replaces an earlier installation
-/// only once it is completely unpacked.
+/// `progress` receives the stage and `(received, total)` octets. The tool
+/// replaces an earlier installation only once it is completely unpacked.
+///
+/// A set `cancel` stops curl or pip at once and removes the partial downloads
+/// and the half-unpacked folder; an installation that was there is kept.
 pub fn install(
     curl: &Path,
     data_dir: &Path,
     id: &str,
     cancel: &AtomicBool,
-    mut progress: impl FnMut(&str, u64, u64),
+    progress: impl FnMut(&str, u64, u64),
 ) -> Result<(), String> {
     let package = package(id).ok_or("unknown analysis tool")?;
+    let result = install_package(curl, data_dir, package, cancel, progress);
+    if result
+        .as_ref()
+        .is_err_and(|e| crate::cancel::is_cancelled(e))
+    {
+        let tools = tools_dir(data_dir);
+        let _ = fs::remove_dir_all(tools.join(".downloads").join(package.id));
+        let _ = fs::remove_dir(tools.join(".downloads"));
+        let _ = fs::remove_dir_all(tools.join(format!(".{}.partial", package.id)));
+    }
+    result
+}
+
+fn install_package(
+    curl: &Path,
+    data_dir: &Path,
+    package: &Package,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(&str, u64, u64),
+) -> Result<(), String> {
     if let Some(requirements) = &package.requirements {
         return install_python(data_dir, package, requirements, cancel, progress);
     }
@@ -810,23 +864,26 @@ pub fn install(
                 // A resumed file can be complete but corrupt: start over once.
                 let _ = fs::remove_file(&path);
             }
-            let mut child = crate::distribution::spawn_download(curl, download.url, &path)?;
-            loop {
-                if cancel.load(Ordering::Relaxed) {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err("tool installation cancelled".into());
+            let fetched = crate::distribution::fetch_file(
+                curl,
+                download.url,
+                &path,
+                cancel,
+                "tool installation",
+                Duration::from_millis(200),
+                || {
+                    let received = fs::metadata(&path).map_or(0, |m| m.len());
+                    progress("download", (done + received).min(total), total);
+                },
+            );
+            if let Err(error) = fetched {
+                if attempt == 1 || crate::cancel::is_cancelled(&error) {
+                    return Err(if crate::cancel::is_cancelled(&error) {
+                        error
+                    } else {
+                        format!("download failed: {}", download.url)
+                    });
                 }
-                if let Ok(Some(_)) = child.try_wait() {
-                    break;
-                }
-                let received = fs::metadata(&path).map_or(0, |m| m.len());
-                progress("download", (done + received).min(total), total);
-                std::thread::sleep(Duration::from_millis(200));
-            }
-            let status = child.wait().map_err(|e| e.to_string())?;
-            if !status.success() && attempt == 1 {
-                return Err(format!("download failed: {}", download.url));
             }
             progress("verify", done + download.size, total);
         }
@@ -844,11 +901,15 @@ pub fn install(
     for download in package.downloads {
         if cancel.load(Ordering::Relaxed) {
             let _ = fs::remove_dir_all(&partial);
-            return Err("tool installation cancelled".into());
+            return Err(CANCELLED_INSTALL.into());
         }
-        unpack(download, &downloads.join(download.file), &partial).map_err(|error| {
+        unpack(download, &downloads.join(download.file), &partial, cancel).map_err(|error| {
             let _ = fs::remove_dir_all(&partial);
-            format!("unpacking {}: {error}", download.file)
+            if crate::cancel::is_cancelled(&error) {
+                error
+            } else {
+                format!("unpacking {}: {error}", download.file)
+            }
         })?;
     }
     if !partial.join(package.entry).exists() {
@@ -973,42 +1034,22 @@ fn install_python(
 }
 
 /// Run one installation step; its standard output on success, the end of
-/// its diagnostics on failure. `cancel` stops it.
+/// its diagnostics on failure. `cancel` stops it and everything it started.
 fn step(command: &mut Command, cancel: &AtomicBool) -> Result<String, String> {
+    crate::cancel::lead_group(command);
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| e.to_string())?;
-    let mut stdout = child.stdout.take().ok_or("no output pipe")?;
-    let mut stderr = child.stderr.take().ok_or("no diagnostics pipe")?;
-    let output = std::thread::spawn(move || {
-        let mut text = String::new();
-        let _ = stdout.read_to_string(&mut text);
-        text
-    });
-    let diagnostics = std::thread::spawn(move || {
-        let mut text = String::new();
-        let _ = stderr.read_to_string(&mut text);
-        text
-    });
-    let status = loop {
-        if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("tool installation cancelled".into());
-        }
-        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            break status;
-        }
-        std::thread::sleep(Duration::from_millis(200));
+    let Some(done) = crate::cancel::capture(&mut child, cancel, 1 << 20, 1 << 16)? else {
+        return Err(CANCELLED_INSTALL.into());
     };
-    let output = output.join().unwrap_or_default();
-    let diagnostics = diagnostics.join().unwrap_or_default();
-    if status.success() {
-        Ok(output)
+    if done.status.success() {
+        Ok(String::from_utf8_lossy(&done.stdout).into_owned())
     } else {
+        let diagnostics = String::from_utf8_lossy(&done.stderr);
         let tail: Vec<_> = diagnostics.lines().rev().take(3).collect();
         Err(tail
             .into_iter()
@@ -1302,13 +1343,13 @@ mod tests {
             into: "base",
         };
         let target = root.join("out");
-        unpack(&download, &archive, &target).unwrap();
+        unpack(&download, &archive, &target, &AtomicBool::new(false)).unwrap();
         assert_eq!(fs::read(target.join("base/libicu-test.so")).unwrap(), body);
         assert!(!target.join("base/other").exists());
         fs::write(&archive, &deb[..deb.len() - 20]).unwrap();
-        assert!(unpack(&download, &archive, &target).is_err());
+        assert!(unpack(&download, &archive, &target, &AtomicBool::new(false)).is_err());
         fs::write(&archive, b"!<arch>\nnot an archive").unwrap();
-        assert!(unpack(&download, &archive, &target).is_err());
+        assert!(unpack(&download, &archive, &target, &AtomicBool::new(false)).is_err());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1343,7 +1384,7 @@ mod tests {
             into: "",
         };
         let target = root.join("out");
-        unpack(&download, &archive, &target).unwrap();
+        unpack(&download, &archive, &target, &AtomicBool::new(false)).unwrap();
         assert_eq!(fs::read(target.join("magika")).unwrap(), body);
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
@@ -1355,7 +1396,7 @@ mod tests {
             0o111
         );
         fs::write(&archive, b"not an xz stream").unwrap();
-        assert!(unpack(&download, &archive, &target).is_err());
+        assert!(unpack(&download, &archive, &target, &AtomicBool::new(false)).is_err());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1516,7 +1557,7 @@ mod tests {
         };
         let data = root.join("data");
         let tool = tools_dir(&data).join("tor");
-        unpack(&download, &archive, &tool).unwrap();
+        unpack(&download, &archive, &tool, &AtomicBool::new(false)).unwrap();
         assert!(
             fs::metadata(tool.join("tor/tor"))
                 .unwrap()
@@ -1557,7 +1598,7 @@ mod tests {
             into: "",
         };
         let target = root.join("out");
-        unpack(&download, &archive, &target).unwrap();
+        unpack(&download, &archive, &target, &AtomicBool::new(false)).unwrap();
         assert_eq!(fs::read(target.join("gef.py")).unwrap(), b"print('gef')\n");
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
@@ -1586,7 +1627,7 @@ mod tests {
             writer.finish().unwrap();
         }
         let target = root.join("out");
-        unpack_zip(&zip_path, &target, 1).unwrap();
+        unpack_zip(&zip_path, &target, 1, &AtomicBool::new(false)).unwrap();
         let mode = fs::metadata(target.join("bin/tool")).unwrap().permissions();
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(mode.mode() & 0o111, 0o111);
@@ -1620,7 +1661,7 @@ mod tests {
             let target = root.join("out");
             let zip_path = root.join("t.zip");
             fs::write(&zip_path, renamed(&[placeholder.as_str()], &[hostile])).unwrap();
-            let result = unpack_zip(&zip_path, &target, 0);
+            let result = unpack_zip(&zip_path, &target, 0, &AtomicBool::new(false));
             assert!(result.is_err(), "{hostile} was accepted");
             let names: Vec<_> = fs::read_dir(&root)
                 .unwrap()
@@ -1649,7 +1690,7 @@ mod tests {
         writer.start_file("top/plain", options).unwrap();
         std::io::Write::write_all(&mut writer, b"ok").unwrap();
         writer.finish().unwrap();
-        let _ = unpack_zip(&zip_path, &target, 1);
+        let _ = unpack_zip(&zip_path, &target, 1, &AtomicBool::new(false));
         // The name "link" is at most an ordinary directory made for the payload.
         assert!(fs::symlink_metadata(target.join("link")).is_ok_and(|meta| !meta.is_symlink()));
         assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
@@ -1670,7 +1711,7 @@ mod tests {
             crate::zip_safe::tests::build(&[("top/tool", b"payload")]),
         )
         .unwrap();
-        assert!(unpack_zip(&zip_path, &target, 1).is_err());
+        assert!(unpack_zip(&zip_path, &target, 1, &AtomicBool::new(false)).is_err());
         assert!(!outside.join("victim").exists());
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&outside);
@@ -1685,7 +1726,7 @@ mod tests {
         crate::zip_safe::tests::patch_name(&mut bytes, "top/b", "top/a", 0);
         crate::zip_safe::tests::patch_name(&mut bytes, "top/b", "top/a", 0);
         fs::write(&zip_path, bytes).unwrap();
-        assert!(unpack_zip(&zip_path, &target, 1).is_err());
+        assert!(unpack_zip(&zip_path, &target, 1, &AtomicBool::new(false)).is_err());
         assert!(!target.join("a").exists());
         let _ = fs::remove_dir_all(&root);
     }

@@ -46,7 +46,7 @@ impl UpdateWindow {
     fn start(&mut self, ctx: &egui::Context, curl: &Path) {
         self.answer = None;
         let (sender, receiver) = mpsc::sync_channel(1);
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = antinomie_monitor_core::cancel::flag();
         let (curl, flag, wake): (PathBuf, _, _) = (curl.to_path_buf(), cancel.clone(), ctx.clone());
         match std::thread::Builder::new()
             .name("antinomie-update-check".into())
@@ -107,6 +107,11 @@ impl UpdateWindow {
                 ui.add_space(4.0);
                 if self.worker.is_some() {
                     theme::loading(ui, "Asking GitHub for the latest release…");
+                    if ui.button("Cancel").clicked()
+                        && let Some((_, _, cancel)) = &self.worker
+                    {
+                        cancel.store(true, Ordering::Relaxed);
+                    }
                 } else if !*outbound && self.answer.is_none() {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(egui::RichText::new("Downloads are off.").color(theme::muted()));
@@ -212,6 +217,9 @@ fn answer_text(ui: &mut egui::Ui, answer: Option<&Answer>) {
                 "This version is newer than the latest release ({}).",
                 release.version
             ));
+        }
+        Some(Err(message)) if antinomie_monitor_core::cancel::is_cancelled(message) => {
+            crate::activity::info(ui, "Cancelled.");
         }
         Some(Err(message)) => {
             crate::activity::error(ui, message);

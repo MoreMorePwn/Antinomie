@@ -218,6 +218,11 @@ impl View {
                         self.start_online(eligible.clone());
                     }
                 }
+                if let Some((_, cancel)) = &self.job
+                    && ui.button("Cancel").clicked()
+                {
+                    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
                 if verdict.outcome == Outcome::Matched
                     && verdict.matches.iter().all(|found| found.online_at.is_none())
                     && ui.button("Mark as false positive").clicked()

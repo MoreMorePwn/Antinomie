@@ -857,7 +857,7 @@ fn downloading_a_base_for_a_newer_revision_names_both_revisions() {
 }
 
 fn attach_waiting_download(worker: &mut Worker) -> Arc<AtomicBool> {
-    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel = crate::cancel::CancelToken::new();
     let worker_cancel = cancel.clone();
     let stopped = Arc::new(AtomicBool::new(false));
     let worker_stopped = stopped.clone();
@@ -879,7 +879,7 @@ fn attach_waiting_download(worker: &mut Worker) -> Arc<AtomicBool> {
         label: "Test".into(),
         total: 100,
         progress: Arc::new(Mutex::new((20, false))),
-        cancel,
+        cancel: cancel.clone(),
         done,
         thread,
     });

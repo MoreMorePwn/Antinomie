@@ -18,7 +18,7 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -182,8 +182,7 @@ impl QemuBuild<'_> {
         // The checksums always come from Debian's own host, never from the
         // mirror that serves the image (see `CLOUD_SUMS_URL`).
         let _ = fs::remove_file(&sums_path);
-        let mut child = crate::distribution::spawn_download(self.curl, CLOUD_SUMS_URL, &sums_path)?;
-        self.wait_child(&mut child, "SHA512SUMS download", |_| {})?;
+        self.fetch_cached(CLOUD_SUMS_URL, &sums_path, "SHA512SUMS download", |_| {})?;
         let sums = fs::read_to_string(&sums_path).map_err(|e| e.to_string())?;
         let _ = fs::remove_file(&sums_path);
         let expected = sums
@@ -198,18 +197,18 @@ impl QemuBuild<'_> {
             .ok_or("Debian's SHA512SUMS does not list the genericcloud amd64 image")?;
         let target = builder.join(format!("cloud-{}.qcow2", &expected[..16]));
         let partial = builder.join("cloud.part");
-        let mut child = crate::distribution::spawn_download(
-            self.curl,
+        let mut reported = 0;
+        self.fetch_cached(
             &format!("{base}/{CLOUD_IMAGE}"),
             &partial,
+            "cloud image download",
+            |received| {
+                if received >= reported + (64 << 20) {
+                    reported = received - received % (64 << 20);
+                    on_line(&format!("cloud image download {} MiB", reported >> 20));
+                }
+            },
         )?;
-        let mut reported = 0;
-        self.wait_child(&mut child, "cloud image download", |received| {
-            if received >= reported + (64 << 20) {
-                reported = received - received % (64 << 20);
-                on_line(&format!("cloud image download {} MiB", reported >> 20));
-            }
-        })?;
         let mut file = File::open(&partial).map_err(|e| e.to_string())?;
         let mut digest = Sha512::new();
         let mut chunk = vec![0; 1 << 20];
@@ -238,29 +237,36 @@ impl QemuBuild<'_> {
     /// download the image from that mirror. Integrity rests on the SHA-512
     /// checksums fetched from `CLOUD_SUMS_URL`, not on the mirror.
     fn cloud_mirror(&self) -> Result<String, String> {
-        let output = crate::http_fetch::command(
+        let mut command = crate::http_fetch::command(
             self.curl,
             &crate::http_fetch::Options {
                 follow: true,
                 max_filesize: None,
                 ..crate::http_fetch::Options::new(60, 0)
             },
-        )
-        .args([
-            "-I",
-            "--retry",
-            "10",
-            "--retry-delay",
-            "1",
-            "--retry-all-errors",
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{url_effective}",
-        ])
-        .arg(format!("{CLOUD_BASE}/{CLOUD_IMAGE}"))
-        .output()
-        .map_err(|e| format!("curl: {e}"))?;
+        );
+        command
+            .args([
+                "-I",
+                "--retry",
+                "10",
+                "--retry-delay",
+                "1",
+                "--retry-all-errors",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{url_effective}",
+            ])
+            .arg(format!("{CLOUD_BASE}/{CLOUD_IMAGE}"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().map_err(|e| format!("curl: {e}"))?;
+        // The retries can take minutes: a cancel must not wait for them.
+        let Some(output) = crate::cancel::capture(&mut child, self.cancel, 4096, 4096)? else {
+            return Err("build cancelled".into());
+        };
         let effective = String::from_utf8_lossy(&output.stdout).trim().to_string();
         match effective.strip_suffix(&format!("/{CLOUD_IMAGE}")) {
             Some(base) if output.status.success() && base.starts_with("https://") => {
@@ -576,29 +582,32 @@ done
         result.map_err(|error| format!("{error}; console log {}", serial_log.display()))
     }
 
-    /// Wait for a download; `progress` gets the partial file's size.
-    fn wait_child(
+    /// Download `url` to `to`; `progress` gets the partial file's size. A
+    /// cancel removes the partial file.
+    fn fetch_cached(
         &self,
-        child: &mut std::process::Child,
+        url: &str,
+        to: &Path,
         what: &str,
         mut progress: impl FnMut(u64),
     ) -> Result<(), String> {
-        let partial = self.root.join("builder/cloud.part");
-        loop {
-            progress(fs::metadata(&partial).map_or(0, |meta| meta.len()));
-            if self.cancel.load(Ordering::Relaxed) {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("build cancelled".into());
+        let fetched = crate::distribution::fetch_file(
+            self.curl,
+            url,
+            to,
+            self.cancel,
+            "build",
+            Duration::from_millis(200),
+            || progress(fs::metadata(to).map_or(0, |meta| meta.len())),
+        );
+        match fetched {
+            Ok(()) => Ok(()),
+            Err(error) if crate::cancel::is_cancelled(&error) => {
+                let _ = fs::remove_file(to);
+                Err(error)
             }
-            if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-                return if status.success() {
-                    Ok(())
-                } else {
-                    Err(format!("{what} failed: {status}"))
-                };
-            }
-            thread::sleep(Duration::from_millis(200));
+            // A failed download keeps its partial file to resume from.
+            Err(error) => Err(format!("{what} failed: {error}")),
         }
     }
 }

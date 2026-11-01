@@ -95,6 +95,9 @@ impl MemoryView {
                                 }
                             } else if cx.memnixfs_installing {
                                 theme::loading(ui, "Installing MemNixFS…");
+                                if ui.button("Cancel").clicked() {
+                                    action = Some(MemoryAction::CancelInstall);
+                                }
                             } else {
                                 ui.label(
                                     "MemNixFS reads Linux memory dumps. Install it once \

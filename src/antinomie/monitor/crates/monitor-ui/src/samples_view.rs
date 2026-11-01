@@ -125,6 +125,9 @@ impl Drop for SamplesView {
         if let Some(cancel) = &self.search_cancel {
             cancel.store(true, Ordering::Relaxed);
         }
+        for (_, cancel) in self.downloads.values() {
+            cancel.store(true, Ordering::Relaxed);
+        }
     }
 }
 
@@ -373,7 +376,8 @@ pub(crate) struct SamplesView {
     catalog_progress: Option<CatalogProgress>,
     catalog_errors: Vec<String>,
     offline: bool,
-    downloads: BTreeMap<String, Receiver<Result<StoredSample, String>>>,
+    /// Downloads under way, by listed hash: the reply and the flag that stops it.
+    downloads: BTreeMap<String, (Receiver<Result<StoredSample, String>>, Arc<AtomicBool>)>,
     stored: Option<Vec<StoredSample>>,
     /// Run pushed samples as root instead of the guest user.
     as_root: bool,
@@ -514,7 +518,7 @@ impl SamplesView {
         }
         let mut finished = Vec::new();
         self.downloads
-            .retain(|hash, receiver| match receiver.try_recv() {
+            .retain(|hash, (receiver, _)| match receiver.try_recv() {
                 Ok(result) => {
                     finished.push((hash.clone(), result));
                     false
@@ -537,6 +541,11 @@ impl SamplesView {
                     ),
                     false,
                 ),
+                // A cancel is the person's own action: information, nothing kept.
+                Err(error) if antinomie_monitor_core::cancel::is_cancelled(&error) => (
+                    format!("{}: download cancelled", &hash[..12.min(hash.len())]),
+                    false,
+                ),
                 Err(error) => (format!("{}: {error}", &hash[..12.min(hash.len())]), true),
             });
         }
@@ -553,6 +562,9 @@ impl SamplesView {
                 self.results = found;
                 self.status = None;
             }
+            Err(error) if antinomie_monitor_core::cancel::is_cancelled(&error) => {
+                self.status = Some(("Search cancelled".into(), false));
+            }
             Err(error) => self.status = Some((error, true)),
         }
     }
@@ -567,7 +579,7 @@ impl SamplesView {
         let offline = self.offline || all_cached;
         self.search_generation = self.search_generation.wrapping_add(1);
         let generation = self.search_generation;
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = antinomie_monitor_core::cancel::flag();
         let worker_cancel = Arc::clone(&cancel);
         if let Err(error) = std::thread::Builder::new()
             .name("malshare-metadata".into())
@@ -602,8 +614,11 @@ impl SamplesView {
         let data_dir = cx.data_dir.to_path_buf();
         self.search_generation = self.search_generation.wrapping_add(1);
         let generation = self.search_generation;
+        let cancel = antinomie_monitor_core::cancel::flag();
+        let worker_cancel = Arc::clone(&cancel);
+        self.search_cancel = Some(cancel);
         std::thread::spawn(move || {
-            let found = source.newest_all(&curl, &key, SEARCH_LIMIT);
+            let found = source.newest_all(&curl, &key, SEARCH_LIMIT, &worker_cancel);
             if found.is_ok() {
                 antinomie_monitor_core::api_keys::record_use(
                     &data_dir,
@@ -623,8 +638,11 @@ impl SamplesView {
         let data_dir = cx.data_dir.to_path_buf();
         self.search_generation = self.search_generation.wrapping_add(1);
         let generation = self.search_generation;
+        let cancel = antinomie_monitor_core::cancel::flag();
+        let worker_cancel = Arc::clone(&cancel);
+        self.search_cancel = Some(cancel);
         std::thread::spawn(move || {
-            let found = source.find(&curl, &key, &text, SEARCH_LIMIT);
+            let found = source.find(&curl, &key, &text, SEARCH_LIMIT, &worker_cancel);
             if found.is_ok() {
                 antinomie_monitor_core::api_keys::record_use(
                     &data_dir,
@@ -985,6 +1003,11 @@ impl SamplesView {
                 }
                 if self.searching.is_some() {
                     crate::theme::spinner(ui);
+                    if let Some(cancel) = &self.search_cancel
+                        && ui.button("Cancel").clicked()
+                    {
+                        cancel.store(true, Ordering::Relaxed);
+                    }
                 }
                 let edit = ui.add_sized(
                     egui::vec2(ui.available_width(), ui.spacing().interact_size.y),

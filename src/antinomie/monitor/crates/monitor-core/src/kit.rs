@@ -14,7 +14,7 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::AtomicBool,
     time::Duration,
 };
 
@@ -283,28 +283,37 @@ pub(crate) fn fetch_orig(
     ];
     let mut failures = Vec::new();
     for url in &urls {
-        let mut child = crate::distribution::spawn_download(curl, url, &partial)?;
-        let status = loop {
-            if cancel.load(Ordering::Relaxed) {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("build cancelled".into());
-            }
-            if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-                break status;
-            }
-            progress(
-                fs::metadata(&partial).map_or(0, |meta| meta.len()),
-                input.size,
-            );
-            std::thread::sleep(Duration::from_millis(200));
-        };
-        if status.success() && sha256_file(&partial)? == input.sha256 {
+        let fetched = crate::distribution::fetch_file(
+            curl,
+            url,
+            &partial,
+            cancel,
+            "build",
+            Duration::from_millis(200),
+            || {
+                progress(
+                    fs::metadata(&partial).map_or(0, |meta| meta.len()),
+                    input.size,
+                );
+            },
+        );
+        if let Err(error) = &fetched
+            && crate::cancel::is_cancelled(error)
+        {
+            let _ = fs::remove_file(&partial);
+            return Err("build cancelled".into());
+        }
+        if fetched.is_ok() && sha256_file(&partial)? == input.sha256 {
             fs::rename(&partial, &target).map_err(|e| format!("{}: {e}", target.display()))?;
             return Ok(target);
         }
         let _ = fs::remove_file(&partial);
-        failures.push(format!("{url}: {status}"));
+        failures.push(format!(
+            "{url}: {}",
+            fetched
+                .err()
+                .unwrap_or_else(|| "the file does not match the pinned SHA-256".into())
+        ));
     }
     Err(format!(
         "could not download {} with the pinned SHA-256 ({})",

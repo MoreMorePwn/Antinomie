@@ -395,3 +395,22 @@ fn info_notices_are_journaled_at_info_and_leave_the_badge_alone() {
         .iter()
         .all(|(level, _)| *level != Level::Info));
 }
+
+#[test]
+fn a_cancelled_job_is_an_info_row_and_a_failed_one_is_an_error() {
+    let ctx = egui::Context::default();
+    let mut journal = Journal::default();
+    for message in [
+        "tool installation cancelled",
+        "Cancelled. YARA-Forge was not changed.",
+        "download failed for https://example.invalid: timed out",
+    ] {
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| outcome(ui, message));
+        });
+        journal.ingest(&ctx);
+    }
+    // Activity's badge counts warnings and errors: one error, two Info rows.
+    assert_eq!(journal.counts(), (0, 1));
+    assert_eq!(journal.messages().len(), 3);
+}
