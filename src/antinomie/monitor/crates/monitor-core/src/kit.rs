@@ -423,6 +423,11 @@ mod tests {
                     .iter()
                     .map(|arch| path.replace("$arch", arch))
                     .collect()
+            } else if path.ends_with("/$signing") {
+                ["module-signing.pem", "module-signing-arm64.pem"]
+                    .iter()
+                    .map(|name| path.replace("$signing", name))
+                    .collect()
             } else {
                 vec![path.trim_end_matches('/').to_owned()]
             };

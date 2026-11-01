@@ -20,6 +20,7 @@ const KIT_FILES: &[&str] = &[
     "scripts/check-kernel-abi.py",
     "src/antinomie/packaging/debian-6.12.94-1-trixie/adapter.conf",
     "src/antinomie/packaging/debian-6.12.94-1-trixie/module-signing.pem",
+    "src/antinomie/packaging/debian-6.12.94-1-trixie/module-signing-arm64.pem",
     "src/antinomie/packaging/kconfig/x86_64/minimal.cfg",
     "src/antinomie/packaging/kconfig/arm64/minimal.cfg",
     "src/antinomie/packaging/container/Dockerfile",
