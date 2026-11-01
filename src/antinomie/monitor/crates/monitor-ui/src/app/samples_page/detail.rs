@@ -737,10 +737,10 @@ impl MonitorApp {
         // Four buttons beside the title need about 65 font heights; a
         // narrower window gives the buttons their own row.
         if ui.available_width() < self.settings.font_size * 65.0 {
-            ui.horizontal_wrapped(|ui| title(ui));
-            ui.horizontal_wrapped(|ui| buttons(ui));
+            ui.horizontal_wrapped(title);
+            ui.horizontal_wrapped(buttons);
         } else {
-            egui::Sides::new().show(ui, |ui| title(ui), |ui| buttons(ui));
+            egui::Sides::new().show(ui, title, buttons);
         }
         if back {
             *action = Some(Action::Back);
