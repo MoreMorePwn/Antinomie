@@ -153,6 +153,8 @@ fn boot_with(bundle: &str, data: &str, stop_grace: Option<Duration>) -> Result<D
             headless: true,
             capture_quota_size: 512 * 1024 * 1024,
             stop_grace,
+            // A host without KVM (a cloud VM) runs x86-64 guests under TCG.
+            force_tcg: std::env::var_os("ANTINOMIE_FORCE_TCG").is_some(),
             ..Default::default()
         })?,
         snapshot: Snapshot::default(),
