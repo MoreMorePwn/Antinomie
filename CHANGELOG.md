@@ -31,6 +31,14 @@ it runs.
   core selected; the report's section filtered to the row). Old notes load
   unchanged and the custody log and its exports name each target.
 
+- **The build says which commit it was made from.** `build.rs` stamps a short
+  commit (`git rev-parse HEAD` in a checkout, `-dirty` after tracked changes;
+  else `source_commit` of a BUILD-INFO.json at the repository root; else
+  `unknown`; `ANTINOMIE_BUILD_COMMIT` overrides). `--version` prints
+  `antinomie 0.8.1 (built from abc12345)` and the base refusal says "this
+  build is Antinomie 0.8.1 (built from abc12345)". No network; the same source
+  without .git gives the same text.
+
 ## 0.8.0 — 2026-11-02
 
 Antinomie 0.8.0 is the first release since 0.7.1. It moves to guest contract

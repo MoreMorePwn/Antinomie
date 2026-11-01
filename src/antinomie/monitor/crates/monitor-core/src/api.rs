@@ -1047,6 +1047,17 @@ pub const APP_REVISION: u32 = crate::control::REVISION;
 /// This app's version (semantic versioning: a fix bumps the patch number, a
 /// feature the minor number, the first release is 1.0.0).
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The commit this build was made from (`unknown` when the source had neither
+/// .git nor a BUILD-INFO.json), stamped by build.rs.
+pub const APP_COMMIT: &str = env!("ANTINOMIE_BUILD_COMMIT_STAMP");
+/// The version and where it was built from, as `--version` and the base
+/// refusal say it.
+pub const APP_BUILD: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (built from ",
+    env!("ANTINOMIE_BUILD_COMMIT_STAMP"),
+    ")"
+);
 
 /// A parsed `major.minor.patch` version.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -1232,7 +1243,7 @@ pub fn base_refusal(revision: Option<u32>, min_app_version: Option<&str>) -> Opt
         "Update Antinomie.".to_string()
     };
     Some(format!(
-        "This base needs {needs}; this build is Antinomie {APP_VERSION} and supports up to \
+        "This base needs {needs}; this build is Antinomie {APP_BUILD} and supports up to \
          guest contract revision {APP_REVISION}. {advice}"
     ))
 }
@@ -2712,6 +2723,9 @@ mod tests {
     #[test]
     fn base_refusal_names_both_sides_and_is_silent_for_usable_bases() {
         assert_eq!(base_refusal(None, None), None);
+        assert!(APP_BUILD.starts_with(APP_VERSION));
+        assert!(APP_BUILD.ends_with(&format!("(built from {APP_COMMIT})")));
+        assert!(!APP_COMMIT.is_empty());
         assert_eq!(base_refusal(Some(APP_REVISION), Some(APP_VERSION)), None);
         assert_eq!(base_refusal(Some(APP_REVISION - 1), None), None);
         // A revision this build lacks, with the base's own minimum version.
@@ -2720,7 +2734,7 @@ mod tests {
             base_refusal(Some(newer), Some("9.1.0")).unwrap(),
             format!(
                 "This base needs guest contract revision {newer} (Antinomie 9.1.0 or newer); \
-                 this build is Antinomie {APP_VERSION} and supports up to guest contract \
+                 this build is Antinomie {APP_BUILD} and supports up to guest contract \
                  revision {APP_REVISION}. Update Antinomie or use a base of revision \
                  {APP_REVISION} or lower."
             )

@@ -59,7 +59,7 @@ use std::{path::PathBuf, time::Duration};
 #[derive(Parser)]
 #[command(
     name = "antinomie",
-    version,
+    version = antinomie_monitor_core::api::APP_BUILD,
     about = "Native Antinomie VM and syscall monitor"
 )]
 struct Arguments {

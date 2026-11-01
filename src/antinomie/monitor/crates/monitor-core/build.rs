@@ -29,7 +29,83 @@ const KIT_FILES: &[&str] = &[
 ];
 const KIT_SERIES: &str = "src/antinomie/core/6.12";
 
+/// The first 8 hex digits of a commit id, if `text` starts with one.
+fn short_commit(text: &str) -> Option<String> {
+    let text = text.trim();
+    let hex: String = text.chars().take_while(char::is_ascii_hexdigit).collect();
+    (hex.len() >= 7 && hex.len() == text.len().min(hex.len()))
+        .then(|| hex[..8.min(hex.len())].to_owned())
+}
+
+/// The commit this build is made from. In order: `ANTINOMIE_BUILD_COMMIT`;
+/// `git rev-parse HEAD` in a git checkout (with `-dirty` after tracked
+/// changes); `source_commit` of a `BUILD-INFO.json` at the repository root (a
+/// source archive without .git); else `unknown`. Nothing is fetched, and the
+/// same source without .git always gives the same text.
+fn build_commit(repo: &Path) -> String {
+    println!("cargo:rerun-if-env-changed=ANTINOMIE_BUILD_COMMIT");
+    if let Some(commit) = env::var("ANTINOMIE_BUILD_COMMIT")
+        .ok()
+        .as_deref()
+        .and_then(short_commit)
+    {
+        return commit;
+    }
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    };
+    if repo.join(".git").exists() {
+        if let Some(commit) = git(&["rev-parse", "HEAD"])
+            .as_deref()
+            .and_then(short_commit)
+        {
+            if let Some(dir) = git(&["rev-parse", "--absolute-git-dir"]) {
+                // Only files that exist: cargo reruns every build for a missing one.
+                let mut watch = vec![format!("{dir}/HEAD"), format!("{dir}/packed-refs")];
+                if let Some(reference) = git(&["symbolic-ref", "-q", "HEAD"]) {
+                    watch.push(format!("{dir}/{reference}"));
+                }
+                for path in watch.into_iter().filter(|path| Path::new(path).exists()) {
+                    println!("cargo:rerun-if-changed={path}");
+                }
+            }
+            let dirty = git(&["status", "--porcelain", "--untracked-files=no"])
+                .is_some_and(|out| !out.is_empty());
+            return if dirty {
+                format!("{commit}-dirty")
+            } else {
+                commit
+            };
+        }
+    }
+    let info = repo.join("BUILD-INFO.json");
+    println!("cargo:rerun-if-changed={}", info.display());
+    fs::read_to_string(info)
+        .ok()
+        .and_then(|text| {
+            let rest = text.split("\"source_commit\"").nth(1)?;
+            let value = rest.split('"').nth(1)?;
+            short_commit(value)
+        })
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
 fn main() {
+    {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../..");
+        let repo = repo.canonicalize().unwrap_or(repo);
+        println!(
+            "cargo:rustc-env=ANTINOMIE_BUILD_COMMIT_STAMP={}",
+            build_commit(&repo)
+        );
+    }
     let transport = "../../../transport";
     cc::Build::new()
         .file(format!("{transport}/host.c"))
