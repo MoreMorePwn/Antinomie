@@ -176,7 +176,11 @@ impl<'open> Dialog<'open> {
                 .map(|rect| rect.center());
             let moved =
                 ctx.data(|data| data.get_temp::<bool>(id.with("dialog-moved"))) == Some(true);
-            if let (Some((last_area, last_centre)), Some(now), false) = (last, now, moved) {
+            if last.is_none() {
+                // Opening: centred, whatever position egui kept from an
+                // earlier session (default_pos applies only to a new id).
+                window = window.current_pos(area.center());
+            } else if let (Some((last_area, last_centre)), Some(now), false) = (last, now, moved) {
                 if last_area != area && now.distance(last_centre) < 2.0 {
                     window = window.current_pos(area.center());
                 }

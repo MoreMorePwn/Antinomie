@@ -263,3 +263,31 @@ fn a_centred_dialog_stays_centred_while_the_app_window_grows_until_moved() {
         rect
     );
 }
+
+#[test]
+fn a_centred_dialog_opens_centred_whatever_place_an_earlier_session_kept() {
+    // Round 6 item 3, seen on the VPS: egui keeps window positions between
+    // sessions and `default_pos` applies only to a window it never saw, so
+    // the dependencies dialog opened where an earlier session left it.
+    let mut app = app();
+    app.getting_started.open = true;
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    for _ in 0..3 {
+        render(&mut app, &ctx, egui::vec2(800.0, 600.0));
+    }
+    // A new session: the window's place is still in egui's memory, this
+    // session's own records (temporary data) are not.
+    ctx.data_mut(|data| data.clear());
+    for _ in 0..3 {
+        render(&mut app, &ctx, egui::vec2(1920.0, 1080.0));
+    }
+    let rect = ctx
+        .memory(|memory| memory.area_rect(Dialog::GettingStarted.window_id()))
+        .expect("Getting started");
+    let area = crate::title_bar::content_rect(&ctx);
+    assert!(
+        rect.center().distance(area.center()) < 2.0,
+        "{rect:?} is not centred in {area:?}"
+    );
+}
