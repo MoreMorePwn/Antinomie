@@ -468,3 +468,110 @@ fn an_elf_header_cut_short_is_not_packed_and_does_not_panic() {
     assert!(detect(b"\x7fELF").is_none());
     assert!(detect(b"\x7f\x45\x4c\x46\x02").is_none());
 }
+
+/// What P2PInfect-style tampering leaves: the pack header's version and
+/// format zeroed and the loader's size record (p_info) wiped.
+fn tampered(file: &[u8]) -> Vec<u8> {
+    let mut out = file.to_vec();
+    let header = header_of(file);
+    out[header + 4] = 0;
+    out[header + 5] = 0;
+    out[L_INFO + 12..L_INFO + 24].fill(0);
+    out
+}
+
+#[test]
+fn a_pack_header_with_altered_fields_is_still_found_and_rebuilt() {
+    let file = packed(4, 500);
+    let damaged = tampered(&file);
+    let found = detect(&damaged).expect("the header is found by its magic and sizes");
+    assert_eq!(found.label(), "UPX (header modified)");
+    assert!(found.changes[0].contains("version or format"));
+    let (mended, done) = upx::repaired_deep(&damaged, found.layout.unwrap(), false);
+    let header = header_of(&file);
+    assert_eq!(
+        &mended[header + 4..header + 6],
+        &file[header + 4..header + 6]
+    );
+    assert_eq!(
+        &mended[L_INFO + 16..L_INFO + 20],
+        &1_000_000u32.to_le_bytes()
+    );
+    assert_eq!(
+        &mended[L_INFO + 20..L_INFO + 24],
+        &1_000_000u32.to_le_bytes()
+    );
+    assert_eq!(done.len(), 2, "{done:?}");
+    // An intact file needs nothing.
+    let mut intact = file.clone();
+    intact[L_INFO + 16..L_INFO + 20].copy_from_slice(&1_000_000u32.to_le_bytes());
+    intact[L_INFO + 20..L_INFO + 24].copy_from_slice(&1_000_000u32.to_le_bytes());
+    assert!(
+        upx::repaired_deep(&intact, detect(&intact).unwrap().layout.unwrap(), false)
+            .1
+            .is_empty()
+    );
+}
+
+#[test]
+fn an_unpacker_that_needs_the_size_record_gets_it_rebuilt() {
+    // A stand-in for upx that, like the real one, refuses a zero p_filesize.
+    let dir = scratch("pinfo");
+    let upx = dir.join("upx");
+    std::fs::write(
+        &upx,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in --version) echo upx-fake; exit 0;; esac\nOUT=\"$4\"; IN=\"$5\"\nv=$(od -An -tu4 -j {} -N4 \"$IN\" | tr -d ' ')\nif [ \"$v\" = 0 ]; then echo 'upx: CantUnpackException: file header corrupted' >&2; exit 1; fi\ncat \"$0.payload\" > \"$OUT\"\n",
+            L_INFO + 16
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&upx, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(dir.join("upx.payload"), plain(7)).unwrap();
+    let mut section = AnalysisSection::new(AnalysisKind::Unpacking);
+    unpack_with(
+        &mut section,
+        &tampered(&packed(4, 500)),
+        &dir.join("artifacts"),
+        Some(upx.to_str().unwrap()),
+    );
+    assert_eq!(
+        section.state,
+        AnalysisSectionState::Complete,
+        "{}",
+        section.summary
+    );
+    let layers = unpack_layers(&report_of(section));
+    assert_eq!(layers.len(), 2);
+    assert!(layers[1].note.contains("p_info"), "{}", layers[1].note);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn upx_text_with_unlocatable_headers_is_never_reported_as_not_packed() {
+    let mut file = plain(3);
+    file.extend_from_slice(
+        b"$Info: This file is packed with the UPX executable packer http://upx.sf.net $\n",
+    );
+    let (section, dir) = run(&file, &[], true);
+    assert_eq!(section.state, AnalysisSectionState::Partial);
+    assert!(
+        section.summary.contains("beyond repair"),
+        "{}",
+        section.summary
+    );
+    assert!(!section.summary.contains("No UPX packing found"));
+    let verdict = packer_verdict(&report_of(section)).unwrap();
+    assert_eq!(verdict.packer, "UPX");
+    // A single stray "UPX!" in an unrelated program is not a verdict.
+    let mut other = plain(3);
+    other.extend_from_slice(b" UPX! ");
+    let (section, dir2) = run(&other, &[], true);
+    assert!(
+        section.summary.contains("No UPX packing found"),
+        "{}",
+        section.summary
+    );
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(dir2);
+}

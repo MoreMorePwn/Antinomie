@@ -12,6 +12,7 @@ mod capa;
 mod decompile;
 pub mod detection;
 mod disasm;
+mod elf_facts;
 mod floss;
 mod ghidra_listing;
 mod ident;

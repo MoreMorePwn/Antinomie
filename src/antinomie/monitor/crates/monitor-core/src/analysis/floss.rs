@@ -25,7 +25,7 @@ struct Found {
     offset: Option<u64>,
 }
 
-pub(super) fn strings(section: &mut AnalysisSection, specimen_len: u64, listings: &Path) {
+pub(super) fn strings(section: &mut AnalysisSection, specimen: &[u8], listings: &Path) {
     let Some(floss) = tools::find_tool(crate::analysis_tools::FLOSS_SYSTEM, MANAGED) else {
         section.state = AnalysisSectionState::Unavailable;
         section.summary =
@@ -33,10 +33,11 @@ pub(super) fn strings(section: &mut AnalysisSection, specimen_len: u64, listings
                 .into();
         return;
     };
-    run(section, floss, specimen_len, listings);
+    run(section, floss, specimen, listings);
 }
 
-fn run(section: &mut AnalysisSection, floss: &str, specimen_len: u64, listings: &Path) {
+fn run(section: &mut AnalysisSection, floss: &str, specimen: &[u8], listings: &Path) {
+    let specimen_len = specimen.len() as u64;
     let specimen_max = u64::from(super::limits::active().floss_file_mib) << 20;
     if specimen_len > specimen_max {
         section.state = AnalysisSectionState::Unavailable;
@@ -112,9 +113,12 @@ fn run(section: &mut AnalysisSection, floss: &str, specimen_len: u64, listings: 
                     (super::limits::large_output() >> 20)
                 )
             } else {
-                run.failure_text("FLOSS", timeout).unwrap_or_else(|| {
-                    "FLOSS printed no readable result; the file format may be unsupported by FLOSS (it takes PE and ELF programs and raw shellcode)".into()
-                })
+                super::capa::explain_failure(
+                    run.failure_text("FLOSS", timeout).unwrap_or_else(|| {
+                        "FLOSS printed no readable result; the file format may be unsupported by FLOSS (it takes PE and ELF programs and raw shellcode)".into()
+                    }),
+                    specimen,
+                )
             };
             return;
         }

@@ -319,10 +319,7 @@ mod tests {
     #[test]
     fn a_sealed_specimen_is_previewed_and_read_whole_with_the_same_checks() {
         let mut fixture = Fixture::new();
-        assert_eq!(
-            crate::analysis::sealed::seal(&fixture.directory),
-            Ok(true)
-        );
+        assert_eq!(crate::analysis::sealed::seal(&fixture.directory), Ok(true));
         assert!(!fixture.directory.join("specimen").exists());
         let page = fixture.read(9, 8).unwrap();
         assert_eq!(page.data, b"archived");
@@ -336,8 +333,10 @@ mod tests {
         fixture.report.specimen_sha256 = Some("00".repeat(32));
         fixture.save();
         assert!(fixture.read(0, 1).is_err());
-        fixture.report.specimen_sha256 =
-            Some(format!("{:x}", Sha256::digest(b"verified archived specimen")));
+        fixture.report.specimen_sha256 = Some(format!(
+            "{:x}",
+            Sha256::digest(b"verified archived specimen")
+        ));
         fixture.report.specimen_len = Some(25);
         fixture.save();
         assert!(fixture.read(0, 1).is_err());

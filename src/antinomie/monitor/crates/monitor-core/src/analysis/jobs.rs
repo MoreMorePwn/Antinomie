@@ -610,9 +610,8 @@ impl Jobs {
         }
         let updates: Vec<_> = self.carried.iter_mut().flat_map(Jobs::updates).collect();
         self.updates.extend(updates);
-        self.carried.retain(|carried| {
-            carried.active.is_some() || !carried.queue.is_empty()
-        });
+        self.carried
+            .retain(|carried| carried.active.is_some() || !carried.queue.is_empty());
     }
     pub fn cancel(&mut self, id: &str) -> Result<(), String> {
         if let Some(carried) = self.carried.iter_mut().find(|c| c.tracks(id)) {

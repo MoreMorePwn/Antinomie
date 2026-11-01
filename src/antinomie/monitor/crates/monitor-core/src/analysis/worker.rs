@@ -866,9 +866,9 @@ fn analyze_section(section: &mut AnalysisSection, specimen: &[u8], listings: &Pa
         AnalysisKind::Disassembly => super::disasm::disassemble(section, specimen, listings),
         AnalysisKind::Identification => super::ident::identify(section, specimen),
         AnalysisKind::Rules => super::rules::scan(section, specimen),
-        AnalysisKind::Capabilities => super::capa::capabilities(section),
+        AnalysisKind::Capabilities => super::capa::capabilities(section, specimen),
         AnalysisKind::Embedded => super::binwalk::embedded(section, specimen.len() as u64),
-        AnalysisKind::Floss => super::floss::strings(section, specimen.len() as u64, listings),
+        AnalysisKind::Floss => super::floss::strings(section, specimen, listings),
         AnalysisKind::Unpacking => {
             let artifacts = listings.parent().unwrap_or(listings).join("artifacts");
             super::unpack::unpack(section, specimen, &artifacts)

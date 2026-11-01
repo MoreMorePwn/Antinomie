@@ -64,7 +64,7 @@ fn a_run_fills_the_section_and_a_listing_the_validator_accepts() {
     let dir = scratch("run");
     let floss = fake(&dir, OUTPUT, 0);
     let mut section = section();
-    run(&mut section, &floss, 8192, &dir.join("listings"));
+    run(&mut section, &floss, &[0u8; 8192], &dir.join("listings"));
     assert_eq!(section.state, AnalysisSectionState::Complete);
     assert_eq!(section.tools, ["floss v3.2.0-0-gfake"]);
     assert_eq!(
@@ -129,7 +129,7 @@ fn a_run_without_strings_is_complete_and_says_so() {
     let dir = scratch("none");
     let floss = fake(&dir, r#"{"strings":{"static_strings":[]}}"#, 0);
     let mut section = section();
-    run(&mut section, &floss, 100, &dir.join("listings"));
+    run(&mut section, &floss, &[0u8; 100], &dir.join("listings"));
     assert_eq!(section.state, AnalysisSectionState::Complete);
     assert!(section.entries.is_empty());
     assert!(section.summary.starts_with("0 strings from FLOSS"));
@@ -142,7 +142,7 @@ fn failures_are_named_not_reported_as_an_empty_result() {
     let listings = dir.join("listings");
     let floss = fake(&dir, "", 1);
     let mut section = section();
-    run(&mut section, &floss, 100, &listings);
+    run(&mut section, &floss, &[0u8; 100], &listings);
     assert_eq!(section.state, AnalysisSectionState::Unavailable);
     assert!(
         section.summary.contains("exited with code 1"),
@@ -152,7 +152,7 @@ fn failures_are_named_not_reported_as_an_empty_result() {
     // Output FLOSS could not have written: not JSON.
     let floss = fake(&dir, "usage: floss", 0);
     let mut section = self::section();
-    run(&mut section, &floss, 100, &listings);
+    run(&mut section, &floss, &[0u8; 100], &listings);
     assert_eq!(section.state, AnalysisSectionState::Unavailable);
     assert!(
         section.summary.contains("FLOSS printed no readable result")
@@ -163,7 +163,7 @@ fn failures_are_named_not_reported_as_an_empty_result() {
     run(
         &mut section,
         "/nonexistent/floss",
-        17 * 1024 * 1024,
+        &vec![0u8; 17 * 1024 * 1024],
         &listings,
     );
     assert_eq!(section.state, AnalysisSectionState::Unavailable);
@@ -172,7 +172,7 @@ fn failures_are_named_not_reported_as_an_empty_result() {
         "FLOSS does not take files over 16 MiB; this file is 17 MiB"
     );
     let mut section = self::section();
-    run(&mut section, "/nonexistent/floss", 100, &listings);
+    run(&mut section, "/nonexistent/floss", &[0u8; 100], &listings);
     assert!(section.summary.starts_with("FLOSS failed to start"));
     let _ = fs::remove_dir_all(dir);
 }
@@ -189,7 +189,7 @@ fn the_row_bound_marks_the_section_partial() {
     let dir = scratch("many");
     let floss = fake(&dir, &output, 0);
     let mut section = section();
-    run(&mut section, &floss, 100, &dir.join("listings"));
+    run(&mut section, &floss, &[0u8; 100], &dir.join("listings"));
     // The report keeps a preview; the listing holds all of them.
     assert_eq!(section.entries.len(), REPORT_ROWS);
     assert_eq!(section.listing.as_ref().unwrap().rows, 300);

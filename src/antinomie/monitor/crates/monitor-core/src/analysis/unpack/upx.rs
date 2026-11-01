@@ -102,12 +102,56 @@ fn find_header(bytes: &[u8], l_info: usize) -> Option<usize> {
     })
 }
 
+/// The pack header when the packer's author altered its version or format
+/// octets (so they no longer match `l_info`'s): the last `UPX!` magic whose
+/// sizes are still plausible.
+fn find_header_loose(bytes: &[u8], l_info: usize) -> Option<usize> {
+    let last = bytes.len().checked_sub(TRAILER_SIZE)?;
+    let first = l_info
+        .saturating_add(24)
+        .max(bytes.len().saturating_sub(TRAILER_SEARCH_SIZE));
+    (first..=last).rev().find(|&at| {
+        bytes[at..at + 4] == *MAGIC
+            && matches!(
+                (u32_at(bytes, at + 16), u32_at(bytes, at + 20)),
+                (Some(unpacked), Some(packed))
+                    if (1..=UNPACKED_MAX_SIZE).contains(&unpacked)
+                        && packed as usize <= at
+                        && packed as usize + 0x2000 >= at
+            )
+    })
+}
+
+/// A sign of UPX anywhere in the file, for a file whose structures are too
+/// damaged to unpack: the packer's `$Info:` line, or a `UPX!` magic.
+pub(super) fn marker(bytes: &[u8]) -> Option<&'static str> {
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    if has(b"$Info: This file is packed with the UPX") {
+        Some("the UPX copyright line")
+    } else if bytes.windows(4).filter(|w| *w == MAGIC).count() >= 2 {
+        // The loader header and the pack header each carry the magic; one
+        // occurrence is as likely to be text in an unrelated program.
+        Some("the UPX! magic in both of UPX's headers")
+    } else {
+        None
+    }
+}
+
 /// Whether `bytes` is a file UPX packed, with what is amiss in it.
 pub(super) fn detect(bytes: &[u8]) -> Option<Detection> {
     if let Some(l_info) = l_info_offset(bytes) {
-        let header = find_header(bytes, l_info)?;
+        let (header, altered) = match find_header(bytes, l_info) {
+            Some(header) => (header, false),
+            None => (find_header_loose(bytes, l_info)?, true),
+        };
         let layout = Layout { l_info, header };
         let mut changes = Vec::new();
+        if altered {
+            changes.push(
+                "the version or format in the pack header does not match the loader header"
+                    .to_owned(),
+            );
+        }
         if bytes[l_info + 4..l_info + 8] != *MAGIC {
             changes.push("the magic in the loader header was overwritten".to_owned());
         }
@@ -144,6 +188,65 @@ pub(super) fn repaired(bytes: &[u8], layout: Layout) -> Vec<u8> {
     out
 }
 
+fn adler32(data: &[u8]) -> u32 {
+    let (mut a, mut b) = (1u32, 0u32);
+    for byte in data {
+        a = (a + u32::from(*byte)) % 65521;
+        b = (b + a) % 65521;
+    }
+    (b << 16) | a
+}
+
+/// Beyond [`repaired`]: the loader's `p_info` (original size, block size)
+/// that a packer's author zeroed or damaged is rebuilt from the pack header's
+/// sizes, and the pack header's version and format are taken from `l_info`.
+/// `checksum` also recomputes the pack header's last octet. Returns the file
+/// and what was changed; the list is empty when nothing needed it.
+pub(super) fn repaired_deep(
+    bytes: &[u8],
+    layout: Layout,
+    checksum: bool,
+) -> (Vec<u8>, Vec<String>) {
+    let mut out = repaired(bytes, layout);
+    let mut done = Vec::new();
+    let (l_info, header) = (layout.l_info, layout.header);
+    // Version and format octets of the pack header follow l_info's.
+    for (at, from) in [(4usize, 10usize), (5, 11)] {
+        if out[header + at] != out[l_info + from] {
+            out[header + at] = out[l_info + from];
+            if !done.iter().any(|d: &String| d.contains("version")) {
+                done.push(
+                    "the pack header's version and format were set from the loader header"
+                        .to_owned(),
+                );
+            }
+        }
+    }
+    let file_size = u32_at(&out, header + 24).unwrap_or(0);
+    let p_filesize = u32_at(&out, l_info + 16).unwrap_or(0);
+    let p_blocksize = u32_at(&out, l_info + 20).unwrap_or(0);
+    if file_size > 0
+        && (p_filesize == 0
+            || p_blocksize == 0
+            || p_blocksize > p_filesize
+            || p_filesize > file_size.saturating_mul(2))
+    {
+        out[l_info + 16..l_info + 20].copy_from_slice(&file_size.to_le_bytes());
+        out[l_info + 20..l_info + 24].copy_from_slice(&file_size.to_le_bytes());
+        done.push(format!(
+            "the loader's size record (p_info) was rebuilt from the pack header's {file_size} octets"
+        ));
+    }
+    if checksum {
+        let sum = (adler32(&out[header + 4..header + 31]) % 251 + 1) as u8;
+        if out[header + 31] != sum {
+            out[header + 31] = sum;
+            done.push("the pack header checksum was recomputed".to_owned());
+        }
+    }
+    (out, done)
+}
+
 pub(super) struct Unpacked {
     pub bytes: Vec<u8>,
     /// What had to be mended for UPX to take the file.
@@ -176,6 +279,16 @@ pub(super) fn unpack(
             attempts.push((repaired(bytes, layout), mended));
         } else {
             attempts.insert(0, (repaired(bytes, layout), mended));
+        }
+        // What upx -d still refuses after that: the size record and header
+        // fields a packer's author damaged on purpose, then the checksum.
+        for checksum in [false, true] {
+            let (deep, done) = repaired_deep(bytes, layout, checksum);
+            if !done.is_empty() && attempts.iter().all(|(seen, _)| *seen != deep) {
+                let mut notes = found.changes.clone();
+                notes.extend(done);
+                attempts.push((deep, notes));
+            }
         }
     }
     let mut last = String::new();

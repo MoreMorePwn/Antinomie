@@ -63,6 +63,21 @@ impl Jobs {
             };
             results.push((layer.index, queued));
         }
+        // capa gives up on a packed program; say where its result is instead.
+        if checks.contains(&AnalysisKind::Capabilities)
+            && let Some((index, id)) = results
+                .iter()
+                .rev()
+                .find_map(|(index, queued)| queued.as_ref().ok().map(|id| (*index, id.clone())))
+            && let Some(capa) = job.report.sections.iter_mut().find(|section| {
+                section.kind == AnalysisKind::Capabilities
+                    && section.state == AnalysisSectionState::Unavailable
+            })
+        {
+            capa.summary.push_str(&format!(
+                ". Fallback: capa runs on the unpacked layer {index}; its capabilities are in that layer's own report ({id})"
+            ));
+        }
         let Some(section) = job
             .report
             .sections

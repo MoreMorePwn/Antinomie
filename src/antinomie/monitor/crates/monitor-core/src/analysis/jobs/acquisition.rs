@@ -351,7 +351,10 @@ mod tests {
         }
         // Cancel before a worker takes it: finish seals.
         let _ = jobs.cancel(&report.id);
-        assert!(!directory.join("specimen").exists(), "no plain copy remains");
+        assert!(
+            !directory.join("specimen").exists(),
+            "no plain copy remains"
+        );
         assert!(!directory.join("specimen.partial").exists());
         let (bytes, _) = super::super::sealed::read_sealed(&directory).unwrap();
         assert_eq!(bytes, b"abc");

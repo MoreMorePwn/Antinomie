@@ -309,10 +309,8 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     fn folder(tag: &str) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "ant-sealed-{tag}-{}",
-            crate::storage::unique_id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("ant-sealed-{tag}-{}", crate::storage::unique_id()));
         std::fs::create_dir_all(&path).unwrap();
         path
     }
@@ -326,11 +324,17 @@ mod tests {
         assert!(!dir.join(PLAIN).exists(), "no plain copy may remain");
         let archive = std::fs::read(dir.join(SEALED)).unwrap();
         assert!(
-            archive.windows(64).all(|w| !bytes.windows(64).any(|b| b == w)),
+            archive
+                .windows(64)
+                .all(|w| !bytes.windows(64).any(|b| b == w)),
             "the archive must not hold the plain bytes"
         );
         assert_eq!(
-            std::fs::metadata(dir.join(SEALED)).unwrap().permissions().mode() & 0o777,
+            std::fs::metadata(dir.join(SEALED))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
             0o600
         );
         assert!(!dir.join(PARTIAL).exists());

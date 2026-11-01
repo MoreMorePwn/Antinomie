@@ -40,6 +40,12 @@ pub(crate) const TOTAL_MAX_SIZE: u64 = 3 * LAYER_MAX_SIZE;
 pub(super) const BUDGET_SECONDS: u64 = 240;
 const RUN_SECONDS: u64 = 60;
 
+/// Whether the file shows UPX's own marks, however damaged its headers are.
+/// Identification and Unpacking share this, so they cannot disagree.
+pub(super) fn upx_marker(bytes: &[u8]) -> Option<&'static str> {
+    upx::marker(bytes)
+}
+
 /// The folder under a report's artifacts that holds the layers.
 pub(crate) const FOLDER: &str = "unpack";
 
@@ -94,6 +100,17 @@ fn unpack_with(
         let bytes = current.as_deref().unwrap_or(specimen);
         let at = layers.len() - 1;
         let Some(found) = upx::detect(bytes) else {
+            // Identification sees UPX's own text in the file, so the verdict
+            // here must not say "not packed": the structures are too damaged
+            // to locate, which is a partial result with the reason.
+            if layers.len() == 1
+                && let Some(sign) = upx::marker(bytes)
+            {
+                layers[at].packer = Some("UPX (headers too damaged to locate)".into());
+                problem = Some(format!(
+                    "{sign} is in the file but UPX's headers are altered beyond repair, so it cannot be unpacked here; unpack it by running it in the VM or with a dumped memory image"
+                ));
+            }
             break;
         };
         layers[at].packer = Some(found.label());

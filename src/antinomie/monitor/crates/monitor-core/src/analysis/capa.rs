@@ -77,7 +77,27 @@ fn mapping(value: &serde_json::Value) -> Option<String> {
     }
 }
 
-pub(super) fn capabilities(section: &mut AnalysisSection) {
+/// `base` (capa's own words) with what the file's headers say about why a
+/// tool that wants an ordinary, whole program gave up on it, and where the
+/// result will be if the file is packed.
+pub(super) fn explain_failure(base: String, specimen: &[u8]) -> String {
+    let facts = super::elf_facts::tool_obstacles(specimen);
+    if facts.is_empty() {
+        return base;
+    }
+    let packed = facts.iter().any(|fact| fact.contains("UPX"));
+    format!(
+        "{base}. Likely reason, from the file's own headers: {}{}",
+        facts.join("; "),
+        if packed {
+            ". An unpacked layer, when Unpacking recovers one, is analysed on its own with the same checks; its report holds capa's result"
+        } else {
+            ""
+        }
+    )
+}
+
+pub(super) fn capabilities(section: &mut AnalysisSection, specimen: &[u8]) {
     let Some(capa) = tools::find_tool(crate::analysis_tools::CAPA_SYSTEM, MANAGED) else {
         section.state = AnalysisSectionState::Unavailable;
         section.summary = format!(
@@ -163,7 +183,7 @@ pub(super) fn capabilities(section: &mut AnalysisSection) {
             );
         } else {
             section.state = AnalysisSectionState::Unavailable;
-            section.summary = run.failure_text("capa", timeout).unwrap_or_else(|| {
+            let base = run.failure_text("capa", timeout).unwrap_or_else(|| {
                 let lines = tools::error_lines(&[&run.stderr, &run.stdout], 4);
                 if lines.is_empty() {
                     "capa finished but printed no result that can be read; the file format may be one capa does not support".into()
@@ -174,6 +194,7 @@ pub(super) fn capabilities(section: &mut AnalysisSection) {
                     )
                 }
             });
+            section.summary = explain_failure(base, specimen);
         }
         return;
     };
@@ -256,6 +277,42 @@ pub(super) fn capabilities(section: &mut AnalysisSection) {
         );
     } else {
         section.state = AnalysisSectionState::Complete;
+    }
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+    use crate::analysis::elf_facts::fixtures::elf64;
+
+    #[test]
+    fn a_failure_names_what_the_headers_show() {
+        let whole = elf64(0x400, 0x400, 0x100, true);
+        // Not truncated, not packed: only what is true of its headers.
+        let plain = explain_failure("capa exited with code 18".into(), &whole);
+        assert!(plain.contains("no section header table"), "{plain}");
+        assert!(
+            !plain.contains("truncated") && !plain.contains("UPX"),
+            "{plain}"
+        );
+        assert_eq!(explain_failure("x".into(), b"not an elf"), "x");
+        let cut = elf64(0x300, 0x400, 0x350, false);
+        let text = explain_failure("capa exited with code 18".into(), &cut);
+        assert!(
+            text.starts_with("capa exited with code 18. Likely reason"),
+            "{text}"
+        );
+        assert!(
+            text.contains("truncated") && text.contains("no section header table"),
+            "{text}"
+        );
+        let mut packed = elf64(0x400, 0x400, 0x100, false);
+        packed[0x300..0x304].copy_from_slice(b"UPX!");
+        let text = explain_failure("capa exited with code 18".into(), &packed);
+        assert!(
+            text.contains("probably packed") && text.contains("unpacked layer"),
+            "{text}"
+        );
     }
 }
 
