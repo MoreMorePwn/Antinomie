@@ -22,6 +22,14 @@ fn input<'a>(archive: &'a Path, finished: bool) -> TriageInput<'a> {
     }
 }
 
+/// `input` for a run whose VM is still up.
+fn input_open<'a>(archive: &'a Path) -> TriageInput<'a> {
+    TriageInput {
+        current_boot: true,
+        ..input(archive, true)
+    }
+}
+
 fn spool_with_calls(range: std::ops::Range<u64>) -> (PacketSpool, std::fs::File) {
     let spool = PacketSpool::new().unwrap();
     let mut raw = std::fs::File::create(spool.directory.join("telemetry.raw")).unwrap();
@@ -201,4 +209,70 @@ fn with_the_toast_on_a_hidden_live_run_is_read_every_fifteen_seconds_and_with_it
     let reads = hidden_reads(true);
     // Forty seconds: one read at once, then one each 15 s.
     assert!((2..=3).contains(&reads), "{reads} reads in 40 s");
+}
+
+#[test]
+fn a_finished_run_the_vm_still_holds_is_read_again_once_the_recording_is_saved() {
+    let (spool, _raw) = spool_with_calls(0..50);
+    let manifest = |saved: bool| {
+        let mut manifest = serde_json::json!({
+            "run": {"id": "done", "vm_id": "vm", "boot_id": "boot",
+                    "execution": {"flags": 11}, "recording_error": null},
+            "started_ms": 1, "ended_ms": 2, "persistence_error": null,
+        });
+        if saved {
+            manifest["terminal_complete"] = true.into();
+            manifest["health"] = serde_json::json!(
+                {"dropped": 0, "ui_dropped": 0, "storage_dropped_packets": 0}
+            );
+        }
+        std::fs::write(spool.directory.join("manifest.json"), manifest.to_string()).unwrap();
+    };
+    let reasons = |view: &TriageView| view.scan.as_ref().unwrap().partial_reasons.clone();
+    // The program ended; the VM has not written the recording's totals yet.
+    manifest(false);
+    let ctx = egui::Context::default();
+    let mut view = TriageView::default();
+    view.refresh_seconds = 1;
+    let deadline = Instant::now() + patience();
+    loop {
+        view.tick(&ctx, input_open(&spool.directory));
+        if view.scan.is_some() && view.scan_rx.is_none() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "index never arrived");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        reasons(&view)
+            .iter()
+            .any(|reason| reason == archive_scan::STILL_SAVING),
+        "{:?}",
+        reasons(&view)
+    );
+    assert!(!reasons(&view)
+        .iter()
+        .any(|reason| reason.contains("marked incomplete")));
+    // The totals are saved while the VM stays up: the index is read again by
+    // itself and no longer calls the recording unfinished.
+    manifest(true);
+    for _ in 0..4 {
+        view.clock.advance(Duration::from_secs(1));
+        let deadline = Instant::now() + patience();
+        loop {
+            view.tick(&ctx, input_open(&spool.directory));
+            if view.scan_rx.is_none() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "index never arrived");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    assert!(
+        !reasons(&view)
+            .iter()
+            .any(|reason| reason == archive_scan::STILL_SAVING || reason.contains("incomplete")),
+        "{:?}",
+        reasons(&view)
+    );
 }

@@ -133,6 +133,7 @@ pub(super) fn source_key(
         identity,
         request.root_cookie,
         request.run_finished,
+        request.recording_open,
         request.started_ms,
         request.ended_ms,
         open,

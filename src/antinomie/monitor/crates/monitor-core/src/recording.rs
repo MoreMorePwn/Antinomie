@@ -1006,10 +1006,15 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
     });
     Ok(runs)
 }
-/// A saved run has no job queue behind it: an analysis still acquiring,
-/// queued or running was cut off with the session that owned it.
+/// A saved run has no job queue behind it unless this app session's own queue
+/// still holds its analysis (the program ended, the analysis did not): an
+/// analysis still acquiring, queued or running that no queue of this process
+/// holds was cut off with the session that owned it.
 fn settle_stale_analysis(run: &mut RunSummary) {
     if let Some(report) = run.analysis.as_mut() {
+        if crate::analysis::jobs::owned_here(&report.id) {
+            return;
+        }
         crate::analysis::jobs::abandon(
             report,
             "the analysis was interrupted before it finished: the app or the VM ended first",
@@ -1049,6 +1054,18 @@ fn reopen_analysis_sidecar(root: &Path, run: &mut RunSummary) -> Result<(), Reco
         return Err(RecordingError::Limit(
             "analysis sidecar identity does not match run",
         ));
+    }
+    // The sidecar is written when a job is queued and when it ends; while this
+    // session's queue still holds the job, the run's own copy is the newer one.
+    if crate::analysis::jobs::owned_here(&report.id)
+        && matches!(
+            report.state,
+            crate::analysis::AnalysisState::Acquiring
+                | crate::analysis::AnalysisState::Queued
+                | crate::analysis::AnalysisState::Running
+        )
+    {
+        return Ok(());
     }
     run.analysis = Some(report);
     Ok(())
@@ -1171,6 +1188,66 @@ mod tests {
             facts_for_health(health(0, 0), serde_json::json!("disk full")),
             Some(false)
         );
+    }
+    #[test]
+    fn a_run_whose_analysis_this_sessions_queue_still_holds_loads_unsettled() {
+        use crate::analysis::{AnalysisSelection, AnalysisState};
+        let root = std::env::temp_dir().join(format!("ant-live-analysis-{}", storage::unique_id()));
+        let selection = AnalysisSelection {
+            enabled: true,
+            checks: vec![crate::analysis::AnalysisKind::Metadata],
+            time_limit_minutes: 0,
+            limits: Default::default(),
+        };
+        let directory = root.join("runs/run");
+        fs::create_dir_all(directory.join("analysis")).unwrap();
+        let mut report = crate::analysis::jobs::new_report("/tmp/sample", &selection);
+        report.state = AnalysisState::Running;
+        let run = serde_json::json!({
+            "id": "run", "vm_id": "vm", "boot_id": "boot", "session_id": 0,
+            "root_task_cookie": 0, "pid": 0, "request": ExecRequest::default(),
+            "directory": directory, "terminal_eof": false, "state": "Finished",
+            "notes": [], "recording_error": null, "execution": null,
+            "analysis": report,
+        });
+        fs::write(directory.join("run.json"), run.to_string()).unwrap();
+        // The specimen copy a running analysis is reading.
+        fs::write(directory.join("analysis/specimen"), b"benign bytes").unwrap();
+        // The sidecar still says queued: it is only rewritten when the job ends.
+        let mut queued = report.clone();
+        queued.state = AnalysisState::Queued;
+        fs::write(
+            directory.join("analysis/report.json"),
+            serde_json::to_vec(&queued).unwrap(),
+        )
+        .unwrap();
+        let root = fs::canonicalize(&root).unwrap();
+        let owner = u64::MAX - 7;
+        crate::analysis::jobs::live::test_claim(owner, &[report.id.as_str()]);
+        let load = || {
+            saved_run(&root, &root.join("runs/run"), "vm")
+                .unwrap()
+                .unwrap()
+        };
+        // A queue of this session holds it: not interrupted, nothing touched.
+        let held = load().analysis.unwrap();
+        assert_eq!(held.state, AnalysisState::Running);
+        assert!(held.reason.is_none());
+        assert!(directory.join("analysis/specimen").exists());
+        let listing = root.join("vm/runs/run");
+        fs::create_dir_all(&listing).unwrap();
+        fs::copy(directory.join("run.json"), listing.join("run.json")).unwrap();
+        let listed = list_runs(&root).unwrap();
+        assert_eq!(
+            listed[0].analysis.as_ref().unwrap().state,
+            AnalysisState::Running
+        );
+        // Nothing holds it: the owner ended, so it is settled.
+        crate::analysis::jobs::live::test_release(owner);
+        let settled = load().analysis.unwrap();
+        assert_eq!(settled.state, AnalysisState::Unavailable);
+        assert!(settled.reason.unwrap().contains("interrupted"));
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn a_saved_run_whose_analysis_never_finished_loads_as_unavailable() {

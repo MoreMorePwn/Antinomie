@@ -171,6 +171,28 @@ mod tests {
     }
 
     #[test]
+    fn a_queue_publishes_the_analyses_it_holds_until_it_ends() {
+        let root = std::env::temp_dir().join(format!("ant-owned-{}", storage::unique_id()));
+        let mut jobs = Jobs::default();
+        let held = submit(&mut jobs, &root, 1, 3);
+        // Owned from the moment it is queued, before any tick.
+        assert!(owned_here(&held.id));
+        assert!(!owned_here("another-session-report"));
+        // Cancelled and reported: still owned through the tick that hands the
+        // final report on, then released with the next.
+        assert_eq!(jobs.cancel(&held.id), Ok(()));
+        let _ = jobs.updates();
+        assert!(owned_here(&held.id));
+        let _ = jobs.updates();
+        assert!(!owned_here(&held.id));
+        let second = submit(&mut jobs, &root, 2, 3);
+        assert!(owned_here(&second.id));
+        drop(jobs);
+        assert!(!owned_here(&second.id));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn a_larger_specimen_gets_a_longer_transfer_and_a_faster_loop() {
         assert_eq!(transfer_deadline(0), Duration::from_secs(120));
         assert_eq!(transfer_deadline(3), Duration::from_secs(121));

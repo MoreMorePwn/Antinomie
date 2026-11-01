@@ -50,6 +50,7 @@ impl Jobs {
     /// Continue the analyses of a finished session beside this queue's own.
     pub(crate) fn adopt(&mut self, carried: Jobs) {
         self.carried.push(carried);
+        self.publish();
     }
     pub(super) fn tick_carried(&mut self) {
         for carried in &mut self.carried {

@@ -31,12 +31,14 @@ mod carry;
 mod host_copy;
 mod host_file;
 mod layers;
+pub(crate) mod live;
 mod sandbox_account;
 mod sandbox_run;
 mod specimen_publication;
 mod supplement;
 mod worker_exe;
 pub(super) use adopt::adopt_listings;
+pub use live::owned_here;
 pub(crate) use sandbox_account::host_user_name;
 use sandbox_account::sandbox_passwd;
 pub(crate) use sandbox_run::{Mounts, run_sandboxed, run_sandboxed_sized, run_sandboxed_with};
@@ -96,6 +98,8 @@ pub(crate) struct Jobs {
     /// Queues of finished VM sessions whose analyses go on: host-side work
     /// does not depend on the VM that produced the specimen.
     carried: Vec<Jobs>,
+    /// This queue's entry in the registry of analyses the process owns.
+    owner: live::Owner,
 }
 pub(crate) enum Action {
     Read {
@@ -322,6 +326,7 @@ impl Jobs {
             job.report_len = job.disk_len;
         }
         self.updates.push((run_id, report.clone()));
+        self.publish();
         report
     }
     fn finish(&mut self, mut job: Job) {
@@ -555,6 +560,7 @@ impl Jobs {
         for carried in &mut self.carried {
             updates.extend(carried.updates());
         }
+        self.rotate_published();
         updates
     }
     pub fn cancel(&mut self, id: &str) -> Result<(), String> {
@@ -1315,6 +1321,7 @@ mod tests {
                 available: 0,
                 detached: Vec::new(),
                 carried: Vec::new(),
+                owner: Default::default(),
             };
             let launcher = jobs.active.as_ref().unwrap().child.as_ref().unwrap().id();
             let children = PathBuf::from(format!("/proc/{launcher}/task/{launcher}/children"));

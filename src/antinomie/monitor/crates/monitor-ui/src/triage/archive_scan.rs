@@ -695,6 +695,7 @@ pub(super) fn scan_archive_query(
         issues: issues.len(),
         facts: facts.as_ref(),
         run_finished: request.run_finished,
+        recording_open: request.recording_open,
         capture_open: pcap_open,
         network_warning: network.network_warning.as_deref(),
     });
@@ -771,6 +772,10 @@ pub(super) fn scan_archive_query(
     })
 }
 
+/// Said instead of a cause while the VM still holds the recording open.
+pub(super) const STILL_SAVING: &str =
+    "the recording is still being saved (its totals are written when the VM stops)";
+
 /// What the event index was built from, for saying why it may be partial.
 struct Source<'a> {
     scan_complete: bool,
@@ -778,6 +783,8 @@ struct Source<'a> {
     issues: usize,
     facts: Option<&'a antinomie_monitor_core::recording::RunFilterFacts>,
     run_finished: bool,
+    /// The VM boot that recorded the run is still up.
+    recording_open: bool,
     capture_open: bool,
     network_warning: Option<&'a str>,
 }
@@ -803,6 +810,16 @@ fn incomplete_reasons(source: &Source<'_>) -> Vec<String> {
     }
     match source.facts {
         None => reasons.push("the run's saved details could not be read".to_owned()),
+        // The recording's totals (what was lost, whether saving stopped) are
+        // written when the VM stops. Until then nothing says it is incomplete.
+        Some(facts)
+            if facts.complete != Some(true)
+                && source.recording_open
+                && facts.transport_loss.is_none()
+                && facts.storage_loss.is_none() =>
+        {
+            reasons.push(STILL_SAVING.to_owned());
+        }
         Some(facts) if facts.complete != Some(true) => {
             if let Some(lost) = facts.transport_loss.filter(|lost| *lost > 0) {
                 reasons.push(format!(
@@ -896,6 +913,7 @@ mod reason_tests {
             issues: 0,
             facts: None,
             run_finished: true,
+            recording_open: false,
             capture_open: false,
             network_warning: None,
         }
@@ -945,5 +963,36 @@ mod reason_tests {
             ..source()
         });
         assert!(reasons[0].contains("retained prefix"), "{reasons:?}");
+    }
+
+    #[test]
+    fn a_recording_the_vm_still_holds_is_being_saved_not_incomplete() {
+        // The manifest has no totals yet: no health, no completion flag.
+        let unsaved = antinomie_monitor_core::recording::RunFilterFacts::default();
+        let reasons = incomplete_reasons(&Source {
+            facts: Some(&unsaved),
+            recording_open: true,
+            ..source()
+        });
+        assert_eq!(reasons, [STILL_SAVING]);
+        // The same manifest of a run whose VM is gone says what it always did.
+        let reasons = incomplete_reasons(&Source {
+            facts: Some(&unsaved),
+            ..source()
+        });
+        assert!(reasons[0].contains("retained prefix"), "{reasons:?}");
+        // Saved totals that show a loss are still reported as a loss.
+        let lossy = antinomie_monitor_core::recording::RunFilterFacts {
+            complete: Some(false),
+            transport_loss: Some(3),
+            storage_loss: Some(0),
+            ..Default::default()
+        };
+        let reasons = incomplete_reasons(&Source {
+            facts: Some(&lossy),
+            recording_open: true,
+            ..source()
+        });
+        assert!(reasons[0].contains("3 dropped"), "{reasons:?}");
     }
 }

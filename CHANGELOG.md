@@ -21,6 +21,19 @@ it runs.
   reminder in the Samples window is shown once per session instead of every time
   the window opens. A clicked register or offset that leads nowhere says so in
   the status line only.
+- **Fixed: a finished run no longer says its analysis was interrupted while it is
+  still running.** When a program ended, the Run History and the Samples page
+  read the run back from disk and settled any analysis not yet finished as
+  "interrupted before it finished: the app or the VM ended first", although this
+  session's job queue was still working on it (capa and FLOSS can take minutes
+  after a short program). The label was only shown, never saved, and the
+  results arrived afterwards, but it was wrong. A run is now settled that way
+  only when no job queue of this app session holds its analysis, which is the
+  case after a restart or a VM that ended first. Triage likewise no longer
+  calls a recording "marked incomplete" (and Sigma "Partial") while the VM is
+  still saving it: the recording's totals are written when the VM stops, so the
+  index says "still being saved" and reads the run again by itself once they are
+  there.
 
 - **Fixed: the Tor route's own tor starts again.** The generated torrc wrote
   `Log notice file "<path>"`; tor only unquotes a value quoted as a whole, so

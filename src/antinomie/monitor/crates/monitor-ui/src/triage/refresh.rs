@@ -42,8 +42,9 @@ pub(super) fn source_stamp(
         )
     };
     let mut stamp = format!(
-        "files-v{FILE_INDEX_VERSION}|{pcap_open}|{}|{:?}|{}|{:?}|{}/{}|rev={:?}",
+        "files-v{FILE_INDEX_VERSION}|{pcap_open}|{}|{}|{:?}|{}|{:?}|{}/{}|rev={:?}",
         request.run_finished,
+        request.recording_open,
         request.started_ms,
         request.root_cookie,
         request
@@ -119,6 +120,16 @@ impl TriageView {
             .is_some_and(|pass| ctx.cumulative_pass_nr().saturating_sub(pass) <= 2)
     }
 
+    /// The index on screen was built while the VM still held the recording
+    /// open and says only that it is still being saved.
+    fn scan_waits_for_saving(&self) -> bool {
+        self.scan.as_ref().is_some_and(|scan| {
+            scan.partial_reasons
+                .iter()
+                .any(|reason| reason == archive_scan::STILL_SAVING)
+        })
+    }
+
     /// Decide whether the index of the selected run is read again now.
     ///
     /// | Run | Pane | Re-read |
@@ -133,10 +144,32 @@ impl TriageView {
     pub(super) fn schedule_refresh(&mut self, ctx: &egui::Context, run_finished: bool) {
         let idle = self.scan_rx.is_none() && !self.refresh_requested && !self.refresh_queued;
         if run_finished {
-            self.next_refresh = None;
             if idle && !self.scan_began_finished && self.scan_key.is_some() {
+                self.next_refresh = None;
                 self.refresh_requested = true;
                 self.timer_refresh = true;
+                return;
+            }
+            // The program ended but the VM has not saved the recording's
+            // totals yet: the index said so instead of calling it incomplete,
+            // and reads it again once they are there. A timer refresh costs
+            // nothing while the recording is as the index saw it.
+            if self.scan_waits_for_saving() {
+                ctx.request_repaint_after(Duration::from_secs(self.refresh_seconds));
+                let now = self.clock.now();
+                match self.next_refresh {
+                    None => {
+                        self.next_refresh = Some(now + Duration::from_secs(self.refresh_seconds));
+                    }
+                    Some(due) if now >= due && idle => {
+                        self.next_refresh = None;
+                        self.refresh_requested = true;
+                        self.timer_refresh = true;
+                    }
+                    Some(_) => {}
+                }
+            } else {
+                self.next_refresh = None;
             }
             return;
         }

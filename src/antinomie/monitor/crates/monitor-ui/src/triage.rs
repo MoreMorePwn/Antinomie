@@ -483,6 +483,7 @@ impl TriageView {
         self.scan_request.root_cookie = input.root_cookie;
         self.scan_request.packed = input.analysis.and_then(rules::PackedImage::of);
         self.scan_request.run_finished = input.run_finished;
+        self.scan_request.recording_open = input.current_boot;
         self.scan_request.identity = input
             .vm_id
             .zip(input.boot_id)
@@ -1112,6 +1113,9 @@ struct ScanRequest {
     packed: Option<rules::PackedImage>,
     address_lookup: AddressLookup,
     run_finished: bool,
+    /// The VM boot that recorded the run is still up, so the recording's
+    /// totals (and with them whether it is whole) are not saved yet.
+    recording_open: bool,
     /// Stamp of the index on screen; a recording with the same stamp is not read again.
     unchanged_since: Option<String>,
     identity: Option<(String, String, String)>,
