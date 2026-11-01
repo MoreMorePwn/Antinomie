@@ -36,6 +36,10 @@ x86 programs by their own table.
   notices in `THIRD-PARTY-NOTICES.md`); hardware breakpoints, write and read
   watchpoints (read watches are offered where the guest says it has them, so
   x86-64 still refuses them); manual cores carry the guest's machine.
+- **Debugger on x86-64.** A child the program forks while a breakpoint is set,
+  and which the debugger does not follow, now runs its own code: the guest puts
+  the program's bytes back in its copy before it runs (before, it met the
+  INT3 and took a SIGTRAP).
 - **arm64 device profiles.** A realistic preset presents an arm64 machine of its
   kind (Ampere Altra servers and workstation, an AWS Graviton2 instance) with
   its SMBIOS tables, ACPI OEM IDs, CPU, network card and disk, or a Raspberry
@@ -86,6 +90,9 @@ x86 programs by their own table.
   as AArch32 on arm64), a `socketcall` as the socket call it makes; on x86-64
   only `kernel/antinomie/recorder.o` and `control.o` (ARCH_INFO's ABI mask)
   change.
+- Patch 43: the x86-64 debug engine puts the program's own bytes back in a
+  forked child it does not follow, as arm64's does; only
+  `kernel/antinomie/debug.o` changes.
 
 ## 0.8.3 — 2026-MM-DD
 

@@ -932,6 +932,20 @@ machinery above now serves ia32 too; contract revision 20 is unchanged
   their pointers by address only; the debugger does not attach to an ia32
   program.
 
+### x86-64 debugger: forked children (0.9.0)
+
+Board card "x86 debugger: a forked child inherits planted INT3 breakpoints".
+A child the program forks with its own memory and that the debugger does not
+follow inherited the INT3 bytes of inserted breakpoints: it took a SIGTRAP at
+one (killed, or, under the SIGTRAP handler anti-debug code installs, resumed
+one byte into the replaced instruction). Patch 43 defines
+`ANT_DBG_FORK_REPAIR` for `CONFIG_X86_64` too, so `ant_dbg_fork()` puts the
+program's own bytes back in such a child before it runs, as patch 39 does on
+arm64 (threads, vforks and followed children are as before; only
+`kernel/antinomie/debug.o` changes). debug-p2's `forkbp` now fails when a
+child met the parent's breakpoint (the fixture's child exits 3 when its
+SIGTRAP handler ran).
+
 ### arm64 debugger (0.9.0)
 
 Multi-arch plan cards MA-11 and MA-14: the debug engine, the RSP server, the
