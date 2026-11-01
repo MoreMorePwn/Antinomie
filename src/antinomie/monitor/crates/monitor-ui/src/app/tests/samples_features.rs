@@ -450,6 +450,33 @@ pub(super) fn qa_data(data: &std::path::Path, sha: &str, scene: &str, first: &Ru
                 ],
             )
             .unwrap();
+        library
+            .add_note(
+                sha,
+                "Surfaces of the VM: the beacon frame, its capture, both dumps, the core \
+                 and the string that names the C2 host.",
+                &[
+                    NoteRef::new(
+                        RefKind::Packet,
+                        "vm/cap1/120",
+                        "Packet 120 · TCP 10.0.0.2 to 198.51.100.7",
+                    ),
+                    NoteRef::new(RefKind::Capture, "vm/cap1", "Capture cap1"),
+                    NoteRef::new(
+                        RefKind::MemoryDump,
+                        "vm/mem1",
+                        "Memory dump · 2026-11-01 07:10",
+                    ),
+                    NoteRef::new(RefKind::DiskDump, "vm/dsk1", "Disk dump · 2026-11-01 07:12"),
+                    NoteRef::new(RefKind::ProcessCore, "vm/core1", "Core PID 4242 · core1"),
+                    NoteRef::new(
+                        RefKind::StaticRow,
+                        "rep1/strings/id:42",
+                        "Static · Strings · http://198.51.100.7/c2",
+                    ),
+                ],
+            )
+            .unwrap();
     }
 }
 
