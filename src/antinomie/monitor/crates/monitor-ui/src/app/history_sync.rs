@@ -134,6 +134,7 @@ impl MonitorApp {
             .collect();
         sync.carried = kept.iter().map(|run| run.id.clone()).collect();
         listed.extend(kept);
+        super::settle_value_limits(&mut listed);
         self.history = listed;
     }
 

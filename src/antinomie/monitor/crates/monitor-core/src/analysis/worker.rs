@@ -266,8 +266,8 @@ fn push_row(
         *retained_len = value.len() as u64;
     }
     if cut {
+        // Only the start of the value is kept: a note, not a Partial check.
         VALUES_CUT.set(VALUES_CUT.get() + 1);
-        section.state = AnalysisSectionState::Partial;
     }
     let listed = LISTING.with(|sink| {
         let mut sink = sink.borrow_mut();
@@ -352,7 +352,7 @@ fn note_row_limits(section: &mut AnalysisSection) {
             AnalysisLimitKind::Text,
             LimitSetting::Value,
             format!(
-                "{} {} longer than {} bytes; only the start is kept.",
+                "{} {} longer than {} bytes; only the start is kept. The full bytes are in the specimen.",
                 super::detection::group_digits(cut),
                 if cut == 1 { "value was" } else { "values were" },
                 super::detection::group_digits(super::limits::value_bytes() as u64)
@@ -1261,7 +1261,9 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(strings.state, AnalysisSectionState::Partial);
+        // A string kept only at its start is a note, not a Partial check.
+        assert_eq!(strings.state, AnalysisSectionState::Complete);
+        assert!(strings.only_value_limits(), "{:?}", strings.limits);
         let mut entropy = section(AnalysisKind::Entropy);
         let specimen: Vec<_> = (0..=255u8).cycle().take(65536).collect();
         analyze_section(&mut entropy, &specimen, &listings());
@@ -1387,7 +1389,7 @@ mod tests {
         let mut result = section(AnalysisKind::Strings);
         result.state = AnalysisSectionState::Complete;
         entry(&mut result, "long", "a\u{1f600}".repeat(2000), Some(3));
-        assert_eq!(result.state, AnalysisSectionState::Partial);
+        assert_eq!(result.state, AnalysisSectionState::Complete);
         assert!(result.entries[0].value.len() <= 4096);
         for _ in 0..3000 {
             entry(&mut result, "row", "text", None);
@@ -1530,7 +1532,7 @@ mod tests {
             None,
         );
         note_row_limits(&mut result);
-        assert_eq!(result.state, AnalysisSectionState::Partial);
+        assert_ne!(result.state, AnalysisSectionState::Partial);
         assert_eq!(result.limits[0].kind, AnalysisLimitKind::Text);
         assert!(
             result.limits[0]

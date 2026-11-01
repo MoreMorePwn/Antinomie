@@ -98,14 +98,15 @@ pub(super) fn strings(section: &mut AnalysisSection, specimen: &[u8], listings: 
         })
         .count();
     section.state = AnalysisSectionState::Complete;
+    // Keeping only the start of a long string is how much of it the report
+    // holds, not input the check missed: Complete, with the note.
     if cut > 0 {
-        section.state = AnalysisSectionState::Partial;
         super::limits::add_for(
             section,
             AnalysisLimitKind::Text,
             LimitSetting::Value,
             format!(
-                "{} {} longer than {} bytes; only the start of each is kept.",
+                "{} {} longer than {} bytes; only the start of each is kept. The full bytes are in the specimen.",
                 super::detection::group_digits(cut as u64),
                 if cut == 1 { "string is" } else { "strings are" },
                 super::detection::group_digits(super::limits::value_bytes() as u64)

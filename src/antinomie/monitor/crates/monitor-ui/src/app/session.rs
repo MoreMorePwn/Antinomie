@@ -255,6 +255,11 @@ impl MonitorApp {
             }
         }
         self.follow_runs(&snapshot);
+        let mut snapshot = snapshot;
+        super::settle_value_limits(&mut snapshot.runs);
+        for report in &mut snapshot.analysis_reports {
+            report.settle_value_limits();
+        }
         self.snapshot = snapshot;
         self.getting_started.snapshot_seen = true;
     }
@@ -391,7 +396,8 @@ impl MonitorApp {
                 Notification::RunStarted(run) => {
                     self.accept_run_started(run, &mut activity);
                 }
-                Notification::AnalysisUpdated { run_id, report } => {
+                Notification::AnalysisUpdated { run_id, mut report } => {
+                    report.settle_value_limits();
                     self.activity_notices_due = true;
                     if let Some(current) = self.analysis_windows.get_mut(&report.id) {
                         current.clone_from(&report);

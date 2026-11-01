@@ -459,6 +459,7 @@ impl MonitorApp {
                             .filter(|run| run.id.starts_with("archive:"))
                             .cloned(),
                     );
+                    super::settle_value_limits(&mut runs);
                     self.history = runs;
                 }
                 Err(error) => {

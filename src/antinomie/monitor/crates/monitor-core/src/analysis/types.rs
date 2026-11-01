@@ -582,7 +582,42 @@ impl AnalysisReport {
     }
 }
 
+impl AnalysisReport {
+    /// Reports made before 0.8.0 called a category Partial when the only
+    /// bound it met was the length of a kept value ("1 string is longer than
+    /// 4,096 bytes; only the start of each is kept"). That is how much of a
+    /// value the report keeps, not input the check did not cover: such a
+    /// category, and a report with nothing else short, is Complete, and the
+    /// limit stays as a note.
+    pub fn settle_value_limits(&mut self) {
+        for section in &mut self.sections {
+            if section.state == AnalysisSectionState::Partial && section.only_value_limits() {
+                section.state = AnalysisSectionState::Complete;
+            }
+        }
+        if self.state == AnalysisState::Partial
+            && self.reason.is_none()
+            && self
+                .sections
+                .iter()
+                .all(|section| section.state == AnalysisSectionState::Complete)
+        {
+            self.state = AnalysisState::Complete;
+        }
+    }
+}
+
 impl AnalysisSection {
+    /// Every bound this category met only shortened a kept value or list
+    /// (none left input unread or a result out).
+    pub fn only_value_limits(&self) -> bool {
+        !self.limits.is_empty()
+            && self
+                .limits
+                .iter()
+                .all(|limit| limit.kind == AnalysisLimitKind::Text)
+    }
+
     /// Why a category is not complete, in plain words, to stand next to its state
     /// badge: the first bound it met, or for one that could not run the reason it
     /// gave. The flag says the sentence is the first limit note, which the notes
@@ -758,5 +793,87 @@ mod selection_tests {
         assert!(chosen.validate().is_err());
         chosen.time_limit_minutes = TIME_LIMIT_MAX_MINUTES;
         assert!(chosen.validate().is_ok());
+    }
+}
+
+#[cfg(test)]
+mod value_limit_tests {
+    use super::*;
+
+    fn limit(kind: AnalysisLimitKind) -> AnalysisLimit {
+        AnalysisLimit {
+            kind,
+            text: "x".into(),
+            seconds: None,
+            setting: None,
+        }
+    }
+
+    fn section(state: AnalysisSectionState, limits: Vec<AnalysisLimit>) -> AnalysisSection {
+        AnalysisSection {
+            kind: AnalysisKind::Strings,
+            state,
+            summary: String::new(),
+            entries: Vec::new(),
+            tools: Vec::new(),
+            listing: None,
+            disassembly: None,
+            limits,
+        }
+    }
+
+    #[test]
+    fn only_a_shortened_value_settles_a_partial_category_and_report_to_complete() {
+        let mut report = crate::analysis::jobs::new_report(
+            "/tmp/sample",
+            &AnalysisSelection {
+                enabled: true,
+                checks: vec![AnalysisKind::Strings],
+                time_limit_minutes: 0,
+                limits: Default::default(),
+            },
+        );
+        report.state = AnalysisState::Partial;
+        report.sections = vec![section(
+            AnalysisSectionState::Partial,
+            vec![limit(AnalysisLimitKind::Text)],
+        )];
+        report.settle_value_limits();
+        assert_eq!(report.sections[0].state, AnalysisSectionState::Complete);
+        assert_eq!(report.state, AnalysisState::Complete);
+        // The note stays.
+        assert_eq!(report.sections[0].limits.len(), 1);
+        // A time, size, row or input bound keeps it Partial, and so the report.
+        for kind in [
+            AnalysisLimitKind::Time,
+            AnalysisLimitKind::Size,
+            AnalysisLimitKind::Rows,
+            AnalysisLimitKind::Input,
+        ] {
+            report.state = AnalysisState::Partial;
+            report.sections = vec![section(
+                AnalysisSectionState::Partial,
+                vec![limit(AnalysisLimitKind::Text), limit(kind)],
+            )];
+            report.settle_value_limits();
+            assert_eq!(
+                report.sections[0].state,
+                AnalysisSectionState::Partial,
+                "{kind:?}"
+            );
+            assert_eq!(report.state, AnalysisState::Partial, "{kind:?}");
+        }
+        // A Partial with no recorded bound, or a report cut for its own size,
+        // is left alone.
+        report.sections = vec![section(AnalysisSectionState::Partial, Vec::new())];
+        report.settle_value_limits();
+        assert_eq!(report.sections[0].state, AnalysisSectionState::Partial);
+        report.sections = vec![section(
+            AnalysisSectionState::Partial,
+            vec![limit(AnalysisLimitKind::Text)],
+        )];
+        report.reason = Some("normalized report truncated".into());
+        report.settle_value_limits();
+        assert_eq!(report.state, AnalysisState::Partial);
     }
 }

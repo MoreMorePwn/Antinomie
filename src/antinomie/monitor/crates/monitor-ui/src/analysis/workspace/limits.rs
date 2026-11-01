@@ -43,6 +43,12 @@ pub(super) fn notes(
     );
     for (at, limit) in section.limits.iter().enumerate() {
         // The first note's sentence stands at the badge; its buttons stay here.
+        if limit.kind == AnalysisLimitKind::Text {
+            // How much of a long value the report keeps is information, not
+            // a limit of the check: a muted Info note, never a warning.
+            crate::activity::info(ui, value_note(&limit.text));
+            continue;
+        }
         if !(first_shown && at == 0) {
             crate::activity::warning(ui, &limit.text);
         }
@@ -89,6 +95,16 @@ pub(super) fn notes(
         });
     }
     action
+}
+
+/// The note of a shortened value, saying where the whole of it is (reports
+/// from before 0.8.0 did not).
+pub(in crate::analysis) fn value_note(text: &str) -> String {
+    if text.contains("specimen") {
+        text.to_owned()
+    } else {
+        format!("{text} The full bytes are in the specimen.")
+    }
 }
 
 #[cfg(test)]

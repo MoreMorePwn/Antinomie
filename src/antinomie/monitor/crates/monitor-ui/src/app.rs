@@ -1124,3 +1124,14 @@ struct ToolButton<'a> {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+/// Reports saved before 0.8.0 call a check Partial when only the length of a
+/// kept value was bounded; every run the app lists reads as the check was
+/// (see `AnalysisReport::settle_value_limits`).
+pub(crate) fn settle_value_limits(runs: &mut [antinomie_monitor_core::RunSummary]) {
+    for run in runs {
+        if let Some(report) = run.analysis.as_mut() {
+            report.settle_value_limits();
+        }
+    }
+}

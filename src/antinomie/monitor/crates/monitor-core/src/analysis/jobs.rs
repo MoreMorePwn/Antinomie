@@ -1177,6 +1177,9 @@ pub(super) fn read_report(
     {
         return Err("worker report violates normalized identity/bounds contract".into());
     }
+    if last {
+        report.settle_value_limits();
+    }
     Ok(report)
 }
 
@@ -1193,8 +1196,9 @@ pub fn open_report(directory: &Path) -> Result<AnalysisReport, String> {
     if encoded.len() > REPORT_MAX_SIZE {
         return Err("archived analysis report exceeds bound".into());
     }
-    let report: AnalysisReport = serde_json::from_slice(&encoded).map_err(|e| e.to_string())?;
+    let mut report: AnalysisReport = serde_json::from_slice(&encoded).map_err(|e| e.to_string())?;
     super::validation::validate_report(&report)?;
+    report.settle_value_limits();
     Ok(report)
 }
 #[cfg(test)]
