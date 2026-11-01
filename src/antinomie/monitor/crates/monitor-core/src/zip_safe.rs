@@ -92,7 +92,7 @@ pub(crate) mod tests {
         // Rename the second entry in both of its headers.
         patch_name(&mut bytes, "b.txt", "a.txt", 0);
         patch_name(&mut bytes, "b.txt", "a.txt", 0);
-        let error = open(Cursor::new(bytes)).err().expect("duplicate refused");
+        let error = open(Cursor::new(bytes)).expect_err("duplicate refused");
         assert!(!error.is_empty(), "{error}");
     }
 
