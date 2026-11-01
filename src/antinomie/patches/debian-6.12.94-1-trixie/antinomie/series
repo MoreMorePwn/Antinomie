@@ -52,5 +52,8 @@
 # Static analysis in 0.8.0: specimens up to 128 MiB (contract revision 19)
 0025-antinomie-raise-the-specimen-limit-to-128-mib.patch
 
+# Transport throughput in 0.8.0 (no contract change): a full ring's turn handed straight to the next sender
+0026-antinomie-hand-a-full-ring-s-turn-straight-to-the-next-waiting-sender.patch
+
 # Multi-architecture contract (revision 20): the guest's architecture and a little-endian transport
 0030-antinomie-report-the-guest-s-architecture-and-carry-the-transport-little-endian-on-every-guest.patch

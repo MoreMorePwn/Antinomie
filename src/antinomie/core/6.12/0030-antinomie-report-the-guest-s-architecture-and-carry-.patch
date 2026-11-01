@@ -258,10 +258,10 @@ index d67b25d96..51439009c 100644
   * 1..64. Non-atomic live pagination of userspace process leaders, ascending
   * PID. Reply: u64 stream_id at 0, u32 count at 8, u32 next_pid at 12
 diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
-index c86907c4b..ee2c3f8d6 100644
+index 281b2c86b..fc1e94dd1 100644
 --- a/kernel/antinomie/guest.c
 +++ b/kernel/antinomie/guest.c
-@@ -24,6 +24,60 @@
+@@ -26,6 +26,60 @@
   */
  #define ANT_SEND_ATOMIC_WAIT_US 200U
  
@@ -322,7 +322,7 @@ index c86907c4b..ee2c3f8d6 100644
  struct ant_cpu {
  	struct page *pages;
  	void *data;
-@@ -72,22 +126,22 @@ static bool host_attached;
+@@ -83,22 +137,22 @@ static bool host_attached;
   */
  static bool service_resume(void)
  {
@@ -350,7 +350,7 @@ index c86907c4b..ee2c3f8d6 100644
  	if (broken || (head & 7) || head < cursor || head - cursor > ANT_COMMAND_RING_SIZE ||
  	    (reply_tail & 7) || reply_tail > response_head ||
  	    response_head - reply_tail > ANT_COMMAND_RING_SIZE) {
-@@ -97,7 +151,7 @@ static bool service_resume(void)
+@@ -108,7 +162,7 @@ static bool service_resume(void)
  	while (cursor != head) {
  		struct ant_message req;
  
@@ -359,7 +359,7 @@ index c86907c4b..ee2c3f8d6 100644
  			ANT_COMMAND_RING_SIZE, ANT_MAX_COMMAND_LEN, cursor, &seen, &req);
  		if (error || !req.id || !req.opcode || req.status) {
  			error = -EPROTO;
-@@ -106,27 +160,27 @@ static bool service_resume(void)
+@@ -117,27 +171,27 @@ static bool service_resume(void)
  		floor = max(floor, req.id);
  		cursor += ant_span(req.payload_len);
  	}
@@ -398,7 +398,7 @@ index c86907c4b..ee2c3f8d6 100644
  	return true;
  }
  
-@@ -183,7 +237,7 @@ int ant_send(const void *data, size_t payload_len)
+@@ -225,7 +279,7 @@ int ant_send(const void *data, size_t payload_len)
  		else if (queued && ticket != p->serving)
  			error = -ENOSPC;
  		else
@@ -407,7 +407,7 @@ index c86907c4b..ee2c3f8d6 100644
  					  ant_span(payload_len));
  		if (error != -ENOSPC)
  			break;
-@@ -193,19 +247,19 @@ int ant_send(const void *data, size_t payload_len)
+@@ -235,19 +289,19 @@ int ant_send(const void *data, size_t payload_len)
  		 * A sender that may sleep sleeps on this CPU, so the control worker
  		 * and other tasks keep running; one in atomic context spins, and
  		 * only briefly. */
@@ -432,19 +432,19 @@ index c86907c4b..ee2c3f8d6 100644
  		    now - progress_at >= (u64)wait_us * NSEC_PER_USEC) {
  			/* A queued sender gives up in its turn, so the ones behind it
  			 * keep theirs; they see the same dead host or idle ring. */
-@@ -223,8 +277,8 @@ int ant_send(const void *data, size_t payload_len)
- 				migrate_disable();
- 			}
- 			/* Only our own preempt_disable is held. */
+@@ -268,8 +322,8 @@ int ant_send(const void *data, size_t payload_len)
+ 			 * turn sleeps until the sender before ends its turn;
+ 			 * waiting in it for room polls the ring, which the host
+ 			 * empties without telling the guest. */
 -			WRITE_ONCE(q->attempted, p->attempted);
 -			WRITE_ONCE(q->waits, p->waits);
 +			MOV_ONCE(&q->attempted, p->attempted);
 +			MOV_ONCE(&q->waits, p->waits);
  			preempt_enable();
- 			usleep_range(50, 100);
- 			preempt_disable();
-@@ -240,23 +294,23 @@ int ant_send(const void *data, size_t payload_len)
- 		p->serving++;
+ 			if (ticket != p->serving)
+ 				ant_wait_turn(p, ticket);
+@@ -296,23 +350,23 @@ int ant_send(const void *data, size_t payload_len)
+ 	}
  	if (waited_from) {
  		p->wait_ns += local_clock() - waited_from;
 -		WRITE_ONCE(q->waits, p->waits);
@@ -473,7 +473,7 @@ index c86907c4b..ee2c3f8d6 100644
  	preempt_enable();
  	if (queued)
  		migrate_enable();
-@@ -276,7 +330,7 @@ u32 ant_send_room(void)
+@@ -332,7 +386,7 @@ u32 ant_send_room(void)
  	preempt_disable();
  	p = this_cpu_ptr(producers);
  	q = &directory[p->index];
@@ -482,7 +482,7 @@ index c86907c4b..ee2c3f8d6 100644
  	if (!p->fault && tail <= p->head && p->head - tail <= ring_size)
  		room = ring_size - (p->head - tail);
  	preempt_enable();
-@@ -286,8 +340,8 @@ u32 ant_send_room(void)
+@@ -342,8 +396,8 @@ u32 ant_send_room(void)
  bool ant_send_waits(void)
  {
  	/* Pairs with the release that publishes the rings at setup. */
@@ -493,7 +493,7 @@ index c86907c4b..ee2c3f8d6 100644
  }
  
  int ant_register_command(u32 opcode, ant_command_handler fn, void *context)
-@@ -358,16 +412,16 @@ static void service_commands(void)
+@@ -414,16 +468,16 @@ static void service_commands(void)
  		 */
  		if (service_resume())
  			return;
@@ -514,7 +514,7 @@ index c86907c4b..ee2c3f8d6 100644
  			return;
  		}
  		if (error) goto fault;
-@@ -385,45 +439,45 @@ static void service_commands(void)
+@@ -441,45 +495,45 @@ static void service_commands(void)
  			resp.payload_len = payload_len;
  		}
  		if (resp.status) {
@@ -575,7 +575,7 @@ index c86907c4b..ee2c3f8d6 100644
  	/* While a debugger is attached, or a finished process core is being read,
  	 * every request is a round trip the user waits for: poll at the next tick
  	 * instead of every ANT_POLL_MS.
-@@ -490,9 +544,9 @@ static int __init ant_guest_init(void)
+@@ -546,9 +600,9 @@ static int __init ant_guest_init(void)
  			goto retry;
  		}
  		cpus[index].data = page_address(cpus[index].pages);
@@ -586,9 +586,9 @@ index c86907c4b..ee2c3f8d6 100644
 +		W32_SET(&directory[index].data_size, ring_size);
 +		W32_SET(&directory[index].cpu_id, cpu);
  		per_cpu_ptr(producers, cpu)->index = index++;
+ 		init_waitqueue_head(&per_cpu_ptr(producers, cpu)->turns);
  	}
- 	/*
-@@ -506,28 +560,28 @@ static int __init ant_guest_init(void)
+@@ -563,28 +617,28 @@ static int __init ant_guest_init(void)
  	 */
  	worker = alloc_ordered_workqueue("events_unbound", 0);
  	if (!worker) goto free_rings;

@@ -722,6 +722,14 @@ it runs.
 
 ### Guest
 
+- **A busy program's telemetry is no longer held to one packet per sleep.** In
+  never-drop mode a sender waiting for its turn on a full ring now sleeps on a
+  wait queue and the sender before it wakes it as its turn ends (guest patch
+  26; no contract change). Before, each waiter found its turn only when its own
+  50 to 100 us sleep ended, so once a ring had filled every CPU sent about one
+  packet per sleep: a syscall flood on two vCPUs made 5,153 calls a second with
+  every thread waiting all the time. It now makes 82,676, and the host's drain
+  is the limit. The full tier measures it (`stress-rate`).
 - **Every base's programs come from Debian's packages.** The BusyBox base and
   the Debian bases' bootstrap initrd take BusyBox, resize2fs, chattr and their
   libraries from pinned Debian 13 packages, checked against the archive's

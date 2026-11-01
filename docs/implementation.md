@@ -2109,6 +2109,48 @@ revision unchanged.
   lost races. vm-regress attributes each drop to a host read gap and fails the
   group only for a drop no gap explains.
 
+### Handing a full ring's turn on (0.8.0)
+
+Guest patch 26 (`kernel/antinomie/guest.c`, `ant_send`, ANT-T0203); transport ABI
+and contract revision unchanged (nothing changes on the wire).
+
+* **Cause.** A sender waiting for its turn learnt that its turn had come only
+  when its own 50 to 100 us sleep ended. Once a ring had filled, the senders of a
+  busy program kept finding others queued and stayed in turn, so each CPU sent
+  about one packet per sleep however fast the host read. Measured with
+  `stress-rate` (below) on 2 vCPUs: 5,153 calls/s, 25.8 k packets/s (77 us per
+  packet per CPU), every thread waiting all the time (313,808 waits, 119.8 s of
+  120 s thread time), while the ring was full for only 0.59 s in all and the
+  host's persist path takes 871,669 packets/s (`replay-bench`).
+* **Change.** Senders sleep for their turn on a wait queue of their CPU
+  (`ant_producer.turns`); the sender that ends its turn, by sending or by giving
+  up, wakes the one whose ticket is next (a keyed wake function passes over the
+  others). The sleep is bounded at 1 ms, so a wake-up that never comes costs at
+  most that. Waiting in its turn for room still polls the ring every 50 to 100
+  us, since the host empties the ring without telling the guest. The wait and
+  drop rules are unchanged: a sender still gives up only in its turn, after the
+  host took nothing from the ring for the whole send wait.
+* **Measurement.** `stress-rate` (conformance trace group, vm-regress full
+  tier `conf-stress-rate`): `ant-workload --level extreme --only syscall-load`
+  (two threads per vCPU in a loop of cheap calls for 30 s) on the default
+  never-drop transport (1 MiB rings, 5 s send wait), 2 vCPUs and 2 GiB, the
+  shape of the real-malware evaluation VM. vm-regress prints its calls and
+  packets per second, drops and send waits; the group fails under 20,000
+  calls/s (four times the convoy's rate, a quarter of the rate after the change,
+  so a busy host passes), and on every other problem a stress group fails on.
+  On 2026-11-01, same host, base revision 20:
+
+  | | Before (0.8.0 series to 25 and 30) | After (patch 26) |
+  | --- | --- | --- |
+  | Calls in 30 s | 158,300 (5,153/s) | 2,492,254 (82,676/s) |
+  | Packets/s, MiB/s | 25,777, 5.3 | 413,391, 85.6 |
+  | Transport drops | 0 of 791,807 | 0 of 12,461,581 |
+  | Send waits | 313,808, 119.8 s | 2,773,118, 104.0 s |
+  | Full-ring spells | 6, 0.59 s | 59, 43.7 s |
+
+  Before, the threads waited all the time with an almost empty ring; after, they
+  wait because the ring is full: the host's drain (85.6 MiB/s here) is the limit.
+
 ### Telemetry read gaps (0.8.0)
 
 Host only; the guest and the contract are unchanged (`transport/host.c` gained

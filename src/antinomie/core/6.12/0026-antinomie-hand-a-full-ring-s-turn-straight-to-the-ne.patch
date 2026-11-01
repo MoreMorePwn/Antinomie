@@ -1,0 +1,159 @@
+From 398d6b90225c04525eef7c054c9955ef339ac302 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Sun, 1 Nov 2026 00:24:15 +0000
+Subject: [PATCH] antinomie: hand a full ring's turn straight to the next
+ waiting sender
+
+In never-drop mode a sender that finds its CPU's telemetry ring full takes a
+turn and sleeps until its turn comes and the ring has room; a later sender
+queues behind the waiting ones, so room the host frees goes to them in
+order. Each waiting sender found its turn only when its own 50 to 100 us
+sleep ended. Once a ring had filled, the senders of a busy program kept
+finding others queued and stayed in turn: each CPU sent one packet per sleep,
+about 13,000 a second, however fast the host emptied the ring (a syscall
+flood on two vCPUs made 5,150 calls a second, every thread waiting all the
+time, while the host can take over 800,000 packets a second).
+
+Senders now sleep for their turn on a wait queue of their CPU, and the
+sender that ends its turn, by sending or by giving up, wakes the one whose
+turn is next (a wake function that passes over the others). Waiting in its
+turn for room still polls the ring every 50 to 100 us, since the host frees
+room without telling the guest; a turn wait also ends after 1 ms in case a
+wake-up never comes. Turns, their order and when a sender gives up are as
+before; only kernel/antinomie/guest.c changes, and nothing the host sees.
+No contract change.
+---
+ kernel/antinomie/guest.c | 65 +++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 61 insertions(+), 4 deletions(-)
+
+diff --git a/kernel/antinomie/guest.c b/kernel/antinomie/guest.c
+index c86907c4b..281b2c86b 100644
+--- a/kernel/antinomie/guest.c
++++ b/kernel/antinomie/guest.c
+@@ -2,6 +2,7 @@
+ #include <linux/antinomie.h>
+ #include <linux/cpu.h>
+ #include <linux/delay.h>
++#include <linux/hrtimer.h>
+ #include <linux/init.h>
+ #include <linux/io.h>
+ #include <linux/jiffies.h>
+@@ -12,6 +13,7 @@
+ #include <linux/rcupdate.h>
+ #include <linux/rwsem.h>
+ #include <linux/slab.h>
++#include <linux/wait.h>
+ #include <linux/workqueue.h>
+ #include "queue.h"
+ #include "process_core.h"
+@@ -30,6 +32,8 @@ struct ant_cpu {
+ };
+ /* One per CPU, used with preemption off. A sender that must wait for room
+  * takes a turn (next_ticket) and stays on its CPU until serving reaches it.
++ * Senders waiting for their turn sleep on turns; the sender that ends its
++ * turn wakes the one whose turn is next.
+  * Allocated at setup (alloc_percpu), not in the static per-CPU section: a
+  * static one would move every later per-CPU variable of the kernel (their
+  * offsets are in its BTF).
+@@ -38,6 +42,13 @@ struct ant_producer {
+ 	u64 head, cached_tail, attempted, dropped, waits, wait_ns;
+ 	u32 index, next_ticket, serving;
+ 	bool fault;
++	struct wait_queue_head turns;
++};
++
++/* A sender asleep until its turn (ticket) on its CPU's ring. */
++struct ant_turn {
++	struct wait_queue_entry entry;
++	u32 ticket;
+ };
+ static struct ant_producer __percpu *producers;
+ static struct ant_cpu *cpus;
+@@ -150,6 +161,37 @@ u32 ant_ring_size(void)
+ 	return ring_size;
+ }
+ 
++/* Wakes only the sender whose ticket is *key: the others keep sleeping. */
++static int ant_turn_wake(struct wait_queue_entry *entry, unsigned int mode, int sync, void *key)
++{
++	struct ant_turn *turn = container_of(entry, struct ant_turn, entry);
++
++	if (turn->ticket != *(u32 *)key)
++		return 0;
++	return default_wake_function(entry, mode, sync, key);
++}
++
++/* Sleep until it is ticket's turn on this CPU's ring. The sender before it
++ * wakes it as its turn ends; the timeout only bounds a wake-up that never
++ * comes. Called with migration disabled and preemption enabled, so p stays
++ * this CPU's and only tasks on this CPU change p->serving.
++ */
++static void ant_wait_turn(struct ant_producer *p, u32 ticket)
++{
++	struct ant_turn turn = { .ticket = ticket };
++	ktime_t timeout = NSEC_PER_MSEC;
++
++	/* As DEFINE_WAIT_FUNC: prepare_to_wait queues an entry whose list
++	 * is empty, so the list must be initialised. */
++	init_waitqueue_func_entry(&turn.entry, ant_turn_wake);
++	INIT_LIST_HEAD(&turn.entry.entry);
++	turn.entry.private = current;
++	prepare_to_wait(&p->turns, &turn.entry, TASK_UNINTERRUPTIBLE);
++	if (READ_ONCE(p->serving) != ticket)
++		schedule_hrtimeout_range(&timeout, 100 * NSEC_PER_USEC, HRTIMER_MODE_REL);
++	finish_wait(&p->turns, &turn.entry);
++}
++
+ int ant_send(const void *data, size_t payload_len)
+ {
+ 	struct ant_producer *p;
+@@ -222,11 +264,17 @@ int ant_send(const void *data, size_t payload_len)
+ 				queued = true;
+ 				migrate_disable();
+ 			}
+-			/* Only our own preempt_disable is held. */
++			/* Only our own preempt_disable is held. Waiting for the
++			 * turn sleeps until the sender before ends its turn;
++			 * waiting in it for room polls the ring, which the host
++			 * empties without telling the guest. */
+ 			WRITE_ONCE(q->attempted, p->attempted);
+ 			WRITE_ONCE(q->waits, p->waits);
+ 			preempt_enable();
+-			usleep_range(50, 100);
++			if (ticket != p->serving)
++				ant_wait_turn(p, ticket);
++			else
++				usleep_range(50, 100);
+ 			preempt_disable();
+ 			if (p->fault) {
+ 				error = -EPROTO;
+@@ -236,8 +284,16 @@ int ant_send(const void *data, size_t payload_len)
+ 		}
+ 		cpu_relax();
+ 	}
+-	if (queued)
+-		p->serving++;
++	if (queued) {
++		/* Hand the turn on at once: before, the next sender found it
++		 * only when its own sleep ended, so a ring that had filled once
++		 * kept its senders queued and took one packet per 50 to 100 us
++		 * on each CPU, however fast the host read. */
++		u32 next = ++p->serving;
++
++		if (next != p->next_ticket)
++			__wake_up(&p->turns, TASK_NORMAL, 0, &next);
++	}
+ 	if (waited_from) {
+ 		p->wait_ns += local_clock() - waited_from;
+ 		WRITE_ONCE(q->waits, p->waits);
+@@ -494,6 +550,7 @@ static int __init ant_guest_init(void)
+ 		directory[index].data_size = ring_size;
+ 		directory[index].cpu_id = cpu;
+ 		per_cpu_ptr(producers, cpu)->index = index++;
++		init_waitqueue_head(&per_cpu_ptr(producers, cpu)->turns);
+ 	}
+ 	/*
+ 	 * This worker only polls host commands. It is not a reclaim path,
+-- 
+2.53.0
+
