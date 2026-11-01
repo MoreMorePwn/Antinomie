@@ -795,11 +795,13 @@ revision 20 is unchanged: the wire carried the architecture since 0.8.0.
   family needs it) and the iptables tables and conntrack. `!NAME` turns a symbol
   off (`PREEMPT`: Debian's arm64 banner says SMP).
 * **BusyBox arm64 base.** `build-monitor-image.py --arch arm64` takes its
-  userland from pinned Debian 13 arm64 packages (busybox-static, e2fsprogs and
-  the libraries resize2fs and chattr load, glibc's loader), fetched through the
-  archive's signed index from snapshot.debian.org and cached by SHA-256
-  (`--package-cache`). Applets come from BusyBox's packed name table, so the
-  build needs no emulation. The console is `ttyAMA0`; the bundle says
+  userland from Debian 13's pinned arm64 packages (`ARM64_USERLAND`:
+  busybox-static, e2fsprogs and the libraries resize2fs and chattr load,
+  glibc's loader), as an x86-64 base takes its own from the amd64 ones, through
+  the archive's signed index from snapshot.debian.org and cached by SHA-256
+  (`--package-cache`); the libraries go to `usr/lib/aarch64-linux-gnu`.
+  Applets come from BusyBox's packed name table, so the build needs no
+  emulation. The console is `ttyAMA0`; the bundle says
   `"arch": "arm64"`.
 * **Launch.** `vm/virt.rs` builds QEMU's `virt` machine under TCG:
   `cortex-a72` with the device tree, `neoverse-n1` with AAVMF (pflash code and a

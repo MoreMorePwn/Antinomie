@@ -57,6 +57,9 @@
 
 # Multi-architecture contract (revision 20): the guest's architecture and a little-endian transport
 0030-antinomie-report-the-guest-s-architecture-and-carry-the-transport-little-endian-on-every-guest.patch
+
+# arm64 guests in 0.9.0 (no contract change): the arm64 hooks and table, AArch32 programs, the
+# arm64 debug engine, device tree and ACPI, Debian's arm64 BTF
 0031-antinomie-keep-the-generic-efi-stub-off-the-bootstrap-page.patch
 0032-antinomie-add-the-arm64-definitions-and-system-call-table.patch
 0033-antinomie-hook-the-arm64-architecture.patch
