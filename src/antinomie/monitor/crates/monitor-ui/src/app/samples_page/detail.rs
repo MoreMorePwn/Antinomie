@@ -683,62 +683,65 @@ impl MonitorApp {
             back = true;
         }
         ui.add_space(2.0);
-        egui::Sides::new().show(
-            ui,
-            |ui| {
-                ui.label(
-                    RichText::new(&data.record.name)
-                        .strong()
-                        .size(ui.text_style_height(&egui::TextStyle::Heading))
-                        .color(theme::identity()),
-                );
-                for tag in data
-                    .tags
-                    .iter()
-                    .filter(|tag| tag.kind == antinomie_monitor_core::samples::TagKind::Verdict)
-                {
-                    sample_tags::tag(ui, tag);
-                }
-                if self.samples_page.loading_detail() {
-                    theme::spinner(ui);
-                }
-            },
-            |ui| {
-                if ui
-                    .button("Export report…")
-                    .on_hover_text(
-                        "A report of the sample: identity, static analysis, every run, lineage, \
+        let title = |ui: &mut egui::Ui| {
+            ui.label(
+                RichText::new(&data.record.name)
+                    .strong()
+                    .size(ui.text_style_height(&egui::TextStyle::Heading))
+                    .color(theme::identity()),
+            );
+            for tag in data
+                .tags
+                .iter()
+                .filter(|tag| tag.kind == antinomie_monitor_core::samples::TagKind::Verdict)
+            {
+                sample_tags::tag(ui, tag);
+            }
+            if self.samples_page.loading_detail() {
+                theme::spinner(ui);
+            }
+        };
+        let buttons = |ui: &mut egui::Ui| {
+            if ui
+                .button("Export report…")
+                .on_hover_text(
+                    "A report of the sample: identity, static analysis, every run, lineage, \
                          indicators and custody. HTML, PDF, JSON, MISP, STIX or Markdown",
-                    )
-                    .clicked()
-                {
-                    chosen = Some(Action::Report);
-                }
-                if ui
-                    .button("Export custody record…")
-                    .on_hover_text(
-                        "JSON with a verifier, or HTML; optionally signed with your own key",
-                    )
-                    .clicked()
-                {
-                    chosen = Some(Action::Export);
-                }
-                if ui
-                    .add_enabled(can_run, egui::Button::new("Run in VM…"))
-                    .on_hover_text(
-                        "Send the archive into the running VM (its SHA-256 is read back first) \
+                )
+                .clicked()
+            {
+                chosen = Some(Action::Report);
+            }
+            if ui
+                .button("Export custody record…")
+                .on_hover_text("JSON with a verifier, or HTML; optionally signed with your own key")
+                .clicked()
+            {
+                chosen = Some(Action::Export);
+            }
+            if ui
+                .add_enabled(can_run, egui::Button::new("Run in VM…"))
+                .on_hover_text(
+                    "Send the archive into the running VM (its SHA-256 is read back first) \
                          and open Run program with it",
-                    )
-                    .on_disabled_hover_text(why.unwrap_or_else(|| "Start a VM first".into()))
-                    .clicked()
-                {
-                    chosen = Some(Action::RunInVm);
-                }
-                if ui.button("Edit tags…").clicked() {
-                    chosen = Some(Action::EditTags);
-                }
-            },
-        );
+                )
+                .on_disabled_hover_text(why.unwrap_or_else(|| "Start a VM first".into()))
+                .clicked()
+            {
+                chosen = Some(Action::RunInVm);
+            }
+            if ui.button("Edit tags…").clicked() {
+                chosen = Some(Action::EditTags);
+            }
+        };
+        // Four buttons beside the title need about 65 font heights; a
+        // narrower window gives the buttons their own row.
+        if ui.available_width() < self.settings.font_size * 65.0 {
+            ui.horizontal_wrapped(|ui| title(ui));
+            ui.horizontal_wrapped(|ui| buttons(ui));
+        } else {
+            egui::Sides::new().show(ui, |ui| title(ui), |ui| buttons(ui));
+        }
         if back {
             *action = Some(Action::Back);
         } else if chosen.is_some() {
