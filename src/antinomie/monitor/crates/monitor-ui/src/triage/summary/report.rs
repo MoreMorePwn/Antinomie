@@ -426,6 +426,7 @@ pub(super) fn content(
             if let Some(error) = &view.scan_error {
                 crate::activity::warning(ui, error);
             }
+            let attack = view.attack_techniques().to_vec();
             let Some(scan) = &view.scan else {
                 presentation::frame().show(ui, |ui| {
                     presentation::heading_busy(ui, "Preparing run evidence", "", true);
@@ -459,21 +460,18 @@ pub(super) fn content(
                 }
             }
             ui.add_space(8.0);
-            if !view.detection.references.is_empty() {
+            if !attack.is_empty() {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("MITRE ATT&CK").small().color(theme::muted()));
-                    for reference in view.detection.references.iter().take(16) {
+                    for technique in attack.iter().take(16) {
                         presentation::badge(
                             ui,
-                            &antinomie_monitor_core::mitre::technique_label(reference),
+                            &antinomie_monitor_core::mitre::technique_label(&technique.id),
                             theme::blue(),
                         );
                     }
-                    if view.detection.references.len() > 16 {
-                        ui.label(format!(
-                            "+{} in Detection",
-                            view.detection.references.len() - 16
-                        ));
+                    if attack.len() > 16 {
+                        ui.label(format!("+{} in the report", attack.len() - 16));
                     }
                 });
             }

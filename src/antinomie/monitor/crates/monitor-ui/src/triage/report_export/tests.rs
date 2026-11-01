@@ -521,3 +521,79 @@ fn a_run_without_a_loss_count_gets_no_loss_line() {
     .unwrap();
     assert_eq!(super::build::telemetry_loss_note(&temp.directory), None);
 }
+
+/// The Summary on screen and the export list the same techniques: the ones the
+/// behaviour rules cite (here the ransom note, T1486) and the ones a detection
+/// engine cites (here a Sigma rule, T1036), each with its source.
+#[test]
+fn the_summary_and_the_export_agree_on_the_attack_techniques() {
+    use antinomie_monitor_core::analysis::detection::{
+        Engine, Finding as Match, Identity, Report as Detected, State,
+    };
+    if !have_tshark() {
+        return;
+    }
+    let (temp, pcap) = fixture();
+    let scan_job = job(&temp, &pcap, Choices::default());
+    let mut scan = scan_archive_query(
+        &temp.directory,
+        Some(&pcap),
+        false,
+        &Arc::new(AtomicBool::new(false)),
+        &scan_job.request,
+    )
+    .unwrap();
+    let note = |dir: &str| {
+        super::super::rules::tests::support::open_write(1, &format!("{dir}/README_DECRYPT.txt"), 3)
+    };
+    scan.findings = super::super::rules::tests::support::run(vec![
+        note("/home/user/a"),
+        note("/home/user/b"),
+        note("/home/user/c"),
+    ])
+    .rows;
+    let mut sigma = Detected::empty(
+        Engine::Sigma,
+        Identity {
+            vm_id: "vm".into(),
+            boot_id: "boot".into(),
+            run_id: "run".into(),
+            root_cookie: 55,
+        },
+    );
+    sigma.state = State::Complete;
+    sigma.findings = vec![Match {
+        rule_id: "masq".into(),
+        title: "Masquerading".into(),
+        severity: "medium".into(),
+        source: "s0".into(),
+        license: "MIT".into(),
+        author: "A".into(),
+        mitre: vec!["T1036".into()],
+        count: 2,
+        evidence: vec![],
+        events: vec![],
+        details: String::new(),
+        rule_text: String::new(),
+    }];
+    let mut view = TriageView::default();
+    view.detection.results[2] = Some(Ok(sigma));
+    // What the digest stores for the export to read back.
+    let stored = super::super::digest::detections(&view.detection.results);
+    antinomie_monitor_core::run_digest::RunDigest::update(&temp.directory, |digest| {
+        digest.detections = stored;
+    })
+    .unwrap();
+    let exported = build::build(&scan, &scan_job)
+        .unwrap()
+        .report
+        .attack
+        .unwrap();
+    view.scan = Some(scan);
+    let shown = view.attack_techniques().to_vec();
+    assert_eq!(shown, exported);
+    let ids: Vec<&str> = shown.iter().map(|t| t.id.as_str()).collect();
+    assert!(ids.contains(&"T1486") && ids.contains(&"T1036"), "{ids:?}");
+    let masq = shown.iter().find(|t| t.id == "T1036").unwrap();
+    assert_eq!(masq.rules, ["Sigma: Masquerading"]);
+}

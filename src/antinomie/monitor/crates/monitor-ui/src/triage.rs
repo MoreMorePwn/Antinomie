@@ -30,6 +30,7 @@ pub(crate) const OPEN_INPUT: &str = "triage-open-input";
 
 mod archive_scan;
 mod async_files;
+mod attack;
 mod auditd_events;
 mod bpf_attach;
 mod bpf_notes;
@@ -209,6 +210,8 @@ pub(crate) struct TriageView {
     scan_began_finished: bool,
     /// What the last written run digest was made from.
     digested: Option<String>,
+    /// The Summary's ATT&CK list with the fingerprint it was made for.
+    attacked: Option<(String, Vec<antinomie_monitor_core::report::Technique>)>,
     /// Pass of the last frame that drew a pane using the index.
     shown_pass: Option<u64>,
     refresh_seconds: u64,
@@ -279,6 +282,7 @@ impl Default for TriageView {
             timer_refresh: false,
             scan_began_finished: false,
             digested: None,
+            attacked: None,
             shown_pass: None,
             refresh_seconds: 5,
             bpf_export_status: String::new(),

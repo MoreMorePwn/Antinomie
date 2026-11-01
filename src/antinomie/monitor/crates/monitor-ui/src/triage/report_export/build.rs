@@ -12,11 +12,10 @@ use antinomie_monitor_core::{
         export as ioc_export,
         verdict::{Outcome, Verdict},
     },
-    mitre,
     report::{
         bundle::{self, BundleInput, DroppedFile},
         Counts, Custody, Detection, EvidenceRef, FileRecord, FilesSection, IndicatorColumn,
-        IndicatorKind, NamedTable, Part, Report, Summary, Table, Technique,
+        IndicatorKind, NamedTable, Part, Report, Summary, Table,
     },
     run_digest::RunDigest,
 };
@@ -61,16 +60,6 @@ fn table(
 
 fn all(n: usize) -> Vec<usize> {
     (0..n).collect()
-}
-
-fn technique_id(id: &str) -> bool {
-    let rest = id.strip_prefix('T').unwrap_or("");
-    let (main, sub) = rest
-        .split_once('.')
-        .map_or((rest, None), |(a, b)| (a, Some(b)));
-    main.len() == 4
-        && main.bytes().all(|b| b.is_ascii_digit())
-        && sub.is_none_or(|s| s.len() == 3 && s.bytes().all(|b| b.is_ascii_digit()))
 }
 
 fn tier_rank(tier: &str) -> usize {
@@ -264,26 +253,6 @@ fn summary(
 }
 
 use antinomie_monitor_core::run_digest as digest_types;
-
-fn attack(behaviour: &digest_types::Behaviour) -> Vec<Technique> {
-    let mut found: BTreeMap<String, (BTreeSet<String>, u64)> = BTreeMap::new();
-    for hit in &behaviour.rules {
-        for id in hit.attack.iter().filter(|id| technique_id(id)) {
-            let entry = found.entry(id.clone()).or_default();
-            entry.0.insert(hit.rule.clone());
-            entry.1 += hit.count.max(1);
-        }
-    }
-    found
-        .into_iter()
-        .map(|(id, (rules, count))| Technique {
-            name: mitre::technique_name(&id).unwrap_or_default(),
-            id,
-            rules: rules.into_iter().collect(),
-            count,
-        })
-        .collect()
-}
 
 fn processes(scan: &ArchiveScan, clock: Option<antinomie_monitor_core::HostClockAnchor>) -> Table {
     let rows = super::super::process_tree::process_rows(&scan.process, clock, &scan.suspicious);
@@ -645,7 +614,10 @@ pub(super) fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
     // `None` when no detection engine has run for the run (stored with the run).
     let digest_detections = RunDigest::read(&job.archive).and_then(|digest| digest.detections);
     let indicator_rows = indicators(job, scan);
-    let techniques = attack(&behaviour);
+    let techniques = super::super::attack::techniques(
+        &behaviour,
+        digest_detections.as_deref().unwrap_or_default(),
+    );
     if choices.has(Part::Summary) {
         report.summary = Some(summary(
             scan,

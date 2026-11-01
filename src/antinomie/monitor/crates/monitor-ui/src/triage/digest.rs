@@ -109,7 +109,7 @@ fn yara_family(engine: antinomie_monitor_core::analysis::detection::Engine, rule
 }
 
 /// The matches of the engines whose reports are complete.
-fn detections(
+pub(super) fn detections(
     results: &[Option<Result<antinomie_monitor_core::analysis::detection::Report, String>>; 3],
 ) -> Option<Vec<DetectionHit>> {
     let mut out = Vec::new();
