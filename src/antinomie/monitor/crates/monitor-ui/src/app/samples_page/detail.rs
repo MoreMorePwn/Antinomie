@@ -198,7 +198,7 @@ impl Detail {
 }
 
 /// Read the sample and its runs on every VM.
-fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &str) -> Loaded {
+pub(super) fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &str) -> Loaded {
     let mut library = Library::open(&options.data_dir)?;
     let record = library
         .get(sha256)?
@@ -560,6 +560,7 @@ enum Action {
     EditTags,
     RunInVm,
     Export,
+    Report,
 }
 
 impl MonitorApp {
@@ -663,6 +664,10 @@ impl MonitorApp {
                     data.chain.clone(),
                 ));
             }
+            Some(Action::Report) => self
+                .samples_page
+                .report
+                .open(&data.record.sha256, &data.record.name),
             None => {}
         }
     }
@@ -699,6 +704,16 @@ impl MonitorApp {
                 }
             },
             |ui| {
+                if ui
+                    .button("Export report…")
+                    .on_hover_text(
+                        "A report of the sample: identity, static analysis, every run, lineage, \
+                         indicators and custody. HTML, PDF, JSON, MISP, STIX or Markdown",
+                    )
+                    .clicked()
+                {
+                    chosen = Some(Action::Report);
+                }
                 if ui
                     .button("Export custody record…")
                     .on_hover_text(

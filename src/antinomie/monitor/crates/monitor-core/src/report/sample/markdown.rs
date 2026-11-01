@@ -47,7 +47,9 @@ fn paragraph(text: &str) -> String {
     text.lines()
         .map(|line| {
             let line = inline(line.trim_end());
-            if line.starts_with(['#', '>', '-', '+', '=']) || line.starts_with(|c: char| c.is_ascii_digit()) {
+            if line.starts_with(['#', '>', '-', '+', '='])
+                || line.starts_with(|c: char| c.is_ascii_digit())
+            {
                 format!("\\{line}")
             } else {
                 line
@@ -73,7 +75,11 @@ fn row(cells: &[String]) -> String {
 
 /// The report as Markdown.
 pub fn render(document: &Document) -> String {
-    let mut out = format!("# {}\n\n{}\n\n", inline(&document.title), inline(&document.subtitle));
+    let mut out = format!(
+        "# {}\n\n{}\n\n",
+        inline(&document.title),
+        inline(&document.subtitle)
+    );
     out.push_str("Contents: ");
     out.push_str(
         &document
@@ -89,7 +95,9 @@ pub fn render(document: &Document) -> String {
         for block in &section.blocks {
             match block {
                 Block::Paragraph(text) => out.push_str(&format!("{}\n\n", paragraph(text))),
-                Block::Note(text) => out.push_str(&format!("*{}*\n\n", paragraph(text).replace('\n', " "))),
+                Block::Note(text) => {
+                    out.push_str(&format!("*{}*\n\n", paragraph(text).replace('\n', " ")))
+                }
                 Block::Sub(text) => out.push_str(&format!("### {}\n\n", inline(text))),
                 Block::Facts(facts) => {
                     out.push_str("| Field | Value |\n| --- | --- |\n");

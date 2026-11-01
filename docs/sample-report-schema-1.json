@@ -1,0 +1,862 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:antinomie:sample-report:1",
+  "title": "Antinomie sample report, schema version 1",
+  "description": "The JSON export of Samples > Export report. See docs/sample-report.md.",
+  "type": "object",
+  "required": [
+    "schema",
+    "schema_version",
+    "generated_ms",
+    "app",
+    "sample",
+    "static_analysis",
+    "detections",
+    "runs",
+    "lineage",
+    "indicators",
+    "attack",
+    "custody",
+    "notes",
+    "similar",
+    "omitted",
+    "remarks"
+  ],
+  "properties": {
+    "schema": {
+      "const": "antinomie-sample-report"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "generated_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "app": {
+      "type": "string"
+    },
+    "sample": {
+      "$ref": "#/$defs/identity"
+    },
+    "static_analysis": {
+      "$ref": "#/$defs/static_analysis"
+    },
+    "detections": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rule_hit"
+      }
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/run"
+      }
+    },
+    "lineage": {
+      "$ref": "#/$defs/lineage"
+    },
+    "indicators": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/indicator"
+      }
+    },
+    "attack": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/technique"
+      }
+    },
+    "custody": {
+      "$ref": "#/$defs/custody"
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/note"
+      }
+    },
+    "similar": {
+      "$ref": "#/$defs/similar"
+    },
+    "omitted": {
+      "$ref": "#/$defs/omitted"
+    },
+    "remarks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "tag": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "verdict",
+            "category",
+            "technique",
+            "custom"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    "name": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "seen": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    "origin": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "vm": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "parent": {
+          "type": "string"
+        },
+        "at_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": []
+    },
+    "identity": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "sha1": {
+          "type": "string"
+        },
+        "md5": {
+          "type": "string"
+        },
+        "tlsh": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "file_type": {
+          "type": "string"
+        },
+        "arch": {
+          "type": "string"
+        },
+        "family": {
+          "type": "string"
+        },
+        "added_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "removed_ms": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "first_seen_ms": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        },
+        "last_seen_ms": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tag"
+          }
+        },
+        "names": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/name"
+          }
+        },
+        "origins": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/origin"
+          }
+        }
+      },
+      "required": [
+        "sha256",
+        "name",
+        "size",
+        "tags",
+        "names",
+        "origins"
+      ]
+    },
+    "check": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "running",
+            "complete",
+            "partial",
+            "unavailable",
+            "timeout"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": []
+    },
+    "layer": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "method": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "packer": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    "capability": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "attack": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mbc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": []
+    },
+    "floss": {
+      "type": "object",
+      "properties": {
+        "origin": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    "static_analysis": {
+      "type": "object",
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "state": {
+          "enum": [
+            "",
+            "complete",
+            "partial"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "report_id": {
+          "type": "string"
+        },
+        "from_run": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/check"
+          }
+        },
+        "packer": {
+          "type": "string"
+        },
+        "layers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/layer"
+          }
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/capability"
+          }
+        },
+        "floss": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/floss"
+          }
+        },
+        "floss_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "capabilities_omitted": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "available",
+        "checks"
+      ]
+    },
+    "rule_hit": {
+      "type": "object",
+      "properties": {
+        "engine": {
+          "enum": [
+            "YARA",
+            "YARA (static)",
+            "Sigma",
+            "IDS"
+          ]
+        },
+        "rule_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "family": {
+          "type": "string"
+        },
+        "mitre": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "runs": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "author": {
+          "type": "string"
+        },
+        "license": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "reference": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "engine",
+        "rule_id",
+        "author",
+        "license",
+        "source",
+        "reference"
+      ]
+    },
+    "run": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "vm_id": {
+          "type": "string"
+        },
+        "vm_name": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "started_ms": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        },
+        "exit": {
+          "type": "string"
+        },
+        "folder_present": {
+          "type": "boolean"
+        },
+        "triaged": {
+          "type": "boolean"
+        },
+        "assessment": {
+          "enum": [
+            "matched_indicators",
+            "suspicious_behaviour",
+            "observed_only",
+            "no_findings",
+            "not_read"
+          ]
+        },
+        "statement": {
+          "type": "string"
+        },
+        "highest_tier": {
+          "type": "string"
+        },
+        "rules": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "indicators": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "indicators_matched": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "detections": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "directory": {
+          "type": "string"
+        },
+        "report_file": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "number",
+        "run_id",
+        "assessment"
+      ]
+    },
+    "lineage_entry": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "enum": [
+            "parent",
+            "child"
+          ]
+        },
+        "level": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "kind": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "verdict": {
+          "type": "string"
+        },
+        "via": {
+          "type": "string"
+        },
+        "runs": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "required": [
+        "role",
+        "kind",
+        "sha256"
+      ]
+    },
+    "lineage": {
+      "type": "object",
+      "properties": {
+        "parents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lineage_entry"
+          }
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lineage_entry"
+          }
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "parents",
+        "children",
+        "reason"
+      ]
+    },
+    "indicator": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "endpoint",
+            "domain",
+            "url",
+            "tls",
+            "file"
+          ]
+        },
+        "value": {
+          "type": "string"
+        },
+        "matched": {
+          "type": "boolean"
+        },
+        "runs": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "value",
+        "matched"
+      ]
+    },
+    "technique": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": []
+    },
+    "custody_row": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "at_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "by": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "verified",
+            "changed",
+            "unverified"
+          ]
+        },
+        "hash": {
+          "type": "string"
+        },
+        "before_chain": {
+          "type": "boolean"
+        }
+      },
+      "required": []
+    },
+    "custody": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "head": {
+          "type": "string"
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "problem": {
+          "type": "string"
+        },
+        "log": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/custody_row"
+          }
+        }
+      },
+      "required": [
+        "entries",
+        "head",
+        "verified",
+        "log"
+      ]
+    },
+    "note": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "by": {
+          "type": "string"
+        },
+        "created_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "edited_ms": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "cut": {
+          "type": "boolean"
+        },
+        "refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": []
+    },
+    "similar_row": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "distance": {
+          "type": "integer"
+        },
+        "shared": {
+          "type": "string"
+        }
+      },
+      "required": []
+    },
+    "similar": {
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/similar_row"
+          }
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rows"
+      ]
+    },
+    "omitted": {
+      "type": "object",
+      "properties": {
+        "indicators": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "detections": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "runs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "custody": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "notes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lineage": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": []
+    }
+  }
+}

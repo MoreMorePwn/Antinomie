@@ -47,6 +47,7 @@ enum Action {
     CopyHash(String),
     CopyName(String),
     EditTags(String, String, Vec<Tag>),
+    Report(String, String),
     Remove(String),
 }
 
@@ -440,6 +441,13 @@ impl MonitorApp {
                                 ));
                                 ui.close_menu();
                             }
+                            if ui.button("Export report…").clicked() {
+                                action = Some(Action::Report(
+                                    sha256.to_owned(),
+                                    row.record.name.clone(),
+                                ));
+                                ui.close_menu();
+                            }
                             if ui.button("Copy SHA-256").clicked() {
                                 action = Some(Action::CopyHash(sha256.to_owned()));
                                 ui.close_menu();
@@ -468,6 +476,7 @@ impl MonitorApp {
             Some(Action::EditTags(sha256, name, tags)) => {
                 self.samples_page.editing = Some((sha256, name, TagPicker::with(&tags)));
             }
+            Some(Action::Report(sha256, name)) => self.samples_page.report.open(&sha256, &name),
             Some(Action::Remove(sha256)) => self.samples_page.confirm_remove = Some(sha256),
             None => {}
         }

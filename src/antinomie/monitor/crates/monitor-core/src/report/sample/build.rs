@@ -213,9 +213,8 @@ pub fn static_analysis(found: Option<(&AnalysisReport, usize)>) -> (StaticAnalys
                 ) => {
                     // The ruleset reads "<author>; <licence>"; the matched
                     // text in the entry's value is not copied.
-                    let (author, license) = ruleset
-                        .rsplit_once("; ")
-                        .unwrap_or((ruleset.as_str(), ""));
+                    let (author, license) =
+                        ruleset.rsplit_once("; ").unwrap_or((ruleset.as_str(), ""));
                     hits.push(RuleHit {
                         engine: "YARA (static)".into(),
                         rule_id: rule.clone(),
@@ -308,6 +307,9 @@ pub fn merge_indicators(digests: &[(usize, &RunDigest)]) -> Vec<MergedIndicator>
         }
     }
     let mut out: Vec<MergedIndicator> = merged.into_values().collect();
+    for item in &mut out {
+        item.runs.sort_unstable();
+    }
     out.sort_by(|a, b| {
         b.matched
             .cmp(&a.matched)
@@ -558,7 +560,8 @@ pub fn lineage(graph: &LineageGraph, runs_with_lineage: usize, runs_total: usize
         );
     }
     if out.children.is_empty() {
-        reason.push("No children: no run shows this sample writing or starting another file.".into());
+        reason
+            .push("No children: no run shows this sample writing or starting another file.".into());
     }
     if graph.hidden_system > 0 {
         reason.push(format!(

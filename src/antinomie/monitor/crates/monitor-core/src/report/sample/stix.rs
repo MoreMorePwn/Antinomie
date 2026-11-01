@@ -50,7 +50,10 @@ fn file_object(node: &LineageEntry) -> Value {
     if !node.label.is_empty() && node.kind != "command" {
         file["name"] = json!(node.label);
     }
-    file["id"] = json!(format!("file--{}", super::super::uuid5(&format!("stix:file:{}", node.sha256))));
+    file["id"] = json!(format!(
+        "file--{}",
+        super::super::uuid5(&format!("stix:file:{}", node.sha256))
+    ));
     file
 }
 
@@ -79,14 +82,24 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
             hashes[key] = json!(value);
         }
     }
-    if !sample.tlsh.is_empty() {
-        hashes["TLSH"] = json!(sample.tlsh);
+    // STIX wants 70 lowercase hex digits, without the `T1` version prefix.
+    let tlsh = sample.tlsh.to_ascii_lowercase();
+    let tlsh = if tlsh.len() == 72 {
+        tlsh.trim_start_matches("t1")
+    } else {
+        &tlsh
+    };
+    if tlsh.len() == 70 && tlsh.chars().all(|c| c.is_ascii_hexdigit()) {
+        hashes["TLSH"] = json!(tlsh);
     }
     let mut file = json!({"type": "file", "hashes": hashes, "size": sample.size});
     if !sample.name.is_empty() {
         file["name"] = json!(sample.name);
     }
-    file["id"] = json!(format!("file--{}", super::super::uuid5(&format!("stix:file:{sha}"))));
+    file["id"] = json!(format!(
+        "file--{}",
+        super::super::uuid5(&format!("stix:file:{sha}"))
+    ));
     let file_id = id_of(&file);
     objects.push(file);
 
@@ -113,7 +126,12 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
             &at,
             json!({"name": sample.family, "is_family": true, "created_by_ref": identity_id}),
         );
-        objects.push(relationship("variant-of", &malware_id, &id_of(&family), &at));
+        objects.push(relationship(
+            "variant-of",
+            &malware_id,
+            &id_of(&family),
+            &at,
+        ));
         objects.push(family);
     }
 
@@ -170,9 +188,17 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
                 item.runs.iter().map(usize::to_string).collect::<Vec<_>>().join(", "), indicator.verdict),
         });
         if item.runs.is_empty() {
-            fields["description"] = json!(format!("Observed in the sample's runs; dataset verdict: {}", indicator.verdict));
+            fields["description"] = json!(format!(
+                "Observed in the sample's runs; dataset verdict: {}",
+                indicator.verdict
+            ));
         }
-        let made = object("indicator", &format!("{sha}:{}", pattern_seed(&indicator)), &at, fields);
+        let made = object(
+            "indicator",
+            &format!("{sha}:{}", pattern_seed(&indicator)),
+            &at,
+            fields,
+        );
         objects.push(relationship("indicates", &id_of(&made), &malware_id, &at));
         objects.push(made);
     }

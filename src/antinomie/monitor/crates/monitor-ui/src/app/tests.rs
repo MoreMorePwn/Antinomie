@@ -35,6 +35,7 @@ mod samples_custody;
 mod samples_detail;
 mod samples_features;
 mod samples_list;
+mod samples_report;
 mod samples_shots;
 mod scanned_inputs;
 mod settings_window;

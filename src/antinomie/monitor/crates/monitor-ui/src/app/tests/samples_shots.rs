@@ -28,6 +28,8 @@ fn native_samples_fixture() {
         open_promote: Option<PathBuf>,
         /// Open Export custody record… once the window has read the sample.
         open_export: bool,
+        /// Open Export report… once the window has read the sample.
+        open_report: bool,
         /// Select the newest run on the Runs tab once the window has read it.
         select_run: bool,
         /// A scene that needs the sample read first (see `samples_features`).
@@ -69,6 +71,10 @@ fn native_samples_fixture() {
             if self.open_export && self.app.samples_page.detail_custody().is_some() {
                 self.open_export = false;
                 self.app.samples_page.open_export_for_test();
+            }
+            if self.open_report && self.app.samples_page.detail_probe().is_some() {
+                self.open_report = false;
+                self.app.samples_page.open_report_for_test();
             }
             eframe::App::update(&mut self.app, ctx, frame);
             ctx.request_repaint_after(Duration::from_millis(200));
@@ -176,6 +182,7 @@ fn native_samples_fixture() {
                     | "custody_all"
                     | "custody_all_broken"
                     | "export"
+                    | "report"
                     | "notes"
                     | "note_editor"
                     | "delete_run"
@@ -268,6 +275,7 @@ fn native_samples_fixture() {
                 open_viewer: scene == "viewer",
                 open_promote: (scene == "promote").then(|| data.clone()),
                 open_export: scene == "export",
+                open_report: scene == "report",
                 select_run: scene == "runs_details",
                 later: matches!(scene.as_str(), "note_editor" | "delete_run")
                     .then(|| scene.clone()),

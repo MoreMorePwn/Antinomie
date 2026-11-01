@@ -37,7 +37,13 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
         }
     }
     if !sample.tlsh.is_empty() {
-        add("tlsh", "Payload delivery", &sample.tlsh, false, "the sample's fuzzy hash");
+        add(
+            "tlsh",
+            "Payload delivery",
+            &sample.tlsh,
+            false,
+            "the sample's fuzzy hash",
+        );
     }
     let mut names = vec![sample.name.clone()];
     names.extend(sample.names.iter().map(|alias| alias.name.clone()));
@@ -45,7 +51,13 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
     names.sort();
     names.dedup();
     for name in &names {
-        add("filename", "Payload delivery", name, false, "a name the sample went by");
+        add(
+            "filename",
+            "Payload delivery",
+            name,
+            false,
+            "a name the sample went by",
+        );
     }
     add(
         "size-in-bytes",
@@ -108,7 +120,11 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
                 } else {
                     format!(
                         " in run {}",
-                        hit.runs.iter().map(usize::to_string).collect::<Vec<_>>().join(", ")
+                        hit.runs
+                            .iter()
+                            .map(usize::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     )
                 },
                 credit(&hit.author),
@@ -134,7 +150,11 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
                 "Run {}: {} ({}), exit {}, {} rule(s), {} indicator(s)",
                 run.number,
                 run.assessment,
-                if run.highest_tier.is_empty() { "tier unknown" } else { &run.highest_tier },
+                if run.highest_tier.is_empty() {
+                    "tier unknown"
+                } else {
+                    &run.highest_tier
+                },
                 run.exit,
                 run.rules,
                 run.indicators
@@ -152,7 +172,11 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
             "Custody log: {} entries, head {}, {}",
             report.custody.entries,
             report.custody.head,
-            if report.custody.verified { "chain verified" } else { "chain NOT verified" }
+            if report.custody.verified {
+                "chain verified"
+            } else {
+                "chain NOT verified"
+            }
         ),
         false,
         "",
@@ -177,7 +201,11 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
         json!({"name": "antinomie:sample-report", "colour": "#0b5cad"}),
         json!({"name": format!("antinomie:assessment=\"{assessment}\""), "colour": "#6b4e00"}),
     ];
-    for tag in sample.tags.iter().filter(|t| t.kind == "verdict" || t.kind == "category") {
+    for tag in sample
+        .tags
+        .iter()
+        .filter(|t| t.kind == "verdict" || t.kind == "category")
+    {
         tags.push(json!({
             "name": format!("antinomie:{}=\"{}\"", tag.kind, tag.value.replace('"', "")),
             "colour": "#5c6670",

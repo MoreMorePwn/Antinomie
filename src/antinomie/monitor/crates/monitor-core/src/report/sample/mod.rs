@@ -574,8 +574,8 @@ impl SampleReport {
         self.omitted.indicators += cap(&mut self.indicators, LIST_ROWS);
         self.omitted.detections += cap(&mut self.detections, LIST_ROWS);
         self.omitted.runs += cap(&mut self.runs, LIST_ROWS);
-        self.omitted.lineage += cap(&mut self.lineage.parents, LIST_ROWS)
-            + cap(&mut self.lineage.children, LIST_ROWS);
+        self.omitted.lineage +=
+            cap(&mut self.lineage.parents, LIST_ROWS) + cap(&mut self.lineage.children, LIST_ROWS);
         cap(&mut self.similar.rows, LIST_ROWS);
         let o = self.omitted.clone();
         for (count, what) in [

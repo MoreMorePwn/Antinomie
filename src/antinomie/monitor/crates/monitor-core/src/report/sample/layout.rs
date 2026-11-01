@@ -130,7 +130,10 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
     };
     let sample = &report.sample;
     let mut head = vec![
-        ("Generated".to_owned(), format!("{} UTC", utc(report.generated_ms))),
+        (
+            "Generated".to_owned(),
+            format!("{} UTC", utc(report.generated_ms)),
+        ),
         ("Application".into(), report.app.clone()),
         ("Sample".into(), b.free(&sample.name)),
         ("SHA-256".into(), sample.sha256.clone()),
@@ -179,8 +182,7 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
         )
     }));
     blocks.push(Block::Note(
-        "This report names the sample by its hashes. It holds none of the sample's bytes."
-            .into(),
+        "This report names the sample by its hashes. It holds none of the sample's bytes.".into(),
     ));
     if defang {
         blocks.push(Block::Note(
@@ -209,7 +211,9 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
     );
     blocks.push(Block::Sub(format!("Origins ({})", sample.origins.len())));
     table(
-        &["When", "How", "Source", "VM", "Run", "Name", "Detail", "Parent"],
+        &[
+            "When", "How", "Source", "VM", "Run", "Name", "Detail", "Parent",
+        ],
         sample
             .origins
             .iter()
@@ -268,7 +272,7 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
                     ]
                 })
                 .collect(),
-        "No check is recorded.",
+            "No check is recorded.",
             &mut blocks,
         );
         if !st.layers.is_empty() {
@@ -291,7 +295,10 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
                 &mut blocks,
             );
         }
-        blocks.push(Block::Sub(format!("Capabilities ({})", st.capabilities.len())));
+        blocks.push(Block::Sub(format!(
+            "Capabilities ({})",
+            st.capabilities.len()
+        )));
         table(
             &["Capability", "Namespace", "ATT&CK", "MBC"],
             st.capabilities
@@ -384,7 +391,14 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
     let mut blocks = Vec::new();
     table(
         &[
-            "Run", "VM", "Started", "Exit", "Assessment", "Tier", "Rules", "Indicators",
+            "Run",
+            "VM",
+            "Started",
+            "Exit",
+            "Assessment",
+            "Tier",
+            "Rules",
+            "Indicators",
             "Run report",
         ],
         report
@@ -393,7 +407,11 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
             .map(|run| {
                 vec![
                     run.number.to_string(),
-                    b.free(if run.vm_name.is_empty() { &run.vm_id } else { &run.vm_name }),
+                    b.free(if run.vm_name.is_empty() {
+                        &run.vm_id
+                    } else {
+                        &run.vm_name
+                    }),
                     time(run.started_ms),
                     run.exit.clone(),
                     assessment_label(&run.assessment).into(),
@@ -429,16 +447,29 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
     // Lineage.
     let mut blocks = Vec::new();
     let columns = [
-        "Level", "Kind", "Name", "Path", "SHA-256", "Verdict", "Joined by", "Runs",
+        "Level",
+        "Kind",
+        "Name",
+        "Path",
+        "SHA-256",
+        "Verdict",
+        "Joined by",
+        "Runs",
     ];
-    blocks.push(Block::Sub(format!("Parents ({})", report.lineage.parents.len())));
+    blocks.push(Block::Sub(format!(
+        "Parents ({})",
+        report.lineage.parents.len()
+    )));
     table(
         &columns,
         lineage_rows(&b, &report.lineage.parents),
         "No parent.",
         &mut blocks,
     );
-    blocks.push(Block::Sub(format!("Children ({})", report.lineage.children.len())));
+    blocks.push(Block::Sub(format!(
+        "Children ({})",
+        report.lineage.children.len()
+    )));
     table(
         &columns,
         lineage_rows(&b, &report.lineage.children),
@@ -567,10 +598,15 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
         )));
         blocks.push(Block::Paragraph(b.free(&note.text)));
         if note.cut {
-            blocks.push(Block::Note(format!("The note was cut to {NOTE_CHARS} characters.")));
+            blocks.push(Block::Note(format!(
+                "The note was cut to {NOTE_CHARS} characters."
+            )));
         }
         if !note.refs.is_empty() {
-            blocks.push(Block::Note(format!("Refers to {}", b.free(&note.refs.join("; ")))));
+            blocks.push(Block::Note(format!(
+                "Refers to {}",
+                b.free(&note.refs.join("; "))
+            )));
         }
     }
     if report.omitted.notes > 0 {

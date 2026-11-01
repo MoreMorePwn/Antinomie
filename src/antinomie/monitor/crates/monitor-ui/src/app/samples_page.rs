@@ -23,6 +23,7 @@ mod list;
 mod notes;
 mod picker;
 mod promote;
+mod report_export;
 mod viewer;
 
 /// One list row: a library sample with what the list shows of its runs,
@@ -147,6 +148,8 @@ pub(super) struct SamplesPage {
     promote: Option<promote::Promote>,
     /// Export custody record… for the open sample.
     export: Option<export::ExportDialog>,
+    /// Export report… for a sample.
+    report: report_export::Slot,
     /// The custody log across every sample; shows instead of the list.
     custody_all: Option<custody_all::CustodyAll>,
     /// Analyze ›: the archived copy being written for static analysis.
@@ -555,6 +558,7 @@ impl MonitorApp {
                 }
             }
         }
+        self.report_export_window(ctx);
         self.edit_tags_window(ctx, &known_custom);
         self.remove_window(ctx);
         self.note_windows(ctx);

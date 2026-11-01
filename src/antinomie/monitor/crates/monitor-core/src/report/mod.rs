@@ -17,11 +17,11 @@ pub mod defang;
 pub mod export;
 mod html;
 pub mod layout;
-pub mod sample;
 pub mod misp;
 mod pdf;
 mod pdf_font;
 mod pdf_layout;
+pub mod sample;
 pub mod stix;
 
 /// The schema name every JSON export carries in `schema`.
