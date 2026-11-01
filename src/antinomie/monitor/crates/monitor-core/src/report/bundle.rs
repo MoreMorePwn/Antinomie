@@ -242,7 +242,10 @@ fn write_into(out: File, temp: &Path, input: BundleInput, path: &Path) -> Result
                     sha256,
                 });
             }
-            Err(error) => skipped.push((capture.display().to_string(), error.to_string())),
+            Err(error) => skipped.push((
+                name,
+                crate::disk_start::without_host_paths(&error.to_string()),
+            )),
         }
     }
     let mut dropped_map = Vec::new();

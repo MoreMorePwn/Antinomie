@@ -224,10 +224,10 @@ pub struct RunRow {
     pub indicators: u64,
     pub indicators_matched: u64,
     pub detections: u64,
-    /// The run's folder, so the person can open the run.
+    /// The run's folder, relative to the data directory.
     pub directory: String,
     /// The newest HTML report the run's Triage export wrote, or empty when it
-    /// has none yet.
+    /// has none yet, relative to the data directory.
     pub report_file: String,
 }
 

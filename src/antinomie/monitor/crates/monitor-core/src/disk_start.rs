@@ -68,18 +68,16 @@ pub struct Frozen {
 impl Frozen {
     /// Whether every layer is still the file it was, or why not.
     pub fn verify(&self) -> Result<(), String> {
-        for layer in &self.layers {
-            let now = Layer::of(&layer.path).map_err(|_| {
-                format!(
-                    "{} is gone (a deleted base or checkpoint)",
-                    layer.path.display()
-                )
-            })?;
+        for (at, layer) in self.layers.iter().enumerate() {
+            let what = if at == 0 {
+                "the VM's disk"
+            } else {
+                "a base or checkpoint under the VM's disk"
+            };
+            let now = Layer::of(&layer.path)
+                .map_err(|_| format!("{what} is gone (a deleted base or checkpoint)"))?;
             if now != *layer {
-                return Err(format!(
-                    "{} changed after the run started",
-                    layer.path.display()
-                ));
+                return Err(format!("{what} changed after the run started"));
             }
         }
         Ok(())
@@ -89,6 +87,25 @@ impl Frozen {
     pub fn paths(&self) -> Vec<PathBuf> {
         self.layers.iter().map(|layer| layer.path.clone()).collect()
     }
+}
+
+/// `text` with every absolute host path in it cut down to its file name, so an
+/// error about a disk layer does not show the user name or the folder layout.
+pub fn without_host_paths(text: &str) -> String {
+    text.split(' ')
+        .map(|word| {
+            let bare = word.trim_end_matches([':', ',', ')', ';']);
+            if bare.starts_with('/') && bare.len() > 1 {
+                let name = Path::new(bare)
+                    .file_name()
+                    .map_or(String::new(), |n| n.to_string_lossy().into_owned());
+                format!("{name}{}", &word[bare.len()..])
+            } else {
+                word.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// What is known of the disk a boot started from.

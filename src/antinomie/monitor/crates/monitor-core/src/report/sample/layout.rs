@@ -439,7 +439,7 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
     }
     blocks.push(Block::Note(
         "Each run's own report is the Triage export of that run, written in the run's folder. \
-         It is named here by its path, since a report holds no links."
+         It is named here by its path inside the data directory, since a report holds no links."
             .into(),
     ));
     b.section("runs", "Runs", blocks);

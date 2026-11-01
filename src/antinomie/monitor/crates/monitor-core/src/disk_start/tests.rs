@@ -96,3 +96,36 @@ fn the_start_is_the_frozen_layers_under_an_empty_overlay() {
     ));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// The message a changed or deleted layer gives names the disk, not the host
+/// path of its image.
+#[test]
+fn a_changed_layer_is_named_without_its_host_path() {
+    let dir = std::env::temp_dir().join(format!("ant-diskstart-{}", crate::storage::unique_id()));
+    crate::storage::private_dir(&dir).unwrap();
+    let disk = dir.join("disk.qcow2");
+    std::fs::write(&disk, b"one").unwrap();
+    let frozen = Frozen {
+        layers: vec![Layer::of(&disk).unwrap()],
+    };
+    assert_eq!(frozen.verify(), Ok(()));
+    std::fs::write(&disk, b"longer").unwrap();
+    let changed = frozen.verify().unwrap_err();
+    assert_eq!(changed, "the VM's disk changed after the run started");
+    std::fs::remove_file(&disk).unwrap();
+    let gone = frozen.verify().unwrap_err();
+    assert!(gone.starts_with("the VM's disk is gone"), "{gone}");
+    for text in [&changed, &gone] {
+        assert!(!text.contains("qcow2") && !text.contains('/'), "{text}");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn host_paths_in_an_error_are_cut_to_the_file_name() {
+    assert_eq!(
+        without_host_paths("/home/me/.local/share/x/vm/disk.qcow2: No such file (os error 2)"),
+        "disk.qcow2: No such file (os error 2)"
+    );
+    assert_eq!(without_host_paths("nothing to cut"), "nothing to cut");
+}

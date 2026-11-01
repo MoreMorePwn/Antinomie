@@ -357,9 +357,21 @@ pub fn merge_attack(digests: &[(usize, &RunDigest)]) -> Vec<Technique> {
         .collect()
 }
 
+/// `path` as the report names it: relative to the data directory, so the
+/// user name and the folder layout above it do not reach the report. A path
+/// outside the data directory is reduced to its file name.
+pub fn in_data_dir(data_dir: &std::path::Path, path: &std::path::Path) -> String {
+    match path.strip_prefix(data_dir) {
+        Ok(inside) => inside.display().to_string(),
+        Err(_) => path
+            .file_name()
+            .map_or(String::new(), |name| name.to_string_lossy().into_owned()),
+    }
+}
+
 /// The newest report file a run's Triage export wrote: `report/antinomie-report-*.html`
 /// in the run's folder. Empty when the run has none.
-pub fn latest_run_report(run_directory: &std::path::Path) -> String {
+pub fn latest_run_report(data_dir: &std::path::Path, run_directory: &std::path::Path) -> String {
     let Ok(listing) = std::fs::read_dir(run_directory.join("report")) else {
         return String::new();
     };
@@ -370,13 +382,7 @@ pub fn latest_run_report(run_directory: &std::path::Path) -> String {
             (name.starts_with("antinomie-report-") && name.ends_with(".html")).then_some(name)
         })
         .max()
-        .map(|name| {
-            run_directory
-                .join("report")
-                .join(name)
-                .display()
-                .to_string()
-        })
+        .map(|name| in_data_dir(data_dir, &run_directory.join("report").join(name)))
         .unwrap_or_default()
 }
 
@@ -389,6 +395,7 @@ pub fn run_row(
     run_id: &str,
     started_ms: Option<u64>,
     exit: &str,
+    data_dir: &std::path::Path,
     directory: &std::path::Path,
     folder_present: bool,
     digest: Option<&RunDigest>,
@@ -401,9 +408,9 @@ pub fn run_row(
         started_ms,
         exit: exit.into(),
         folder_present,
-        directory: directory.display().to_string(),
+        directory: in_data_dir(data_dir, directory),
         report_file: if folder_present {
-            latest_run_report(directory)
+            latest_run_report(data_dir, directory)
         } else {
             String::new()
         },

@@ -65,7 +65,11 @@ pub(super) fn collect(
                 break;
             }
             Err(error) => {
-                warnings.push(format!("{}: {error}", path.display()));
+                warnings.push(format!(
+                    "{}: {error}",
+                    path.file_name()
+                        .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+                ));
                 continue;
             }
         }
@@ -93,7 +97,11 @@ pub(super) fn collect(
                 }
             }
             Err(error) if cancel.load(Ordering::Relaxed) => return Err(error),
-            Err(error) => warnings.push(format!("{}: {error}", path.display())),
+            Err(error) => warnings.push(format!(
+                "{}: {error}",
+                path.file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
+            )),
         }
     }
     if succeeded == 0 {

@@ -84,6 +84,7 @@ fn default_folder(data_dir: &std::path::Path) -> PathBuf {
 /// comparison's answer.
 pub(super) fn build_report(
     data: &Data,
+    data_dir: &std::path::Path,
     vms: &[(String, String)],
     similar: Result<Vec<Similar>, String>,
     now_ms: u64,
@@ -104,6 +105,7 @@ pub(super) fn build_report(
                 &entry.run.id,
                 entry.run.started_ms,
                 &super::exit_label(&entry.run),
+                data_dir,
                 &entry.run.directory,
                 entry.folder,
                 entry.digest.as_ref(),
@@ -223,7 +225,7 @@ fn run_job(job: &Job, status: &dyn Fn(&str)) -> Result<Written, String> {
             .and_then(|library| library.similar_to(&job.sha256, &exclude))
     };
     status("Building the report...");
-    let report = build_report(&data, &job.vms, similar, now_ms());
+    let report = build_report(&data, &job.options.data_dir, &job.vms, similar, now_ms());
     status("Writing the files...");
     let library = Library::open(&job.options.data_dir)?;
     sample::export::write_and_note(&library, &report, &job.choices, &job.folder)
@@ -496,6 +498,12 @@ impl super::SamplesPage {
         sha256: &str,
     ) -> Result<SampleReport, String> {
         let data = detail::load(options, vms, sha256)?;
-        Ok(build_report(&data, vms, Ok(Vec::new()), 1_792_000_000_000))
+        Ok(build_report(
+            &data,
+            &options.data_dir,
+            vms,
+            Ok(Vec::new()),
+            1_792_000_000_000,
+        ))
     }
 }

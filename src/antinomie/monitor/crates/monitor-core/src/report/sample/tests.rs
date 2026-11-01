@@ -178,6 +178,7 @@ pub(super) fn fixture() -> SampleReport {
             "run-1",
             Some(1_791_500_000_000),
             "Exit 0",
+            std::path::Path::new("/nonexistent"),
             std::path::Path::new("/nonexistent/run-1"),
             false,
             Some(&d1),
@@ -189,6 +190,7 @@ pub(super) fn fixture() -> SampleReport {
             "run-2",
             Some(1_792_000_000_000),
             "Exit 1",
+            std::path::Path::new("/nonexistent"),
             std::path::Path::new("/nonexistent/run-2"),
             false,
             Some(&d2),
@@ -200,6 +202,7 @@ pub(super) fn fixture() -> SampleReport {
             "run-3",
             None,
             "Running",
+            std::path::Path::new("/nonexistent"),
             std::path::Path::new("/nonexistent/run-3"),
             false,
             None,
@@ -898,4 +901,44 @@ fn sample_report_fixture_export() {
         ..Choices::default()
     };
     export::write(&report, &raw, &out.join("raw")).unwrap();
+}
+
+#[test]
+fn no_export_names_the_home_directory_of_the_data_dir() {
+    let home = temp("home").join("fakeuser");
+    let data_dir = home.join(".local/share/antinomie");
+    let run_dir = data_dir.join("runs/vm-1/run-9");
+    std::fs::create_dir_all(run_dir.join("report")).unwrap();
+    std::fs::write(run_dir.join("report/antinomie-report-1.html"), b"x").unwrap();
+    let mut report = fixture();
+    report.runs = vec![build::run_row(
+        1,
+        "vm-1",
+        "Debian",
+        "run-9",
+        Some(1_791_500_000_000),
+        "Exit 0",
+        &data_dir,
+        &run_dir,
+        true,
+        None,
+    )];
+    assert_eq!(report.runs[0].directory, "runs/vm-1/run-9");
+    assert_eq!(
+        report.runs[0].report_file,
+        "runs/vm-1/run-9/report/antinomie-report-1.html"
+    );
+    let home_text = home.display().to_string();
+    for format in [
+        Format::Html,
+        Format::Json,
+        Format::Misp,
+        Format::Stix,
+        Format::Markdown,
+    ] {
+        let out = text(&report, format, true);
+        assert!(!out.contains(&home_text), "{format:?} names the home");
+        assert!(!out.contains("fakeuser"), "{format:?} names the user");
+    }
+    assert!(text(&report, Format::Markdown, true).contains("runs/vm-1/run-9/report/"));
 }

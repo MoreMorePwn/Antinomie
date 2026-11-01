@@ -8,6 +8,12 @@ it runs.
 
 ### Host
 
+- **Fixed: run views and reports no longer show host paths.** Per-file history
+  said "unavailable: /home/<user>/.../disk.qcow2 changed after the run started";
+  it now says "the VM's disk changed after the run started". Disk-layer errors,
+  network index warnings and the evidence bundle's skipped list name files, not
+  host folders, and the sample report's run table and JSON give each run's
+  folder and report relative to the data directory.
 - **Fixed: multi-threaded ransomware is triaged as one process.** The stateful
   Triage rules (mass rewrite, mass delete, ransom rewrite and note, file search,
   process and user enumeration, scans, kill lists, fork bombs, uploads, floods,

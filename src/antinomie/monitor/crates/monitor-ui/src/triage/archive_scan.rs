@@ -522,8 +522,14 @@ pub(super) fn scan_archive_query(
         )
         .unwrap_or_else(|error| PacketIndex {
             counts: None,
-            coverage: format!("pcap index failed: {error}"),
-            network_warning: Some(format!("Network index unavailable: {error}")),
+            coverage: format!(
+                "pcap index failed: {}",
+                antinomie_monitor_core::disk_start::without_host_paths(&error.to_string())
+            ),
+            network_warning: Some(format!(
+                "Network index unavailable: {}",
+                antinomie_monitor_core::disk_start::without_host_paths(&error.to_string())
+            )),
             ..PacketIndex::default()
         }),
         None => PacketIndex {

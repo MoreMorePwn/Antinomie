@@ -98,7 +98,10 @@ impl StartDisk {
                 );
             }
             Start::Unknown(why) => {
-                return Err(format!("the starting disk was not recorded: {why}"));
+                return Err(format!(
+                    "the starting disk was not recorded: {}",
+                    crate::disk_start::without_host_paths(why)
+                ));
             }
         };
         frozen.verify()?;
@@ -163,13 +166,15 @@ impl StartDisk {
             })
         });
         match located {
-            Err(why) => Before::Unavailable(why),
+            Err(why) => Before::Unavailable(crate::disk_start::without_host_paths(&why)),
             Ok(Err(ReadError::NotFound)) => Before::Elsewhere(
                 "the path is not on the starting disk (a file the run created, or on tmpfs or \
                  another mount)"
                     .into(),
             ),
-            Ok(Err(error)) => Before::Unavailable(error.to_string()),
+            Ok(Err(error)) => {
+                Before::Unavailable(crate::disk_start::without_host_paths(&error.to_string()))
+            }
             Ok(Ok(DiskAnswer::Located(location))) => match location.matched {
                 LocationMatch::Different(why) => Before::Elsewhere(why),
                 _ if location.size > SIZE_CAP => Before::TooLarge(location.size),
@@ -500,7 +505,12 @@ impl Resolver {
         });
         let disk = match disk {
             Ok(disk) => Arc::clone(disk),
-            Err(why) => return (Before::Unavailable(why.clone()), None),
+            Err(why) => {
+                return (
+                    Before::Unavailable(crate::disk_start::without_host_paths(why)),
+                    None,
+                );
+            }
         };
         let mut first_answer = None;
         for path in std::iter::once(wanted.path).chain(wanted.names.iter().map(String::as_str)) {
