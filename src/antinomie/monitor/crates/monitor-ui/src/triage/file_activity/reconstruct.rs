@@ -548,8 +548,6 @@ impl Open {
                     ui.selectable_value(&mut self.text_view, true, "Text diff")
                         .on_hover_text("Lines changed since the start of the run, for text files whose every byte is known");
                 });
-                heading(ui, "What this call changed");
-                self.changed(ui);
                 heading(ui, "Byte history");
                 self.history(ui, clock);
                 heading(ui, "Hash check");
@@ -559,77 +557,12 @@ impl Open {
             });
     }
 
-    fn changed(&self, ui: &mut egui::Ui) {
-        let position = self.map.position();
-        let Some(step) = position
-            .checked_sub(1)
-            .and_then(|at| self.map.steps().get(at))
-        else {
-            ui.weak("The start of the run: nothing changed yet.");
-            return;
-        };
-        let ranges = step.ranges();
-        if ranges.is_empty() {
-            if let Action::Resize(to) = step.action {
-                ui.weak(format!("The file was resized to {to} B."));
-            } else {
-                ui.weak("No bytes changed (a read of bytes already known).");
-            }
-        }
-        for (offset, len, state) in ranges.iter().take(12) {
-            let end = if *len == u64::MAX {
-                self.map.size()
-            } else {
-                offset.saturating_add(*len)
-            };
-            let cells = self
-                .map
-                .row(*offset, 8.min(end.saturating_sub(*offset) as usize));
-            let hex: Vec<String> = cells
-                .iter()
-                .map(|cell| match (cell.state.glyph(), cell.byte) {
-                    (Some(glyph), _) => glyph.to_owned(),
-                    (None, Some(byte)) => format!("{byte:02x}"),
-                    (None, None) => "!!".into(),
-                })
-                .collect();
-            let what = match state {
-                Some(state) => state.label(),
-                None => "bytes seen",
-            };
-            ui.add(
-                egui::Label::new(
-                    RichText::new(format!(
-                        "0x{offset:x} +{} · {what}\n{}{}",
-                        if *len == u64::MAX {
-                            "to the end".to_owned()
-                        } else {
-                            len.to_string()
-                        },
-                        hex.join(" "),
-                        if end.saturating_sub(*offset) > 8 {
-                            " …"
-                        } else {
-                            ""
-                        }
-                    ))
-                    .monospace()
-                    .small(),
-                )
-                .wrap(),
-            );
-        }
-        if ranges.len() > 12 {
-            ui.weak(format!("… and {} more ranges", ranges.len() - 12));
-        }
-    }
-
     fn history(&self, ui: &mut egui::Ui, clock: Option<antinomie_monitor_core::HostClockAnchor>) {
         let Some(offset) = self.selected else {
-            ui.weak("Click a byte to see how it became known.");
+            ui.weak("Click a cell to see how the byte at its offset became known.");
             return;
         };
-        ui.label(RichText::new(format!("Byte 0x{offset:x}")).strong());
+        ui.label(RichText::new(format!("Offset 0x{offset:x}")).strong());
         let history = self.map.history(offset);
         if history.is_empty() {
             ui.weak("No call has shown this byte: it is unknown.");

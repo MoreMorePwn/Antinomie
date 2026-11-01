@@ -34,12 +34,57 @@ impl Order {
     }
 }
 
+/// Which name a file renamed during the run is listed, searched and
+/// sorted by.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum NameChoice {
+    /// The name it had last (`web01.vswp.INC`).
+    #[default]
+    Last,
+    /// The name it was first reached by (`web01.vswp`).
+    First,
+}
+
+impl NameChoice {
+    const ALL: [Self; 2] = [Self::Last, Self::First];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Last => "Last name",
+            Self::First => "First name",
+        }
+    }
+}
+
+impl FileActivity {
+    /// The name the file had after its last successful rename, if it was
+    /// renamed.
+    pub(super) fn last_name(&self) -> Option<&str> {
+        self.events
+            .iter()
+            .filter(|event| event.kind == super::Kind::Rename && event.success != Some(false))
+            .filter_map(|event| event.other_path.as_deref())
+            .next_back()
+            .filter(|name| *name != self.path)
+    }
+
+    /// The name the list shows under `choice`, and the other one, if any.
+    pub(super) fn names_by(&self, choice: NameChoice) -> (&str, Option<&str>) {
+        match (choice, self.last_name()) {
+            (NameChoice::Last, Some(last)) => (last, Some(self.path.as_str())),
+            (NameChoice::First, Some(last)) => (self.path.as_str(), Some(last)),
+            (_, None) => (self.path.as_str(), None),
+        }
+    }
+}
+
 pub(in crate::triage) struct Window {
     pub(super) filter: String,
     pub(super) hide_standard_io: bool,
     pub(super) hide_libraries: bool,
     pub(super) changed_only: bool,
     pub(super) order: Order,
+    pub(super) name_choice: NameChoice,
     /// The chosen file: its path and first call, which survive a new index.
     selected: Option<(String, u64)>,
     node: Option<usize>,
@@ -57,6 +102,7 @@ impl Default for Window {
             hide_libraries: true,
             changed_only: false,
             order: Order::First,
+            name_choice: NameChoice::Last,
             selected: None,
             node: None,
             reconstruction: None,
@@ -126,6 +172,7 @@ impl Window {
                         || file
                             .names
                             .iter()
+                            .chain(file.last_name().map(str::to_owned).as_ref())
                             .any(|name| name.to_lowercase().contains(&needle)))
             })
             .map(|(index, _)| index)
@@ -137,7 +184,12 @@ impl Window {
             Order::Calls => kept.sort_by_key(|&i| {
                 std::cmp::Reverse(files[i].events.len() as u64 + files[i].omitted)
             }),
-            Order::Path => kept.sort_by(|&a, &b| files[a].path.cmp(&files[b].path)),
+            Order::Path => kept.sort_by(|&a, &b| {
+                files[a]
+                    .names_by(self.name_choice)
+                    .0
+                    .cmp(files[b].names_by(self.name_choice).0)
+            }),
         }
         kept
     }
@@ -255,40 +307,35 @@ impl Window {
         shown: &[usize],
         clock: Option<antinomie_monitor_core::HostClockAnchor>,
     ) {
-        ui.add(
-            egui::TextEdit::singleline(&mut self.filter)
-                .hint_text(theme::hint_text("Filter by path"))
-                .desired_width(f32::INFINITY),
-        );
-        ui.horizontal_wrapped(|ui| {
-            for (label, flag, hover) in [
-                ("Hide stdio", &mut self.hide_standard_io, "Hide stdin, stdout, stderr"),
-                (
-                    "Hide library",
-                    &mut self.hide_libraries,
-                    "Hide shared libraries and the loader cache",
-                ),
-                (
-                    "Changed only",
-                    &mut self.changed_only,
-                    "Only files a call created, wrote, resized, renamed, linked, deleted or changed the attributes of",
-                ),
-            ] {
-                if widgets::toggle_chip(ui, label, *flag, None)
-                    .on_hover_text(hover)
-                    .clicked()
-                {
-                    *flag = !*flag;
+        // Every filter of the list in one section, folded or not for the
+        // session; folded, its header says how many are on.
+        let on = [
+            !self.filter.trim().is_empty(),
+            self.hide_standard_io,
+            self.hide_libraries,
+            self.changed_only,
+            self.order != Order::First,
+            self.name_choice != NameChoice::Last,
+        ]
+        .into_iter()
+        .filter(|on| *on)
+        .count();
+        let id = ui.make_persistent_id("file-activity-filters");
+        let state =
+            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
+        let open = state.is_open();
+        state
+            .show_header(ui, |ui| {
+                ui.label(egui::RichText::new("Filters").strong());
+                if !open && on > 0 {
+                    ui.weak(if on == 1 {
+                        "1 filter on".to_owned()
+                    } else {
+                        format!("{on} filters on")
+                    });
                 }
-            }
-        });
-        egui::ComboBox::from_id_salt("file-activity-order")
-            .selected_text(self.order.label())
-            .show_ui(ui, |ui| {
-                for order in Order::ALL {
-                    ui.selectable_value(&mut self.order, order, order.label());
-                }
-            });
+            })
+            .body(|ui| self.filters(ui));
         ui.weak(format!(
             "{} of {} files",
             shown.len(),
@@ -320,16 +367,25 @@ impl Window {
                         .scope(|ui| {
                             ui.set_min_width(ui.available_width());
                             ui.vertical(|ui| {
+                                let (name, other) = file.names_by(self.name_choice);
                                 ui.add(
-                                    egui::Label::new(egui::RichText::new(&file.path).monospace())
+                                    egui::Label::new(egui::RichText::new(name).monospace())
                                         .truncate()
                                         .selectable(false),
-                                );
+                                )
+                                .on_hover_text(match other {
+                                    Some(other) => format!("{name}\nalso seen as {other}"),
+                                    None => name.to_owned(),
+                                });
+                                let summary = match other {
+                                    Some(other) => {
+                                        format!("also seen as {other} · {}", file.summary())
+                                    }
+                                    None => file.summary(),
+                                };
                                 ui.add(
                                     egui::Label::new(
-                                        egui::RichText::new(file.summary())
-                                            .small()
-                                            .color(theme::muted()),
+                                        egui::RichText::new(summary).small().color(theme::muted()),
                                     )
                                     .truncate()
                                     .selectable(false),
@@ -367,6 +423,57 @@ impl Window {
                 details::clicked(ctx, FILE_TABLE);
             }
         }
+    }
+
+    /// The body of the Filters section of the file list.
+    fn filters(&mut self, ui: &mut egui::Ui) {
+        ui.add(
+            egui::TextEdit::singleline(&mut self.filter)
+                .hint_text(theme::hint_text("Filter by path"))
+                .desired_width(f32::INFINITY),
+        );
+        ui.horizontal_wrapped(|ui| {
+            for (label, flag, hover) in [
+                ("Hide stdio", &mut self.hide_standard_io, "Hide stdin, stdout, stderr"),
+                (
+                    "Hide library",
+                    &mut self.hide_libraries,
+                    "Hide shared libraries and the loader cache",
+                ),
+                (
+                    "Changed only",
+                    &mut self.changed_only,
+                    "Only files a call created, wrote, resized, renamed, linked, deleted or changed the attributes of",
+                ),
+            ] {
+                if widgets::toggle_chip(ui, label, *flag, None)
+                    .on_hover_text(hover)
+                    .clicked()
+                {
+                    *flag = !*flag;
+                }
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            egui::ComboBox::from_id_salt("file-activity-order")
+                .selected_text(self.order.label())
+                .show_ui(ui, |ui| {
+                    for order in Order::ALL {
+                        ui.selectable_value(&mut self.order, order, order.label());
+                    }
+                });
+            egui::ComboBox::from_id_salt("file-activity-name")
+                .selected_text(format!("Name: {}", self.name_choice.label()))
+                .show_ui(ui, |ui| {
+                    for choice in NameChoice::ALL {
+                        ui.selectable_value(&mut self.name_choice, choice, choice.label());
+                    }
+                })
+                .response
+                .on_hover_text(
+                    "Which name a file renamed during the run is listed, searched and sorted by; the other one is shown under it",
+                );
+        });
     }
 
     fn history(

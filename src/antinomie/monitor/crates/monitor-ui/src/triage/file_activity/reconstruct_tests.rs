@@ -316,7 +316,7 @@ fn a_clicked_byte_shows_when_it_was_learned() {
         .expect("first byte");
     harness.click(&mut open, &activity, file, None, first.center());
     let shown = harness.settle(&mut open, &activity, file, None);
-    find(&shown, "Byte 0x0");
+    find(&shown, "Offset 0x0");
     find(&shown, "written = 23");
 }
 
@@ -361,7 +361,13 @@ fn a_file_with_a_gap_has_no_hash_and_the_map_marks_it() {
     let mut open = Open::new(file);
     let mut harness = Harness::new();
     let shown = harness.settle(&mut open, &activity, file, None);
-    find(&shown, "## ## ## ##");
+    // The map marks each byte with no value (the side panel no longer
+    // repeats the changed ranges).
+    assert!(
+        shown.iter().filter(|(text, _)| text == "##").count() >= 4,
+        "{:?}",
+        shown.iter().map(|s| &s.0).collect::<Vec<_>>()
+    );
     let button = find(&shown, "Hash this state").center();
     harness.click(&mut open, &activity, file, None, button);
     let mut text = Vec::new();

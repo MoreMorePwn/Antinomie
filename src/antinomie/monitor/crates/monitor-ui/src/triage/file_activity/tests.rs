@@ -665,3 +665,52 @@ fn a_file_the_run_created_starts_empty_whatever_the_starting_disk_says() {
     });
     assert_eq!(start_of(&created).size, None);
 }
+
+#[test]
+fn a_renamed_file_is_listed_and_sorted_by_its_last_name_unless_the_first_is_chosen() {
+    use super::window::NameChoice;
+    let mut activity = activity();
+    // /tmp/payload is renamed to /tmp/payload.locked, as an INC-like sample does.
+    let index = activity
+        .files
+        .iter()
+        .position(|file| file.path == "/tmp/payload")
+        .unwrap();
+    let mut rename = event(9, Kind::Rename, 0);
+    rename.success = Some(true);
+    rename.other_path = Some("/tmp/payload.locked".into());
+    activity.files[index].events.push(rename);
+    let file = &activity.files[index];
+    assert_eq!(file.last_name(), Some("/tmp/payload.locked"));
+    assert_eq!(
+        file.names_by(NameChoice::Last),
+        ("/tmp/payload.locked", Some("/tmp/payload"))
+    );
+    assert_eq!(
+        file.names_by(NameChoice::First),
+        ("/tmp/payload", Some("/tmp/payload.locked"))
+    );
+    // A refused rename changes no name.
+    let mut refused = activity.files[index].clone();
+    for event in refused
+        .events
+        .iter_mut()
+        .filter(|event| event.kind == Kind::Rename)
+    {
+        event.success = Some(false);
+    }
+    assert_eq!(refused.last_name(), None);
+    // Either name finds it; the order by name follows the chosen one.
+    let mut window = Window::default();
+    window.filter = "locked".into();
+    assert_eq!(window.shown(&activity), [index]);
+    window.filter = "/tmp/payload".into();
+    assert_eq!(window.shown(&activity), [index]);
+    window.filter.clear();
+    window.order = Order::Path;
+    window.hide_libraries = false;
+    let first = |window: &Window| activity.files[window.shown(&activity)[0]].path.clone();
+    assert_eq!(first(&window), "/etc/hosts");
+    window.name_choice = NameChoice::Last;
+    assert!(window.shown(&activity).contains(&index));
+}
