@@ -337,3 +337,63 @@ fn run_history_names_the_library_sample_each_run_executed() {
         );
     }
 }
+
+#[test]
+fn a_typed_path_is_read_when_the_field_is_left_not_after_its_first_letters() {
+    // Round 6 walkthrough: typing a path read its first letters ("/ho") and
+    // kept that "No such file" error under the whole path, Add disabled.
+    let root = temp("typed-path");
+    let files = temp("typed-path-files");
+    let (mut app, ctx) = open_page(&root);
+    let file = files.join("incident.sh");
+    std::fs::write(&file, SCRIPT).unwrap();
+    app.samples_page.open_add(None);
+    click_label(&mut app, &ctx, SIZE, "Path on this computer");
+    let screen = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE));
+    let typed = file.display().to_string();
+    let (head, tail) = typed.split_at(3);
+    for text in [head, tail] {
+        let _ = draw_input(
+            &mut app,
+            &ctx,
+            egui::RawInput {
+                screen_rect: screen,
+                events: vec![egui::Event::Text(text.into())],
+                ..Default::default()
+            },
+        );
+        // Time for a read of what was typed so far, had one started.
+        for _ in 0..20 {
+            render(&mut app, &ctx, SIZE);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    let shown = texts(&render(&mut app, &ctx, SIZE));
+    assert!(
+        !shown.iter().any(|(text, _)| text.contains("No such file")),
+        "{shown:?}"
+    );
+    assert!(
+        !app.samples_page.add_ready(),
+        "nothing is read while typing"
+    );
+    // Enter leaves the field: the whole path is read.
+    let _ = draw_input(
+        &mut app,
+        &ctx,
+        egui::RawInput {
+            screen_rect: screen,
+            events: vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        },
+    );
+    until(&mut app, &ctx, |app| app.samples_page.add_ready());
+    std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_dir_all(files).unwrap();
+}

@@ -198,8 +198,12 @@ impl AddDialog {
                                     .font(egui::TextStyle::Monospace)
                                     .desired_width(360.0),
                             );
+                            // A path set by Choose file is read at once; a typed one
+                            // when the field is left, not after its first letters.
                             if (edit.lost_focus() && self.probed != self.path.trim())
-                                || (self.probed.is_empty() && !self.path.trim().is_empty())
+                                || (self.probed.is_empty()
+                                    && !self.path.trim().is_empty()
+                                    && !edit.has_focus())
                             {
                                 self.start_probe(ctx, data_dir);
                             }
@@ -223,11 +227,13 @@ impl AddDialog {
                                 theme::loading(ui, "Reading and hashing…");
                                 ui.end_row();
                             }
-                            Probe::Failed(error) => {
+                            // An error about a path since edited is not shown.
+                            Probe::Failed(error) if self.probed == self.path.trim() => {
                                 ui.label("");
                                 ui.colored_label(theme::error(), error);
                                 ui.end_row();
                             }
+                            Probe::Failed(_) => {}
                             Probe::Ready(probe) => {
                                 ui.label(RichText::new("Size").color(theme::muted()));
                                 ui.label(
