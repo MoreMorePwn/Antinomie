@@ -606,7 +606,14 @@ impl MonitorApp {
             .max_width(560.0)
             .resizable(false)
             .show(ctx, |ui| {
-                picker.show(ui, &suggested, known_custom);
+                // The tag list scrolls so the title and Save stay on screen in
+                // a short app window (1100x700 with dozens of techniques).
+                let most = crate::title_bar::content_rect(ctx).height() - 180.0;
+                egui::ScrollArea::vertical()
+                    .id_salt("samples_edit_tags_list")
+                    .max_height(most.max(160.0))
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| picker.show(ui, &suggested, known_custom));
                 crate::widgets::footer(ui, |ui| {
                     save = ui.button("Save").clicked();
                     cancel = ui.button("Cancel").clicked();
