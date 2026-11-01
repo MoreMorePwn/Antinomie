@@ -127,6 +127,9 @@ pub(super) struct View {
     pub(super) offset: Vec2,
     pub(super) zoom: f32,
     pub(super) fitted: bool,
+    /// The user panned or zoomed: a rebuilt graph keeps this view instead of
+    /// being fitted again.
+    pub(super) moved: bool,
 }
 
 impl Default for View {
@@ -135,6 +138,7 @@ impl Default for View {
             offset: Vec2::ZERO,
             zoom: 1.0,
             fitted: false,
+            moved: false,
         }
     }
 }
@@ -159,16 +163,19 @@ impl View {
         self.zoom = zoom;
         self.offset = (viewport - bounds.size() * zoom) / 2.0 - bounds.min.to_vec2() * zoom;
         self.fitted = true;
+        self.moved = false;
     }
 
     /// Actual size, centred on `centre` (graph space).
     fn actual(&mut self, viewport: Vec2, centre: Pos2) {
+        self.moved = true;
         self.zoom = 1.0;
         self.offset = viewport / 2.0 - centre.to_vec2();
     }
 
     /// Zoom by `factor` keeping the graph point under `pivot` (viewport space).
     fn zoom_about(&mut self, pivot: Vec2, factor: f32) {
+        self.moved = true;
         let zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
         let factor = zoom / self.zoom;
         self.offset = pivot - (pivot - self.offset) * factor;
@@ -315,9 +322,11 @@ pub(super) fn show(
                 .min(MINIMAP.y / layout.bounds.height().max(1.0));
             let world = layout.bounds.min + (pointer - minimap.min) / scale;
             view.offset = viewport / 2.0 - world.to_vec2() * view.zoom;
+            view.moved = true;
         }
     } else if response.dragged() {
         view.offset += response.drag_delta();
+        view.moved = true;
     }
     if response.hovered() {
         let (scroll, pinch, pointer) = ui.input(|input| {
@@ -352,7 +361,10 @@ pub(super) fn show(
                 input.key_pressed(egui::Key::Num0),
             )
         });
-        view.offset += egui::vec2(dx, dy);
+        if dx != 0.0 || dy != 0.0 {
+            view.offset += egui::vec2(dx, dy);
+            view.moved = true;
+        }
         if zoom != 0.0 {
             view.zoom_about(viewport / 2.0, if zoom > 0.0 { 1.2 } else { 1.0 / 1.2 });
         }

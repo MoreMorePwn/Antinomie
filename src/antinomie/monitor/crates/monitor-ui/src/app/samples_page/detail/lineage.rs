@@ -11,6 +11,7 @@ use antinomie_monitor_core::samples::{
 use std::collections::BTreeSet;
 
 mod canvas;
+mod crowd;
 mod labels;
 
 /// What a click in the section asks of the window.
@@ -114,6 +115,7 @@ impl State {
         {
             self.view.offset = viewport * 0.5 - at.center().to_vec2() * self.view.zoom;
             self.view.fitted = true;
+            self.view.moved = true;
         }
     }
 
@@ -160,7 +162,10 @@ impl State {
                     verdict: verdict.clone(),
                 })
             };
-            let graph = build_lineage(&data.record.sha256, &runs, &data.links, &known, &options);
+            let mut graph =
+                build_lineage(&data.record.sha256, &runs, &data.links, &known, &options);
+            // Hundreds of written files fold into their parent's +N badge.
+            crowd::fold(&mut graph, &options.expanded, &data.record.sha256);
             let layout = canvas::Layout::of(&graph);
             // A level or node was added or removed: the anchor stays where it
             // was on screen, the rest of the graph moves around it.
@@ -172,7 +177,11 @@ impl State {
                 (Some(id), true) => id.clone(),
                 _ => data.record.sha256.clone(),
             };
-            if self.cached.is_some() && self.view.fitted {
+            if !self.view.moved {
+                // Nobody moved the view: fit the new graph, which may be
+                // much smaller once its crowds are folded.
+                self.view.fitted = false;
+            } else if self.cached.is_some() && self.view.fitted {
                 if let (Some(at), Some(rect)) = (self.screen.get(&anchor), layout.at.get(&anchor)) {
                     self.view.offset = *at - rect.center().to_vec2() * self.view.zoom;
                 }
@@ -391,10 +400,8 @@ pub(super) fn section(ui: &mut egui::Ui, state: &mut State, data: &Data) -> Opti
         let sample = data.record.sha256.clone();
         // Read the graph again when an option changed this frame.
         state.refresh(data);
-        let rect = egui::Rect::from_min_size(
-            ui.cursor().min,
-            egui::vec2(width, canvas_height(ui, state)),
-        );
+        let rect =
+            egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, canvas_height(ui, state)));
         state.apply_focus(data, rect.size());
         let mut act = None;
         let (hit, screen) = {
