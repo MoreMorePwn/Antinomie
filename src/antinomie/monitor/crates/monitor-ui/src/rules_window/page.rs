@@ -763,7 +763,9 @@ impl Model {
         self.rule_order(ui.ctx());
         let total = ui.available_width();
         let gap = 12.0;
-        let wide = total >= 760.0;
+        // Side by side only when the table keeps room for its five columns
+        // and a readable rule name; otherwise the details go under it.
+        let wide = total >= 1000.0;
         let left = if wide { (total - gap) * 0.56 } else { total };
         let height = (ui.clip_rect().bottom() - ui.cursor().top()).clamp(240.0, 640.0);
         let mut picked = None;
@@ -815,87 +817,89 @@ impl Model {
     ) {
         let font = ui.text_style_height(&egui::TextStyle::Body);
         let row_height = table::row_height(font) + ROW_PAD;
-        egui::ScrollArea::horizontal()
-            .id_salt("rules_list_scroll")
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.x += CELL_PAD;
-                table::begin(ui);
-                TableBuilder::new(ui)
-                    .id_salt("rules_list")
-                    .sense(egui::Sense::click())
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .striped(true)
-                    .column(Column::exact(34.0))
-                    .column(Column::remainder().at_least(120.0).clip(true))
-                    .column(Column::exact(84.0))
-                    .column(Column::exact(84.0))
-                    .column(
-                        Column::initial(100.0)
-                            .at_least(40.0)
-                            .resizable(true)
-                            .clip(true),
-                    )
-                    .max_scroll_height(height)
-                    .min_scrolled_height(0.0)
-                    .header(table::header_height(font), |mut header| {
-                        header.col(|ui| table::head(ui, "On"));
-                        for (column, title) in ["Rule", "Severity", "State", "File"]
-                            .into_iter()
-                            .enumerate()
-                        {
-                            header.col(|ui| {
-                                crate::table_sort::header(ui, "rules_list", column + 1, title)
-                            });
-                        }
-                    })
-                    .body(|body| {
-                        body.rows(row_height, self.sorted.len(), |mut row| {
-                            let index = self.sorted[row.index()];
-                            let rule = &self.rows[index];
-                            let state = self.rule_state(rule);
-                            let selected = self.detail == Some(index);
-                            row.set_selected(selected);
-                            row.col(|ui| {
-                                table::row_mark(
-                                    ui,
-                                    if selected {
-                                        table::Mark::Selected
-                                    } else {
-                                        table::Mark::None
-                                    },
-                                );
-                                let mut on = state == "enabled";
-                                if ui
-                                    .add_enabled(rule.compatible, egui::Checkbox::new(&mut on, ""))
-                                    .changed()
-                                {
-                                    *toggle = Some((rule.id.clone(), on));
-                                }
-                            });
-                            row.col(|ui| {
-                                table::cell_click(ui, table::Cell::Mono, &rule.name);
-                            });
-                            row.col(|ui| {
-                                if !rule.severity.is_empty() {
-                                    widgets::chip(
-                                        ui,
-                                        &rule.severity,
-                                        severity_tone(&rule.severity),
-                                    );
-                                }
-                            });
-                            row.col(|ui| {
-                                table::cell_click(ui, table::Cell::Text, state);
-                            });
-                            row.col(|ui| {
-                                table::cell_click(ui, table::Cell::Text, &rule.file);
-                            });
-                            if row.response().clicked() {
-                                *picked = Some(index);
+        // The table fits the width it is given: no horizontal scroll area,
+        // whose content width fed the Rule column's width back to it every
+        // frame (item 21: the table shrank and grew by a few points). Long
+        // names are cut and the tooltip has them whole.
+        ui.scope(|ui| {
+            let width = ui.available_width();
+            ui.set_max_width(width);
+            ui.spacing_mut().item_spacing.x += CELL_PAD;
+            table::begin(ui);
+            TableBuilder::new(ui)
+                .id_salt("rules_list")
+                .sense(egui::Sense::click())
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .striped(true)
+                .column(Column::exact(34.0))
+                .column(Column::remainder().at_least(120.0).clip(true))
+                .column(Column::exact(84.0))
+                .column(Column::exact(84.0))
+                .column(
+                    Column::initial(100.0)
+                        .at_least(40.0)
+                        .resizable(true)
+                        .clip(true),
+                )
+                .max_scroll_height(height)
+                .min_scrolled_height(0.0)
+                .header(table::header_height(font), |mut header| {
+                    header.col(|ui| table::head(ui, "On"));
+                    for (column, title) in ["Rule", "Severity", "State", "File"]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        header.col(|ui| {
+                            crate::table_sort::header(ui, "rules_list", column + 1, title)
+                        });
+                    }
+                })
+                .body(|body| {
+                    body.rows(row_height, self.sorted.len(), |mut row| {
+                        let index = self.sorted[row.index()];
+                        let rule = &self.rows[index];
+                        let state = self.rule_state(rule);
+                        let selected = self.detail == Some(index);
+                        row.set_selected(selected);
+                        row.col(|ui| {
+                            table::row_mark(
+                                ui,
+                                if selected {
+                                    table::Mark::Selected
+                                } else {
+                                    table::Mark::None
+                                },
+                            );
+                            let mut on = state == "enabled";
+                            if ui
+                                .add_enabled(rule.compatible, egui::Checkbox::new(&mut on, ""))
+                                .changed()
+                            {
+                                *toggle = Some((rule.id.clone(), on));
                             }
                         });
+                        row.col(|ui| {
+                            table::cell_click(ui, table::Cell::Mono, &rule.name)
+                                .on_hover_text(&rule.name);
+                        });
+                        row.col(|ui| {
+                            if !rule.severity.is_empty() {
+                                widgets::chip(ui, &rule.severity, severity_tone(&rule.severity));
+                            }
+                        });
+                        row.col(|ui| {
+                            table::cell_click(ui, table::Cell::Text, state);
+                        });
+                        row.col(|ui| {
+                            table::cell_click(ui, table::Cell::Text, &rule.file)
+                                .on_hover_text(&rule.file);
+                        });
+                        if row.response().clicked() {
+                            *picked = Some(index);
+                        }
                     });
-            });
+                });
+        });
     }
 
     fn pick_rule(&mut self, index: usize, data_dir: &Path) {

@@ -540,3 +540,77 @@ fn native_rules_pack_fixture() {
     )
     .unwrap();
 }
+
+#[test]
+fn a_pack_rule_table_holds_still_frame_after_frame() {
+    // Item 21: the rule table of a chosen pack shrank and grew by a few
+    // points every frame. Long rule names and file names, at a fractional
+    // text size, in a narrow and a wide window: no header may move.
+    let mut rules = String::new();
+    for index in 0..40 {
+        rules.push_str(&format!(
+            "rule A_Very_Long_Rule_Name_For_Layout_Checks_Number_{index:02}_With_More_Words\n{{\n  meta:\n    description = \"{}\"\n  strings:\n    $a = \"x{index}\"\n  condition:\n    $a\n}}\n\n",
+            "a long description ".repeat(8)
+        ));
+    }
+    for (width, font) in [(1100.0, 18.0), (760.0, 18.0), (1600.0, 16.0), (640.0, 20.0)] {
+        let mut f = Fixture::new(&format!("still-{width}"));
+        crate::theme::text_size(&f.ctx, font);
+        f.pack(
+            "fixture",
+            "yara",
+            "a_rather_long_file_name_for_the_rules.yar",
+            &rules,
+        );
+        f.until("Number_00");
+        let size = egui::vec2(width, 1000.0);
+        let mut first: Option<Vec<f32>> = None;
+        for frame in 0..100 {
+            let shown = render(
+                &f.ctx,
+                &mut f.model,
+                &f.dir,
+                size,
+                Vec::new(),
+                &mut f.outbound,
+            );
+            let mut edges: Vec<f32> = ["Severity", "State", "File"]
+                .iter()
+                .filter_map(|title| {
+                    shown
+                        .iter()
+                        .find(|(text, _, _)| text.starts_with(title))
+                        .map(|(_, rect, _)| rect.left())
+                })
+                .collect();
+            // Every column is on screen: none is pushed past the table's edge.
+            assert_eq!(
+                edges.len(),
+                3,
+                "a column header is cut off at {width}/{font}: {}",
+                joined(&shown)
+            );
+            edges.push(
+                shown
+                    .iter()
+                    .filter(|(text, _, _)| text.contains("Number_"))
+                    .map(|(_, rect, clip)| rect.right().min(clip.right()))
+                    .fold(0.0, f32::max),
+            );
+            match &first {
+                None if frame >= 5 => first = Some(edges),
+                Some(first) => assert!(
+                    first.iter().zip(&edges).all(|(a, b)| (a - b).abs() < 0.01),
+                    "the rule table moves at {width}/{font}, frame {frame}: {first:?} -> {edges:?}"
+                ),
+                None => {}
+            }
+            for (_, rect, clip) in &shown {
+                assert!(
+                    rect.right().min(clip.right()) <= width + 0.5,
+                    "text past the window at {width}/{font}"
+                );
+            }
+        }
+    }
+}
