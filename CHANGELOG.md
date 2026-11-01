@@ -4,7 +4,21 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
-## 0.8.0 — unreleased
+## 0.8.0 — 2026-11-02
+
+Antinomie 0.8.0 is the first release since 0.7.1. It moves to guest contract
+revision 20 with rebuilt bases: Debian 13 Minimal and the Debian 13 desktop (GNOME)
+are assembled from pinned Debian userland, and BusyBox takes its programs from
+Debian's packages. Live network routes gain an egress abuse filter, and a run that
+fails to start now says why. Static analysis adds Ghidra disassembly and accepts
+programs up to 128 MiB. A run's Triage can be exported as a report in HTML, PDF,
+JSON, MISP or STIX 2.1, with an optional evidence bundle, and a sample's runs as a
+sample report. Triage counts the work of multi-threaded programs per process, so
+ransomware that spreads its writes over worker threads is caught. Device profiles
+now cover whole machines, including cloud VPS identities, and the recorder keeps up
+with busy programs and says how much telemetry a run lost. The interface had two
+more rounds of fixes, run views and reports no longer show host paths, and several
+security advisories in bundled libraries are closed. Details follow.
 
 ### Host
 

@@ -9,9 +9,9 @@ and does not protect against.
 
 | Version | Supported |
 |---|---|
-| 0.7.x (latest release) | Yes |
+| 0.8.x (latest release) | Yes |
 | `release-*` development branches | Fixes land here first; not a supported release |
-| 0.6.x and earlier | No; upgrade to the latest release |
+| 0.7.x and earlier | No; upgrade to the latest release |
 
 Security fixes are released as a new patch version. Older releases are not
 patched.

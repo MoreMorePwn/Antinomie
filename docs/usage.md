@@ -2,8 +2,7 @@
 
 [← Back to the overview](../README.md)
 
-This guide follows the 0.8.0 development branch: it describes 0.7.1 plus what
-0.8.0 adds so far. Available controls depend on the application and base
+This guide follows 0.8.0. Available controls depend on the application and base
 versions; existing VMs keep their pinned base.
 
 ## Dependencies and analysis tools

@@ -56,10 +56,9 @@ is the recorded run; no VM is running.</sub>
 > sample can still do.
 
 > [!NOTE]
-> This is the **0.8.0 development branch**. The latest release is **0.7.1**:
-> download it from [Releases](https://github.com/MoreMorePwn/Antinomie/releases)
-> and read its README on the `main` branch. Sections below that describe 0.7.1
-> say so; the [changelog](CHANGELOG.md) lists what 0.8.0 adds so far.
+> This README describes **0.8.0**, the first release since 0.7.1. Download it
+> from [Releases](https://github.com/MoreMorePwn/Antinomie/releases); the
+> [changelog](CHANGELOG.md) lists every change.
 
 ## Highlights
 
@@ -170,14 +169,14 @@ and network card into its disk without root; BusyBox VMs do not need it:
 sudo apt install qemu-system-x86 qemu-utils qemu-system-gui curl libsqlite3-0 bubblewrap tshark util-linux libguestfs-tools
 ```
 
-Download `antinomie-0.7.1-linux-x86_64.tar.gz` and `SHA256SUMS` from
+Download `antinomie-0.8.0-linux-x86_64.tar.gz` and `SHA256SUMS` from
 [Releases](https://github.com/MoreMorePwn/Antinomie/releases) into one folder,
 then verify, extract and install for your user (no root):
 
 ```sh
 sha256sum --check SHA256SUMS
-tar -xzf antinomie-0.7.1-linux-x86_64.tar.gz
-cd antinomie-0.7.1
+tar -xzf antinomie-0.8.0-linux-x86_64.tar.gz
+cd antinomie-0.8.0
 ./install.sh
 antinomie --check-dependencies
 antinomie
@@ -190,7 +189,7 @@ antinomie
   and keeps your data too.
 - **Other distributions:** **Tools → App dependencies** names the packages for
   apt, dnf, pacman and zypper. Only Debian and Ubuntu installs are tested.
-- **Provenance:** releases after 0.7.1 carry a build attestation. With the GitHub
+- **Provenance:** releases from 0.8.0 on carry a build attestation. With the GitHub
   CLI, `gh attestation verify antinomie-X.Y.Z-linux-x86_64.tar.gz --repo
   MoreMorePwn/Antinomie` confirms the archive was built by this repository's
   release workflow from the tagged commit.
@@ -203,7 +202,7 @@ antinomie
 Install the [host build prerequisites](src/antinomie/monitor/README.md#build-and-run), then:
 
 ```sh
-git clone --branch v0.7.1 https://github.com/MoreMorePwn/Antinomie.git
+git clone --branch v0.8.0 https://github.com/MoreMorePwn/Antinomie.git
 cd Antinomie
 ./run.sh
 ```
@@ -349,10 +348,35 @@ The app checks dependencies at startup (**Tools → App dependencies**). From a
 terminal: `antinomie --check-dependencies`. The
 [full dependency list](docs/usage.md#dependencies-and-analysis-tools) names every tool.
 
-## What's in 0.7.1
+## What's in 0.8.0
 
-Highlights of 0.7.1 on top of the 0.7.0 work; the [changelog](CHANGELOG.md) has
-the full list.
+Highlights of 0.8.0 on top of 0.7.1; the [changelog](CHANGELOG.md) has the full
+list.
+
+<details>
+<summary><b>Show the 0.8.0 changes</b></summary>
+
+<br>
+
+* **Guest contract revision 20** with rebuilt bases; Debian Minimal and the
+  Debian desktop are assembled from pinned Debian userland.
+* **Network routes:** an egress abuse filter on live routes, routed captures and
+  routes that survive snapshots and reconnects.
+* **Static analysis:** Ghidra disassembly and programs up to 128 MiB.
+* **Report export:** HTML, PDF, JSON, MISP and STIX 2.1, with an optional
+  evidence bundle.
+* **Device profiles:** whole machine identities, including cloud VPS profiles
+  with a canary metadata service.
+* **Samples:** a library with a custody log, a window per sample and file
+  reconstruction.
+* **Interface:** two more rounds of fixes, larger default text, and a per-run
+  count of lost telemetry.
+* **Security:** zip 9.2, wasmtime 48.0.8 and one strict check for every
+  untrusted zip.
+
+</details>
+
+## What was in 0.7.1
 
 <details>
 <summary><b>Show the 0.7.1 changes</b></summary>
