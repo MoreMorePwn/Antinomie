@@ -319,6 +319,10 @@ pub fn download_base(
         .is_err_and(|error| crate::cancel::is_cancelled(error))
     {
         let _ = fs::remove_dir_all(staging);
+        // The `downloads` folder it was in, when nothing else is there.
+        if let Some(parent) = staging.parent() {
+            let _ = fs::remove_dir(parent);
+        }
     }
     result
 }

@@ -437,8 +437,15 @@ fn build_tree(
     );
     fs::write(tree.join("SOURCE.txt"), source_note).map_err(|error| error.to_string())?;
     index_tree(&tree, &pack.engine)?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
     if pack.engine == "yara" {
         compile_yara_tree(&tree)?;
+    }
+    // The last point to stop: after this the pack is put in place.
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
     }
     let indexed = read_index(&tree)?;
     let helpers = indexed.iter().filter(|rule| rule.helper).count() as u64;

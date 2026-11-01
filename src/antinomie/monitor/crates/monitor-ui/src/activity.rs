@@ -393,7 +393,15 @@ pub(crate) fn error_toast(ui: &egui::Ui, message: impl std::fmt::Display) {
 pub(crate) fn outcome(ui: &mut egui::Ui, message: impl std::fmt::Display) {
     let text = message.to_string();
     if antinomie_monitor_core::cancel::is_cancelled(&text) {
-        info(ui, text);
+        // "Cancelled" and what it means; the job's own words when it has them.
+        info(
+            ui,
+            if text.starts_with("Cancelled") {
+                text
+            } else {
+                "Cancelled. Nothing was changed.".to_owned()
+            },
+        );
     } else {
         error_toast(ui, text);
     }
