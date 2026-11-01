@@ -199,9 +199,18 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(x86, {c.name: c.timeout for c in vm.plan("full", self.ctx(), "x86_64")})
         arm64 = {c.name: c for c in vm.plan("full", self.ctx(), "arm64")}
         self.assertIn("conf-quick", arm64)
-        for name in ("debugger-live", "cloud", "conf-stress-extreme",
+        for name in ("debugger-live", "conf-stress-extreme",
                      "io-old-new-p3", "io-new-old-audit", "uring-legacy"):
             self.assertNotIn(name, arm64)
+        self.assertIn("cloud", arm64)
+        # Interop on arm64: the old host refuses the base, before any VM.
+        refused = arm64.pop("io-old-arm64-refused")
+        self.assertEqual((refused.group, refused.needs, refused.timeout), ("interop", ("base", "old"), 300))
+        self.assertIn("guest-run", refused.argv[-1])
+        self.assertEqual(vm.command_for(refused, self.ctx(), None)[1], {"ANTINOMIE_FORCE_TCG": "1"})
+        self.assertRegex("Error: this Antinomie does not start arm64 VMs yet", refused.refusal)
+        self.assertRegex("this base is for a newer Antinomie (revision 21)", refused.refusal)
+        self.assertNotIn("io-old-arm64-refused", {c.name for c in vm.plan("full", self.ctx())})
         self.assertIn("snapshot", arm64)
         self.assertIn("debug-p2", arm64)
         self.assertIn("debug-p3", arm64)
@@ -211,6 +220,26 @@ class PlanTests(unittest.TestCase):
         self.assertEqual([c.name for c in vm.plan("quick", self.ctx(), "arm64")], ["conf-quick"])
         self.assertEqual(vm.parse(["quick", "/base", "--arch", "arm64"]).arch, "arm64")
         self.assertEqual(vm.parse(["quick", "/base"]).arch, "x86_64")
+
+    def test_a_refusal_check_passes_only_when_its_command_fails_with_the_message(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            args = vm.parse(["full", "/base", "--out", tmp, "--min-free", f"{tmp}:0",
+                             "--max-used-gb", "1000000"])
+            ctx = {"out": out, "results": {}}
+
+            def outcome(script):
+                check = vm.Check("io-old-arm64-refused", "interop", ["sh", "-c", script], tmp, 30,
+                                 vm=False)
+                check.refusal = vm.ARM64_REFUSAL
+                return vm.run_check(check, ctx, args, 1)
+
+            refused = outcome("echo 'snapshot-check: this Antinomie does not start arm64 VMs yet'; exit 1")
+            self.assertEqual(refused["status"], "PASS", refused)
+            self.assertIn("does not start arm64 VMs", refused["detail"])
+            # Starting the VM, or failing for another reason, is not a refusal.
+            self.assertEqual(outcome("echo booted; exit 0")["status"], "FAIL")
+            self.assertEqual(outcome("echo 'qemu: cannot boot'; exit 1")["status"], "FAIL")
 
     def test_missing_prerequisites_skip(self):
         ctx = {**self.ctx(), "old_base": None, "old_ok": False}

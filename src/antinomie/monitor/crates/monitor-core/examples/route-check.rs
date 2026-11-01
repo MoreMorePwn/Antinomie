@@ -74,6 +74,10 @@ const SINKHOLE: &str = "198.51.100.1";
 /// What a fake proxy was asked: `target:port`, and `|probe` when the
 /// request on it came from the route probe in the guest.
 type Seen = Arc<Mutex<Vec<String>>>;
+/// In the fake wireproxy: the log each CONNECT is appended to as it is
+/// seen, before the request is answered (the route stops wireproxy when the
+/// run ends, which can be before a batched write).
+static CONNECT_LOG: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 /// Serves SOCKS5 on `listener` forever: every CONNECT succeeds, and an HTTP
 /// request on it is answered by the fake itself with `X-Route-Fake: label`.
@@ -149,12 +153,20 @@ fn socks_session(
         }
     }
     let from_probe = String::from_utf8_lossy(&text).contains("antinomie-route-probe");
+    let line = if from_probe {
+        format!("{target}|probe")
+    } else {
+        target
+    };
+    if let Some(path) = CONNECT_LOG.get() {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        writeln!(file, "{line}")?;
+    }
     if let Ok(mut seen) = seen.lock() {
-        seen.push(if from_probe {
-            format!("{target}|probe")
-        } else {
-            target
-        });
+        seen.push(line);
     }
     if text.is_empty() {
         return Ok(());
@@ -208,26 +220,12 @@ fn fake_wireproxy(config: &str) -> Result<(), String> {
     // The check makes this wireproxy die during a run by creating `stop`.
     let stop = log.with_file_name(VPN_STOP);
     let listener = TcpListener::bind(bind).map_err(|e| e.to_string())?;
-    let seen = Seen::default();
-    let shared = seen.clone();
-    thread::spawn(move || serve_socks(listener, "vpn", false, shared));
-    let mut written = 0;
+    let _ = CONNECT_LOG.set(log);
+    thread::spawn(move || serve_socks(listener, "vpn", false, Seen::default()));
     loop {
         thread::sleep(Duration::from_millis(100));
         if stop.exists() {
             std::process::exit(7);
-        }
-        let lines: Vec<String> = seen.lock().map(|s| s.clone()).unwrap_or_default();
-        if lines.len() > written {
-            let mut file = fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log)
-                .map_err(|e| e.to_string())?;
-            for line in &lines[written..] {
-                writeln!(file, "{line}").map_err(|e| e.to_string())?;
-            }
-            written = lines.len();
         }
     }
 }
@@ -706,6 +704,15 @@ fn routed(d: &mut Driver, t: &mut Table, fakes: &Fakes, data: &Path) -> Result<(
         cloud_profile()?,
     ))?;
     let vm = "routed";
+    // An arm64 Cloud VPS has no metadata service (the launch says so), so
+    // 169.254.169.254 stays silent there and carries no connection.
+    let arm = antinomie_monitor_core::storage::Bundle::load(&d.options.bundle_dir)
+        .is_ok_and(|bundle| bundle.arch == antinomie_monitor_core::GuestArch::AARCH64);
+    let metadata = if arm {
+        "metadata silent (arm64 has no metadata service)"
+    } else {
+        "metadata answered"
+    };
 
     let drop = d.probe(Some(RouteKind::Drop), false);
     t.check(vm, "drop: run starts", drop.is_ok(), error_text(&drop));
@@ -729,8 +736,8 @@ fn routed(d: &mut Driver, t: &mut Table, fakes: &Fakes, data: &Path) -> Result<(
         );
         t.check(
             vm,
-            "drop: metadata answered",
-            p.answered("meta.status"),
+            &format!("drop: {metadata}"),
+            p.answered("meta.status") != arm,
             p.fact("meta.status"),
         );
     }
@@ -760,13 +767,13 @@ fn routed(d: &mut Driver, t: &mut Table, fakes: &Fakes, data: &Path) -> Result<(
             vm,
             // The site's connection and the metadata service's.
             "internet: gateway carried it",
-            p.connections() >= 2,
+            p.connections() >= if arm { 1 } else { 2 },
             format!("{} carried", p.connections()),
         );
         t.check(
             vm,
-            "internet: metadata answered",
-            p.answered("meta.status"),
+            &format!("internet: {metadata}"),
+            p.answered("meta.status") != arm,
             p.fact("meta.status"),
         );
         let captures = p.captures();

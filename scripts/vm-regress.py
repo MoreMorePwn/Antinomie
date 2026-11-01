@@ -42,6 +42,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -106,12 +107,18 @@ ATTRIBUTED_GROUPS = {"conf-stress-contended": "stress-contended"}
 MEASURED_GROUPS = {"conf-stress-rate": "stress-rate"}
 # The compiler of each guest architecture's static fixtures.
 ARCH_CC = {"x86_64": "gcc", "arm64": "aarch64-linux-gnu-gcc"}
-# Checks an arm64 tier does not plan yet, and the card that brings each: the
-# app's live debugger check (MA-14), the cloud profiles (MA-17), interop (x86
-# bases only), stress-extreme (disk under TCG). The stealth probe measures arm64
-# without its CPUID and I/O port checks; debug-p2/p3 run the aarch64 fixtures.
-ARM64_LATER = {"debugger-live", "cloud",
-               "conf-stress-extreme", "uring-legacy", "tracer-legacy"}
+# Checks an arm64 tier does not plan, and why: the app's live debugger check
+# types x86-64 registers into GEF and pwndbg (debug-p2/p3 run the aarch64
+# fixtures through gdb-multiarch instead), the legacy checks need a base from
+# before 0.9.0 (no arm64 base is older), stress-extreme fills a disk under TCG.
+# The stealth probe measures arm64 without its CPUID and I/O port checks; the
+# cloud check expects the arm64 instance's identity. Interop has its own arm64
+# check (ARM64_INTEROP).
+ARM64_LATER = {"debugger-live", "conf-stress-extreme", "uring-legacy", "tracer-legacy"}
+# What an old host (--old-host: 0.8.0, which has no arm64 VMs) says when it is
+# asked to start a VM on an arm64 base: it must refuse before QEMU runs, with
+# its own message, or as a base of a newer revision.
+ARM64_REFUSAL = r"does not start arm64 VMs|this base is for a newer Antinomie"
 MACHINE_RS = MONITOR / "crates/monitor-core/src/vm/machine.rs"
 
 
@@ -412,6 +419,8 @@ class Check:
         self.timeout, self.vm, self.needs, self.cargo = timeout, vm, needs, cargo
         # An old host run on BASE: not applicable when BASE has a newer revision.
         self.old_host_on_base = False
+        # A check that passes when its command fails with output matching this.
+        self.refusal = None
 
 
 def plan(tier, ctx, arch="x86_64"):
@@ -424,6 +433,22 @@ def plan(tier, ctx, arch="x86_64"):
     checks = [check for check in checks if check.name not in ARM64_LATER and check.group != "interop"]
     for check in checks:
         check.timeout *= scale
+    if tier == "full":
+        # The old host (0.8.0) imports this base and is asked to start a VM
+        # on it (its guest-run, under TCG wherever it runs): a clean refusal,
+        # before QEMU runs.
+        runs = ctx["out"] / "runs" / "io-old-arm64-refused"
+        order = {"data_dir": str(runs / "data"), "headless": True, "import": str(ctx["base"]),
+                 "vm": {"name": "interop", "cpus": 1, "ram_mib": 1024, "disk_gib": 2},
+                 "boot_timeout": 120, "runs": []}
+        q = shlex.quote
+        script = (f"mkdir -p {q(str(runs))} && printf '%s' {q(json.dumps(order))} > "
+                  f"{q(str(runs / 'plan.json'))} && exec {q(str(ctx['old'] / 'guest-run'))} "
+                  f"{q(str(runs / 'plan.json'))}")
+        refused = Check("io-old-arm64-refused", "interop", ["sh", "-c", script], str(ROOT), 300,
+                        needs=("base", "old"))
+        refused.refusal = ARM64_REFUSAL
+        checks.append(refused)
     return checks
 
 
@@ -575,6 +600,8 @@ def build_foreign_fixtures(out, arch):
         (["-static", "-O2", *strict], "tracer-fixture.c", fix / "tracer-fixture"),
         (["-static", "-O2", *strict], "stealth-probe.c", fix / "stealth-probe"),
         (["-static", "-O2", *strict], "cloud-probe.c", fix / "cloud-probe"),
+        (["-static", "-O2", *strict], "route-probe.c", fix / "route-probe"),
+        (["-static", "-O2", *strict], "specimen-probe.c", fix / "specimen-probe"),
         (["-O1", "-static", "-pthread"], "debug-fixture.c", fix / "debug/fixture"),
         (["-O1", "-static", "-no-pie", "-pthread"], "debug-p2-fixture.c", fix / "debug/p2fix"),
         (["-O1", "-static-pie", "-pthread"], "debug-p2-fixture.c", fix / "debug/p2pie"),
@@ -666,6 +693,10 @@ def command_for(check, ctx, args):
         argv = ["cargo", "test", "--release", "--locked", "-j", "2", "-p", "antinomie-monitor-ui", "--bin",
                 "antinomie-monitor", "debugger_console_live", "--", "--ignored", "--nocapture"]
         return argv, env
+    if check.name == "io-old-arm64-refused":
+        # An old host has no arm64 machine of its own: it must refuse, not
+        # stop at a missing /dev/kvm first.
+        return check.argv, {"ANTINOMIE_FORCE_TCG": "1"}
     if check.name == "tracer-qa":
         # Triage QA over the recordings of a failed tracer-record would pass on
         # whatever that run left: its input must have passed.
@@ -803,6 +834,12 @@ def run_check(check, ctx, args, attempt):
     code, seconds = run_logged(argv, env, check.cwd, log, check.timeout)
     status = "TIMEOUT" if code is None else "PASS" if code == 0 else "FAIL"
     result = {**result, "status": status, "seconds": round(seconds, 1), "exit": code}
+    if check.refusal and code is not None:
+        text = log.read_text(errors="replace") if log.exists() else ""
+        refused = code != 0 and re.search(check.refusal, text)
+        result["status"] = "PASS" if refused else "FAIL"
+        result["detail"] = ("refused: " + refused.group(0)) if refused else \
+            f"expected a refusal matching {check.refusal!r} (exit {code})"
     if check.name in ATTRIBUTED_GROUPS and code is not None:
         result.update(measure(check.name, out, log, code))
     elif check.name in MEASURED_GROUPS and code is not None:
@@ -1202,7 +1239,8 @@ def main(argv=None):
                 if not args.no_build:
                     disk_guard(args)
                     ctx["new"] = build_examples(ROOT, out, "build.log", app=bool(selected & {"tracer-qa", "debugger-live"}))
-                if old_base and any("old" in c.needs for c in checks):
+                # An arm64 tier's interop check needs the old host only.
+                if any("old" in c.needs and (old_base or "old_base" not in c.needs) for c in checks):
                     spec = args.old_host or against or default_against()
                     print(f"old host: {spec}", flush=True)
                     disk_guard(args)

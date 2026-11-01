@@ -612,7 +612,18 @@ fn cloud(bundle: &str, data: &str, probe: &str, only: &[&str]) -> Result<(), Str
     {
         let folder = data.join(provider.id);
         let profile = StealthProfile::cloud_vps(provider);
-        let mac_prefix = profile.mac[..8].to_owned();
+        // An arm64 VM presents the arm64 cloud instance (AWS Graviton2)
+        // whichever provider's network and metadata the profile names.
+        let ram_mib = 2048.max(base.guest.as_ref().map_or(0, |guest| guest.min_ram_mib));
+        let shown = antinomie_monitor_core::stealth::arm64::shown_profile(
+            &profile,
+            base.arch,
+            &base.stealth_support,
+            2,
+            ram_mib,
+        );
+        let arm = base.arch == GuestArch::AARCH64;
+        let mac_prefix = shown.mac[..8].to_owned();
         let (mut d, vm_id) = driver_on(bundle, &folder, profile, None, true)?;
         d.boot(&vm_id)?;
         thread::sleep(Duration::from_secs(3));
@@ -672,24 +683,40 @@ fn cloud(bundle: &str, data: &str, probe: &str, only: &[&str]) -> Result<(), Str
             }
         };
         let value = |key: &str| get(key).unwrap_or_else(|| "(missing)".into());
+        let (vendor, product, bios, chassis) = if arm {
+            let id = &shown.identity;
+            (
+                id.system_manufacturer.clone(),
+                id.system_product.clone(),
+                id.bios_vendor.clone(),
+                id.chassis_type.to_string(),
+            )
+        } else {
+            (
+                provider.system.0.to_owned(),
+                provider.system.1.to_owned(),
+                provider.bios.0.to_owned(),
+                provider.chassis_type.to_string(),
+            )
+        };
         check(
             "dmi.sys_vendor",
-            value("dmi.sys_vendor") == provider.system.0,
+            value("dmi.sys_vendor") == vendor,
             value("dmi.sys_vendor"),
         );
         check(
             "dmi.product_name",
-            value("dmi.product_name") == provider.system.1,
+            value("dmi.product_name") == product,
             value("dmi.product_name"),
         );
         check(
             "dmi.bios_vendor",
-            value("dmi.bios_vendor") == provider.bios.0 || provider.bios.0.is_empty(),
+            value("dmi.bios_vendor") == bios || bios.is_empty(),
             value("dmi.bios_vendor"),
         );
         check(
             "dmi.chassis_type",
-            value("dmi.chassis_type") == provider.chassis_type.to_string(),
+            value("dmi.chassis_type") == chassis,
             value("dmi.chassis_type"),
         );
         check(
@@ -709,7 +736,9 @@ fn cloud(bundle: &str, data: &str, probe: &str, only: &[&str]) -> Result<(), Str
                 .any(|l| l.0 == "net.resolv" && l.1.contains(provider.nat.2)),
             provider.nat.2.to_owned(),
         );
+        // virt's PCIe host bridge on arm64.
         let chipset = match provider.machine.qemu() {
+            _ if arm => "1b36:0008",
             "pc" => "8086:1237",
             _ => "8086:29c0",
         };
@@ -718,55 +747,64 @@ fn cloud(bundle: &str, data: &str, probe: &str, only: &[&str]) -> Result<(), Str
             lines.iter().any(|l| l.0 == "pci" && l.1.contains(chipset)),
             chipset.to_owned(),
         );
-        let prefix = format!("meta.{}", provider.metadata_ip);
-        let answered: Vec<_> = lines
-            .iter()
-            .filter(|l| l.0.starts_with(&prefix) && l.1.starts_with("[200"))
-            .collect();
-        check(
-            "metadata answers",
-            !answered.is_empty(),
-            format!("{} paths answered", answered.len()),
-        );
-        let others = lines
-            .iter()
-            .filter(|l| l.0.starts_with("meta.") && !l.0.starts_with(&prefix))
-            .count();
-        check(
-            "other providers' addresses stay silent",
-            others == 0,
-            format!("{others} answers"),
-        );
-        if !provider.metadata_name.is_empty() {
+        // An arm64 Cloud VPS has no metadata service (the launch says so):
+        // only the instance's identity and the provider's network apply.
+        if arm {
+            println!(
+                "SKIP {} metadata service and report: an arm64 Cloud VPS has none",
+                provider.id
+            );
+        } else {
+            let prefix = format!("meta.{}", provider.metadata_ip);
+            let answered: Vec<_> = lines
+                .iter()
+                .filter(|l| l.0.starts_with(&prefix) && l.1.starts_with("[200"))
+                .collect();
             check(
-                "metadata name resolves",
-                value(&format!("dns.{}", provider.metadata_name)) == provider.metadata_ip,
-                value(&format!("dns.{}", provider.metadata_name)),
+                "metadata answers",
+                !answered.is_empty(),
+                format!("{} paths answered", answered.len()),
+            );
+            let others = lines
+                .iter()
+                .filter(|l| l.0.starts_with("meta.") && !l.0.starts_with(&prefix))
+                .count();
+            check(
+                "other providers' addresses stay silent",
+                others == 0,
+                format!("{others} answers"),
+            );
+            if !provider.metadata_name.is_empty() {
+                check(
+                    "metadata name resolves",
+                    value(&format!("dns.{}", provider.metadata_name)) == provider.metadata_ip,
+                    value(&format!("dns.{}", provider.metadata_name)),
+                );
+            }
+            let kinds: Vec<_> = report
+                .iter()
+                .flat_map(|r| r.events.iter().map(|e| e.kind.as_str()))
+                .collect();
+            check(
+                "report: requests",
+                kinds.contains(&"request"),
+                format!("{} events", kinds.len()),
+            );
+            check(
+                "report: credentials",
+                kinds.contains(&"credentials"),
+                format!("{kinds:?}").chars().take(60).collect(),
+            );
+            check(
+                "report: canary use",
+                report.iter().any(|r| {
+                    r.events
+                        .iter()
+                        .any(|e| e.kind == "canary-use" && e.endpoint == "203.0.113.9:80")
+                }),
+                "203.0.113.9:80".into(),
             );
         }
-        let kinds: Vec<_> = report
-            .iter()
-            .flat_map(|r| r.events.iter().map(|e| e.kind.as_str()))
-            .collect();
-        check(
-            "report: requests",
-            kinds.contains(&"request"),
-            format!("{} events", kinds.len()),
-        );
-        check(
-            "report: credentials",
-            kinds.contains(&"credentials"),
-            format!("{kinds:?}").chars().take(60).collect(),
-        );
-        check(
-            "report: canary use",
-            report.iter().any(|r| {
-                r.events
-                    .iter()
-                    .any(|e| e.kind == "canary-use" && e.endpoint == "203.0.113.9:80")
-            }),
-            "203.0.113.9:80".into(),
-        );
         if let Some(state) = &state {
             let line = |key: &str| {
                 state

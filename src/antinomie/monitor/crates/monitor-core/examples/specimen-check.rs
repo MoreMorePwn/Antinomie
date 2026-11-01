@@ -367,7 +367,15 @@ fn check(bundle: &str, data: &str, probe: &str) -> Result<(), String> {
         errors.push(format!("big: {error}"));
         let _ = d.stop();
     }
-    if let Err(error) = small(&mut d, &mut t, &probe) {
+    // An arm64 VM has at least 512 MiB, a quarter of which (128 MiB) is
+    // above the probe: no arm64 VM refuses it, so the small case is x86's.
+    let arm = antinomie_monitor_core::storage::Bundle::load(Path::new(bundle))
+        .is_ok_and(|base| base.arch == GuestArch::AARCH64);
+    if arm {
+        println!(
+            "SKIP small: an arm64 VM's 512 MiB minimum keeps the probe under a quarter of its RAM"
+        );
+    } else if let Err(error) = small(&mut d, &mut t, &probe) {
         errors.push(format!("small: {error}"));
         let _ = d.stop();
     }
