@@ -4,6 +4,74 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
+## 0.9.0 — 2026-MM-DD
+
+Runs the bases 0.8.3 runs (contract revision 20, unchanged) and arm64 BusyBox
+bases built by this release. An app older than 0.9.0 refuses an arm64 base
+before it starts a VM.
+
+### Host
+
+- **arm64 guests.** A BusyBox arm64 base (Debian 13's pinned arm64 BusyBox and
+  e2fsprogs packages, the patched kernel cross-built with Debian 13's
+  `aarch64-linux-gnu-gcc-14`) starts on QEMU's `virt` machine, on its device
+  tree or through UEFI (AAVMF), under TCG with eight times the usual waits.
+  Recording, captures, file activity and contents, packets and routes,
+  io_uring and AIO, notes, Triage, Sigma, the Files and Network tabs, process
+  cores, snapshots and the debugger all work on it. The VM settings offer
+  **Faster emulation (KPTI off)**.
+- **32-bit ARM programs** run on arm64 guests and are recorded and decoded by
+  arm's own EABI numbers and layouts.
+- **Debugger on arm64.** gdb-multiarch drives the guest's arm64 debug engine;
+  the Code pane disassembles aarch64 with Capstone (BSD-3-Clause and NCSA,
+  notices in `THIRD-PARTY-NOTICES.md`); hardware breakpoints, write and read
+  watchpoints (read watches are offered where the guest says it has them, so
+  x86-64 still refuses them); manual cores carry the guest's machine.
+- **arm64 device profiles.** A realistic preset presents an arm64 machine of its
+  kind (Ampere Altra servers and workstation, an AWS Graviton2 instance) with
+  its SMBIOS tables, ACPI OEM IDs, CPU, network card and disk, or a Raspberry
+  Pi 4 or 5 on a disguised device tree; every value is cited in
+  `SOURCES-arm64.md`. The **Device profile** window of an arm64 VM checks AAVMF
+  (not OVMF), lists the arm64 machines to pick from, shows the machine's CPU in
+  place of the x86 CPU settings and lists the giveaways an arm64 VM keeps; a
+  **Use base** suggestion only names bases of the VM's architecture.
+- **Plain limits on arm64.** The Memory tab of an arm64 VM says that Volatility
+  3 and MemNixFS read x86-64 guest memory only; capa and FLOSS report
+  "unavailable" for programs of other architectures than x86 (and the Run form
+  warns when they are chosen on an arm64 VM).
+- **Build kit.** The app's kit also carries Debian's arm64 module-signing
+  certificate, which the kernel script picks for an arm64 kernel, and the kit
+  test checks both certificates.
+- **Debian 13 arm64 Minimal (recipe).** `build-base.py` and the image recipe
+  build a Debian arm64 console base with Debian's own arm64 kernel packages,
+  banner and signed modules, bootstrapped only inside the QEMU builder VM
+  (whose own qemu-user runs the arm64 maintainer scripts; no binfmt handler on
+  the host or in a container). Its kernel is built as Debian's arm64 kernel is,
+  with the 32-bit ARM compiler for the AArch32 vDSO, and the ABI check reads
+  Debian's arm64 Image by its BTF header and its exports from the pinned
+  `linux-headers-6.12.94+deb13-arm64` Module.symvers (Debian's arm64 System.map
+  is a stub). VMs of such a base are refused for now: their guest account is
+  made with the guest's own programs, which the x86-64 disk tools cannot run.
+- **Tests.** `vm-regress.py --arch arm64` runs the full tier on an arm64 base
+  (the cloud check expects the arm64 instance; the route and specimen probes
+  are built for arm64) and checks that an old host refuses the base
+  (`io-old-arm64-refused`).
+
+### Guest
+
+- Patches 31-41 (shared ones compile out of x86-64, whose objects are
+  unchanged): the generic EFI stub keeps off the bootstrap page; the arm64
+  definitions, system-call table and hooks; clone()'s argument order on
+  `CLONE_BACKWARDS`; never-drop send waits on kernels without
+  `CONFIG_PREEMPT_COUNT` (arm64's and Debian's arm64 voluntary preemption); AArch32
+  programs recorded by arm's numbers; the caller's old pages read on CPUs
+  without a hardware access flag (fork's children on a Cortex-A72); a
+  debugger state setter named apart from stock ones; the arm64 debug engine (BRK, hardware step, breakpoint and watchpoint
+  registers, load-only watches, unfollowed fork children cleaned of inserted
+  breakpoints); boot options kept out of the device tree and virt's own devices
+  out of ACPI; the stock arm64 kernel's BTF kept Debian's type for type (the
+  core exit hooks' arm64 forms, setup.c's bootargs helper in the recorder).
+
 ## 0.8.3 — 2026-MM-DD
 
 ### Host

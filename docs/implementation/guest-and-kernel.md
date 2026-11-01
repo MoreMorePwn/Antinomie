@@ -1002,6 +1002,86 @@ machine of its profile's kind instead (`stealth/arm64.rs`, catalog
   giveaways, and neither is the absence of SMBIOS and EFI on a device-tree
   boot. The x86 probe is byte-identical (.text, .rodata, .data).
 
+### arm64 qualification, limits and Debian arm64 Minimal (0.9.0)
+
+Multi-arch plan cards MA-19 and the Debian half of MA-15. No contract change.
+
+* **Device profile window.** `app/stealth.rs` takes the base's architecture
+  (`Fit::new(.., arch, fast_emulation)`): an arm64 VM's host check is
+  `HostSupport::cached_arm64()` (AAVMF, no Secure Boot, no two-threads entry),
+  Still visible is `giveaways_for(arch, fast_emulation)`, and
+  `app/stealth/arm64.rs` replaces the PC catalog with the arm64 machines
+  (`arm64::presented()`: the machine the VM shows when it can or cannot boot
+  UEFI; picking a board sets BIOS, a UEFI machine UEFI) and the x86 CPU
+  settings with the machine's CPU (MIDR, timer). `base_supporting()` offers
+  only bases of the current base's architecture.
+* **Unsupported features say so.** The Memory tab (`memory_view/plugins.rs`
+  `foreign_guest`) of a VM whose base is not x86-64 shows a warning instead of
+  plugins: Volatility 3 and MemNixFS read x86-64 guest memory only and arm64
+  bases carry no symbol table (`build-base.py has_symbols`). Static Analysis
+  (`analysis/worker.rs` `x86_tool_refuses`) marks capa and FLOSS Unavailable
+  for an ELF program of another machine than x86 or x86-64 (their code
+  analysis, vivisect, has no ARM); PE files and scripts still go to the tools.
+  The Run form warns when either is chosen on an arm64 guest
+  (`LaunchCapabilities::guest_arch`).
+* **Full tier on arm64** (`vm-regress.py full BASE --arch arm64`): every check
+  but `ARM64_LATER` (debugger-live, whose GEF/pwndbg session types x86-64
+  registers; uring-legacy and tracer-legacy, which need a base from before
+  0.9.0; stress-extreme), with timeouts times `ARM64_TIME_SCALE` (8). The
+  route and specimen probes are cross-built for arm64; `cloud` expects the
+  arm64 instance's identity (an arm64 Cloud VPS is an AWS Graviton2 instance
+  without a metadata service, so those checks print SKIP). Interop on arm64 is
+  `io-old-arm64-refused`: the old host (`--old-host`, 0.8.0) runs
+  `snapshot-check` on the arm64 base and passes only when it fails with its
+  refusal (`ARM64_REFUSAL`: "does not start arm64 VMs", or a base of a newer
+  revision), before QEMU runs.
+* **Build kit.** `monitor-core/build.rs` `KIT_FILES` carries every repository
+  file the kit's scripts read (0.8.0: the kconfig fragments per architecture,
+  the BTF and ABI checks, Debian's x86-64 module-signing certificate), and
+  Debian's arm64 certificate, which the kernel script names as `$signing`;
+  `kit.rs` checks the list against the paths the scripts name, both
+  certificates for `$signing`.
+* **Debian 13 arm64 Minimal.** The stock kernel profile builds for arm64:
+  Debian's `config` + `arm64/config`, Debian's arm64 build certificate
+  (`module-signing-arm64.pem`, serial 39896D98..., the signer Debian's arm64
+  modules name) and the uncompressed `Image` (Debian's arm64 vmlinuz is the
+  Image, so no compression symbol is set). As Debian's arm64 build does, it
+  names the 32-bit ARM compiler (`CROSS_COMPILE_COMPAT=arm-linux-gnueabihf-`,
+  the AArch32 vDSO) and links against the arm64 C library (`CC_CAN_LINK`):
+  without them the configuration lacked `COMPAT_VDSO` and the BTF Debian's
+  `__vdso_init`, its prototype and a two-entry `vdso_info`. The minimal profile
+  keeps its own configuration. Guest patch 0041 does for arm64 what 0022 does
+  for x86-64, so the BTF is Debian's type for type: do_coredump()'s exit hook
+  is an unlikely branch on arm64 (GCC then keeps Debian's out-of-line
+  `__percpu_add_case_32`), kernel/exit.c's exit hooks take an int-only entry
+  (no `const kernel_siginfo` among exit.c's types, which renumbered the types
+  after it) and setup.c's device-tree bootargs helper lives in the recorder
+  (no `const device_node` among setup.c's types); on x86-64 the macros expand
+  to the hooks as before and the objects are unchanged. The ABI check reads an
+  arm64 call site 8 bytes before its function (call ops), and a header inline
+  GCC keeps out of line in several stock files (`__raw_spin_lock_irq`) is no
+  recorder name clash.
+  Debian's arm64 System.map is a stub (it names the -dbg package), so
+  `check-kernel-abi.py` finds the BTF in Debian's Image by its header (exactly
+  one complete blob) and takes the exports, licences and CRCs from the
+  `Module.symvers` of `linux-headers-6.12.94+deb13-arm64` 6.12.94-1 (pinned by
+  SHA-256 from the same snapshot, read by the build only). The
+  image recipe (`build-debian-image.py --arch arm64`) bootstraps `arm64` with
+  Debian's `linux-image-6.12.94+deb13-arm64` and `linux-image-arm64` 6.12.94-1
+  (linux-signed-arm64, pinned from the same trixie-security snapshot), the
+  arm64 netinst's sources.list name, no boot loader on the device-tree disk and
+  the installer's `grub-efi-arm64` with `shim-signed` (shimaa64) in the UEFI
+  copy; the initrd's programs are the BusyBox arm64 base's pinned packages and
+  it loads Debian's root modules (crc32c-intel is x86's). A bootstrap of another
+  architecture than the machine's runs only in the QEMU builder VM
+  (`ANTINOMIE_BUILDER=1` and its qemu-user binfmt handler): `build-base.py`
+  refuses it natively and before a container starts, and the app picks the
+  QEMU builder for it (`build::arch_mode`; `BuildRequest.arch`, a job's
+  `"arch"`, kernel and root filesystem caches of their own). VMs of such a base
+  are refused (`guest_account::foreign_account`): the account, GRUB and
+  initramfs steps run the guest's own programs in the x86-64 libguestfs
+  appliance, which cannot run arm64 ones.
+
 ### Fair, progress-sensitive send waits (0.8.0)
 
 Guest patch 1 (`transport/guest.c`, `ant_send`); transport ABI and contract

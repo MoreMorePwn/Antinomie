@@ -304,6 +304,68 @@ packet history already has it, and specimen Content supports a byte-offset jump.
    On a Routed VM, **Route** in the same section picks where the run's traffic goes
    (see *Network routes* below).
 
+## arm64 guests (0.9.0)
+
+Antinomie also runs arm64 Linux guests: a BusyBox arm64 base (Debian 13's
+arm64 BusyBox and e2fsprogs packages with the patched 6.12.94 kernel built for
+arm64) runs arm64 programs and, on the same kernel, 32-bit ARM (AArch32)
+programs. On an x86-64 host QEMU emulates the CPU (TCG, no KVM), so an arm64
+VM is several times slower than an x86-64 one; the app allows it eight times
+the usual waits. The host needs `qemu-system-aarch64`, AAVMF
+(`qemu-efi-aarch64`) for the UEFI machines below and `gdb-multiarch` for the
+debugger console.
+
+**Getting a base.** The Build base wizard builds x86-64 bases. Build an arm64
+BusyBox base with the kit and import it (**Add base → Import base…**):
+
+    echo '{"format":1,"profile":"busybox","arch":"arm64"}' > job.json
+    scripts/build-base.py --job job.json --inputs INPUTS --work WORK --output BUNDLE
+
+It cross-compiles the kernel with Debian 13's `aarch64-linux-gnu-gcc-14` (the
+container image and the toolchain chroot have it) and takes its programs from
+Debian's pinned arm64 packages, so no arm64 program runs on the build host.
+A run's details name the guest's architecture.
+
+**What works.** Everything an x86-64 BusyBox VM records: every system call
+(by arm64's own numbers and names), file activity and contents, captured
+programs, packets and routes, io_uring and AIO, notes, Triage, Sigma, the Files
+and Network tabs, process cores, snapshots, and the debugger (gdb-multiarch;
+the Code pane disassembles with Capstone; hardware breakpoints and write and
+read watchpoints).
+
+**Device profiles.** An arm64 VM does not present a PC. With a realistic preset
+it presents an arm64 machine of the preset's kind, the same one for the VM's
+life: an Ampere Altra server (Gigabyte R272-P33, HPE ProLiant RL300 Gen11) or
+workstation (ADLINK Altra Developer Platform), or an AWS EC2 Graviton2 instance
+for Cloud VPS, all booting UEFI (AAVMF) with that machine's SMBIOS tables, ACPI
+OEM IDs, CPU (MIDR and timer frequency), network card and SATA disk; with BIOS
+firmware, a Raspberry Pi 4 Model B or Pi 5 on a disguised device tree. The
+**Device profile** window shows the arm64 machine list instead of the PC
+catalog (pick one, or let the preset pick by the VM's UUID), the machine's CPU
+instead of the x86 CPU settings, and, under **Still visible**, what an arm64
+VM still gives away (instruction timing under emulation, QEMU's ACPI tables to
+root, the PCIe host bridge, no CPU cache sizes, the emulated display). **Faster
+emulation (KPTI off)** in the VM's settings boots without kernel page-table
+isolation, which emulation runs slowly; a program can notice, and Still visible
+says so.
+
+**What does not work on arm64.** The app says so where it applies:
+
+- **Memory analysis.** Volatility 3 and MemNixFS read x86-64 guest memory only
+  and an arm64 base carries no symbol table: the Memory tab of an arm64 VM says
+  so instead of offering plugins.
+- **capa and FLOSS** analyse x86 and x86-64 programs only: Static Analysis
+  reports them as unavailable for an arm64 or ARM program ("capa finds
+  capabilities in x86 and x86-64 programs only; this program is for AArch64"),
+  and the Run form warns when they are chosen on an arm64 VM. The other checks
+  (metadata, structures, strings, entropy, hardening, rules, identification,
+  disassembly) read arm64 programs.
+- **Debian arm64 bases** are not offered yet (see the 0.9.0 notes in
+  `docs/implementation.md`).
+
+An app older than 0.9.0 refuses an arm64 base before it starts QEMU ("this
+Antinomie does not start arm64 VMs yet").
+
 ## Network routes
 
 A VM whose network is **Routed** (VM dialog > Network) lets you choose, for each
