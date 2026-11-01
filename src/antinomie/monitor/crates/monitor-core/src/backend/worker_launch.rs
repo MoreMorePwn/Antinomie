@@ -257,7 +257,13 @@ impl Worker {
             notes: Vec::new(),
             // The identity the guest shows, for reading the result against it.
             machine: Some(crate::stealth::MachineRecord::of(
-                &session.vm.stealth,
+                &crate::stealth::arm64::shown_profile(
+                    &session.vm.stealth,
+                    session.disk_bundle.arch,
+                    &session.disk_bundle.stealth_support,
+                    session.vm.cpus,
+                    session.vm.ram_mib,
+                ),
                 &crate::stealth::HostCpu::detect(),
                 session.vm.ram_mib,
             )),

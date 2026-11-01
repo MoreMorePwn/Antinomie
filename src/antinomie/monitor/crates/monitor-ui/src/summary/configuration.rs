@@ -51,11 +51,19 @@ pub(super) fn show(ui: &mut egui::Ui, vm: &VmConfig, snapshot: &Snapshot) {
         &snapshot.bases,
         antinomie_monitor_core::stealth::HostSupport::cached(),
     );
-    let arch = crate::app::selected_base(snapshot, vm.base_identity.as_deref())
-        .map_or_else(Default::default, |base| base.arch);
+    let base = crate::app::selected_base(snapshot, vm.base_identity.as_deref());
+    let arch = base.map_or_else(Default::default, |base| base.arch);
     let giveaways = vm.stealth.giveaways_for(arch, vm.launch.fast_emulation);
+    // An arm64 VM shows the arm64 machine its profile presents.
+    let shown = antinomie_monitor_core::stealth::arm64::shown_profile(
+        &vm.stealth,
+        arch,
+        base.map_or(&[][..], |base| &base.stealth_support),
+        vm.cpus,
+        vm.ram_mib,
+    );
     resource_cards(ui, "summary-stealth", 1, 1, width.max(80.0), 10, |ui, _| {
-        stealth(ui, &vm.stealth, narrow, &fallbacks, &giveaways)
+        stealth(ui, &shown, narrow, &fallbacks, &giveaways)
     });
     ui.add_space(10.0);
     resource_cards(

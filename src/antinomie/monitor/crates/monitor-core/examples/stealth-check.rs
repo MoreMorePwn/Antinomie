@@ -9,7 +9,9 @@
 //!   stealth-check abi BUNDLE NEW_DATA_DIR FIXTURES HEADER_DEBS|- [PRESET [ENTRY=VALUE...]]
 //!
 //! PROBE is the static `tests/monitor/stealth-probe` program; PRESET is
-//! `desktop` (default), `laptop`, `server` or `transparent`; entries change
+//! `desktop` (default), `laptop`, `server`, `cloud` (the first provider's)
+//! or `transparent`; on an arm64 base the preset picks the arm64 machine
+//! (an Altra workstation or server, a Graviton2 instance); entries change
 //! the preset: `firmware=bios|uefi|uefi-sb`, `disk=virtio|sata|nvme`,
 //! `nat=qemu|home`, `cdrom=on|off`, `smt=on|off` and `gpa=ADDRESS` (the
 //! bootstrap page). One BusyBox VM with two vCPUs and 2 GiB boots with that
@@ -183,6 +185,7 @@ fn profile(args: &[&str]) -> Result<(StealthProfile, Option<u64>), String> {
         "desktop" => StealthPreset::RealisticDesktop,
         "laptop" => StealthPreset::RealisticLaptop,
         "server" => StealthPreset::RealisticServer,
+        "cloud" => StealthPreset::CloudVps,
         "transparent" => StealthPreset::Transparent,
         other => return Err(format!("unknown preset {other}")),
     };
@@ -218,6 +221,15 @@ fn profile(args: &[&str]) -> Result<(StealthProfile, Option<u64>), String> {
         }
     }
     Ok((profile, gpa))
+}
+
+/// The host as the base's QEMU sees it (AAVMF for an arm64 base).
+fn host_support(base: &antinomie_monitor_core::storage::Bundle) -> HostSupport {
+    if base.arch == GuestArch::AARCH64 {
+        HostSupport::detect_arm64(Path::new("qemu-system-x86_64"))
+    } else {
+        HostSupport::detect(Path::new("qemu-system-x86_64"))
+    }
 }
 
 /// A backend on a new data folder with one VM of `profile`, after printing
@@ -271,7 +283,7 @@ fn driver_network(
     let guest = base.guest.as_ref();
     let (_, notes) = profile.fitted(
         &BaseSupport::from_list(&base.stealth_support),
-        &HostSupport::detect(Path::new("qemu-system-x86_64")),
+        &host_support(&base),
     );
     for note in notes {
         println!("NOTE {note}");
@@ -483,9 +495,15 @@ fn boots(bundle: &str, data: &str, count: &str, args: &[&str]) -> Result<(), Str
     let base = antinomie_monitor_core::storage::Bundle::load(Path::new(bundle))?;
     let (fitted, _) = d.snapshot.vms[0].stealth.fitted(
         &BaseSupport::from_list(&base.stealth_support),
-        &HostSupport::detect(Path::new("qemu-system-x86_64")),
+        &host_support(&base),
     );
-    let expected = if fitted.firmware.is_uefi() {
+    // An arm64 server, workstation or cloud machine boots UEFI whatever the
+    // firmware entry says; a board boots its device tree.
+    let arm_uefi = base.arch == GuestArch::AARCH64
+        && BaseSupport::from_list(&base.stealth_support).uefi
+        && antinomie_monitor_core::stealth::arm_machine(&fitted)
+            .is_some_and(|machine| machine.tree.is_none());
+    let expected = if fitted.firmware.is_uefi() || arm_uefi {
         "uefi"
     } else {
         "bios"

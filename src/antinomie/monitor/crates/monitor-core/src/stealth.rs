@@ -13,6 +13,8 @@
 //! of its own) or the host (OVMF, two threads per core); `fitted()` turns an
 //! entry the base or host lacks back into the choice every one has.
 use crate::storage::unique_id;
+pub use arm64::arm_machine;
+pub use catalog::arm64::{ARM_MACHINES, ArmKind, ArmMachine, ArmPlan, BoardTree};
 pub use catalog::{MACHINES, MachineProfile, NicFit, Variant};
 use catalog::{SerialStyle, SmbiosFields, Subsystem};
 pub use cloud::{CLOUDS, CloudProvider, MachineType, MetadataStyle, Owner, Plan, StateFile};
@@ -21,11 +23,13 @@ use parts::{DiskModel, RamPart};
 pub use record::MachineRecord;
 use serde::{Deserialize, Serialize};
 
+pub mod arm64;
 mod catalog;
 mod cloud;
 #[cfg(test)]
 mod cloud_tests;
 mod cpu;
+pub mod fdt;
 mod firmware;
 mod launch;
 mod memory;
@@ -1125,6 +1129,9 @@ impl StealthProfile {
         {
             return machine.label.into();
         }
+        if let Some(machine) = ArmMachine::find(&self.identity.profile) {
+            return machine.label.into();
+        }
         let name = format!(
             "{} {}",
             self.identity.system_manufacturer, self.identity.system_product
@@ -1298,7 +1305,12 @@ impl StealthProfile {
         fast_emulation: bool,
     ) -> Vec<&'static str> {
         if arch == crate::api::GuestArch::AARCH64 {
-            return crate::vm::virt_giveaways(self.firmware.is_uefi(), fast_emulation);
+            let machine = arm_machine(self);
+            return arm64::giveaways(
+                machine,
+                machine.is_some() || self.firmware.is_uefi(),
+                fast_emulation,
+            );
         }
         self.giveaways()
     }
@@ -1580,6 +1592,12 @@ pub fn vm_fallbacks(
     host: &HostSupport,
 ) -> Vec<Fallback> {
     vm_base(vm.base_identity.as_deref(), bases).map_or_else(Vec::new, |base| {
+        // An arm64 VM's UEFI is AAVMF, whatever the x86 host check found.
+        let host = if base.arch == crate::api::GuestArch::AARCH64 {
+            HostSupport::cached_arm64()
+        } else {
+            host
+        };
         vm.stealth
             .fallbacks(&BaseSupport::from_list(&base.stealth_support), host)
     })
@@ -1671,10 +1689,29 @@ impl HostSupport {
         }
     }
 
+    /// The host as an arm64 VM's `qemu` sees it: AAVMF for UEFI (without
+    /// Secure Boot, which arm64 profiles do not offer). The two-threads entry
+    /// does not apply: an arm64 VM has one thread per core, as Neoverse N1
+    /// and Cortex-A cores have, whatever it says.
+    pub fn detect_arm64(qemu: &std::path::Path) -> Self {
+        Self {
+            ovmf: firmware::find_aavmf(qemu).map(|_| ()),
+            ovmf_secure_boot: Err("arm64 device profiles do not offer Secure Boot".into()),
+            smt: Ok(()),
+        }
+    }
+
     /// The host as `qemu-system-x86_64` on the path sees it, read once.
     pub fn cached() -> &'static Self {
         static HOST: std::sync::OnceLock<HostSupport> = std::sync::OnceLock::new();
         HOST.get_or_init(|| Self::detect(std::path::Path::new("qemu-system-x86_64")))
+    }
+
+    /// [`detect_arm64`](Self::detect_arm64) for `qemu-system-x86_64` on the
+    /// path (AAVMF is found beside it), read once.
+    pub fn cached_arm64() -> &'static Self {
+        static HOST: std::sync::OnceLock<HostSupport> = std::sync::OnceLock::new();
+        HOST.get_or_init(|| Self::detect_arm64(std::path::Path::new("qemu-system-x86_64")))
     }
 
     pub fn all() -> Self {

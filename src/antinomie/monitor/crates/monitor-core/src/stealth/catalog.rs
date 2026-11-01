@@ -12,6 +12,7 @@
 use super::parts::{DiskModel, RamPart};
 use super::{CpuGen, HostCpu, NicSlot, StealthPreset};
 
+pub mod arm64;
 mod dell_desktops;
 mod dell_laptops;
 mod hp_desktops;

@@ -4,9 +4,10 @@
 //! ACPI) when the device profile asks for UEFI and the base boots it.
 //!
 //! The device profile's x86 identity (SMBIOS, CPUID, q35 devices) does not
-//! apply here; what does is its network (NAT addresses, MAC, card model) and
-//! its root disk bus where `virt` has it. arm64 device profiles come with
-//! MA-17; until then the CPU is a named Cortex/Neoverse model, never `max`.
+//! apply here: a UEFI boot presents an arm64 machine of the profile's kind
+//! (`stealth::arm64`, MA-17) with its own CPU, SMBIOS and ACPI OEM IDs; a
+//! direct boot keeps QEMU's identity. The CPU is a named Cortex/Neoverse
+//! model, never `max`.
 use crate::stealth::{DiskBus, StealthProfile};
 use std::{path::Path, process::Command};
 
@@ -29,6 +30,14 @@ pub(crate) struct VirtDisplay {
     pub fit_to_window: bool,
 }
 
+/// The arm64 machine a device profile presents: the `-cpu` value and extra
+/// `-machine` properties (its ACPI OEM IDs).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VirtIdentity {
+    pub cpu: String,
+    pub machine: String,
+}
+
 /// The machine, CPU and accelerator options. `uefi`: the firmware's code and
 /// the VM's variable store, in the two flash devices.
 pub(crate) fn machine_args(
@@ -37,10 +46,14 @@ pub(crate) fn machine_args(
     ram_path: &str,
     cpus: u16,
     uefi: Option<(&Path, &Path)>,
+    identity: Option<&VirtIdentity>,
 ) -> Result<(), String> {
     command
         .arg("-machine")
-        .arg("virt,gic-version=3,memory-backend=shared")
+        .arg(format!(
+            "virt,gic-version=3,memory-backend=shared{}",
+            identity.map_or("", |identity| identity.machine.as_str())
+        ))
         .arg("-object")
         .arg(format!(
             "memory-backend-file,id=shared,size={ram_mib}M,mem-path={ram_path},share=on"
@@ -52,7 +65,11 @@ pub(crate) fn machine_args(
         // No KVM for a foreign architecture: TCG, one host thread per vCPU.
         .args(["-accel", "tcg"])
         .arg("-cpu")
-        .arg(if uefi.is_some() { UEFI_CPU } else { DT_CPU });
+        .arg(match identity {
+            Some(identity) => identity.cpu.as_str(),
+            None if uefi.is_some() => UEFI_CPU,
+            None => DT_CPU,
+        });
     if let Some((code, vars)) = uefi {
         let path = |path: &Path| {
             path.to_str()
@@ -129,31 +146,6 @@ pub(crate) fn display_args(command: &mut Command, display: VirtDisplay, append: 
     command.arg("-display").arg(value);
 }
 
-/// What still tells an arm64 VM apart from a real arm64 machine, most telling
-/// first (the device profile's own list covers its network and disk).
-pub(crate) fn giveaways(uefi: bool, fast_emulation: bool) -> Vec<&'static str> {
-    let mut found = vec![
-        "instruction timing of an emulated CPU (TCG, no hardware virtualisation)",
-        if uefi {
-            "QEMU's ACPI tables and AAVMF's vendor (EDK II) in the EFI tables, to root"
-        } else {
-            "QEMU's device tree: linux,dummy-virt, fw-cfg and virtio-mmio nodes"
-        },
-        "the virt machine's PCIe host bridge (Red Hat vendor ID)",
-    ];
-    if fast_emulation {
-        found.push(
-            "faster emulation: no kernel page-table isolation (KPTI), which a real \
-             machine of this CPU with KASLR has",
-        );
-    }
-    found.extend([
-        "the emulated display (virtio-gpu)",
-        "a fresh boot: minutes of uptime",
-    ]);
-    found
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,7 +160,7 @@ mod tests {
     #[test]
     fn a_direct_boot_uses_the_device_tree_cpu_and_tcg() {
         let mut command = Command::new("qemu-system-aarch64");
-        machine_args(&mut command, 1024, "/run/ram", 2, None).unwrap();
+        machine_args(&mut command, 1024, "/run/ram", 2, None, None).unwrap();
         assert_eq!(
             args(&command),
             [
@@ -193,6 +185,7 @@ mod tests {
             "/run/ram",
             2,
             Some((Path::new("/fw/code,a.fd"), Path::new("/vm/vars.fd"))),
+            None,
         )
         .unwrap();
         let args = args(&command);
@@ -201,6 +194,21 @@ mod tests {
             args.contains(&"if=pflash,format=raw,unit=0,readonly=on,file=/fw/code,,a.fd".into())
         );
         assert!(args.contains(&"if=pflash,format=raw,unit=1,file=/vm/vars.fd".into()));
+        let mut command = Command::new("qemu-system-aarch64");
+        let identity = VirtIdentity {
+            cpu: "neoverse-n1,midr=0x413fd0c1,cntfrq=25000000".into(),
+            machine: ",x-oem-id=Ampere,x-oem-table-id=Altra".into(),
+        };
+        machine_args(&mut command, 1024, "/run/ram", 2, None, Some(&identity)).unwrap();
+        let args = super::tests::args(&command);
+        assert_eq!(
+            args[1],
+            "virt,gic-version=3,memory-backend=shared,x-oem-id=Ampere,x-oem-table-id=Altra"
+        );
+        assert_eq!(
+            args.last().unwrap(),
+            "neoverse-n1,midr=0x413fd0c1,cntfrq=25000000"
+        );
     }
 
     #[test]
@@ -212,16 +220,6 @@ mod tests {
         assert_eq!(
             append("console=ttyAMA0", 0x6000_0000, true),
             "console=ttyAMA0 antinomie_boot_gpa=0x60000000 antinomie_kpti=off"
-        );
-        assert!(
-            giveaways(false, true)
-                .iter()
-                .any(|item| item.contains("KPTI"))
-        );
-        assert!(
-            !giveaways(false, false)
-                .iter()
-                .any(|item| item.contains("KPTI"))
         );
     }
 

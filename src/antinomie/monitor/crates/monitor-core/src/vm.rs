@@ -68,7 +68,6 @@ mod state_transfer;
 pub(crate) use machine::*;
 use qmp::*;
 mod virt;
-pub(crate) use virt::giveaways as virt_giveaways;
 /// Delete guest RAM files that no process holds open: an app that exits
 /// without stopping its VM leaves `runtime/<run>/shared-ram` behind, several
 /// GiB each. A running VM's QEMU keeps its file open, so it is kept.
@@ -490,10 +489,12 @@ impl VmProcess {
         let (ram_path, ram_memory) = guest_ram(ram_path, ram_size)?;
         // The profile as this base and host can boot it.
         let base_support = crate::stealth::BaseSupport::from_list(&bundle.stealth_support);
-        let (mut stealth, fallbacks) = vm.stealth.fitted_with(
-            &base_support,
-            &crate::stealth::HostSupport::detect(&options.qemu),
-        );
+        let host_support = if virt {
+            crate::stealth::HostSupport::detect_arm64(&options.qemu)
+        } else {
+            crate::stealth::HostSupport::detect(&options.qemu)
+        };
+        let (mut stealth, fallbacks) = vm.stealth.fitted_with(&base_support, &host_support);
         let mut fallbacks: Vec<String> = fallbacks
             .iter()
             .map(crate::stealth::Fallback::log_line)
@@ -511,6 +512,14 @@ impl VmProcess {
                 path: socket_dir,
                 started: false,
             });
+        }
+        let cloud = stealth.cloud_provider().filter(|_| !virt);
+        if virt && stealth.cloud_provider().is_some() {
+            fallbacks.push(
+                "Cloud VPS on arm64: the VM is shown as an AWS Graviton2 instance, without \
+                 the x86 provider's metadata service or instance state."
+                    .into(),
+            );
         }
         // A Routed VM's gateway listens before QEMU starts, on the Drop
         // route: nothing leaves until a run claims a route.
@@ -531,14 +540,14 @@ impl VmProcess {
             }
             let net = crate::route::GatewayNet::from_nat(&stealth.nat)?;
             // A cloud profile's gateway also answers the provider's metadata
-            // address.
-            let metadata = stealth.cloud_provider().map(|provider| {
+            // address (x86 providers; an arm64 VM is an AWS instance).
+            let metadata = cloud.map(|provider| {
                 let id = provider.instance_id(&stealth.identity.system_uuid);
                 crate::route::MetadataService::new(provider, &id, &provider.hostname(&id))
             });
             gateway = Some(crate::route::Gateway::start_with(&dir, net, metadata)?);
         }
-        if stealth.cloud_provider().is_some() && vm.network() != VmNetwork::Routed {
+        if cloud.is_some() && vm.network() != VmNetwork::Routed {
             fallbacks.push(
                 "Cloud metadata service is off: it needs a Routed network. Set Network to Routed \
                  to turn it on."
@@ -554,7 +563,7 @@ impl VmProcess {
         }
         // A cloud profile's lived-in state goes into the VM's disk once; a
         // failure leaves the VM plain and is said in the start log.
-        if let Some(provider) = stealth.cloud_provider()
+        if let Some(provider) = cloud
             && let Err(error) = crate::guest_account::ensure_cloud_state(
                 disk,
                 &vm_dir(options, &vm.id)?,
@@ -569,10 +578,19 @@ impl VmProcess {
         let serial = File::create(runtime_dir.join("serial.log")).map_err(|e| e.to_string())?;
         let stderr = File::create(runtime_dir.join("qemu.log")).map_err(|e| e.to_string())?;
         let mut cmd = qemu_command(&qemu);
+        // The arm64 machine the profile presents (MA-17); it boots UEFI.
+        let mut arm_machine = if virt {
+            crate::stealth::arm_machine(&stealth)
+        } else {
+            None
+        };
         if virt {
-            // UEFI when the profile asks for it and the base boots it (the
-            // fitted profile kept it); AAVMF missing: the device tree.
-            let uefi = if stealth.firmware.is_uefi() {
+            // UEFI when the profile asks for it or presents an arm64 machine
+            // and the base boots it; AAVMF missing: the device tree.
+            let wants_uefi = (stealth.firmware.is_uefi()
+                || arm_machine.is_some_and(|machine| machine.tree.is_none()))
+                && base_support.uefi;
+            let uefi = if wants_uefi {
                 match crate::stealth::aavmf_files(&options.qemu, &vm_dir(options, &vm.id)?) {
                     Ok(files) => Some(files),
                     Err(error) => {
@@ -585,6 +603,29 @@ impl VmProcess {
             } else {
                 None
             };
+            // A UEFI machine without UEFI: a board on its device tree.
+            if uefi.is_none() && arm_machine.is_some_and(|machine| machine.tree.is_none()) {
+                arm_machine = crate::stealth::arm64::board_for(&stealth);
+                if let Some(board) = arm_machine {
+                    fallbacks.push(format!(
+                        "The arm64 server, workstation and cloud machines boot UEFI; without \
+                         it the VM is shown as a {} on its device tree.",
+                        board.label
+                    ));
+                }
+            }
+            let identity = arm_machine.map(|machine| {
+                stealth =
+                    crate::stealth::arm64::arm_profile(&stealth, machine, vm.cpus, vm.ram_mib);
+                virt::VirtIdentity {
+                    cpu: crate::stealth::arm64::cpu_option(machine),
+                    machine: if machine.tree.is_some() {
+                        String::new()
+                    } else {
+                        crate::stealth::arm64::machine_options(&stealth.identity)
+                    },
+                }
+            });
             cmd.arg("-name").arg(name_option(&vm.name));
             virt::machine_args(
                 &mut cmd,
@@ -593,7 +634,29 @@ impl VmProcess {
                 vm.cpus,
                 uefi.as_ref()
                     .map(|(code, vars)| (code.as_path(), vars.as_path())),
+                identity.as_ref(),
             )?;
+            if let Some(machine) = arm_machine.filter(|machine| machine.tree.is_some()) {
+                let dtb = runtime_dir.join("board.dtb");
+                crate::stealth::arm64::board_dtb(
+                    &qemu,
+                    machine,
+                    vm.cpus,
+                    vm.ram_mib,
+                    &stealth.identity.system_uuid,
+                    &dtb,
+                )?;
+                cmd.arg("-dtb").arg(&dtb);
+            } else if let Some(machine) = arm_machine {
+                crate::stealth::arm64::apply(
+                    &mut cmd,
+                    &stealth,
+                    machine,
+                    &runtime_dir,
+                    vm.ram_mib,
+                    vm.cpus,
+                )?;
+            }
             cmd.arg("-kernel")
                 .arg(&bundle.kernel)
                 .args(virt::disk_args(&stealth, &qemu_path(disk)?))
@@ -713,17 +776,21 @@ impl VmProcess {
         if let Some(initrd) = &bundle.initrd {
             cmd.arg("-initrd").arg(initrd);
         }
+        let nic = match arm_machine {
+            Some(_) => crate::stealth::arm64::nic_option(&stealth),
+            None => crate::stealth::nic_option_for(&stealth, nic_slot),
+        };
         if let Some(netdev) = user_network_backend(vm) {
             // Network captures attach a filter-dump to net0 over QMP.
             cmd.arg("-netdev")
                 .arg(crate::stealth::netdev_option(netdev, &stealth))
                 .arg("-device")
-                .arg(crate::stealth::nic_option_for(&stealth, nic_slot));
+                .arg(nic);
         } else if let Some(gateway) = &gateway {
             cmd.arg("-netdev")
                 .arg(gateway.netdev_option()?)
                 .arg("-device")
-                .arg(crate::stealth::nic_option_for(&stealth, nic_slot));
+                .arg(nic);
         } else {
             cmd.args(["-nic", "none"]);
         }
