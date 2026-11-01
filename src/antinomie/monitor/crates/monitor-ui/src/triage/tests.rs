@@ -1570,6 +1570,27 @@ fn file_process_labels_follow_exec_time_without_guessing_unknown_or_reused_pid()
 }
 
 #[test]
+fn a_worker_thread_is_named_by_its_process_in_file_labels() {
+    let mut files = FdState::default();
+    let mut first = call(3, 59, "execve", 0);
+    first
+        .entry
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(captured("arg0.pathname", "", b"/bin/locker\0"));
+    observe_processes(&mut files.process_images, &[first]);
+    let read = call(3, 0, "read", 0);
+    let mut worker = trace::representative(&read).unwrap().clone();
+    worker.tid = 4;
+    worker.task_cookie = 4;
+    assert_eq!(
+        process_identity(worker.pid, worker.tid, process_image(&files, &worker)),
+        "locker (3 / 4)"
+    );
+}
+
+#[test]
 fn clone3_thread_flags_create_no_child() {
     let mut threaded = call(1, CLONE3, "clone3", 99);
     threaded.entry.as_mut().unwrap().args = Some([0x1000, 88, 0, 0, 0, 0]);

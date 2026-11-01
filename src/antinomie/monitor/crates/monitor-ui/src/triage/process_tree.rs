@@ -582,15 +582,32 @@ pub(super) fn committed_exec(invocation: &InvocationSummary) -> bool {
             && succeeded(invocation)
 }
 
+/// The program a call's task runs. A worker thread (tid != pid) is named by its
+/// process: the thread group leader's image, whatever the thread called itself.
 pub(super) fn process_image<'a>(files: &'a FdState, event: &EventSummary) -> Option<&'a str> {
-    files
+    let named = |node: &'a TaskNode| {
+        Some(node.comm.as_str()).filter(|image| !image.is_empty() && *image != "?")
+    };
+    let exact = files.process_images.get(&TaskKey {
+        pid: event.pid,
+        cookie: event.task_cookie,
+    });
+    if event.tid == event.pid || event.tid == 0 {
+        return exact.and_then(named);
+    }
+    let pid = event.pid;
+    let leader = files
         .process_images
-        .get(&TaskKey {
-            pid: event.pid,
-            cookie: event.task_cookie,
-        })
-        .map(|node| node.comm.as_str())
-        .filter(|image| !image.is_empty() && *image != "?")
+        .range(
+            TaskKey { pid, cookie: 0 }..=TaskKey {
+                pid,
+                cookie: u64::MAX,
+            },
+        )
+        .map(|(_, node)| node)
+        .filter(|node| node.tid == 0 || node.tid == pid)
+        .find_map(named);
+    leader.or_else(|| exact.and_then(named))
 }
 
 pub(super) fn process_identity(pid: u32, tid: u32, image: Option<&str>) -> String {
