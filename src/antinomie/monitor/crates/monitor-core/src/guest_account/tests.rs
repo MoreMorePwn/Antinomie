@@ -776,3 +776,99 @@ fn the_boot_disk_answer_follows_the_vm_disk_bus() {
     }
     fs::remove_dir_all(root).unwrap();
 }
+
+/// The x86-64 provisioning is pinned byte for byte (0.9.0 added the arm64
+/// provisioning boot beside it): the appliance's script for a whole-disk, a
+/// BIOS and a UEFI disk, the edits after a profile change, the probe and the
+/// helpers it uploads, each staging folder's random name set aside.
+#[test]
+fn the_x86_appliance_script_is_pinned() {
+    use sha2::{Digest, Sha256};
+    fn fixed(text: &str) -> String {
+        let mut out = String::new();
+        let mut rest = text;
+        while let Some(at) = rest.find("/root/.provision-") {
+            let start = at + "/root/.provision-".len();
+            out.push_str(&rest[..start]);
+            out.push_str("ID");
+            let id = rest[start..]
+                .bytes()
+                .take_while(u8::is_ascii_hexdigit)
+                .count();
+            assert_eq!(id, 32, "{text}");
+            rest = &rest[start + id..];
+        }
+        out.push_str(rest);
+        out
+    }
+    let guids = gpt_guids();
+    let identity = Identity {
+        uuid: "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d",
+        swap_uuid: "1c2d3e4f-5061-4b7c-8d9e-0f1a2b3c4d5e",
+        machine_id: "00112233445566778899aabbccddeeff",
+        gpt_guids: &guids,
+    };
+    let hash = guest_hash();
+    let whole = parse_probe("/dev/sda: ext4\n6442450944\n").unwrap();
+    let bios = parse_probe(&PARTITIONED.replace("\\n", "\n")).unwrap();
+    let uefi = parse_probe(
+        "/dev/sda1: vfat\n/dev/sda2: ext4\n8589934592\n[0] = {\n  part_num: 1\n  part_end: 681574399\n}\n[1] = {\n  part_num: 2\n  part_end: 3902799871\n}\ngpt\n",
+    )
+    .unwrap();
+    let bios_plan = partition_plan(bios.size / 512, bios.root_last.unwrap(), 1024, None, false);
+    let uefi_plan = partition_plan(uefi.size / 512, uefi.root_last.unwrap(), 2048, None, true);
+    let mut record = account();
+    let mut all = vec![
+        account().script(
+            &whole,
+            None,
+            &identity,
+            &Password::Plain("pinned-password"),
+            None,
+            None,
+        ),
+        account().script(
+            &bios,
+            Some(&bios_plan),
+            &identity,
+            &Password::Hashed(&hash),
+            Some("enp0s25"),
+            Some(Path::new("/host")),
+        ),
+    ];
+    record.boot_disk = Some("/dev/nvme0n1".into());
+    all.push(record.script(
+        &uefi,
+        Some(&uefi_plan),
+        &identity,
+        &Password::Plain("pinned-password"),
+        Some("enp0s31f6"),
+        Some(Path::new("/host")),
+    ));
+    all.push(interface_commands(
+        "eno1",
+        "/root/.provision-00000000000000000000000000000000",
+    ));
+    all.push(boot_disk_commands("/dev/vda"));
+    all.push(password_commands(
+        "analyst",
+        &Password::Plain("pinned-password"),
+    ));
+    all.extend(
+        [PROBE, BOOT_LOADER.as_bytes(), INITRD_RESUME.as_bytes()]
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned()),
+    );
+    let text = all
+        .iter()
+        .map(|part| fixed(part))
+        .collect::<Vec<_>>()
+        .join("\n--\n");
+    let digest: String = Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(
+        digest, "b6e0fe0d08222d98be9074261f091b2eaee2c48f7f071cae6e7e2f9504d6a20f",
+        "{text}"
+    );
+}
