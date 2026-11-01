@@ -76,7 +76,10 @@ fn every_cloud_provider_has_its_own_cpu_name_for_each_host_vendor() {
         assert_eq!(provider.cpu_brand_for("AuthenticAMD"), amd);
         assert_eq!(provider.cpu_brand_for("HygonGenuine"), amd);
         assert_eq!(provider.cpu_brand_for(""), intel);
-        assert!(intel.contains("Intel") || intel.starts_with("DO-"), "{intel}");
+        assert!(
+            intel.contains("Intel") || intel.starts_with("DO-"),
+            "{intel}"
+        );
         assert!(amd.contains("AMD") || amd.starts_with("DO-"), "{amd}");
     }
 }
@@ -89,7 +92,10 @@ fn a_cloud_profile_names_the_providers_cpu_not_the_hosts() {
         assert_eq!(profile.cloud_cpu_brand().as_deref(), Some(expected));
         let with_kvm = cpu_option(&profile, None, true, 2).unwrap();
         assert!(with_kvm.starts_with("host,"), "{with_kvm}");
-        assert!(with_kvm.contains(&format!(",model-id={expected}")), "{with_kvm}");
+        assert!(
+            with_kvm.contains(&format!(",model-id={expected}")),
+            "{with_kvm}"
+        );
         let without_kvm = cpu_option(&profile, None, false, 2).unwrap();
         assert!(
             without_kvm.starts_with(&format!("max,model-id={expected}")),
@@ -134,11 +140,22 @@ fn a_machine_profile_has_its_own_chassis_and_the_hosts_cpu_name() {
         let (kind, maker, _) = chassis(&tables);
         assert_eq!(kind, profile.identity.chassis_type.max(1), "{}", machine.id);
         assert_ne!(kind, 1, "{}: chassis Other is QEMU's", machine.id);
-        assert!(!maker.contains("QEMU") && !maker.is_empty(), "{}: {maker}", machine.id);
-        assert_eq!(maker, profile.identity.system_manufacturer, "{}", machine.id);
+        assert!(
+            !maker.contains("QEMU") && !maker.is_empty(),
+            "{}: {maker}",
+            machine.id
+        );
+        assert_eq!(
+            maker, profile.identity.system_manufacturer,
+            "{}",
+            machine.id
+        );
         // The CPU is the host's, passed through whole; no brand override.
         let cpu = cpu_option(&profile, None, true, 4).unwrap();
-        assert!(cpu.starts_with("host,") && !cpu.contains("model-id"), "{cpu}");
+        assert!(
+            cpu.starts_with("host,") && !cpu.contains("model-id"),
+            "{cpu}"
+        );
         assert_eq!(profile.cloud_cpu_brand(), None);
         let (without_kvm, _) = (cpu_option(&profile, None, false, 4).unwrap(), ());
         let host = host_cpuinfo("model name").unwrap_or_default();
