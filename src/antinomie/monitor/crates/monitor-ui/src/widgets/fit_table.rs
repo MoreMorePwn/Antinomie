@@ -12,6 +12,11 @@
 //! - one `remainder()` column takes what is left;
 //! - only when even the minimums do not fit, the table sits in a horizontal
 //!   `ScrollArea` of its own, at the sum of the minimums;
+//! - a column the person drags wider keeps that width for the session: the
+//!   remainder column gives way first, and when the others would have to shrink
+//!   below their fitted width the table scrolls sideways instead (header and
+//!   body together). A double click on a column divider, or "Fit columns" in
+//!   its menu, returns the table to fitting its box;
 //! - every cell is clipped (use the `table::cell*` helpers or
 //!   [`cell_middle`]: ellipsis, full text on hover);
 //! - the background is painted from the table's final rect.
@@ -141,6 +146,59 @@ pub struct Plan {
 /// Decide the widths of `cols` for a container `available` wide with
 /// `spacing` between columns. Pure, so the rules are tested without egui.
 pub fn plan(available: f32, spacing: f32, cols: &[Col]) -> Plan {
+    plan_with(available, spacing, cols, &[])
+}
+
+/// [`plan`] with the widths the person dragged (`user[index]`, only for
+/// resizable columns that are not the remainder). The remainder column gives
+/// way first; when it is at its minimum and the table is still too wide the
+/// plan scrolls, with every other column at its fitted or dragged width.
+pub fn plan_with(available: f32, spacing: f32, cols: &[Col], user: &[Option<f32>]) -> Plan {
+    let fitted = fit(available, spacing, cols);
+    if user.iter().all(Option::is_none) {
+        return fitted;
+    }
+    let Plan {
+        cols,
+        mut widths,
+        rest,
+        shrunk,
+        ..
+    } = fitted;
+    for (index, col) in cols.iter().enumerate() {
+        if let (Some(Some(width)), true) = (user.get(index), col.resizable && Some(index) != rest) {
+            widths[index] = width.clamp(col.min, col.max.max(col.min));
+        }
+    }
+    let gaps = spacing * cols.len().saturating_sub(1) as f32;
+    let budget = (available - gaps - 1.0).max(0.0);
+    let scrolls = match rest {
+        Some(rest) => {
+            let others: f32 = widths
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != rest)
+                .map(|(_, width)| *width)
+                .sum();
+            let room = (available - gaps).max(0.0) - others;
+            widths[rest] = room.max(cols[rest].min);
+            room < cols[rest].min
+        }
+        None => widths.iter().sum::<f32>() > budget,
+    };
+    let total = widths.iter().sum::<f32>() + gaps;
+    Plan {
+        cols,
+        widths,
+        rest,
+        scrolls,
+        total,
+        shrunk,
+    }
+}
+
+/// The widths of `cols` for a container, without dragged widths.
+fn fit(available: f32, spacing: f32, cols: &[Col]) -> Plan {
     let mut cols = cols.to_vec();
     let rest = cols.iter().position(|col| col.kind == Kind::Rest);
     for (index, col) in cols.iter_mut().enumerate() {
@@ -181,6 +239,17 @@ pub fn plan(available: f32, spacing: f32, cols: &[Col]) -> Plan {
             scrolls = minimum > budget;
         }
     }
+    // The remainder column takes whatever the others leave of the width, so
+    // the dividers after it are drawn where it really ends.
+    if let (Some(index), false) = (rest, scrolls) {
+        let others: f32 = widths
+            .iter()
+            .enumerate()
+            .filter(|(at, _)| *at != index)
+            .map(|(_, width)| *width)
+            .sum();
+        widths[index] = ((available - gaps).max(0.0) - others).max(cols[index].min);
+    }
     let used: f32 = widths.iter().sum();
     let total = used + gaps;
     Plan {
@@ -204,37 +273,16 @@ impl Plan {
         self.shrunk
     }
 
-    /// Add the columns to `builder`, every one clipped. While the table is
-    /// scrolling sideways the remainder column is fixed at its minimum too.
+    /// Add the columns to `builder`, every one clipped and at its planned
+    /// width (columns are resized by this module's dividers, not by
+    /// `egui_extras`). The remainder column takes the rest unless the table is
+    /// scrolling sideways, where it is fixed at its width too.
     pub fn apply<'a>(&self, mut builder: TableBuilder<'a>) -> TableBuilder<'a> {
-        let others_min = |skip: usize| -> f32 {
-            self.cols
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| *index != skip)
-                .map(|(_, col)| col.min)
-                .sum::<f32>()
-        };
         for (index, col) in self.cols.iter().enumerate() {
-            let width = self.widths[index];
             let column = if Some(index) == self.rest && !self.scrolls {
                 Column::remainder().at_least(col.min)
-            } else if col.resizable && !self.scrolls {
-                // The widest a dragged column gets leaves the others their
-                // minimums; a table that had to shrink does not let the
-                // widths kept from a wider window stand.
-                let widest = if self.shrunk {
-                    width
-                } else {
-                    (self.total - others_min(index)).max(col.min)
-                }
-                .min(col.max)
-                .max(col.min);
-                Column::initial(width)
-                    .range(col.min..=widest)
-                    .resizable(true)
             } else {
-                Column::exact(width)
+                Column::exact(self.widths[index])
             };
             builder = builder.column(column.clip(true));
         }
@@ -259,16 +307,38 @@ pub fn show_with<R>(
     vscroll: bool,
     add: impl FnOnce(&mut Ui, &Plan) -> R,
 ) -> R {
+    let font = ui.text_style_height(&egui::TextStyle::Body).max(14.0);
+    let header = crate::widgets::table::header_height(font);
+    let key = ui.id().with("fit-widths");
+    show_keyed(ui, key, header, cols, vscroll, add)
+}
+
+/// [`show_with`] for a table that has a name of its own (`key`) and a header
+/// row `header` high (0 for none): the widths the person drags on the header's
+/// dividers are kept under `key` for the session.
+pub fn show_keyed<R>(
+    ui: &mut Ui,
+    key: egui::Id,
+    header: f32,
+    cols: &[Col],
+    vscroll: bool,
+    add: impl FnOnce(&mut Ui, &Plan) -> R,
+) -> R {
     let gutter = if vscroll {
         ui.spacing().scroll.allocated_width()
     } else {
         0.0
     };
     let available = ui.available_width() - gutter;
-    let plan = plan(available, ui.spacing().item_spacing.x, cols);
+    let spacing = ui.spacing().item_spacing.x;
+    let user: Vec<Option<f32>> = ui
+        .data(|data| data.get_temp::<Vec<Option<f32>>>(key))
+        .unwrap_or_default();
+    let plan = plan_with(available, spacing, cols, &user);
     let area = ui.available_rect_before_wrap();
     let (start, full) = (area.min, area.width());
     let slot = ui.painter().add(Shape::Noop);
+    let mut offset = 0.0;
     let out = if plan.scrolls {
         let id = ui.id().with("fit-table-scroll");
         let width = plan.total;
@@ -279,6 +349,7 @@ pub fn show_with<R>(
                 ui.set_min_width(width);
                 add(ui, &plan)
             });
+        offset = shown.state.offset.x;
         shown.inner
     } else {
         add(ui, &plan)
@@ -296,7 +367,91 @@ pub fn show_with<R>(
         slot,
         egui::epaint::RectShape::filled(rect, 0.0, theme::bg()),
     );
+    if header > 0.0 {
+        dividers(
+            ui,
+            key,
+            &plan,
+            user,
+            Pos2::new(start.x - offset, start.y),
+            header,
+            spacing,
+        );
+    }
     out
+}
+
+/// The draggable dividers on the right edge of every resizable column's
+/// header cell. Drag: the column keeps the dragged width; double click or the
+/// menu: every column is fitted again.
+fn dividers(
+    ui: &mut Ui,
+    key: egui::Id,
+    plan: &Plan,
+    mut user: Vec<Option<f32>>,
+    origin: Pos2,
+    header: f32,
+    spacing: f32,
+) {
+    let mut changed = false;
+    let mut reset = false;
+    let mut edge = origin.x;
+    for (index, col) in plan.cols.iter().enumerate() {
+        edge += plan.width(index);
+        let x = edge + spacing / 2.0;
+        edge += spacing;
+        if !col.resizable || Some(index) == plan.rest {
+            continue;
+        }
+        let rect = Rect::from_min_max(
+            Pos2::new(x - 4.0, origin.y),
+            Pos2::new(x + 4.0, origin.y + header),
+        );
+        let response = ui
+            .interact(
+                rect,
+                key.with(("divider", index)),
+                egui::Sense::click_and_drag(),
+            )
+            .on_hover_cursor(egui::CursorIcon::ResizeColumn)
+            .on_hover_text("Drag to resize. Double-click to fit the columns.");
+        if response.hovered() || response.dragged() {
+            ui.painter().vline(
+                x,
+                rect.y_range(),
+                egui::Stroke::new(2.0_f32, ui.visuals().widgets.active.bg_stroke.color),
+            );
+        }
+        if response.dragged() {
+            let width = user
+                .get(index)
+                .copied()
+                .flatten()
+                .unwrap_or(plan.width(index));
+            if user.len() < plan.cols.len() {
+                user.resize(plan.cols.len(), None);
+            }
+            user[index] =
+                Some((width + response.drag_delta().x).clamp(col.min, col.max.max(col.min)));
+            changed = true;
+        }
+        if response.double_clicked() {
+            reset = true;
+        }
+        response.context_menu(|ui| {
+            if ui.button("Fit columns").clicked() {
+                reset = true;
+                ui.close_menu();
+            }
+        });
+    }
+    if reset {
+        ui.data_mut(|data| data.remove::<Vec<Option<f32>>>(key));
+        ui.ctx().request_repaint();
+    } else if changed {
+        ui.data_mut(|data| data.insert_temp(key, user));
+        ui.ctx().request_repaint();
+    }
 }
 
 /// `egui_extras::TableBuilder` with the columns fitted to the container: the
@@ -452,7 +607,9 @@ impl<'a> FitBuilder<'a> {
             }
         }
         let vscroll_on = vscroll.unwrap_or(true);
-        show_with(ui, &cols, vscroll_on, |ui, plan| {
+        let key = ui.id().with(("fit-widths", id_salt));
+        let header_height = header.as_ref().map_or(0.0, |(height, _)| *height);
+        show_keyed(ui, key, header_height, &cols, vscroll_on, |ui, plan| {
             let mut builder = TableBuilder::new(ui);
             if let Some(salt) = id_salt {
                 builder = builder.id_salt(salt);

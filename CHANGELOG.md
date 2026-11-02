@@ -121,6 +121,15 @@ it runs.
   "History", "Cores", "Static"; the hover text keeps the full name) and tighter
   padding, and when even those do not fit it scrolls the active tab into view
   and shows a tab list button at its right end that opens every tab of the bar.
+- **Widening a column scrolls the table sideways instead of squeezing the
+  others.** Drag a column divider in a table (Triage Suspicious activity, Files
+  and the rest, Network, a sample's Runs, the Detection rules tables, the
+  Samples list). The last column gives way first; when it is at its minimum the
+  table scrolls horizontally inside its own area, the header and the rows
+  together, and the other columns keep their fitted width. Double-click a
+  divider, or right-click it and choose Fit columns, to fit the box again. The
+  dragged widths are kept per table for the session and no longer stick after
+  the window grows.
 
 ## 0.8.1 — 2026-11-03
 

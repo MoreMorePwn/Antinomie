@@ -316,170 +316,184 @@ fn table_rows_with(
             }
         })
         .collect();
-    crate::widgets::fit_table::show(ui, &cols, |ui, plan| {
-        let mut builder = TableBuilder::new(ui)
-            .id_salt(("triage-062", id))
-            .striped(true)
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .vscroll(true)
-            .max_scroll_height(max_height)
-            .min_scrolled_height(0.0)
-            .sense(egui::Sense::click());
-        builder = plan.apply(builder);
-        builder
-            .header(crate::widgets::table::header_height(font), |mut header| {
-                for (column, title) in headers.iter().enumerate() {
-                    header.col(|ui| {
-                        crate::widgets::table::aligned(
-                            ui,
-                            crate::widgets::table::numeric_align(numeric_column(title)),
-                            |ui| sorting::header(ui, id, column, title),
-                        );
-                    });
-                }
-            })
-            .body(|body| {
-                body.rows(row_height, rows.len(), |mut row| {
-                    let cells = &rows[order
-                        .as_ref()
-                        .map_or(row.index(), |order| order[row.index()])];
-                    let key = evidence_key(cells);
-                    let row_selected = selected.as_ref() == Some(&key);
-                    row.set_selected(row_selected);
-                    let branch = branches.map(|branches| &branches[row.index()]);
-                    for (column, cell) in cells.iter().enumerate() {
-                        row.col(|ui| {
-                            if column == 0 {
-                                crate::widgets::table::row_mark(ui, mark_of(row_selected, cell));
-                            }
-                            let indent = branch.filter(|_| column == 0).map(|branch| {
-                                let reach = ui.spacing().item_spacing.y * 0.5;
-                                let lines = ui.max_rect().expand2(egui::vec2(0.0, reach));
-                                branch.paint(ui.painter(), lines, branch_char);
-                                branch.width(branch_char)
-                            });
-                            let mut text =
-                                RichText::new(display_cell(&cell.text)).color(cell.color());
-                            if cell.mono {
-                                text = text.monospace();
-                            }
-                            let label = egui::Label::new(text)
-                                .truncate()
-                                .selectable(false)
-                                .sense(egui::Sense::hover());
-                            let draw = |ui: &mut egui::Ui| match indent {
-                                Some(width) => {
-                                    let mut rect = ui.max_rect();
-                                    rect.min.x += width;
-                                    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                                        hover_errno(ui.add(label), &cell.text);
-                                    });
-                                }
-                                None => {
-                                    hover_errno(ui.add(label), &cell.text);
-                                }
-                            };
-                            // The count of suspicious observations is a chip at the
-                            // right of the process cell; the label takes the rest.
-                            let suspect = (column == 0 && id == "triage-process")
-                                .then(|| files::number(&cell.values, "process.suspicious"))
-                                .flatten()
-                                .filter(|count| *count > 0);
-                            if let Some(count) = suspect {
-                                // The chip wears the colour of the worst tier among
-                                // the process's observations.
-                                let tone = cell
-                                    .values
-                                    .iter()
-                                    .find_map(|(key, value)| match value {
-                                        RowValue::Text(tag) if *key == "process.worst_tier" => {
-                                            rules::Tier::from_tag(tag)
-                                        }
-                                        _ => None,
-                                    })
-                                    .map_or(crate::widgets::Tone::Neutral, rules::Tier::tone);
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        crate::widgets::chip(ui, count.to_string(), tone)
-                                            .on_hover_text(
-                                                "Suspicious observations in this process",
-                                            );
-                                        ui.with_layout(
-                                            egui::Layout::left_to_right(egui::Align::Center),
-                                            draw,
-                                        );
-                                    },
-                                );
-                            } else {
-                                crate::widgets::table::aligned_cell(
-                                    ui,
-                                    crate::widgets::table::numeric_align(numeric_column(
-                                        headers[column],
-                                    )),
-                                    draw,
-                                );
-                            }
+    let widths_key = ui.id().with(("triage-062-widths", id));
+    crate::widgets::fit_table::show_keyed(
+        ui,
+        widths_key,
+        crate::widgets::table::header_height(font),
+        &cols,
+        true,
+        |ui, plan| {
+            let mut builder = TableBuilder::new(ui)
+                .id_salt(("triage-062", id))
+                .striped(true)
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .vscroll(true)
+                .max_scroll_height(max_height)
+                .min_scrolled_height(0.0)
+                .sense(egui::Sense::click());
+            builder = plan.apply(builder);
+            builder
+                .header(crate::widgets::table::header_height(font), |mut header| {
+                    for (column, title) in headers.iter().enumerate() {
+                        header.col(|ui| {
+                            crate::widgets::table::aligned(
+                                ui,
+                                crate::widgets::table::numeric_align(numeric_column(title)),
+                                |ui| sorting::header(ui, id, column, title),
+                            );
                         });
                     }
-                    if row.response().clicked() {
-                        details::select(&row.response().ctx, id, headers, cells);
-                        if id == "triage-process" {
-                            // A process opens its Suspicious activity; Details keep it selected.
-                            if let Some(pid) = cells
-                                .first()
-                                .and_then(|cell| files::number(&cell.values, "process.pid"))
-                            {
-                                row.response().ctx.data_mut(|data| {
-                                    data.insert_temp(
-                                        egui::Id::new(process_details::PROCESS_SCOPE),
-                                        pid,
-                                    )
+                })
+                .body(|body| {
+                    body.rows(row_height, rows.len(), |mut row| {
+                        let cells = &rows[order
+                            .as_ref()
+                            .map_or(row.index(), |order| order[row.index()])];
+                        let key = evidence_key(cells);
+                        let row_selected = selected.as_ref() == Some(&key);
+                        row.set_selected(row_selected);
+                        let branch = branches.map(|branches| &branches[row.index()]);
+                        for (column, cell) in cells.iter().enumerate() {
+                            row.col(|ui| {
+                                if column == 0 {
+                                    crate::widgets::table::row_mark(
+                                        ui,
+                                        mark_of(row_selected, cell),
+                                    );
+                                }
+                                let indent = branch.filter(|_| column == 0).map(|branch| {
+                                    let reach = ui.spacing().item_spacing.y * 0.5;
+                                    let lines = ui.max_rect().expand2(egui::vec2(0.0, reach));
+                                    branch.paint(ui.painter(), lines, branch_char);
+                                    branch.width(branch_char)
                                 });
-                            }
-                        } else {
-                            details::clicked(&row.response().ctx, id);
+                                let mut text =
+                                    RichText::new(display_cell(&cell.text)).color(cell.color());
+                                if cell.mono {
+                                    text = text.monospace();
+                                }
+                                let label = egui::Label::new(text)
+                                    .truncate()
+                                    .selectable(false)
+                                    .sense(egui::Sense::hover());
+                                let draw = |ui: &mut egui::Ui| match indent {
+                                    Some(width) => {
+                                        let mut rect = ui.max_rect();
+                                        rect.min.x += width;
+                                        ui.scope_builder(
+                                            egui::UiBuilder::new().max_rect(rect),
+                                            |ui| {
+                                                hover_errno(ui.add(label), &cell.text);
+                                            },
+                                        );
+                                    }
+                                    None => {
+                                        hover_errno(ui.add(label), &cell.text);
+                                    }
+                                };
+                                // The count of suspicious observations is a chip at the
+                                // right of the process cell; the label takes the rest.
+                                let suspect = (column == 0 && id == "triage-process")
+                                    .then(|| files::number(&cell.values, "process.suspicious"))
+                                    .flatten()
+                                    .filter(|count| *count > 0);
+                                if let Some(count) = suspect {
+                                    // The chip wears the colour of the worst tier among
+                                    // the process's observations.
+                                    let tone = cell
+                                        .values
+                                        .iter()
+                                        .find_map(|(key, value)| match value {
+                                            RowValue::Text(tag) if *key == "process.worst_tier" => {
+                                                rules::Tier::from_tag(tag)
+                                            }
+                                            _ => None,
+                                        })
+                                        .map_or(crate::widgets::Tone::Neutral, rules::Tier::tone);
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            crate::widgets::chip(ui, count.to_string(), tone)
+                                                .on_hover_text(
+                                                    "Suspicious observations in this process",
+                                                );
+                                            ui.with_layout(
+                                                egui::Layout::left_to_right(egui::Align::Center),
+                                                draw,
+                                            );
+                                        },
+                                    );
+                                } else {
+                                    crate::widgets::table::aligned_cell(
+                                        ui,
+                                        crate::widgets::table::numeric_align(numeric_column(
+                                            headers[column],
+                                        )),
+                                        draw,
+                                    );
+                                }
+                            });
                         }
-                        row.response()
-                            .ctx
-                            .data_mut(|data| data.insert_temp(selected_id, key));
-                    }
-                    if row.response().double_clicked() {
-                        request_evidence_jump(
-                            &row.response().ctx,
-                            cells
-                                .first()
-                                .map(|cell| cell.values.as_slice())
-                                .unwrap_or_default(),
+                        if row.response().clicked() {
+                            details::select(&row.response().ctx, id, headers, cells);
+                            if id == "triage-process" {
+                                // A process opens its Suspicious activity; Details keep it selected.
+                                if let Some(pid) = cells
+                                    .first()
+                                    .and_then(|cell| files::number(&cell.values, "process.pid"))
+                                {
+                                    row.response().ctx.data_mut(|data| {
+                                        data.insert_temp(
+                                            egui::Id::new(process_details::PROCESS_SCOPE),
+                                            pid,
+                                        )
+                                    });
+                                }
+                            } else {
+                                details::clicked(&row.response().ctx, id);
+                            }
+                            row.response()
+                                .ctx
+                                .data_mut(|data| data.insert_temp(selected_id, key));
+                        }
+                        if row.response().double_clicked() {
+                            request_evidence_jump(
+                                &row.response().ctx,
+                                cells
+                                    .first()
+                                    .map(|cell| cell.values.as_slice())
+                                    .unwrap_or_default(),
+                            );
+                        }
+                        let values = cells
+                            .first()
+                            .map(|cell| cell.values.as_slice())
+                            .unwrap_or_default();
+                        let extras = row_extras(
+                            query::NoteRun::get(&row.response().ctx).as_ref(),
+                            id,
+                            cells.first().map_or("", |cell| cell.text.as_str()),
+                            values,
                         );
-                    }
-                    let values = cells
-                        .first()
-                        .map(|cell| cell.values.as_slice())
-                        .unwrap_or_default();
-                    let extras = row_extras(
-                        query::NoteRun::get(&row.response().ctx).as_ref(),
-                        id,
-                        cells.first().map_or("", |cell| cell.text.as_str()),
-                        values,
-                    );
-                    row.response().context_menu(|ui| {
-                        file_activity::reconstruct_menu(ui, id, values);
-                        match filter_id {
-                            Some(filter_id) => {
-                                query::table_row_menu_with(ui, filter_id, values, extras)
+                        row.response().context_menu(|ui| {
+                            file_activity::reconstruct_menu(ui, id, values);
+                            match filter_id {
+                                Some(filter_id) => {
+                                    query::table_row_menu_with(ui, filter_id, values, extras)
+                                }
+                                None => query::row_menu_plain(
+                                    ui,
+                                    egui::Id::new((id, "row-menu")),
+                                    values,
+                                    extras,
+                                ),
                             }
-                            None => query::row_menu_plain(
-                                ui,
-                                egui::Id::new((id, "row-menu")),
-                                values,
-                                extras,
-                            ),
-                        }
+                        });
                     });
                 });
-            });
-    });
+        },
+    );
 }
 
 /// Suspicious-activity rows. A click returns that invocation's `call_id`.
