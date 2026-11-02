@@ -257,9 +257,36 @@ download anything, **you build a full pack** yourself:
 - Your data (bases, VM disks, recordings) lives in `~/antinomie` by default.
 - Downloaded bases are GPL-2.0 and Debian software: their corresponding source
   (kernel patch series and configuration, BusyBox and package sources) is in the
-  `sources/` folder of the [base bucket](https://huggingface.co/buckets/MoreMorePwn/antinomie-bases/tree/main/sources).
+  `sources/` folder of the [base bucket](https://huggingface.co/buckets/MoreMorePwn/antinomie-bases/tree/sources).
 - The [user guide](docs/usage.md) covers controls, transport settings, desktop
   execution and layouts.
+
+<details>
+<summary><b>Download a base by hand (offline machines, mirrors, scripts)</b></summary>
+
+<br>
+
+The app downloads bases for you, but every base is also a plain folder in the
+public [base bucket](https://huggingface.co/buckets/MoreMorePwn/antinomie-bases)
+on Hugging Face, so you can fetch one yourself:
+
+1. Read the catalog,
+   [`index.json`](https://huggingface.co/buckets/MoreMorePwn/antinomie-bases/resolve/index.json):
+   each base has a label, its `identity` (a 64-character SHA-256), the
+   revision, the minimum app version and its files with their SHA-256.
+2. Download every file of the base you want from
+   `https://huggingface.co/buckets/MoreMorePwn/antinomie-bases/resolve/bases/<identity>/<file>`
+   into one folder (or browse the
+   [`bases/` folder](https://huggingface.co/buckets/MoreMorePwn/antinomie-bases/tree/bases)),
+   and check each file against the SHA-256 in `index.json`.
+3. Install the folder with **Add base → Import base…**, or from a terminal:
+   `antinomie --install-base /path/to/folder`. The app recomputes the identity
+   and refuses a folder that does not match.
+
+The same bucket holds each base's corresponding source under
+[`sources/`](https://huggingface.co/buckets/MoreMorePwn/antinomie-bases/tree/sources).
+
+</details>
 
 <details>
 <summary><b>Build your own base</b></summary>
