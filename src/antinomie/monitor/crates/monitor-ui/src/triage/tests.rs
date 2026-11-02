@@ -1600,7 +1600,7 @@ fn clone3_thread_flags_create_no_child() {
     ));
     let lines = process_tree_lines(&[threaded]);
     assert!(
-        lines.iter().all(|line| !line.contains("pid 99")),
+        lines.iter().all(|line| !line.contains("PID 99")),
         "{lines:?}"
     );
 
@@ -1615,7 +1615,7 @@ fn clone3_thread_flags_create_no_child() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("pid 77") && line.starts_with("  ")),
+            .any(|line| line.contains("PID 77") && line.starts_with("  ")),
         "{lines:?}"
     );
 
@@ -1623,7 +1623,7 @@ fn clone3_thread_flags_create_no_child() {
     missing.entry.as_mut().unwrap().args = Some([0, 88, 0, 0, 0, 0]);
     let lines = process_tree_lines(&[missing]);
     assert!(
-        lines.iter().all(|line| !line.contains("pid 66")),
+        lines.iter().all(|line| !line.contains("PID 66")),
         "{lines:?}"
     );
 }
@@ -1637,7 +1637,7 @@ fn child_whose_parent_pid_is_absent_contains_parent_not_in_this_trace() {
         "{}",
         lines[0]
     );
-    assert!(lines[0].starts_with("pid 42"), "{}", lines[0]);
+    assert!(lines[0].starts_with("PID 42"), "{}", lines[0]);
 }
 
 #[test]

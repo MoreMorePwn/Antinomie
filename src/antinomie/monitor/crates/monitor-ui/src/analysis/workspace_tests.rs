@@ -1524,7 +1524,7 @@ fn lists_are_colored_by_meaning_and_entropy_stays_a_chart() {
     expect_color(&structures, "EI_CLASS", crate::theme::muted());
     expect_color(&structures, ".text", crate::theme::blue());
     expect_color(&structures, ".data", crate::theme::info());
-    expect_color(&structures, "puts", crate::theme::warn());
+    expect_color(&structures, "puts", crate::theme::neutral_accent());
 
     let mut listed = meaning_report();
     for kind in [AnalysisKind::Strings, AnalysisKind::Structures] {
@@ -1546,7 +1546,7 @@ fn lists_are_colored_by_meaning_and_entropy_stays_a_chart() {
         } else {
             expect_color(&output, ".text", crate::theme::blue());
             expect_color(&output, ".data", crate::theme::info());
-            expect_color(&output, "puts", crate::theme::warn());
+            expect_color(&output, "puts", crate::theme::neutral_accent());
         }
     }
 

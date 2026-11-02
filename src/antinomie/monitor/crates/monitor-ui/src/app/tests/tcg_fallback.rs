@@ -233,7 +233,9 @@ fn settings_advanced_has_the_start_timeouts_and_the_multiplier() {
     assert!(has("VM start and guest connection timeouts"), "{shown:?}");
     assert!(has("TCG multiplier"), "{shown:?}");
     assert!(has("Use TCG when KVM is unavailable"), "{shown:?}");
-    assert!(has("waits up to 200 s"), "{shown:?}");
+    // The number is 200 s on an idle host; a loaded one stretches it
+    // (/proc/loadavg), so the test does not pin it.
+    assert!(has("waits up to "), "{shown:?}");
     let defaults = StartSettings::default();
     assert_eq!(
         (defaults.guest_connect_secs, defaults.tcg_multiplier),

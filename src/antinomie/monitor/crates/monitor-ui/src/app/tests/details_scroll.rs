@@ -134,7 +134,9 @@ fn a_deep_and_wide_process_tree_scrolls_both_ways_before_the_details() {
     let mut panel = Panel::new(chain(80));
     let before = panel.settle(INSIDE_TREE);
     assert!(find(&before, "proc1-with").is_some(), "{before:?}");
-    assert!(!has(&before, "PID"), "{before:?}");
+    // The table fits the pane (fit_table), so the number columns are in view
+    // without scrolling sideways; only the rows scroll.
+    assert!(has(&before, "PID"), "{before:?}");
     let heading = top(&before, "Recorded process tree");
     // Down: the first rows leave the tree and the Details do not move.
     let down = panel.wheel(INSIDE_TREE, egui::vec2(0.0, -400.0));

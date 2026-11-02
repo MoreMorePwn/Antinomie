@@ -78,8 +78,8 @@ fn the_heading_counts_all_functions_or_those_a_filter_keeps() {
 #[test]
 fn instructions_color_calls_jumps_and_bad_bytes_apart_from_plain_ones() {
     assert_eq!(mnemonic_color("call"), theme::blue());
-    assert_eq!(mnemonic_color("jne"), theme::warn());
-    assert_eq!(mnemonic_color("ret"), theme::warn());
+    assert_eq!(mnemonic_color("jne"), theme::value(theme::ValueKind::Flags));
+    assert_eq!(mnemonic_color("ret"), theme::value(theme::ValueKind::Flags));
     assert_eq!(mnemonic_color("(bad)"), theme::error());
     assert_eq!(mnemonic_color("mov"), theme::text());
     let job = instruction("mov", "rax, rbx", &FontId::monospace(14.0));
@@ -101,7 +101,10 @@ fn decompiled_lines_keep_keyword_string_and_comment_colors() {
         })
     };
     assert_eq!(color("    return 1;", "return"), Some(theme::error()));
-    assert_eq!(color("    return 1;", "1"), Some(theme::warn()));
+    assert_eq!(
+        color("    return 1;", "1"),
+        Some(theme::value(theme::ValueKind::Number))
+    );
     assert_eq!(color("    int value;", "int"), Some(theme::blue()));
     assert_eq!(color("    call(\"hi\");", "\"hi\""), Some(theme::good()));
     let comment = highlight("    // stay", &font);

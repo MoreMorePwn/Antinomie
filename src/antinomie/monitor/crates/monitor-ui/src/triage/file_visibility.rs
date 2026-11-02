@@ -143,21 +143,22 @@ mod tests {
     }
 
     #[test]
-    fn failed_attempts_are_hidden_until_asked_for() {
+    fn failed_attempts_are_listed_by_default_and_hidden_when_the_chip_is_off() {
         let mut row = vec![cell("path", theme::text(), true)];
         row[0].values = vec![
             ("file.path", RowValue::Text("/tmp/a".into())),
             ("file.result", RowValue::Text("failed".into())),
         ];
-        assert!(!FileVisibility::default().keeps(&row));
-        let shown = FileVisibility {
-            show_failed: true,
+        assert!(FileVisibility::default().show_failed);
+        assert!(FileVisibility::default().keeps(&row));
+        let hidden = FileVisibility {
+            show_failed: false,
             ..FileVisibility::default()
         };
-        assert!(shown.keeps(&row));
+        assert!(!hidden.keeps(&row));
         row[0].values[1].1 = RowValue::Text("no exit".into());
-        assert!(FileVisibility::default().keeps(&row));
+        assert!(hidden.keeps(&row));
         row[0].values[1].1 = RowValue::Text("succeeded".into());
-        assert!(FileVisibility::default().keeps(&row));
+        assert!(hidden.keeps(&row));
     }
 }

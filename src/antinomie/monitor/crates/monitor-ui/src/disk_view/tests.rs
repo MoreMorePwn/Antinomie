@@ -1703,7 +1703,7 @@ fn a_dump_that_cannot_be_opened_says_why_instead_of_a_tree() {
     view.scan(&scene.roots);
     for (id, expected) in [
         ("failed", "This dump failed: qemu-img: out of space"),
-        ("open", "This dump was never completed."),
+        ("open", "This dump was never completed and cannot be opened"),
         ("newer", "This dump was made by a newer version"),
     ] {
         view.entry = Entry::Dump(id.into());

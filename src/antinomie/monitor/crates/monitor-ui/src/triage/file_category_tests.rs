@@ -423,11 +423,12 @@ fn failed_attempts_are_not_changes_and_stay_behind_the_toggle() {
         real.lifecycle_text(),
         "deleted · 1 failed attempt not counted"
     );
-    // Hidden until asked for, by the same rule every file table uses.
-    let hidden = file_visibility::FileVisibility::default();
-    let shown = file_visibility::FileVisibility {
-        show_failed: true,
-        ..hidden
+    // Listed by default and hidden by the chip, by the same rule every file
+    // table uses.
+    let shown = file_visibility::FileVisibility::default();
+    let hidden = file_visibility::FileVisibility {
+        show_failed: false,
+        ..shown
     };
     assert!(!hidden.keeps(&gone.row(None)));
     assert!(shown.keeps(&gone.row(None)));
@@ -464,18 +465,22 @@ fn counts_badges_and_pages_leave_failed_attempts_out_unless_shown() {
     let tab = |tab: FileTab| tab.slot() - 8;
     for show in [false, true] {
         let (counts, opened, tabs) = sink_run(show);
-        // Change badges never include the refused calls, whatever the toggle
-        // says. Opened lists its failed opens with their result, so counts them.
-        assert_eq!(counts.opened, 2);
-        assert_eq!(counts.tabs[tab(FileTab::Deleted)], 1);
+        // Every table follows the chip, Opened included.
+        assert_eq!(counts.opened, if show { 2 } else { 1 });
+        // A tab's badge is the rows its table lists, so the refused unlink
+        // is in it only while the chip lists it.
+        assert_eq!(counts.tabs[tab(FileTab::Deleted)], if show { 2 } else { 1 });
         assert_eq!(counts.tabs[tab(FileTab::Attributes)], 1);
         assert_eq!(counts.tabs[tab(FileTab::Probed)], 1);
         assert_eq!(counts.tabs[tab(FileTab::Other)], 1);
         assert_eq!(counts.tabs[tab(FileTab::Created)], 0);
-        // The toggle is for the change categories, not Opened.
-        assert_eq!(counts.failed_attempts, 1);
-        assert_eq!(opened.rows.len(), 2);
-        assert_eq!(opened.rows[1][6].text, "Failed (ENOENT)");
+        // The chip applies to Opened as well, so the refused open counts with
+        // the refused unlink.
+        assert_eq!(counts.failed_attempts, 2);
+        assert_eq!(opened.rows.len(), if show { 2 } else { 1 });
+        if show {
+            assert_eq!(opened.rows[1][6].text, "Failed (ENOENT)");
+        }
         // Rows follow the toggle.
         assert_eq!(
             tabs[tab(FileTab::Deleted)].rows.len(),
@@ -703,7 +708,10 @@ fn opened_and_read_draw_the_five_and_six_columns_the_cards_asked_for() {
 
 #[test]
 fn a_failed_read_is_listed_with_its_result_while_the_toggle_is_off() {
-    let visibility = file_visibility::FileVisibility::default();
+    let visibility = file_visibility::FileVisibility {
+        show_failed: false,
+        ..file_visibility::FileVisibility::default()
+    };
     let mut row = vec![cell("t", theme::text(), true)];
     row[0].values = vec![("file.result", RowValue::Text("failed".into()))];
     assert!(!visibility.keeps(&row));

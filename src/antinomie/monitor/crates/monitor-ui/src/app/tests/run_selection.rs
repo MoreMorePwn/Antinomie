@@ -622,7 +622,7 @@ fn full_run_warning_is_dismissible_and_deduplicates_with_activity_without_hiding
                 ..Default::default()
             },
             |ctx| {
-                crate::activity::report(ctx, crate::activity::Level::Warn, &message);
+                crate::activity::report(ctx, crate::activity::Level::Error, &message);
                 egui::CentralPanel::default().show(ctx, |ui| crate::run_recording::show(ui, run));
             },
         )
@@ -655,14 +655,14 @@ fn full_run_warning_is_dismissible_and_deduplicates_with_activity_without_hiding
         .iter()
         .any(|(text, _)| text.contains("retained final cause")));
     journal.ingest(&ctx);
-    assert_eq!(journal.counts(), (1, 0));
+    assert_eq!(journal.counts(), (0, 1));
     let mut other = partial.clone();
     other.id = "partial-two".into();
     assert!(super::texts(&draw(&other, vec![]))
         .iter()
         .any(|(text, _)| text.contains("retained final cause")));
     journal.ingest(&ctx);
-    assert_eq!(journal.counts(), (2, 0));
+    assert_eq!(journal.counts(), (0, 2));
     assert_eq!(partial.recording_error.as_deref(), Some(reason.as_str()));
 }
 

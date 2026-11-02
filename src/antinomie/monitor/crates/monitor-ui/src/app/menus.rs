@@ -665,13 +665,19 @@ fn tool_layout(ui: &egui::Ui, specs: &[ToolSpec]) -> Vec<usize> {
     let spacing = 4.0;
     let font = egui::TextStyle::Button.resolve(ui.style());
     let width_of = |spec: &ToolSpec| -> f32 {
-        let text = format!("{}      {}", spec.icon, spec.label);
-        ui.fonts(|fonts| {
-            fonts
-                .layout_no_wrap(text, font.clone(), egui::Color32::WHITE)
-                .size()
-                .x
-        }) + ui.spacing().button_padding.x * 2.0
+        // As `tool_button` lays it out: the icon, 6 px, the label.
+        let measure = |text: &str| {
+            ui.fonts(|fonts| {
+                fonts
+                    .layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::WHITE)
+                    .size()
+                    .x
+            })
+        };
+        measure(spec.icon)
+            + 6.0
+            + measure(spec.label)
+            + ui.spacing().button_padding.x * 2.0
             + spacing
     };
     let more = ui.spacing().interact_size.y + 12.0;

@@ -408,7 +408,7 @@ impl TabSink {
     }
 
     /// `hits` is the call's classification made before it was tracked. A failed
-    /// call is not counted in any badge and has a row only when shown. Reads
+    /// call has a row, and is in its tab's badge, only when the chip shows it. Reads
     /// belong to the Read index and are left to it.
     pub(super) fn observe(
         &mut self,

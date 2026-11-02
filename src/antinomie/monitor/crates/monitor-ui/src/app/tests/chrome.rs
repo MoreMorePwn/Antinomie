@@ -150,8 +150,10 @@ fn toolbar_keeps_the_main_actions_and_menus_reach_the_rest() {
             "Run program",
             "Capture all",
             "Capture network",
-            "Dump memory",
-            "Dump core"
+            // The VM state and name keep their room at the right; Dump
+            // memory and Dump core moved into the ">" menu to give it.
+            "Running",
+            "Capture QA"
         ],
         "{shown:?}"
     );

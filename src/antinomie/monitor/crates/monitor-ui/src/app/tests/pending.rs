@@ -137,6 +137,6 @@ fn pending_binding_cap_rejects_before_submitting_another_control() {
 
     assert!(app.send_request(Command::ReconnectTransport).is_none());
     assert!(app.submitted.is_empty());
-    assert!(app.status.contains("Too many pending VM operations"));
+    assert!(app.status.contains("too many VM operations are pending"));
     assert_eq!(app.pending_sessions.len(), PENDING_SESSION_LIMIT);
 }

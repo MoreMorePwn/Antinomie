@@ -288,7 +288,7 @@ impl MonitorApp {
             .striped(true)
             .column(Col::flex(140.0).at_least(110.0).resizable(true))
             .column(Col::rest(80.0).at_least(120.0))
-            .column(Col::flex(150.0).at_least(80.0).resizable(true))
+            .column(Col::flex(230.0).at_least(80.0).resizable(true))
             .column(Col::fixed(72.0))
             .column(Col::fixed(100.0))
             .column(Col::flex(250.0).at_least(120.0).resizable(true))

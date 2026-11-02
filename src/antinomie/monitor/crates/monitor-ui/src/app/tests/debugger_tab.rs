@@ -504,6 +504,29 @@ fn the_flavour_is_chosen_in_settings_and_defaults_to_gef() {
     assert_eq!(app.settings.debugger.gdb_flavour, GdbFlavour::Gef);
     app.settings_open = true;
     app.settings_page = crate::app::settings_window::SettingsPage::AnalysisTools;
+    frames(&mut app, &ctx, size);
+    // The page scrolls: the flavour is under the limits and the rebuilt file
+    // bytes, so bring it into view first.
+    let input = |events| egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+        events,
+        ..Default::default()
+    };
+    let over_the_page = egui::pos2(600.0, 300.0);
+    crate::app::tests::draw_input(
+        &mut app,
+        &ctx,
+        input(vec![egui::Event::PointerMoved(over_the_page)]),
+    );
+    crate::app::tests::draw_input(
+        &mut app,
+        &ctx,
+        input(vec![egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -200.0),
+            modifiers: egui::Modifiers::NONE,
+        }]),
+    );
     let shown = frames(&mut app, &ctx, size);
     assert!(has(&shown, "Debugger console"), "{shown:?}");
     assert!(has(&shown, "GEF (bata24)") && has(&shown, "pwndbg"));

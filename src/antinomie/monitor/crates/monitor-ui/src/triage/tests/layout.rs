@@ -247,9 +247,11 @@ fn per_file_history_is_a_sub_tab_beside_the_file_categories() {
 fn file_toggles_are_chips_in_the_filter_bar_with_their_defaults() {
     let ctx = context();
     let (_temp, mut view) = view(Section::Files);
-    view.scan.as_mut().unwrap().counts.failed_attempts = 2;
+    view.scan.as_mut().unwrap().counts.visibility
+        [file_visibility::visibility_slot(FileTab::Opened)]
+    .failed = 2;
     let visibility = view.scan_request.file_visibility;
-    assert!(visibility.hide_standard_io && visibility.hide_libraries && !visibility.show_failed);
+    assert!(visibility.hide_standard_io && visibility.hide_libraries && visibility.show_failed);
     let out = settle(&ctx, &mut view);
     let shown = texts(&out);
     let chip = |label: &str| {
@@ -261,7 +263,7 @@ fn file_toggles_are_chips_in_the_filter_bar_with_their_defaults() {
     };
     let stdio = chip("Hide stdio");
     chip("Hide library");
-    chip("Failed attempts 2");
+    let failed = chip("Failed attempts (2)");
     // The checkboxes of the separate row are gone, and nothing but the
     // refresh status sits above the tabs.
     assert!(!shown.iter().any(|(text, _)| text.contains("Hide stdin")));
@@ -274,14 +276,12 @@ fn file_toggles_are_chips_in_the_filter_bar_with_their_defaults() {
     );
     // Clicking a chip flips its flag and asks for a new query.
     view.scan_request.offsets[1] = 2000;
+    click(&ctx, &mut view, failed.center());
+    assert!(!view.scan_request.file_visibility.show_failed);
+    assert_eq!(view.scan_request.offsets[1], 0);
     click(&ctx, &mut view, stdio.center());
     assert!(!view.scan_request.file_visibility.hide_standard_io);
     assert!(view.scan_request.file_visibility.hide_libraries);
-    assert_eq!(view.scan_request.offsets[1], 0);
-    let out = settle(&ctx, &mut view);
-    let at = find(&out, "Failed attempts 2").center();
-    click(&ctx, &mut view, at);
-    assert!(view.scan_request.file_visibility.show_failed);
 }
 
 fn row_with_location(tags: &[&str]) -> Vec<Cell> {
@@ -608,7 +608,7 @@ fn an_opened_row_keeps_every_value_under_its_own_column() {
         at("Path")
     );
     assert_eq!(at("Operation"), "open");
-    assert!(at("Process (PID / TID)").contains(" / "));
+    assert!(at("Process (PID / TID)").contains(" \u{b7} TID "));
     assert!(at("Evidence").starts_with("call "));
     // The shown columns are the Opened table's, each from its own header.
     let shown: Vec<&str> = file_tabs::OPENED_COLUMNS

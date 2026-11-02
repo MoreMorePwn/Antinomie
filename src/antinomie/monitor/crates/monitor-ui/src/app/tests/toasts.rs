@@ -151,7 +151,8 @@ fn what_belongs_to_one_run_stays_in_activity_and_its_view() {
     app.activity_notices_due = true;
     frames(&mut app, &ctx, 2);
     assert!(toasts(&ctx).is_empty());
-    assert_eq!(app.activity.counts(), (1, 0));
+    // A saving failure is an Error.
+    assert_eq!(app.activity.counts(), (0, 1));
 }
 
 #[test]

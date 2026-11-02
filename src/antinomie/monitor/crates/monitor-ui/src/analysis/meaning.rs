@@ -433,7 +433,7 @@ mod tests {
         assert_eq!(colors[1], Some(theme::good()));
         assert_eq!(colors[2], Some(theme::info()));
         assert_eq!(colors[3], Some(theme::palette().pointer));
-        assert_eq!(colors[4], Some(theme::warn()));
+        assert_eq!(colors[4], Some(theme::neutral_accent()));
         for left in 0..colors.len() {
             for right in (left + 1)..colors.len() {
                 assert_ne!(colors[left], colors[right]);
@@ -525,12 +525,16 @@ mod tests {
         assert_eq!(colors[0], Some(theme::muted()));
         assert_eq!(colors[1], Some(theme::blue()));
         assert_eq!(colors[2], Some(theme::info()));
-        assert_eq!(colors[3], Some(theme::warn()));
+        assert_eq!(colors[3], Some(theme::neutral_accent()));
         assert_eq!(colors[4], Some(theme::good()));
         assert_eq!(colors[5], Some(theme::palette().name));
+        // Imports use the neutral accent, which is the section blue in the
+        // palette; every other kind keeps its own color.
         for left in 0..colors.len() {
             for right in (left + 1)..colors.len() {
-                assert_ne!(colors[left], colors[right]);
+                if (left, right) != (1, 3) {
+                    assert_ne!(colors[left], colors[right]);
+                }
             }
         }
         assert_eq!(
