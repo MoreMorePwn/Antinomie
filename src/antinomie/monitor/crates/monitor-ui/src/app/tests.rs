@@ -43,6 +43,8 @@ mod start_error;
 mod startup;
 mod stealth;
 mod stealth_shots;
+mod tcg_fallback;
+mod tcg_shots;
 mod terminal_windows;
 mod terminals;
 mod theme_setting;

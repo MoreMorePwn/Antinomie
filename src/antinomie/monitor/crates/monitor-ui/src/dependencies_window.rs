@@ -31,6 +31,8 @@ pub(crate) struct DependenciesWindow {
     /// A line for the status bar, set when a check finished without opening
     /// the window (a probe that only ran out of time).
     notice: Option<String>,
+    /// The selected VM's name, for the Use TCG action; set by the app.
+    pub selected_vm: Option<String>,
 }
 
 /// The network-route programs the window lists after the system checks: their
@@ -49,6 +51,10 @@ pub(crate) struct Outcome {
     pub command: Option<Command>,
     /// Open Tools > Settings > Network routes.
     pub open_routes: bool,
+    /// Set the selected VM's acceleration to TCG.
+    pub tcg_for_vm: bool,
+    /// Turn on "Use TCG when KVM is unavailable".
+    pub tcg_everywhere: bool,
 }
 
 impl DependenciesWindow {
@@ -61,6 +67,7 @@ impl DependenciesWindow {
             error: None,
             quiet: false,
             notice: None,
+            selected_vm: None,
         };
         window.recheck(options);
         window
@@ -209,9 +216,10 @@ impl DependenciesWindow {
                                     &check.problem,
                                     check.optional,
                                 ) {
+                                    (Some(_), false) if check.is_warning() => 1,
                                     (Some(_), false) => 0,
-                                    (Some(_), true) => 1,
-                                    (None, _) => 2,
+                                    (Some(_), true) => 2,
+                                    (None, _) => 3,
                                 };
                                 let mut ordered: Vec<_> = report.checks.iter().collect();
                                 ordered.sort_by_key(|check| rank(check));
@@ -239,6 +247,14 @@ impl DependenciesWindow {
                                                 }
                                             }
                                         });
+                                        if check.dependency == Dependency::Kvm {
+                                            kvm_actions(
+                                                ui,
+                                                options,
+                                                self.selected_vm.as_deref(),
+                                                &mut outcome,
+                                            );
+                                        }
                                     }
                                 }
                             });
@@ -274,6 +290,39 @@ fn scroll_height(area: f32) -> f32 {
     (area - 24.0 - 150.0).max(120.0)
 }
 
+/// What to do about missing KVM: VMs can still run with TCG software
+/// emulation, much slower.
+fn kvm_actions(
+    ui: &mut egui::Ui,
+    options: &BackendOptions,
+    vm: Option<&str>,
+    outcome: &mut Outcome,
+) {
+    ui.colored_label(
+        theme::warn(),
+        "Without KVM, VMs run with TCG software emulation, which is much slower (roughly 10 to 50 times). A VM set to Default does this by itself and says so when it starts.",
+    );
+    ui.horizontal_wrapped(|ui| {
+        if let Some(vm) = vm
+            && ui
+                .button(format!("Use TCG for {vm}"))
+                .on_hover_text("Sets this VM's acceleration to TCG")
+                .clicked()
+        {
+            outcome.tcg_for_vm = true;
+        }
+        if options.start.kvm_fallback {
+            ui.label("Use TCG when KVM is unavailable: on");
+        } else if ui
+            .button("Use TCG when KVM is unavailable")
+            .on_hover_text("VMs set to KVM then run with TCG instead of refusing to start")
+            .clicked()
+        {
+            outcome.tcg_everywhere = true;
+        }
+    });
+}
+
 /// Tor and wireproxy, which the network routes start: whether the system or
 /// Antinomie has them, with the install button, and a way to the routes page.
 fn route_programs(ui: &mut egui::Ui, routes: &RoutePrograms<'_>, outcome: &mut Outcome) {
@@ -305,6 +354,7 @@ pub(crate) fn state_of(check: &dependencies::Check) -> (egui::Color32, &'static 
         return (theme::warn(), "Wrong version");
     }
     match (&check.problem, check.optional) {
+        (Some(_), false) if check.is_warning() => (theme::warn(), "Warning"),
         (Some(_), false) => (theme::warn(), "Unavailable"),
         (Some(_), true) => (theme::muted(), "Optional, not installed"),
         (None, _) => (theme::good(), "Ready"),
@@ -472,6 +522,7 @@ impl DependenciesWindow {
             wake: None,
             quiet: false,
             notice: None,
+            selected_vm: None,
         }
     }
 }
@@ -634,6 +685,7 @@ mod tests {
             error: None,
             quiet: false,
             notice: None,
+            selected_vm: None,
         };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         while window.worker.is_some() {

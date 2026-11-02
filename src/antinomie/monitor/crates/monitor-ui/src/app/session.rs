@@ -217,6 +217,15 @@ impl MonitorApp {
         if snapshot.state != self.snapshot.state {
             activity.push(("INFO", format!("Session {:?}", snapshot.state)));
         }
+        // Once per start: KVM was wanted and the VM runs with TCG instead.
+        if snapshot.accelerator != self.snapshot.accelerator
+            && let Some(warning) = snapshot
+                .accelerator
+                .as_ref()
+                .and_then(|accelerator| accelerator.fallback_warning.clone())
+        {
+            activity.push(("WARN", warning));
+        }
         if snapshot.last_error != self.snapshot.last_error {
             if let Some(error) = &snapshot.last_error {
                 activity.push(("ERROR", error.clone()));
@@ -721,10 +730,12 @@ impl MonitorApp {
 
     pub(super) fn update_options(&mut self) {
         self.options.bundle_dir = crate::folders::user_path(&self.settings.bundle);
+        self.options.start = self.settings.start;
         self.send(Command::UpdateOptions {
             bundle_dir: crate::folders::user_path(&self.settings.bundle),
             capture_quota_size: u64::from(self.settings.quota_gib) * 1073741824,
             shutdown_timeout_secs: self.settings.timeout,
+            start: self.settings.start,
         });
     }
 }

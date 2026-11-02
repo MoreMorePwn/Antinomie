@@ -129,6 +129,8 @@ struct Settings {
     /// File activity: most MiB of earlier bytes copied for a whole run.
     file_before_run_mib: u32,
     timeout: u64,
+    /// VM start waits and the KVM fallback (Settings > Advanced).
+    start: antinomie_monitor_core::StartSettings,
     font_size: f32,
     /// Version of the saved settings; a missing field (settings saved before
     /// versions) reads as 0 so `migrate` can upgrade old defaults once.
@@ -268,6 +270,7 @@ impl Default for Settings {
             file_before_run_mib: (antinomie_monitor_core::file_writes::DEFAULT_PER_RUN >> 20)
                 as u32,
             timeout: 10,
+            start: Default::default(),
             font_size: theme::DEFAULT_TEXT_SIZE,
             settings_version: SETTINGS_VERSION,
             trace_colors: true,
@@ -622,6 +625,12 @@ impl MonitorApp {
         options.bundle_dir = crate::folders::user_path(&settings.bundle);
         options.capture_quota_size = u64::from(settings.quota_gib) * 1024 * 1024 * 1024;
         options.shutdown_timeout = Duration::from_secs(settings.timeout);
+        settings.start = if settings.start.validate().is_ok() {
+            settings.start
+        } else {
+            Default::default()
+        };
+        options.start = settings.start;
         // Before the backend starts: it finishes layers an earlier process left.
         antinomie_monitor_core::file_before_store::set_limits(settings.before_limits());
         let (backend, start_error) = match start_error::start_backend(&options, &cc.egui_ctx) {

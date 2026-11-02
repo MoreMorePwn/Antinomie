@@ -142,6 +142,51 @@ impl MonitorApp {
         Ok(())
     }
 
+    /// Why this host cannot use KVM, once the dependency check has finished.
+    pub(super) fn kvm_problem(&self) -> Option<String> {
+        self.dependencies
+            .report()?
+            .checks
+            .iter()
+            .find(|check| {
+                check.dependency == antinomie_monitor_core::dependencies::Dependency::Kvm
+            })?
+            .problem
+            .clone()
+    }
+
+    /// The Use TCG buttons of the dependencies window.
+    pub(super) fn apply_tcg_choice(&mut self, everywhere: bool, for_vm: bool) {
+        if everywhere {
+            self.settings.start.kvm_fallback = true;
+            self.update_options();
+            self.report_info(
+                "Use TCG when KVM is unavailable is on; VMs set to KVM run with TCG, much slower"
+                    .into(),
+            );
+        }
+        if for_vm
+            && let Some(mut vm) = self
+                .snapshot
+                .vms
+                .iter()
+                .find(|vm| Some(&vm.id) == self.selected.as_ref())
+                .cloned()
+        {
+            vm.launch.acceleration = VmAcceleration::Tcg;
+            if vm.launch.cpu_model == VmCpuModel::Host {
+                vm.launch.cpu_model = VmCpuModel::Default;
+            }
+            let name = vm.name.clone();
+            match self.save_vm(vm) {
+                Ok(()) => self.report_info(format!(
+                    "{name} now uses TCG acceleration; software emulation is much slower"
+                )),
+                Err(error) => self.report_warning(error),
+            }
+        }
+    }
+
     pub(super) fn new_run(&mut self) {
         if let Some(vm_id) = self.selected.clone() {
             self.send(Command::Start { vm_id });
@@ -627,7 +672,8 @@ impl MonitorApp {
                             });
                             vm_section(ui, "Display and emulation");
                             form_grid("vm_display", ui).show(ui, |ui| {
-                                launch_options(ui, &mut app.draft.launch);
+                                let kvm_problem = app.kvm_problem();
+                                launch_options(ui, &mut app.draft.launch, kvm_problem.as_deref());
                                 let fallbacks = app.draft_stealth_fallbacks();
                                 super::stealth::preset_row(ui, &mut app.draft.stealth, &mut app.stealth_open, &fallbacks, "Edit…");
                             });
@@ -913,7 +959,7 @@ fn vm_section(ui: &mut egui::Ui, title: &str) {
     dialog_section(ui, title);
 }
 
-fn launch_options(ui: &mut egui::Ui, launch: &mut VmLaunchOptions) {
+fn launch_options(ui: &mut egui::Ui, launch: &mut VmLaunchOptions, kvm_problem: Option<&str>) {
     ui.label("Resolution");
     egui::ComboBox::from_id_salt("vm_resolution")
         .selected_text(launch.resolution.label())
@@ -941,6 +987,33 @@ fn launch_options(ui: &mut egui::Ui, launch: &mut VmLaunchOptions) {
             }
         });
     ui.end_row();
+    if let Some(problem) = kvm_problem
+        && launch.acceleration != VmAcceleration::Tcg
+    {
+        ui.label("");
+        ui.vertical(|ui| {
+            let fallback = launch.acceleration == VmAcceleration::Default;
+            ui.colored_label(
+                theme::warn(),
+                format!(
+                    "KVM is not available on this host ({problem}). {} TCG is software emulation, much slower (roughly 10 to 50 times).",
+                    if fallback {
+                        "This VM will start with TCG."
+                    } else {
+                        "This VM will not start with KVM."
+                    }
+                ),
+            );
+            if ui.button("Use TCG for this VM").clicked() {
+                launch.acceleration = VmAcceleration::Tcg;
+                // The host CPU model needs KVM.
+                if launch.cpu_model == VmCpuModel::Host {
+                    launch.cpu_model = VmCpuModel::Default;
+                }
+            }
+        });
+        ui.end_row();
+    }
     ui.label("CPU model");
     egui::ComboBox::from_id_salt("vm_cpu_model")
         .selected_text(launch.cpu_model.label())

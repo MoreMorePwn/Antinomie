@@ -647,6 +647,46 @@ impl MonitorApp {
                     );
             });
             ui.end_row();
+            ui.label("VM start and guest connection timeouts");
+            ui.vertical(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut self.settings.start.guest_connect_secs)
+                            .range(antinomie_monitor_core::StartSettings::GUEST_CONNECT_SECS)
+                            .suffix(" s guest connection"),
+                    )
+                    .on_hover_text("How long a start waits for the guest to connect at KVM speed.");
+                    ui.add(
+                        egui::DragValue::new(&mut self.settings.start.tcg_multiplier)
+                            .range(antinomie_monitor_core::StartSettings::TCG_MULTIPLIER)
+                            .prefix("TCG multiplier x"),
+                    )
+                    .on_hover_text(
+                        "TCG is software emulation, 10 to 50 times slower than KVM. Every start wait is this many times longer when a VM runs with TCG.",
+                    );
+                });
+                ui.checkbox(
+                    &mut self.settings.start.kvm_fallback,
+                    "Use TCG when KVM is unavailable",
+                )
+                .on_hover_text(
+                    "A VM set to KVM runs with TCG when /dev/kvm cannot be used, instead of refusing to start. A VM set to Default always does.",
+                );
+                let tcg = antinomie_monitor_core::accel::Choice {
+                    accelerator: antinomie_monitor_core::accel::Accelerator::Tcg,
+                    fallback: None,
+                };
+                let waits = antinomie_monitor_core::accel::Waits::new(&tcg, &self.settings.start);
+                hint(
+                    ui,
+                    &format!(
+                        "A VM that runs with TCG waits up to {} s for its guest to connect now (the multiplier, and a host load above one per CPU, stretch every wait of a start; a QMP reply may take {} s). Raise the multiplier when a slow TCG boot is reported as not connecting. Applies to the next start.",
+                        waits.guest_connect().as_secs(),
+                        waits.qmp_reply().as_secs()
+                    ),
+                );
+            });
+            ui.end_row();
             ui.label("File activity: written content kept");
             ui.vertical(|ui| {
                 ui.horizontal_wrapped(|ui| {

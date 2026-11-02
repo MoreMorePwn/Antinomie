@@ -163,9 +163,17 @@ fn main() -> eframe::Result<()> {
         let report = antinomie_monitor_core::dependencies::check(&options);
         for check in &report.checks {
             match &check.problem {
+                Some(problem) if check.is_warning() => {
+                    println!("Warning: {}: {problem}. {}", check.name, check.hint)
+                }
                 Some(problem) => println!("{}: {problem}. {}", check.name, check.hint),
                 None => println!("{}: ready", check.name),
             }
+        }
+        if !options.force_tcg && !report.warnings().is_empty() {
+            eprintln!(
+                "Warning: KVM is not available; VMs run with TCG software emulation, much slower (roughly 10 to 50 times). Use --tcg or set a VM to TCG to silence this."
+            );
         }
         if report.has_missing() {
             eprintln!("{}", failure_line("some runtime requirements are missing"));

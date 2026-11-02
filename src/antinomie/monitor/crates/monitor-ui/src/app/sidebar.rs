@@ -311,6 +311,10 @@ impl MonitorApp {
                 let status = self.status.clone();
                 let is_notice = self.status_notice.as_ref().is_some_and(|(_, message)| message == &status);
                 let closing = self.closing;
+                // A slow start is waited for, not failed.
+                let start_note = (self.snapshot.state == VmState::Starting)
+                    .then(|| self.snapshot.start_note.clone())
+                    .flatten();
                 let loss = |count: u64| if count == 0 { theme::good() } else { theme::warn() };
                 let saved = persisted as f64 / 1_073_741_824.0;
                 ui.add_space(3.0);
@@ -357,6 +361,10 @@ impl MonitorApp {
                             let message = "Waiting for guest shutdown and recording finalization…";
                             ui.add(egui::Label::new(RichText::new(message).color(theme::warn())).truncate())
                                 .on_hover_text(message);
+                        } else if let Some(note) = &start_note {
+                            crate::theme::spinner(ui);
+                            ui.add(egui::Label::new(RichText::new(note).color(theme::warn())).truncate())
+                                .on_hover_text(note);
                         } else if !status.is_empty() && !is_notice {
                             // A warning or an error is a toast, not a status line.
                             status_line(ui, egui_phosphor::regular::INFO, &status, theme::info());

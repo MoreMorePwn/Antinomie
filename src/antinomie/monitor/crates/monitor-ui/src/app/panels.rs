@@ -22,6 +22,12 @@ impl MonitorApp {
             .filter_map(|id| self.route_tool(id))
             .collect();
         let install = self.snapshot.tool_install.clone();
+        self.dependencies.selected_vm = self
+            .snapshot
+            .vms
+            .iter()
+            .find(|vm| Some(&vm.id) == self.selected.as_ref())
+            .map(|vm| vm.name.clone());
         let outcome = self.dependencies.show(
             ctx,
             &self.options,
@@ -36,6 +42,9 @@ impl MonitorApp {
         }
         if let Some(command) = outcome.command {
             self.send(command);
+        }
+        if outcome.tcg_everywhere || outcome.tcg_for_vm {
+            self.apply_tcg_choice(outcome.tcg_everywhere, outcome.tcg_for_vm);
         }
         if outcome.open_routes {
             self.open_routes_settings();
