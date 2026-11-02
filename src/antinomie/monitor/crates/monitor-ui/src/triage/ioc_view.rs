@@ -569,15 +569,7 @@ impl TriageView {
         let mut items = vec![(Tab::Summary, TabItem::new("Summary"))];
         for ty in Type::ALL {
             let all = self.ioc.count_of(Some(ty));
-            let tone = if all.matched > 0 {
-                Tone::Error
-            } else {
-                Tone::Plain
-            };
-            items.push((
-                Tab::Of(ty),
-                TabItem::new(ty.label()).badge(all.all().to_string(), tone),
-            ));
+            items.push((Tab::Of(ty), count_tab(ty.label(), all.matched, all.all())));
         }
         let mut tab = self.ioc.tab;
         widgets::tabs(ui, items, &mut tab);
@@ -607,6 +599,23 @@ impl TriageView {
             list::Jump::Properties => self.section = Section::Properties,
         }
     }
+}
+
+/// A tab with the total in the muted count style and, when any matched, the
+/// matched count beside it in red: "IOC 24 · 3".
+pub(super) fn count_tab(label: &str, matched: usize, total: usize) -> TabItem {
+    let tip = if matched > 0 {
+        format!("{total} indicators, {matched} matched")
+    } else {
+        format!("{total} indicators, none matched")
+    };
+    TabItem::new(label)
+        .badge(
+            antinomie_monitor_core::analysis::detection::group_digits(total as u64),
+            Tone::Neutral,
+        )
+        .alert(matched)
+        .tooltip(tip)
 }
 
 impl View {

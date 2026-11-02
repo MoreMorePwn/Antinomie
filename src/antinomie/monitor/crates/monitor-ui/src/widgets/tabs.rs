@@ -15,6 +15,9 @@ pub struct TabItem {
     pub icon: Option<(String, Tone)>,
     /// A count or word in a small pill after the label.
     pub badge: Option<(String, Tone)>,
+    /// A second count in the badge's pill, after a dot, in the alert color:
+    /// the part of the badge's count that needs attention.
+    pub alert: Option<String>,
     /// Shown on hover; for a disabled tab, why it is disabled.
     pub tooltip: Option<String>,
     /// A disabled tab is drawn in the hint color and takes no clicks.
@@ -30,6 +33,7 @@ impl TabItem {
             label: label.into(),
             icon: None,
             badge: None,
+            alert: None,
             tooltip: None,
             enabled: true,
             dim: false,
@@ -41,6 +45,12 @@ impl TabItem {
     }
     pub fn badge(mut self, text: impl Into<String>, tone: Tone) -> Self {
         self.badge = Some((text.into(), tone));
+        self
+    }
+    /// The alert count beside the badge ("24 · 3", the 3 in red); none if 0.
+    pub fn alert(mut self, count: usize) -> Self {
+        self.alert = (count > 0)
+            .then(|| antinomie_monitor_core::analysis::detection::group_digits(count as u64));
         self
     }
     pub fn tooltip(mut self, text: impl Into<String>) -> Self {
@@ -138,6 +148,19 @@ pub fn tab(ui: &mut egui::Ui, selected: bool, item: &TabItem) -> Response {
             .layout_no_wrap(text.clone(), small.clone(), tone.fg());
         (galley, tone.bg())
     });
+    let alert = item.alert.as_ref().map(|text| {
+        let red = Tone::Error.fg();
+        let dot = ui
+            .painter()
+            .layout_no_wrap(" · ".into(), small.clone(), palette.muted);
+        let number = ui
+            .painter()
+            .layout_no_wrap(text.clone(), small.clone(), red);
+        (dot, number)
+    });
+    let alert_width = alert
+        .as_ref()
+        .map_or(0.0, |(dot, number)| dot.size().x + number.size().x);
     let pad = 10.0;
     let gap = 6.0;
     let badge_pad = 5.0;
@@ -146,7 +169,7 @@ pub fn tab(ui: &mut egui::Ui, selected: bool, item: &TabItem) -> Response {
         extra += galley.size().x + 5.0;
     }
     if let Some((galley, _)) = &badge {
-        extra += gap + galley.size().x + badge_pad * 2.0;
+        extra += gap + galley.size().x + badge_pad * 2.0 + alert_width;
     }
     // A tab never grows past the row: the label is cut with an ellipsis.
     let room = (ui.max_rect().width() - extra).max(24.0);
@@ -223,19 +246,25 @@ pub fn tab(ui: &mut egui::Ui, selected: bool, item: &TabItem) -> Response {
         let text_pos = egui::pos2(left, rect.center().y - label.size().y / 2.0);
         painter.galley(text_pos, label, color);
         if let Some((galley, badge_bg)) = badge {
-            let size = galley.size() + vec2(badge_pad * 2.0, 2.0);
+            let size = galley.size() + vec2(badge_pad * 2.0 + alert_width, 2.0);
             let left = rect.right() - pad - size.x + 0.0;
             let pill =
                 egui::Rect::from_min_size(egui::pos2(left, rect.center().y - size.y / 2.0), size);
             painter.rect_filled(pill, 8.0, badge_bg);
-            painter.galley(
-                egui::pos2(
-                    pill.left() + badge_pad,
-                    pill.center().y - galley.size().y / 2.0,
-                ),
-                galley,
-                egui::Color32::PLACEHOLDER,
-            );
+            let mut x = pill.left() + badge_pad;
+            let y = pill.center().y - galley.size().y / 2.0;
+            let count_width = galley.size().x;
+            painter.galley(egui::pos2(x, y), galley, egui::Color32::PLACEHOLDER);
+            x += count_width;
+            if let Some((dot, number)) = alert {
+                let dot_width = dot.size().x;
+                painter.galley(egui::pos2(x, y), dot, egui::Color32::PLACEHOLDER);
+                painter.galley(
+                    egui::pos2(x + dot_width, y),
+                    number,
+                    egui::Color32::PLACEHOLDER,
+                );
+            }
         }
     }
     response

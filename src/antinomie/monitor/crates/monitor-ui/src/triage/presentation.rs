@@ -73,16 +73,9 @@ pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui, input: &Triag
                 view.section = section;
             }
         }
-        // The IOC tab counts the run's indicators, red when one matched.
+        // The IOC tab: the indicators in grey, the matched ones beside it in red.
         let ioc = match view.ioc_headline() {
-            Some((matched, total, _)) => crate::widgets::TabItem::new("IOC").badge(
-                total.to_string(),
-                if matched > 0 {
-                    crate::widgets::Tone::Error
-                } else {
-                    crate::widgets::Tone::Plain
-                },
-            ),
+            Some((matched, total, _)) => super::ioc_view::count_tab("IOC", matched, total),
             None => crate::widgets::TabItem::new("IOC"),
         };
         if crate::widgets::tab(ui, view.section == Section::Ioc, &ioc).clicked() {

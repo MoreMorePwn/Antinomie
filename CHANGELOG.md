@@ -8,6 +8,12 @@ it runs.
 
 ### Host
 
+- **The Triage IOC tab and its kind tabs show matches beside the total.** The
+  total number of indicators is in the muted grey count style and, when any
+  indicator matched (IDS, YARA, Sigma, abuse.ch or marked malicious), the
+  matched count follows it in alert red ("IOC 24 · 3", tooltip "24 indicators,
+  3 matched"); nothing red when nothing matched. It uses the same tab count
+  painter as the other Triage tabs.
 - **A Jobs window lists everything the app is running.** It sits beside Activity
   (View > Jobs), and a "3 jobs" chip in the status bar opens it. One row per job
   with its kind, target, start time, a ticking elapsed time, progress when
