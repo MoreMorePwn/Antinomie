@@ -652,7 +652,7 @@ fn string_table(
             .resizable(true)
             .vscroll(true)
             .max_scroll_height(row_height * VISIBLE_ROWS as f32)
-            .min_scrolled_height(0.0)
+            .min_scrolled_height(row_height * shown.len().min(VISIBLE_ROWS) as f32)
             .header(table::header_height(font), |mut header| {
                 for title in titles {
                     header.col(|ui| {
