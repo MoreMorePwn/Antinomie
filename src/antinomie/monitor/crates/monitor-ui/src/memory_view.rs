@@ -262,6 +262,91 @@ impl Drop for MemoryView {
 }
 
 impl MemoryView {
+    /// How a plugin run that left the running list ended.
+    pub(crate) fn plugin_outcome(&self, id: &str) -> Option<(crate::jobs::Outcome, String)> {
+        use crate::jobs::Outcome;
+        let run = self.runs.iter().find(|run| run.id == id)?;
+        Some(match run.state {
+            RunState::Failed => (
+                Outcome::Failed,
+                run.error.clone().unwrap_or_else(|| "Failed".into()),
+            ),
+            RunState::Cancelled => (Outcome::Cancelled, "Cancelled".into()),
+            _ => (Outcome::Finished, format!("{} rows", run.rows)),
+        })
+    }
+
+    /// What the Memory tab is running now, for the Jobs window: plugin and
+    /// report runs, and catalog plugin downloads.
+    pub(crate) fn running_jobs(&self) -> Vec<crate::jobs::Job> {
+        use crate::jobs::{Job, Stop};
+        use crate::workspace::Panel;
+        let mut out = Vec::new();
+        for handle in &self.jobs {
+            let run = &handle.run;
+            let progress = handle.progress();
+            let dump = self
+                .dumps
+                .iter()
+                .find(|dump| dump.id == run.dump_id)
+                .map_or_else(
+                    || run.dump_id.chars().take(8).collect(),
+                    |dump| dump.vm_name.clone(),
+                );
+            let kind = match run.analyzer {
+                Analyzer::Volatility => "Volatility plugin",
+                Analyzer::MemNixFs => "MemNixFS report",
+            };
+            let stop = handle.clone();
+            let mut job = Job::new(
+                format!("plugin:{}", run.id),
+                kind,
+                format!("{} on {dump}", run.short_name()),
+            )
+            .started(Some(run.started_ms))
+            .state(if progress.step.is_empty() {
+                "Running".to_owned()
+            } else {
+                progress.step.clone()
+            })
+            .stop(Stop::Call(std::sync::Arc::new(move || stop.cancel())))
+            .open(Panel::Memory);
+            if progress.percent > 0.0 {
+                job = job.fraction(progress.percent / 100.0);
+            }
+            out.push(job);
+        }
+        for (id, install) in &self.installs {
+            let (done, total) = install.progress.lock().map(|p| *p).unwrap_or_default();
+            out.push(
+                Job::new(
+                    format!("plugin-install:{id}"),
+                    "Plugin download",
+                    id.clone(),
+                )
+                .state("Downloading")
+                .progress(done, total)
+                .flag(Some(install.cancel.clone()))
+                .open(Panel::Memory),
+            );
+        }
+        if matches!(self.catalog, Catalog::Loading(_)) {
+            out.push(
+                Job::new("plugin-list", "Volatility", "reading the plugin list")
+                    .state("Loading")
+                    .open(Panel::Memory),
+            );
+        }
+        if matches!(self.engine, Engine::Loading(_)) {
+            out.push(
+                Job::new("memnixfs-locate", "MemNixFS", "starting the tool")
+                    .state("Loading")
+                    .open(Panel::Memory),
+            );
+        }
+        out
+    }
+
     fn poll(&mut self, ctx: &egui::Context, data_dir: &Path) {
         let finished = self
             .loading

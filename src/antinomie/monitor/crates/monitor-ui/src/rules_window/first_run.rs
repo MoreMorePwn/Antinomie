@@ -3,7 +3,11 @@
 //! packs, which of them are installed, and one install at a time on the
 //! manager's own worker. Nothing here opens the network by itself.
 use super::{sources::short_revision, Model, Ordering};
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::BTreeSet,
+    path::Path,
+    sync::{atomic::AtomicBool, Arc},
+};
 
 /// One pack the catalog offers, for any engine.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -147,6 +151,23 @@ impl Model {
             self.install(data_dir, outbound, entry.clone());
         }
         self.job.is_some()
+    }
+
+    /// The running job as (what it says it does, its cancel flag), for the
+    /// Jobs window.
+    pub(crate) fn running_job(&self) -> Option<(String, Arc<AtomicBool>)> {
+        let job = self.job.as_ref()?;
+        let progress = job
+            .progress
+            .lock()
+            .map(|text| text.clone())
+            .unwrap_or_default();
+        let text = if progress.is_empty() {
+            self.status.clone()
+        } else {
+            progress
+        };
+        Some((text, Arc::clone(&job.cancel)))
     }
 
     pub(crate) fn cancel_job(&mut self) {

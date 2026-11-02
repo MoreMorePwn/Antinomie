@@ -19,6 +19,7 @@ mod getting_started;
 mod history;
 mod history_columns;
 mod history_sync;
+mod jobs;
 mod library;
 mod menus;
 mod notices;
@@ -321,6 +322,8 @@ enum Confirm {
     },
     /// Detach the debugger and kill the debugged process.
     DebugKill,
+    /// Quit while jobs run: the list shows what would stop.
+    Quit,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -558,6 +561,10 @@ pub struct MonitorApp {
     focus_panel: Option<Panel>,
     activity: crate::activity::Journal,
     activity_notices_due: bool,
+    /// Everything running now and the last jobs that finished.
+    jobs: crate::jobs::Board,
+    /// The quit confirmation was answered Quit: close without asking again.
+    quit_confirmed: bool,
     status_notice: Option<(crate::activity::Level, String)>,
     exec: ExecRequest,
     args: String,
@@ -777,6 +784,8 @@ impl MonitorApp {
             focus_panel: None,
             activity: crate::activity::Journal::restore(cc.storage),
             activity_notices_due: true,
+            jobs: Default::default(),
+            quit_confirmed: false,
             status_notice: None,
             exec,
             args: String::new(),
@@ -929,10 +938,22 @@ impl eframe::App for MonitorApp {
         if let Some(choices) = self.triage.take_report_choices() {
             self.settings.report_export = choices;
         }
-        let close = ctx.input(|input| input.viewport().close_requested())
+        self.jobs_tick(ctx);
+        let mut close = ctx.input(|input| input.viewport().close_requested())
             || self
                 .smoke
                 .is_some_and(|timeout| self.started.elapsed() >= timeout);
+        // Closing the window with jobs running asks first.
+        if close
+            && !self.closing
+            && !self.quit_confirmed
+            && self.smoke.is_none()
+            && self.jobs.count() > 0
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm = Some(Confirm::Quit);
+            close = false;
+        }
         if close && !self.closing {
             self.closing = true;
             self.send(Command::Close);

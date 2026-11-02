@@ -248,6 +248,44 @@ fn input_note(ui: &mut egui::Ui, text: &str) {
 }
 
 impl View {
+    /// The scans in flight or being prepared, for the Jobs window.
+    pub(super) fn running_jobs(&self) -> Vec<crate::jobs::Job> {
+        let mut out = Vec::new();
+        for (index, engine) in ENGINES.into_iter().enumerate() {
+            // A phase word alone can be left over; the worker or the waiting
+            // request is what makes it a job.
+            let waiting = self.pending.as_ref().is_some_and(|p| p.engine == engine);
+            if self.busy != Some(index) && !waiting {
+                continue;
+            }
+            let state = match self.phase[index].as_str() {
+                "queued" => "Queued".to_owned(),
+                "preparing" => "Preparing the rules".to_owned(),
+                _ => match &self.progress[index] {
+                    Some(progress) => format!(
+                        "Scanning, {} rules loaded",
+                        antinomie_monitor_core::analysis::detection::group_digits(
+                            progress.rules_loaded
+                        )
+                    ),
+                    None => "Scanning".to_owned(),
+                },
+            };
+            let mut job = crate::jobs::Job::new(
+                format!("scan:{}", name(engine)),
+                "Detection scan",
+                format!("{} rules on the run", name(engine)),
+            )
+            .state(state)
+            .open(crate::workspace::Panel::Triage);
+            if self.busy == Some(index) {
+                job = job.flag(self.cancel.clone());
+            }
+            out.push(job);
+        }
+        out
+    }
+
     /// Saved evidence was deleted: look at the listed captures and cores again.
     pub(super) fn evidence_deleted(&mut self) {
         self.presence.invalidate();

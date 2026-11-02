@@ -64,6 +64,11 @@ impl UpdateWindow {
         }
     }
 
+    /// The running check's cancel flag, for the Jobs window.
+    pub(crate) fn running_check(&self) -> Option<Arc<AtomicBool>> {
+        self.worker.as_ref().map(|(_, _, cancel)| cancel.clone())
+    }
+
     fn poll(&mut self) {
         let Some((receiver, _, _)) = &self.worker else {
             return;

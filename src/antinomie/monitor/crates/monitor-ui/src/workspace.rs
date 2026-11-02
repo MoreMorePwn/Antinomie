@@ -31,6 +31,8 @@ pub(crate) enum Panel {
     RunHistory,
     Details,
     Activity,
+    /// Everything the app is running now, beside Activity.
+    Jobs,
     Terminal(String),
     /// The debugger of the attached session: it sits beside Static analysis
     /// while a session lasts, and is never restored with the saved
@@ -88,6 +90,7 @@ impl Panel {
             Self::RunHistory => "Run History",
             Self::Details => "Details",
             Self::Activity => "Activity",
+            Self::Jobs => "Jobs",
             Self::Terminal(_) => "Terminal",
             Self::Debugger => "Debugger",
             Self::Library(page) => page.title(),
@@ -253,7 +256,7 @@ impl Default for WorkspaceLayout {
         dock.main_surface_mut().split_below(
             NodeIndex::root(),
             0.72,
-            vec![Panel::Details, Panel::Activity],
+            vec![Panel::Details, Panel::Activity, Panel::Jobs],
         );
         Self {
             version: LAYOUT_VERSION,
@@ -364,7 +367,7 @@ impl WorkspaceLayout {
         self.remove_empty_windows();
         for panel in Panel::MAIN
             .into_iter()
-            .chain([Panel::Details, Panel::Activity])
+            .chain([Panel::Details, Panel::Activity, Panel::Jobs])
         {
             if self.dock.find_tab(&panel).is_none() {
                 self.return_home(panel);
@@ -885,10 +888,10 @@ impl WorkspaceLayout {
         if location.0.is_main() {
             return;
         }
-        let home = if matches!(panel, Panel::Details | Panel::Activity) {
-            [Panel::Details, Panel::Activity]
+        let home: &[Panel] = if matches!(panel, Panel::Details | Panel::Activity | Panel::Jobs) {
+            &[Panel::Details, Panel::Activity, Panel::Jobs]
         } else {
-            [Panel::Trace, Panel::RunHistory]
+            &[Panel::Trace, Panel::RunHistory]
         };
         if self.dock.main_surface().is_empty() {
             self.dock
@@ -934,9 +937,9 @@ impl WorkspaceLayout {
     /// the trace in the upper tab bar, Details and Activity in the lower one,
     /// recreating that split when the other group is all that is left.
     fn return_home(&mut self, panel: Panel) {
-        let lower = matches!(panel, Panel::Details | Panel::Activity);
+        let lower = matches!(panel, Panel::Details | Panel::Activity | Panel::Jobs);
         let upper = Panel::MAIN.to_vec();
-        let bottom = vec![Panel::Details, Panel::Activity];
+        let bottom = vec![Panel::Details, Panel::Activity, Panel::Jobs];
         let (own, other) = if lower {
             (bottom, upper)
         } else {
@@ -1046,6 +1049,8 @@ impl Viewer<'_> {
     fn title_for(&mut self, tab: &Panel, tight: bool) -> egui::WidgetText {
         if *tab == Panel::Activity {
             self.app.activity_title()
+        } else if *tab == Panel::Jobs {
+            self.app.jobs_title()
         } else if tight {
             workspace_tabs::tight_title(&self.app.panel_title(tab)).into()
         } else {

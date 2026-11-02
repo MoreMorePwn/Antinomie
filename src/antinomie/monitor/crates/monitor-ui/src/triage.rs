@@ -703,6 +703,23 @@ impl TriageView {
         })
     }
 
+    /// What Triage is doing now, for the Jobs window: preparing the recording,
+    /// detection scans and the online Check.
+    pub(crate) fn running_jobs(&self) -> Vec<crate::jobs::Job> {
+        let mut out = Vec::new();
+        if self.preparing() {
+            out.push(
+                crate::jobs::Job::new("triage-index", "Triage", "preparing the recording")
+                    .state("Indexing")
+                    .flag(self.scan_cancel.clone())
+                    .open(crate::workspace::Panel::Triage),
+            );
+        }
+        out.extend(self.detection.running_jobs());
+        out.extend(self.ioc.running_jobs());
+        out
+    }
+
     pub(crate) fn take_rule_manager(&mut self) -> bool {
         std::mem::take(&mut self.detection.open_manager)
     }

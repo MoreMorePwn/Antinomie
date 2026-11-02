@@ -134,6 +134,39 @@ impl Drop for SamplesView {
     }
 }
 
+impl SamplesView {
+    /// The MalwareBazaar searches and downloads running, for the Jobs window.
+    pub(crate) fn running_jobs(&self) -> Vec<crate::jobs::Job> {
+        use crate::jobs::Job;
+        let mut out = Vec::new();
+        if self.searching.is_some() {
+            out.push(
+                Job::new("bazaar-search", "MalwareBazaar search", "catalog query")
+                    .state("Asking abuse.ch")
+                    .flag(self.search_cancel.clone())
+                    .open(crate::workspace::Panel::Library(
+                        crate::workspace::LibraryPage::Samples,
+                    )),
+            );
+        }
+        for (hash, (_, cancel)) in &self.downloads {
+            out.push(
+                Job::new(
+                    format!("bazaar-download:{hash}"),
+                    "MalwareBazaar download",
+                    hash.chars().take(16).collect::<String>(),
+                )
+                .state("Downloading")
+                .flag(Some(cancel.clone()))
+                .open(crate::workspace::Panel::Library(
+                    crate::workspace::LibraryPage::Samples,
+                )),
+            );
+        }
+        out
+    }
+}
+
 fn next_sort(sort: Option<Sort>, column: Col) -> Option<Sort> {
     match sort {
         Some(Sort {

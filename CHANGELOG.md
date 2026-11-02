@@ -8,6 +8,21 @@ it runs.
 
 ### Host
 
+- **A Jobs window lists everything the app is running.** It sits beside Activity
+  (View > Jobs), and a "3 jobs" chip in the status bar opens it. One row per job
+  with its kind, target, start time, a ticking elapsed time, progress when
+  known, its state, and Open and Stop where the job can be stopped. It covers
+  runs (also those still recording after the root exited, with the processes
+  alive), VM start (with the slow TCG boot wait) and stop, VM snapshots, memory
+  dumps, process cores (also armed ones), static analysis checks per report,
+  Triage preparing a recording, detection scans, Check online lookups, base
+  downloads, catalog refreshes, base builds, tool installs, rule and dataset
+  downloads, MalwareBazaar searches and downloads, Volatility and MemNixFS runs,
+  plugin downloads, disk jobs, recording saves, exports and update checks. A
+  Finished list keeps the last 20 jobs with how each ended and an Open link
+  (until cleared). Closing the window while jobs run asks first and lists them.
+  It reads the state the app already keeps and starts no work of its own.
+
 - **ATT&CK techniques are coloured by tactic.** Each of the 15 ATT&CK v20
   tactics (Defense Evasion is now Stealth and Defense Impairment) has its own
   colour, one palette for dark and one for light (every colour is at least 4.2:1

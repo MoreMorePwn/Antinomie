@@ -591,6 +591,7 @@ impl MonitorApp {
                 crate::workspace::DetailsOf::Sample => self.sample_run_details(ui),
             },
             Panel::Activity => self.activity(ui),
+            Panel::Jobs => self.jobs_panel(ui),
             Panel::Terminal(id) => {
                 let live = self
                     .terminals

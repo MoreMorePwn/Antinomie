@@ -382,6 +382,12 @@ impl MonitorApp {
                     "Type into VM",
                     false,
                 ),
+                Confirm::Quit => (
+                    "Quit Antinomie",
+                    "These jobs are still running. Quitting stops them: the VM is shut down and its recordings are saved first.",
+                    "Quit",
+                    true,
+                ),
                 Confirm::DebugKill => (
                     "Detach and kill",
                     "Detach the debugger and end the debugged process with SIGKILL? Its state is lost; the VM keeps running.",
@@ -420,6 +426,19 @@ impl MonitorApp {
                     if let Confirm::Clipboard { text, .. } = confirm {
                         ui.label(format!("{} keys to type", text.key_count));
                     }
+                    if matches!(confirm, Confirm::Quit) {
+                        let lines = self.quit_lines();
+                        if lines.is_empty() {
+                            ui.label("No jobs are running now.");
+                        }
+                        for line in lines.iter().take(12) {
+                            ui.add(egui::Label::new(format!("• {line}")).wrap())
+                                .on_hover_text(line);
+                        }
+                        if lines.len() > 12 {
+                            ui.label(format!("… and {} more", lines.len() - 12));
+                        }
+                    }
                     let enabled = !self.closing
                         && match confirm {
                             Confirm::KillRun(target) => {
@@ -443,6 +462,7 @@ impl MonitorApp {
                                     && self.running()
                                     && self.snapshot.memory_dump.is_none()
                             }
+                            Confirm::Quit => true,
                             Confirm::DebugKill => self
                                 .snapshot
                                 .debug
@@ -486,6 +506,10 @@ impl MonitorApp {
                         Confirm::Upload(intent) => self.submit_upload(intent, true),
                         Confirm::Clipboard { intent, text } => self.submit_clipboard(intent, text),
                         Confirm::DebugKill => self.send(Command::DebugDetach { kill: true }),
+                        Confirm::Quit => {
+                            self.quit_confirmed = true;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
                     }
                 }
             }

@@ -17,9 +17,25 @@ pub(crate) struct EvidenceJobs {
     export: Option<Export>,
     receiver: Option<mpsc::Receiver<Result<String, String>>>,
     result: Option<Result<String, String>>,
+    /// What the running worker does, for the Jobs window.
+    label: String,
 }
 impl EvidenceJobs {
+    /// The running worker as (what it is, what it works on), or None.
+    pub(crate) fn running(&self) -> Option<(&'static str, &str)> {
+        self.receiver.is_some().then(|| {
+            (
+                if self.label.starts_with("Open ") {
+                    "Open folder"
+                } else {
+                    "Export"
+                },
+                self.label.as_str(),
+            )
+        })
+    }
     pub(crate) fn reveal(&mut self, directory: PathBuf) {
+        self.label = format!("Open {}", directory.display());
         self.start(move || {
             crate::folders::show(&directory)?;
             Ok(format!("Opened {}", directory.display()))
@@ -147,6 +163,14 @@ impl EvidenceJobs {
             });
             if save {
                 if let Some(export) = self.export.take() {
+                    self.label = format!(
+                        "{} of report {} to {}",
+                        export
+                            .kind
+                            .map_or_else(|| "Report".into(), |kind| kind.label().to_owned()),
+                        export.report_id.chars().take(8).collect::<String>(),
+                        export.destination.trim()
+                    );
                     self.start(move || {
                         let path = antinomie_monitor_core::export_analysis(
                             &export.directory,

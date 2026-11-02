@@ -392,6 +392,22 @@ impl View {
     }
 }
 
+impl View {
+    /// The online Check in flight, for the Jobs window.
+    pub(super) fn running_jobs(&self) -> Vec<crate::jobs::Job> {
+        self.job
+            .as_ref()
+            .map(|(_, cancel)| {
+                crate::jobs::Job::new("ioc-online", "Check online", "abuse.ch lookups")
+                    .state("Asking abuse.ch")
+                    .flag(Some(cancel.clone()))
+                    .open(crate::workspace::Panel::Triage)
+            })
+            .into_iter()
+            .collect()
+    }
+}
+
 impl Drop for View {
     fn drop(&mut self) {
         if let Some((_, cancel)) = &self.job {

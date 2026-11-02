@@ -20,6 +20,7 @@ mod evidence_jobs;
 mod folders;
 mod getting_started;
 mod hex_view;
+mod jobs;
 #[cfg(test)]
 mod memory_probe;
 mod memory_view;

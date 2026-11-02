@@ -296,6 +296,7 @@ impl MonitorApp {
     /// The status line. Losses and the app version sit on the right:
     /// `TRL x UIL y STL z CAP p/q GiB Antinomie x.y.z`.
     pub(super) fn health(&mut self, ctx: &egui::Context) {
+        let mut open_jobs = false;
         let bar = egui::TopBottomPanel::bottom("health")
             .frame(theme::frame(theme::raised()))
             .show(ctx, |ui| {
@@ -311,6 +312,7 @@ impl MonitorApp {
                 let status = self.status.clone();
                 let is_notice = self.status_notice.as_ref().is_some_and(|(_, message)| message == &status);
                 let closing = self.closing;
+                let jobs = &self.jobs;
                 // A slow start is waited for, not failed.
                 let start_note = (self.snapshot.state == VmState::Starting)
                     .then(|| self.snapshot.start_note.clone())
@@ -346,6 +348,10 @@ impl MonitorApp {
                             if shedding { "dropping events" } else { "off" }));
                     version.on_hover_text(format!("Antinomie {APP_VERSION}"));
                     ui.add_space(16.0);
+                    if jobs.chip(ui) {
+                        open_jobs = true;
+                        ui.add_space(16.0);
+                    }
                     let message_size = ui.available_size();
                     ui.allocate_ui_with_layout(message_size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
@@ -373,6 +379,9 @@ impl MonitorApp {
                 });
                 ui.add_space(3.0);
             });
+        if open_jobs {
+            self.focus_panel = Some(Panel::Jobs);
+        }
         // The toast stack sits above the bar.
         crate::toasts::set_floor(ctx, bar.response.rect.top());
     }
