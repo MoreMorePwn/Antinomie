@@ -205,6 +205,18 @@ pub fn technique_name(id: &str) -> Option<String> {
     }
 }
 
+/// Whether a recorded run can show the technique: false for one ATT&CK files
+/// only under Reconnaissance and Resource Development, which happen before
+/// the program runs (a rule that carries such a tag upstream says nothing a
+/// run can confirm). An id the bundled table does not know passes.
+pub fn observable(id: &str) -> bool {
+    let tactics = tactics(id);
+    tactics.is_empty()
+        || tactics
+            .iter()
+            .any(|t| !matches!(t, Tactic::Reconnaissance | Tactic::ResourceDevelopment))
+}
+
 /// "T1059 Command and Scripting Interpreter"; the bare id when it is unknown.
 pub fn technique_label(id: &str) -> String {
     match technique_name(id) {

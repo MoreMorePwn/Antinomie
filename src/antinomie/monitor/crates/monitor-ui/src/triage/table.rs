@@ -2,6 +2,13 @@
 //! Bounded evidence tables and the jump from a row to its evidence.
 use super::*;
 
+/// An outcome cell "failed (EACCES)" gets the errno number on hover.
+fn hover_errno(response: egui::Response, text: &str) {
+    if let Some(hover) = crate::values::outcome_hover(text) {
+        response.on_hover_text(hover);
+    }
+}
+
 pub(super) fn cell(text: impl Into<String>, color: egui::Color32, mono: bool) -> Cell {
     Cell {
         text: text.into(),
@@ -365,11 +372,11 @@ fn table_rows_with(
                                     let mut rect = ui.max_rect();
                                     rect.min.x += width;
                                     ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                                        ui.add(label);
+                                        hover_errno(ui.add(label), &cell.text);
                                     });
                                 }
                                 None => {
-                                    ui.add(label);
+                                    hover_errno(ui.add(label), &cell.text);
                                 }
                             };
                             // The count of suspicious observations is a chip at the

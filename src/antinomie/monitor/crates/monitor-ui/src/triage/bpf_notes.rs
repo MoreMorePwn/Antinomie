@@ -273,7 +273,9 @@ fn bpf_lifecycle(command: &str, result: Option<i64>) -> Option<String> {
     Some(match result {
         Some(fd) if command == "BPF_PROG_LOAD" && fd >= 0 => format!("loaded program fd {fd}"),
         Some(0) => format!("{action} successful"),
-        Some(ret) if ret < 0 => format!("{action} failed ({ret})"),
+        Some(ret) if ret < 0 => {
+            format!("{action} {}", crate::values::failed_outcome(i64::from(ret)))
+        }
         Some(ret) => format!("{action} returned {ret}; interpretation depends on recorded flags"),
         None => format!("{action} attempted; exit not recorded"),
     })

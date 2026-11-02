@@ -223,6 +223,41 @@ pub(crate) fn errno_name(errno: u64) -> Option<&'static str> {
         .map(|(_, name, _)| *name)
 }
 
+/// The errno number of a symbolic name (`EACCES` is 13).
+pub(crate) fn errno_number(name: &str) -> Option<u64> {
+    ERRNO
+        .iter()
+        .position(|candidate| !candidate.is_empty() && *candidate == name)
+        .map(|index| index as u64)
+        .or_else(|| {
+            KERNEL_ERRNO
+                .iter()
+                .find(|(_, candidate, _)| *candidate == name)
+                .map(|(number, ..)| *number)
+        })
+}
+
+/// A failed call's result as an outcome reads: "failed (EACCES)", or the
+/// number when it has no name.
+pub(crate) fn failed_outcome(result: i64) -> String {
+    match errno_name(result.unsigned_abs()) {
+        Some(name) => format!("failed ({name})"),
+        None => format!("failed ({result})"),
+    }
+}
+
+/// The hover of an outcome cell "failed (EACCES)": the number and the words.
+pub(crate) fn outcome_hover(text: &str) -> Option<String> {
+    let name = text.strip_prefix("failed (")?.strip_suffix(')')?;
+    let number = errno_number(name)?;
+    let words = errno_description(number).unwrap_or_default();
+    Some(
+        format!("{name}: errno {number} (result -{number}) {words}")
+            .trim_end()
+            .to_owned(),
+    )
+}
+
 /// What an errno means, in words ("No such file or directory").
 pub(crate) fn errno_description(errno: u64) -> Option<String> {
     if let Some((.., text)) = KERNEL_ERRNO.iter().find(|(number, ..)| *number == errno) {

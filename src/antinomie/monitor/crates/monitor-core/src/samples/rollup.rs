@@ -238,7 +238,7 @@ pub fn rollup(runs: &[RunInput<'_>]) -> Rollup {
                 });
             push_run(&mut row.runs, run.number);
             row.latest = row.latest.max(run.number);
-            for id in hit.mitre.iter().filter(|id| technique(id)) {
+            for id in hit.attack_ids().filter(|id| technique(id)) {
                 let entry = tactics
                     .entry("Detection rules")
                     .or_default()

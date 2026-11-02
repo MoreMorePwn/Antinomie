@@ -104,6 +104,26 @@ pub struct DetectionHit {
     pub reference: String,
 }
 
+impl DetectionHit {
+    /// The ATT&CK ids this hit adds to the run's technique list. A Sigma rule
+    /// of low or informational severity adds none (a rule such as "Program
+    /// Executions in Suspicious Folders" fires in nearly every run, since
+    /// samples run from /tmp, and would flood the list), and a Sigma tag for a
+    /// technique a run cannot show (upstream T1584 and T1587 on that rule) is
+    /// dropped. The hit itself stays in the detection results.
+    pub fn attack_ids(&self) -> impl Iterator<Item = &String> {
+        let sigma = self.engine.eq_ignore_ascii_case("sigma");
+        let quiet = sigma
+            && matches!(
+                self.severity.to_ascii_lowercase().as_str(),
+                "low" | "informational" | "info"
+            );
+        self.mitre
+            .iter()
+            .filter(move |id| !quiet && !(sigma && !crate::mitre::observable(id)))
+    }
+}
+
 /// One indicator of compromise of the run.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]

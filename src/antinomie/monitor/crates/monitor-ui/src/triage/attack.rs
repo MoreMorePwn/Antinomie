@@ -147,7 +147,7 @@ fn details(list: &[Technique], behaviour: &Behaviour, detections: &[DetectionHit
             }
             let detections = detections
                 .iter()
-                .filter(|hit| hit.mitre.contains(&technique.id))
+                .filter(|hit| hit.attack_ids().any(|id| *id == technique.id))
                 .map(|hit| DetectionCause {
                     engine: hit.engine.clone(),
                     title: if hit.title.is_empty() {
@@ -199,7 +199,7 @@ pub(super) fn techniques(behaviour: &Behaviour, detections: &[DetectionHit]) -> 
         } else {
             &hit.title
         };
-        for id in hit.mitre.iter().filter(|id| technique_id(id)) {
+        for id in hit.attack_ids().filter(|id| technique_id(id)) {
             let entry = found.entry(id.clone()).or_default();
             entry.0.insert(format!("{}: {name}", hit.engine));
             entry.1 += hit.count.max(1);

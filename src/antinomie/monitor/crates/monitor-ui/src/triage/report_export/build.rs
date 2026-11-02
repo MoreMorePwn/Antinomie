@@ -167,17 +167,29 @@ fn summary(
         .map(|(family, sources)| format!("{family}: {}", sources.join("; ")))
         .collect();
     let families: BTreeSet<String> = named.keys().cloned().collect();
-    let mut key: Vec<_> = behaviour
+    // One row per rule: the same rule fires once per object it was seen on
+    // (binary_replace 44, 2 and 1), so the counts are added and the highest
+    // tier of its rows is kept.
+    let mut merged: BTreeMap<&str, report::Behaviour> = BTreeMap::new();
+    for hit in behaviour
         .rules
         .iter()
         .filter(|hit| matches!(hit.tier.as_str(), "high" | "medium"))
-        .map(|hit| report::Behaviour {
-            rule: hit.rule.clone(),
-            tier: hit.tier.clone(),
-            category: hit.category.clone(),
-            count: hit.count,
-        })
-        .collect();
+    {
+        let row = merged
+            .entry(hit.rule.as_str())
+            .or_insert_with(|| report::Behaviour {
+                rule: hit.rule.clone(),
+                tier: hit.tier.clone(),
+                category: hit.category.clone(),
+                count: 0,
+            });
+        row.count += hit.count;
+        if tier_rank(&hit.tier) < tier_rank(&row.tier) {
+            row.tier.clone_from(&hit.tier);
+        }
+    }
+    let mut key: Vec<_> = merged.into_values().collect();
     key.sort_by(|a, b| {
         tier_rank(&a.tier)
             .cmp(&tier_rank(&b.tier))

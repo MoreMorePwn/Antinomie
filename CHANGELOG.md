@@ -53,6 +53,17 @@ it runs.
   not toast until the run ends. Each toast is also an Activity row. Settings >
   Notifications > "Toast when a run finishes" turns it off (on by default).
 
+- **Summary and finding fixes from the third evaluation run.** The key
+  behaviours of a report list each rule once (counts added, highest tier kept)
+  instead of once per object ("binary_replace" 44, 2 and 1). A Sigma rule of
+  low or informational severity (such as "Program Executions in Suspicious
+  Folders", which fires in nearly every run because samples run from /tmp) no
+  longer adds techniques to the ATT&CK list, and a Sigma tag for a technique a
+  run cannot show (Reconnaissance or Resource Development only, like its
+  upstream T1584 and T1587) is dropped; the rule stays in Detection. A failed
+  call reads "failed (EACCES)" instead of "failed (-13)", with the number and
+  its meaning on hover.
+
 ## 0.8.1 — 2026-11-03
 
 Antinomie 0.8.1 is a fix release for the 0.8.0 line; it runs the same revision-20
