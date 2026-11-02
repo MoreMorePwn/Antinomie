@@ -5,3 +5,5 @@ wireproxy/LICENSE        https://raw.githubusercontent.com/windtf/wireproxy/v1.1
 gef/LICENSE              https://raw.githubusercontent.com/bata24/gef/fc085a60be334d38d498296187344e9e7d558587/LICENSE (MIT, as published)
 volatility3/VSL-1.0.txt  https://raw.githubusercontent.com/volatilityfoundation/volatility3/v2.28.2/LICENSE.txt (Volatility Software License 1.0, as published)
 magika/LICENSE-Apache-2.0.txt  the Apache License 2.0 text from LICENSES/third-party/rules/Apache-2.0.txt (the Magika release asset holds only the executable; the project is Apache-2.0, Google)
+geoip/LICENSE-CC-BY-4.0.txt  https://creativecommons.org/licenses/by/4.0/legalcode.txt (Creative Commons Attribution 4.0, as published)
+geoip/NOTICE-DB-IP.txt  the attribution DB-IP asks for, written for the pack

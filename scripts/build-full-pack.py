@@ -16,6 +16,7 @@ The pack is built by the person who uses it; Antinomie does not publish one.
 Nothing is uploaded. See docs/full-pack.md.
 """
 import argparse
+import gzip
 import hashlib
 import io
 import json
@@ -132,6 +133,8 @@ def parse_archive(text):
         return {"kind": kind, "prefix": field(rest, "prefix")}
     if kind == "File":
         return {"kind": kind}
+    if kind == "Gz":
+        return {"kind": kind, "name": field(rest, "name")}
     raise PackError(f"registry: unknown archive kind {kind}")
 
 
@@ -337,6 +340,12 @@ def unpack(download, archive, target):
     elif kind == "File":
         path = target / download["file"]
         shutil.copyfile(archive, path)
+        os.chmod(path, 0o444)
+    elif kind == "Gz":
+        # One gzip file, unpacked under its own name (analysis_tools.rs: Archive::Gz).
+        path = target / spec["name"]
+        with gzip.open(archive, "rb") as source, open(path, "wb") as out:
+            shutil.copyfileobj(source, out)
         os.chmod(path, 0o444)
     elif kind == "DebFiles":
         prefix = spec["prefix"]

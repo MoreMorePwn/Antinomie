@@ -37,3 +37,20 @@ of legal clearance. New dependencies or missing host notice documents need
 review. Do not change imported licenses to the host license. The release
 archive includes the inventory and notices; corresponding source access for
 binary recipients remains a separate release obligation.
+
+## DB-IP Lite (IP geolocation data)
+
+Reviewed 2026-11-03 against the licence statements on
+`https://db-ip.com/db/download/ip-to-country-lite` and `ip-to-asn-lite`: the
+free Lite databases are licensed under Creative Commons Attribution 4.0
+International; the user must give attribution to DB-IP.com for the data, and a
+web application must link back to `https://db-ip.com` where results are shown
+("IP Geolocation by DB-IP"). The download page asks the user to agree to these
+terms; Settings > Network lookup states them next to the install button.
+Antinomie downloads the files on request and does not redistribute them (the
+optional full pack carries them unmodified with the licence note).
+
+Attribution is shown in: Settings > Network lookup, Tools > App dependencies
+(through the same status block), the Endpoints tab of Triage > Network, and the
+notes of exported triage reports; it is listed in `THIRD-PARTY-NOTICES.md`.
+The text lives in `monitor-core/src/geoip.rs` (`ATTRIBUTION`, `ATTRIBUTION_NOTE`).

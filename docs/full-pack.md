@@ -14,7 +14,8 @@ upstream host by the person who builds the pack, exactly as the app would.
 
 It holds the tools Antinomie manages: capa, FLOSS, UPX, Detect It Easy, Ghidra
 with its Temurin JDK, Volatility 3, MemNixFS, Sigma (pySigma), Magika, GEF,
-pwndbg, wireproxy and Tor. The list, URLs and SHA-256 values are read from the
+pwndbg, wireproxy, Tor and the DB-IP Lite IP geolocation databases for TShark
+(CC BY 4.0; the pack carries their licence and the attribution notice). The list, URLs and SHA-256 values are read from the
 app's own registry (`monitor-core/src/analysis_tools.rs`), so the pack cannot
 drift from what the app would install. It does **not** hold bases, detection-rule
 packs, IOC datasets or the system packages (QEMU, TShark, bubblewrap): those are
