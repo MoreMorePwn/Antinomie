@@ -26,7 +26,9 @@ mod worker_base_jobs;
 mod worker_commands;
 mod worker_disks;
 mod worker_guest;
+mod worker_launch;
 mod worker_loop;
+mod worker_terminal;
 mod worker_vm;
 mod worker_vm_config;
 

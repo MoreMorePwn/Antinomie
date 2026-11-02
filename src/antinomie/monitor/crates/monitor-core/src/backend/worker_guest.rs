@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Commands executed inside the running guest.
 use super::*;
-use crate::debug::KernelDebugBackend;
-use session_transport::launch_image_hash;
 
-/// A launch the guest confirmed: the reply, session id, root task cookie and pid.
-type Acknowledged = (Vec<u8>, u64, u64, u32);
+/// How long the guest has to answer one command.
+pub(super) const GUEST_REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl Worker {
     pub(super) fn guest_command(&mut self, command: Command) -> Result<String, String> {
@@ -24,7 +22,7 @@ impl Worker {
             self.debug_reap_ended();
         }
         let session = self.session.as_mut().ok_or("VM is stopped")?;
-        let timeout = Duration::from_secs(10);
+        let timeout = GUEST_REPLY_TIMEOUT;
         if matches!(
             &command,
             Command::ListProcesses { .. }
@@ -96,501 +94,9 @@ impl Worker {
                 }
                 Ok(message)
             }
-            Command::CaptureAll => {
-                let message = session.start_capture(
-                    &self.options,
-                    CaptureScope::AllUserspace,
-                    &mut self.snapshot,
-                    &self.sender,
-                )?;
-                // start_capture answers with a status message; the capture
-                // just started is the active one.
-                let id = session
-                    .captures
-                    .iter()
-                    .find(|(_, capture)| capture.summary.state == CaptureState::Active)
-                    .map(|(id, _)| id.clone())
-                    .unwrap_or_default();
-                // Name the processes already running; the capture's fork and
-                // exec records name the rest. A failed list only leaves
-                // early processes unnamed.
-                match session.list_processes(0, &mut self.snapshot, &self.sender, timeout) {
-                    Ok(page) => {
-                        if let Some(capture) = session.captures.get_mut(&id) {
-                            capture.processes.seed(&page.processes);
-                        }
-                    }
-                    Err(error) => {
-                        self.snapshot.last_error =
-                            Some(format!("Capture All process names: {error}"));
-                    }
-                }
-                Ok(message)
-            }
-            Command::StopCapture { capture_id } => {
-                let capture = session
-                    .captures
-                    .get(&capture_id)
-                    .ok_or("unknown capture in this VM boot")?;
-                let mut cookie = capture.summary.capture_cookie;
-                if cookie == 0 {
-                    let reply = session.request(
-                        control::CAPTURE_STATUS,
-                        &control::with_session(0),
-                        &mut self.snapshot,
-                        &self.sender,
-                        timeout,
-                    )?;
-                    let status = control::capture_status(&reply, 0)?;
-                    if status.cookie == 0 {
-                        return Err("capture identity is unknown; admission outcome unresolved until VM restart".into());
-                    }
-                    session.apply_capture_status(&capture_id, status)?;
-                    session.update_captures(&mut self.snapshot);
-                    cookie = session
-                        .captures
-                        .get(&capture_id)
-                        .ok_or("unknown capture")?
-                        .summary
-                        .capture_cookie;
-                }
-                let reply = session.request(
-                    control::CAPTURE_STOP,
-                    &control::with_session(cookie),
-                    &mut self.snapshot,
-                    &self.sender,
-                    timeout,
-                )?;
-                let status = control::capture_status(&reply, cookie)?;
-                if status.active {
-                    return Err("capture stop reply still admits observations".into());
-                }
-                session.apply_capture_status(&capture_id, status)?;
-                session.update_captures(&mut self.snapshot);
-                Ok("capture admission stopped; programs continue running and late observation tails remain recordable".into())
-            }
-            Command::Execute(mut request) => {
-                // A program the library sent into this VM is the library's
-                // sample; the run record names it.
-                if request.sample.is_none() {
-                    request.sample = crate::samples::Library::open(&self.options.data_dir)
-                        .and_then(|library| {
-                            library.identify_run(&session.vm.id, &request.path, &request.args)
-                        })
-                        .unwrap_or(None);
-                }
-                if request.core_dump_on_exit
-                    && !self
-                        .snapshot
-                        .guest_kernel
-                        .as_ref()
-                        .and_then(|kernel| kernel.revision)
-                        .is_some_and(|revision| revision >= 15)
-                {
-                    return Err(
-                        "process Core Dump on Exit requires a revision-15 base for Antinomie 0.6.0"
-                            .into(),
-                    );
-                }
-                if request.core_dump_on_exit {
-                    crate::core_limits::CoreLimits::check_known(
-                        self.snapshot.guest_core_limits,
-                        u64::from(request.core_max_size.unwrap_or(64 << 20)),
-                        request.core_timeout_ms.unwrap_or(5000),
-                    )?;
-                }
-                if request.core_dump_on_exit && request.run_in.guest_desktop() {
-                    return Err("process Core Dump on Exit currently requires App Terminal; desktop wrappers do not identify the selected executable as the root group".into());
-                }
-                if request.debug_on_start {
-                    if request.run_in.guest_desktop() {
-                        return Err("Debug on start needs Run in: App terminal; a desktop launcher runs a shell wrapper, which is what would stop".into());
-                    }
-                    if self.debug.is_active() {
-                        return Err("a debugger is already attached; detach it before debugging another program from its start".into());
-                    }
-                    let caps = KernelDebugBackend::probe(&mut debug_service::WorkerLink {
-                        session,
-                        snapshot: &mut self.snapshot,
-                        sender: &self.sender,
-                    })
-                    .map_err(|error| error.to_string())?;
-                    if !caps.debug_on_start {
-                        return Err("this base's debugger cannot stop a program at its start; rebuild the base for Antinomie 0.7.0 (Debug on start is a Phase 2 feature)".into());
-                    }
-                }
-                let boot_id = session.boot_id.clone();
-                if session.run_artifacts.contains_key(&0) {
-                    return Err("a failed launch still owns an unresolved network capture; wait for cleanup or restart the VM".into());
-                }
-                if (request.capture_network || request.memory_dump_on_exit)
-                    && !self
-                        .snapshot
-                        .guest_kernel
-                        .as_ref()
-                        .and_then(|kernel| kernel.revision)
-                        .is_some_and(|revision| revision >= 14)
-                {
-                    return Err("run-to-exit capture and post-exit RAM dump require a revision-14 base for Antinomie 0.5.0".into());
-                }
-                if session.runs.len() >= 64 {
-                    return Err("this VM boot reached the 64-run limit; restart the VM before another launch".into());
-                }
-                // The specimen size this guest's contract takes (none before 10).
-                let specimen = control::specimen_request(
-                    self.snapshot.guest_kernel.as_ref().and_then(|k| k.revision),
-                    session.vm.ram_mib,
-                );
-                let supported = specimen.is_some();
-                let desktop = request.run_in.guest_desktop();
-                if desktop
-                    && !session
-                        .disk_bundle
-                        .guest
-                        .as_ref()
-                        .is_some_and(|guest| guest.graphical)
-                {
-                    return Err(format!(
-                        "{} needs a VM with a graphical base",
-                        request.run_in.label()
-                    ));
-                }
-                // A desktop run executes `/bin/sh`, so its program is acquired
-                // by path after the launch instead of by the kernel's exec.
-                let wire = crate::guest_desktop::wire_request(&request)?;
-                // Whatever hashing and launch shape the guest offers is asked
-                // for; an older guest offers none and sees no new flag.
-                // The offer comes from a probe after boot. A launch that beat it
-                // would silently drop the shell-job shape and the hashing, so it
-                // waits instead, like the core limits do.
-                if let Some(kernel) = self.snapshot.guest_kernel.as_ref()
-                    && !kernel.arch.supported()
-                {
-                    return Err(super::session_transport::unsupported_arch(kernel.arch));
-                }
-                let offered = control::tracer_offer(self.snapshot.guest_tracer)?;
-                let tracer_hashing =
-                    offered & (control::EXEC_HASH_ROOT | control::EXEC_HASH_WRITES);
-                let args = control::with_tracer_flags(
-                    control::execute_analysis(&wire, specimen)?,
-                    offered,
-                );
-                // Refused before the run exists, so Run History lists nothing for it.
-                if request.capture_network && !session.vm.has_network() {
-                    return Err(format!(
-                        "Capture network cannot be used: {}",
-                        super::run_network::NO_NETWORK_CARD
-                    ));
-                }
-                let selected = request.analysis.enabled;
-                let inline_acquisition = selected && supported && !desktop;
-                let run_id = storage::unique_id();
-                let directory = crate::locations::locations(&self.options, &session.vm.id)?
-                    .recording_directory
-                    .join("runs")
-                    .join(&run_id);
-                // The route comes up before anything of the run exists, and a
-                // route that cannot start is the run's error (no fallback).
-                let (route, route_claim) =
-                    session.claim_run_route(&self.options, &run_id, request.route)?;
-                let summary = RunSummary {
-                    started_ms: None,
-                    clock_anchor: None,
-                    id: run_id,
-                    vm_id: session.vm.id.clone(),
-                    boot_id: session.boot_id.clone(),
-                    session_id: 0,
-                    root_task_cookie: 0,
-                    pid: 0,
-                    request: request.clone(),
-                    directory,
-                    terminal_eof: false,
-                    state: RunState::Unknown,
-                    recording_error: Some("execution has not been acknowledged".into()),
-                    notes: Vec::new(),
-                    // The identity the guest shows, for reading the result against it.
-                    machine: Some(crate::stealth::MachineRecord::of(
-                        &session.vm.stealth,
-                        &crate::stealth::HostCpu::detect(),
-                        session.vm.ram_mib,
-                    )),
-                    route: Some(route),
-                    environment: Some(crate::run_environment::RunEnvironment::capture(
-                        &crate::run_environment::Inputs {
-                            vm: &session.vm,
-                            base_name: session.disk_bundle.name.as_deref().or(session
-                                .disk_bundle
-                                .guest
-                                .as_ref()
-                                .map(|guest| guest.label.as_str())),
-                            base_identity: session.disk_bundle.base_identity.as_deref(),
-                            base_revision: session.disk_bundle.antinomie_revision,
-                            kernel: self.snapshot.guest_kernel.as_ref(),
-                            accelerator: Some(session.process.accel.record().as_str()),
-                            data_dir: &self.options.data_dir,
-                        },
-                    )),
-                    reduced: None,
-                    execution: None,
-                    analysis: selected.then(|| {
-                        crate::analysis::jobs::new_report(&request.path, &request.analysis)
-                    }),
-                };
-                let run_id = summary.id.clone();
-                let mut run = match ProgramRun::new(summary, session.capture.quota()) {
-                    Ok(run) => run,
-                    Err(error) => {
-                        session.release_unowned_route(&run_id, route_claim);
-                        return Err(error);
-                    }
-                };
-                run.assembler
-                    .set_event_table(session.vm.transport.event_table as usize);
-                run.summary.recording_error = None;
-                // What the VM started without, so a run that evaded on a
-                // setting that was never applied says so in its notes.
-                run.add_stealth_fallbacks(&session.process.stealth_fallbacks);
-                run.boot_bundle_identity = session.bundle.base_identity.clone();
-                run.disk_base_identity = session.disk_bundle.base_identity.clone();
-                run.tracer_hashing = tracer_hashing;
-                let mut artifacts = RunArtifactOwner::new(&run.summary);
-                artifacts.route_claim = route_claim;
-                let prepared = if request.capture_network {
-                    session.start_run_network(&self.options, &mut artifacts)
-                } else {
-                    artifacts.save()
-                };
-                if let Err(error) = prepared {
-                    // Nothing was sent to the guest: the program never started.
-                    return Err(session.failed_run_launch(
-                        &mut run,
-                        artifacts,
-                        (RunState::FailedToStart, error),
-                    ));
-                }
-                // Every error text below is final: a guest rejection says the launch
-                // did not happen, only an unanswered or malformed one leaves it unknown.
-                // Telemetry of the new program can arrive before this reply,
-                // and the claim below can be late (the disk can hold this
-                // thread up): until then none of it ages out.
-                session.pre_ack.launch_sent(Instant::now());
-                let acknowledged = (|| -> Result<Acknowledged, (RunState, String)> {
-                    let reply = session
-                        .request_typed(
-                            control::EXEC,
-                            &args,
-                            &mut self.snapshot,
-                            &self.sender,
-                            timeout,
-                        )
-                        .map_err(|error| launch_failure(error, &request.path, &request.cwd))?;
-                    (|| {
-                        if reply.len()
-                            != 24
-                                + usize::from(inline_acquisition) * 24
-                                + usize::from(request.core_dump_on_exit) * 24
-                                + usize::from(request.debug_on_start) * 16
-                            || u32_at(&reply, 20).map_err(|e| e.to_string())? != 0
-                        {
-                            return Err("invalid execution reply".to_string());
-                        }
-                        let id = u64_at(&reply, 0).map_err(|e| e.to_string())?;
-                        let cookie = u64_at(&reply, 8).map_err(|e| e.to_string())?;
-                        let pid = u32_at(&reply, 16).map_err(|e| e.to_string())?;
-                        if cookie == 0 || session.runs.contains_key(&cookie) {
-                            return Err("invalid or reused execution root identity".to_string());
-                        }
-                        Ok((id, cookie, pid))
-                    })()
-                    .map(|(id, cookie, pid)| (reply, id, cookie, pid))
-                    .map_err(|error| (RunState::LaunchUnconfirmed, launch_unknown(&error)))
-                })();
-                let (reply, id, cookie, pid) = match acknowledged {
-                    Ok(acknowledged) => acknowledged,
-                    Err(error) => return Err(session.failed_run_launch(&mut run, artifacts, error)),
-                };
-                run.summary.session_id = id;
-                run.summary.root_task_cookie = cookie;
-                run.summary.pid = pid;
-                run.summary.state = RunState::Running;
-                if let Some(sample) = request.sample.as_ref() {
-                    session.custody_start(&self.options.data_dir, sample, &mut run);
-                }
-                if request.core_dump_on_exit {
-                    // The core's 24-byte arm reply sits before the debugger's
-                    // 16-byte start record, which is not part of it.
-                    let core_offset = 24 + usize::from(inline_acquisition) * 24;
-                    let core_reply = &reply[core_offset..core_offset + 24];
-                    match process_core::Transfer::armed(core_reply, &run.summary) {
-                        Ok(core) => artifacts.core = Some(core),
-                        Err(error) => {
-                            artifacts.summary.core_state = RunArtifactState::Failed;
-                            artifacts.issue(error.clone());
-                            artifacts.core = Some(process_core::Transfer::failed(
-                                core_reply,
-                                &run.summary,
-                                error,
-                            ));
-                        }
-                    }
-                    if let Err(error) = storage::queue_json(
-                        &artifacts.directory.join("artifacts.json"),
-                        &artifacts.summary,
-                    ) {
-                        artifacts.issue(error);
-                    }
-                }
-                session.run_artifacts.insert(cookie, artifacts);
-                if let Some(report) = run.summary.analysis.take() {
-                    let acquisition = if inline_acquisition {
-                        control::specimen_acquisition(
-                            &reply[24..48],
-                            specimen.unwrap_or(control::LEGACY_SPECIMEN_MAX_SIZE),
-                        )
-                    } else if supported {
-                        control::acquire(
-                            &request.path,
-                            request.uid,
-                            request.gid,
-                            specimen.unwrap_or(control::LEGACY_SPECIMEN_MAX_SIZE),
-                        )
-                        .and_then(|args| {
-                            session.request(
-                                control::ACQUIRE,
-                                &args,
-                                &mut self.snapshot,
-                                &self.sender,
-                                timeout,
-                            )
-                        })
-                        .and_then(|reply| {
-                            control::specimen_acquisition(
-                                &reply,
-                                specimen.unwrap_or(control::LEGACY_SPECIMEN_MAX_SIZE),
-                            )
-                        })
-                    } else {
-                        Err(
-                            "this base does not support static analysis (it needs a base for Antinomie 0.2.0 or newer); the program ran without it"
-                                .into(),
-                        )
-                    };
-                    let available = session.available().saturating_sub(run.stored_len());
-                    run.summary.analysis = Some(session.analysis.submit(
-                        Some(run.summary.id.clone()),
-                        report,
-                        run.summary.directory.join("analysis"),
-                        acquisition,
-                        available,
-                    ));
-                    // Only a guest that hashes the executed file can vouch for
-                    // the host's copy; any other falls back to the transfer.
-                    if let (Some(source), Some(report)) =
-                        (&request.host_copy, &run.summary.analysis)
-                        && tracer_hashing & control::EXEC_HASH_ROOT != 0
-                    {
-                        // A refusal leaves the guest transfer as it was.
-                        let _ = session.analysis.offer_host_copy(&report.id, source);
-                    }
-                    if let Err(error) = run.refresh_analysis_metadata() {
-                        run.storage_error(format!("analysis metadata accounting: {error}"));
-                    }
-                }
-                if let Some(error) = session.capture.error.clone() {
-                    run.capture.error = Some(error.clone());
-                    run.storage_error(error);
-                }
-                // Telemetry that arrived before this launch was acknowledged.
-                let claim = session.pre_ack.claim(cookie, Instant::now());
-                for packet in claim.packets {
-                    if let Ok((header, _)) = crate::parser::parse_packet(&packet) {
-                        run.observe_clock(header.timestamp_ns);
-                        run.telemetry_loss
-                            .packet(header.task_cookie, header.packet_seq);
-                    }
-                    let reserved = session.stored_len() + run.stored_len() - run.capture.bytes;
-                    if !run.capture.append_with_reserved(&packet, reserved) {
-                        let error = run
-                            .capture
-                            .error
-                            .clone()
-                            .unwrap_or_else(|| "pending raw saving failed".into());
-                        run.storage_error(error.clone());
-                        session.saving_refused(cookie, error);
-                    }
-                    run.assembler.set_storage_limit(
-                        run.assembler
-                            .stored_len()
-                            .saturating_add(session.available().saturating_sub(run.stored_len())),
-                    );
-                    match run.assembler.ingest(&packet) {
-                        Ok(event) => {
-                            if let Some(hash) = event.as_ref().and_then(launch_image_hash) {
-                                session
-                                    .analysis
-                                    .guest_hash(&run.summary.id, hash.sha256_hex().as_deref());
-                            }
-                        }
-                        Err(error) => self.snapshot.last_error = Some(error.to_string()),
-                    }
-                    if let Some(error) = run.assembler.saving_error().map(str::to_owned) {
-                        run.capture.error.get_or_insert(error.clone());
-                        run.storage_error(error.clone());
-                        session.saving_refused(cookie, error);
-                    }
-                }
-                // A note, not a saving failure: the run keeps recording and the
-                // lost packets are still in the boot's raw archives.
-                if let Some(note) = claim.lost.note() {
-                    run.add_note(note);
-                }
-                if let Err(error) = run.persist_summary() {
-                    run.storage_error(format!("run metadata persistence failed: {error}"));
-                }
-                let summary = run.summary.clone();
-                session.runs.insert(cookie, run);
-                session.update_runs(&mut self.snapshot);
-                self.emit(Notification::RunStarted(summary));
-                let launched = format!("launched pid {pid}, terminal session {id}");
-                if !request.debug_on_start {
-                    return Ok(launched);
-                }
-                // The guest parked the new program before its first instruction;
-                // the debugger takes over that session.
-                let start_offset = 24
-                    + usize::from(inline_acquisition) * 24
-                    + usize::from(request.core_dump_on_exit) * 24;
-                let identity = crate::observation::GuestProcessIdentity {
-                    boot_id: boot_id.clone(),
-                    task_cookie: cookie,
-                    tgid: pid,
-                    start_boot_ns: u64_at(&reply, start_offset).map_err(|e| e.to_string())?,
-                };
-                match self.debug_attach(identity) {
-                    Ok(attached) => Ok(format!(
-                        "{launched}; stopped before its first instruction; {attached}"
-                    )),
-                    Err(error) => {
-                        // A parked program nobody can debug must not wait for ever.
-                        if let Some(session) = self.session.as_mut() {
-                            let mut args = control::header(0);
-                            args.extend(cookie.to_le_bytes());
-                            let _ = session.request(
-                                0x1015,
-                                &args,
-                                &mut self.snapshot,
-                                &self.sender,
-                                timeout,
-                            );
-                        }
-                        let message = format!(
-                            "{launched}, but the debugger could not attach ({error}); the program was stopped"
-                        );
-                        self.snapshot.last_error = Some(message.clone());
-                        Ok(message)
-                    }
-                }
-            }
+            Command::CaptureAll => self.capture_all(),
+            Command::StopCapture { capture_id } => self.stop_capture(capture_id),
+            Command::Execute(request) => self.execute(request),
             Command::CancelProcessCore { run_id } => {
                 session.cancel_core(&run_id, &mut self.snapshot, &self.sender)
             }
@@ -599,56 +105,7 @@ impl Worker {
                 uid,
                 gid,
                 analysis,
-            } => {
-                analysis.validate()?;
-                control::string(&path, true)?;
-                if !analysis.enabled {
-                    return Err("Analyze Only requires static analysis enabled".into());
-                }
-                if self.snapshot.analysis_reports.len() >= 8 {
-                    return Err("this VM boot reached the eight standalone analysis limit".into());
-                }
-                let report = crate::analysis::jobs::new_report(&path, &analysis);
-                let directory = crate::locations::locations(&self.options, &session.vm.id)?
-                    .recording_directory
-                    .join("analyses")
-                    .join(&report.id);
-                // The specimen size this guest's contract takes (none before 10).
-                let specimen = control::specimen_request(
-                    self.snapshot.guest_kernel.as_ref().and_then(|k| k.revision),
-                    session.vm.ram_mib,
-                );
-                let supported = specimen.is_some();
-                let acquisition = if supported {
-                    session
-                        .request(
-                            control::ACQUIRE,
-                            &control::acquire(
-                                &path,
-                                uid,
-                                gid,
-                                specimen.unwrap_or(control::LEGACY_SPECIMEN_MAX_SIZE),
-                            )?,
-                            &mut self.snapshot,
-                            &self.sender,
-                            timeout,
-                        )
-                        .and_then(|reply| {
-                            control::specimen_acquisition(
-                                &reply,
-                                specimen.unwrap_or(control::LEGACY_SPECIMEN_MAX_SIZE),
-                            )
-                        })
-                } else {
-                    Err("this base does not support static analysis; use a base for Antinomie 0.2.0 or newer".into())
-                };
-                let available = session.available();
-                session
-                    .analysis
-                    .submit(None, report, directory, acquisition, available);
-                session.analysis_updates(&mut self.snapshot, &self.sender);
-                Ok("standalone analysis request recorded".into())
-            }
+            } => self.analyze_only(path, uid, gid, analysis),
             Command::CancelAnalysis { analysis_id } => {
                 session.analysis.cancel(&analysis_id)?;
                 session.analysis_updates(&mut self.snapshot, &self.sender);
@@ -659,162 +116,13 @@ impl Worker {
                 destination,
                 overwrite,
                 executable,
-            } => {
-                let mut file =
-                    File::open(&source).map_err(|e| format!("upload {}: {e}", source.display()))?;
-                let metadata = file.metadata().map_err(|e| e.to_string())?;
-                if !metadata.is_file() {
-                    return Err("upload source must be a regular file".into());
-                }
-                let total = metadata.len();
-                check_program_size(total, executable, session.vm.ram_mib)?;
-                if total > crate::samples::MAX_SAMPLE {
-                    // Too large for the library, which keeps what is sent.
-                    return upload_stream(
-                        session,
-                        &mut self.snapshot,
-                        &self.sender,
-                        &self.stopping,
-                        timeout,
-                        &mut file,
-                        total,
-                        (&destination, overwrite, executable),
-                    );
-                }
-                // Everything the app sends into a guest is archived first,
-                // hashed on the host and never run or unpacked there: what is
-                // streamed is exactly what the library holds.
-                let mut bytes = Vec::with_capacity(total as usize);
-                std::io::Read::read_to_end(
-                    &mut std::io::Read::take(&mut file, crate::samples::MAX_SAMPLE + 1),
-                    &mut bytes,
-                )
-                .map_err(|e| format!("upload {}: {e}", source.display()))?;
-                let note = arch_note(&self.snapshot, &bytes, executable);
-                let mut library = crate::samples::Library::open(&self.options.data_dir)?;
-                let sha256 = library
-                    .add_bytes(
-                        &bytes,
-                        crate::samples::NewSample {
-                            origin: crate::samples::NewOrigin {
-                                kind: crate::samples::OriginKind::Uploaded,
-                                source: "Upload".into(),
-                                path: source.display().to_string(),
-                                vm_id: session.vm.id.clone(),
-                                vm_name: session.vm.name.clone(),
-                                ..crate::samples::NewOrigin::default()
-                            },
-                            ..crate::samples::NewSample::default()
-                        },
-                    )?
-                    .sha256;
-                let message = upload_stream(
-                    session,
-                    &mut self.snapshot,
-                    &self.sender,
-                    &self.stopping,
-                    timeout,
-                    &mut bytes.as_slice(),
-                    bytes.len() as u64,
-                    (&destination, overwrite, executable),
-                )? + &note;
-                drop(bytes);
-                drop(library);
-                // Written by the custody thread: a commit here held the
-                // transport thread for seconds on a busy disk (ANT-T0203).
-                crate::samples::record_push_later(
-                    &self.options.data_dir,
-                    &sha256,
-                    crate::samples::Push {
-                        vm_id: session.vm.id.clone(),
-                        vm_name: session.vm.name.clone(),
-                        path: destination.clone(),
-                        at_ms: 0,
-                    },
-                );
-                Ok(message)
-            }
+            } => self.upload_file(source, destination, overwrite, executable),
             Command::UploadSample {
                 sha256,
                 destination,
                 executable,
-            } => {
-                // Decrypted in memory only; the host keeps the archive. The
-                // library reads it back and compares its SHA-256 first: a
-                // sample that does not verify is never sent.
-                let library = crate::samples::Library::open(&self.options.data_dir)?;
-                let bytes = library.open_bytes(&sha256)?;
-                drop(library);
-                check_program_size(bytes.len() as u64, executable, session.vm.ram_mib)?;
-                let note = arch_note(&self.snapshot, &bytes, executable);
-                let message = upload_stream(
-                    session,
-                    &mut self.snapshot,
-                    &self.sender,
-                    &self.stopping,
-                    timeout,
-                    &mut bytes.as_slice(),
-                    bytes.len() as u64,
-                    // The path names the sample's hash: what is there is the
-                    // same sample (sent before), so it is replaced.
-                    (&destination, true, executable),
-                )? + &note;
-                drop(bytes);
-                crate::samples::record_push_later(
-                    &self.options.data_dir,
-                    &sha256,
-                    crate::samples::Push {
-                        vm_id: session.vm.id.clone(),
-                        vm_name: session.vm.name.clone(),
-                        path: destination.clone(),
-                        at_ms: 0,
-                    },
-                );
-                Ok(message)
-            }
-            Command::TerminalInput { run_id, data } => {
-                let cookie = session.run_cookie(&run_id)?;
-                let run = session.runs.get(&cookie).ok_or("unknown run")?;
-                if run.summary.terminal_eof {
-                    return Err("terminal is closed".into());
-                }
-                let terminal = run.summary.session_id;
-                let chunk_size = session.transport.command_limit.saturating_sub(16);
-                if chunk_size == 0 {
-                    return Err("no terminal payload capacity".into());
-                }
-                let mut written = 0;
-                for chunk in data.chunks(chunk_size) {
-                    let mut args = control::with_session(terminal);
-                    args.extend(chunk);
-                    let reply = session.request(
-                        control::INPUT,
-                        &args,
-                        &mut self.snapshot,
-                        &self.sender,
-                        timeout,
-                    )?;
-                    if reply.len() != 8 {
-                        return Err("invalid terminal input reply".into());
-                    }
-                    let count = u64_at(&reply, 0).map_err(|e| e.to_string())?;
-                    if count > chunk.len() as u64 {
-                        return Err("invalid terminal input count".into());
-                    }
-                    written += count;
-                    if count != chunk.len() as u64 {
-                        return Err(format!("terminal accepted only {written} input bytes"));
-                    }
-                }
-                if let Some(log) = session
-                    .runs
-                    .get_mut(&cookie)
-                    .and_then(|run| run.custody.as_mut())
-                {
-                    log.typed(&data);
-                }
-                Ok(format!("terminal input accepted {written} bytes"))
-            }
+            } => self.upload_sample(sha256, destination, executable),
+            Command::TerminalInput { run_id, data } => self.terminal_input(run_id, data),
             Command::TerminalRead { run_id } => {
                 session.read_terminal(
                     &run_id,
@@ -825,33 +133,7 @@ impl Worker {
                 Ok(String::new())
             }
             Command::TerminalResize { run_id, rows, cols } => {
-                if rows == 0 || cols == 0 || rows > 256 || cols > 256 {
-                    return Err("terminal dimensions must be 1..256".into());
-                }
-                let cookie = session.run_cookie(&run_id)?;
-                let run = session.runs.get(&cookie).ok_or("unknown run")?;
-                if run.summary.terminal_eof {
-                    // Nothing to size: a program that detached (a daemon)
-                    // closed it, as its window opened. Not an error.
-                    return Ok(String::new());
-                }
-                let mut args = control::with_session(run.summary.session_id);
-                args.extend(rows.to_le_bytes());
-                args.extend(cols.to_le_bytes());
-                args.extend([0; 4]);
-                session.request(
-                    control::RESIZE,
-                    &args,
-                    &mut self.snapshot,
-                    &self.sender,
-                    timeout,
-                )?;
-                let available = session.available();
-                let run = session.runs.get_mut(&cookie).ok_or("unknown run")?;
-                run.resize(rows, cols, available)?;
-                let notification = run.screen_notification();
-                self.emit(notification);
-                Ok("terminal resized".into())
+                self.terminal_resize(run_id, rows, cols)
             }
             Command::TerminalSnapshot { run_id } => {
                 let cookie = session.run_cookie(&run_id)?;
@@ -863,37 +145,7 @@ impl Worker {
                 self.emit(notification);
                 Ok(String::new())
             }
-            Command::Signal { run_id, signal } => {
-                if !(1..=64).contains(&signal) {
-                    return Err("signal must be 1..64".into());
-                }
-                let cookie = session.run_cookie(&run_id)?;
-                let run = session.runs.get(&cookie).ok_or("unknown run")?;
-                let (id, current_pid) = (run.summary.session_id, run.summary.pid);
-                let mut args = control::with_session(id);
-                args.extend(signal.to_le_bytes());
-                args.extend(0u32.to_le_bytes());
-                session.request(
-                    control::SIGNAL,
-                    &args,
-                    &mut self.snapshot,
-                    &self.sender,
-                    timeout,
-                )?;
-                if let Some(log) = session
-                    .runs
-                    .get_mut(&cookie)
-                    .and_then(|run| run.custody.as_mut())
-                {
-                    log.action(
-                        crate::samples::ActionKind::Kill,
-                        &format!("signal {signal} sent to process group {current_pid}"),
-                    );
-                }
-                Ok(format!(
-                    "signal {signal} sent to process group {current_pid}"
-                ))
-            }
+            Command::Signal { run_id, signal } => self.signal_run(run_id, signal),
             Command::ForgetRun { run_id } => {
                 let cookie = session.run_cookie(&run_id)?;
                 let run = session.runs.get(&cookie).ok_or("unknown run")?;
@@ -901,88 +153,280 @@ impl Worker {
                 session.runs.remove(&cookie);
                 Ok(format!("run {run_id} removed from this list"))
             }
-            Command::StopRun { run_id } => {
-                let cookie = session.run_cookie(&run_id)?;
-                let run = session.runs.get(&cookie).ok_or("unknown run")?;
-                if !matches!(
-                    run.summary.state,
-                    RunState::Running | RunState::TerminalClosed
-                ) {
-                    return Err("run is no longer available for termination".into());
+            Command::StopRun { run_id } => self.stop_run(run_id),
+            Command::RecorderStats => self.recorder_stats(),
+            _ => Err("not a guest command".into()),
+        }
+    }
+
+    /// Start capturing every user-space process and name those already running.
+    fn capture_all(&mut self) -> Result<String, String> {
+        let session = self.session.as_mut().ok_or("VM is stopped")?;
+        let timeout = GUEST_REPLY_TIMEOUT;
+        let message = session.start_capture(
+            &self.options,
+            CaptureScope::AllUserspace,
+            &mut self.snapshot,
+            &self.sender,
+        )?;
+        // start_capture answers with a status message; the capture
+        // just started is the active one.
+        let id = session
+            .captures
+            .iter()
+            .find(|(_, capture)| capture.summary.state == CaptureState::Active)
+            .map(|(id, _)| id.clone())
+            .unwrap_or_default();
+        // Name the processes already running; the capture's fork and
+        // exec records name the rest. A failed list only leaves
+        // early processes unnamed.
+        match session.list_processes(0, &mut self.snapshot, &self.sender, timeout) {
+            Ok(page) => {
+                if let Some(capture) = session.captures.get_mut(&id) {
+                    capture.processes.seed(&page.processes);
                 }
-                let mut args = control::header(0);
-                args.extend(cookie.to_le_bytes());
-                // A revision-17 guest sends SIGKILL to the whole run when SIGTERM
-                // was not enough, after 4 s unless the options name another grace.
-                let escalates = self
-                    .snapshot
-                    .guest_kernel
-                    .as_ref()
-                    .and_then(|kernel| kernel.revision)
-                    .is_some_and(|revision| revision >= 17);
-                let mut grace = 4000;
-                if let Some(wanted) = self.options.stop_grace {
-                    if !escalates {
-                        return Err("a Stop grace period needs a revision-17 guest".into());
-                    }
-                    grace = u32::try_from(wanted.as_millis())
-                        .ok()
-                        .filter(|millis| (100..=30_000).contains(millis))
-                        .ok_or("the Stop grace period must be 100 ms to 30 s")?;
-                    args.extend(grace.to_le_bytes());
-                    args.extend(0u32.to_le_bytes());
-                }
-                let reply =
-                    session.request(0x1015, &args, &mut self.snapshot, &self.sender, timeout)?;
-                if !reply.is_empty() {
-                    return Err("invalid stop-run acknowledgement".into());
-                }
-                let run = session.runs.get_mut(&cookie).ok_or("unknown run")?;
-                run.summary.state = RunState::StopRequested;
-                if let Some(log) = run.custody.as_mut() {
-                    log.action(
-                        crate::samples::ActionKind::Kill,
-                        "Stop: SIGTERM issued to the run",
-                    );
-                }
-                run.persist_summary()?;
-                Ok(if escalates {
-                    format!(
-                        "SIGTERM issued to the run; the guest sends SIGKILL to anything still alive after {:.1} s, and the run status then says which signal ended it",
-                        f64::from(grace) / 1000.0
-                    )
-                } else {
-                    "SIGTERM issued to the run; this guest never escalates, so a task that ignores it keeps running (descendant completion is not yet proven)".into()
-                })
             }
-            Command::RecorderStats => {
-                let stats_requested = Instant::now();
-                let reply = session.request(
-                    control::STATS,
-                    &control::header(0),
+            Err(error) => {
+                self.snapshot.last_error = Some(format!("Capture All process names: {error}"));
+            }
+        }
+        Ok(message)
+    }
+
+    /// Stop the admission of observations for one capture.
+    fn stop_capture(&mut self, capture_id: String) -> Result<String, String> {
+        let session = self.session.as_mut().ok_or("VM is stopped")?;
+        let timeout = GUEST_REPLY_TIMEOUT;
+        let capture = session
+            .captures
+            .get(&capture_id)
+            .ok_or("unknown capture in this VM boot")?;
+        let mut cookie = capture.summary.capture_cookie;
+        if cookie == 0 {
+            let reply = session.request(
+                control::CAPTURE_STATUS,
+                &control::with_session(0),
+                &mut self.snapshot,
+                &self.sender,
+                timeout,
+            )?;
+            let status = control::capture_status(&reply, 0)?;
+            if status.cookie == 0 {
+                return Err(
+                    "capture identity is unknown; admission outcome unresolved until VM restart"
+                        .into(),
+                );
+            }
+            session.apply_capture_status(&capture_id, status)?;
+            session.update_captures(&mut self.snapshot);
+            cookie = session
+                .captures
+                .get(&capture_id)
+                .ok_or("unknown capture")?
+                .summary
+                .capture_cookie;
+        }
+        let reply = session.request(
+            control::CAPTURE_STOP,
+            &control::with_session(cookie),
+            &mut self.snapshot,
+            &self.sender,
+            timeout,
+        )?;
+        let status = control::capture_status(&reply, cookie)?;
+        if status.active {
+            return Err("capture stop reply still admits observations".into());
+        }
+        session.apply_capture_status(&capture_id, status)?;
+        session.update_captures(&mut self.snapshot);
+        Ok("capture admission stopped; programs continue running and late observation tails remain recordable".into())
+    }
+
+    /// Record a standalone static analysis of a file in the guest.
+    fn analyze_only(
+        &mut self,
+        path: String,
+        uid: u32,
+        gid: u32,
+        analysis: crate::analysis::AnalysisSelection,
+    ) -> Result<String, String> {
+        let session = self.session.as_mut().ok_or("VM is stopped")?;
+        let timeout = GUEST_REPLY_TIMEOUT;
+        analysis.validate()?;
+        control::string(&path, true)?;
+        if !analysis.enabled {
+            return Err("Analyze Only requires static analysis enabled".into());
+        }
+        if self.snapshot.analysis_reports.len() >= 8 {
+            return Err("this VM boot reached the eight standalone analysis limit".into());
+        }
+        let report = crate::analysis::jobs::new_report(&path, &analysis);
+        let directory = crate::locations::locations(&self.options, &session.vm.id)?
+            .recording_directory
+            .join("analyses")
+            .join(&report.id);
+        // The specimen size this guest's contract takes (none before 10).
+        let specimen = control::specimen_request(
+            self.snapshot.guest_kernel.as_ref().and_then(|k| k.revision),
+            session.vm.ram_mib,
+        );
+        let supported = specimen.is_some();
+        let acquisition = if supported {
+            session
+                .request(
+                    control::ACQUIRE,
+                    &control::acquire(
+                        &path,
+                        uid,
+                        gid,
+                        specimen.unwrap_or(control::LEGACY_SPECIMEN_MAX_SIZE),
+                    )?,
                     &mut self.snapshot,
                     &self.sender,
                     timeout,
-                )?;
-                if reply.len() != 80 {
-                    return Err("invalid recorder stats reply".into());
-                }
-                let counters = decode_stats(&reply)?;
-                session
-                    .recorder_poll
-                    .observe(stats_requested, counters, &mut self.snapshot.health);
-                Ok(format!(
-                    "recorder stream {} calls {} packets {} failed {} copy faults {} schema gaps {} context failures {}",
-                    counters[0],
-                    counters[3],
-                    counters[5],
-                    counters[6],
-                    counters[7],
-                    counters[8],
-                    counters[9]
-                ))
-            }
-            _ => Err("not a guest command".into()),
+                )
+                .and_then(|reply| {
+                    control::specimen_acquisition(
+                        &reply,
+                        specimen.unwrap_or(control::LEGACY_SPECIMEN_MAX_SIZE),
+                    )
+                })
+        } else {
+            Err("this base does not support static analysis; use a base for Antinomie 0.2.0 or newer".into())
+        };
+        let available = session.available();
+        session
+            .analysis
+            .submit(None, report, directory, acquisition, available);
+        session.analysis_updates(&mut self.snapshot, &self.sender);
+        Ok("standalone analysis request recorded".into())
+    }
+
+    /// Send a host file into the guest, archiving it in the library first.
+    fn upload_file(
+        &mut self,
+        source: PathBuf,
+        destination: String,
+        overwrite: bool,
+        executable: bool,
+    ) -> Result<String, String> {
+        let session = self.session.as_mut().ok_or("VM is stopped")?;
+        let timeout = GUEST_REPLY_TIMEOUT;
+        let mut file =
+            File::open(&source).map_err(|e| format!("upload {}: {e}", source.display()))?;
+        let metadata = file.metadata().map_err(|e| e.to_string())?;
+        if !metadata.is_file() {
+            return Err("upload source must be a regular file".into());
         }
+        let total = metadata.len();
+        check_program_size(total, executable, session.vm.ram_mib)?;
+        if total > crate::samples::MAX_SAMPLE {
+            // Too large for the library, which keeps what is sent.
+            return upload_stream(
+                session,
+                &mut self.snapshot,
+                &self.sender,
+                &self.stopping,
+                timeout,
+                &mut file,
+                total,
+                (&destination, overwrite, executable),
+            );
+        }
+        // Everything the app sends into a guest is archived first,
+        // hashed on the host and never run or unpacked there: what is
+        // streamed is exactly what the library holds.
+        let mut bytes = Vec::with_capacity(total as usize);
+        std::io::Read::read_to_end(
+            &mut std::io::Read::take(&mut file, crate::samples::MAX_SAMPLE + 1),
+            &mut bytes,
+        )
+        .map_err(|e| format!("upload {}: {e}", source.display()))?;
+        let note = arch_note(&self.snapshot, &bytes, executable);
+        let mut library = crate::samples::Library::open(&self.options.data_dir)?;
+        let sha256 = library
+            .add_bytes(
+                &bytes,
+                crate::samples::NewSample {
+                    origin: crate::samples::NewOrigin {
+                        kind: crate::samples::OriginKind::Uploaded,
+                        source: "Upload".into(),
+                        path: source.display().to_string(),
+                        vm_id: session.vm.id.clone(),
+                        vm_name: session.vm.name.clone(),
+                        ..crate::samples::NewOrigin::default()
+                    },
+                    ..crate::samples::NewSample::default()
+                },
+            )?
+            .sha256;
+        let message = upload_stream(
+            session,
+            &mut self.snapshot,
+            &self.sender,
+            &self.stopping,
+            timeout,
+            &mut bytes.as_slice(),
+            bytes.len() as u64,
+            (&destination, overwrite, executable),
+        )? + &note;
+        drop(bytes);
+        drop(library);
+        // Written by the custody thread: a commit here held the
+        // transport thread for seconds on a busy disk (ANT-T0203).
+        crate::samples::record_push_later(
+            &self.options.data_dir,
+            &sha256,
+            crate::samples::Push {
+                vm_id: session.vm.id.clone(),
+                vm_name: session.vm.name.clone(),
+                path: destination.clone(),
+                at_ms: 0,
+            },
+        );
+        Ok(message)
+    }
+
+    /// Send a library sample into the guest.
+    fn upload_sample(
+        &mut self,
+        sha256: String,
+        destination: String,
+        executable: bool,
+    ) -> Result<String, String> {
+        let session = self.session.as_mut().ok_or("VM is stopped")?;
+        let timeout = GUEST_REPLY_TIMEOUT;
+        // Decrypted in memory only; the host keeps the archive. The
+        // library reads it back and compares its SHA-256 first: a
+        // sample that does not verify is never sent.
+        let library = crate::samples::Library::open(&self.options.data_dir)?;
+        let bytes = library.open_bytes(&sha256)?;
+        drop(library);
+        check_program_size(bytes.len() as u64, executable, session.vm.ram_mib)?;
+        let note = arch_note(&self.snapshot, &bytes, executable);
+        let message = upload_stream(
+            session,
+            &mut self.snapshot,
+            &self.sender,
+            &self.stopping,
+            timeout,
+            &mut bytes.as_slice(),
+            bytes.len() as u64,
+            // The path names the sample's hash: what is there is the
+            // same sample (sent before), so it is replaced.
+            (&destination, true, executable),
+        )? + &note;
+        drop(bytes);
+        crate::samples::record_push_later(
+            &self.options.data_dir,
+            &sha256,
+            crate::samples::Push {
+                vm_id: session.vm.id.clone(),
+                vm_name: session.vm.name.clone(),
+                path: destination.clone(),
+                at_ms: 0,
+            },
+        );
+        Ok(message)
     }
 }
