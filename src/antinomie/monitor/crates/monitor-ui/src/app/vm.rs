@@ -417,7 +417,7 @@ impl MonitorApp {
             }
         }
         if let Some(reason) = selection_error {
-            crate::activity::error(ui, reason);
+            crate::activity::inline_only(ui, crate::activity::Level::Warn, reason);
         }
         let valid = self.exec.analysis.validate().is_ok();
         let program_ready = if uploading {
@@ -456,10 +456,10 @@ impl MonitorApp {
                             egui::Label::new(
                                 RichText::new(format!(
                                     "{} Start the VM to run a program",
-                                    egui_phosphor::regular::WARNING
+                                    egui_phosphor::regular::INFO
                                 ))
                                 .small()
-                                .color(theme::warn()),
+                                .color(theme::neutral_accent()),
                             )
                             .truncate(),
                         );
@@ -1155,8 +1155,8 @@ fn ring_label(kib: u32) -> String {
 pub(super) fn vm_state_word(state: &VmState) -> (&'static str, egui::Color32) {
     match state {
         VmState::Running => ("Running", theme::good()),
-        VmState::Starting => ("Starting", theme::warn()),
-        VmState::Stopping => ("Stopping", theme::warn()),
+        VmState::Starting => ("Starting", theme::neutral_accent()),
+        VmState::Stopping => ("Stopping", theme::neutral_accent()),
         VmState::Failed => ("Failed", theme::error()),
         VmState::Stopped => ("Stopped", theme::muted()),
     }

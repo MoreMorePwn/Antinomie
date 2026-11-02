@@ -452,7 +452,10 @@ impl MemoryView {
             Err(error) => {
                 // A failed run's reason is shown above.
                 if result.run.state != RunState::Failed {
-                    crate::activity::warning(ui, format!("No result saved: {error}"));
+                    crate::activity::error(
+                        ui,
+                        format!("No result saved: {error}. Run the plugin again."),
+                    );
                 }
                 return;
             }

@@ -304,7 +304,7 @@ impl CoreView {
                     let selected = self.selected_directory.as_ref() == Some(&core.directory);
                     let state = manual_status(core);
                     let color = if core.issue.is_some() {
-                        crate::theme::warn()
+                        crate::theme::error()
                     } else {
                         crate::theme::text()
                     };

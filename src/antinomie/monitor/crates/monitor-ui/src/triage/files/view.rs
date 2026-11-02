@@ -224,7 +224,11 @@ impl Change {
                 let marker = op.call == 0;
                 let mut row = vec![
                     cell(if marker { "—".to_owned() } else { crate::time_format::guest_ns(clock, Some(op.time)) }, theme::text(), true),
-                    cell(&op.name, if marker { theme::warn() } else { theme::text() }, false),
+                    cell(
+                        &op.name,
+                        if marker { theme::neutral_accent() } else { theme::text() },
+                        false,
+                    ),
                     cell(&op.process, theme::text(), true),
                     cell(&op.result, theme::text(), false),
                     cell(if marker { "—".to_owned() } else { format!("call {}", op.call) }, theme::text(), true),

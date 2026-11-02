@@ -148,6 +148,34 @@ it runs.
   build is Antinomie 0.8.1 (built from abc12345)". No network; the same source
   without .git gives the same text.
 
+- **A failure is an Error, and one condition has one level.** About fifty
+  messages that said a read, a save, a copy or an update had failed were Warnings;
+  they are Errors now, with the reason and what to do: the clipboard that was
+  not typed, a refused or non-UTF-8 upload or explorer path, a disk dump that
+  never finished or whose image is gone, the partition table, a MalShare day
+  lookup, the core dump list, the saved-recording index, the event journal, the
+  properties, the detection scan and its evidence preview, the IOC datasets and
+  their updates, the capture, a frame, TShark's packet details and field list, the
+  process tree, a terminal history, the debugger's code and memory windows, a
+  copy over 8 MiB, the route settings file, and a builder image or chroot that
+  could not be removed. A run that failed to start or whose saving stopped is the
+  same Error in the Trace, History, Details and Triage as in the status bar, and a
+  capture's saving error is an Error while "incomplete" stays a Warning. The same
+  archive read error, final terminal screen and resource sampling note now have
+  one level wherever they appear. A filter box or a form that does not parse yet
+  (the run filter, the listing filter, the analysis selection) is typing feedback
+  in every place: coloured text with no Activity row and no toast.
+- **Plain values are not drawn as warnings.** The warning colour is kept for
+  sentences about something wrong. Starting and Stopping, a changed diff entry, a
+  changed signal, the stack registers, jump mnemonics and numeric literals in the
+  code listing, ARP, Metadata values such as "no" or "absent", imports, an unusual
+  string encoding, the invalid UTF-8 stand-in, raw terminal escape marks, "not
+  set" and "Not installed" for optional keys and tools, "No rules enabled", the
+  file graph's writes, the reconnect marker, "Waiting for guest shutdown", the
+  RAM-dump pause text and "Controlled by gdb" use the neutral accent
+  (`theme::neutral_accent()`). The "Saving stopped" badge and a core with an issue
+  use the error colour.
+
 ### Fixed
 
 - **Library > Analysis tools shows where Antinomie's copy of a tool is

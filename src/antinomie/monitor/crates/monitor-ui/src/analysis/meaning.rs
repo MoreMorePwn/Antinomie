@@ -210,7 +210,7 @@ fn string_type_color(encoding: &str) -> Option<Color32> {
     } else if upper.starts_with("UTF") {
         theme::blue()
     } else {
-        theme::warn()
+        theme::neutral_accent()
     })
 }
 
@@ -220,12 +220,12 @@ fn structure_color(entry: &AnalysisEntry) -> Option<Color32> {
     }
     match entry.record.as_ref().map(|record| &record.data) {
         Some(AnalysisData::Section { .. }) => Some(theme::blue()),
-        Some(AnalysisData::Import { .. }) => Some(theme::warn()),
+        Some(AnalysisData::Import { .. }) => Some(theme::neutral_accent()),
         Some(AnalysisData::Export { .. }) => Some(theme::good()),
         Some(AnalysisData::Symbol { .. }) => Some(theme::palette().name),
         Some(AnalysisData::Field { .. }) => Some(theme::muted()),
         None => match entry.label.as_str() {
-            "Import" => Some(theme::warn()),
+            "Import" => Some(theme::neutral_accent()),
             "Export" => Some(theme::good()),
             "Section" => Some(theme::blue()),
             _ => None,
@@ -549,7 +549,7 @@ mod tests {
         };
         assert_eq!(
             cell_color(AnalysisKind::Structures, Column::Name, &legacy),
-            Some(theme::warn())
+            Some(theme::neutral_accent())
         );
     }
 

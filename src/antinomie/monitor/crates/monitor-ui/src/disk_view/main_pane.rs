@@ -285,7 +285,7 @@ impl DiskView {
             self.dump_button(ui, cx, false);
         });
         if let Some(quota) = measure.and_then(|measure| measure.quota_error()) {
-            crate::activity::warning(ui, quota);
+            crate::activity::error(ui, quota);
         }
         ui.add_space(4.0);
         ui.add(
@@ -388,11 +388,14 @@ impl DiskView {
             return;
         }
         if dump.finished_ms.is_none() {
-            crate::activity::warning(ui, "This dump was never completed.");
+            crate::activity::error(
+                ui,
+                "This dump was never completed and cannot be opened; delete it and dump the disk again.",
+            );
             return;
         }
         if missing {
-            crate::activity::warning(
+            crate::activity::error(
                 ui,
                 format!(
                     "The imported image is no longer at {}. Delete this entry, or put the file back and refresh the list.",
@@ -402,9 +405,9 @@ impl DiskView {
             return;
         }
         if !browsable {
-            crate::activity::warning(
+            crate::activity::error(
                 ui,
-                "This dump was made by a newer version and its format cannot be opened here.",
+                "This dump was made by a newer version and its format cannot be opened here; update Antinomie to open it.",
             );
             return;
         }

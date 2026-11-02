@@ -279,7 +279,7 @@ impl MonitorApp {
             !terminal.open && !run_in_live_session(&self.snapshot, &terminal.run)
         });
         if consumes_slot && available_terminal_slots(&self.terminals, &self.snapshot) <= reserved {
-            self.report_warning(terminal_capacity_message());
+            self.report_error(terminal_capacity_message());
             return;
         }
         if let Some(terminal) = self.terminals.get_mut(&run.id) {
@@ -306,7 +306,7 @@ impl MonitorApp {
             }
         }
         if self.terminals.len() >= TERMINAL_VIEW_LIMIT {
-            self.report_warning(terminal_capacity_message());
+            self.report_error(terminal_capacity_message());
             return;
         }
         let mut terminal = RunTerminal::new(run.clone());
@@ -587,7 +587,7 @@ impl MonitorApp {
                             terminal.replay_offset = replay.page.next_offset;
                             if let Some(warning) = replay.screen_warning {
                                 terminal.replay_error = Some(warning.clone());
-                                self.report_warning(warning);
+                                self.report_error(warning);
                             }
                         }
                         Err(error) => {

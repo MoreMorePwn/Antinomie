@@ -80,7 +80,7 @@ impl Model {
                 .on_hover_text("ThreatFox and URLhaus need it; Feodo Tracker and SSLBL do not.");
             match &self.ioc.key_masked {
                 Some(masked) => ui.colored_label(theme::good(), format!("set ({masked})")),
-                None => ui.colored_label(theme::warn(), "not set"),
+                None => ui.colored_label(theme::neutral_accent(), "not set"),
             };
             if ui.button("API keys…").clicked() {
                 self.requested = Some(super::RulesAction::ApiKeys);
@@ -162,10 +162,10 @@ impl Model {
             .map(|status| status.feed.name)
             .collect();
         if !failed.is_empty() {
-            crate::activity::warning(
+            crate::activity::error(
                 ui,
                 format!(
-                    "The last update of {} failed; the previous copy is still used.",
+                    "The last update of {} failed; the previous copy is still used. Check the network and update again.",
                     failed.join(", ")
                 ),
             );
@@ -372,7 +372,7 @@ impl Model {
                 );
             }
             if let Some(error) = &status.last_error {
-                crate::activity::warning(ui, format!("Last update failed: {error}"));
+                crate::activity::error(ui, format!("Last update failed: {error}"));
             }
         });
     }

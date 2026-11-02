@@ -285,7 +285,7 @@ fn display_row(row: &str, font: &egui::FontId) -> egui::text::LayoutJob {
     let mut start = 0;
     for (index, character) in row.char_indices() {
         let stand_in = match character {
-            '\u{FFFD}' => ("\u{25A1}", theme::warn()),
+            '\u{FFFD}' => ("\u{25A1}", theme::neutral_accent()),
             '\t' => ("    ", theme::text()),
             character if character.is_control() => ("\u{B7}", theme::muted()),
             _ => continue,
@@ -998,7 +998,7 @@ mod tests {
         let font = egui::FontId::monospace(14.0);
         let job = display_row("a\u{FFFD}\u{1}\tb\r", &font);
         assert_eq!(job.text, "a\u{25A1}\u{B7}    b\u{B7}");
-        assert_eq!(job.sections[1].format.color, theme::warn());
+        assert_eq!(job.sections[1].format.color, theme::neutral_accent());
         assert_eq!(job.sections[2].format.color, theme::muted());
         assert_eq!(display_row("", &font).text, "");
     }

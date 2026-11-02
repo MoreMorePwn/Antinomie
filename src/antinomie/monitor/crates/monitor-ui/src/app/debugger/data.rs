@@ -63,7 +63,7 @@ fn registers(ui: &mut egui::Ui, view: &DebugView) {
             for entry in &registers.entries {
                 let name_color = match entry.name {
                     "rip" => theme::error(),
-                    "rsp" | "rbp" => theme::warn(),
+                    "rsp" | "rbp" => theme::neutral_accent(),
                     _ => theme::value(theme::ValueKind::Name),
                 };
                 ui.label(RichText::new(entry.name).monospace().color(name_color));
@@ -113,7 +113,13 @@ fn window_rows(ui: &mut egui::Ui, view: &DebugView, kind: WindowKind, marker: Op
 
 fn rows(ui: &mut egui::Ui, window: &MemoryWindow, arrow: Option<u64>) {
     if let Some(problem) = &window.error {
-        crate::activity::warning(ui, format!("{:#x}: {problem}", window.address));
+        crate::activity::error(
+            ui,
+            format!(
+                "Memory at {:#x} could not be read: {problem}",
+                window.address
+            ),
+        );
         return;
     }
     // At most a few dozen rows (the stack window and the memory range are both

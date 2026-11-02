@@ -36,7 +36,6 @@ impl MonitorApp {
             &snapshot.health.persistence_error,
             &snapshot.remote_error,
             &self.archive_error,
-            &self.run_query_error,
         ]
         .into_iter()
         .flatten()
@@ -73,7 +72,7 @@ impl MonitorApp {
             .into_iter()
             .flatten()
             {
-                emit(Level::Warn, error.to_string());
+                emit(Level::Info, error.to_string());
             }
         }
         if let Some(flush) = &snapshot.recording_flush {
@@ -84,7 +83,7 @@ impl MonitorApp {
         ctx.data_mut(|data| data.insert_temp(key, now));
         for run in snapshot.runs.iter().chain(&self.history) {
             if let Some(message) = crate::run_recording::warning_message(run) {
-                report_quiet(ctx, Level::Warn, message);
+                report_quiet(ctx, Level::Error, message);
             }
             if let Some(analysis) = &run.analysis {
                 if let Some(reason) = &analysis.reason {
@@ -99,7 +98,7 @@ impl MonitorApp {
         }
         for capture in snapshot.captures.iter().chain(&self.capture_history) {
             if let Some(error) = &capture.recording_error {
-                report_quiet(ctx, Level::Warn, error);
+                report_quiet(ctx, Level::Error, error);
             }
             if let Some(reason) = &capture.incomplete_reason {
                 report_quiet(ctx, Level::Warn, reason);

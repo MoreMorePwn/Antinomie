@@ -189,7 +189,10 @@ impl DiskView {
             .color(theme::heading()),
         );
         if let Some(error) = &measure.partition_error {
-            crate::activity::warning(ui, error);
+            crate::activity::error(
+                ui,
+                format!("The partition table could not be read: {error}"),
+            );
         }
         if table.skipped > 0 {
             crate::activity::warning(

@@ -1015,7 +1015,10 @@ impl Model {
                         text: Some(Err(error)),
                         ..
                     }) => {
-                        crate::activity::warning(ui, error);
+                        crate::activity::error(
+                            ui,
+                            format!("The rule text could not be read: {error}"),
+                        );
                     }
                     _ => {
                         theme::loading(ui, "Reading the rule…");

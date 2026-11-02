@@ -78,7 +78,7 @@ pub(super) fn rows(
                     let name =
                         RichText::new(format!("{} ({number})", signal_name(number))).monospace();
                     ui.label(if changed {
-                        name.color(theme::warn())
+                        name.color(theme::neutral_accent())
                     } else {
                         name
                     });
@@ -97,7 +97,7 @@ pub(super) fn rows(
                 }
                 row.col(|ui| {
                     if changed {
-                        ui.label(RichText::new("changed").color(theme::warn()));
+                        ui.label(RichText::new("changed").color(theme::neutral_accent()));
                     }
                 });
                 if touched {

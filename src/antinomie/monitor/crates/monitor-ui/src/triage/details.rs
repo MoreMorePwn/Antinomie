@@ -200,7 +200,7 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
                 }
                 change.show(ui, view.scan.as_ref().and_then(|scan| scan.clock_anchor));
             } else {
-                crate::activity::warning(ui, "This file's retained differences are no longer available in the current index.");
+                crate::activity::error(ui, "This file's retained differences are no longer available in the current index; refresh the Triage index.");
             }
         } else if selected.table == "triage-process" {
             process_details::show(view, ui, values);

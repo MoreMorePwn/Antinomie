@@ -148,11 +148,17 @@ impl MonitorApp {
             return;
         }
         let Some(source) = path.to_str() else {
-            self.report_warning("The selected file path is not valid UTF-8".into());
+            self.report_error(
+                "The selected file was not uploaded: its path is not valid UTF-8; rename it or choose another file"
+                    .into(),
+            );
             return;
         };
         if !path.is_file() {
-            self.report_warning("Choose a regular file to upload".into());
+            self.report_error(
+                "The selected path is not a regular file, so nothing was uploaded; choose a file, not a folder or device"
+                    .into(),
+            );
             return;
         }
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {

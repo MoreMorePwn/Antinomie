@@ -124,7 +124,7 @@ pub(crate) fn mnemonic_color(mnemonic: &str) -> Color32 {
     if mnemonic.starts_with("call") {
         theme::blue()
     } else if mnemonic.starts_with('j') || mnemonic.starts_with("ret") {
-        theme::warn()
+        theme::value(theme::ValueKind::Flags)
     } else if mnemonic == "(bad)" {
         theme::error()
     } else {
@@ -234,7 +234,7 @@ pub(crate) fn highlight(line: &str, font: &FontId) -> LayoutJob {
             let end = rest
                 .find(|c: char| !(c.is_ascii_alphanumeric() || c == '.'))
                 .unwrap_or(rest.len());
-            (&rest[..end], theme::warn())
+            (&rest[..end], theme::value(theme::ValueKind::Number))
         } else if first.is_alphabetic() || first == '_' {
             let end = rest
                 .find(|c: char| !(c.is_alphanumeric() || c == '_'))

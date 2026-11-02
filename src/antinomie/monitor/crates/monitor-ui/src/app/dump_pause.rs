@@ -52,7 +52,7 @@ impl MonitorApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     crate::theme::spinner(ui);
-                    ui.colored_label(theme::warn(), text);
+                    ui.colored_label(theme::neutral_accent(), text);
                     ui.add(
                         egui::ProgressBar::new(fraction)
                             .desired_width(200.0)

@@ -510,7 +510,7 @@ impl MonitorApp {
             let (text, tone) = match (&tool.system, &tool.installed) {
                 (Some(_), _) => ("On this system".to_owned(), Tone::Good),
                 (None, Some(version)) => (format!("Installed {version}"), Tone::Good),
-                (None, None) => ("Not installed".to_owned(), Tone::Warn),
+                (None, None) => ("Not installed".to_owned(), Tone::Accent),
             };
             chip(ui, text, tone);
         }

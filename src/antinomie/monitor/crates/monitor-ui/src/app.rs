@@ -526,7 +526,6 @@ pub struct MonitorApp {
     run_query: String,
     /// Last run-history filter that compiled. An invalid expression keeps this.
     applied_run_query: String,
-    run_query_error: Option<String>,
     terminals: BTreeMap<String, RunTerminal>,
     archive: Option<ArchiveWorker>,
     pending_archive: Option<Request>,
@@ -743,7 +742,6 @@ impl MonitorApp {
             run_filter: RunFilter::All,
             run_query: String::new(),
             applied_run_query: String::new(),
-            run_query_error: None,
             terminals: BTreeMap::new(),
             archive: None,
             pending_archive: None,

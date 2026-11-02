@@ -1023,7 +1023,10 @@ impl View {
 
         if self.selected == Engine::Sigma {
             if let Some(error) = scan.and_then(|scan| scan.event_error.as_ref()) {
-                crate::activity::warning(ui, error);
+                crate::activity::error(
+                    ui,
+                    format!("The event journal could not be written: {error}"),
+                );
             }
         }
         let Some(result) = &self.results[index] else {
@@ -1035,7 +1038,7 @@ impl View {
         let report = match result {
             Ok(report) => report,
             Err(error) => {
-                crate::activity::warning(ui, error);
+                crate::activity::error(ui, format!("The scan failed: {error}. Scan again."));
                 return;
             }
         };

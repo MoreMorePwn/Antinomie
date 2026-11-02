@@ -168,7 +168,10 @@ impl DiskView {
             crate::activity::error(ui, format!("This dump failed: {error}"));
         }
         if missing {
-            crate::activity::warning(ui, "The imported image is no longer at its path.");
+            crate::activity::error(
+                ui,
+                "The imported image is no longer at its path; delete this entry, or put the file back and refresh the list.",
+            );
         }
         ui.add_space(4.0);
         ui.add(

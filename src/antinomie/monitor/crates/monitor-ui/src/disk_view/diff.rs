@@ -167,7 +167,7 @@ fn status_color(status: DiffStatus) -> egui::Color32 {
     match status {
         DiffStatus::Added => theme::good(),
         DiffStatus::Deleted => theme::error(),
-        DiffStatus::Changed => theme::warn(),
+        DiffStatus::Changed => theme::neutral_accent(),
     }
 }
 
@@ -535,7 +535,7 @@ impl DiskView {
         ui.horizontal_wrapped(|ui| {
             ui.colored_label(theme::good(), format!("+{added} added"));
             ui.colored_label(theme::error(), format!("−{deleted} deleted"));
-            ui.colored_label(theme::warn(), format!("~{changed} changed"));
+            ui.colored_label(theme::neutral_accent(), format!("~{changed} changed"));
             ui.colored_label(theme::muted(), format!("· {scanned} entries compared"));
         });
         if truncated {

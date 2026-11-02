@@ -25,7 +25,7 @@ fn scan_status(
             State::Complete => ("Complete", theme::blue()),
             State::Partial => ("Partial", theme::warn()),
             State::Unavailable => ("Unavailable", theme::muted()),
-            State::NoRules => ("No rules enabled", theme::warn()),
+            State::NoRules => ("No rules enabled", theme::neutral_accent()),
             State::Missing => ("Evidence missing", theme::warn()),
             State::Skipped => ("Skipped", theme::muted()),
         },
@@ -448,7 +448,7 @@ pub(super) fn content(
         .auto_shrink([false, false])
         .show(ui, |ui| {
             if let Some(error) = &view.scan_error {
-                crate::activity::warning(ui, error);
+                crate::activity::error(ui, format!("The saved-recording index failed: {error}"));
             }
             let attack = view.attack_techniques().to_vec();
             let Some(scan) = &view.scan else {
@@ -458,7 +458,10 @@ pub(super) fn content(
                 return;
             };
             if let Some(error) = &scan.event_error {
-                crate::activity::warning(ui, error);
+                crate::activity::error(
+                    ui,
+                    format!("The event journal could not be written: {error}"),
+                );
             }
             presentation::heading(ui, "Detection evidence", "");
             if ui.available_width() >= 620.0 {

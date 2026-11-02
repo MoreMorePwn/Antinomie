@@ -75,7 +75,7 @@ pub(crate) fn show(ui: &mut egui::Ui, run: &RunSummary) {
 pub(crate) fn show_removable(ui: &mut egui::Ui, run: &RunSummary, in_run_list: bool) -> bool {
     let mut remove = false;
     if let Some(message) = warning_message(run) {
-        crate::activity::warning(ui, message);
+        crate::activity::error(ui, message);
         if in_run_list
             && run.forgettable().is_ok()
             && ui
@@ -103,7 +103,7 @@ pub(crate) fn show_removable(ui: &mut egui::Ui, run: &RunSummary, in_run_list: b
 /// Only the warnings of `show`: Triage lists the notes in its own section.
 pub(crate) fn show_warning(ui: &mut egui::Ui, run: &RunSummary) {
     if let Some(message) = warning_message(run) {
-        crate::activity::warning(ui, message);
+        crate::activity::error(ui, message);
     }
     show_loss(ui, run);
 }

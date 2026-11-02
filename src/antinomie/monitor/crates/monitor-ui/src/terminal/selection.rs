@@ -259,7 +259,7 @@ impl Terminal {
             }
             Ok(_) => false,
             Err(message) => {
-                crate::activity::report(ui.ctx(), crate::activity::Level::Warn, message);
+                crate::activity::report(ui.ctx(), crate::activity::Level::Error, message);
                 true
             }
         }

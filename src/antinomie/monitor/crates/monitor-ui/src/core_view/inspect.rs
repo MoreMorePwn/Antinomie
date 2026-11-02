@@ -11,7 +11,7 @@ impl CoreView {
             egui::CollapsingHeader::new(format!("Capture issues ({})", self.catalog_issues.len()))
                 .show(ui, |ui| {
                     for issue in &self.catalog_issues {
-                        crate::activity::warning(ui, issue);
+                        crate::activity::error(ui, format!("Core dump list: {issue}"));
                     }
                 });
         }
@@ -44,7 +44,7 @@ impl CoreView {
                     None => "Capture pause status unknown",
                 });
                 if let Some(issue) = &core.issue {
-                    crate::activity::warning(ui, issue);
+                    crate::activity::error(ui, issue);
                 }
                 if core.file.is_some() {
                     ui.label("Select this capture.");
@@ -175,7 +175,7 @@ impl CoreView {
     fn register_cell(&mut self, ui: &mut egui::Ui, record: &CoreRecord, name: &str, value: u64) {
         let name_color = match name {
             "rip" | "eip" | "pc" => crate::theme::error(),
-            "rsp" | "esp" | "rbp" | "ebp" => crate::theme::warn(),
+            "rsp" | "esp" | "rbp" | "ebp" => crate::theme::neutral_accent(),
             "rflags" | "eflags" | "flags" => crate::theme::value(crate::theme::ValueKind::Flags),
             _ => crate::theme::value(crate::theme::ValueKind::Name),
         };

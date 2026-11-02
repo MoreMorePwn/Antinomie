@@ -63,7 +63,7 @@ impl Model {
             if has_key {
                 ui.colored_label(theme::good(), format!("set ({})", api_keys::masked(&key)));
             } else {
-                ui.colored_label(theme::warn(), "not set");
+                ui.colored_label(theme::neutral_accent(), "not set");
             }
             if ui.button("API keys…").clicked() {
                 self.requested = Some(super::RulesAction::ApiKeys);

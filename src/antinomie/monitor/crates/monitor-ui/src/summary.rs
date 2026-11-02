@@ -1107,7 +1107,7 @@ fn state_color(snapshot: &Snapshot, active: bool) -> Color32 {
     }
     match snapshot.state {
         VmState::Running => theme::good(),
-        VmState::Starting | VmState::Stopping => theme::warn(),
+        VmState::Starting | VmState::Stopping => theme::neutral_accent(),
         VmState::Failed => theme::error(),
         VmState::Stopped => theme::muted(),
     }

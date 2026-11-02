@@ -122,6 +122,12 @@ pub fn good() -> Color32 {
 pub fn warn() -> Color32 {
     palette().warn
 }
+/// A plain value or a state that is not a problem and still deserves the
+/// eye (a register, a jump, "Starting", "not set"): the accent, never the
+/// warning color, which stays for sentences about something wrong.
+pub fn neutral_accent() -> Color32 {
+    palette().accent
+}
 pub fn error() -> Color32 {
     palette().error
 }

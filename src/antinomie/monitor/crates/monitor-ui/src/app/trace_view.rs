@@ -120,7 +120,7 @@ impl MonitorApp {
             crate::run_recording::show(ui, run);
         }
         if let Some(error) = &self.archive_error {
-            crate::activity::warning(ui, error).on_hover_text(error);
+            crate::activity::error(ui, error).on_hover_text(error);
         }
         let draft = self.commit_trace_filter();
         if let Some(error) = &draft.error {

@@ -353,7 +353,10 @@ pub(super) fn byte_preview(
             }
         }
         Some(Err(error)) => {
-            crate::activity::warning(ui, error);
+            crate::activity::error(
+                ui,
+                format!("The evidence preview could not be loaded: {error}"),
+            );
         }
         _ => {}
     }

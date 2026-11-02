@@ -203,7 +203,7 @@ impl ApiKeysWindow {
             ui.label(RichText::new(key.label()).strong().color(theme::heading()));
             match &state.masked {
                 Some(masked) => ui.colored_label(theme::good(), format!("set ({masked})")),
-                None => ui.colored_label(theme::warn(), "not set"),
+                None => ui.colored_label(theme::neutral_accent(), "not set"),
             };
             ui.hyperlink_to(
                 format!("Get a key {}", egui_phosphor::regular::ARROW_SQUARE_OUT),

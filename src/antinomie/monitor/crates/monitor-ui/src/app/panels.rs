@@ -655,7 +655,7 @@ fn terminal_header(ui: &mut egui::Ui, terminal: &mut RunTerminal) {
                     .on_hover_text("Drag to select text. Double-click selects a word. Copy with Ctrl+Shift+C, Ctrl+Insert, or right-click. Ctrl+C interrupts when nothing is selected. Paste with Ctrl+Shift+V or Ctrl+V. Shift+PageUp/PageDown scrolls output. Raw shows escape codes as text; Copy then gives that text.");
             });
             if let Some(error) = terminal.snapshot_error.as_ref().or(terminal.replay_error.as_ref()) {
-                crate::activity::warning(ui, error);
+                crate::activity::error(ui, error);
             }
         });
 }
@@ -721,7 +721,7 @@ pub(super) fn show_terminal_viewport(
 }
 
 pub(super) fn terminal_capacity_message() -> String {
-    format!("Terminal view limit reached ({TERMINAL_VIEW_LIMIT}); close a history window")
+    format!("Terminal view limit reached ({TERMINAL_VIEW_LIMIT}); close a history window to open this one")
 }
 
 pub(super) fn available_terminal_slots(

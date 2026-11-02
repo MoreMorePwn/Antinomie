@@ -49,7 +49,10 @@ pub(super) fn show(
         return;
     };
     if let Some(problem) = &window.error {
-        crate::activity::warning(ui, format!("Code at {:#x}: {problem}", window.address));
+        crate::activity::error(
+            ui,
+            format!("Code at {:#x} could not be read: {problem}", window.address),
+        );
         return;
     }
     let pc = view

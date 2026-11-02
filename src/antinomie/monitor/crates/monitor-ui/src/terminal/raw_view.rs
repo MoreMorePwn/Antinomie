@@ -71,7 +71,7 @@ fn style_color(mark: Option<Mark>) -> Color32 {
         None => theme::terminal_text(),
         Some(Mark::Plain) => theme::muted(),
         Some(Mark::Conceal | Mark::Clipboard) => theme::error(),
-        Some(_) => theme::warn(),
+        Some(_) => theme::neutral_accent(),
     }
 }
 
@@ -79,7 +79,7 @@ fn style_fill(mark: Mark) -> Option<Color32> {
     match mark {
         Mark::Plain => None,
         Mark::Conceal | Mark::Clipboard => Some(theme::palette().error_bg),
-        _ => Some(theme::palette().warn_bg),
+        _ => Some(theme::palette().selection_soft),
     }
 }
 
@@ -274,7 +274,7 @@ impl Terminal {
             }
             Ok(_) => false,
             Err(message) => {
-                crate::activity::report(ui.ctx(), crate::activity::Level::Warn, message);
+                crate::activity::report(ui.ctx(), crate::activity::Level::Error, message);
                 true
             }
         }

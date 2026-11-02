@@ -616,7 +616,7 @@ impl View {
             ui.label(RichText::new("Auth-Key").small().color(theme::muted()));
             match &key {
                 Some(masked) => ui.colored_label(theme::good(), format!("set ({masked})")),
-                None => ui.colored_label(theme::warn(), "missing"),
+                None => ui.colored_label(theme::neutral_accent(), "missing"),
             };
             ui.separator();
             let mut on = self.online_on && key.is_some();
@@ -704,10 +704,10 @@ impl View {
             }
         }
         for (feed, error) in &ioc.scan.errors {
-            crate::activity::warning(
+            crate::activity::error(
                 ui,
                 format!(
-                    "{} could not be read: {error}",
+                    "{} could not be read: {error}. Update the IOC datasets in Library > Rules.",
                     ioc_scan::dataset_name(feed)
                 ),
             );
@@ -724,7 +724,7 @@ impl View {
                 ui.colored_label(theme::muted(), "Network capture was off for this run. Turn on Capture network in Run program to record one.");
             }
             Capture::Failed(error) => {
-                crate::activity::warning(
+                crate::activity::error(
                     ui,
                     format!("The network capture could not be read: {error}"),
                 );

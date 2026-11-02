@@ -341,10 +341,11 @@ impl MonitorApp {
     pub(super) fn routes_page(&mut self, ui: &mut egui::Ui) {
         self.routes.poll_test(ui.ctx());
         if let Some(error) = &self.routes.load_error {
-            crate::activity::warning(
+            crate::activity::error(
                 ui,
                 format!(
-                    "The saved route settings could not be read ({error}). Saving replaces them."
+                    "The saved route settings could not be read ({error}). Saving replaces them; \
+                     restore the file first to keep them."
                 ),
             );
         }

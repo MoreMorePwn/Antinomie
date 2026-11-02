@@ -113,7 +113,7 @@ fn tooltip_ui(ui: &mut egui::Ui, tip: &input::Tip) {
             }
         });
     if let Some(crowd) = &tip.crowd {
-        ui.label(RichText::new(crowd).small().color(theme::warn()));
+        ui.label(RichText::new(crowd).small().color(theme::neutral_accent()));
     }
 }
 

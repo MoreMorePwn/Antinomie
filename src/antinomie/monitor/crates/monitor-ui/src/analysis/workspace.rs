@@ -575,7 +575,7 @@ fn results(
         );
     });
     if let Some(error) = &view.query_error {
-        crate::activity::error(ui, error);
+        crate::activity::inline_only(ui, crate::activity::Level::Warn, error);
     }
     let indices = visible(section, filter, view, &record_context);
     if view.query_error.is_none() {

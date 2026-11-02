@@ -661,7 +661,11 @@ impl SamplesView {
     ) -> Option<SamplesAction> {
         self.poll(ctx);
         for error in &self.catalog_errors {
-            crate::activity::report(ctx, crate::activity::Level::Warn, error);
+            crate::activity::report(
+                ctx,
+                crate::activity::Level::Error,
+                format!("MalShare lookup failed for {error}. Retry the range to resume."),
+            );
         }
         crate::toasts::take_failure(ctx, &mut self.status);
         if !self.open {
@@ -1091,7 +1095,12 @@ impl SamplesView {
                 egui::CollapsingHeader::new("Unavailable days / retry details")
                     .show(ui, |ui| {
                         for error in &self.catalog_errors {
-                            crate::activity::warning(ui, error);
+                            crate::activity::error(
+                                ui,
+                                format!(
+                                    "MalShare lookup failed for {error}. Retry the range to resume."
+                                ),
+                            );
                         }
                     })
                     .header_response

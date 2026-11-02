@@ -377,7 +377,7 @@ impl MonitorApp {
                     (None, Some(version)) => {
                         ui.colored_label(theme::good(), format!("Installed ({version})"))
                     }
-                    (None, None) => ui.colored_label(theme::warn(), "Not installed"),
+                    (None, None) => ui.colored_label(theme::neutral_accent(), "Not installed"),
                 };
                 ui.weak(&tool.purpose);
                 let this = install.as_ref().filter(|install| install.id == tool.id);
@@ -596,7 +596,7 @@ impl MonitorApp {
             let (glyph, color) = match status {
                 Status::Done => (egui_phosphor::regular::CHECK_CIRCLE, theme::good()),
                 Status::Skipped => (egui_phosphor::regular::MINUS_CIRCLE, theme::muted()),
-                Status::Pending => (egui_phosphor::regular::WARNING, theme::warn()),
+                Status::Pending => (egui_phosphor::regular::CIRCLE, theme::neutral_accent()),
             };
             ui.horizontal(|ui| {
                 ui.colored_label(color, format!("{glyph} {}", step.title()));

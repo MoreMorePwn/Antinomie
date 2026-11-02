@@ -297,7 +297,10 @@ impl View {
             }
         });
         if let Some(error) = &self.refresh_error {
-            crate::activity::warning(ui, format!("Property refresh failed: {error}"));
+            crate::activity::error(
+                ui,
+                format!("Property refresh failed: {error}. Select the run again to retry."),
+            );
         }
         if input.analysis.is_none() {
             crate::activity::info(ui, "This run has no executable capture record. Enable static analysis before starting a new run.");
@@ -310,11 +313,14 @@ impl View {
         }
         match &self.result {
             Some(Err(error)) if ready => {
-                crate::activity::warning(ui, error);
+                crate::activity::error(
+                    ui,
+                    format!("The properties could not be computed: {error}"),
+                );
             }
             Some(Ok(result)) => {
                 for warning in &result.warnings {
-                    crate::activity::warning(ui, warning);
+                    crate::activity::error(ui, warning);
                 }
             }
             _ => {}

@@ -449,7 +449,7 @@ pub(crate) fn selection(
         });
     }
     if let Err(reason) = selection.validate() {
-        crate::activity::error(ui, reason);
+        crate::activity::inline_only(ui, crate::activity::Level::Warn, reason);
     }
     master.inner
 }

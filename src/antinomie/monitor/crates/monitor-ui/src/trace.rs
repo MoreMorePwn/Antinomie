@@ -459,7 +459,7 @@ impl Inspector {
                         (values::task_end(&status), theme::value(ValueKind::Number))
                     }
                     Some(status) => (values::task_end(&status), theme::error()),
-                    None => ("ended".to_owned(), theme::warn()),
+                    None => ("ended".to_owned(), theme::neutral_accent()),
                 };
                 let note = if matches!(event.syscall_name.as_str(), "exit" | "exit_group") {
                     "never returns: the task ended here"
@@ -938,7 +938,7 @@ impl Inspector {
             self.open_selected_data(invocation, field);
         }
         if let Some(error) = &self.error {
-            crate::activity::warning(ui, error);
+            crate::activity::error(ui, format!("The captured data could not be read: {error}"));
         }
         if self.pending {
             theme::loading_colored(ui, theme::muted(), "Reading capture…");

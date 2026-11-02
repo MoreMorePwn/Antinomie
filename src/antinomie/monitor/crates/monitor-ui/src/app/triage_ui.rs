@@ -54,7 +54,7 @@ impl MonitorApp {
         self.triage.set_notes(notes);
         self.triage.set_route_text(route);
         if let Some(error) = &self.archive_error {
-            crate::activity::warning(ui, error);
+            crate::activity::error(ui, error);
         }
         let live = self.invocations();
         // A loaded archive page can be from an observation capture or a query;

@@ -75,7 +75,7 @@ impl MonitorApp {
                 return;
             }
             match Text::prepare(&paste) {
-                Err(error) => self.report_warning(error),
+                Err(error) => self.report_error(format!("Clipboard was not typed: {error}")),
                 Ok(text) => {
                     if text.skipped_count > 0 {
                         self.report_warning(format!(
@@ -92,8 +92,9 @@ impl MonitorApp {
             }
         } else if intent.started.elapsed() >= Duration::from_secs(5) {
             self.clipboard_request = None;
-            self.report_warning(
-                "Host clipboard text was unavailable; copy text and try again".into(),
+            self.report_error(
+                "Host clipboard text was unavailable (no paste arrived in 5 seconds); copy the text again and retry"
+                    .into(),
             );
         }
     }

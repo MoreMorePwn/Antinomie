@@ -370,8 +370,8 @@ impl BuildWizard {
             {
                 crate::activity::report(
                     ui.ctx(),
-                    crate::activity::Level::Warn,
-                    format!("could not delete the toolchain chroot: {error}"),
+                    crate::activity::Level::Error,
+                    format!("Could not delete the toolchain chroot: {error}. Close what uses it and try again."),
                 );
             }
         });
@@ -429,8 +429,11 @@ impl BuildWizard {
                                         ) {
                                             crate::activity::report(
                                                 ui.ctx(),
-                                                crate::activity::Level::Warn,
-                                                format!("could not remove {}: {error}", image.tag),
+                                                crate::activity::Level::Error,
+                                                format!(
+                                                    "Could not remove the builder image {}: {error}. Check that the container engine is running and try again.",
+                                                    image.tag
+                                                ),
                                             );
                                         }
                                         removed = true;

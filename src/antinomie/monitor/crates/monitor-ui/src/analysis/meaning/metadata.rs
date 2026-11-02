@@ -37,7 +37,7 @@ pub(super) fn cell_color(column: Column, entry: &AnalysisEntry) -> Option<Color3
         Column::Offset => Some(theme::muted()),
         Column::Value => match style(entry) {
             Style::Good => Some(theme::good()),
-            Style::Warn => Some(theme::warn()),
+            Style::Warn => Some(theme::neutral_accent()),
             Style::Plain | Style::Hex => None,
         },
         _ => None,
@@ -183,7 +183,7 @@ mod tests {
         for value in ["no", "Absent", "false", "not declared"] {
             assert_eq!(
                 cell_color(Column::Value, &row("Signed", value)),
-                Some(theme::warn()),
+                Some(theme::neutral_accent()),
                 "{value}"
             );
         }

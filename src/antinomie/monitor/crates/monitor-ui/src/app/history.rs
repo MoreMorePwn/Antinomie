@@ -41,7 +41,6 @@ impl MonitorApp {
         self.run_filter = RunFilter::All;
         self.run_query.clear();
         self.applied_run_query.clear();
-        self.run_query_error = None;
     }
 
     pub(super) fn run_history(&mut self, ui: &mut egui::Ui) {
@@ -127,11 +126,13 @@ impl MonitorApp {
         let unfiltered_count = runs.len();
         let draft = crate::run_filter::compile(&self.run_query, &fields);
         if let Some(error) = draft.error.as_ref() {
-            self.run_query_error = Some(error.clone());
-            crate::activity::error(ui, format!("{error} · showing last valid filter"));
+            crate::activity::inline_only(
+                ui,
+                crate::activity::Level::Warn,
+                format!("{error} · showing last valid filter"),
+            );
         } else {
             self.applied_run_query.clone_from(&self.run_query);
-            self.run_query_error = None;
             crate::query::remember_valid_filter(ui, &self.run_query);
         }
         let compiled = crate::run_filter::compile(&self.applied_run_query, &fields);
@@ -304,7 +305,7 @@ impl MonitorApp {
                                 )
                                 .on_hover_text(detail.join("\n"));
                                 if let Some(badge) = crate::run_recording::badge(run) {
-                                    ui.colored_label(theme::warn(), badge);
+                                    ui.colored_label(theme::error(), badge);
                                 }
                             });
                             row.col(|ui| {
@@ -535,7 +536,7 @@ impl MonitorApp {
         };
         let selection = match selection {
             Some(Err(error)) => {
-                crate::activity::warning(ui, format!("Process tree unavailable: {error}"));
+                crate::activity::error(ui, format!("Process tree unavailable: {error}"));
                 None
             }
             None | Some(Ok([])) => {
@@ -594,7 +595,7 @@ impl MonitorApp {
                 });
             }
             Some((_, Err(error))) => {
-                crate::activity::warning(ui, error);
+                crate::activity::error(ui, format!("Process tree unavailable: {error}"));
             }
             None => {
                 crate::theme::loading(ui, "Reading saved lifecycle records…");

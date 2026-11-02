@@ -359,7 +359,7 @@ impl MonitorApp {
                         } else if closing {
                             crate::theme::spinner(ui);
                             let message = "Waiting for guest shutdown and recording finalization…";
-                            ui.add(egui::Label::new(RichText::new(message).color(theme::warn())).truncate())
+                            ui.add(egui::Label::new(RichText::new(message).color(theme::neutral_accent())).truncate())
                                 .on_hover_text(message);
                         } else if let Some(note) = &start_note {
                             crate::theme::spinner(ui);

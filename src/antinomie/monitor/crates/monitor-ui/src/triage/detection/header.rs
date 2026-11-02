@@ -79,7 +79,8 @@ fn status_badge(report: &Report) -> (&'static str, egui::Color32) {
 fn state_tone(state_value: &State) -> egui::Color32 {
     match state_value {
         State::Complete => theme::blue(),
-        State::Partial | State::NoRules | State::Missing => theme::warn(),
+        State::Partial | State::Missing => theme::warn(),
+        State::NoRules => theme::neutral_accent(),
         State::Unavailable | State::Skipped => theme::muted(),
     }
 }

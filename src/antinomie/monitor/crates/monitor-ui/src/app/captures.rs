@@ -704,11 +704,11 @@ pub(super) fn detail(ui: &mut egui::Ui, capture: &CaptureSummary) {
                         ui.end_row();
                     }
                 });
-            for warning in [&capture.incomplete_reason, &capture.recording_error]
-                .into_iter()
-                .flatten()
-            {
+            if let Some(warning) = &capture.incomplete_reason {
                 crate::activity::warning(ui, warning);
+            }
+            if let Some(error) = &capture.recording_error {
+                crate::activity::error(ui, error);
             }
         });
 }

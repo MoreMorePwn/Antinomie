@@ -82,7 +82,7 @@ pub(crate) fn show(
                             );
                         }
                         None => {
-                            ui.colored_label(theme::warn(), "Not found on PATH");
+                            ui.colored_label(theme::neutral_accent(), "Not found on PATH");
                         }
                     }
                     ui.weak(program.licence);
@@ -143,7 +143,7 @@ pub(crate) fn tool_row(
                 ui.colored_label(theme::good(), format!("Installed by Antinomie ({version})"));
             }
             (None, None) => {
-                ui.colored_label(theme::warn(), "Not installed");
+                ui.colored_label(theme::neutral_accent(), "Not installed");
             }
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

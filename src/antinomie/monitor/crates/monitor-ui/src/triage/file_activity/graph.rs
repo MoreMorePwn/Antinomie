@@ -83,7 +83,7 @@ pub(super) fn tint(kind: Kind) -> Color32 {
         Kind::Open => theme::info(),
         Kind::Create => theme::good(),
         Kind::Read => theme::bright_blue(),
-        Kind::Write | Kind::Resize => theme::warn(),
+        Kind::Write | Kind::Resize => theme::neutral_accent(),
         Kind::Rename | Kind::Link => theme::primary(),
         Kind::Delete => theme::error(),
         Kind::Exec => theme::error(),

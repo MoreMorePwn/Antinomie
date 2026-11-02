@@ -470,7 +470,11 @@ impl CoreView {
         self.poll();
         self.poll_catalog();
         for issue in &self.catalog_issues {
-            crate::activity::report(ui.ctx(), crate::activity::Level::Warn, issue);
+            crate::activity::report(
+                ui.ctx(),
+                crate::activity::Level::Error,
+                format!("Core dump list: {issue}"),
+            );
         }
         for capture in controls
             .captures

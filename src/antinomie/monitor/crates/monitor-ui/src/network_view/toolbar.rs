@@ -208,12 +208,15 @@ impl NetworkView {
                 theme::loading_colored(ui, theme::muted(), "Loading installed TShark fields…");
             }
             Some(FieldRegistry::Unavailable(error)) => {
-                crate::activity::warning(ui, error);
+                crate::activity::error(
+                    ui,
+                    format!("The TShark field list could not be loaded: {error}"),
+                );
             }
             _ => {}
         }
         if let Some(error) = &self.display_worker_error {
-            crate::activity::warning(ui, error);
+            crate::activity::error(ui, format!("The display-filter checker stopped: {error}"));
         }
         if let Some(error) = &self.display_error {
             crate::activity::inline_only(ui, crate::activity::Level::Warn, error);
@@ -327,9 +330,9 @@ impl NetworkView {
                 );
             }
             ParseStatus::Failed(error) => {
-                crate::activity::warning(
+                crate::activity::error(
                     ui,
-                    format!("TShark parsed {done} of {total} packets: {error}"),
+                    format!("TShark stopped after {done} of {total} packets: {error}. Open the capture again to retry."),
                 );
             }
         }

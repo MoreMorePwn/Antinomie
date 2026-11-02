@@ -80,8 +80,9 @@ impl MonitorApp {
             );
         let has_pending_binding = bind_to_session || vm_snapshot_target.is_some();
         if has_pending_binding && self.pending_sessions.len() >= PENDING_SESSION_LIMIT {
-            self.report_warning(
-                "Too many pending VM operations; wait for existing requests to settle".into(),
+            self.report_error(
+                "The request was not sent: too many VM operations are pending; wait for them to settle and try again"
+                    .into(),
             );
             return None;
         }

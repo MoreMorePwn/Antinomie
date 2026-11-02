@@ -82,7 +82,7 @@ impl NetworkView {
             return;
         }
         if let Some(error) = &self.list.error {
-            crate::activity::warning(ui, error);
+            crate::activity::error(ui, format!("The capture could not be read: {error}"));
         }
         if let Some(error) = self.tshark_unavailable() {
             tshark_missing_notice(ui, &error, "Frames are shown raw, without decoding.");
@@ -476,7 +476,7 @@ impl NetworkView {
         let bytes = match self.list.frame.as_ref().map(|(_, frame)| frame) {
             Some(Ok(bytes)) => bytes.clone(),
             Some(Err(error)) => {
-                crate::activity::warning(ui, error);
+                crate::activity::error(ui, format!("The frame bytes could not be read: {error}"));
                 return;
             }
             None => return,
@@ -512,7 +512,10 @@ impl NetworkView {
                         );
                     }
                     DetailState::Failed(error) => {
-                        crate::activity::warning(ui, error);
+                        crate::activity::error(
+                            ui,
+                            format!("TShark could not decode this packet: {error}"),
+                        );
                     }
                     DetailState::Ready(ready) => {
                         ui.horizontal(|ui| {
@@ -654,7 +657,7 @@ pub(super) fn protocol_color(protocol: &str) -> egui::Color32 {
         }
         "TCP" => theme::value(ValueKind::Flags),
         "UDP" => theme::value(ValueKind::Number),
-        "ARP" => theme::warn(),
+        "ARP" => theme::neutral_accent(),
         _ if protocol.starts_with("ICMP") => theme::value(ValueKind::Name),
         _ => theme::muted(),
     }

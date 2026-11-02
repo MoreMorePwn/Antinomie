@@ -9,7 +9,7 @@ pub(super) fn status_line(view: &DebugView) -> (String, egui::Color32, bool) {
     if view.controller == Controller::Gdb {
         return (
             "Controlled by gdb (read-only here until it disconnects)".into(),
-            theme::warn(),
+            theme::neutral_accent(),
             false,
         );
     }

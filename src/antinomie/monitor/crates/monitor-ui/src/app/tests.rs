@@ -162,7 +162,6 @@ pub(crate) fn app() -> MonitorApp {
         run_filter: RunFilter::All,
         run_query: String::new(),
         applied_run_query: String::new(),
-        run_query_error: None,
         terminals: BTreeMap::new(),
         archive: None,
         pending_archive: None,
