@@ -215,8 +215,14 @@ pub(super) fn scan_archive_query(
             .ok()
             .flatten()
     });
-    if let Some(launch) = &launch {
-        name_launched(&mut nodes, launch, request.root_cookie);
+    // The root is named after what the launch request asked for when the
+    // recording has no launch record naming it.
+    let requested = segments::requested_launch(request.launch.as_ref(), launch.as_ref());
+    let named = requested
+        .as_ref()
+        .or(launch.as_ref().filter(|launch| launch.path.is_some()));
+    if let Some(named) = named {
+        name_launched(&mut nodes, named, request.root_cookie);
     }
     let cookies = resolve_cookies(&cookie_sets);
     let mut counts = normalized::Counts {
@@ -267,8 +273,10 @@ pub(super) fn scan_archive_query(
     files.journal.root_cookie = request.root_cookie;
     files.journal.hashes_writes = facts.as_ref().is_some_and(|facts| facts.hashed_writes);
     files.journal.names = guest_names(&recording.directory, request);
+    if let Some(named) = named {
+        name_launched(&mut files.process_images, named, request.root_cookie);
+    }
     if let Some(launch) = &launch {
-        name_launched(&mut files.process_images, launch, request.root_cookie);
         if let (Some(writer), Some(first)) = (&mut event_journal, root_call) {
             let evidence = antinomie_monitor_core::analysis::detection::Evidence::Call {
                 stream: first.0,

@@ -160,6 +160,17 @@ impl TriageView {
         self.scan_request.kernel_revision = revision;
     }
 
+    /// The launch the selected run was asked for, to name its root process
+    /// when the recording holds no launch record of it.
+    pub(crate) fn set_launch(&mut self, run: Option<&antinomie_monitor_core::RunSummary>) {
+        let launch = run
+            .filter(|run| run.pid != 0)
+            .map(|run| (run.pid, run.request.path.clone(), run.request.args.clone()));
+        if self.scan_request.launch != launch {
+            self.scan_request.launch = launch;
+        }
+    }
+
     pub(crate) fn set_tools_dir(&mut self, dir: &std::path::Path) {
         if self.properties.tools_dir.as_deref() != Some(dir) {
             self.properties.tools_dir = Some(dir.to_owned());

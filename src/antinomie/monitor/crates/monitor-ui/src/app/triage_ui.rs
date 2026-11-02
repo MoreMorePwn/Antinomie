@@ -98,6 +98,7 @@ impl MonitorApp {
             self.settings_page = settings_window::SettingsPage::AnalysisTools;
             self.settings_focus_rebuild = true;
         }
+        self.triage.set_launch(Some(&run));
         self.triage.set_kernel_revision(
             run.environment
                 .as_ref()

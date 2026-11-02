@@ -914,6 +914,7 @@ impl eframe::App for MonitorApp {
         self.triage.set_data_dir(&self.options.data_dir);
         self.triage.set_write_limits(self.settings.write_limits());
         self.triage.set_page_rows(self.settings.triage_page_rows);
+        self.triage.set_launch(triage_run);
         self.triage.set_kernel_revision(triage_run.and_then(|run| {
             run.environment
                 .as_ref()

@@ -22,6 +22,15 @@ it runs.
   Finished list keeps the last 20 jobs with how each ended and an Open link
   (until cleared). Closing the window while jobs run asks first and lists them.
   It reads the state the app already keeps and starts no work of its own.
+- **Triage names a run's root process from the launch request when the
+  recording's launch record cannot name it.** A run whose launch record had no
+  readable program path (its end record missing, or its text not read back)
+  showed the root as "?". The root now takes the program and arguments the run
+  was asked to start, kept as the first name in its exec history; a program the
+  recording itself names keeps its own name. A run with Core dump on exit
+  recorded the same launch end as one without in every test recording (a tiny
+  program, a program that writes, runs and deletes a file, and the demo
+  sample), so no host or guest change was needed for the end record itself.
 
 - **ATT&CK techniques are coloured by tactic.** Each of the 15 ATT&CK v20
   tactics (Defense Evasion is now Stealth and Defense Impairment) has its own

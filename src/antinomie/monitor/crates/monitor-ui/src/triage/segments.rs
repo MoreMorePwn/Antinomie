@@ -127,6 +127,40 @@ pub(super) fn guest_names(
         .filter(|names| !names.is_empty())
 }
 
+/// The launch the run was asked for, as a record that names the root, used
+/// where the recording's own launch record does not name it whole: it is
+/// missing, its end record never arrived, or its text could not be read back.
+/// `None` when the recording's record names the program and its arguments, or
+/// when there was no request.
+pub(super) fn requested_launch(
+    request: Option<&(u32, String, Vec<String>)>,
+    recorded: Option<&LaunchRecord>,
+) -> Option<LaunchRecord> {
+    let (pid, path, args) = request?;
+    if path.is_empty()
+        || recorded.is_some_and(|record| record.path.is_some() && record.argv.is_some())
+    {
+        return None;
+    }
+    // A program the recording names differently (a later exec) keeps its own name.
+    let named = recorded
+        .and_then(|record| record.path.clone())
+        .unwrap_or_else(|| path.clone());
+    let same = named == *path;
+    Some(LaunchRecord {
+        pid: recorded.map_or(*pid, |record| record.pid),
+        tid: *pid,
+        timestamp_ns: recorded.map_or(0, |record| record.timestamp_ns),
+        path: Some(named),
+        argv: same.then(|| {
+            std::iter::once(path.clone())
+                .chain(args.iter().cloned())
+                .collect()
+        }),
+        notes: recorded.map_or_else(Vec::new, |record| record.notes.clone()),
+    })
+}
+
 /// Name the root task after the program the run launched: the kernel started
 /// it without a traced execve, so no call names it. A later exec of the root
 /// keeps its own name; the launched image stays first in its history.

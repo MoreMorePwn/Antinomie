@@ -1227,6 +1227,10 @@ struct ScanRequest {
     /// The kernel revision of the run's base, when the run recorded it: from
     /// revision 18 a read or write with no position record is a stream.
     kernel_revision: Option<u32>,
+    /// The launch the run was asked for: the root's pid, the program path and
+    /// its arguments. Names the root when the recording has no launch record
+    /// of it (its end record, or the whole event, never arrived).
+    launch: Option<(u32, String, Vec<String>)>,
     /// Set while the earlier bytes of a finished boot are copied into its
     /// recording: each changed file asked about is added to it.
     before_copy: Option<Arc<std::sync::Mutex<antinomie_monitor_core::file_before_store::Writer>>>,
