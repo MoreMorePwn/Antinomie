@@ -88,8 +88,22 @@ fn title(ui: &mut egui::Ui, symbol: &str, text: &str, color: Color32) {
 /// within the card (a grid would let them run past it).
 fn rows(ui: &mut egui::Ui, id: &str, rows: &[(&str, String)]) {
     let body = ui.text_style_height(&egui::TextStyle::Body);
-    let label_width = (ui.available_width() * 0.36)
-        .min(body * 6.5)
+    // The widest name on one line (a fixed multiple of the text height cut
+    // "Acceleration" in two), but never more than half the card.
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let widest = rows
+        .iter()
+        .map(|(name, _)| {
+            ui.fonts(|fonts| {
+                fonts
+                    .layout_no_wrap((*name).to_owned(), font.clone(), Color32::WHITE)
+                    .size()
+                    .x
+            })
+        })
+        .fold(0.0_f32, f32::max);
+    let label_width = (widest + 8.0)
+        .min(ui.available_width() * 0.5)
         .max(body * 3.5);
     ui.push_id(id, |ui| {
         ui.spacing_mut().item_spacing.y = body * 0.45;

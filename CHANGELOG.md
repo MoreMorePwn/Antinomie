@@ -181,6 +181,10 @@ it runs.
   the compatibility of a checkpoint all come from the same data, and its list is
   refreshed when you select the VM and when it starts or stops.
 
+- **The VM Summary's label column fits its longest name.** "Acceleration" no
+  longer breaks into "Acceleratio" and "n" in the Compute card; the column is as
+  wide as the widest label (at most half the card).
+
 ## 0.8.1 — 2026-11-03
 
 Antinomie 0.8.1 is a fix release for the 0.8.0 line; it runs the same revision-20
