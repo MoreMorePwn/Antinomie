@@ -133,3 +133,45 @@ pub fn legend(ui: &mut egui::Ui, id: &str) {
         });
     });
 }
+
+/// A tactic heading of a grouped list: its dot and name, in the tactic's
+/// colour, with how many techniques it holds. `None` is the group of
+/// techniques the bundled ATT&CK table does not know.
+pub fn tactic_heading(ui: &mut egui::Ui, tactic: Option<Tactic>, count: usize) {
+    ui.horizontal(|ui| {
+        let (dot, name) = match tactic {
+            Some(tactic) => (tactic_color(tactic), tactic.name()),
+            None => (theme::muted(), "Not in the ATT&CK table"),
+        };
+        ui.label(egui::RichText::new("●").color(dot));
+        ui.label(egui::RichText::new(name).strong().color(theme::text()));
+        ui.label(
+            egui::RichText::new(format!("({count})"))
+                .small()
+                .color(theme::muted()),
+        );
+    });
+}
+
+/// A foldable technique row: the badge (in `context`'s colour) and `summary`
+/// in the header, `body` when it is open. Open or closed is kept per
+/// technique for the rest of the app session, under `salt` so a technique in
+/// two lists folds on its own in each.
+pub fn technique_row(
+    ui: &mut egui::Ui,
+    salt: &str,
+    id: &str,
+    context: Option<Tactic>,
+    summary: &str,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    let state = ui.make_persistent_id(("technique-row", salt, id));
+    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), state, false)
+        .show_header(ui, |ui| {
+            technique_badge(ui, id, context);
+            if !summary.is_empty() {
+                ui.label(egui::RichText::new(summary).small().color(theme::muted()));
+            }
+        })
+        .body(body);
+}

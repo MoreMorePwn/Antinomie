@@ -193,6 +193,9 @@ pub(super) struct View {
     /// A rule the Matches table is to be filtered to when it next shows (set
     /// by the sample window, which opens a run on one rule's hit).
     pending_rule: Option<String>,
+    /// An ATT&CK technique the Matches table is to be filtered to when it next
+    /// shows (set by the Summary's ATT&CK list).
+    pending_technique: Option<String>,
     pub rules_generation: u64,
     seen_generation: u64,
     auto_key: [String; 3],
@@ -377,6 +380,12 @@ impl View {
             self.selected = *found;
         }
         self.pending_rule = Some(rule_id.to_owned());
+    }
+    /// Show `engine`'s tab, filtered to the rules that cite `technique`.
+    pub(super) fn focus_technique(&mut self, engine: &str, technique: &str) {
+        self.focus_rule(engine, "");
+        self.pending_rule = None;
+        self.pending_technique = Some(technique.to_owned());
     }
     pub fn tick(&mut self, ctx: &egui::Context, input: &TriageInput<'_>) {
         self.clock = input.clock_anchor;
@@ -1090,6 +1099,14 @@ impl View {
             .filter(|rule| !rule.contains(['"', '\\']) && !rule.chars().any(char::is_control))
         {
             let draft = format!("finding.rule == \"{rule}\"");
+            ui.data_mut(|data| data.insert_temp(draft_id, draft));
+        }
+        if let Some(technique) = self
+            .pending_technique
+            .take()
+            .filter(|id| id.chars().all(|c| c.is_ascii_alphanumeric() || c == '.'))
+        {
+            let draft = format!("finding.mitre == \"{technique}\"");
             ui.data_mut(|data| data.insert_temp(draft_id, draft));
         }
         let filter =

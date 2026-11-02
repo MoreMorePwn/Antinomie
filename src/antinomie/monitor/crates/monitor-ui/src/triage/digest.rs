@@ -180,6 +180,10 @@ impl TriageView {
         if !self.scan_began_finished || self.scan_rx.is_some() {
             return;
         }
+        // A narrowed table holds only the rows it shows; the digest is of the run.
+        if self.findings_narrowed() {
+            return;
+        }
         let (Some(directory), Some(scan)) = (self.details_directory.clone(), self.scan.as_ref())
         else {
             return;

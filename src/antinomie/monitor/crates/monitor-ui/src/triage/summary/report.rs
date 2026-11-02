@@ -398,6 +398,7 @@ pub(super) fn content(
 ) -> Option<Destination> {
     let mut destination = None;
     let mut pop_out = false;
+    let mut attack_jump = None;
     ui.horizontal_wrapped(|ui| {
         ui.label(
             RichText::new("Run overview")
@@ -434,7 +435,10 @@ pub(super) fn content(
             if let Some(error) = &view.scan_error {
                 crate::activity::error(ui, format!("The saved-recording index failed: {error}"));
             }
-            let attack = view.attack_techniques().to_vec();
+            let (attack, attack_details) = {
+                let (list, details) = view.attack_list();
+                (list.to_vec(), details.to_vec())
+            };
             let Some(scan) = &view.scan else {
                 presentation::frame().show(ui, |ui| {
                     presentation::heading_busy(ui, "Preparing run evidence", "", true);
@@ -491,15 +495,47 @@ pub(super) fn content(
             }
             ui.add_space(8.0);
             if !attack.is_empty() {
+                // Folded: the badge row and "Show all N"; open: the list by
+                // tactic. Kept for the rest of the app session.
+                let fold = ui.make_persistent_id("summary-attack-open");
+                let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+                    ui.ctx(),
+                    fold,
+                    false,
+                );
+                let open = state.is_open();
+                let mut toggle = false;
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("MITRE ATT&CK").small().color(theme::muted()));
-                    for technique in attack.iter().take(16) {
-                        crate::widgets::attack::technique_badge(ui, &technique.id, None);
-                    }
-                    if attack.len() > 16 {
-                        ui.label(format!("+{} in the report", attack.len() - 16));
+                    ui.label(
+                        RichText::new(format!("MITRE ATT&CK ({})", attack.len()))
+                            .small()
+                            .color(theme::muted()),
+                    );
+                    if open {
+                        toggle |= crate::widgets::link(ui, "Hide")
+                            .on_hover_text("Fold the list back to the badge row")
+                            .clicked();
+                    } else {
+                        for technique in attack.iter().take(16) {
+                            crate::widgets::attack::technique_badge(ui, &technique.id, None);
+                        }
+                        toggle |= crate::widgets::link(ui, format!("Show all {}", attack.len()))
+                            .on_hover_text(
+                                "One row per technique, by tactic, with what produced it",
+                            )
+                            .clicked();
                     }
                 });
+                if toggle {
+                    state.set_open(!open);
+                }
+                if open {
+                    ui.add_space(4.0);
+                    if let Some(jump) = attack_list::show(ui, view, &attack, &attack_details) {
+                        attack_jump = Some(jump);
+                    }
+                }
+                state.store(ui.ctx());
                 crate::widgets::attack::legend(ui, "summary-attack-legend");
             }
             ui.add_space(14.0);
@@ -541,6 +577,9 @@ pub(super) fn content(
             ui.add_space(14.0);
             notes(ui, &view.notes);
         });
+    if attack_jump.is_some() {
+        view.attack_jump = attack_jump;
+    }
     if pop_out {
         view.clear_finding_filters(ui.ctx());
         view.open_graph_window(ui.ctx());

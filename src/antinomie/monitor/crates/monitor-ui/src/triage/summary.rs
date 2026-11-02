@@ -2,6 +2,7 @@
 //! Whole-run counts, independent of table visibility, filters and query pages.
 use super::*;
 use antinomie_monitor_core::analysis::detection::{Engine, State};
+mod attack_list;
 mod report;
 
 #[derive(Clone, Copy)]
@@ -52,6 +53,24 @@ fn metric_hover(ui: &mut egui::Ui, title: &str, value: Option<u64>, hover: &str)
 
 pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, input: &TriageInput<'_>) {
     let destination = report::content(view, ui, input);
+    if let Some(jump) = view.attack_jump.take() {
+        match jump {
+            attack::Jump::Suspicious(id) => {
+                view.section = Section::Process;
+                view.process = ProcessTab::Suspicious;
+                view.filter_findings_by_technique(ui.ctx(), &id);
+            }
+            attack::Jump::Detection(engine, id) => {
+                view.section = Section::Detection;
+                view.detection.focus_technique(&engine, &id);
+            }
+            attack::Jump::Calls(id) => {
+                if let Some(finding) = view.technique_finding(&id) {
+                    request_evidence_jump(ui.ctx(), &finding.values);
+                }
+            }
+        }
+    }
     if let Some(destination) = destination {
         match destination {
             Destination::Properties => view.section = Section::Properties,

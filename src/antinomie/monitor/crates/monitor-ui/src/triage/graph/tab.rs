@@ -218,6 +218,20 @@ impl TriageView {
         self.request_query_refresh();
     }
 
+    /// Show Suspicious activity filtered to the rows that cite `technique`
+    /// (the tier and category chips and an older filter are dropped first).
+    pub(in crate::triage) fn filter_findings_by_technique(
+        &mut self,
+        ctx: &egui::Context,
+        technique: &str,
+    ) {
+        self.clear_finding_filters(ctx);
+        let text = format!("finding.technique == \"{technique}\"");
+        self.filter_drafts[0].clone_from(&text);
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new(("triage-filter-draft", 0usize)), text));
+        ctx.request_repaint();
+    }
+
     /// Put `parts` in the filter bar; the next frame's query bar applies it.
     fn set_filter(&mut self, ctx: &egui::Context, parts: &Parts) {
         let text = parts.render();

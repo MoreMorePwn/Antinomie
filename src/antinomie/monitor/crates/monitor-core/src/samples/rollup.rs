@@ -35,6 +35,9 @@ pub struct RuleRow {
 pub struct TechniqueRow {
     pub id: String,
     pub runs: Vec<usize>,
+    /// What cited it, as the exports name it: a behaviour rule's name, or
+    /// "Engine: rule title" for a detection rule.
+    pub rules: Vec<String>,
 }
 
 /// The techniques of one tactic.
@@ -159,7 +162,8 @@ pub fn rollup(runs: &[RunInput<'_>]) -> Rollup {
     };
     let mut top: Option<(usize, Vec<usize>)> = None;
     let mut rules: BTreeMap<(String, String), RuleRow> = BTreeMap::new();
-    let mut tactics: BTreeMap<&'static str, BTreeMap<String, Vec<usize>>> = BTreeMap::new();
+    let mut tactics: BTreeMap<&'static str, BTreeMap<String, (Vec<usize>, BTreeSet<String>)>> =
+        BTreeMap::new();
     let mut checks: BTreeMap<(&'static str, String, String), CheckRow> = BTreeMap::new();
     for run in runs {
         let Some(digest) = run.digest else { continue };
@@ -174,14 +178,13 @@ pub fn rollup(runs: &[RunInput<'_>]) -> Rollup {
             }
             for hit in &behaviour.rules {
                 for id in hit.attack.iter().filter(|id| technique(id)) {
-                    push_run(
-                        tactics
-                            .entry(tactic_of(&hit.category))
-                            .or_default()
-                            .entry(id.clone())
-                            .or_default(),
-                        run.number,
-                    );
+                    let entry = tactics
+                        .entry(tactic_of(&hit.category))
+                        .or_default()
+                        .entry(id.clone())
+                        .or_default();
+                    push_run(&mut entry.0, run.number);
+                    entry.1.insert(hit.rule.clone());
                 }
             }
             for check in &behaviour.evasion {
@@ -236,14 +239,21 @@ pub fn rollup(runs: &[RunInput<'_>]) -> Rollup {
             push_run(&mut row.runs, run.number);
             row.latest = row.latest.max(run.number);
             for id in hit.mitre.iter().filter(|id| technique(id)) {
-                push_run(
-                    tactics
-                        .entry("Detection rules")
-                        .or_default()
-                        .entry(id.clone())
-                        .or_default(),
-                    run.number,
-                );
+                let entry = tactics
+                    .entry("Detection rules")
+                    .or_default()
+                    .entry(id.clone())
+                    .or_default();
+                push_run(&mut entry.0, run.number);
+                entry.1.insert(format!(
+                    "{}: {}",
+                    hit.engine,
+                    if hit.title.is_empty() {
+                        &hit.rule_id
+                    } else {
+                        &hit.title
+                    }
+                ));
             }
         }
     }
@@ -266,9 +276,13 @@ pub fn rollup(runs: &[RunInput<'_>]) -> Rollup {
         if let Some(found) = tactics.remove(tactic) {
             let mut techniques: Vec<TechniqueRow> = found
                 .into_iter()
-                .map(|(id, mut runs)| {
+                .map(|(id, (mut runs, rules))| {
                     runs.sort_unstable();
-                    TechniqueRow { id, runs }
+                    TechniqueRow {
+                        id,
+                        runs,
+                        rules: rules.into_iter().collect(),
+                    }
                 })
                 .collect();
             techniques.sort_by(|a, b| a.id.cmp(&b.id));

@@ -216,7 +216,14 @@ pub(crate) struct TriageView {
     /// What the last written run digest was made from.
     digested: Option<String>,
     /// The Summary's ATT&CK list with the fingerprint it was made for.
-    attacked: Option<(String, Vec<antinomie_monitor_core::report::Technique>)>,
+    /// Where a click in the Summary's ATT&CK list asked to go, taken by the
+    /// next `summary::show`.
+    attack_jump: Option<attack::Jump>,
+    attacked: Option<(
+        String,
+        Vec<antinomie_monitor_core::report::Technique>,
+        Vec<attack::Detail>,
+    )>,
     /// Pass of the last frame that drew a pane using the index.
     shown_pass: Option<u64>,
     refresh_seconds: u64,
@@ -288,6 +295,7 @@ impl Default for TriageView {
             scan_began_finished: false,
             scan_is_timer: false,
             digested: None,
+            attack_jump: None,
             attacked: None,
             shown_pass: None,
             refresh_seconds: 5,

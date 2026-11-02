@@ -96,7 +96,9 @@ impl MonitorApp {
                 {
                     go = Some(Go::Rule(number, engine, rule));
                 }
-                super::triage_parts::techniques(ui, data);
+                if let Some(number) = super::triage_parts::techniques(ui, data) {
+                    go = Some(Go::Run(number));
+                }
                 if let Some((number, filter)) = super::triage_parts::evasion(ui, data) {
                     go = Some(Go::Trace(number, filter));
                 }

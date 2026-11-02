@@ -21,6 +21,20 @@ it runs.
   column (named in text, with the colour as a chip in HTML and a bar in PDF).
   The bundled ATT&CK table now carries each technique's tactics.
 
+- **The MITRE ATT&CK techniques of a run overview open into a list.** The
+  Triage Summary shows "MITRE ATT&CK (N)" with its badge row and "Show all N"
+  (it replaces "+N in the report"); open, it lists the techniques grouped by
+  tactic in kill-chain order, one foldable row each: the technique and its name,
+  its tactics, the Triage rules that cited it (with tier and count), the YARA,
+  IDS and Sigma rules that cited it, and links that open Suspicious activity
+  or the engine's matches in Detection filtered to that technique, and Syscall
+  Trace at the first call behind it. Open or closed is remembered, for the
+  section and for each technique. The sample window's ATT&CK section has the
+  same list ("Show all N"), each technique with what cited it and its runs as
+  links into Triage. The list is the one the exports use. Filtering Suspicious
+  activity no longer shrinks the Summary's technique list or rewrites the run's
+  saved digest with the filtered rows.
+
 ## 0.8.1 — 2026-11-03
 
 Antinomie 0.8.1 is a fix release for the 0.8.0 line; it runs the same revision-20

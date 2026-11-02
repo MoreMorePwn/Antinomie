@@ -206,16 +206,46 @@ pub(super) fn rules_matched(
 }
 
 /// ATT&CK techniques: one line per tactic, a technique tag per technique
-/// (the tag look of the sample's own tags) with the runs it was mapped in.
-pub(super) fn techniques(ui: &mut egui::Ui, data: &Data) {
+/// (the tag look of the sample's own tags) with the runs it was mapped in;
+/// "Show all" opens one foldable row per technique instead. The run whose
+/// link was clicked is returned.
+pub(super) fn techniques(ui: &mut egui::Ui, data: &Data) -> Option<usize> {
     use antinomie_monitor_core::samples::{Tag, TagKind};
     let rollup = &data.rollup;
+    let mut open_run = None;
     parts::section(ui, "ATT&CK techniques", None, |ui| {
         if not_triaged(ui, rollup) {
             return;
         }
         if rollup.tactics.is_empty() {
             parts::muted_line(ui, "No technique mapped.");
+            return;
+        }
+        // Folded: the tag rows below; open: one foldable row per technique.
+        // Kept for the rest of the app session.
+        let total: usize = rollup.tactics.iter().map(|t| t.techniques.len()).sum();
+        let fold = ui.make_persistent_id("sample-attack-open");
+        let mut state =
+            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), fold, false);
+        let open = state.is_open();
+        if widgets::link(
+            ui,
+            &if open {
+                "Hide".to_owned()
+            } else {
+                format!("Show all {total}")
+            },
+        )
+        .on_hover_text("One row per technique, with what cited it and the runs")
+        .clicked()
+        {
+            state.set_open(!open);
+        }
+        state.store(ui.ctx());
+        if open {
+            open_run = technique_rows(ui, data);
+            ui.add_space(4.0);
+            crate::widgets::attack::legend(ui, "sample-attack-legend");
             return;
         }
         let body = egui::TextStyle::Body.resolve(ui.style());
@@ -346,6 +376,77 @@ pub(super) fn techniques(ui: &mut egui::Ui, data: &Data) {
         ui.add_space(4.0);
         crate::widgets::attack::legend(ui, "sample-attack-legend");
     });
+    open_run
+}
+
+/// One foldable row per technique, grouped by the tactic of the rule
+/// category that cited it: what cited it and the runs, each run a link into
+/// Triage. The run whose link was clicked is returned.
+fn technique_rows(ui: &mut egui::Ui, data: &Data) -> Option<usize> {
+    use crate::widgets::attack as pills;
+    use antinomie_monitor_core::mitre::{self, Tactic};
+    let rollup = &data.rollup;
+    let mut open_run = None;
+    for row in &rollup.tactics {
+        let context = Tactic::from_label(&row.tactic);
+        ui.horizontal(|ui| {
+            let (dot, name) = match context {
+                Some(tactic) => (pills::tactic_color(tactic), row.tactic.as_str()),
+                None => (theme::muted(), row.tactic.as_str()),
+            };
+            ui.label(RichText::new("●").color(dot));
+            ui.label(RichText::new(name).strong().color(theme::text()));
+            ui.label(
+                RichText::new(format!("({})", row.techniques.len()))
+                    .small()
+                    .color(theme::muted()),
+            );
+        });
+        ui.indent(("sample-attack-group", row.tactic.as_str()), |ui| {
+            for technique in &row.techniques {
+                let summary = format!("{}/{} runs", technique.runs.len(), rollup.triaged);
+                pills::technique_row(ui, "sample", &technique.id, context, &summary, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new("Technique").small().color(theme::muted()));
+                        ui.label(RichText::new(&technique.id).monospace().strong());
+                        ui.label(mitre::technique_name(&technique.id).unwrap_or_default());
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new("Tactic").small().color(theme::muted()));
+                        let tactics = mitre::tactics(&technique.id);
+                        if tactics.is_empty() {
+                            ui.label(
+                                RichText::new("not in the bundled ATT&CK table")
+                                    .color(theme::muted()),
+                            );
+                        }
+                        for tactic in tactics {
+                            pills::tactic_chip(ui, tactic);
+                        }
+                    });
+                    if !technique.rules.is_empty() {
+                        ui.label(RichText::new("Cited by").small().color(theme::muted()));
+                        for rule in &technique.rules {
+                            ui.label(RichText::new(rule).monospace());
+                        }
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new("Runs").small().color(theme::muted()));
+                        for number in &technique.runs {
+                            if widgets::link(ui, &parts::run_name(*number))
+                                .on_hover_text("Open this run in Triage")
+                                .clicked()
+                            {
+                                open_run = Some(*number);
+                            }
+                        }
+                    });
+                });
+            }
+        });
+        ui.add_space(4.0);
+    }
+    open_run
 }
 
 /// "Run 3" or "Runs 2, 3": where a check tripped.
