@@ -58,7 +58,11 @@ pub(super) fn ending(run: &RunSummary) -> Option<Ending> {
             .and_then(|execution| execution.root_exit.as_ref())
         {
             Some(WaitStatus::Exited { code: 0 }) => Ending::Success,
+            // coreutils exits 124; BusyBox's timeout re-raises the SIGTERM it sent.
             Some(WaitStatus::Exited { code: 124 }) if program == "timeout" => Ending::TimeLimit,
+            Some(WaitStatus::Signaled { signal: 15, .. }) if program == "timeout" => {
+                Ending::TimeLimit
+            }
             Some(WaitStatus::Exited { code }) => Ending::Exit(*code),
             Some(WaitStatus::Signaled {
                 signal,
@@ -92,7 +96,7 @@ fn words(number: usize, ending: &Ending) -> (Level, bool, String, String) {
             Level::Info,
             false,
             format!("{run} reached its time limit"),
-            "timeout stopped it (exit 124)".into(),
+            "the timeout program stopped it".into(),
         ),
         Ending::Stopped => (
             Level::Info,

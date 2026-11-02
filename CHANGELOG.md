@@ -48,7 +48,7 @@ it runs.
   toast says "Run 3 finished" with the program, how long it ran and how it
   ended, with Open Triage (and Open sample for a library sample): green for
   exit 0; neutral for another exit code, a stop with Kill, or a `timeout`
-  program's time limit (exit 124); a warning for a crash (SIGSEGV and the
+  program's time limit (exit 124, or the SIGTERM BusyBox's timeout re-raises); a warning for a crash (SIGSEGV and the
   like) or a kill by a signal. A root that exits while children live on does
   not toast until the run ends. Each toast is also an Activity row. Settings >
   Notifications > "Toast when a run finishes" turns it off (on by default).
