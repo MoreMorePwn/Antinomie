@@ -494,16 +494,13 @@ pub(super) fn content(
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("MITRE ATT&CK").small().color(theme::muted()));
                     for technique in attack.iter().take(16) {
-                        presentation::badge(
-                            ui,
-                            &antinomie_monitor_core::mitre::technique_label(&technique.id),
-                            theme::blue(),
-                        );
+                        crate::widgets::attack::technique_badge(ui, &technique.id, None);
                     }
                     if attack.len() > 16 {
                         ui.label(format!("+{} in the report", attack.len() - 16));
                     }
                 });
+                crate::widgets::attack::legend(ui, "summary-attack-legend");
             }
             ui.add_space(14.0);
             let (mut left, mut right) = (None, None);

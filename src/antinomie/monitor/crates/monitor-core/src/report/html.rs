@@ -45,7 +45,44 @@ th{background:var(--head)}\
 .mono,code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}\
 .note{color:var(--note);font-size:13px;margin:4px 0 10px}\
 .wide{overflow-x:auto}\
+.tac{display:inline-block;margin:1px 3px 1px 0;padding:0 6px;border:1px solid var(--c);border-left-width:6px;border-radius:4px;white-space:nowrap}\
 @media print{body{font-size:11px}main{max-width:none;padding:0}h2{break-after:avoid}tr{break-inside:avoid}.wide{overflow:visible}}";
+
+/// One class per tactic: its colour on a light page, and on a dark one.
+fn tactic_style() -> String {
+    use crate::mitre::Tactic;
+    let hex = |tactic: Tactic, light: bool| {
+        let [r, g, b] = tactic.rgb(light);
+        format!("#{r:02x}{g:02x}{b:02x}")
+    };
+    let mut light = String::new();
+    let mut dark = String::new();
+    for (index, tactic) in Tactic::ALL.into_iter().enumerate() {
+        light.push_str(&format!(".t{index}{{--c:{}}}", hex(tactic, true)));
+        dark.push_str(&format!(".t{index}{{--c:{}}}", hex(tactic, false)));
+    }
+    format!("{light}@media (prefers-color-scheme:dark){{{dark}}}")
+}
+
+/// The cell of the Tactic column: one outlined chip per tactic, named in text
+/// so the colour is never the only cue.
+fn tactic_cell(cell: &str) -> String {
+    let chips: Vec<String> = super::cell_tactics(cell)
+        .into_iter()
+        .map(|tactic| {
+            format!(
+                "<span class=\"tac t{}\">{}</span>",
+                tactic as usize,
+                escape(tactic.name())
+            )
+        })
+        .collect();
+    if chips.is_empty() {
+        escape(cell)
+    } else {
+        chips.join(" ")
+    }
+}
 
 /// A cell that looks like a hash, a path or an address reads better in monospace.
 fn mono(text: &str) -> bool {
@@ -54,6 +91,10 @@ fn mono(text: &str) -> bool {
 }
 
 fn table(out: &mut String, table: &DocTable) {
+    let tactics = table
+        .columns
+        .iter()
+        .position(|column| column == super::TACTIC_COLUMN);
     out.push_str("<div class=\"wide\"><table><thead><tr>");
     for column in &table.columns {
         out.push_str(&format!("<th>{}</th>", escape(column)));
@@ -61,8 +102,10 @@ fn table(out: &mut String, table: &DocTable) {
     out.push_str("</tr></thead><tbody>\n");
     for row in &table.rows {
         out.push_str("<tr>");
-        for cell in row {
-            if mono(cell) {
+        for (column, cell) in row.iter().enumerate() {
+            if Some(column) == tactics {
+                out.push_str(&format!("<td>{}</td>", tactic_cell(cell)));
+            } else if mono(cell) {
                 out.push_str(&format!("<td class=\"mono\">{}</td>", escape(cell)));
             } else {
                 out.push_str(&format!("<td>{}</td>", escape(cell)));
@@ -81,7 +124,10 @@ pub(super) fn render(document: &Document) -> String {
     out.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />");
     out.push_str("<meta name=\"generator\" content=\"Antinomie\" />");
     out.push_str(&format!("<title>{}</title>", escape(&document.title)));
-    out.push_str(&format!("<style>{STYLE}</style></head><body><main>\n"));
+    out.push_str(&format!(
+        "<style>{STYLE}{}</style></head><body><main>\n",
+        tactic_style()
+    ));
     out.push_str(&format!(
         "<h1>{}</h1><p class=\"sub\">{}</p>\n<nav><ul>",
         escape(&document.title),

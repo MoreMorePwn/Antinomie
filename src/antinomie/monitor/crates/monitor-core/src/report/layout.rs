@@ -309,7 +309,7 @@ pub fn document(report: &Report, defang: bool) -> Document {
             )]
         } else {
             vec![Block::Table(DocTable {
-                columns: ["Technique", "Name", "Count", "Rules"]
+                columns: ["Technique", "Name", "Tactic", "Count", "Rules"]
                     .map(String::from)
                     .to_vec(),
                 rows: attack
@@ -318,6 +318,7 @@ pub fn document(report: &Report, defang: bool) -> Document {
                         vec![
                             technique.id.clone(),
                             technique.name.clone(),
+                            super::tactic_cell(&technique.id),
                             technique.count.to_string(),
                             technique.rules.join(", "),
                         ]

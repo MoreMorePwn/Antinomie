@@ -207,6 +207,27 @@ pub struct Technique {
     pub count: u64,
 }
 
+/// The header of the table column that names a technique's tactics; the HTML
+/// and PDF exports colour what is in it (the names stay in the text).
+pub(crate) const TACTIC_COLUMN: &str = "Tactic";
+
+/// A technique's tactics as the table cell reads, "Privilege Escalation,
+/// Stealth" in kill-chain order; empty for an id the bundled table lacks.
+pub(crate) fn tactic_cell(id: &str) -> String {
+    crate::mitre::tactics(id)
+        .iter()
+        .map(|tactic| tactic.name())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The tactics a [`tactic_cell`] names.
+pub(crate) fn cell_tactics(cell: &str) -> Vec<crate::mitre::Tactic> {
+    cell.split(',')
+        .filter_map(crate::mitre::Tactic::from_label)
+        .collect()
+}
+
 /// A rule of a detection engine that matched.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]

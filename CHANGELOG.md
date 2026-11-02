@@ -4,6 +4,23 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
+## 0.8.2 — 2026-MM-DD
+
+### Host
+
+- **ATT&CK techniques are coloured by tactic.** Each of the 15 ATT&CK v20
+  tactics (Defense Evasion is now Stealth and Defense Impairment) has its own
+  colour, one palette for dark and one for light (every colour is at least 4.2:1
+  against the page, so it holds as an outline and a dot); the badge text keeps
+  the theme's own colour. A technique ATT&CK files under several tactics takes
+  the colour of the tactic of the row it sits in (the sample window groups by
+  tactic), else of its first tactic in kill-chain order, and shows one dot per
+  tactic. The tactic names are always in the badge's tooltip and in a folded
+  "Tactic colours" legend under the Triage Summary and the sample window's
+  ATT&CK section. The HTML and PDF exports of runs and samples get a Tactic
+  column (named in text, with the colour as a chip in HTML and a bar in PDF).
+  The bundled ATT&CK table now carries each technique's tactics.
+
 ## 0.8.1 — 2026-11-03
 
 Antinomie 0.8.1 is a fix release for the 0.8.0 line; it runs the same revision-20

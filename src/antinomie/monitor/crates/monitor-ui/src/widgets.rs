@@ -28,6 +28,7 @@
 // screen in the next batches.
 #![allow(dead_code, unused_imports)]
 
+pub(crate) mod attack;
 mod card;
 mod facts;
 mod fit;

@@ -6,24 +6,189 @@ use std::sync::OnceLock;
 
 const TABLE: &str = include_str!("../assets/mitre_attack_enterprise.tsv");
 
-fn entries() -> &'static [(&'static str, &'static str)] {
-    static ENTRIES: OnceLock<Vec<(&'static str, &'static str)>> = OnceLock::new();
+/// One row of the table: id, name, tactic short names (comma separated).
+type Entry = (&'static str, &'static str, &'static str);
+
+fn entries() -> &'static [Entry] {
+    static ENTRIES: OnceLock<Vec<Entry>> = OnceLock::new();
     ENTRIES.get_or_init(|| {
-        let mut rows: Vec<_> = TABLE
+        let mut rows: Vec<Entry> = TABLE
             .lines()
             .filter(|line| !line.starts_with('#'))
-            .filter_map(|line| line.split_once('\t'))
+            .filter_map(|line| {
+                let mut parts = line.splitn(3, '\t');
+                Some((parts.next()?, parts.next()?, parts.next().unwrap_or("")))
+            })
             .collect();
         rows.sort_unstable();
         rows
     })
 }
 
-fn name(id: &str) -> Option<&'static str> {
+fn entry(id: &str) -> Option<&'static Entry> {
     let rows = entries();
-    rows.binary_search_by(|(key, _)| (*key).cmp(id))
+    rows.binary_search_by(|(key, ..)| (*key).cmp(id))
         .ok()
-        .map(|index| rows[index].1)
+        .map(|index| &rows[index])
+}
+
+fn name(id: &str) -> Option<&'static str> {
+    entry(id).map(|row| row.1)
+}
+
+/// An ATT&CK tactic (v20: Stealth and Defense Impairment replace Defense
+/// Evasion), in kill-chain order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Tactic {
+    Reconnaissance,
+    ResourceDevelopment,
+    InitialAccess,
+    Execution,
+    Persistence,
+    PrivilegeEscalation,
+    Stealth,
+    DefenseImpairment,
+    CredentialAccess,
+    Discovery,
+    LateralMovement,
+    Collection,
+    CommandAndControl,
+    Exfiltration,
+    Impact,
+}
+
+impl Tactic {
+    /// Every tactic, in kill-chain order.
+    pub const ALL: [Tactic; 15] = [
+        Self::Reconnaissance,
+        Self::ResourceDevelopment,
+        Self::InitialAccess,
+        Self::Execution,
+        Self::Persistence,
+        Self::PrivilegeEscalation,
+        Self::Stealth,
+        Self::DefenseImpairment,
+        Self::CredentialAccess,
+        Self::Discovery,
+        Self::LateralMovement,
+        Self::Collection,
+        Self::CommandAndControl,
+        Self::Exfiltration,
+        Self::Impact,
+    ];
+
+    /// The name ATT&CK shows.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Reconnaissance => "Reconnaissance",
+            Self::ResourceDevelopment => "Resource Development",
+            Self::InitialAccess => "Initial Access",
+            Self::Execution => "Execution",
+            Self::Persistence => "Persistence",
+            Self::PrivilegeEscalation => "Privilege Escalation",
+            Self::Stealth => "Stealth",
+            Self::DefenseImpairment => "Defense Impairment",
+            Self::CredentialAccess => "Credential Access",
+            Self::Discovery => "Discovery",
+            Self::LateralMovement => "Lateral Movement",
+            Self::Collection => "Collection",
+            Self::CommandAndControl => "Command and Control",
+            Self::Exfiltration => "Exfiltration",
+            Self::Impact => "Impact",
+        }
+    }
+
+    /// The kill-chain phase short name the bundled table uses.
+    fn slug(self) -> &'static str {
+        match self {
+            Self::Reconnaissance => "reconnaissance",
+            Self::ResourceDevelopment => "resource-development",
+            Self::InitialAccess => "initial-access",
+            Self::Execution => "execution",
+            Self::Persistence => "persistence",
+            Self::PrivilegeEscalation => "privilege-escalation",
+            Self::Stealth => "stealth",
+            Self::DefenseImpairment => "defense-impairment",
+            Self::CredentialAccess => "credential-access",
+            Self::Discovery => "discovery",
+            Self::LateralMovement => "lateral-movement",
+            Self::Collection => "collection",
+            Self::CommandAndControl => "command-and-control",
+            Self::Exfiltration => "exfiltration",
+            Self::Impact => "impact",
+        }
+    }
+
+    /// The tactic named `label` ("Defense evasion", the older name of Stealth,
+    /// included), ignoring case.
+    pub fn from_label(label: &str) -> Option<Self> {
+        let label = label.trim();
+        if label.eq_ignore_ascii_case("defense evasion") {
+            return Some(Self::Stealth);
+        }
+        Self::ALL
+            .into_iter()
+            .find(|tactic| tactic.name().eq_ignore_ascii_case(label))
+    }
+
+    /// The tactic's colour as RGB, for a light or a dark surface. Spaced round
+    /// the hue wheel in kill-chain steps of 168 degrees so neighbouring tactics
+    /// differ most; every colour is at least 4.2:1 against white (light) and
+    /// 6.5:1 against the dark panel (dark), so it holds as a 1 px outline or a
+    /// dot. Text on a badge keeps the theme's own colour.
+    pub fn rgb(self, light: bool) -> [u8; 3] {
+        const DARK: [[u8; 3]; 15] = [
+            [251, 129, 122],
+            [0, 199, 197],
+            [246, 127, 165],
+            [0, 200, 154],
+            [230, 131, 205],
+            [104, 195, 109],
+            [204, 141, 238],
+            [157, 185, 62],
+            [169, 153, 255],
+            [198, 170, 15],
+            [124, 167, 255],
+            [227, 154, 31],
+            [61, 181, 255],
+            [245, 139, 77],
+            [0, 192, 232],
+        ];
+        const LIGHT: [[u8; 3]; 15] = [
+            [179, 55, 54],
+            [0, 131, 130],
+            [173, 53, 99],
+            [0, 132, 88],
+            [159, 60, 138],
+            [9, 127, 35],
+            [136, 71, 169],
+            [92, 117, 0],
+            [105, 83, 189],
+            [132, 102, 0],
+            [58, 97, 196],
+            [158, 84, 0],
+            [0, 112, 187],
+            [174, 67, 0],
+            [0, 123, 164],
+        ];
+        let at = self as usize;
+        if light { LIGHT[at] } else { DARK[at] }
+    }
+}
+
+/// The tactics of a technique or sub-technique, in kill-chain order (empty for
+/// an id the table does not know). T1055 is Privilege Escalation and Stealth.
+pub fn tactics(id: &str) -> Vec<Tactic> {
+    let id = id.trim().to_ascii_uppercase();
+    let Some((_, _, slugs)) = entry(&id) else {
+        return Vec::new();
+    };
+    let mut found: Vec<Tactic> = slugs
+        .split(',')
+        .filter_map(|slug| Tactic::ALL.into_iter().find(|tactic| tactic.slug() == slug))
+        .collect();
+    found.sort();
+    found
 }
 
 /// The technique's name; a sub-technique reads "Parent: Sub-technique" as
@@ -58,13 +223,13 @@ pub fn search(query: &str, limit: usize) -> Vec<String> {
     }
     entries()
         .iter()
-        .filter(|(id, _)| id.starts_with('T'))
-        .filter(|(id, _)| {
+        .filter(|(id, ..)| id.starts_with('T'))
+        .filter(|(id, ..)| {
             let label = technique_label(id).to_ascii_lowercase();
             id.to_ascii_lowercase().contains(&query) || label.contains(&query)
         })
         .take(limit)
-        .map(|(id, _)| technique_label(id))
+        .map(|(id, ..)| technique_label(id))
         .collect()
 }
 

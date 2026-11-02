@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! How a sample's tags are drawn. The shapes carry the meaning, so nothing
 //! explains them: a verdict is an outlined pill with a coloured dot, a
-//! malware category a filled orange pill, a technique a purple box with its
-//! ID in monospace, a custom tag a dashed outline in its own colour with a
-//! `#` before the name. The colour is in the shape (fill, outline, dot); the
+//! malware category a filled orange pill, a technique a box in its ATT&CK
+//! tactic's colour (see `widgets::attack`) with its ID in monospace, a custom
+//! tag a dashed outline in its own colour with a `#` before the name. The colour is in the shape (fill, outline, dot); the
 //! text is the theme's own text colour, so it reads in every theme.
 use crate::theme;
+use crate::widgets::attack;
+use antinomie_monitor_core::mitre::Tactic;
 use antinomie_monitor_core::samples::{Tag, TagKind};
 use eframe::egui::{self, Color32, Stroke};
 
@@ -49,10 +51,9 @@ fn technique_parts(value: &str) -> (&str, &str) {
 
 /// The text of a tag as one pill line: a verdict's dot, a technique's ID in
 /// monospace, a custom tag's `#`. The text is the theme's own colour.
-fn tag_job(ui: &egui::Ui, tag: &Tag) -> egui::text::LayoutJob {
+fn tag_job(ui: &egui::Ui, tag: &Tag, context: Option<Tactic>) -> egui::text::LayoutJob {
     use crate::widgets::tone::{pill_font, pill_text};
     let small = pill_font(ui);
-    let mono = egui::FontId::monospace(small.size);
     let mut job = egui::text::LayoutJob::default();
     match tag.kind {
         TagKind::Verdict => {
@@ -63,11 +64,7 @@ fn tag_job(ui: &egui::Ui, tag: &Tag) -> egui::text::LayoutJob {
         TagKind::Category => pill_text(&mut job, &tag.value, small, theme::text()),
         TagKind::Technique => {
             let (id, name) = technique_parts(&tag.value);
-            pill_text(&mut job, id, mono, theme::text());
-            if !name.is_empty() {
-                pill_text(&mut job, " ", small.clone(), theme::text());
-                pill_text(&mut job, name, small, theme::text());
-            }
+            return attack::technique_job(ui, id, name, &attack::badge_tactics(id, context));
         }
         TagKind::Custom => pill_text(&mut job, &format!("#{}", tag.value), small, theme::text()),
     }
@@ -78,9 +75,14 @@ fn tag_job(ui: &egui::Ui, tag: &Tag) -> egui::text::LayoutJob {
 /// the line starts the next one, whole; one wider than a whole line is cut
 /// with "…" and its tooltip has all of it.
 pub(crate) fn tag(ui: &mut egui::Ui, tag: &Tag) -> egui::Response {
+    tag_in(ui, tag, None)
+}
+
+/// [`tag`] for a technique drawn in the row of the tactic `context`.
+pub(crate) fn tag_in(ui: &mut egui::Ui, tag: &Tag, context: Option<Tactic>) -> egui::Response {
     use crate::widgets::tone::{pill, PillLook};
     let palette = theme::palette();
-    let job = tag_job(ui, tag);
+    let job = tag_job(ui, tag, context);
     let look = |fill: Color32, stroke: Stroke, corner: u8| PillLook {
         fill,
         stroke,
@@ -107,17 +109,15 @@ pub(crate) fn tag(ui: &mut egui::Ui, tag: &Tag) -> egui::Response {
             job,
             0.0,
         ),
-        TagKind::Technique => pill(
-            ui,
-            look(
-                wash(palette.pointer),
-                Stroke::new(1.0_f32, palette.pointer),
-                4,
-            ),
-            job,
-            0.0,
-        )
-        .on_hover_text(&tag.value),
+        TagKind::Technique => {
+            let (id, _) = technique_parts(&tag.value);
+            let tactics = attack::badge_tactics(id, context);
+            pill(ui, attack::technique_look(&tactics), job, 0.0).on_hover_text(format!(
+                "{}\n{}",
+                tag.value,
+                attack::tactic_names(&tactics)
+            ))
+        }
         TagKind::Custom => {
             let color = palette_color(&tag.color);
             let shown = pill(ui, look(Color32::TRANSPARENT, Stroke::NONE, 11), job, 0.0);
@@ -140,10 +140,10 @@ pub(crate) fn tag(ui: &mut egui::Ui, tag: &Tag) -> egui::Response {
     }
 }
 
-/// The width a tag takes on one line, for a caller that keeps a tag and
-/// something beside it together.
-pub(crate) fn width_of(ui: &egui::Ui, tag: &Tag) -> f32 {
-    let mut job = tag_job(ui, tag);
+/// The width a tag drawn with [`tag_in`] takes on one line, for a caller that
+/// keeps a tag and something beside it together.
+pub(crate) fn width_of_in(ui: &egui::Ui, tag: &Tag, context: Option<Tactic>) -> f32 {
+    let mut job = tag_job(ui, tag, context);
     job.wrap.max_width = f32::INFINITY;
     ui.fonts(|fonts| fonts.layout_job(job)).size().x + 16.0
 }

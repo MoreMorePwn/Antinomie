@@ -222,7 +222,10 @@ pub(super) fn techniques(ui: &mut egui::Ui, data: &Data) {
         let column = parts::fitted_up_to(
             ui,
             &body,
-            rollup.tactics.iter().map(|tactic| tactic.tactic.clone()),
+            rollup
+                .tactics
+                .iter()
+                .map(|tactic| format!("● {}", tactic.tactic)),
             220.0,
         );
         for tactic in &rollup.tactics {
@@ -235,11 +238,32 @@ pub(super) fn techniques(ui: &mut egui::Ui, data: &Data) {
                         // The cell is as wide as the column, not as its text.
                         ui.set_min_width(column);
                         ui.set_max_width(column);
-                        ui.add(
-                            egui::Label::new(RichText::new(&tactic.tactic).color(theme::text()))
-                                .truncate(),
-                        )
-                        .on_hover_text(&tactic.tactic);
+                        let context =
+                            antinomie_monitor_core::mitre::Tactic::from_label(&tactic.tactic);
+                        let mut label = egui::text::LayoutJob::default();
+                        if let Some(context) = context {
+                            label.append(
+                                "● ",
+                                0.0,
+                                egui::TextFormat {
+                                    color: crate::widgets::attack::tactic_color(context),
+                                    ..egui::TextFormat::simple(
+                                        egui::TextStyle::Body.resolve(ui.style()),
+                                        theme::text(),
+                                    )
+                                },
+                            );
+                        }
+                        label.append(
+                            &tactic.tactic,
+                            0.0,
+                            egui::TextFormat::simple(
+                                egui::TextStyle::Body.resolve(ui.style()),
+                                theme::text(),
+                            ),
+                        );
+                        ui.add(egui::Label::new(label).truncate())
+                            .on_hover_text(&tactic.tactic);
                     },
                 );
                 ui.vertical(|ui| {
@@ -249,6 +273,7 @@ pub(super) fn techniques(ui: &mut egui::Ui, data: &Data) {
                     // than a whole row is cut (its tooltip has all of it).
                     let width = ui.available_width();
                     let gap = 10.0;
+                    let context = antinomie_monitor_core::mitre::Tactic::from_label(&tactic.tactic);
                     let groups: Vec<(Tag, RichText, f32, f32)> = tactic
                         .techniques
                         .iter()
@@ -273,7 +298,7 @@ pub(super) fn techniques(ui: &mut egui::Ui, data: &Data) {
                                     .size()
                                     .x
                             });
-                            let tag_width = crate::sample_tags::width_of(ui, &tag);
+                            let tag_width = crate::sample_tags::width_of_in(ui, &tag, context);
                             (tag, count, tag_width, count_width)
                         })
                         .collect();
@@ -306,7 +331,7 @@ pub(super) fn techniques(ui: &mut egui::Ui, data: &Data) {
                                         ),
                                         egui::Layout::left_to_right(egui::Align::Center),
                                         |ui| {
-                                            crate::sample_tags::tag(ui, tag);
+                                            crate::sample_tags::tag_in(ui, tag, context);
                                         },
                                     );
                                     ui.add(egui::Label::new(count.clone()).extend())
@@ -318,6 +343,8 @@ pub(super) fn techniques(ui: &mut egui::Ui, data: &Data) {
                 });
             });
         }
+        ui.add_space(4.0);
+        crate::widgets::attack::legend(ui, "sample-attack-legend");
     });
 }
 

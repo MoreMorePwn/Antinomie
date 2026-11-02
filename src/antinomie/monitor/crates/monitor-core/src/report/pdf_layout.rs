@@ -236,6 +236,8 @@ impl Cursor {
         first_bold: bool,
     ) {
         let leading = size * 1.3;
+        let tactic_column =
+            header.and_then(|header| header.iter().position(|c| c == super::TACTIC_COLUMN));
         let draw_row = |this: &mut Self, cells: &[(Vec<String>, Font)], height: f32, head: bool| {
             let top = this.y;
             let bottom = top - height;
@@ -243,7 +245,25 @@ impl Cursor {
             if head {
                 this_rect(this, x, bottom, widths.iter().sum(), height, HEAD_FILL);
             }
-            for ((lines, font), w) in cells.iter().zip(widths) {
+            for (column, ((lines, font), w)) in cells.iter().zip(widths).enumerate() {
+                // A bar of the tactics' colours at the cell's left edge; the
+                // names stay in the text.
+                if !head && Some(column) == tactic_column {
+                    let tactics = super::cell_tactics(&lines.join(" "));
+                    let part = (height - 2.0) / tactics.len().max(1) as f32;
+                    for (n, tactic) in tactics.iter().enumerate() {
+                        let [r, g, b] = tactic.rgb(true);
+                        let fill = [r, g, b].map(|c| f32::from(c) / 255.0);
+                        this_rect(
+                            this,
+                            x + 1.0,
+                            bottom + 1.0 + part * n as f32,
+                            1.8,
+                            part,
+                            fill,
+                        );
+                    }
+                }
                 for (i, line) in lines.iter().enumerate() {
                     let y = top - PAD - size - i as f32 * leading + (size * 0.15);
                     this.text(x + PAD, y, *font, size, INK, line);

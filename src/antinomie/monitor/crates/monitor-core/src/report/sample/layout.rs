@@ -517,7 +517,7 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
     if !report.attack.is_empty() {
         let mut blocks = Vec::new();
         table(
-            &["Technique", "Name", "Count", "Rules"],
+            &["Technique", "Name", "Tactic", "Count", "Rules"],
             report
                 .attack
                 .iter()
@@ -525,6 +525,7 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
                     vec![
                         t.id.clone(),
                         t.name.clone(),
+                        crate::report::tactic_cell(&t.id),
                         t.count.to_string(),
                         t.rules.join(", "),
                     ]
