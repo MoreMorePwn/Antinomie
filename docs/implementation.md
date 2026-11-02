@@ -1279,6 +1279,26 @@ and reads as never run, refused while the running boot still owns it; a capture 
 for it stays in the Network tab). An older app reading a record with a new state skips
 that run (one damaged run never hides the others).
 
+### Run state questions (0.8.2)
+
+Views no longer list `RunState` variants to ask whether a run is going (ANT-T0265).
+`RunState` in `monitor-core/src/api.rs` answers:
+
+| Helper | True for | Used by |
+|---|---|---|
+| `is_live()` | `Running`, `StopRequested`, `TerminalClosed`: the run still records. `Unknown` is not live (a record waiting for its first status has no proof of a program; the callers that list it test it themselves). | Run History, the sample window's Runs list and detail, Jobs, the run-state line, the run-finished toast, run deletion, `forgettable` |
+| `can_stop()` | `Running`, `TerminalClosed`: what the guest accepts (`StopRun`); `StopRequested` already has a Stop under way. | every Stop and Kill button, `StopRun` |
+| `ended_normally()` | `Finished`, `Stopped`, `Finalized`. `Interrupted` and runs that never ran are left out on purpose: they leave nothing new to show in the history. | `history_sync` |
+
+`TerminalClosed` is set only by `Run::eof` when the PTY ends before any execution
+status exists; once a status arrived the state stays `Running` with `terminal_eof`.
+Before 0.8.2 the sample window's exit column said "Unknown" for such a run; it now says
+"Running" like Run History and Jobs. Run states reach a colour through `widgets::Tone`
+(`state_tone` in the Summary, the Detection header and the debugger status line,
+`run_state_line::state_tone` for runs, `None` meaning plain grey), and the raw colours
+the views still held (the terminal's 16 ANSI colours, series colours, `ink_on`,
+`hover_wash`, the file reconstruction's Mapping colour) live in `theme`.
+
 ### Pending analyses always settle (0.7.1)
 
 A run's `analysis` record starts as `acquiring` with every section `pending`. It is
@@ -2493,6 +2513,34 @@ Not decoded: get_thread_area/set_thread_area (ENOSYS on x86-64 guests), the
 iptables rules after the table header, the opaque handle bytes, `sigaction`
 and the other structures not listed.
 
+### Record arrays and Decode all captured (0.8.2)
+
+A captured field that is an array of fixed or self-sized records opens as a list of
+`Record`s (`monitor-core/src/typed_fields/arrays.rs`; `Records::open`), which the
+Syscall Trace draws as an expandable tree (`monitor-ui/src/trace/record_tree.rs`).
+
+* **Table.** One `Spec` per layout in `typed_fields/arrays/table.rs`: the record size
+  (fixed, or read from its header: a directory entry's `d_reclen`, a control message's
+  `cmsg_len`), the decoder (`arrays/decoders.rs`, `arrays/classic.rs` for
+  classic BPF) and the one-line summary a collapsed record shows. Another
+  architecture adds table rows; nothing else names x86-64, and only the x86-64 layouts
+  are decoded now. eBPF instruction text is `typed_fields/ebpf_asm.rs`
+  (`mnemonic`, `ebpf_landing_wide`, and the helper registry of the pinned Linux
+  6.12.94 UAPI), shared with the BPF viewer.
+* **Bounds.** `Records::open` walks the record boundaries once with checked
+  arithmetic and at most `MAX_RECORDS` (1,000,000) records; a final record that does
+  not fit, or a length field that cannot be right, ends the walk and is returned as a
+  `Cut`, never guessed at. Records are decoded one at a time on demand.
+* **Preview and full read.** The tree opens on the owned 256-byte preview.
+  **Decode all captured (M bytes)** reads the field's evidence from the run archive
+  in 64 KiB chunks on a thread (progress and cancel; up to 16 MiB), then pages 100
+  records at a time ("showing X of Y"). Bytes past the contiguous captured run are
+  counted as left out and named.
+* **JSON.** **Copy row as JSON**, **Copy all as JSON** and **Save as JSON** carry at
+  most 50,000 records; Save writes `records/<syscall>-<field>-<unix seconds>.json` beside the run's files
+  (folder 0700, file 0600) and never over an existing file. The trace filter reads decoded records
+  (`records contains "..."`).
+
 ### Transport reconnect, command deadlines and terminal output under load (0.8.0)
 
 Three host fixes; the guest and the contract are unchanged.
@@ -2615,6 +2663,28 @@ Provide explicit per-launch `--graphics-driver system|d3d12` without changing
 global driver settings or forcing GPU selection by default. Measure native
 idle/update behavior and render-thread file calls with isolated data directories.
 No guest, image, shared-memory ABI, dependency or release-tag change is needed.
+
+### Background tasks and the stat cache (0.8.2)
+
+Two small helpers keep slow disks and programs off the frame (`monitor-ui/src/background.rs`,
+`stat_cache.rs`).
+
+* `background::Task<T>` runs one closure on its own thread; the result sits in an
+  `Arc<Mutex<Option<T>>>`, the worker asks the context for a repaint, and the view
+  takes the result with `done()` on a later frame. Users: the Build base wizard's host
+  checks (container engines, the builder image list, the toolchain chroot's size)
+  and the removal of chroots and images (`build_wizard/probe.rs`), and the Network
+  capture list (`network_view/display.rs`, which keeps the selection while it loads).
+  The core view's saved Ghidra text and Export functions, and the folder openers (a
+  failure becomes an error toast and an Activity row; the rules and plugins folders
+  are created off the UI thread too), use their own worker threads. The Build mode
+  and Summary pages show a spinner until the first answer.
+* `stat_cache::is_file` and `stat_cache::len` answer from a per-thread map for one
+  second (`KEEP`), at most 256 paths (`MOST`), for code that asks every frame: the
+  network toolbar's PATH lookups, the memory dump size and symbol-table checks, and
+  the artifact menu's file test. It is for the UI thread only.
+* The memory result view looks up the run's files folder once, when the result loads,
+  not on every frame.
 
 ### Historical initial requirements
 
@@ -3012,6 +3082,36 @@ on a busy host lost its first 1,537 packets (1.1 MB, the root's execve among
 them): the transport thread was held for 42.8 s between the reply and the
 claim (a custody-log commit that synced the disk), and the claim's own expiry
 pass dropped every packet older than 5 s.
+
+### Reduced recording near a full quota (0.8.2)
+
+The boot's quota (raw capture, assembler, run archives and PCAP share it) used to stop
+all saving when full. Now the last tenth is a reserve (`monitor-core/src/reduced.rs`,
+`backend/reduced.rs`).
+
+* **Switch.** `Session::reduce_packet`, in the pump loop before saving, switches the
+  boot to reduced mode when `stored_len + packet` reaches 90 % of the quota
+  (`RESERVE_DIVISOR` 10). The switch is boot-wide; each run going on records it in
+  `run.json` as `reduced` (`at_ms`, `at_guest_ns`, `quota_bytes`, `used_bytes`,
+  `kept_packets`, `dropped_packets`, `dropped_calls` per system call, and when they
+  happened `full_at_ms` and `network_stopped_ms`). Older runs without it load (serde default).
+* **Verdict.** A packet is dropped only when it is a phase 1 or 2 event of a
+  native-ABI call whose system call is not on the kept list. Lifecycle (phase 3) events,
+  other record types, other ABIs and unknown numbers are always kept. One drop is
+  counted per call, at its entry. A dropped packet's sequence number is not telemetry
+  loss: it is counted as received.
+* **Kept list.** Derived in one place in the UI, `triage/rules/calls.rs`: lifecycle plus
+  the calls each Triage rule group matches, minus a documented bulk set (read, write,
+  stat, getdents, clock, poll), handed to the backend as
+  `BackendOptions.reduced_keep_calls`; empty keeps the old behaviour.
+* **Network.** The PCAP keeps running past the switch until half of the reserve is left,
+  so calls keep the other half (`network_stopped_ms` records when the capture was
+  stopped). The quota stays the hard ceiling: when it is full saving stops as before and
+  `run.json` records `full_at_ms`.
+* **Report.** Triage, Run History's tooltip and the HTML/PDF report show
+  `reduced_text.rs`'s message as information. A finished run's report note reads "The run
+  has ended. What this report may be missing: ..." instead of saying the recording was
+  still being written.
 
 ## Recording disk work off the transport thread (0.6.2)
 
