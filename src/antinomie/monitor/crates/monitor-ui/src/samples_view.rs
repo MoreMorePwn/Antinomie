@@ -816,33 +816,43 @@ impl SamplesView {
             .default_pos(ctx.screen_rect().center())
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(egui_phosphor::regular::BIOHAZARD)
-                            .size(cx.font_size * 2.0)
-                            .color(theme::warn()),
-                    );
-                    ui.label(
-                        RichText::new("Before you use the malware catalog")
-                            .size(cx.font_size * 1.3)
-                            .strong()
-                            .color(theme::text()),
-                    );
-                });
-                ui.add_space(8.0);
-                ui.label(
-                    "This window downloads real, live malware from MalwareBazaar (abuse.ch) \
-                     or MalShare so you can study it inside a VM.",
-                );
-                ui.add_space(6.0);
-                for point in FIRST_USE_POINTS {
-                    // Wrapped lines hang under the text, not the bullet.
-                    ui.horizontal_top(|ui| {
-                        ui.label("•");
-                        ui.add(egui::Label::new(*point).wrap());
+                // The text scrolls on a short screen or at a large text size;
+                // the checkbox and the buttons below it always stay in view.
+                let reserved = cx.font_size * 7.0 + 110.0;
+                let text_height =
+                    (crate::title_bar::content_rect(ctx).height() - reserved).max(90.0);
+                egui::ScrollArea::vertical()
+                    .max_height(text_height)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(egui_phosphor::regular::BIOHAZARD)
+                                    .size(cx.font_size * 2.0)
+                                    .color(theme::warn()),
+                            );
+                            ui.label(
+                                RichText::new("Before you use the malware catalog")
+                                    .size(cx.font_size * 1.3)
+                                    .strong()
+                                    .color(theme::text()),
+                            );
+                        });
+                        ui.add_space(8.0);
+                        ui.label(
+                            "This window downloads real, live malware from MalwareBazaar (abuse.ch) \
+                             or MalShare so you can study it inside a VM.",
+                        );
+                        ui.add_space(6.0);
+                        for point in FIRST_USE_POINTS {
+                            // Wrapped lines hang under the text, not the bullet.
+                            ui.horizontal_top(|ui| {
+                                ui.label("•");
+                                ui.add(egui::Label::new(*point).wrap());
+                            });
+                            ui.add_space(2.0);
+                        }
                     });
-                    ui.add_space(2.0);
-                }
                 ui.add_space(8.0);
                 ui.checkbox(
                     &mut self.understood,

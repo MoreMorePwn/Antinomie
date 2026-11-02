@@ -257,7 +257,8 @@ impl MonitorApp {
                     ui,
                     |ui| {
                         // The buttons grow with the text size; leave their room.
-                        let buttons = egui::TextStyle::Button.resolve(ui.style()).size * 12.5 + 16.0;
+                        let buttons =
+                            egui::TextStyle::Button.resolve(ui.style()).size * 12.5 + 16.0;
                         let room = (ui.available_width() - buttons).max(60.0);
                         ui.scope(|ui| {
                             ui.set_max_width(room);
