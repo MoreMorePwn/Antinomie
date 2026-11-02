@@ -19,6 +19,7 @@ pub(crate) const DOCS_URL: &str =
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Step {
     #[default]
+    Appearance,
     Base,
     Vm,
     Dependencies,
@@ -28,7 +29,8 @@ pub(crate) enum Step {
 }
 
 impl Step {
-    pub(crate) const ALL: [Step; 6] = [
+    pub(crate) const ALL: [Step; 7] = [
+        Step::Appearance,
         Step::Base,
         Step::Vm,
         Step::Dependencies,
@@ -40,6 +42,7 @@ impl Step {
     /// The name saved in the settings.
     pub(crate) fn id(self) -> &'static str {
         match self {
+            Step::Appearance => "appearance",
             Step::Base => "base",
             Step::Vm => "vm",
             Step::Dependencies => "dependencies",
@@ -55,6 +58,7 @@ impl Step {
 
     pub(crate) fn title(self) -> &'static str {
         match self {
+            Step::Appearance => "Appearance",
             Step::Base => "Base image",
             Step::Vm => "First VM",
             Step::Dependencies => "Dependencies",
@@ -76,7 +80,7 @@ impl Step {
             .into_iter()
             .rev()
             .find(|step| *step < self)
-            .unwrap_or(Step::Base)
+            .unwrap_or(Step::Appearance)
     }
 }
 
@@ -88,6 +92,9 @@ pub(crate) struct Progress {
     pub seen: bool,
     /// The last step was reached and finished.
     pub finished: bool,
+    /// Next was pressed on the Appearance step (the choices themselves are
+    /// the ordinary Appearance settings).
+    pub appearance_seen: bool,
     /// "Don't show again": no automatic opening, whatever else happens.
     pub dont_show: bool,
     /// Steps skipped, by [`Step::id`].
@@ -156,6 +163,7 @@ pub(crate) const RULE_ENGINES: usize = 3;
 
 pub(crate) fn status(step: Step, facts: &Facts, progress: &Progress) -> Status {
     let done = match step {
+        Step::Appearance => progress.appearance_seen,
         Step::Base => facts.bases > 0,
         Step::Vm => facts.vms > 0,
         Step::Dependencies => facts.dependencies_ready == Some(true),
@@ -262,16 +270,18 @@ mod tests {
                 ..Progress::default()
             }
             .remembered_step(),
-            Step::Base
+            Step::Appearance
         );
     }
 
     #[test]
     fn steps_follow_each_other_and_stop_at_the_ends() {
+        assert_eq!(Step::Appearance.next(), Step::Base);
         assert_eq!(Step::Base.next(), Step::Vm);
         assert_eq!(Step::Rules.next(), Step::Finish);
         assert_eq!(Step::Finish.next(), Step::Finish);
-        assert_eq!(Step::Base.previous(), Step::Base);
+        assert_eq!(Step::Base.previous(), Step::Appearance);
+        assert_eq!(Step::Appearance.previous(), Step::Appearance);
         assert_eq!(Step::Finish.previous(), Step::Rules);
         for step in Step::ALL {
             assert_eq!(Step::from_id(step.id()), Some(step));

@@ -191,7 +191,7 @@ impl MonitorApp {
                     .show(ui, |ui| self.getting_started_step(ui, &facts));
                 dialog_footer(ui, |ui| {
                     let step = self.getting_started.step;
-                    if ui.add_enabled(step != Step::Base, egui::Button::new("Back")).clicked() {
+                    if ui.add_enabled(step != Step::Appearance, egui::Button::new("Back")).clicked() {
                         go = Some(step.previous());
                     }
                     if step == Step::Finish {
@@ -220,6 +220,10 @@ impl MonitorApp {
             go = Some(step.next());
         }
         if let Some(step) = go {
+            if self.getting_started.step == Step::Appearance && step == Step::Base && !skip {
+                self.settings.getting_started.appearance_seen = true;
+                self.settings.getting_started.unskip(Step::Appearance);
+            }
             self.getting_started.step = step;
         }
         if finish {

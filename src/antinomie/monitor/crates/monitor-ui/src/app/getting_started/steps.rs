@@ -11,6 +11,7 @@ use antinomie_monitor_core::analysis_tools::ToolStatus;
 impl MonitorApp {
     pub(super) fn getting_started_step(&mut self, ui: &mut egui::Ui, facts: &Facts) {
         match self.getting_started.step {
+            Step::Appearance => self.step_appearance(ui),
             Step::Base => self.step_base(ui),
             Step::Vm => self.step_vm(ui),
             Step::Dependencies => self.step_dependencies(ui),
@@ -33,6 +34,17 @@ impl MonitorApp {
             Ok(()) => {}
             Err(error) => self.getting_started.base_error = Some(error),
         }
+    }
+
+    /// The same rows as Settings > Appearance (one code path); every change
+    /// applies at once and is saved with the other settings.
+    fn step_appearance(&mut self, ui: &mut egui::Ui) {
+        ui.label("Choose how Antinomie looks. Changes apply at once and can be changed later in Settings > Appearance.");
+        ui.add_space(6.0);
+        let ctx = ui.ctx().clone();
+        form_grid("getting_started_appearance", ui).show(ui, |ui| {
+            self.appearance_rows(ui, &ctx);
+        });
     }
 
     fn step_base(&mut self, ui: &mut egui::Ui) {

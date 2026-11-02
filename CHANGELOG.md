@@ -164,6 +164,13 @@ it runs.
   column groups with its first column repeated. The HTML prints on a landscape
   page.
 
+- **Getting started starts with Appearance.** The new first step has the same
+  Theme, Text size and Density controls as Settings > Appearance (one shared
+  piece of code, so there is a single set of settings behind both) and applies
+  every change at once, so the window shows the result as you choose. Next keeps
+  what you picked and marks the step Ready; Skip this step leaves the settings as
+  they are. The step list, Back and the Finish summary now have seven steps.
+
 ## 0.8.1 — 2026-11-03
 
 Antinomie 0.8.1 is a fix release for the 0.8.0 line; it runs the same revision-20

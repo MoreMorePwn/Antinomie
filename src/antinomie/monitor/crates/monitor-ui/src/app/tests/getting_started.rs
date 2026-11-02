@@ -211,7 +211,9 @@ fn skipping_and_finishing_are_remembered() {
     let (mut app, root) = fresh_app("skip");
     app.getting_started.open = true;
     click_label(&mut app, &ctx, SIZE, "Skip this step");
-    assert!(app.settings.getting_started.is_skipped(Step::Base));
+    assert!(app.settings.getting_started.is_skipped(Step::Appearance));
+    assert_eq!(app.getting_started.step, Step::Base);
+    click_label(&mut app, &ctx, SIZE, "Next");
     assert_eq!(app.getting_started.step, Step::Vm);
     click_label(&mut app, &ctx, SIZE, "Next");
     assert_eq!(app.getting_started.step, Step::Dependencies);
@@ -224,7 +226,7 @@ fn skipping_and_finishing_are_remembered() {
     let saved = serde_json::to_string(&app.settings).unwrap();
     let back: Settings = serde_json::from_str(&saved).unwrap();
     assert!(back.getting_started.finished);
-    assert!(back.getting_started.is_skipped(Step::Base));
+    assert!(back.getting_started.is_skipped(Step::Appearance));
     assert_eq!(back.getting_started.remembered_step(), Step::Finish);
     assert!(!back.getting_started.opens_on_launch(0, 0));
     settle(&mut app);

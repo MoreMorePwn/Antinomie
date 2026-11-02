@@ -307,48 +307,7 @@ impl MonitorApp {
 
     fn appearance_page(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         form_grid("settings_appearance", ui).show(ui, |ui| {
-            ui.label("Theme");
-            let mut chosen = self.settings.active_theme();
-            if widgets::segmented(
-                ui,
-                theme::Theme::ALL
-                    .into_iter()
-                    .map(|theme| (theme, widgets::TabItem::new(theme.label()))),
-                &mut chosen,
-            ) {
-                self.settings.set_theme(chosen);
-                theme::apply_theme(ctx, chosen);
-                theme::text_size(ctx, self.settings.font_size);
-            }
-            ui.end_row();
-            ui.label("Text size");
-            let before = self.settings.font_size;
-            text_size_control(ui, &mut self.settings.font_size);
-            if self.settings.font_size != before {
-                theme::text_size(ctx, self.settings.font_size);
-                for terminal in self.terminals.values_mut() {
-                    terminal.terminal.invalidate_resize();
-                }
-            }
-            ui.end_row();
-            ui.label("Density").on_hover_text(
-                "Compact: tight rows and spacing. Comfortable: taller rows and roomier margins everywhere.",
-            );
-            ui.vertical(|ui| {
-                let before = self.settings.compact;
-                widgets::segmented(
-                    ui,
-                    [
-                        (true, widgets::TabItem::new("Compact")),
-                        (false, widgets::TabItem::new("Comfortable")),
-                    ],
-                    &mut self.settings.compact,
-                );
-                if self.settings.compact != before {
-                    theme::set_compact(ctx, self.settings.compact);
-                }
-            });
-            ui.end_row();
+            self.appearance_rows(ui, ctx);
             ui.label("Trace colors");
             ui.checkbox(
                 &mut self.settings.trace_colors,
@@ -357,6 +316,54 @@ impl MonitorApp {
             .on_hover_text("Tint each syscall by its category, like Wireshark's coloring rules");
             ui.end_row();
         });
+    }
+
+    /// The rows of Settings > Appearance that Getting started shows too:
+    /// Theme, Text size and Density, each applied at once. The caller owns the
+    /// two-column grid.
+    pub(super) fn appearance_rows(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.label("Theme");
+        let mut chosen = self.settings.active_theme();
+        if widgets::segmented(
+            ui,
+            theme::Theme::ALL
+                .into_iter()
+                .map(|theme| (theme, widgets::TabItem::new(theme.label()))),
+            &mut chosen,
+        ) {
+            self.settings.set_theme(chosen);
+            theme::apply_theme(ctx, chosen);
+            theme::text_size(ctx, self.settings.font_size);
+        }
+        ui.end_row();
+        ui.label("Text size");
+        let before = self.settings.font_size;
+        text_size_control(ui, &mut self.settings.font_size);
+        if self.settings.font_size != before {
+            theme::text_size(ctx, self.settings.font_size);
+            for terminal in self.terminals.values_mut() {
+                terminal.terminal.invalidate_resize();
+            }
+        }
+        ui.end_row();
+        ui.label("Density").on_hover_text(
+            "Compact: tight rows and spacing. Comfortable: taller rows and roomier margins everywhere.",
+        );
+        ui.vertical(|ui| {
+            let before = self.settings.compact;
+            widgets::segmented(
+                ui,
+                [
+                    (true, widgets::TabItem::new("Compact")),
+                    (false, widgets::TabItem::new("Comfortable")),
+                ],
+                &mut self.settings.compact,
+            );
+            if self.settings.compact != before {
+                theme::set_compact(ctx, self.settings.compact);
+            }
+        });
+        ui.end_row();
     }
 
     fn recording_page(&mut self, ui: &mut egui::Ui) {
