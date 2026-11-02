@@ -122,12 +122,8 @@ fn lineage_rows(b: &Builder, nodes: &[LineageEntry]) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// The document for `report`; `defang` rewrites indicators for reading.
-pub fn document(report: &SampleReport, defang: bool) -> Document {
-    let mut b = Builder {
-        defang,
-        sections: Vec::new(),
-    };
+/// The first section: the sample's identity facts and what the report is.
+fn overview_section(b: &mut Builder, report: &SampleReport) {
     let sample = &report.sample;
     let mut head = vec![
         (
@@ -184,7 +180,7 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
     blocks.push(Block::Note(
         "This report names the sample by its hashes. It holds none of the sample's bytes.".into(),
     ));
-    if defang {
+    if b.defang {
         blocks.push(Block::Note(
             "Indicators in this document are defanged (hxxp, [.]) so they cannot be opened by \
              accident. The JSON, MISP and STIX exports carry the raw values."
@@ -195,8 +191,11 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
         blocks.push(Block::Note(b.free(note)));
     }
     b.section("overview", "Sample overview", blocks);
+}
 
-    // Identity: names and origins.
+/// Names the sample went by and where it came from.
+fn identity_section(b: &mut Builder, report: &SampleReport) {
+    let sample = &report.sample;
     let mut blocks = Vec::new();
     blocks.push(Block::Sub(format!("Names ({})", sample.names.len())));
     table(
@@ -234,8 +233,10 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
         &mut blocks,
     );
     b.section("identity", "Names and origins", blocks);
+}
 
-    // Static analysis.
+/// The retained static analysis of the sample.
+fn static_section(b: &mut Builder, report: &SampleReport) {
     let st = &report.static_analysis;
     let mut blocks = Vec::new();
     if !st.available {
@@ -343,8 +344,10 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
         }
     }
     b.section("static", "Static analysis", blocks);
+}
 
-    // Rules.
+/// YARA, Sigma and IDS matches, with each rule's credit.
+fn rules_section(b: &mut Builder, report: &SampleReport) {
     let mut blocks = Vec::new();
     table(
         &[
@@ -386,8 +389,10 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
             .into(),
     ));
     b.section("rules", "Rules that matched", blocks);
+}
 
-    // Runs.
+/// One row per recorded run.
+fn runs_section(b: &mut Builder, report: &SampleReport) {
     let mut blocks = Vec::new();
     table(
         &[
@@ -443,8 +448,10 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
             .into(),
     ));
     b.section("runs", "Runs", blocks);
+}
 
-    // Lineage.
+/// Parents and children in the sample lineage.
+fn lineage_section(b: &mut Builder, report: &SampleReport) {
     let mut blocks = Vec::new();
     let columns = [
         "Level",
@@ -486,8 +493,10 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
         )));
     }
     b.section("lineage", "Lineage", blocks);
+}
 
-    // Indicators.
+/// Indicators merged across runs.
+fn indicators_section(b: &mut Builder, report: &SampleReport) {
     let mut blocks = Vec::new();
     table(
         &["Type", "Indicator", "How seen", "Dataset", "Runs"],
@@ -522,7 +531,10 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
         )));
     }
     b.section("indicators", "Indicators merged across runs", blocks);
+}
 
+/// ATT&CK techniques; no section when there are none.
+fn attack_section(b: &mut Builder, report: &SampleReport) {
     if !report.attack.is_empty() {
         let mut blocks = Vec::new();
         table(
@@ -545,8 +557,10 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
         );
         b.section("attack", "ATT&CK techniques", blocks);
     }
+}
 
-    // Custody.
+/// The custody chain and its log.
+fn custody_section(b: &mut Builder, report: &SampleReport) {
     let c = &report.custody;
     let mut blocks = vec![Block::Facts(vec![
         ("Entries".to_owned(), c.entries.to_string()),
@@ -591,8 +605,10 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
             .into(),
     ));
     b.section("custody", "Custody log", blocks);
+}
 
-    // Notes.
+/// The analyst notes.
+fn notes_section(b: &mut Builder, report: &SampleReport) {
     let mut blocks = Vec::new();
     if report.notes.is_empty() {
         blocks.push(Block::Note("The sample has no notes.".into()));
@@ -626,8 +642,10 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
         )));
     }
     b.section("notes", "Notes", blocks);
+}
 
-    // Similar.
+/// Library samples close to this one.
+fn similar_section(b: &mut Builder, report: &SampleReport) {
     let mut blocks = Vec::new();
     table(
         &["Sample", "SHA-256", "TLSH distance", "Shared"],
@@ -651,6 +669,26 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
         blocks.push(Block::Note(report.similar.reason.clone()));
     }
     b.section("similar", "Similar samples", blocks);
+}
+
+/// The document for `report`; `defang` rewrites indicators for reading.
+pub fn document(report: &SampleReport, defang: bool) -> Document {
+    let mut b = Builder {
+        defang,
+        sections: Vec::new(),
+    };
+    let sample = &report.sample;
+    overview_section(&mut b, report);
+    identity_section(&mut b, report);
+    static_section(&mut b, report);
+    rules_section(&mut b, report);
+    runs_section(&mut b, report);
+    lineage_section(&mut b, report);
+    indicators_section(&mut b, report);
+    attack_section(&mut b, report);
+    custody_section(&mut b, report);
+    notes_section(&mut b, report);
+    similar_section(&mut b, report);
 
     let name = if sample.name.is_empty() {
         sample.sha256.as_str()
