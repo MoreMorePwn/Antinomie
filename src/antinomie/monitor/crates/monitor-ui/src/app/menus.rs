@@ -2,62 +2,61 @@
 //! Menu bar, toolbar and keyboard shortcuts.
 use super::*;
 
-/// The web documentation, opened in the system browser from the Help menu.
-const DOCUMENTATION_URL: &str = "https://antinomie.moremorepwn.blog/docs/";
-
 /// What the Tools menu is wider than the others: icons before the labels.
 const TOOLS_MENU_EXTRA_WIDTH: f32 = 90.0;
 
 impl MonitorApp {
-    /// Menu shortcuts; they wait while a text field or terminal has the
-    /// keyboard.
+    /// Global shortcuts. They wait while a text field or the terminal has the
+    /// keyboard (`typing`), so typing never triggers one, and while a snapshot
+    /// decision waits for its answer. The palette, tab and `?` shortcuts also
+    /// wait behind a confirmation.
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
-        if self.vm_snapshots.decision_open() {
-            return;
-        }
-        if ctx.memory(|memory| memory.focused().is_some()) {
+        if self.vm_snapshots.decision_open() || crate::typing::typing(ctx) {
             return;
         }
         let pressed = |shortcut: egui::KeyboardShortcut| {
             ctx.input_mut(|input| input.consume_shortcut(&shortcut))
         };
         // Shift+F5 first: F5 alone would also match it.
-        if pressed(keys::STOP_VM) && self.can_stop_vm() {
-            self.send(Command::Stop);
+        let mut asked = Vec::new();
+        for action in [
+            Action::StopVm,
+            Action::StartVm,
+            Action::NewVm,
+            Action::RunProgram,
+            Action::UploadFile,
+            Action::AttachDebugger,
+            Action::TypeClipboard,
+            Action::Settings,
+            Action::Quit,
+        ] {
+            if action.shortcut().is_some_and(pressed) {
+                asked.push(action);
+            }
         }
-        if pressed(keys::START_VM) && self.can_start_vm() {
-            self.new_run();
+        // The new shortcuts do not reach behind a confirmation.
+        let modal = self.confirm.is_some();
+        if !modal {
+            if pressed(keys::PALETTE) {
+                asked.push(Action::Palette);
+            }
+            if let Some(position) = (0..keys::TAB_KEYS.len())
+                .find(|position| keys::tab_shortcut(*position).is_some_and(pressed))
+            {
+                if let Some(panel) = self.layout.work_tabs().get(position) {
+                    asked.push(Action::Go(panel.clone()));
+                }
+            }
+            if crate::typing::question_mark_pressed(ctx) {
+                asked.push(Action::Shortcuts);
+            }
         }
-        if pressed(keys::NEW_VM) && self.snapshot.active_vm.is_none() {
-            self.new_image();
-        }
-        if pressed(keys::RUN_PROGRAM) && self.running() {
-            self.launch_open = true;
-        }
-        if pressed(keys::UPLOAD) && self.running() {
-            self.open_upload();
-        }
-        if pressed(keys::TYPE_CLIPBOARD) && self.clipboard_enabled() {
-            self.request_clipboard(ctx);
-        }
-        if pressed(keys::SETTINGS) {
-            self.settings_open = true;
-        }
-        if pressed(keys::QUIT) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        for action in asked {
+            self.run_action(ctx, action);
         }
     }
 
     pub(super) fn menus(&mut self, ctx: &egui::Context) {
-        let stopped = self.snapshot.active_vm.is_none();
-        let selected = self.selected.is_some() && stopped;
-        let item = |label: &str, shortcut: Option<egui::KeyboardShortcut>| {
-            let button = egui::Button::new(label);
-            match shortcut {
-                Some(shortcut) => button.shortcut_text(ctx.format_shortcut(&shortcut)),
-                None => button,
-            }
-        };
         egui::TopBottomPanel::top("menus")
             .exact_height(self.settings.font_size + 16.0)
             .frame(theme::frame(theme::panel()))
@@ -66,199 +65,41 @@ impl MonitorApp {
                     ui.menu_button("File", |ui| {
                         // Room between an item and its shortcut.
                         ui.set_min_width(ui.spacing().menu_width);
-                        if ui
-                            .add_enabled(stopped, item("New VM…", Some(keys::NEW_VM)))
-                            .clicked()
-                        {
-                            self.new_image();
-                            ui.close_menu();
-                        }
+                        self.menu_item(ui, Action::NewVm, None);
                         ui.menu_button("Add base", |ui| {
-                            // Room between an item and its shortcut.
                             ui.set_min_width(ui.spacing().menu_width);
-                            if ui
-                                .add_enabled(stopped, item("Import base…", None))
-                                .clicked()
-                            {
-                                self.import_open = true;
-                                ui.close_menu();
-                            }
-                            if ui.button("Download base…").clicked() {
-                                self.open_downloads();
-                                ui.close_menu();
-                            }
-                            if ui.button("Build base…").clicked() {
-                                self.build_open = true;
-                                ui.close_menu();
-                            }
+                            self.menu_item(ui, Action::ImportBase, None);
+                            self.menu_item(ui, Action::DownloadBase, None);
+                            self.menu_item(ui, Action::BuildBase, None);
                         });
                         ui.separator();
-                        if ui.add(item("Exit", Some(keys::QUIT))).clicked() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                            ui.close_menu();
-                        }
+                        self.menu_item(ui, Action::Quit, None);
                     });
                     ui.menu_button("VM", |ui| {
-                        // Room between an item and its shortcut.
                         ui.set_min_width(ui.spacing().menu_width);
-                        if ui
-                            .add_enabled(
-                                self.can_start_vm(),
-                                item("Start VM", Some(keys::START_VM)),
-                            )
-                            .clicked()
-                        {
-                            self.new_run();
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(self.can_stop_vm(), item("Stop VM", Some(keys::STOP_VM)))
-                            .clicked()
-                        {
-                            self.send(Command::Stop);
-                            ui.close_menu();
-                        }
+                        self.menu_item(ui, Action::StartVm, None);
+                        self.menu_item(ui, Action::StopVm, None);
                         ui.separator();
-                        if ui
-                            .add_enabled(self.can_configure_vm(), item("Configuration…", None))
-                            .clicked()
-                        {
-                            self.configure_vm();
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(
-                                self.selected.is_some() && !self.closing,
-                                item("Snapshots…", None),
-                            )
-                            .clicked()
-                        {
-                            self.open_snapshots();
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(
-                                self.running()
-                                    && !self.closing
-                                    && self.vm_snapshots.pending.is_none(),
-                                item("Reconnect telemetry", None),
-                            )
-                            .clicked()
-                        {
-                            self.send(Command::ReconnectTransport);
-                            ui.close_menu();
-                        }
-                        let vm = self.selected_vm().cloned();
-                        if ui.add_enabled(self.clipboard_enabled(),
-                            item("Type host clipboard into VM", Some(keys::TYPE_CLIPBOARD)))
-                            .on_hover_text("Types into the guest's focused input using a US keyboard layout; Caps Lock should be off. Newlines press Enter. Maximum 4 KiB.")
-                            .clicked()
-                        {
-                            self.request_clipboard(ctx);
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(vm.is_some() && !self.closing, item("Rename…", None))
-                            .clicked()
-                        {
-                            if let Some(vm) = &vm {
-                                self.name_action = Some((vm.id.clone(), false, vm.name.clone()));
-                            }
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(selected && !self.closing, item("Duplicate…", None))
-                            .clicked()
-                        {
-                            if let Some(vm) = &vm {
-                                self.name_action =
-                                    Some((vm.id.clone(), true, format!("{} copy", vm.name)));
-                            }
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(vm.is_some(), item("Open directory", None))
-                            .clicked()
-                        {
-                            if let Some(vm) = vm {
-                                self.open_vm_directory(&vm.id);
-                            }
-                            ui.close_menu();
-                        }
+                        self.menu_item(ui, Action::ConfigureVm, None);
+                        self.menu_item(ui, Action::Snapshots, None);
+                        self.menu_item(ui, Action::ReconnectTelemetry, None);
+                        self.menu_item(ui, Action::TypeClipboard, None);
+                        self.menu_item(ui, Action::RenameVm, None);
+                        self.menu_item(ui, Action::DuplicateVm, None);
+                        self.menu_item(ui, Action::OpenVmDirectory, None);
                         ui.separator();
-                        if ui
-                            .add_enabled(selected, item("Reset disk to base…", None))
-                            .clicked()
-                        {
-                            self.confirm = self.selected.clone().map(Confirm::Reset);
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(selected, item("Delete VM and disk…", None))
-                            .clicked()
-                        {
-                            self.confirm = self.selected.clone().map(Confirm::Delete);
-                            ui.close_menu();
-                        }
+                        self.menu_item(ui, Action::ResetDisk, None);
+                        self.menu_item(ui, Action::DeleteVm, None);
                     });
                     ui.menu_button("Run", |ui| {
-                        // Room between an item and its shortcut.
                         ui.set_min_width(ui.spacing().menu_width);
-                        if ui
-                            .add_enabled(
-                                self.running(),
-                                item("Run program…", Some(keys::RUN_PROGRAM)),
-                            )
-                            .clicked()
-                        {
-                            self.launch_open = true;
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(self.running(), item("Upload file…", Some(keys::UPLOAD)))
-                            .clicked()
-                        {
-                            self.open_upload();
-                            ui.close_menu();
-                        }
+                        self.menu_item(ui, Action::RunProgram, None);
+                        self.menu_item(ui, Action::UploadFile, None);
                         ui.separator();
-                        if ui
-                            .add_enabled(
-                                self.observer_start_enabled(),
-                                item("Attach to process…", None),
-                            )
-                            .clicked()
-                        {
-                            self.open_process_picker();
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(
-                                self.debugger_unavailable().is_none(),
-                                item("Attach debugger…", None),
-                            )
-                            .on_disabled_hover_text(
-                                self.debugger_unavailable().unwrap_or_default(),
-                            )
-                            .clicked()
-                        {
-                            self.open_debug_picker();
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(self.observer_start_enabled(), item("Capture all", None))
-                            .clicked()
-                        {
-                            self.send(Command::CaptureAll);
-                            ui.close_menu();
-                        }
-                        if ui
-                            .add_enabled(self.can_stop_capture(), item("Stop capture", None))
-                            .clicked()
-                        {
-                            self.stop_observer();
-                            ui.close_menu();
-                        }
+                        self.menu_item(ui, Action::AttachProcess, None);
+                        self.menu_item(ui, Action::AttachDebugger, None);
+                        self.menu_item(ui, Action::CaptureAll, None);
+                        self.menu_item(ui, Action::StopCapture, None);
                         if self.running() && !self.observer_supported() {
                             ui.colored_label(
                                 theme::muted(),
@@ -266,128 +107,67 @@ impl MonitorApp {
                             );
                         }
                         ui.separator();
-                        if ui
-                            .add_enabled(
-                                self.network_toggle_enabled(),
-                                item(
-                                    if self.snapshot.network_capture.is_some() {
-                                        "Stop network capture"
-                                    } else {
-                                        "Capture network"
-                                    },
-                                    None,
-                                ),
-                            )
-                            .on_disabled_hover_text(self.network_toggle_label())
-                            .clicked()
-                        {
-                            self.toggle_network_capture();
-                            ui.close_menu();
-                        }
+                        self.menu_item(ui, Action::NetworkCapture, None);
                     });
                     ui.menu_button("View", |ui| {
-                        // Room between an item and its shortcut.
                         ui.set_min_width(ui.spacing().menu_width);
-                        for view in Panel::MAIN.into_iter().chain([Panel::Details, Panel::Activity, Panel::Jobs]) {
-                            if ui.button(view.title()).clicked() {
-                                self.focus_panel = Some(view);
-                                ui.close_menu();
-                            }
+                        for view in Panel::MAIN
+                            .into_iter()
+                            .chain([Panel::Details, Panel::Activity, Panel::Jobs])
+                        {
+                            self.menu_item(ui, Action::Go(view), None);
                         }
                         ui.separator();
-                        if ui.button("Reset layout").clicked() {
-                            self.layout = WorkspaceLayout::default();
-                            ui.close_menu();
-                        }
+                        self.menu_item(ui, Action::ResetLayout, None);
                     });
                     ui.menu_button("Tools", |ui| {
                         // Room for the longest label with its icon, and between
                         // an item and its shortcut.
                         ui.set_min_width(ui.spacing().menu_width + TOOLS_MENU_EXTRA_WIDTH);
-                        if ui
-                            .add(item(
-                                &format!("{} Settings…", egui_phosphor::regular::GEAR),
-                                Some(keys::SETTINGS),
-                            ))
-                            .clicked()
-                        {
-                            self.settings_open = true;
-                            ui.close_menu();
-                        }
-                        if ui.button(format!("{} Analysis tools", egui_phosphor::regular::WRENCH)).clicked() {
-                            self.open_library(LibraryPage::Tools);
-                            ui.close_menu();
-                        }
-                        if ui.button(format!("{} Detection rules", egui_phosphor::regular::SHIELD_CHECK)).clicked() {
-                            self.open_library(LibraryPage::Rules);
-                            ui.close_menu();
-                        }
-                        if ui
-                            .button(format!(
-                                "{} Download malware samples…",
-                                egui_phosphor::regular::BIOHAZARD
-                            ))
-                            .clicked()
-                        {
-                            self.samples.open = true;
-                            ui.close_menu();
-                        }
-                        if ui
-                            .button(format!("{} API keys…", egui_phosphor::regular::KEY))
-                            .clicked()
-                        {
-                            self.api_keys.open = true;
-                            ui.close_menu();
-                        }
-                        if ui.button(format!("{} App dependencies…", egui_phosphor::regular::PACKAGE)).clicked() {
-                            self.folder_picker.refresh(ctx);
-                            self.dependencies.open = true;
-                            ui.close_menu();
-                        }
-                        if ui.button(format!("{} UI performance…", egui_phosphor::regular::GAUGE)).clicked() {
-                            self.performance.open = true;
-                            ui.close_menu();
-                        }
+                        self.menu_item(ui, Action::Settings, Some(egui_phosphor::regular::GEAR));
+                        self.menu_item(
+                            ui,
+                            Action::AnalysisTools,
+                            Some(egui_phosphor::regular::WRENCH),
+                        );
+                        self.menu_item(
+                            ui,
+                            Action::DetectionRules,
+                            Some(egui_phosphor::regular::SHIELD_CHECK),
+                        );
+                        self.menu_item(
+                            ui,
+                            Action::MalwareSamples,
+                            Some(egui_phosphor::regular::BIOHAZARD),
+                        );
+                        self.menu_item(ui, Action::ApiKeys, Some(egui_phosphor::regular::KEY));
+                        self.menu_item(
+                            ui,
+                            Action::Dependencies,
+                            Some(egui_phosphor::regular::PACKAGE),
+                        );
+                        self.menu_item(
+                            ui,
+                            Action::UiPerformance,
+                            Some(egui_phosphor::regular::GAUGE),
+                        );
                         ui.separator();
-                        if ui
-                            .add_enabled(self.running(), item(
-                                &format!(
-                                    "{} Refresh recorder statistics",
-                                    egui_phosphor::regular::ARROWS_CLOCKWISE
-                                ),
-                                None,
-                            ))
-                            .clicked()
-                        {
-                            self.send(Command::RecorderStats);
-                            ui.close_menu();
-                        }
+                        self.menu_item(
+                            ui,
+                            Action::RecorderStats,
+                            Some(egui_phosphor::regular::ARROWS_CLOCKWISE),
+                        );
                     });
                     ui.menu_button("Help", |ui| {
-                        // Room between an item and its shortcut.
                         ui.set_min_width(ui.spacing().menu_width);
-                        if ui.button("Getting started").clicked() {
-                            self.open_getting_started();
-                            ui.close_menu();
-                        }
-                        if ui.button("About Antinomie").clicked() {
-                            self.about_open = true;
-                            ui.close_menu();
-                        }
-                        if ui.button("Filter guide").clicked() {
-                            crate::query::open_guide(ui.ctx());
-                            ui.close_menu();
-                        }
-                        if ui.button("Online documentation").clicked() {
-                            ui.ctx()
-                                .open_url(egui::OpenUrl::new_tab(DOCUMENTATION_URL));
-                            ui.close_menu();
-                        }
-                        if ui.button("Check for updates…").clicked() {
-                            let outbound = self.settings.outbound_catalog;
-                            self.updates.request(ctx, &self.options.curl, outbound);
-                            ui.close_menu();
-                        }
+                        self.menu_item(ui, Action::GettingStarted, None);
+                        self.menu_item(ui, Action::About, None);
+                        self.menu_item(ui, Action::FilterGuide, None);
+                        self.menu_item(ui, Action::Documentation, None);
+                        self.menu_item(ui, Action::CheckUpdates, None);
+                        ui.separator();
+                        self.menu_item(ui, Action::Palette, None);
+                        self.menu_item(ui, Action::Shortcuts, None);
                     });
                     if self.snapshot.bases.is_empty() && !self.snapshot.bases_checking {
                         ui.separator();
@@ -404,6 +184,24 @@ impl MonitorApp {
                             self.open_downloads();
                         }
                     }
+                    // Always reachable by mouse, also while a text field or the
+                    // terminal keeps Ctrl+K for itself.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let text = format!(
+                            "{} Search  {}",
+                            egui_phosphor::regular::MAGNIFYING_GLASS,
+                            ctx.format_shortcut(&keys::PALETTE)
+                        );
+                        if ui
+                            .add(egui::Button::new(text).frame(false))
+                            .on_hover_text(
+                                "Command palette: find any action, tab, VM, run or sample",
+                            )
+                            .clicked()
+                        {
+                            self.run_action(ctx, Action::Palette);
+                        }
+                    });
                 });
             });
     }
@@ -417,6 +215,13 @@ impl MonitorApp {
     /// VM's name and state take what is left of the row and cut the name with
     /// an ellipsis (the whole text is on hover).
     pub(super) fn toolbar(&mut self, ctx: &egui::Context) {
+        let start_tip = self.with_shortcut(ctx, "Start the selected VM", &Action::StartVm);
+        let stop_tip = self.with_shortcut(ctx, "Shut down the running VM", &Action::StopVm);
+        let run_tip = self.with_shortcut(
+            ctx,
+            "Run a program in the VM and record it",
+            &Action::RunProgram,
+        );
         egui::TopBottomPanel::top("toolbar")
             .exact_height(self.settings.font_size + 22.0)
             .frame(theme::frame(theme::panel()))

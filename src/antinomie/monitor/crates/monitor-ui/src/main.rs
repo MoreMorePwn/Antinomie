@@ -49,6 +49,7 @@ mod tools_page;
 mod trace;
 mod tree_lines;
 mod triage;
+mod typing;
 mod ui_performance;
 mod update_window;
 mod values;

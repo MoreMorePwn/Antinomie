@@ -3,6 +3,7 @@
 //!
 //! Each child module adds one area of behaviour to [`MonitorApp`] in its own
 //! `impl` block. Types shared between areas stay here.
+mod actions;
 mod analysis_windows;
 mod bases;
 mod capture;
@@ -20,9 +21,11 @@ mod history;
 mod history_columns;
 mod history_sync;
 mod jobs;
+mod keys;
 mod library;
 mod menus;
 mod notices;
+mod palette;
 mod panels;
 mod recording;
 mod route_settings;
@@ -35,6 +38,7 @@ mod run_state_text;
 mod samples_page;
 mod session;
 mod settings_window;
+mod shortcut_list;
 mod sidebar;
 mod start_error;
 mod stealth;
@@ -60,6 +64,7 @@ use crate::{
     values,
     workspace::{LibraryPage, Panel, WorkspaceLayout},
 };
+use actions::Action;
 use antinomie_monitor_core::{
     capture_processes::CaptureProcess, pair_events, syscall_groups::SyscallGroup, Backend,
     BackendOptions, BaseSummary, CaptureState, CaptureSummary, Command, DisplayResolution,
@@ -71,6 +76,7 @@ use antinomie_monitor_core::{
 pub(crate) use bases::selected_base;
 pub(crate) use capture::core_capture_status;
 use eframe::egui::{self, RichText};
+pub(crate) use keys::tab_shortcut;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -562,6 +568,8 @@ pub struct MonitorApp {
     data_windows: crate::data_view::DataWindows,
     layout: WorkspaceLayout,
     focus_panel: Option<Panel>,
+    /// The command palette and the Keyboard shortcuts window.
+    shortcut_ui: shortcut_list::ShortcutUi,
     activity: crate::activity::Journal,
     activity_notices_due: bool,
     /// Everything running now and the last jobs that finished.
@@ -785,6 +793,7 @@ impl MonitorApp {
                     .and_then(|storage| eframe::get_value(storage, "workspace_layout")),
             ),
             focus_panel: None,
+            shortcut_ui: Default::default(),
             activity: crate::activity::Journal::restore(cc.storage),
             activity_notices_due: true,
             jobs: Default::default(),
@@ -1133,20 +1142,6 @@ impl Dialog {
             Dialog::Attach => "attach_process",
         })
     }
-}
-
-/// Keyboard shortcuts of menu actions.
-mod keys {
-    use eframe::egui::{Key, KeyboardShortcut, Modifiers};
-    pub const NEW_VM: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
-    pub const START_VM: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F5);
-    pub const STOP_VM: KeyboardShortcut = KeyboardShortcut::new(Modifiers::SHIFT, Key::F5);
-    pub const RUN_PROGRAM: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::R);
-    pub const UPLOAD: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::U);
-    pub const TYPE_CLIPBOARD: KeyboardShortcut =
-        KeyboardShortcut::new(Modifiers::CTRL.plus(Modifiers::SHIFT), Key::Y);
-    pub const SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
-    pub const QUIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
 }
 
 /// Right-click actions of a sidebar VM.

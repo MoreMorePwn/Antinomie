@@ -773,6 +773,16 @@ impl SamplesPage {
             error: None,
         });
     }
+
+    /// The library has been read at least once.
+    pub(super) fn is_loaded(&self) -> bool {
+        self.loaded
+    }
+
+    /// The library rows as the Samples page last read them.
+    pub(super) fn rows(&self) -> &[Row] {
+        &self.rows
+    }
 }
 
 #[cfg(test)]
@@ -790,12 +800,6 @@ impl SamplesPage {
     }
     pub(super) fn edit_tags_of(&mut self, sha256: &str, name: &str, tags: &[Tag]) {
         self.editing = Some((sha256.into(), name.into(), picker::TagPicker::with(tags)));
-    }
-    pub(super) fn is_loaded(&self) -> bool {
-        self.loaded
-    }
-    pub(super) fn rows(&self) -> &[Row] {
-        &self.rows
     }
     pub(super) fn set_query(&mut self, query: &str) {
         self.query = query.into();

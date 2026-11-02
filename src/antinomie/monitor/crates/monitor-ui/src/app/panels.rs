@@ -10,6 +10,8 @@ impl MonitorApp {
             self.activity_notices_due = false;
         }
         self.activity.ingest(ctx);
+        self.palette(ctx);
+        self.shortcut_window(ctx);
         self.escape(ctx);
         self.performance.show(ctx, &self.options.data_dir);
         if self.settings.show_fps {

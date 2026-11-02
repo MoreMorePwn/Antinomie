@@ -437,6 +437,9 @@ impl Terminal {
         if response.clicked() || response.drag_started() {
             response.request_focus();
         }
+        if response.has_focus() {
+            crate::typing::mark_terminal(ui.ctx(), response.id);
+        }
 
         let history = self.history();
         let lines = history + usize::from(rows);

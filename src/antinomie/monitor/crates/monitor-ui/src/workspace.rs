@@ -407,6 +407,69 @@ impl WorkspaceLayout {
         self.focus(panel);
     }
 
+    /// The tabs of the work area in the order the tab bar shows them: the bar
+    /// that holds the first of the main views (Summary, Run History, ...) in
+    /// the main window. Ctrl+1 to Ctrl+9 open its first nine tabs.
+    pub(crate) fn work_tabs(&self) -> Vec<Panel> {
+        self.work_leaf().map_or_else(Vec::new, |(tabs, _)| tabs)
+    }
+
+    /// The work area's tab bar: its tabs and the position of the shown one.
+    fn work_leaf(&self) -> Option<(Vec<Panel>, usize)> {
+        // The surface being drawn is taken out of the dock for the frame.
+        let Some(egui_dock::Surface::Main(main)) = self.dock.get_surface(SurfaceIndex::main())
+        else {
+            return None;
+        };
+        let node = Panel::MAIN
+            .iter()
+            .find_map(|panel| main.find_tab(panel).map(|(node, _)| node))?;
+        match &main[node] {
+            egui_dock::Node::Leaf { tabs, active, .. } => Some((tabs.clone(), active.0)),
+            _ => None,
+        }
+    }
+
+    /// Put `panel` first in the work area's tab bar, as dragging it there does.
+    #[cfg(test)]
+    pub(crate) fn move_to_front_for_test(&mut self, panel: &Panel) {
+        let Some((surface, node, tab)) = self.dock.find_tab(panel) else {
+            return;
+        };
+        let moved = self.dock[surface][node].remove_tab(tab);
+        if let Some(moved) = moved {
+            self.dock[surface][node].insert_tab(TabIndex(0), moved);
+        }
+        self.focus(panel.clone());
+    }
+
+    /// The tab the work area shows.
+    #[cfg(test)]
+    pub(crate) fn active_work_tab(&self) -> Option<Panel> {
+        let (tabs, active) = self.work_leaf()?;
+        tabs.get(active).cloned()
+    }
+
+    /// Every open tab: the work area's in order, then the others (Details,
+    /// Activity, terminals, detached windows).
+    pub(crate) fn all_tabs(&self) -> Vec<Panel> {
+        let mut tabs = self.work_tabs();
+        for (_, panel) in self.dock.iter_all_tabs() {
+            if !tabs.contains(panel) {
+                tabs.push(panel.clone());
+            }
+        }
+        tabs
+    }
+
+    /// The position of `panel` in the work area when Ctrl+1 to Ctrl+9 reach it.
+    pub(crate) fn tab_key_position(&self, panel: &Panel) -> Option<usize> {
+        self.work_tabs()
+            .iter()
+            .take(9)
+            .position(|candidate| candidate == panel)
+    }
+
     /// Where the Debugger tab is: the tab before it, and whether it shows.
     #[cfg(test)]
     pub(crate) fn debugger_position(&self) -> Option<(Option<Panel>, bool)> {
@@ -711,6 +774,8 @@ impl WorkspaceLayout {
             ui.ctx().stop_dragging();
             ui.ctx().request_repaint();
         }
+        // The tabs the Ctrl+digits reach, read before this surface is taken out.
+        let work_tabs = self.work_tabs();
         let Some(slot) = self.dock.get_surface_mut(surface) else {
             return;
         };
@@ -734,6 +799,7 @@ impl WorkspaceLayout {
             layout: self,
             surface,
             tight: Vec::new(),
+            work_tabs,
         };
         let fits = workspace_tabs::fit(ui, &mut viewer, &mut local, surface);
         let mut dock_style = theme::dock_style(ui.style());
@@ -1042,6 +1108,8 @@ struct Viewer<'a> {
     surface: SurfaceIndex,
     /// Tabs shown with short names because their bar is too narrow.
     tight: Vec<Panel>,
+    /// The work area's tabs in bar order (see `WorkspaceLayout::work_tabs`).
+    work_tabs: Vec<Panel>,
 }
 
 impl Viewer<'_> {
@@ -1113,8 +1181,15 @@ impl TabViewer for Viewer<'_> {
                 .clone()
                 .on_hover_cursor(egui::CursorIcon::Grab)
                 .on_hover_text(format!(
-                    "{}\nDrag to reorder or dock at a pane edge. Right-click to detach.",
-                    self.app.panel_title(tab)
+                    "{}{}\nDrag to reorder or dock at a pane edge. Right-click to detach.",
+                    self.app.panel_title(tab),
+                    self.work_tabs
+                        .iter()
+                        .take(9)
+                        .position(|candidate| candidate == tab)
+                        .and_then(crate::app::tab_shortcut)
+                        .map(|shortcut| format!(" ({})", response.ctx.format_shortcut(&shortcut)))
+                        .unwrap_or_default()
                 ));
         }
     }

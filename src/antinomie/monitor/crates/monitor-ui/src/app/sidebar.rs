@@ -255,12 +255,7 @@ impl MonitorApp {
             self.new_image();
         }
         if let Some(vm_id) = selected_vm {
-            if self.selected.as_ref() != Some(&vm_id) {
-                self.selected = Some(vm_id);
-                self.clear_history();
-                self.select_run(None);
-                self.refresh_history();
-            }
+            self.select_vm(vm_id);
         }
         if let Some((vm, action)) = action {
             match action {

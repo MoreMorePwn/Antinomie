@@ -40,6 +40,7 @@ mod samples_shots;
 mod scanned_inputs;
 mod settings_window;
 mod start_error;
+mod shortcuts;
 mod startup;
 mod stealth;
 mod stealth_shots;
@@ -182,6 +183,7 @@ pub(crate) fn app() -> MonitorApp {
         data_windows: crate::data_view::DataWindows::default(),
         layout,
         focus_panel: None,
+        shortcut_ui: Default::default(),
         activity: Default::default(),
         activity_notices_due: true,
         status_notice: None,
