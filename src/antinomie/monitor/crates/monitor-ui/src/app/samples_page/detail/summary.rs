@@ -747,7 +747,7 @@ fn line_result(
         }
         text
     };
-    let found = match kind {
+    match kind {
         AnalysisKind::Metadata => format!(
             "{}; hashes and object header ({} fields)",
             crate::values::file_size(data.record.size),
@@ -870,8 +870,7 @@ fn line_result(
             "embedded signatures",
         ),
         _ => first_line(&section.summary),
-    };
-    found
+    }
 }
 
 fn first_line(text: &str) -> String {

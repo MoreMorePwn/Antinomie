@@ -19,7 +19,7 @@ pub(super) fn outcome(invocation: &InvocationSummary) -> String {
         .and_then(|exit| exit.result)
         .map_or("exit not recorded".to_string(), |result| {
             if result < 0 {
-                crate::values::failed_outcome(result as i64)
+                crate::values::failed_outcome(result)
             } else {
                 format!("returned {result}")
             }

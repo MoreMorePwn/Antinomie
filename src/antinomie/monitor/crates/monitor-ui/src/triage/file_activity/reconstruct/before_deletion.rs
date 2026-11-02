@@ -288,7 +288,7 @@ impl Open {
         } else {
             widgets::chip(
                 ui,
-                &format!("partial: {} bytes unknown", prepared.missing),
+                format!("partial: {} bytes unknown", prepared.missing),
                 Tone::Warn,
             );
         }

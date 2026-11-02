@@ -17,8 +17,7 @@
 //!   below their fitted width the table scrolls sideways instead (header and
 //!   body together). A double click on a column divider, or "Fit columns" in
 //!   its menu, returns the table to fitting its box;
-//! - every cell is clipped (use the `table::cell*` helpers or
-//!   [`cell_middle`]: ellipsis, full text on hover);
+//! - every cell is clipped (use the `table::cell*` helpers);
 //! - the background is painted from the table's final rect.
 //!
 //! ```ignore
@@ -140,16 +139,9 @@ pub struct Plan {
     pub scrolls: bool,
     /// Width of all columns and gaps (the table's own width when it scrolls).
     pub total: f32,
-    shrunk: bool,
 }
 
-/// Decide the widths of `cols` for a container `available` wide with
-/// `spacing` between columns. Pure, so the rules are tested without egui.
-pub fn plan(available: f32, spacing: f32, cols: &[Col]) -> Plan {
-    plan_with(available, spacing, cols, &[])
-}
-
-/// [`plan`] with the widths the person dragged (`user[index]`, only for
+/// The fitted widths with the widths the person dragged (`user[index]`, only for
 /// resizable columns that are not the remainder). The remainder column gives
 /// way first; when it is at its minimum and the table is still too wide the
 /// plan scrolls, with every other column at its fitted or dragged width.
@@ -162,7 +154,6 @@ pub fn plan_with(available: f32, spacing: f32, cols: &[Col], user: &[Option<f32>
         cols,
         mut widths,
         rest,
-        shrunk,
         ..
     } = fitted;
     for (index, col) in cols.iter().enumerate() {
@@ -193,7 +184,6 @@ pub fn plan_with(available: f32, spacing: f32, cols: &[Col], user: &[Option<f32>
         rest,
         scrolls,
         total,
-        shrunk,
     }
 }
 
@@ -211,9 +201,7 @@ fn fit(available: f32, spacing: f32, cols: &[Col]) -> Plan {
     let wanted: f32 = cols.iter().map(|col| col.width).sum();
     let mut widths: Vec<f32> = cols.iter().map(|col| col.width).collect();
     let mut scrolls = false;
-    let mut shrunk = false;
     if wanted > budget {
-        shrunk = true;
         // The remainder column only gives way after the others.
         let slack: Vec<f32> = cols
             .iter()
@@ -258,7 +246,6 @@ fn fit(available: f32, spacing: f32, cols: &[Col]) -> Plan {
         rest,
         scrolls,
         total,
-        shrunk,
     }
 }
 
@@ -266,11 +253,6 @@ impl Plan {
     /// Width decided for column `index`.
     pub fn width(&self, index: usize) -> f32 {
         self.widths.get(index).copied().unwrap_or(0.0)
-    }
-
-    /// True when the table had to be narrower than the columns asked for.
-    pub fn shrunk(&self) -> bool {
-        self.shrunk
     }
 
     /// Add the columns to `builder`, every one clipped and at its planned
@@ -572,14 +554,6 @@ impl<'a> FitBuilder<'a> {
         }
     }
 
-    /// A table without a header row.
-    pub fn body(
-        self,
-        add: impl FnOnce(egui_extras::TableBody<'_>),
-    ) -> egui::scroll_area::ScrollAreaOutput<()> {
-        self.run(None, add)
-    }
-
     fn run(
         self,
         header: Option<(f32, HeaderFn<'a>)>,
@@ -657,30 +631,6 @@ impl FitTable<'_> {
     ) -> egui::scroll_area::ScrollAreaOutput<()> {
         let Self { builder, header } = self;
         builder.run(header, add)
-    }
-}
-
-/// A cell of text whose middle becomes an ellipsis when it does not fit
-/// ("7dd32a00…c1e1a3"): hashes, ids and paths whose two ends matter. The
-/// whole value is on hover.
-pub fn cell_middle(ui: &mut Ui, text: &str, mono: bool) -> egui::Response {
-    let width = ui.available_width();
-    let font = if mono {
-        egui::TextStyle::Monospace.resolve(ui.style())
-    } else {
-        egui::TextStyle::Body.resolve(ui.style())
-    };
-    let shown = middle(ui, text, &font, width);
-    let label = if mono {
-        egui::RichText::new(&shown).monospace()
-    } else {
-        egui::RichText::new(&shown)
-    };
-    let response = ui.add(egui::Label::new(label).wrap_mode(egui::TextWrapMode::Extend));
-    if shown != text {
-        response.on_hover_text(text)
-    } else {
-        response
     }
 }
 

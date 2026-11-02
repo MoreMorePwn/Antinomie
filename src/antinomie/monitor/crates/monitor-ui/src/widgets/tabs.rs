@@ -3,9 +3,7 @@
 //! (egui_dock) are separate and keep their own look.
 use super::Tone;
 use crate::theme;
-use eframe::egui::{
-    self, vec2, Response, RichText, Sense, Stroke, TextStyle, WidgetInfo, WidgetType,
-};
+use eframe::egui::{self, vec2, Response, Sense, Stroke, TextStyle, WidgetInfo, WidgetType};
 
 /// What one tab shows besides being selectable.
 #[derive(Clone, Debug)]
@@ -55,12 +53,6 @@ impl TabItem {
     }
     pub fn tooltip(mut self, text: impl Into<String>) -> Self {
         self.tooltip = Some(text.into());
-        self
-    }
-    /// Dim the tab (still clickable); `why` is its tooltip.
-    pub fn dimmed(mut self, why: impl Into<String>) -> Self {
-        self.dim = true;
-        self.tooltip = Some(why.into());
         self
     }
     /// Disable the tab; `why` is its tooltip.

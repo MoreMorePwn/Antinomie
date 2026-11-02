@@ -143,7 +143,7 @@ impl MonitorApp {
                 runs.push(run);
             }
         }
-        runs.sort_by(|a, b| b.started_ms.cmp(&a.started_ms));
+        runs.sort_by_key(|run| std::cmp::Reverse(run.started_ms));
         for run in runs.into_iter().take(RECENT_LIMIT) {
             let program = std::path::Path::new(&run.request.path)
                 .file_name()

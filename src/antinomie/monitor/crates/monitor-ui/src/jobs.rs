@@ -28,13 +28,20 @@ pub(crate) enum Stop {
     /// A cancel flag the worker watches.
     Flag(Arc<AtomicBool>),
     /// A command for the backend (cancel a download, a build, ...).
-    Command(Command),
+    Command(Box<Command>),
     /// Stop one run of the active VM (asks for the usual confirmation).
     Run(String),
     /// Stop the VM that is starting.
     Vm,
     /// Anything else that stops a worker (a plugin run's handle).
     Call(Arc<dyn Fn() + Send + Sync>),
+}
+
+impl Stop {
+    /// Stop through a backend command.
+    pub(crate) fn command(command: Command) -> Self {
+        Self::Command(Box::new(command))
+    }
 }
 
 /// One thing the app is doing.

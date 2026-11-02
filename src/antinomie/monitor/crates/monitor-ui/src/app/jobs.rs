@@ -207,7 +207,7 @@ impl MonitorApp {
                 Job::new(format!("core:{}", core.id), "Process core", target.trim())
                     .state(state)
                     .progress(core.stored_size, u64::from(core.max_size))
-                    .stop(Stop::Command(Command::CancelCoreCapture {
+                    .stop(Stop::command(Command::CancelCoreCapture {
                         capture_id: core.id.clone(),
                     }))
                     .open(Panel::CoreDump),
@@ -260,7 +260,7 @@ impl MonitorApp {
                 )
                 .state(state)
                 .progress(done as u64, total as u64)
-                .stop(Stop::Command(Command::CancelAnalysis {
+                .stop(Stop::command(Command::CancelAnalysis {
                     analysis_id: report.id.clone(),
                 }))
                 .open(Panel::StaticAnalysis),
@@ -281,7 +281,7 @@ impl MonitorApp {
                 .progress(download.received, download.total)
                 .open(Panel::Library(LibraryPage::BaseImages));
             if !download.installing {
-                job = job.stop(Stop::Command(Command::CancelDownload));
+                job = job.stop(Stop::command(Command::CancelDownload));
             }
             jobs.push(job);
         }
@@ -289,7 +289,7 @@ impl MonitorApp {
             jobs.push(
                 Job::new("catalog-refresh", "Catalog refresh", "remote base catalog")
                     .state("Downloading")
-                    .stop(Stop::Command(Command::CancelRefresh))
+                    .stop(Stop::command(Command::CancelRefresh))
                     .open(Panel::Library(LibraryPage::BaseImages)),
             );
         }
@@ -297,7 +297,7 @@ impl MonitorApp {
             jobs.push(
                 Job::new("build", "Base build", build.label.clone())
                     .state(format!("Stage: {}", build.stage))
-                    .stop(Stop::Command(Command::CancelBuild))
+                    .stop(Stop::command(Command::CancelBuild))
                     .open(Panel::Library(LibraryPage::BaseImages)),
             );
         }
@@ -311,7 +311,7 @@ impl MonitorApp {
                 Job::new("tool-install", "Tool install", install.name.clone())
                     .state(state)
                     .progress(install.received, install.total)
-                    .stop(Stop::Command(Command::CancelToolInstall))
+                    .stop(Stop::command(Command::CancelToolInstall))
                     .open(Panel::Library(LibraryPage::Tools)),
             );
         }
@@ -327,7 +327,7 @@ impl MonitorApp {
             };
             let mut job = Job::new("disk-job", "Disk job", self.vm_name(&disk.vm_id))
                 .started(Some(disk.started_ms))
-                .stop(Stop::Command(Command::CancelDiskJob {
+                .stop(Stop::command(Command::CancelDiskJob {
                     vm_id: disk.vm_id.clone(),
                 }))
                 .open(Panel::Disks);
@@ -479,7 +479,7 @@ impl MonitorApp {
                 self.jobs.mark_stopping(key);
             }
             Stop::Command(command) => {
-                self.send(command);
+                self.send(*command);
                 self.jobs.mark_stopping(key);
             }
             Stop::Run(id) => self.request_kill(Some(&id)),

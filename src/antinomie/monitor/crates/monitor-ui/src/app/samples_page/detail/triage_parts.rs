@@ -433,7 +433,7 @@ fn technique_rows(ui: &mut egui::Ui, data: &Data) -> Option<usize> {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new("Runs").small().color(theme::muted()));
                         for number in &technique.runs {
-                            if widgets::link(ui, &parts::run_name(*number))
+                            if widgets::link(ui, parts::run_name(*number))
                                 .on_hover_text("Open this run in Triage")
                                 .clicked()
                             {

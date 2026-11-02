@@ -16,6 +16,9 @@ use std::sync::{
 };
 use std::time::Duration;
 
+/// The scan a pane starts on a worker thread.
+type ScanWork = Box<dyn FnOnce(&AtomicBool, &AtomicU64) -> Scan + Send>;
+
 /// Hits listed per page.
 pub(super) const HITS_PAGE_SIZE: usize = 200;
 /// Characters of a hit shown in the list.
@@ -112,7 +115,7 @@ impl ScanPane {
         let reader = Arc::clone(&source.source);
         let cancel = Arc::new(AtomicBool::new(false));
         let progress = Arc::new(AtomicU64::new(0));
-        let work: Box<dyn FnOnce(&AtomicBool, &AtomicU64) -> Scan + Send> = match self.kind {
+        let work: ScanWork = match self.kind {
             Kind::Strings => {
                 if !self.ascii && !self.utf16 {
                     self.error = Some("Choose ASCII, UTF-16LE or both.".into());

@@ -19,6 +19,7 @@ pub enum Tone {
 }
 
 impl Tone {
+    #[cfg(test)]
     pub const ALL: [Tone; 8] = [
         Tone::Good,
         Tone::Warn,

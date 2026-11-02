@@ -329,6 +329,13 @@ it runs.
 
 ### Build and CI
 
+- **Large source files are split and clippy passes on every crate.** Internal: files
+  at or over the module size limit (storage, the Detection tab, the VM dialog, the
+  Samples window, the workspace dock and a dozen near it) move pieces into their own
+  modules with no change in behaviour, `storage.rs` leaves the size allowlist, the
+  blanket dead-code allow on the widget kit is gone with the unused code it hid, and
+  `clippy -D warnings` is clean on the libraries, binaries and examples.
+
 - **CI runs the remaining build-script suites and audits the fuzz lock.** The
   publish-base-sources tests and `sync-quilt-view.py --check` join the build-script
   step (the full-pack and refresh-bundle tests were already there), and the audit
