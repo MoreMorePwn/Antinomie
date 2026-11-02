@@ -232,10 +232,14 @@ pub(super) fn techniques(ui: &mut egui::Ui, data: &Data) {
                     egui::vec2(column, ui.spacing().interact_size.y),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
+                        // The cell is as wide as the column, not as its text.
+                        ui.set_min_width(column);
+                        ui.set_max_width(column);
                         ui.add(
                             egui::Label::new(RichText::new(&tactic.tactic).color(theme::text()))
                                 .truncate(),
-                        );
+                        )
+                        .on_hover_text(&tactic.tactic);
                     },
                 );
                 ui.vertical(|ui| {

@@ -765,6 +765,8 @@ fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go
                     egui::vec2(name_width, ui.spacing().interact_size.y),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
+                        ui.set_min_width(name_width);
+                        ui.set_max_width(name_width);
                         ui.add(
                             egui::Label::new(RichText::new(label).strong())
                                 .truncate()
