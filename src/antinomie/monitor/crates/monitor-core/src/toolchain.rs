@@ -106,6 +106,16 @@ pub fn pins() -> Result<Pins, String> {
 
 /// What the wizard says about the toolchain a native build of `kind` uses.
 pub fn describe(kind: crate::build::Kind, build_root: &Path) -> String {
+    describe_sized(kind, build_root, None)
+}
+
+/// [`describe`] with the chroot's size already measured, so a caller that
+/// draws every frame does not walk the folder each time.
+pub fn describe_sized(
+    kind: crate::build::Kind,
+    build_root: &Path,
+    measured: Option<u64>,
+) -> String {
     match for_kind(kind) {
         Toolchain::Host => "compiles with this host's toolchain (gcc and binutils)".to_owned(),
         Toolchain::Chroot => {
@@ -117,7 +127,7 @@ pub fn describe(kind: crate::build::Kind, build_root: &Path) -> String {
             if is_ready(&dir) {
                 format!(
                     "compiles in the cached Debian 13 toolchain chroot ({pins}; {} on disk)",
-                    crate::byte_size::short_size(size(&dir))
+                    crate::byte_size::short_size(measured.unwrap_or_else(|| size(&dir)))
                 )
             } else {
                 format!(

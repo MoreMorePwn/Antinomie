@@ -12,6 +12,9 @@ use antinomie_monitor_core::{
 };
 use eframe::egui::{self, RichText};
 
+mod probe;
+use probe::Probe;
+
 /// Wizard pages; BusyBox skips the Debian-only ones.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -77,14 +80,9 @@ pub struct BuildWizard {
     detected: build::HostLocale,
     /// The page whose list was last scrolled to its selection.
     scrolled: Option<Page>,
-    /// The builder images each ready engine held, and when that was looked up.
-    images: Option<(std::time::Instant, Vec<EngineImages>)>,
+    /// What the host answers to the Build mode and Summary pages, asked on a worker.
+    probe: Probe,
 }
-
-type EngineImages = (
-    antinomie_monitor_core::container::Engine,
-    Result<Vec<antinomie_monitor_core::container::ImageInfo>, String>,
-);
 impl Default for BuildWizard {
     fn default() -> Self {
         Self {
@@ -98,7 +96,7 @@ impl Default for BuildWizard {
             show_status: true,
             detected: build::HostLocale::detect(),
             scrolled: None,
-            images: None,
+            probe: Probe::default(),
         }
     }
 }
@@ -149,7 +147,21 @@ impl BuildWizard {
         });
         ui.separator();
         let mut action = None;
+        // Only these pages ask the host (engines, images, the chroot's size).
+        let asking = matches!(page, Page::Mode | Page::Summary);
+        let host_ready = !asking || self.probe.tick(ui, data_dir);
         let valid = match page {
+            _ if !host_ready => {
+                ui.horizontal(|ui| {
+                    theme::spinner(ui);
+                    ui.label(if self.probe.removing() {
+                        "Removing…"
+                    } else {
+                        "Checking this host…"
+                    });
+                });
+                false
+            }
             Page::Base => self.base(ui),
             Page::Mode => self.mode_page(ui, data_dir),
             Page::Language => self.language(ui),
@@ -158,7 +170,10 @@ impl BuildWizard {
             Page::Hostname => self.hostname(ui),
             Page::Software => self.software(ui),
             Page::Mirror => self.mirror(ui),
-            Page::Summary => self.summary(ui, build::kernel_cached(data_dir, self.kind())),
+            Page::Summary => {
+                let cached = self.probe.snapshot.kernel_cached(self.kind());
+                self.summary(ui, cached)
+            }
         };
         ui.separator();
         ui.horizontal(|ui| {
@@ -311,9 +326,13 @@ impl BuildWizard {
                 ui.colored_label(theme::good(), "The build will run on this host.");
                 ui.small(format!(
                     "Kernel {}.",
-                    toolchain::describe(kind, &data_dir.join("build"))
+                    toolchain::describe_sized(
+                        kind,
+                        &data_dir.join("build"),
+                        self.probe.snapshot.toolchain_size
+                    )
                 ));
-                Self::toolchain_cache(ui, data_dir);
+                self.toolchain_cache(ui, data_dir);
                 self.images(ui);
                 true
             }
@@ -332,7 +351,7 @@ impl BuildWizard {
             }
             Ok(_) => {
                 ui.colored_label(theme::good(), "The build will run in the QEMU builder VM.");
-                if let Some(problem) = antinomie_monitor_core::accel::kvm_problem() {
+                if let Some(problem) = self.probe.snapshot.kvm_problem.as_deref() {
                     crate::activity::warning(ui,
                         format!("KVM is not available on this host ({problem}): the builder VM runs with TCG software emulation, much slower (roughly 10 to 50 times), and can take many hours."),
                     );
@@ -349,15 +368,15 @@ impl BuildWizard {
     }
 
     /// The cached Debian 13 toolchain chroot: its size and a way to delete it.
-    fn toolchain_cache(ui: &mut egui::Ui, data_dir: &std::path::Path) {
-        let dir = toolchain::chroot_dir(&data_dir.join("build"));
-        if !dir.exists() {
+    fn toolchain_cache(&mut self, ui: &mut egui::Ui, data_dir: &std::path::Path) {
+        let Some(size) = self.probe.snapshot.toolchain_size else {
             return;
-        }
+        };
+        let dir = toolchain::chroot_dir(&data_dir.join("build"));
         ui.horizontal(|ui| {
             ui.small(format!(
                 "Toolchain chroot cache: {} in {}",
-                antinomie_monitor_core::byte_size::short_size(toolchain::size(&dir)),
+                antinomie_monitor_core::byte_size::short_size(size),
                 dir.display()
             ));
             if ui
@@ -366,12 +385,12 @@ impl BuildWizard {
                     "The next native Debian Minimal build downloads and unpacks it again.",
                 )
                 .clicked()
-                && let Err(error) = toolchain::remove(&dir)
             {
-                crate::activity::report(
+                self.probe.remove(
                     ui.ctx(),
-                    crate::activity::Level::Error,
-                    format!("Could not delete the toolchain chroot: {error}. Close what uses it and try again."),
+                    "Could not delete the toolchain chroot (close what uses it and try again)"
+                        .into(),
+                    move || toolchain::remove(&dir),
                 );
             }
         });
@@ -379,26 +398,11 @@ impl BuildWizard {
 
     /// The builder images the container engines hold, with a way to remove them.
     fn images(&mut self, ui: &mut egui::Ui) {
-        use antinomie_monitor_core::container::{self, Engine, SystemRunner};
-        let ready: Vec<Engine> = Engine::ALL
-            .into_iter()
-            .filter(|engine| container::cached_standing(*engine).ready.is_ok())
-            .collect();
-        if ready.is_empty() {
+        use antinomie_monitor_core::container::{self, SystemRunner};
+        if self.probe.snapshot.images.is_empty() {
             return;
         }
-        if self
-            .images
-            .as_ref()
-            .is_none_or(|(at, _)| at.elapsed() > std::time::Duration::from_secs(20))
-        {
-            let listed = ready
-                .iter()
-                .map(|engine| (*engine, container::list_images(*engine, &SystemRunner)))
-                .collect();
-            self.images = Some((std::time::Instant::now(), listed));
-        }
-        let mut removed = false;
+        let mut remove = None;
         egui::CollapsingHeader::new("Builder images")
             .id_salt("build_builder_images")
             .show(ui, |ui| {
@@ -406,7 +410,7 @@ impl BuildWizard {
                     "The container builder keeps its Debian 13 image so later builds start fast. \
                      Removing it only means the next container build makes it again.",
                 );
-                for (engine, listing) in self.images.iter().flat_map(|(_, listed)| listed) {
+                for (engine, listing) in &self.probe.snapshot.images {
                     match listing {
                         Ok(images) if images.is_empty() => {
                             ui.small(format!("{}: no builder image", engine.label()));
@@ -422,21 +426,7 @@ impl BuildWizard {
                                         if image.current { ", this app's" } else { "" }
                                     ));
                                     if ui.button("Remove").clicked() {
-                                        if let Err(error) = container::remove_image(
-                                            *engine,
-                                            &SystemRunner,
-                                            &image.tag,
-                                        ) {
-                                            crate::activity::report(
-                                                ui.ctx(),
-                                                crate::activity::Level::Error,
-                                                format!(
-                                                    "Could not remove the builder image {}: {error}. Check that the container engine is running and try again.",
-                                                    image.tag
-                                                ),
-                                            );
-                                        }
-                                        removed = true;
+                                        remove = Some((*engine, image.tag.clone()));
                                     }
                                 });
                             }
@@ -447,9 +437,13 @@ impl BuildWizard {
                     }
                 }
             });
-        if removed {
-            container::forget_standing();
-            self.images = None;
+        if let Some((engine, tag)) = remove {
+            let label = format!(
+                "Could not remove the builder image {tag} (check that the container engine is running and try again)"
+            );
+            self.probe.remove(ui.ctx(), label, move || {
+                container::remove_image(engine, &SystemRunner, &tag)
+            });
         }
     }
 

@@ -8,6 +8,7 @@ it runs.
 
 ### Host
 
+- **The Build base wizard no longer stalls.** Container engine checks, the builder image list, the toolchain chroot size (a walk of its whole folder on every frame) and the chroot and image removals run on a worker; the Build mode and Summary pages show a spinner while the first answer arrives.
 - **Core inspection reads and exports on its worker.** Opening a core reads its saved Ghidra text, and Export functions reads and writes, off the UI thread.
 - **Per-frame file checks are throttled.** The network toolbar's PATH lookups, the memory dump size and symbol-table checks, and the artifact menu's file test reuse their answer for a second.
 - **A failed Open folder or Open file shows a toast.** The desktop opener already ran off the UI thread but only logged a failure to the terminal; it now raises an error toast and Activity row. Creating the rules and plugins folders before opening them also moved off the UI thread.

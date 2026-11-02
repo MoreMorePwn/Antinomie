@@ -369,6 +369,12 @@ pub fn cached_standing(engine: Engine) -> Standing {
     {
         return standing.clone();
     }
+    refresh_standing(engine)
+}
+
+/// Asks the engine again now and keeps the answer for [`cached_standing`]. A
+/// caller that must not block keeps the cache warm from a worker with this.
+pub fn refresh_standing(engine: Engine) -> Standing {
     let fresh = standing(engine, &SystemRunner, &|program| {
         build::which(program).is_some()
     });
