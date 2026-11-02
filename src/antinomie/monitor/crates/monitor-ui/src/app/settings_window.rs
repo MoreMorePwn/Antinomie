@@ -504,6 +504,9 @@ impl MonitorApp {
             });
             ui.end_row();
         });
+        ui.add_space(10.0);
+        ui.separator();
+        self.geoip_section(ui);
     }
 
     fn tools_page(&mut self, ui: &mut egui::Ui) {

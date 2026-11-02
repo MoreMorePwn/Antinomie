@@ -1,0 +1,10 @@
+The IP geolocation databases in tools/geoip/ (dbip-country-lite.mmdb and
+dbip-asn-lite.mmdb) are the free DB-IP Lite databases by DB-IP.com
+(https://db-ip.com), month 2026-11, decompressed and otherwise unmodified.
+
+They are licensed under the Creative Commons Attribution 4.0 International
+License (LICENSE-CC-BY-4.0.txt, https://creativecommons.org/licenses/by/4.0/).
+You must give attribution to DB-IP.com for the data, and link back to
+https://db-ip.com where results from the database are shown:
+
+    IP geolocation by DB-IP (https://db-ip.com)

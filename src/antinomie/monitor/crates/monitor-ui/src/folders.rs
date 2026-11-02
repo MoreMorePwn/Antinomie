@@ -17,6 +17,8 @@ pub(crate) enum Kind {
     /// A file to add to Samples.
     SampleFile,
     ExplorerRoot,
+    /// A folder of MaxMind-format databases for TShark.
+    GeoipFolder,
 }
 
 #[derive(Clone, Copy)]

@@ -289,6 +289,7 @@ impl MonitorApp {
                     }
                     FolderKind::UploadFile => self.accept_upload_file(target.generation, path),
                     FolderKind::SampleFile => self.samples_page.chosen(&path),
+                    FolderKind::GeoipFolder => self.settings.geoip_folder = Some(path),
                     FolderKind::ExplorerRoot
                         if target.generation == self.explorer_browser.generation =>
                     {

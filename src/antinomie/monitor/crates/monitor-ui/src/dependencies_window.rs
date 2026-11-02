@@ -41,6 +41,8 @@ pub(crate) struct RoutePrograms<'a> {
     pub tools: Vec<ToolStatus>,
     pub install: Option<&'a ToolInstall>,
     pub enabled: bool,
+    /// What TShark can use for IP geolocation; `None` until first looked at.
+    pub geoip: Option<&'a antinomie_monitor_core::geoip::Status>,
 }
 
 /// What the window asks the app to do.
@@ -51,6 +53,8 @@ pub(crate) struct Outcome {
     pub command: Option<Command>,
     /// Open Tools > Settings > Network routes.
     pub open_routes: bool,
+    /// Open Tools > Settings > Network lookup.
+    pub open_lookup: bool,
     /// Set the selected VM's acceleration to TCG.
     pub tcg_for_vm: bool,
     /// Turn on "Use TCG when KVM is unavailable".
@@ -263,6 +267,7 @@ impl DependenciesWindow {
                             install_section(ui, report);
                         }
                         route_programs(ui, routes, &mut outcome);
+                        geoip_database(ui, routes, &mut outcome);
                     });
                 ui.separator();
                 recheck = ui
@@ -343,6 +348,23 @@ fn route_programs(ui: &mut egui::Ui, routes: &RoutePrograms<'_>, outcome: &mut O
         .clicked()
     {
         outcome.open_routes = true;
+    }
+}
+
+/// The IP geolocation database TShark reads: found or missing, with the fix
+/// as a Warning when Country or Organization would stay empty.
+fn geoip_database(ui: &mut egui::Ui, routes: &RoutePrograms<'_>, outcome: &mut Outcome) {
+    ui.separator();
+    theme::section(ui, "IP geolocation database (optional)");
+    ui.weak("TShark reads MaxMind-format (.mmdb) databases to fill Country and Organization.");
+    crate::app::geoip_status(ui, routes.geoip);
+    ui.add_space(4.0);
+    if ui
+        .button("Open Network lookup settings")
+        .on_hover_text("Tools > Settings > Network lookup: install DB-IP Lite or choose a folder")
+        .clicked()
+    {
+        outcome.open_lookup = true;
     }
 }
 

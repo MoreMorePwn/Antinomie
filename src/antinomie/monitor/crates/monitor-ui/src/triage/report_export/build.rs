@@ -801,6 +801,12 @@ pub(super) fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
     if let Some(warning) = &scan.network_warning {
         report.notes.push(format!("Network: {warning}"));
     }
+    if choices.has(Part::Network) && antinomie_monitor_core::geoip::attribution_due() {
+        report.notes.push(format!(
+            "Network: {}",
+            antinomie_monitor_core::geoip::ATTRIBUTION_NOTE
+        ));
+    }
     let bundle = choices.bundle.then(|| {
         let captures = antinomie_monitor_core::RunArtifacts::load(&job.archive)
             .ok()

@@ -23,6 +23,7 @@ impl MonitorApp {
             .into_iter()
             .filter_map(|id| self.route_tool(id))
             .collect();
+        self.geoip_sync(ctx);
         let install = self.snapshot.tool_install.clone();
         self.dependencies.selected_vm = self
             .snapshot
@@ -37,6 +38,7 @@ impl MonitorApp {
                 tools: route_tools,
                 install: install.as_ref(),
                 enabled: !self.closing,
+                geoip: self.geoip.status(),
             },
         );
         if outcome.recheck {
@@ -47,6 +49,10 @@ impl MonitorApp {
         }
         if outcome.tcg_everywhere || outcome.tcg_for_vm {
             self.apply_tcg_choice(outcome.tcg_everywhere, outcome.tcg_for_vm);
+        }
+        if outcome.open_lookup {
+            self.settings_open = true;
+            self.settings_page = settings_window::SettingsPage::NetworkLookup;
         }
         if outcome.open_routes {
             self.open_routes_settings();
