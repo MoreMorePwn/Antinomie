@@ -24,7 +24,9 @@ the runs' YARA, Sigma and IDS reports, each with author, licence, source and
 reference), every run (start, exit, assessment, tier, counts, the path of the
 run's own Triage report when it has been exported), lineage (parents and
 children with hashes, or the reason there are none), indicators merged across
-the runs, ATT&CK techniques, the custody log with its verification result,
+the runs (with how each was observed, first and last seen, whether every run had it, and the
+dataset records that list it, as in the sample window's IOCs tab), ATT&CK techniques
+(with their tactics), the custody log with its verification result,
 notes, and similar samples.
 
 ## Formats
