@@ -60,6 +60,25 @@ def dwarf2json(tools):
     return tool
 
 
+def name_release(table):
+    """The table with its kernel's release in place of the file name dwarf2json
+    writes ("vmlinux") in its metadata: Volatility 3 and MemNixFS take the
+    kernel release from there, and report a mismatch with the dump's banner
+    otherwise. The release is the one in the table's own linux_banner."""
+    import base64
+    import re
+    at = table.find(b'"linux_banner"')
+    banner = re.search(rb'"constant_data"\s*:\s*"([A-Za-z0-9+/=]+)"', table[at:at + 1024]) if at >= 0 else None
+    if banner is None:
+        return table
+    text = base64.b64decode(banner.group(1) + b"=" * (-len(banner.group(1)) % 4))
+    release = re.match(rb"Linux version (\S+) ", text)
+    head, tail = table[:8192], table[8192:]
+    if release is None or b'"metadata"' not in head:
+        return table
+    return head.replace(b'"name": "vmlinux"', b'"name": "' + release.group(1) + b'"') + tail
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -78,9 +97,10 @@ def main():
             table = subprocess.Popen([tool, "linux", "--elf", args.vmlinux,
                                       "--system-map", args.system_map], stdout=subprocess.PIPE,
                                      env=os.environ | {"GOGC": "25"})
-            compress = subprocess.run(["xz", "-6", "-T0", "-c"], stdin=table.stdout,
-                                      stdout=output, check=False)
+            document = table.stdout.read()
             table.stdout.close()
+            compress = subprocess.run(["xz", "-6", "-T0", "-c"], input=name_release(document),
+                                      stdout=output, check=False)
             if table.wait() != 0 or compress.returncode != 0:
                 partial.unlink(missing_ok=True)
                 raise RuntimeError(f"dwarf2json exited with {table.returncode}, "

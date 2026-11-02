@@ -183,6 +183,16 @@ impl MemoryView {
                         | "frameworkinfo.FrameworkInfo"
                 )
         };
+        let mut auto_run = None;
+        if let Some(name) = self.pending_plugin.clone()
+            && plugins
+                .iter()
+                .any(|plugin| plugin.name == name && applies(&plugin))
+        {
+            self.pending_plugin = None;
+            self.plugin = Some(name.clone());
+            auto_run = Some(name);
+        }
         if self.plugin.as_ref().is_none_or(|name| {
             !plugins
                 .iter()
@@ -202,6 +212,9 @@ impl MemoryView {
             .cloned()?;
         let mut chosen = None;
         let mut run = None;
+        if auto_run.as_deref() == Some(current.name.as_str()) {
+            run = Some(memory::plugin_args(&current, &[]));
+        }
         let mut chosen_os = None;
         ui.horizontal(|ui| {
             for os in Os::ALL {

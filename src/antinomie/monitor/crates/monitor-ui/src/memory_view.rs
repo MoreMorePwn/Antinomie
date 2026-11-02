@@ -169,6 +169,8 @@ pub(crate) struct MemoryView {
     /// The MemNixFS report chosen (its name).
     report: Option<String>,
     plugin: Option<String>,
+    /// A Volatility plugin to select and run as soon as its list is loaded.
+    pending_plugin: Option<String>,
     search: String,
     /// Option values typed per plugin.
     values: BTreeMap<String, Vec<(String, String)>>,
@@ -202,6 +204,7 @@ pub(crate) struct MemoryView {
 impl Default for MemoryView {
     fn default() -> Self {
         Self {
+            pending_plugin: None,
             dumps: Vec::new(),
             dumps_for: None,
             dumping_seen: false,

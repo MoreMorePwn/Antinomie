@@ -13,6 +13,7 @@
 //! plugins write with `--dump` (`files/`). Runs are kept, like Run History, so
 //! every earlier result can be opened again without running it again.
 use serde::{Deserialize, Serialize};
+mod release_name;
 mod results;
 pub use results::{RESULT_PAGE_MAX_ROWS, ResultPage, read_result_page_with};
 use std::{
@@ -179,8 +180,9 @@ fn create(
         // Volatility finds Linux tables by banner under <symbol dir>/linux.
         let linux = dump.symbols_dir().join("linux");
         fs::create_dir_all(&linux).map_err(|e| format!("symbol folder: {e}"))?;
-        fs::copy(symbols, linux.join(crate::storage::SYMBOLS_FILE))
-            .map_err(|e| format!("symbol table: {e}"))?;
+        // Named for the kernel's release, so analysers do not report a
+        // mismatch with the dump's banner.
+        release_name::copy(symbols, &linux.join(crate::storage::SYMBOLS_FILE))?;
         dump.symbols = true;
     }
     dump.save()?;

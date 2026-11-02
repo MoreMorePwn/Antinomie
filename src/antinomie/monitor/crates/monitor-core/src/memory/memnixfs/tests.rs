@@ -552,7 +552,7 @@ fn a_table_report_is_saved_like_a_volatility_result() {
     assert!(!saved[0].dir.join("work").exists());
     let log = fs::read_to_string(saved[0].log()).unwrap();
     assert!(log.contains("Dump format: ELF64 core of guest physical memory"));
-    assert!(log.contains("Partial: The kernel's page-table root"));
+    assert!(log.contains("Partial: MemNixFS could not find the kernel's page-table root"));
     assert!(log.contains("[WRN] DTB unvalidated"), "{log}");
     assert!(!log.contains('\u{1b}'));
     // Offline, with a private home and the package's own libraries.

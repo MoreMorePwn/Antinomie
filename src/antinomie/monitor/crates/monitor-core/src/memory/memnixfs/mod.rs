@@ -31,6 +31,7 @@ mod convert;
 pub mod format;
 mod messages;
 pub use format::DumpFormat;
+pub use messages::{ROOT_FALLBACKS, ROOT_NOTE};
 
 /// How long one report may take, from start to the saved result.
 const RUN_TIMEOUT: Duration = Duration::from_secs(45 * 60);

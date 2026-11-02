@@ -29,6 +29,19 @@ pub(super) fn strip_colors(text: &str) -> String {
     out
 }
 
+/// Said when the kernel's page-table root was not validated.
+pub const ROOT_NOTE: &str = "MemNixFS could not find the kernel's page-table root. Process and \
+     file lists read from physical memory are reliable; loaded modules, mounts and the kernel log \
+     may be missing or wrong.";
+
+/// The Volatility 3 plugins that read what an unvalidated page-table root
+/// leaves unreliable: (plugin, what it lists).
+pub const ROOT_FALLBACKS: &[(&str, &str)] = &[
+    ("linux.lsmod.Lsmod", "modules"),
+    ("linux.mountinfo.MountInfo", "mounts"),
+    ("linux.kmsg.Kmsg", "kernel log"),
+];
+
 /// MemNixFS's line for a table it believes is for another kernel.
 pub(super) const MISMATCH_MARKER: &str = "ISF/dump MISMATCH";
 
@@ -42,12 +55,7 @@ pub(super) fn partial_notes(log: &str, banner_verified: bool) -> Vec<String> {
             "MemNixFS could not match the symbol table to this dump's kernel banner; it used \
              the table's structure offsets as they are.",
         ),
-        (
-            "DTB unvalidated",
-            "The kernel's page-table root was not validated, so what is read from kernel \
-             virtual memory (loaded modules, kernel log, symbol lookups) may be wrong or \
-             missing.",
-        ),
+        ("DTB unvalidated", ROOT_NOTE),
         (
             "modules: read state",
             "The kernel's list of loaded modules could not be read.",
@@ -64,7 +72,12 @@ pub(super) fn partial_notes(log: &str, banner_verified: bool) -> Vec<String> {
         if banner_verified && line.contains(MISMATCH_MARKER) {
             continue;
         }
-        if let Some((_, note)) = KNOWN.iter().find(|(marker, _)| line.contains(marker)) {
+        // "Brute-force scan completed: N pages, M plausible, NO match".
+        if line.contains("Brute-force scan completed") && line.contains("NO match") {
+            if !notes.iter().any(|known| known == ROOT_NOTE) {
+                notes.push(ROOT_NOTE.to_owned());
+            }
+        } else if let Some((_, note)) = KNOWN.iter().find(|(marker, _)| line.contains(marker)) {
             if !notes.iter().any(|known| known == note) {
                 notes.push((*note).to_owned());
             }

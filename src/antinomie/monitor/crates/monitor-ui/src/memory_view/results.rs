@@ -414,6 +414,31 @@ impl MemoryView {
                 ),
                 result.run.partial.join("\n"),
             );
+            // The outputs an unvalidated page-table root leaves unreliable
+            // can be read by Volatility 3 in one click.
+            if result.run.analyzer == Analyzer::MemNixFs
+                && result
+                    .run
+                    .partial
+                    .iter()
+                    .any(|note| note == antinomie_monitor_core::memory::memnixfs::ROOT_NOTE)
+            {
+                ui.horizontal_wrapped(|ui| {
+                    ui.colored_label(theme::muted(), "Run in Volatility 3:");
+                    for (plugin, what) in antinomie_monitor_core::memory::memnixfs::ROOT_FALLBACKS {
+                        if ui
+                            .button(format!("{what} ({plugin})"))
+                            .on_hover_text(format!(
+                                "Switch to Volatility 3 and run {plugin} on this dump"
+                            ))
+                            .clicked()
+                        {
+                            self.analyzer = Analyzer::Volatility;
+                            self.pending_plugin = Some((*plugin).to_owned());
+                        }
+                    }
+                });
+            }
         }
         if let Some(format) = &result.run.dump_format {
             ui.colored_label(
