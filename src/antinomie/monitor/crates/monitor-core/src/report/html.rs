@@ -40,12 +40,14 @@ nav ul{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:4px 14px;margin
 nav a{color:var(--accent);text-decoration:none}\
 table{border-collapse:collapse;width:100%;margin:6px 0 10px;font-size:13px}\
 th,td{border:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top;overflow-wrap:anywhere}\
-th{background:var(--head)}\
+th{background:var(--head);overflow-wrap:normal;word-break:keep-all;hyphens:none;white-space:normal}\
+table.t12{font-size:12px}table.t11{font-size:11px}table.t10{font-size:10px}table.t9{font-size:9px}\
 .facts th{width:14em;font-weight:600}\
 .mono,code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}\
 .note{color:var(--note);font-size:13px;margin:4px 0 10px}\
 .wide{overflow-x:auto}\
 .tac{display:inline-block;margin:1px 3px 1px 0;padding:0 6px;border:1px solid var(--c);border-left-width:6px;border-radius:4px;white-space:nowrap}\
+@page{size:landscape;margin:12mm}\
 @media print{body{font-size:11px}main{max-width:none;padding:0}h2{break-after:avoid}tr{break-inside:avoid}.wide{overflow:visible}}";
 
 /// One class per tactic: its colour on a light page, and on a dark one.
@@ -90,17 +92,65 @@ fn mono(text: &str) -> bool {
         || text.len() >= 32 && text.chars().all(|c| c.is_ascii_hexdigit() || c == ':')
 }
 
-fn table(out: &mut String, table: &DocTable) {
-    let tactics = table
-        .columns
+/// The widest a table's column headers may need, in CSS pixels: a landscape
+/// A4 or Letter page less its margins, and about what the page holds on screen.
+const TABLE_WIDTH: f32 = 1000.0;
+/// Font sizes tried for a table, largest first (the table's own: 13).
+const SIZES: [u32; 5] = [13, 12, 11, 10, 9];
+/// The size at which a table that still does not fit is split.
+const SPLIT_SIZE: u32 = 10;
+
+/// The widest word of a header, in characters.
+fn longest_word(text: &str) -> usize {
+    text.split_whitespace()
+        .map(|word| word.chars().count())
+        .max()
+        .unwrap_or(0)
+}
+
+/// The least width a header of `columns` needs at `size` pixels: the longest
+/// word of each, in bold, plus padding. Headers wrap only at spaces.
+fn header_width(columns: &[&String], size: u32) -> f32 {
+    columns
         .iter()
-        .position(|column| column == super::TACTIC_COLUMN);
-    out.push_str("<div class=\"wide\"><table><thead><tr>");
-    for column in &table.columns {
+        .map(|name| longest_word(name) as f32 * 0.66 * size as f32 + 18.0)
+        .sum()
+}
+
+/// The columns of a table that does not fit at [`SPLIT_SIZE`], cut into groups
+/// that do; the first column (the row's key) is in every group.
+fn groups(columns: &[String]) -> Vec<Vec<usize>> {
+    let mut out: Vec<Vec<usize>> = Vec::new();
+    let mut current = vec![0usize];
+    for at in 1..columns.len() {
+        let mut trial = current.clone();
+        trial.push(at);
+        let names: Vec<&String> = trial.iter().map(|&i| &columns[i]).collect();
+        if current.len() > 1 && header_width(&names, SPLIT_SIZE) > TABLE_WIDTH {
+            out.push(std::mem::replace(&mut current, vec![0, at]));
+        } else {
+            current = trial;
+        }
+    }
+    out.push(current);
+    out
+}
+
+fn one_table(out: &mut String, columns: &[&String], rows: &[Vec<&String>], size: u32) {
+    let class = if size >= SIZES[0] {
+        String::new()
+    } else {
+        format!(" class=\"t{size}\"")
+    };
+    let tactics = columns
+        .iter()
+        .position(|column| column.as_str() == super::TACTIC_COLUMN);
+    out.push_str(&format!("<div class=\"wide\"><table{class}><thead><tr>"));
+    for column in columns {
         out.push_str(&format!("<th>{}</th>", escape(column)));
     }
     out.push_str("</tr></thead><tbody>\n");
-    for row in &table.rows {
+    for row in rows {
         out.push_str("<tr>");
         for (column, cell) in row.iter().enumerate() {
             if Some(column) == tactics {
@@ -114,6 +164,37 @@ fn table(out: &mut String, table: &DocTable) {
         out.push_str("</tr>\n");
     }
     out.push_str("</tbody></table></div>\n");
+}
+
+/// A table. Its headers never break inside a word (CSS), so when the longest
+/// words side by side are wider than a page the table takes a smaller font a
+/// step at a time, and past that is split in column groups with the first
+/// column repeated.
+fn table(out: &mut String, table: &DocTable) {
+    let all: Vec<&String> = table.columns.iter().collect();
+    if let Some(size) = SIZES
+        .into_iter()
+        .find(|&size| header_width(&all, size) <= TABLE_WIDTH)
+    {
+        let rows: Vec<Vec<&String>> = table.rows.iter().map(|row| row.iter().collect()).collect();
+        one_table(out, &all, &rows, size);
+        return;
+    }
+    let parts = groups(&table.columns);
+    for (number, part) in parts.iter().enumerate() {
+        out.push_str(&format!(
+            "<p class=\"note\">Columns of this table, part {} of {}; the first column is repeated.</p>\n",
+            number + 1,
+            parts.len()
+        ));
+        let columns: Vec<&String> = part.iter().map(|&i| &table.columns[i]).collect();
+        let rows: Vec<Vec<&String>> = table
+            .rows
+            .iter()
+            .map(|row| part.iter().filter_map(|&i| row.get(i)).collect())
+            .collect();
+        one_table(out, &columns, &rows, SPLIT_SIZE);
+    }
 }
 
 /// The report as an HTML document.

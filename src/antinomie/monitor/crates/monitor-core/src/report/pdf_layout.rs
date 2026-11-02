@@ -14,6 +14,17 @@ const FOOTER: f32 = 30.0;
 const PAD: f32 = 3.0;
 /// Lines of one table cell kept; a cell with more ends in `...`.
 const CELL_LINES: usize = 24;
+/// Font sizes tried for a table, largest first.
+const TABLE_SIZES: [f32; 5] = [7.5, 7.0, 6.5, 6.0, 5.5];
+
+/// The width the longest word of a column title needs, in bold, with padding.
+fn header_word(title: &str, size: f32) -> f32 {
+    title
+        .split_whitespace()
+        .map(|word| width(Font::Bold, size, word))
+        .fold(0.0, f32::max)
+        + 2.0 * PAD
+}
 
 /// A colour, as the three components of `rg`.
 pub(super) type Rgb = [f32; 3];
@@ -316,10 +327,60 @@ impl Cursor {
         self.y -= 8.0;
     }
 
+    /// A table whose column titles never break inside a word: at the usual
+    /// size when the longest word of each title fits the page side by side,
+    /// else at a smaller size a step at a time, else split into column groups
+    /// with the first column repeated.
     fn table(&mut self, table: &DocTable) {
-        let size = 7.5;
-        let widths = column_widths(table, size);
-        self.rows(&widths, Some(&table.columns), &table.rows, size, false);
+        let avail = PAGE_W - 2.0 * MARGIN;
+        let fits = |columns: &[usize], size: f32| -> bool {
+            columns
+                .iter()
+                .map(|&c| header_word(&table.columns[c], size))
+                .sum::<f32>()
+                <= avail
+        };
+        let all: Vec<usize> = (0..table.columns.len()).collect();
+        if let Some(size) = TABLE_SIZES.into_iter().find(|&size| fits(&all, size)) {
+            let widths = column_widths(table, size);
+            self.rows(&widths, Some(&table.columns), &table.rows, size, false);
+            return;
+        }
+        let size = TABLE_SIZES[TABLE_SIZES.len() - 1];
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        let mut current = vec![0usize];
+        for at in 1..table.columns.len() {
+            let mut trial = current.clone();
+            trial.push(at);
+            if current.len() > 1 && !fits(&trial, size) {
+                groups.push(std::mem::replace(&mut current, vec![0, at]));
+            } else {
+                current = trial;
+            }
+        }
+        groups.push(current);
+        let count = groups.len();
+        for (number, group) in groups.into_iter().enumerate() {
+            let part = DocTable {
+                columns: group.iter().map(|&c| table.columns[c].clone()).collect(),
+                rows: table
+                    .rows
+                    .iter()
+                    .map(|row| group.iter().filter_map(|&c| row.get(c).cloned()).collect())
+                    .collect(),
+            };
+            self.paragraph(
+                &format!(
+                    "Columns of this table, part {} of {count}; the first column is repeated.",
+                    number + 1
+                ),
+                Font::Oblique,
+                7.5,
+                MUTED,
+            );
+            let widths = column_widths(&part, size);
+            self.rows(&widths, Some(&part.columns), &part.rows, size, false);
+        }
     }
 
     fn facts(&mut self, facts: &[(String, String)]) {
@@ -372,9 +433,22 @@ fn column_widths(table: &DocTable, size: f32) -> Vec<f32> {
             measure(cell, column, &mut natural, &mut floor);
         }
     }
-    // A single word is never worth more than a third of the page as a floor.
-    for f in &mut floor {
-        *f = f.min(avail / 3.0);
+    // A single word of a cell is never worth more than a third of the page as
+    // a floor; a title's longest word (in bold) is a floor nothing goes under.
+    let heads: Vec<f32> = table
+        .columns
+        .iter()
+        .map(|name| header_word(name, size))
+        .collect();
+    for (f, head) in floor.iter_mut().zip(&heads) {
+        *f = f.min(avail / 3.0).max(*head);
+    }
+    for (n, head) in natural.iter_mut().zip(&heads) {
+        *n = n.max(*head);
+    }
+    let head_total: f32 = heads.iter().sum();
+    if floor.iter().sum::<f32>() > avail && head_total <= avail {
+        floor.clone_from(&heads);
     }
     let total: f32 = natural.iter().sum();
     if total <= avail {

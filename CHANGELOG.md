@@ -153,6 +153,16 @@ it runs.
   1.2 GB safety limit for this dataset". The typical sizes were refreshed. A
   rule pack's progress says "of" for a pinned download and "of about" only for a
   rolling one.
+- **Exported HTML and PDF tables never break a column title inside a word.**
+  Wide tables (Processes, Suspicious activity, the Network and Files tabs, a
+  sample report's runs, lineage and custody tables) cut titles like "Process" or
+  "Count" into "Proc|ess" and "Co|un|t". A title now wraps only at spaces: the
+  HTML cannot break it inside a word and keeps the longest word of every title
+  as the column's least width, the PDF measures each title in bold and keeps it
+  that wide. When the longest words side by side are wider than a page the table
+  takes a smaller font a step at a time, and as a last resort is split into
+  column groups with its first column repeated. The HTML prints on a landscape
+  page.
 
 ## 0.8.1 — 2026-11-03
 
