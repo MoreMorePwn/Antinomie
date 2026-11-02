@@ -331,6 +331,13 @@ it runs.
   diskcache 5.6.3 stays: pySigma requires it (<6) and no fixed version exists;
   see docs/dependency-advisories.md.
 
+### Internal
+
+- **Long functions split.** The guest command transport, the backend command
+  dispatcher, the static analysis section worker and the sample report layout
+  are divided into named steps. No behaviour changed. The module size check
+  now also lists functions over 300 lines as a warning.
+
 ## 0.8.1 — 2026-11-03
 
 Antinomie 0.8.1 is a fix release for the 0.8.0 line; it runs the same revision-20
