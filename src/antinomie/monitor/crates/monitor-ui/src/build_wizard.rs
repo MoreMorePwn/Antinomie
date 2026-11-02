@@ -334,7 +334,7 @@ impl BuildWizard {
                 ui.colored_label(theme::good(), "The build will run in the QEMU builder VM.");
                 if let Some(problem) = antinomie_monitor_core::accel::kvm_problem() {
                     crate::activity::warning(ui,
-                        &format!("KVM is not available on this host ({problem}): the builder VM runs with TCG software emulation, much slower (roughly 10 to 50 times), and can take many hours."),
+                        format!("KVM is not available on this host ({problem}): the builder VM runs with TCG software emulation, much slower (roughly 10 to 50 times), and can take many hours."),
                     );
                 }
                 self.images(ui);

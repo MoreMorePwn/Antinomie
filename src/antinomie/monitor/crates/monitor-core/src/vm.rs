@@ -168,6 +168,7 @@ pub(crate) fn vm_kernel_append(append: &str, root_uuid: Option<&str>) -> String 
         .join(" ")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_launch_settings(
     command: &mut Command,
     options: &BackendOptions,
