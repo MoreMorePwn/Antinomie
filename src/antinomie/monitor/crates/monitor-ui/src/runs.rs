@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Presentation state for independent native program terminals.
 use crate::terminal::Terminal;
-use antinomie_monitor_core::{RunState, RunSummary};
+use antinomie_monitor_core::RunSummary;
 use std::time::Instant;
 
 pub(crate) struct RunTerminal {
@@ -85,15 +85,14 @@ impl RunTerminal {
     }
 
     pub(crate) fn interactive(&self) -> bool {
-        !self.run.terminal_eof
-            && matches!(self.run.state, RunState::Running | RunState::StopRequested)
+        !self.run.terminal_eof && self.run.state.is_live()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use antinomie_monitor_core::ExecRequest;
+    use antinomie_monitor_core::{ExecRequest, RunState};
 
     #[test]
     fn closing_one_terminal_preserves_the_run_and_other_windows() {

@@ -445,10 +445,7 @@ impl MonitorApp {
                                     *go = Some(Go::Terminal(run.id.clone()));
                                 }
                                 let live = self.snapshot.runs.iter().any(|live| live.id == run.id)
-                                    && matches!(
-                                        run.state,
-                                        RunState::Running | RunState::TerminalClosed
-                                    )
+                                    && run.state.can_stop()
                                     && !self.closing
                                     && self.running()
                                     && self.pending_kill.is_none();

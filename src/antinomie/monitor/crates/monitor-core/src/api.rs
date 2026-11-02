@@ -885,13 +885,7 @@ impl RunSummary {
     /// failed for it and its recording folder is gone, so nothing of it is left
     /// to protect. Anything else is refused with the reason.
     pub fn forgettable(&self) -> Result<(), String> {
-        if matches!(
-            self.state,
-            RunState::Unknown
-                | RunState::Running
-                | RunState::StopRequested
-                | RunState::TerminalClosed
-        ) {
+        if self.state == RunState::Unknown || self.state.is_live() {
             return Err("the run is still going; stop it first".into());
         }
         if self.recording_error.is_none() {
@@ -1709,6 +1703,36 @@ impl RunState {
             RunState::Unknown => RunState::Interrupted,
             other => other.clone(),
         }
+    }
+
+    /// The run is still going and still recording: the program runs
+    /// (`Running`), a Stop was asked and the guest has not reported the end
+    /// (`StopRequested`), or its terminal closed while descendants may still
+    /// run (`TerminalClosed`: the PTY EOF does not prove the tree is gone).
+    /// `Unknown` is not live here: a record waiting for its first status has
+    /// no proof of a program yet, and the callers that list it say so.
+    /// Views ask this one question instead of listing the states.
+    pub fn is_live(&self) -> bool {
+        matches!(
+            self,
+            RunState::Running | RunState::StopRequested | RunState::TerminalClosed
+        )
+    }
+
+    /// A Stop may be sent: the run is live and no Stop is under way (the
+    /// guest refuses a second one for `StopRequested`).
+    pub fn can_stop(&self) -> bool {
+        matches!(self, RunState::Running | RunState::TerminalClosed)
+    }
+
+    /// The program ended and its recording was closed normally: finished,
+    /// stopped or finalized. Interrupted and never-started runs are not
+    /// counted: they leave nothing new to show in the history.
+    pub fn ended_normally(&self) -> bool {
+        matches!(
+            self,
+            RunState::Finished | RunState::Stopped | RunState::Finalized
+        )
     }
 
     /// The run is over and nothing of the program was recorded.

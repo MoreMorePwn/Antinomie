@@ -2,7 +2,7 @@
 //! The run's overall state in words, beside the Network route line of Triage:
 //! "Running · 12:34 elapsed", "Finished after 5:02 (exit 0)", "Still recording:
 //! 10 processes alive". The words are Run History's.
-use crate::{theme, widgets::Tone};
+use crate::widgets::Tone;
 use antinomie_monitor_core::{RunState, RunSummary, WaitStatus};
 use eframe::egui::{self, Color32};
 
@@ -50,9 +50,7 @@ pub(crate) fn describe(
     };
     match run.state {
         // The root program is gone and its children keep the run open.
-        RunState::Running | RunState::StopRequested | RunState::TerminalClosed
-            if root.is_some() && live.max(alive.unwrap_or(0)) > 0 =>
-        {
+        _ if run.state.is_live() && root.is_some() && live.max(alive.unwrap_or(0)) > 0 => {
             let count = live.max(alive.unwrap_or(0));
             let plural = if count == 1 { "process" } else { "processes" };
             let time =
@@ -82,10 +80,7 @@ pub(crate) fn describe(
 
 /// Whether the line changes with the clock: the run is going.
 pub(crate) fn ticks(run: &RunSummary) -> bool {
-    matches!(
-        run.state,
-        RunState::Running | RunState::StopRequested | RunState::TerminalClosed
-    )
+    run.state.is_live()
 }
 
 /// The host clock, Unix milliseconds.
@@ -154,7 +149,7 @@ pub(crate) fn ending(run: &RunSummary) -> Option<Ending> {
 /// the Samples window's Runs and the VM Summary share. Colour never stands
 /// alone: the state words stay beside it.
 pub(crate) fn color(run: &RunSummary) -> Color32 {
-    state_tone(run).map_or_else(theme::muted, Tone::fg)
+    crate::widgets::fg_or_muted(state_tone(run))
 }
 
 /// [`color`] as a tone; `None` is plain grey (stopped, state unknown).

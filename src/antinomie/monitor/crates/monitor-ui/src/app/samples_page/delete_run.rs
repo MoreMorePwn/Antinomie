@@ -302,7 +302,7 @@ impl MonitorApp {
         self.snapshot
             .runs
             .iter()
-            .any(|live| live.id == run.id && live_state(&live.state))
+            .any(|live| live.id == run.id && live.state.is_live())
     }
 
     /// Open the Delete run… dialog for `run` (number `number` of the sample).
@@ -386,7 +386,7 @@ impl MonitorApp {
                 .snapshot
                 .runs
                 .iter()
-                .any(|run| run.id == dialog.run_id && live_state(&run.state));
+                .any(|run| run.id == dialog.run_id && run.state.is_live());
             let Stage::Ready(plan) =
                 std::mem::replace(&mut dialog.stage, Stage::Failed(String::new()))
             else {
@@ -411,14 +411,6 @@ impl MonitorApp {
             self.samples_page.delete_run = None;
         }
     }
-}
-
-/// A run that is running (or being stopped) cannot be deleted.
-fn live_state(state: &RunState) -> bool {
-    matches!(
-        *state,
-        RunState::Running | RunState::StopRequested | RunState::TerminalClosed
-    )
 }
 
 #[cfg(test)]

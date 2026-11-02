@@ -134,10 +134,7 @@ impl Worker {
         let timeout = GUEST_REPLY_TIMEOUT;
         let cookie = session.run_cookie(&run_id)?;
         let run = session.runs.get(&cookie).ok_or("unknown run")?;
-        if !matches!(
-            run.summary.state,
-            RunState::Running | RunState::TerminalClosed
-        ) {
+        if !run.summary.state.can_stop() {
             return Err("run is no longer available for termination".into());
         }
         let mut args = control::header(0);

@@ -64,10 +64,8 @@ impl MonitorApp {
         // Programs running in the guest, and runs still recording after the
         // root exited.
         for run in &snapshot.runs {
-            let live = matches!(
-                run.state,
-                RunState::Running | RunState::StopRequested | RunState::TerminalClosed
-            ) || (run.state == RunState::Unknown && run.root_task_cookie == 0);
+            let live = run.state.is_live()
+                || (run.state == RunState::Unknown && run.root_task_cookie == 0);
             if !live {
                 continue;
             }
@@ -507,5 +505,5 @@ fn actionable_run(run: &RunSummary, snapshot: &Snapshot) -> bool {
         && snapshot.active_vm.as_ref() == Some(&run.vm_id)
         && snapshot.boot_id.as_ref() == Some(&run.boot_id)
         && run.root_task_cookie != 0
-        && matches!(run.state, RunState::Running | RunState::TerminalClosed)
+        && run.state.can_stop()
 }

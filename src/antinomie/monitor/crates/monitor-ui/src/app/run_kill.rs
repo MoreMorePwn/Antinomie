@@ -37,7 +37,7 @@ fn actionable(run: &RunSummary, snapshot: &Snapshot) -> bool {
     snapshot.active_vm.as_ref() == Some(&run.vm_id)
         && snapshot.boot_id.as_ref() == Some(&run.boot_id)
         && run.root_task_cookie != 0
-        && matches!(run.state, RunState::Running | RunState::TerminalClosed)
+        && run.state.can_stop()
 }
 
 impl MonitorApp {

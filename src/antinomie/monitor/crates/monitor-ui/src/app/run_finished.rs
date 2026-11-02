@@ -88,10 +88,7 @@ impl MonitorApp {
         ctx.data_mut(|data| {
             let seen = data.get_temp_mut_or_default::<Seen>(egui::Id::new("run-finished-seen"));
             for run in &self.snapshot.runs {
-                if matches!(
-                    run.state,
-                    RunState::Running | RunState::StopRequested | RunState::TerminalClosed
-                ) {
+                if run.state.is_live() {
                     seen.going.insert(run.id.clone());
                     continue;
                 }

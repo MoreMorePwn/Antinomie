@@ -318,6 +318,15 @@ it runs.
   gives way to the buttons at large text sizes, and the malware catalog notice
   scrolls so its checkbox and buttons stay on screen.
 
+- **The sample window's Runs list says "Running" for a run whose terminal was
+  closed.** A run whose terminal closed while its program (or children) kept
+  recording showed "Unknown" in the exit column, unlike Run History, Jobs and the
+  Stop button, which count it as going. One `RunState::is_live()` now answers
+  "is this run going" for all of them (and `can_stop()` for the Stop buttons).
+  Internal: the VM, scan and debugger state colours go through `widgets::Tone`,
+  and the terminal's ANSI colours and a few meter and overlay colours moved into
+  the theme.
+
 ### Build and CI
 
 - **CI runs the remaining build-script suites and audits the fuzz lock.** The

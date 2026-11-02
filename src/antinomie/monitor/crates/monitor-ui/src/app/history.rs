@@ -342,10 +342,7 @@ impl MonitorApp {
                                     egui_phosphor::regular::STOP,
                                     "Stop run and descendants",
                                     self.snapshot.runs.iter().any(|live| live.id == run.id)
-                                        && matches!(
-                                            run.state,
-                                            RunState::Running | RunState::TerminalClosed
-                                        )
+                                        && run.state.can_stop()
                                         && !self.closing
                                         && self.running()
                                         && self.pending_kill.is_none(),
@@ -797,11 +794,7 @@ impl MonitorApp {
     }
 
     pub(super) fn live_history_run(&self, run: &RunSummary) -> bool {
-        self.snapshot.runs.iter().any(|live| live.id == run.id)
-            && matches!(
-                run.state,
-                RunState::Running | RunState::StopRequested | RunState::TerminalClosed
-            )
+        self.snapshot.runs.iter().any(|live| live.id == run.id) && run.state.is_live()
     }
 }
 

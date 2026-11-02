@@ -25,13 +25,6 @@ pub(super) struct HistorySync {
     pub(super) captures_refresh_due: bool,
 }
 
-fn ended(state: &RunState) -> bool {
-    matches!(
-        state,
-        RunState::Finished | RunState::Stopped | RunState::Finalized
-    )
-}
-
 impl MonitorApp {
     /// Called with each new snapshot before it replaces `self.snapshot`.
     pub(super) fn follow_runs(&mut self, next: &Snapshot) {
@@ -46,7 +39,7 @@ impl MonitorApp {
             || previous.active_vm != next.active_vm
             || (previous.state != next.state && next.state == VmState::Stopped);
         due |= next.runs.iter().any(|run| {
-            ended(&run.state)
+            run.state.ended_normally()
                 && previous_states
                     .get(run.id.as_str())
                     .is_none_or(|old_state| *old_state != &run.state)

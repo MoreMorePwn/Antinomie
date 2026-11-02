@@ -47,7 +47,7 @@ type Verified = Result<(Vec<(String, Verification)>, LibraryCheck), String>;
 
 /// How a run's root ended, as the run list says it.
 fn exit_label(run: &RunSummary) -> String {
-    if matches!(run.state, RunState::Running | RunState::StopRequested) {
+    if run.state.is_live() {
         "Running".into()
     } else {
         history::root_exit(run)
