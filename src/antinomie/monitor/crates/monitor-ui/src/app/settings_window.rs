@@ -462,6 +462,17 @@ impl MonitorApp {
                 );
             });
             ui.end_row();
+            ui.label("Runs");
+            ui.vertical(|ui| {
+                ui.checkbox(
+                    &mut self.settings.toast_run_finished,
+                    "Toast when a run finishes",
+                )
+                .on_hover_text(
+                    "One toast per run when its program tree really ends: green for exit 0, neutral for another exit code, a stop or a time limit, a warning for a crash or a kill. It has Open Triage, and Open sample for a library sample. Applies at once.",
+                );
+            });
+            ui.end_row();
         });
     }
 

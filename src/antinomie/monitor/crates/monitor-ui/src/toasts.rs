@@ -35,17 +35,30 @@ const HUB: &str = "toast-stack";
 const STACK: &str = "toast-stack-area";
 
 /// An action link: its text and the panel it brings forward, through the
-/// app's ordinary panel focus.
+/// app's ordinary panel focus, and what the app does first when there is
+/// something to select.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Action {
     pub label: String,
     pub panel: Panel,
+    pub then: Option<Then>,
 }
+
+/// What a clicked action selects before its panel comes forward.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Then {
+    /// A run of a VM, for the panel to show.
+    Run { vm_id: String, run_id: String },
+    /// A library sample, for its window.
+    Sample(String),
+}
+
 impl Action {
     pub(crate) fn open_activity() -> Self {
         Self {
             label: "Open Activity".into(),
             panel: Panel::Activity,
+            then: None,
         }
     }
 }
@@ -57,6 +70,10 @@ pub(crate) struct Toast {
     pub title: String,
     pub detail: String,
     pub action: Option<Action>,
+    /// A second link beside the first ("Open sample" after "Open Triage").
+    pub second: Option<Action>,
+    /// Drawn in the success colour (green): a run that finished well.
+    pub success: bool,
     /// How many times this toast was raised while it was on screen.
     pub count: u32,
     /// Seconds left; `None` stays until dismissed.
@@ -105,6 +122,19 @@ impl Toasts {
         action: Option<Action>,
         row: bool,
     ) {
+        self.add_with(level, title, detail, [action, None], false, row);
+    }
+
+    /// [`Self::add`] with a second action link and the success colour.
+    pub(crate) fn add_with(
+        &mut self,
+        level: Level,
+        title: &str,
+        detail: &str,
+        [action, second]: [Option<Action>; 2],
+        success: bool,
+        row: bool,
+    ) {
         // A failure always has the way to its Activity row, and a full disk
         // says what to do about it.
         let action = action.or_else(|| (level != Level::Info).then(Action::open_activity));
@@ -137,6 +167,8 @@ impl Toasts {
             title: title.into(),
             detail: detail.into(),
             action,
+            second,
+            success,
             count: 1,
             left: lifetime(level),
             hovered: false,
@@ -217,6 +249,22 @@ pub(crate) fn push(
     action: Option<Action>,
 ) {
     with(ctx, |toasts| toasts.add(level, title, detail, action, true));
+    ctx.request_repaint();
+}
+
+/// Raise the toast of a run that ended, with up to two action links, and write
+/// its Activity row. `success` draws it green.
+pub(crate) fn push_run(
+    ctx: &egui::Context,
+    level: Level,
+    success: bool,
+    title: &str,
+    detail: &str,
+    actions: [Option<Action>; 2],
+) {
+    with(ctx, |toasts| {
+        toasts.add_with(level, title, detail, actions, success, true)
+    });
     ctx.request_repaint();
 }
 
@@ -322,8 +370,11 @@ pub(crate) fn split(level: Level, message: &str) -> (String, String) {
     (title.into(), message.into())
 }
 
-fn visuals(level: Level) -> (&'static str, egui::Color32) {
+fn visuals(level: Level, success: bool) -> (&'static str, egui::Color32) {
     let palette = theme::palette();
+    if success {
+        return (egui_phosphor::regular::CHECK_CIRCLE, palette.good);
+    }
     match level {
         Level::Info => (egui_phosphor::regular::INFO, palette.info),
         Level::Warn => (egui_phosphor::regular::WARNING, palette.warn),
@@ -335,12 +386,13 @@ fn visuals(level: Level) -> (&'static str, egui::Color32) {
 struct Outcome {
     hovered: bool,
     close: bool,
-    follow: bool,
+    /// The action link that was clicked: 0 the first, 1 the second.
+    follow: Option<usize>,
 }
 
 fn draw(ui: &mut egui::Ui, toast: &Toast, width: f32) -> Outcome {
     let palette = theme::palette();
-    let (icon, color) = visuals(toast.level);
+    let (icon, color) = visuals(toast.level, toast.success);
     let stroke = if toast.level == Level::Error {
         palette.error
     } else {
@@ -382,6 +434,7 @@ fn draw(ui: &mut egui::Ui, toast: &Toast, width: f32) -> Outcome {
                                     ui,
                                     format!("×{}", toast.count),
                                     match toast.level {
+                                        _ if toast.success => crate::widgets::Tone::Good,
                                         Level::Info => crate::widgets::Tone::Info,
                                         Level::Warn => crate::widgets::Tone::Warn,
                                         Level::Error => crate::widgets::Tone::Error,
@@ -402,18 +455,28 @@ fn draw(ui: &mut egui::Ui, toast: &Toast, width: f32) -> Outcome {
                             ui.add(egui::Label::new(job).wrap())
                                 .on_hover_text(&toast.detail);
                         }
-                        if let Some(action) = &toast.action {
-                            let link = ui
-                                .add(
-                                    egui::Label::new(
-                                        RichText::new(&action.label).small().color(palette.accent),
+                        ui.horizontal(|ui| {
+                            for (index, action) in [&toast.action, &toast.second]
+                                .into_iter()
+                                .flatten()
+                                .enumerate()
+                            {
+                                let link = ui
+                                    .add(
+                                        egui::Label::new(
+                                            RichText::new(&action.label)
+                                                .small()
+                                                .color(palette.accent),
+                                        )
+                                        .selectable(false)
+                                        .sense(egui::Sense::click()),
                                     )
-                                    .selectable(false)
-                                    .sense(egui::Sense::click()),
-                                )
-                                .on_hover_cursor(egui::CursorIcon::PointingHand);
-                            outcome.follow = link.clicked();
-                        }
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                                if link.clicked() {
+                                    outcome.follow = Some(index);
+                                }
+                            }
+                        });
                     },
                 );
                 if ui
@@ -517,9 +580,9 @@ fn placement(
     (right, bottom)
 }
 
-/// Draw the stack and run the timers. Returns the panels of clicked action
-/// links, for the app to bring forward.
-pub(crate) fn show(ctx: &egui::Context) -> Vec<Panel> {
+/// Draw the stack and run the timers. Returns the clicked action links, for
+/// the app to carry out.
+pub(crate) fn show(ctx: &egui::Context) -> Vec<Action> {
     let dt = f64::from(ctx.input(|input| input.stable_dt)).min(0.5);
     let (items, floor, hidden) = with(ctx, |toasts| {
         toasts.tick(dt);
@@ -564,18 +627,25 @@ pub(crate) fn show(ctx: &egui::Context) -> Vec<Panel> {
                     });
                 }
                 for toast in &items {
-                    outcomes.push((toast.id, toast.action.clone(), draw(ui, toast, width)));
+                    outcomes.push((
+                        toast.id,
+                        [toast.action.clone(), toast.second.clone()],
+                        draw(ui, toast, width),
+                    ));
                 }
             });
         });
     let mut follow = Vec::new();
     with(ctx, |toasts| {
-        for (id, action, outcome) in outcomes {
-            if outcome.close || outcome.follow {
+        for (id, actions, outcome) in outcomes {
+            if outcome.close || outcome.follow.is_some() {
                 toasts.dismiss(id);
             }
-            if let (true, Some(action)) = (outcome.follow, action) {
-                follow.push(action.panel);
+            if let Some(action) = outcome
+                .follow
+                .and_then(|index| actions.into_iter().flatten().nth(index))
+            {
+                follow.push(action);
             }
             if let Some(toast) = toasts.items.iter_mut().find(|toast| toast.id == id) {
                 toast.hovered = outcome.hovered;

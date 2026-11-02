@@ -44,6 +44,15 @@ it runs.
   check that could not run). The Static analysis tab's Categories card has the
   same order: name, state, rows, the open-in-pane button, then the notice.
 
+- **A toast when a run finishes.** When a run's program tree really ends, one
+  toast says "Run 3 finished" with the program, how long it ran and how it
+  ended, with Open Triage (and Open sample for a library sample): green for
+  exit 0; neutral for another exit code, a stop with Kill, or a `timeout`
+  program's time limit (exit 124); a warning for a crash (SIGSEGV and the
+  like) or a kill by a signal. A root that exits while children live on does
+  not toast until the run ends. Each toast is also an Activity row. Settings >
+  Notifications > "Toast when a run finishes" turns it off (on by default).
+
 ## 0.8.1 — 2026-11-03
 
 Antinomie 0.8.1 is a fix release for the 0.8.0 line; it runs the same revision-20

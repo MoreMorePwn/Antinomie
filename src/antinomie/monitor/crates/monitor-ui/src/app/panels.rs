@@ -68,8 +68,8 @@ impl MonitorApp {
         self.file_drop_overlay(ctx);
         self.activity.ingest(ctx);
         crate::title_bar::resize(ctx);
-        for panel in crate::toasts::show(ctx) {
-            self.focus_panel = Some(panel);
+        for action in crate::toasts::show(ctx) {
+            self.follow_toast_action(action);
             ctx.request_repaint();
         }
         self.process_picker.unavailable = match self.process_picker.purpose {

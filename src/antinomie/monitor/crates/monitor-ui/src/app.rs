@@ -26,6 +26,7 @@ mod panels;
 mod recording;
 mod route_settings;
 mod rules;
+mod run_finished;
 mod run_kill;
 mod run_labels;
 mod run_selector;
@@ -167,6 +168,8 @@ struct Settings {
     /// cannot tell a choice from a default and is not read.
     #[serde(rename = "toast_high_live")]
     toast_high_findings: bool,
+    /// Toast when a run ends ("Run 3 finished"). On by default.
+    toast_run_finished: bool,
     /// The size the activity graph's window opened at last, in points.
     graph_window: [f32; 2],
     /// How the activity graph spaces findings along its time axis.
@@ -285,6 +288,7 @@ impl Default for Settings {
             automatic_detection: true,
             outbound_catalog: false,
             toast_high_findings: false,
+            toast_run_finished: true,
             graph_window: crate::triage::GRAPH_WINDOW_SIZE,
             graph_spacing: Default::default(),
             report_export: Default::default(),
