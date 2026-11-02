@@ -60,7 +60,6 @@ pub(crate) struct WorkspaceState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SubTab {
     Sections,
-    Segments,
     Symbols,
 }
 
@@ -70,7 +69,6 @@ impl WorkspaceState {
     pub(crate) fn show_sub_tab(&mut self, sub: SubTab) {
         self.structure = match sub {
             SubTab::Sections => Structure::Sections,
-            SubTab::Segments => Structure::Segments,
             SubTab::Symbols => Structure::Symbols,
         };
     }
@@ -326,35 +324,51 @@ fn render(
     };
     state.bind(&report.id);
     let mut action = None;
-    if matches!(
-        report.state,
-        AnalysisState::Acquiring | AnalysisState::Queued | AnalysisState::Running
-    ) && ui
-        .button(egui_phosphor::regular::X)
-        .on_hover_text("Cancel analysis")
-        .clicked()
-    {
-        action = Some(ReportAction::Cancel(report.id.clone()));
-    }
-    super::progress_banner(ui, report);
-    match forced {
-        None => {
-            if let Some(next) = tabs::show(ui, report, state, preview, listing) {
-                action = Some(next);
+    // The report's chrome (file line, tabs, sub tabs) takes most of a short
+    // window: the view keeps room for its content and scrolls as a whole
+    // below that, instead of leaving the content a few rows.
+    let wanted = if forced.is_some() {
+        0.0
+    } else {
+        22.0 * ui.text_style_height(&egui::TextStyle::Body)
+    };
+    let height = ui.available_height().max(wanted);
+    egui::ScrollArea::vertical()
+        .id_salt("analysis-workspace")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_max_height(height);
+            ui.set_min_height(height);
+            if matches!(
+                report.state,
+                AnalysisState::Acquiring | AnalysisState::Queued | AnalysisState::Running
+            ) && ui
+                .button(egui_phosphor::regular::X)
+                .on_hover_text("Cancel analysis")
+                .clicked()
+            {
+                action = Some(ReportAction::Cancel(report.id.clone()));
             }
-        }
-        Some(kind) => {
-            ui.separator();
-            let next = if kind == AnalysisKind::Regex {
-                tabs::regex_view(ui, report, state)
-            } else {
-                results(ui, report, state, listing, Some(kind))
-            };
-            if let Some(next) = next {
-                action = Some(next);
+            super::progress_banner(ui, report);
+            match forced {
+                None => {
+                    if let Some(next) = tabs::show(ui, report, state, preview, listing) {
+                        action = Some(next);
+                    }
+                }
+                Some(kind) => {
+                    ui.separator();
+                    let next = if kind == AnalysisKind::Regex {
+                        tabs::regex_view(ui, report, state)
+                    } else {
+                        results(ui, report, state, listing, Some(kind))
+                    };
+                    if let Some(next) = next {
+                        action = Some(next);
+                    }
+                }
             }
-        }
-    }
+        });
     // The Content tab reads the same specimen preview as the bytes window.
     let bytes_visible = forced.is_some() || state.tab != Tab::Content;
     state.publish(ui.ctx(), report, forced);
@@ -792,6 +806,43 @@ fn categories(
                 .x
         })
     };
+    // The title column fits the longest title (a reason a check is not
+    // complete needs a little more); a narrow pane cuts titles with an
+    // ellipsis (the full title is one hover away) instead of squeezing them.
+    let name_width = {
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let longest = ui.fonts(|fonts| {
+            ALL_KINDS
+                .iter()
+                .map(|kind| {
+                    fonts
+                        .layout_no_wrap(
+                            section_title(*kind).to_owned(),
+                            font.clone(),
+                            egui::Color32::PLACEHOLDER,
+                        )
+                        .size()
+                        .x
+                })
+                .fold(0.0_f32, f32::max)
+        }) + 2.0 * ui.spacing().button_padding.x;
+        let needs_reason = report
+            .sections
+            .iter()
+            .any(|section| section.reason().is_some());
+        let wanted = if needs_reason {
+            longest.max(220.0)
+        } else {
+            longest
+        };
+        let others = tag_width
+            + rows_width
+            + ui.spacing().interact_size.x
+            + 3.0 * 12.0
+            + 2.0 * ui.spacing().item_spacing.x
+            + 24.0;
+        wanted.min((ui.available_width() - others).max(90.0))
+    };
     crate::widgets::card(
         ui,
         "Categories",
@@ -805,7 +856,10 @@ fn categories(
                         let Some(section) =
                             report.sections.iter().find(|section| section.kind == kind)
                         else {
-                            ui.add_enabled(false, egui::Label::new(section_title(kind)))
+                            ui.add_enabled(
+                                false,
+                                egui::Label::new(section_title(kind)).truncate(),
+                            )
                                 .on_disabled_hover_text(NOT_REQUESTED);
                             crate::widgets::chip_wide(ui, "Not requested", Tone::Neutral, tag_width);
                             ui.label("");
@@ -825,9 +879,22 @@ fn categories(
                         let clicked = ui
                             .vertical(|ui| {
                                 // Why a check is not complete stands under its name.
-                                ui.set_max_width(340.0_f32.min(ui.available_width() * 0.5));
-                                let clicked = crate::widgets::link(ui, section_title(kind))
-                                    .on_hover_text(&section.summary)
+                                ui.set_width(name_width);
+                                let clicked = ui
+                                    .add(
+                                        egui::Button::new(
+                                            egui::RichText::new(section_title(kind))
+                                                .color(crate::theme::palette().accent),
+                                        )
+                                        .frame(false)
+                                        .truncate(),
+                                    )
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                    .on_hover_text(format!(
+                                        "{}\n{}",
+                                        section_title(kind),
+                                        section.summary
+                                    ))
                                     .clicked();
                                 if let Some((text, _)) = section.reason() {
                                     ui.add(

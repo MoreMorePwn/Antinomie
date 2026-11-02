@@ -453,11 +453,6 @@ fn strings(ui: &mut egui::Ui, data: &Data, scanned: &Scanned, go: &mut Option<Go
                 ui.colored_label(theme::error(), error);
             }
             (Scanned::Done(strings), Some(reference)) => {
-                ui.label(
-                    RichText::new("The 100 longest strings; URLs, addresses and keys are under Regex matches.")
-                        .small()
-                        .color(theme::muted()),
-                );
                 let rows: Vec<&StringRow> = strings.longest.iter().collect();
                 string_table(
                     ui,
@@ -738,67 +733,82 @@ fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go
             Some(Scanned::Done(strings)) => Some(strings.total),
             _ => None,
         };
-        for (kind, label, sub) in LINES {
-            let Some(section) = report.sections.iter().find(|section| section.kind == *kind) else {
-                continue;
-            };
-            let value = line_value(*kind, sub, section, total, data);
-            let name = if sub.is_empty() {
-                (*label).to_owned()
-            } else {
-                format!("{label} · {sub}")
-            };
-            // The name, whole, at the left; the count or value, then a normal
-            // button, at the right. The button carries the whole row's action.
+        let lines: Vec<(&AnalysisSection, &str, String)> = LINES
+            .iter()
+            .filter_map(|(kind, label)| {
+                let section = report
+                    .sections
+                    .iter()
+                    .find(|section| section.kind == *kind)?;
+                Some((section, *label, line_result(*kind, section, total, data)))
+            })
+            .collect();
+        let strong = egui::TextStyle::Body.resolve(ui.style());
+        let name_width = parts::fitted_up_to(
+            ui,
+            &strong,
+            lines.iter().map(|(_, label, _)| (*label).to_owned()),
+            200.0,
+        ) + 6.0;
+        let chip_width = state_width(ui);
+        let button_width = ui.fonts(|fonts| {
+            fonts
+                .layout_no_wrap("Open".into(), strong.clone(), egui::Color32::PLACEHOLDER)
+                .size()
+                .x
+        }) + ui.spacing().button_padding.x * 2.0;
+        for (section, label, result) in lines {
+            let kind = section.kind;
             let mut open = false;
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    open = ui
-                        .button("Open")
-                        .on_hover_text(format!("Open {name} in Static analysis"))
-                        .clicked();
-                    let (word, tone) = section_state(section.state);
-                    let chip = widgets::chip_wide(ui, word, tone, state_width(ui));
-                    // Why a check is not Complete: its limits, else its summary.
-                    let why: Vec<String> = section
-                        .limits
-                        .iter()
-                        .map(|limit| limit.text.clone())
-                        .collect();
-                    if !why.is_empty() {
-                        chip.on_hover_text(why.join("\n"));
-                    } else if section.state
-                        != antinomie_monitor_core::AnalysisSectionState::Complete
-                        && !section.summary.is_empty()
-                    {
-                        chip.on_hover_text(&section.summary);
-                    }
-                    ui.add(
-                        egui::Label::new(RichText::new(&value).monospace())
-                            .truncate()
-                            .selectable(false),
-                    );
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(name_width, ui.spacing().interact_size.y),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
                         ui.add(
-                            egui::Label::new(RichText::new(&name).strong())
+                            egui::Label::new(RichText::new(label).strong())
                                 .truncate()
                                 .selectable(false),
-                        );
-                    });
-                });
+                        )
+                        .on_hover_text(label);
+                    },
+                );
+                let (word, tone) = section_state(section.state);
+                let chip = widgets::chip_wide(ui, word, tone, chip_width);
+                if !section.summary.is_empty()
+                    && section.state != antinomie_monitor_core::AnalysisSectionState::Complete
+                {
+                    chip.on_hover_text(&section.summary);
+                }
+                // The result wraps inside what the button leaves, so none of
+                // it is cut off.
+                let room =
+                    (ui.available_width() - button_width - ui.spacing().item_spacing.x).max(60.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(room, 0.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_width(room);
+                        ui.add(egui::Label::new(&result).wrap().selectable(false))
+                            .on_hover_text(&result);
+                    },
+                );
+                open = ui
+                    .button("Open")
+                    .on_hover_text(format!("Open {label} in Static analysis"))
+                    .clicked();
             });
             if open {
-                *go = Some(match (*label, *sub) {
-                    // Content is the sample's own bytes: the file viewer.
-                    ("Content", _) => Go::View,
-                    ("File Info", "Sections") => {
-                        Go::ReportView(*kind, crate::analysis::SubTab::Sections)
-                    }
-                    ("File Info", "Segments") => {
-                        Go::ReportView(*kind, crate::analysis::SubTab::Segments)
-                    }
-                    ("Symbols", _) => Go::ReportView(*kind, crate::analysis::SubTab::Symbols),
-                    _ => Go::Report(*kind),
+                *go = Some(if kind == AnalysisKind::Structures {
+                    // The symbols when the file has them, else its sections.
+                    let sub = if section.entries.iter().any(|entry| entry.label == "Symbol") {
+                        crate::analysis::SubTab::Symbols
+                    } else {
+                        crate::analysis::SubTab::Sections
+                    };
+                    Go::ReportView(kind, sub)
+                } else {
+                    Go::Report(kind)
                 });
             }
         }
@@ -852,73 +862,192 @@ fn short_id(id: &str) -> String {
 }
 
 /// One line per Static analysis tab, in the window's order.
-const LINES: &[(AnalysisKind, &str, &str)] = &[
-    (AnalysisKind::Metadata, "File Info", "Summary"),
-    (AnalysisKind::Structures, "File Info", "Sections"),
-    (AnalysisKind::Structures, "File Info", "Segments"),
-    (AnalysisKind::Hardening, "File Info", "Hardening"),
-    (AnalysisKind::Identification, "File Info", "Identification"),
-    (AnalysisKind::Entropy, "File Info", "Entropy"),
-    (AnalysisKind::Metadata, "Content", ""),
-    (AnalysisKind::Strings, "Strings", ""),
-    (AnalysisKind::Regex, "Regex matches", ""),
-    (AnalysisKind::Floss, "FLOSS", ""),
-    (AnalysisKind::Embedded, "Binwalk", ""),
-    (AnalysisKind::Unpacking, "Unpacking", ""),
-    (AnalysisKind::Rules, "YARA", ""),
-    (AnalysisKind::Capabilities, "Capa Matrix", ""),
-    (AnalysisKind::Structures, "Symbols", ""),
-    (AnalysisKind::Disassembly, "Disassembly", ""),
-    (AnalysisKind::Decompilation, "Decompilation", ""),
+const LINES: &[(AnalysisKind, &str)] = &[
+    (AnalysisKind::Metadata, "File info"),
+    (AnalysisKind::Identification, "Identification"),
+    (AnalysisKind::Structures, "Structures"),
+    (AnalysisKind::Hardening, "Hardening"),
+    (AnalysisKind::Entropy, "Entropy"),
+    (AnalysisKind::Strings, "Strings"),
+    (AnalysisKind::Regex, "Regex matches"),
+    (AnalysisKind::Floss, "FLOSS"),
+    (AnalysisKind::Embedded, "Binwalk"),
+    (AnalysisKind::Unpacking, "Unpacking"),
+    (AnalysisKind::Rules, "YARA rules"),
+    (AnalysisKind::Capabilities, "capa"),
+    (AnalysisKind::Disassembly, "Disassembly"),
+    (AnalysisKind::Decompilation, "Decompilation"),
 ];
 
-/// The count or value the tab's badge shows.
-fn line_value(
+/// What a check found, in plain words from its report section; why it is not
+/// complete comes first when it is not.
+fn line_result(
     kind: AnalysisKind,
-    sub: &str,
     section: &AnalysisSection,
     regex_total: Option<u64>,
     data: &Data,
 ) -> String {
-    let entries = |labels: &[&str]| {
+    use antinomie_monitor_core::analysis::detection::group_digits;
+    let plural = |n: usize, one: &str, many: &str| {
+        format!(
+            "{} {}",
+            group_digits(n as u64),
+            if n == 1 { one } else { many }
+        )
+    };
+    let count = |labels: &[&str]| {
         section
             .entries
             .iter()
             .filter(|entry| labels.contains(&entry.label.as_str()))
             .count()
     };
-    match (kind, sub) {
-        (AnalysisKind::Metadata, "") => crate::values::file_size(data.record.size),
-        (AnalysisKind::Structures, "Segments") => {
-            let count = entries(&["Segment"]);
-            format!("{count} segment{}", if count == 1 { "" } else { "s" })
+    let names = |limit: usize| {
+        let all: Vec<&str> = section.entries.iter().map(|e| e.label.as_str()).collect();
+        let mut text = all
+            .iter()
+            .take(limit)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", ");
+        if all.len() > limit {
+            text.push_str(&format!(", +{} more", all.len() - limit));
         }
-        (AnalysisKind::Structures, "") => format!(
-            "{} symbols · {} imports · {} exports",
-            entries(&["Symbol"]),
-            entries(&["Import"]),
-            entries(&["Export"])
+        text
+    };
+    let found = match kind {
+        AnalysisKind::Metadata => format!(
+            "{}; hashes and object header ({} fields)",
+            crate::values::file_size(data.record.size),
+            section.entries.len()
         ),
-        (
-            AnalysisKind::Strings
-            | AnalysisKind::Floss
-            | AnalysisKind::Embedded
-            | AnalysisKind::Rules
-            | AnalysisKind::Capabilities,
-            _,
-        ) => counted(section).to_string(),
-        (AnalysisKind::Regex, _) => {
-            regex_total.map_or_else(|| first_line(&section.summary), |n| n.to_string())
+        AnalysisKind::Identification => {
+            let mut parts: Vec<String> = Vec::new();
+            for entry in &section.entries {
+                match entry.label.split_once(": ") {
+                    Some(("format", _)) => parts.insert(0, entry.value.clone()),
+                    Some((_, name)) => parts.push(name.to_owned()),
+                    None => parts.push(entry.label.clone()),
+                }
+            }
+            if parts.is_empty() {
+                "Nothing identified".to_owned()
+            } else {
+                parts.join("; ")
+            }
         }
+        AnalysisKind::Structures => {
+            let mut kinds = Vec::new();
+            for (labels, word) in [
+                (&["Section"][..], "sections"),
+                (&["Segment"], "segments"),
+                (&["Symbol"], "symbols"),
+                (&["Import"], "imports"),
+                (&["Export"], "exports"),
+            ] {
+                let n = count(labels);
+                if n > 0 {
+                    kinds.push(format!("{} {word}", group_digits(n as u64)));
+                }
+            }
+            format!(
+                "{} ({})",
+                plural(counted(section) as usize, "row", "rows"),
+                kinds.join(", ")
+            )
+        }
+        AnalysisKind::Hardening => {
+            let facts: Vec<String> = section
+                .entries
+                .iter()
+                .filter(|entry| entry.value.len() < 120 && !entry.value.starts_with(' '))
+                .map(|entry| {
+                    let value = entry.value.split(';').next().unwrap_or_default().trim();
+                    format!("{}: {value}", entry.label)
+                })
+                .collect();
+            if facts.is_empty() {
+                first_line(&section.summary)
+            } else {
+                facts.join("; ")
+            }
+        }
+        AnalysisKind::Entropy => {
+            let whole = section
+                .entries
+                .iter()
+                .find(|entry| entry.label == "Whole file")
+                .and_then(|entry| entry.value.parse::<f64>().ok());
+            match whole {
+                Some(bits) => format!(
+                    "{bits:.2} bits/byte whole file, {} measured (not a packing verdict)",
+                    plural(count(&["Measured region"]), "region", "regions")
+                ),
+                None => first_line(&section.summary),
+            }
+        }
+        AnalysisKind::Strings => {
+            let total = section
+                .summary
+                .split_whitespace()
+                .next()
+                .and_then(|word| word.parse::<u64>().ok());
+            match (total, section.summary.split_once(" strings")) {
+                (Some(total), Some((_, rest))) => {
+                    format!("{} strings{rest}", group_digits(total))
+                }
+                _ => format!("{} strings", group_digits(counted(section))),
+            }
+        }
+        AnalysisKind::Regex => match regex_total {
+            Some(total) => plural(total as usize, "match", "matches"),
+            None => "Matched over the strings when Regex matches is opened".to_owned(),
+        },
+        AnalysisKind::Rules => {
+            let n = section.entries.len();
+            if n == 0 {
+                "No rule matched".to_owned()
+            } else {
+                format!(
+                    "{}: {}",
+                    plural(n, "rule matched", "rules matched"),
+                    names(2)
+                )
+            }
+        }
+        AnalysisKind::Capabilities => {
+            let n = section.entries.len();
+            if n == 0 {
+                first_line(&section.summary)
+            } else {
+                format!(
+                    "{}, e.g. {}",
+                    plural(n, "capability", "capabilities"),
+                    names(3)
+                )
+            }
+        }
+        AnalysisKind::Floss => plural(
+            counted(section) as usize,
+            "string recovered",
+            "strings recovered",
+        ),
+        AnalysisKind::Embedded => plural(
+            counted(section) as usize,
+            "embedded signature",
+            "embedded signatures",
+        ),
         _ => first_line(&section.summary),
+    };
+    match section.reason() {
+        Some((why, _)) => format!("{why} {found}"),
+        None => found,
     }
 }
 
 fn first_line(text: &str) -> String {
     let line = text.lines().next().unwrap_or_default().trim();
-    if line.chars().count() > 60 {
-        format!("{}…", line.chars().take(59).collect::<String>())
-    } else if line.is_empty() {
+    if line.is_empty() {
         "–".into()
     } else {
         line.to_owned()
