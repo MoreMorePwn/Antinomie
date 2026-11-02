@@ -192,7 +192,10 @@ struct Settings {
     /// Help > Getting started: skipped steps and whether it has been shown.
     getting_started: crate::getting_started::Progress,
     /// Debugger panel: the signal table and fork policy for new sessions.
-    #[serde(deserialize_with = "debugger::prefs::lenient_prefs")]
+    #[serde(
+        deserialize_with = "debugger::prefs::lenient_prefs",
+        serialize_with = "debugger::prefs::serialize_prefs"
+    )]
     debugger: debugger::DebuggerPrefs,
     /// The latest program each VM ran, for the sidebar.
     last_runs: BTreeMap<String, LastRun>,

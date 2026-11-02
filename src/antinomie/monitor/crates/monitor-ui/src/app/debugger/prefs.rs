@@ -9,7 +9,10 @@ use antinomie_monitor_core::debug::{
     signal_policy::SignalTable,
     view::{FollowMode, ForkPolicy},
 };
-use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
+use serde::{
+    de::{DeserializeOwned, MapAccess, SeqAccess, Visitor},
+    Deserialize, Deserializer, Serialize, Serializer,
+};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -130,10 +133,74 @@ fn lenient_detach<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D:
 }
 
 /// The whole entry, leniently: damage anywhere in it gives the defaults.
+///
+/// The app's settings are stored as RON, which cannot buffer a nested struct
+/// or a map with number keys into a `serde_json::Value`; reading the entry
+/// that way failed the whole settings file, so every setting (text size,
+/// theme...) fell back to its default at each start. The entry is therefore
+/// stored as one JSON text (`serialize_prefs`) and read back from that text.
+/// A JSON object is still accepted (the lenient reading above), and anything
+/// else, such as an entry an earlier version wrote as a RON struct, reads as
+/// the defaults.
 pub(crate) fn lenient_prefs<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<DebuggerPrefs, D::Error> {
-    lenient::<D, DebuggerPrefs>(deserializer).map(DebuggerPrefs::clean)
+    struct Entry;
+    impl<'de> Visitor<'de> for Entry {
+        type Value = DebuggerPrefs;
+
+        fn expecting(&self, out: &mut std::fmt::Formatter) -> std::fmt::Result {
+            out.write_str("the debugger preferences")
+        }
+
+        fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<Self::Value, E> {
+            let value = serde_json::from_str::<serde_json::Value>(text).unwrap_or_default();
+            Ok(serde_json::from_value(value).unwrap_or_default())
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+            lenient::<_, DebuggerPrefs>(serde::de::value::MapAccessDeserializer::new(map))
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E> {
+            Ok(DebuggerPrefs::default())
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E> {
+            Ok(DebuggerPrefs::default())
+        }
+
+        fn visit_bool<E>(self, _: bool) -> Result<Self::Value, E> {
+            Ok(DebuggerPrefs::default())
+        }
+
+        fn visit_i64<E>(self, _: i64) -> Result<Self::Value, E> {
+            Ok(DebuggerPrefs::default())
+        }
+
+        fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E> {
+            Ok(DebuggerPrefs::default())
+        }
+
+        fn visit_f64<E>(self, _: f64) -> Result<Self::Value, E> {
+            Ok(DebuggerPrefs::default())
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, _: A) -> Result<Self::Value, A::Error> {
+            Ok(DebuggerPrefs::default())
+        }
+    }
+    deserializer
+        .deserialize_any(Entry)
+        .map(DebuggerPrefs::clean)
+}
+
+/// The entry as one JSON text (see `lenient_prefs`).
+pub(crate) fn serialize_prefs<S: Serializer>(
+    prefs: &DebuggerPrefs,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&serde_json::to_string(prefs).map_err(serde::ser::Error::custom)?)
 }
 
 #[cfg(test)]
