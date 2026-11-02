@@ -99,10 +99,24 @@ impl Model {
                     )
                     .fill(theme::primary()),
                 )
-                .on_hover_text(if has_key {
-                    "Fetch every dataset that is switched on"
-                } else {
-                    "Fetches the datasets that need no key; ThreatFox and URLhaus wait for the Auth-Key"
+                .on_hover_text({
+                    // A typical size: the real sizes are asked when it starts.
+                    let typical: u64 = self
+                        .ioc
+                        .statuses
+                        .iter()
+                        .filter(|s| s.enabled && (has_key || !s.feed.needs_key))
+                        .map(|s| s.feed.expected_size)
+                        .sum();
+                    format!(
+                        "{} (typically about {} in all; the real sizes are asked first)",
+                        if has_key {
+                            "Fetch every dataset that is switched on"
+                        } else {
+                            "Fetches the datasets that need no key; ThreatFox and URLhaus wait for the Auth-Key"
+                        },
+                        size_text(typical)
+                    )
                 })
                 .clicked()
             {

@@ -139,6 +139,20 @@ it runs.
   outcome, the listing) is one line of fixed height, the window keeps its size
   and scrolls inside when the screen is small, and a row's download progress
   stays in its own cell.
+- **IOC dataset downloads use the real size, not a stale estimate.** The
+  progress said "386 MB of about 312 MB" because each abuse.ch dataset carried a
+  fixed size from the day it was written. Update now asks each server for the
+  real size first (a HEAD request, Content-Length) and shows "386 of 450 MB", or
+  "386 MB downloaded" when the server does not say. The free-space check uses
+  the real size and what it unpacks to, and the unpacked-text cap follows it.
+  Update all shows the total of the datasets (marked "about" when some sizes are
+  estimated) in every progress line, and the button's hover text shows the typical
+  total before it starts. The safety caps stay (four times the typical size for
+  a download); a dataset over its cap is refused before it is fetched with its
+  size and the limit in the message, e.g. "URLhaus payloads is 1.4 GB, over the
+  1.2 GB safety limit for this dataset". The typical sizes were refreshed. A
+  rule pack's progress says "of" for a pinned download and "of about" only for a
+  rolling one.
 
 ## 0.8.1 — 2026-11-03
 

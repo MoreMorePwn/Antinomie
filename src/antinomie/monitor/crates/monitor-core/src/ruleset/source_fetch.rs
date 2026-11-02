@@ -26,6 +26,13 @@ pub trait Fetcher {
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(u64),
     ) -> Result<(), String>;
+
+    /// The size in bytes the server says `url` has (a HEAD request's
+    /// Content-Length), or `None` when it does not say or cannot be asked.
+    /// Fetchers that serve from memory or disk need not answer.
+    fn remote_size(&self, _url: &str, _cancel: &AtomicBool) -> Option<u64> {
+        None
+    }
 }
 
 /// The system `curl`. Each hop is a separate process so that every redirect
@@ -225,7 +232,105 @@ struct Hop {
     redirect: String,
 }
 
+impl Curl {
+    /// One HEAD request: the status, the redirect target and Content-Length.
+    fn head(&self, url: &str, cancel: &AtomicBool) -> Option<(u32, String, Option<u64>)> {
+        if url.chars().any(|c| c.is_control() || c == '"' || c == '\\') {
+            return None;
+        }
+        let mut command = crate::http_fetch::command(
+            &self.program,
+            &crate::http_fetch::Options {
+                fail: false,
+                ..crate::http_fetch::Options::new(30, 1 << 40)
+            },
+        );
+        command
+            .args([
+                "--head",
+                "--user-agent",
+                concat!("Antinomie-rules/", env!("CARGO_PKG_VERSION")),
+                "-K",
+                "-",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut child = command.spawn().ok()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            if writeln!(stdin, "url = \"{url}\"").is_err() {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+        let _recorded = crate::cancel::record(child.id());
+        let started = Instant::now();
+        let status = loop {
+            if cancel.load(Ordering::Relaxed) || started.elapsed() > Duration::from_secs(40) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            match child.try_wait().ok()? {
+                Some(status) => break status,
+                None => std::thread::sleep(Duration::from_millis(50)),
+            }
+        };
+        if !status.success() {
+            return None;
+        }
+        let mut out = String::new();
+        child
+            .stdout
+            .take()?
+            .take(16 * 1024)
+            .read_to_string(&mut out)
+            .ok()?;
+        // The last response block: a redirect chain is not followed here.
+        let mut code = 0u32;
+        let mut location = String::new();
+        let mut length = None;
+        for line in out.lines().map(str::trim_end) {
+            if line.starts_with("HTTP/") {
+                code = line.split_whitespace().nth(1)?.parse().ok()?;
+                location.clear();
+                length = None;
+            } else if let Some((name, value)) = line.split_once(':') {
+                let value = value.trim();
+                if name.eq_ignore_ascii_case("content-length") {
+                    length = value.parse().ok();
+                } else if name.eq_ignore_ascii_case("location") {
+                    location = value.to_owned();
+                }
+            }
+        }
+        (code != 0).then_some((code, location, length))
+    }
+}
+
 impl Fetcher for Curl {
+    fn remote_size(&self, url: &str, cancel: &AtomicBool) -> Option<u64> {
+        let origin = https_host(url).ok()?;
+        let mut current = url.to_owned();
+        for _ in 0..=MAX_REDIRECTS {
+            let (code, location, length) = self.head(&current, cancel)?;
+            match code {
+                200 => return length.filter(|&size| size > 0),
+                301 | 302 | 303 | 307 | 308 => {
+                    let host = https_host(&location).ok()?;
+                    if !host_allowed(&origin, &host) {
+                        return None;
+                    }
+                    current = location;
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
     fn fetch(
         &self,
         url: &str,

@@ -66,7 +66,9 @@ pub struct Feed {
     pub terms: Terms,
     /// The download needs the abuse.ch Auth-Key.
     pub needs_key: bool,
-    /// Usual size of the plain text, in bytes; limits are derived from it.
+    /// A typical size of the download, in bytes. Only an estimate, used when
+    /// the server does not say the real size (progress text, free-space check)
+    /// and for the safety caps below; the real size, when known, wins.
     pub expected_size: u64,
     /// Switched on until the person says otherwise. A smaller alternative to
     /// another feed is off until it is asked for.
@@ -74,6 +76,9 @@ pub struct Feed {
 }
 
 const KEY_MARK: &str = "{key}";
+/// How many times larger than its zip the plain text of a dataset may be
+/// (free-space check and unpacked-size cap). The CSV exports pack about 5 to 1.
+pub const UNPACK_RATIO: u64 = 6;
 
 impl Feed {
     /// The URL to fetch, with the key in it. It goes to curl on standard input
@@ -92,7 +97,8 @@ impl Feed {
         template_owns(self.url, url)
     }
 
-    /// Most bytes one download may send.
+    /// The safety cap on one download: a dataset larger than this is refused
+    /// before it is fetched when its size is known, and cut off when not.
     pub fn download_limit(&self) -> u64 {
         self.expected_size.saturating_mul(4).max(8 * 1024 * 1024)
     }
@@ -100,6 +106,14 @@ impl Feed {
     /// Most bytes the plain text may have after unpacking.
     pub fn text_limit(&self) -> u64 {
         self.expected_size.saturating_mul(6).max(16 * 1024 * 1024)
+    }
+
+    /// The same cap for a download of known `size`: the text of a zip is a few
+    /// times larger than the zip, so it follows the real size when that is
+    /// larger than the estimate says.
+    pub fn text_limit_for(&self, size: Option<u64>) -> u64 {
+        self.text_limit()
+            .max(size.unwrap_or(0).saturating_mul(UNPACK_RATIO))
     }
 
     pub fn license(&self) -> &'static str {
@@ -158,7 +172,7 @@ pub const FEEDS: [Feed; 7] = [
         format: Format::Csv,
         terms: Terms::FairUse,
         needs_key: true,
-        expected_size: 118 * 1024 * 1024,
+        expected_size: 150 * 1024 * 1024,
         default_on: true,
     },
     Feed {
@@ -171,7 +185,7 @@ pub const FEEDS: [Feed; 7] = [
         format: Format::Csv,
         terms: Terms::FairUse,
         needs_key: true,
-        expected_size: 204 * 1024 * 1024,
+        expected_size: 250 * 1024 * 1024,
         default_on: true,
     },
     Feed {
@@ -184,7 +198,7 @@ pub const FEEDS: [Feed; 7] = [
         format: Format::Csv,
         terms: Terms::FairUse,
         needs_key: true,
-        expected_size: 312 * 1024 * 1024,
+        expected_size: 450 * 1024 * 1024,
         default_on: true,
     },
     Feed {
@@ -197,7 +211,7 @@ pub const FEEDS: [Feed; 7] = [
         format: Format::FeodoJson,
         terms: Terms::Cc0,
         needs_key: false,
-        expected_size: 512 * 1024,
+        expected_size: 64 * 1024,
         default_on: true,
     },
     Feed {
@@ -210,7 +224,7 @@ pub const FEEDS: [Feed; 7] = [
         format: Format::Csv,
         terms: Terms::Cc0,
         needs_key: false,
-        expected_size: 256 * 1024,
+        expected_size: 64 * 1024,
         default_on: true,
     },
     Feed {

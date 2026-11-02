@@ -84,7 +84,12 @@ fn copy_limited(
 }
 
 /// Turn a download into the feed's plain text in `text`.
-fn unpack(download: &Path, text: &Path, feed: &Feed) -> Result<(u64, String), String> {
+fn unpack(
+    download: &Path,
+    text: &Path,
+    feed: &Feed,
+    text_limit: u64,
+) -> Result<(u64, String), String> {
     let mut file =
         File::open(download).map_err(|error| format!("{}: {error}", download.display()))?;
     let mut magic = [0u8; 4];
@@ -94,7 +99,7 @@ fn unpack(download: &Path, text: &Path, feed: &Feed) -> Result<(u64, String), St
     drop(file);
     if &magic[..read] != ZIP_MAGIC {
         let file = File::open(download).map_err(|error| error.to_string())?;
-        return copy_limited(file, text, feed.text_limit(), feed.file);
+        return copy_limited(file, text, text_limit, feed.file);
     }
     let file = File::open(download).map_err(|error| error.to_string())?;
     let mut archive = crate::zip_safe::open(file)
@@ -118,7 +123,48 @@ fn unpack(download: &Path, text: &Path, feed: &Feed) -> Result<(u64, String), St
     let entry = archive
         .by_index(at)
         .map_err(|error| format!("the zip download cannot be read: {error}"))?;
-    copy_limited(entry, text, feed.text_limit(), feed.file)
+    copy_limited(entry, text, text_limit, feed.file)
+}
+
+/// A size for people: `386 MB`, `1.4 GB`, `512 KB`.
+fn human(bytes: u64) -> String {
+    const MB: f64 = (1u64 << 20) as f64;
+    let value = bytes as f64;
+    if bytes >= 1 << 30 {
+        format!("{:.1} GB", value / (MB * 1024.0))
+    } else if bytes >= 1 << 20 {
+        format!("{} MB", bytes >> 20)
+    } else {
+        format!("{} KB", (bytes >> 10).max(1))
+    }
+}
+
+/// `386 of 450 MB` when the size is known, `386 MB downloaded` when not; both
+/// figures in one unit.
+fn progress_text(received: u64, total: Option<u64>) -> String {
+    let Some(total) = total else {
+        return format!("{} downloaded", human(received));
+    };
+    let (unit, shift) = if total >= 1 << 30 {
+        ("GB", 30)
+    } else if total >= 1 << 20 {
+        ("MB", 20)
+    } else {
+        ("KB", 10)
+    };
+    let scale = (1u64 << shift) as f64;
+    let figure = |bytes: u64| {
+        if shift == 30 {
+            format!("{:.1}", bytes as f64 / scale)
+        } else {
+            (bytes >> shift).to_string()
+        }
+    };
+    format!(
+        "{} of {} {unit}",
+        figure(received.min(total)),
+        figure(total)
+    )
 }
 
 fn free_space(path: &Path) -> Result<u64, String> {
@@ -139,7 +185,32 @@ pub fn update_feed(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<FeedMeta, String> {
-    let result = update_inner(data_dir, feed, key, fetcher, cancel, progress)
+    let size = remote_size(feed, key, fetcher, cancel);
+    update_sized(data_dir, feed, key, size, fetcher, cancel, progress)
+}
+
+/// The real size of `feed`'s download, when the server says it.
+fn remote_size(
+    feed: &Feed,
+    key: &Secret,
+    fetcher: &dyn Fetcher,
+    cancel: &AtomicBool,
+) -> Option<u64> {
+    let url = feed.url_for(key).ok()?;
+    fetcher.remote_size(&url, cancel)
+}
+
+/// [`update_feed`] with the download's real size, when it is known.
+fn update_sized(
+    data_dir: &Path,
+    feed: &'static Feed,
+    key: &Secret,
+    known: Option<u64>,
+    fetcher: &dyn Fetcher,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(&str),
+) -> Result<FeedMeta, String> {
+    let result = update_inner(data_dir, feed, key, known, fetcher, cancel, progress)
         .map_err(|error| api_keys::redact(&redact_url(&error), &[key]));
     match &result {
         Ok(_) => feeds::write_error(data_dir, feed, None),
@@ -159,6 +230,7 @@ fn update_inner(
     data_dir: &Path,
     feed: &'static Feed,
     key: &Secret,
+    known: Option<u64>,
     fetcher: &dyn Fetcher,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
@@ -168,44 +240,61 @@ fn update_inner(
     let staging = feeds::staging_dir(data_dir).join(crate::storage::unique_id());
     crate::storage::private_dir(&staging).map_err(|error| error.to_string())?;
     let result = (|| {
-        // The download and the plain text it unpacks to, with room to spare:
-        // not the largest the limits would let them be, which for a 300 MB
-        // dataset asked for gigabytes and refused a download that fits.
-        let needed = feed.expected_size.saturating_mul(3).max(64 * 1024 * 1024);
+        let name = feed.name;
+        // The real size when the server said it, else the estimate.
+        let size = known.unwrap_or(feed.expected_size);
+        let cap = feed.download_limit();
+        if known.is_some_and(|real| real > cap) {
+            return Err(format!(
+                "{name} is {}, over the {} safety limit for this dataset",
+                human(size),
+                human(cap)
+            ));
+        }
+        // The download, then the plain text it unpacks to, with room to spare.
+        let needed = size
+            .saturating_mul(1 + feeds::UNPACK_RATIO)
+            .max(64 * 1024 * 1024);
         let free = free_space(&staging)?;
         if free < needed {
             return Err(format!(
-                "not enough free space ({} MB free, about {} MB needed)",
-                free >> 20,
-                needed >> 20
+                "not enough free space ({} free, about {} needed for the {} download and what it unpacks to)",
+                human(free),
+                human(needed),
+                human(size)
             ));
         }
         let download = staging.join("download");
-        let name = feed.name;
+        // The real size plus a little for a file that grew since it was asked.
+        let limit = known.map_or(cap, |real| real.saturating_add(real / 16 + (1 << 20)));
         let mut last = 0u64;
         progress(&format!("Downloading {name}"));
-        fetcher.fetch(
-            &url,
-            &download,
-            feed.download_limit(),
-            cancel,
-            &mut |received| {
+        fetcher
+            .fetch(&url, &download, limit, cancel, &mut |received| {
                 if received >> 21 != last >> 21 {
                     progress(&format!(
-                        "Downloading {name}: {} MB of about {} MB",
-                        received >> 20,
-                        feed.expected_size >> 20
+                        "Downloading {name}: {}",
+                        progress_text(received, known)
                     ));
                 }
                 last = received;
-            },
-        )?;
+            })
+            .map_err(|error| {
+                if error.contains("sent more than") {
+                    format!(
+                        "{name} is larger than the {} safety limit for this dataset",
+                        human(limit)
+                    )
+                } else {
+                    error
+                }
+            })?;
         if cancel.load(Ordering::Relaxed) {
             return Err("cancelled".into());
         }
         progress(&format!("Checking {name}"));
         let text = staging.join("text");
-        let (size, sha256) = unpack(&download, &text, feed)?;
+        let (size, sha256) = unpack(&download, &text, feed, feed.text_limit_for(known))?;
         let _ = fs::remove_file(&download);
         let scanned = records::count(&text, feed, cancel)?;
         if scanned.records == 0 {
@@ -266,16 +355,38 @@ pub fn update_all(
 ) -> Vec<Outcome> {
     feeds::remove_withdrawn(data_dir);
     let statuses = feeds::status(data_dir);
-    let total = statuses.iter().filter(|status| status.enabled).count();
+    let enabled: Vec<&feeds::FeedStatus> =
+        statuses.iter().filter(|status| status.enabled).collect();
+    let total = enabled.len();
+    // Ask every dataset its size first, so the whole download is known (or
+    // estimated) before the first byte comes.
+    progress(&format!("Checking the size of {total} datasets"));
+    let sizes: Vec<Option<u64>> = enabled
+        .iter()
+        .map(|status| remote_size(status.feed, key, fetcher, cancel))
+        .collect();
+    let all: u64 = enabled
+        .iter()
+        .zip(&sizes)
+        .map(|(status, size)| size.unwrap_or(status.feed.expected_size))
+        .sum();
+    let exact = sizes.iter().all(Option::is_some);
+    let overall = format!("{}{} in all", if exact { "" } else { "about " }, human(all));
     let mut outcomes = Vec::new();
-    for status in statuses.iter().filter(|status| status.enabled) {
+    for (status, size) in enabled.iter().zip(sizes) {
         if cancel.load(Ordering::Relaxed) {
             break;
         }
         let number = outcomes.len() + 1;
-        let result = update_feed(data_dir, status.feed, key, fetcher, cancel, &mut |line| {
-            progress(&format!("{line} ({number} of {total})"))
-        });
+        let result = update_sized(
+            data_dir,
+            status.feed,
+            key,
+            size,
+            fetcher,
+            cancel,
+            &mut |line| progress(&format!("{line} ({number} of {total}, {overall})")),
+        );
         outcomes.push(Outcome {
             feed: status.feed,
             result,

@@ -291,8 +291,15 @@ fn build_tree(
             cancel,
             &mut |received| {
                 if received / (256 * 1024) != last / (256 * 1024) {
+                    // A pinned source has exactly the size the catalog lists;
+                    // only a rolling one is an estimate.
+                    let about = if source.rolling || source.sha256.is_empty() {
+                        "about "
+                    } else {
+                        ""
+                    };
                     progress(&format!(
-                        "{label}: {} of about {}",
+                        "{label}: {} of {about}{}",
                         human_bytes(received),
                         human_bytes(source.size)
                     ));
