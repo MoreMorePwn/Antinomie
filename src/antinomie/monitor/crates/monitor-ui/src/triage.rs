@@ -1310,6 +1310,9 @@ struct ArchiveScan {
     /// The run's program died of a signal before its first recorded system
     /// call: "the sample crashed before its first system call: SIGSEGV".
     root_crash: Option<String>,
+    /// The last create, write, delete or exec the kernel refused, as
+    /// "openat /var/run/dbus/x.pid ENOENT".
+    last_failed_step: Option<String>,
 }
 
 /// The rows of the rebuilt Network tabs and what their pages left out.

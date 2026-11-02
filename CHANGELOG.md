@@ -99,6 +99,12 @@ it runs.
   `/usr/bin`, `/usr/sbin`, `/usr/local/bin` or `/usr/local/sbin` that the run did
   not create itself (a botnet removing `wget`, `nc`, `reboot` or `killall`). Package
   managers lower it one tier.
+- **The report says when the sample's tree ended at once, and what failed
+  last.** When every process of a run exited within 10 s, the report's summary
+  and notes say "The sample's process tree ended after N ms (P processes). Last
+  failing step: openat /var/run/dbus/x.pid ENOENT", the last refused create,
+  write, delete, rename, link, permission change or exec, so a failed install
+  step is no longer silent.
 
 ## 0.8.1 — 2026-11-03
 

@@ -266,6 +266,46 @@ fn summary(
 
 use antinomie_monitor_core::run_digest as digest_types;
 
+/// A tree that ended sooner than this was over before it could do much.
+const SHORT_TREE_NS: u64 = 10_000_000_000;
+
+/// "The process tree ended after 0.1 s; last failing step: openat /x ENOENT":
+/// said when every process of the run exited within seconds, so a reader knows
+/// the short report is the sample's own doing (a failed install step, a check
+/// that told it to stop), not a lost recording.
+fn tree_end_note(scan: &ArchiveScan) -> Option<String> {
+    let tasks: Vec<_> = scan.process.iter().filter(|node| !node.thread).collect();
+    if tasks.is_empty()
+        || !tasks.iter().all(|node| node.state.starts_with("task exit"))
+        || scan.root_crash.is_some()
+    {
+        return None;
+    }
+    let first = tasks.iter().filter_map(|node| node.first_ns).min()?;
+    let last = tasks.iter().filter_map(|node| node.last_ns).max()?;
+    let span = last.saturating_sub(first);
+    if span >= SHORT_TREE_NS {
+        return None;
+    }
+    let count = tasks.len();
+    let after = if span < 1_000_000_000 {
+        format!("{} ms", span / 1_000_000)
+    } else {
+        format!("{:.1} s", span as f64 / 1e9)
+    };
+    let mut note = format!(
+        "The sample's process tree ended after {after} ({count} process{}).",
+        if count == 1 { "" } else { "es" }
+    );
+    match &scan.last_failed_step {
+        Some(step) => note.push_str(&format!(
+            " Last failing step: {step}. If this is an install or setup step, the sample stopped because it failed."
+        )),
+        None => note.push_str(" No create, write or exec call was refused before it ended."),
+    }
+    Some(note)
+}
+
 fn processes(scan: &ArchiveScan, clock: Option<antinomie_monitor_core::HostClockAnchor>) -> Table {
     let rows = super::super::process_tree::process_rows(&scan.process, clock, &scan.suspicious);
     let headers = [
@@ -644,6 +684,12 @@ pub(super) fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
                 summary.statement
             );
         }
+    }
+    if let Some(note) = tree_end_note(scan) {
+        if let Some(summary) = report.summary.as_mut() {
+            summary.statement = format!("{note} {}", summary.statement);
+        }
+        report.notes.push(note);
     }
     if let Some(crash) = &scan.root_crash {
         report.notes.push(format!(

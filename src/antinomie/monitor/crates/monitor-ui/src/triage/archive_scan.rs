@@ -163,6 +163,8 @@ pub(super) fn scan_archive_query(
         cloud_profile: cloud_profile(&directory),
     });
     let mut scoped_count = 0;
+    // The last install-like call the kernel refused: "openat /var/run/x ENOENT".
+    let mut last_failed: Option<FailedStep> = None;
     // Calls whose saved async observations the pages only preview, and how many.
     let (mut async_partial, mut async_omitted) = (0u64, 0u64);
     let (seen, complete, issues) = walk_segments(&recordings, cancel, |segment, page| {
@@ -332,6 +334,9 @@ pub(super) fn scan_archive_query(
         // Classified before the call is tracked: "created" means the path
         // was not seen before this call.
         let hits = file_category::classify(&files, invocation, event);
+        if real {
+            note_failed_step(&mut last_failed, &files, invocation, event);
+        }
         if let Some(writer) = &mut event_journal {
             if let Err(error) =
                 normalized::call(writer, &mut pending, &mut files, invocation, event)
@@ -800,7 +805,52 @@ pub(super) fn scan_archive_query(
         ioc: Some(Arc::new(ioc)),
         network_warning: network.network_warning,
         root_crash,
+        last_failed_step: last_failed.map(|step| step.text),
     })
+}
+
+/// A call that tried to make, change or run something and was refused.
+struct FailedStep {
+    text: String,
+}
+
+/// Remember `invocation` as the run's last failing step when it is a refused
+/// create, write, delete, rename, link, permission change or exec. Reads and
+/// probes (a library search, a `stat`) fail all the time and say nothing.
+fn note_failed_step(
+    last: &mut Option<FailedStep>,
+    files: &FdState,
+    invocation: &InvocationSummary,
+    event: &EventSummary,
+) {
+    let file_category::Outcome::Failed(ret) = file_category::outcome(invocation) else {
+        return;
+    };
+    let name = event.syscall_name.as_str();
+    let makes = match name {
+        "open" | "openat" | "openat2" | "creat" => file_events::open_flags(invocation, event)
+            .is_some_and(|flags| flags & 0o3 != 0 || flags & 0o100 != 0),
+        "mkdir" | "mkdirat" | "mknod" | "mknodat" | "unlink" | "unlinkat" | "rmdir" | "rename"
+        | "renameat" | "renameat2" | "link" | "linkat" | "symlink" | "symlinkat" | "chmod"
+        | "fchmodat" | "chown" | "fchownat" | "truncate" | "execve" | "execveat" => true,
+        _ => false,
+    };
+    if !makes {
+        return;
+    }
+    let path = sigma_events::paths(files, invocation, event)
+        .into_iter()
+        .next()
+        .map(|used| used.name)
+        .unwrap_or_default();
+    let errno = crate::values::errno_name(ret.unsigned_abs())
+        .map_or_else(|| ret.to_string(), str::to_owned);
+    let text = if path.is_empty() {
+        format!("{name} {errno}")
+    } else {
+        format!("{name} {path} {errno}")
+    };
+    *last = Some(FailedStep { text });
 }
 
 /// Said instead of a cause while the VM still holds the recording open.
