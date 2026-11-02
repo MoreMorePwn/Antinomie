@@ -106,10 +106,7 @@ impl MonitorApp {
         for panel in self.layout.all_tabs() {
             let title = self.panel_title(&panel);
             let detail = self
-                .layout
-                .tab_key_position(&panel)
-                .and_then(keys::tab_shortcut)
-                .map(|shortcut| ctx.format_shortcut(&shortcut))
+                .shortcut_text(ctx, &Action::Go(panel.clone()))
                 .unwrap_or_default();
             items.push(Item {
                 haystack: format!("{title} tab view"),
@@ -332,7 +329,8 @@ impl MonitorApp {
             .resizable(false)
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 64.0))
-            .fixed_size(egui::vec2(width, 0.0))
+            .min_width(width)
+            .max_width(width)
             .show(ctx, |ui| {
                 let edit = ui.add(
                     egui::TextEdit::singleline(&mut state.query)

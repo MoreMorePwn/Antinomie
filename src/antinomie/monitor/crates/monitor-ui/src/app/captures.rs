@@ -34,6 +34,8 @@ pub(super) struct ProcessPicker {
     pub core_picked: Option<u32>,
     /// Why the action is not available, said in the window; set each frame.
     pub unavailable: Option<&'static str>,
+    /// Ctrl+D while the debugger picker is open: attach the selected process.
+    pub confirm: bool,
 }
 
 /// What the Dump core dialog needs to know about the guest.
@@ -298,9 +300,14 @@ impl ProcessPicker {
                     );
                 }
                 ui.horizontal_wrapped(|ui| {
+                    let ready = enabled
+                        && self.pending.is_none()
+                        && selection_current
+                        && self.selected.is_some();
+                    let confirm = std::mem::take(&mut self.confirm) && debug && ready;
                     if ui
                         .add_enabled(
-                            enabled && self.pending.is_none() && selection_current && self.selected.is_some(),
+                            ready,
                             egui::Button::new(
                                 RichText::new(if core {
                                     format!("{} Dump core", egui_phosphor::regular::FILE)
@@ -314,6 +321,7 @@ impl ProcessPicker {
                             .fill(theme::primary()),
                         )
                         .clicked()
+                        || confirm
                     {
                         if let Some(identity) = self.selected.clone() {
                             action = Some(if core {

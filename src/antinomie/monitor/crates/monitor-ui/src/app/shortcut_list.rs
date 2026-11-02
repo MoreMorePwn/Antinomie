@@ -35,6 +35,11 @@ pub(super) const AREA_SHORTCUTS: &[(&str, &str, &str)] = &[
     ),
     (
         "Windows and dialogs",
+        "Ctrl+D",
+        "In the Attach debugger list: attach the debugger to the selected process",
+    ),
+    (
+        "Windows and dialogs",
         "Enter",
         "Confirm Rename and Duplicate; accept a one-line field",
     ),
@@ -166,6 +171,19 @@ impl MonitorApp {
             ),
             "Show the 1st to 9th tab of the work area, left to right",
         );
+        for panel in [Panel::Activity, Panel::Jobs] {
+            let action = Action::Go(panel.clone());
+            if let Some(keys) = action
+                .shortcut()
+                .map(|shortcut| ctx.format_shortcut(&shortcut))
+            {
+                add(
+                    "Workspace tabs",
+                    keys,
+                    &format!("Show the {} tab (lower bar)", panel.title()),
+                );
+            }
+        }
         for (area, keys, what) in AREA_SHORTCUTS {
             add(area, (*keys).into(), what);
         }

@@ -21,6 +21,27 @@ it runs.
   stopped grey, time limit blue-grey info, crashed or killed by a signal amber,
   failed to start or interrupted red, recording incomplete amber. The words
   stay, so colour is never the only cue.
+
+- **Keyboard shortcuts: command palette, tab keys and a shortcut list.**
+  Ctrl+K opens a command palette that searches every menu action, the open
+  tabs, the machines, the recent runs and the library samples; Enter runs the
+  highlighted entry through the same code as the menus, Esc (or Ctrl+K again)
+  closes it, and an action that cannot run now stays in the list with the
+  reason ("Start the selected VM first."). Ctrl+1 to Ctrl+9 show the first nine
+  tabs of the work area in the order the tab bar shows them (so they follow a
+  tab you dragged), Ctrl+Shift+A and Ctrl+Shift+J show Activity and Jobs (the
+  lower bar), Ctrl+D opens the debugger's process picker and, with the picker
+  open, attaches the selected process, Ctrl+R still runs a program, Getting
+  started's Appearance step has a palette entry, and `?` (or Help > Keyboard shortcuts) lists every shortcut by
+  area, including the graph, table, filter and terminal keys. Menus and button
+  tooltips show the keys, and a tab's tooltip shows its Ctrl+digit. The menu
+  bar has a Search button for the palette. The rule for who owns the keyboard:
+  a global shortcut never takes a key from a text field or the terminal (Ctrl+K
+  stays with them too: it deletes to the end of the line, in a field and in the
+  guest shell); a focused button, table or graph no longer blocks the shortcuts.
+  A menu item, its shortcut and its palette entry now share one action list, so
+  they cannot disagree.
+
 - **A Jobs window lists everything the app is running.** It sits beside Activity
   (View > Jobs), and a "3 jobs" chip in the status bar opens it. One row per job
   with its kind, target, start time, a ticking elapsed time, progress when

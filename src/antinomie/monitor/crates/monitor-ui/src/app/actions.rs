@@ -48,6 +48,8 @@ pub(super) enum Action {
     UiPerformance,
     RecorderStats,
     GettingStarted,
+    /// Getting started, opened on its Appearance step.
+    GettingStartedAppearance,
     About,
     FilterGuide,
     Documentation,
@@ -61,7 +63,7 @@ const DOCUMENTATION_URL: &str = "https://antinomie.moremorepwn.blog/docs/";
 impl Action {
     /// Every action the palette offers, in the order of the menus. Views are
     /// not here: the palette lists the open tabs instead.
-    pub(super) const PALETTE: [Self; 42] = [
+    pub(super) const PALETTE: [Self; 43] = [
         Self::NewVm,
         Self::ImportBase,
         Self::DownloadBase,
@@ -98,6 +100,7 @@ impl Action {
         Self::UiPerformance,
         Self::RecorderStats,
         Self::GettingStarted,
+        Self::GettingStartedAppearance,
         Self::About,
         Self::FilterGuide,
         Self::Documentation,
@@ -143,6 +146,7 @@ impl Action {
             | Self::UiPerformance
             | Self::RecorderStats => "Tools",
             Self::GettingStarted
+            | Self::GettingStartedAppearance
             | Self::About
             | Self::FilterGuide
             | Self::Documentation
@@ -166,6 +170,8 @@ impl Action {
             Self::Settings => keys::SETTINGS,
             Self::Quit => keys::QUIT,
             Self::Palette => keys::PALETTE,
+            Self::Go(Panel::Activity) => keys::SHOW_ACTIVITY,
+            Self::Go(Panel::Jobs) => keys::SHOW_JOBS,
             _ => return None,
         })
     }
@@ -215,6 +221,7 @@ impl Action {
             Self::UiPerformance => "UI performance…".into(),
             Self::RecorderStats => "Refresh recorder statistics".into(),
             Self::GettingStarted => "Getting started".into(),
+            Self::GettingStartedAppearance => "Getting started: Appearance".into(),
             Self::About => "About Antinomie".into(),
             Self::FilterGuide => "Filter guide".into(),
             Self::Documentation => "Online documentation".into(),
@@ -390,6 +397,7 @@ impl MonitorApp {
             | Action::Dependencies
             | Action::UiPerformance
             | Action::GettingStarted
+            | Action::GettingStartedAppearance
             | Action::About
             | Action::FilterGuide
             | Action::Documentation
@@ -407,6 +415,7 @@ impl MonitorApp {
                 .layout
                 .tab_key_position(panel)
                 .and_then(keys::tab_shortcut)
+                .or_else(|| action.shortcut())
                 .map(|shortcut| ctx.format_shortcut(&shortcut)),
             Action::Shortcuts => Some(keys::SHORTCUT_LIST.into()),
             other => other
@@ -461,7 +470,15 @@ impl MonitorApp {
             Action::RunProgram => self.launch_open = true,
             Action::UploadFile => self.open_upload(),
             Action::AttachProcess => self.open_process_picker(),
-            Action::AttachDebugger => self.open_debug_picker(),
+            Action::AttachDebugger => {
+                let picker = &mut self.process_picker;
+                if picker.open && picker.purpose == captures::ProcessPurpose::Debug {
+                    // The list is already open: the key attaches the selected process.
+                    picker.confirm = true;
+                } else {
+                    self.open_debug_picker();
+                }
+            }
             Action::CaptureAll => self.send(Command::CaptureAll),
             Action::StopCapture => self.stop_observer(),
             Action::NetworkCapture => self.toggle_network_capture(),
@@ -485,6 +502,10 @@ impl MonitorApp {
             Action::UiPerformance => self.performance.open = true,
             Action::RecorderStats => self.send(Command::RecorderStats),
             Action::GettingStarted => self.open_getting_started(),
+            Action::GettingStartedAppearance => {
+                self.open_getting_started();
+                self.getting_started.step = crate::getting_started::Step::Appearance;
+            }
             Action::About => self.about_open = true,
             Action::FilterGuide => crate::query::open_guide(ctx),
             Action::Documentation => ctx.open_url(egui::OpenUrl::new_tab(DOCUMENTATION_URL)),

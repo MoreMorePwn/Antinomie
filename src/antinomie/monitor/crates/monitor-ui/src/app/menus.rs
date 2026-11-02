@@ -47,6 +47,11 @@ impl MonitorApp {
                     asked.push(Action::Go(panel.clone()));
                 }
             }
+            for panel in [Panel::Activity, Panel::Jobs] {
+                if Action::Go(panel.clone()).shortcut().is_some_and(pressed) {
+                    asked.push(Action::Go(panel));
+                }
+            }
             if crate::typing::question_mark_pressed(ctx) {
                 asked.push(Action::Shortcuts);
             }
@@ -111,10 +116,11 @@ impl MonitorApp {
                     });
                     ui.menu_button("View", |ui| {
                         ui.set_min_width(ui.spacing().menu_width);
-                        for view in Panel::MAIN
-                            .into_iter()
-                            .chain([Panel::Details, Panel::Activity, Panel::Jobs])
-                        {
+                        for view in Panel::MAIN.into_iter().chain([
+                            Panel::Details,
+                            Panel::Activity,
+                            Panel::Jobs,
+                        ]) {
                             self.menu_item(ui, Action::Go(view), None);
                         }
                         ui.separator();
@@ -215,13 +221,6 @@ impl MonitorApp {
     /// VM's name and state take what is left of the row and cut the name with
     /// an ellipsis (the whole text is on hover).
     pub(super) fn toolbar(&mut self, ctx: &egui::Context) {
-        let start_tip = self.with_shortcut(ctx, "Start the selected VM", &Action::StartVm);
-        let stop_tip = self.with_shortcut(ctx, "Shut down the running VM", &Action::StopVm);
-        let run_tip = self.with_shortcut(
-            ctx,
-            "Run a program in the VM and record it",
-            &Action::RunProgram,
-        );
         egui::TopBottomPanel::top("toolbar")
             .exact_height(self.settings.font_size + 22.0)
             .frame(theme::frame(theme::panel()))
@@ -325,8 +324,7 @@ impl MonitorApp {
 
     /// The toolbar's buttons in the order they are drawn.
     fn tool_specs(&self, ctx: &egui::Context) -> Vec<ToolSpec> {
-        let shortcut =
-            |text: &str, shortcut| format!("{text} ({})", ctx.format_shortcut(&shortcut));
+        let shortcut = |text: &str, action: Action| self.with_shortcut(ctx, text, &action);
         let observer = self.active_observer().map(|capture| {
             format!(
                 "Stop capture ({}); programs keep running",
@@ -336,11 +334,11 @@ impl MonitorApp {
         let capturing = observer.is_some();
         use egui_phosphor::regular as icon;
         vec![
-            ToolSpec::new(ToolAction::Start, 0, icon::PLAY, "Start", shortcut("Start the selected VM", keys::START_VM), self.can_start_vm(), theme::good(), true, false),
-            ToolSpec::new(ToolAction::Stop, 0, icon::STOP, "Stop", shortcut("Shut down the running VM", keys::STOP_VM), self.can_stop_vm(), theme::error(), true, false),
+            ToolSpec::new(ToolAction::Start, 0, icon::PLAY, "Start", shortcut("Start the selected VM", Action::StartVm), self.can_start_vm(), theme::good(), true, false),
+            ToolSpec::new(ToolAction::Stop, 0, icon::STOP, "Stop", shortcut("Shut down the running VM", Action::StopVm), self.can_stop_vm(), theme::error(), true, false),
             ToolSpec::new(ToolAction::Snapshots, 1, icon::CLOCK_COUNTER_CLOCKWISE, "Snapshots", "Save, restore and branch this VM's disk and memory".into(), self.selected.is_some() && !self.closing, theme::blue(), false, false),
             ToolSpec::new(ToolAction::Kill, 2, icon::X_CIRCLE, "Kill", "Terminate the selected active run and descendants; keep the VM running. Select a live run in Run history when several are active.".into(), self.kill_target().is_some(), theme::error(), false, false),
-            ToolSpec::new(ToolAction::RunProgram, 2, icon::TERMINAL_WINDOW, "Run program", shortcut("Run a program in the VM and record it", keys::RUN_PROGRAM), self.running(), theme::blue(), false, self.launch_open),
+            ToolSpec::new(ToolAction::RunProgram, 2, icon::TERMINAL_WINDOW, "Run program", shortcut("Run a program in the VM and record it", Action::RunProgram), self.running(), theme::blue(), false, self.launch_open),
             ToolSpec::new(
                 ToolAction::CaptureAll,
                 3,
