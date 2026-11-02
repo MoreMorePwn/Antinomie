@@ -225,7 +225,16 @@ impl MonitorApp {
         };
         let mut state = std::mem::take(&mut detail.iocs);
         let mut go = None;
-        self.iocs_body(ui, data, &mut state, &mut go);
+        // The page scrolls when the window is too short for the filters and
+        // a table (a short window with Details open); the table keeps a
+        // height of its own meanwhile.
+        let table_height = (ui.available_height() - 150.0).max(200.0);
+        egui::ScrollArea::vertical()
+            .id_salt("sample-iocs-page")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                self.iocs_body(ui, data, &mut state, &mut go, table_height);
+            });
         self.iocs_poll(ui.ctx(), &mut state);
         if let Some(detail) = self.samples_page.detail.as_mut() {
             detail.iocs = state;
@@ -239,6 +248,7 @@ impl MonitorApp {
         data: &Arc<Data>,
         state: &mut State,
         go: &mut Option<Go>,
+        table_height: f32,
     ) {
         let union = &data.iocs;
         let listed = union.listed.len();
@@ -380,9 +390,10 @@ impl MonitorApp {
             parts::muted_line(ui, "Nothing matches these filters.");
             return;
         }
-        self.ioc_table(ui, data, state, &rows, key, go);
+        self.ioc_table(ui, data, state, &rows, key, go, table_height);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn ioc_table(
         &mut self,
         ui: &mut egui::Ui,
@@ -391,11 +402,12 @@ impl MonitorApp {
         rows: &[&SampleIoc],
         have_key: bool,
         go: &mut Option<Go>,
+        table_height: f32,
     ) {
         let listed = data.iocs.listed.len();
         let font = ui.text_style_height(&egui::TextStyle::Body);
         let row_height = table::row_height(font) + 6.0;
-        let height = ui.available_height().max(180.0);
+        let height = table_height;
         let mut picked = None;
         let defanged = state.defang;
         let selected = state.selected.clone();
