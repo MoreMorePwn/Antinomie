@@ -201,10 +201,8 @@ impl MonitorApp {
             .min_width(width)
             .max_width(width)
             .default_height(0.0)
-            .default_pos(egui::pos2(
-                (screen.center().x - width * 0.5).max(0.0),
-                screen.top() + 32.0,
-            ))
+            // No default_pos: like every dialog, it opens centred in the window
+            // (a position kept from a larger screen put it against the edge).
             .max_height((screen.height() - 40.0).max(200.0))
             .show(ctx, |ui| {
                 ui.set_width(width - 20.0);
@@ -258,7 +256,9 @@ impl MonitorApp {
                 widgets::footer_split(
                     ui,
                     |ui| {
-                        let room = (ui.available_width() - 190.0).max(60.0);
+                        // The buttons grow with the text size; leave their room.
+                        let buttons = egui::TextStyle::Button.resolve(ui.style()).size * 12.5 + 16.0;
+                        let room = (ui.available_width() - buttons).max(60.0);
                         ui.scope(|ui| {
                             ui.set_max_width(room);
                             ui.add(
