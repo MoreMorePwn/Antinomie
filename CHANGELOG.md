@@ -220,6 +220,14 @@ it runs.
   longer breaks into "Acceleratio" and "n" in the Compute card; the column is as
   wide as the widest label (at most half the card).
 
+- **A restart keeps your settings.** The debugger's remembered choices were saved
+  in a form the settings file could not read back, so every start fell back to the
+  defaults (text size, theme, density and the rest). They are now saved as one
+  text and read back, and a size such as 12, 17.5 or 24 survives a restart. Settings
+  opens centred in the window instead of against the right edge, its footer note
+  gives way to the buttons at large text sizes, and the malware catalog notice
+  scrolls so its checkbox and buttons stay on screen.
+
 ## 0.8.1 — 2026-11-03
 
 Antinomie 0.8.1 is a fix release for the 0.8.0 line; it runs the same revision-20
