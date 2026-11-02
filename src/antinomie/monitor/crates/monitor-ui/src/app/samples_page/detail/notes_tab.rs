@@ -118,6 +118,12 @@ fn note_card(ui: &mut egui::Ui, note: &Note, data: &Data, act: &mut Option<Act>)
         .stroke(egui::Stroke::new(1.0_f32, palette.line_soft))
         .corner_radius(6)
         .inner_margin(10);
+    // The card's own click (the right-click menu) is registered before its
+    // content, from the rect of the last frame: one added after the content
+    // would lie over the Edit and Delete buttons and take their clicks.
+    let card_id = ui.id().with(("note-card", note.id));
+    let last = ui.data(|d| d.get_temp::<egui::Rect>(card_id));
+    let card = last.map(|rect| ui.interact(rect, card_id.with("menu"), egui::Sense::click()));
     let shown = frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
@@ -146,12 +152,10 @@ fn note_card(ui: &mut egui::Ui, note: &Note, data: &Data, act: &mut Option<Act>)
             });
         }
     });
-    let card = ui.interact(
-        shown.response.rect,
-        shown.response.id.with("menu"),
-        egui::Sense::click(),
-    );
-    note_menu(&card, note, act);
+    ui.data_mut(|d| d.insert_temp(card_id, shown.response.rect));
+    if let Some(card) = card {
+        note_menu(&card, note, act);
+    }
 }
 
 fn show(ui: &mut egui::Ui, data: &Data) -> Option<Act> {
