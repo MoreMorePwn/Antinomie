@@ -8,6 +8,30 @@ it runs.
 
 ### Host
 
+- **The sample window has an IOCs tab: every indicator across all runs of the
+  sample.** One row per unique indicator (a file by hash and path): kind, value
+  (defanged by default, with a toggle), which runs had it ("run 2, 3", "5 runs",
+  "every run (4)"), how it was observed (DNS query, connect, packets, file write,
+  executed), first and last seen, the process, and the stored abuse.ch records that
+  list it. Kind chips carry counts ("Domains (4)"), "Seen in every run" and "Only
+  in some runs" show what changed between run settings, and a search box and
+  "Hide private and reserved" / "Hide guest infrastructure" (the base image's own
+  traffic and the emulated network's 10.0.2.x) narrow the list. The tab count is
+  the Triage one: the total in grey and the matched count in red. The selected row
+  is in the shared Details pane with one line per run and "Open in Triage", which
+  opens that run on the indicator in Triage > IOC. Per row: Copy, Open in Triage,
+  Add note (the indicator reference of the note kinds) and Check online, which is
+  off without an abuse.ch key and otherwise opens the run's Triage on the row,
+  where the existing lookup with its Cancel and rate limits is. Export writes the
+  rows listed (or the selected row) as CSV, JSON, a MISP event or a STIX 2.1
+  bundle into the data folder's `sample-reports`, defanged in CSV and JSON on
+  request, and notes it in the sample's custody log. The sample report's merged
+  indicators carry the same observed, first/last, every-run and dataset columns.
+  Runs Triage has not read, and runs read by an older Triage (value only), are
+  named in a note. IDS, YARA and Sigma rules match runs, not single
+  indicators, and stay in Summary > Detections. Triage's run digests keep the
+  sources, times, process and dataset records of each indicator from now on;
+  open a run in Triage once to fill them in.
 - **The Triage IOC tab and its kind tabs show matches beside the total.** The
   total number of indicators is in the muted grey count style and, when any
   indicator matched (IDS, YARA, Sigma, abuse.ch or marked malicious), the

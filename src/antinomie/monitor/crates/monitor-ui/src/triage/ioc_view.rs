@@ -26,6 +26,16 @@ mod detail;
 mod list;
 mod summary_tab;
 
+/// The look of a source chip, for the sample window's IOC tab.
+pub(crate) fn source_tone_of(label: &str) -> Tone {
+    match label {
+        "pcap" => list::source_tone(Source::Pcap),
+        "syscall" => list::source_tone(Source::Syscall),
+        "disk" => list::source_tone(Source::Disk),
+        _ => list::source_tone(Source::Static),
+    }
+}
+
 pub(super) use list::DETAILS_TABLE;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -81,6 +91,8 @@ pub(super) struct View {
     datasets_seen: Option<String>,
     /// The feeds' chips for the status bar: name and whether a copy is loaded.
     chips: Vec<(String, bool)>,
+    /// An indicator the sample window asked to show: kind, value, file path.
+    pending: Option<(Type, String, String)>,
 }
 
 impl View {
@@ -122,6 +134,27 @@ impl View {
         if let Some(dir) = run_dir {
             self.online = online::load(dir);
         }
+    }
+
+    /// Select the indicator the sample window asked for: its kind's tab, the
+    /// row, and the shared Details pane.
+    fn show_pending(&mut self, ctx: &egui::Context, ioc: &IocScan) {
+        let Some((ty, value, path)) = self.pending.take() else {
+            return;
+        };
+        let found = ioc.indicators.iter().find(|item| {
+            item.ty == ty && item.value == value && (ty != Type::File || item.path == path)
+        });
+        let Some(found) = found else {
+            self.message("That indicator is not in this run's list any more.", true);
+            return;
+        };
+        self.tab = Tab::Of(ty);
+        self.outcome = None;
+        self.drafts.remove(&ty);
+        self.noise = found.noise.is_some();
+        self.selected.insert(ty, found.id());
+        list::select_in_details(ctx, found);
     }
 
     fn key_state(&mut self) -> Option<&str> {
@@ -491,6 +524,15 @@ fn verdict_line(verdict: &Verdict) -> String {
 }
 
 impl TriageView {
+    /// Show one indicator of this run in the IOC section, selected, when the
+    /// scan has it. `path` names a file's row.
+    pub(super) fn show_ioc_indicator(&mut self, ty: &str, value: &str, path: &str) {
+        if let Some(ty) = Type::ALL.into_iter().find(|kind| kind.id() == ty) {
+            self.section = Section::Ioc;
+            self.ioc.pending = Some((ty, value.to_owned(), path.to_owned()));
+        }
+    }
+
     /// Keep the IOC view in step with the scan: the run, the folders, the
     /// verdicts.
     pub(super) fn ioc_tick(&mut self, ctx: &egui::Context) {
@@ -532,6 +574,7 @@ impl TriageView {
         };
         // The scan may have been replaced since the frame began.
         self.ioc.sync(Some(&ioc));
+        self.ioc.show_pending(ui.ctx(), &ioc);
         self.ioc.status_bar(ui, &ioc);
         self.ioc.banners(ui, &ioc, input);
         self.ioc_tabs(ui, &ioc);
@@ -603,7 +646,7 @@ impl TriageView {
 
 /// A tab with the total in the muted count style and, when any matched, the
 /// matched count beside it in red: "IOC 24 · 3".
-pub(super) fn count_tab(label: &str, matched: usize, total: usize) -> TabItem {
+pub(crate) fn count_tab(label: &str, matched: usize, total: usize) -> TabItem {
     let tip = if matched > 0 {
         format!("{total} indicators, {matched} matched")
     } else {

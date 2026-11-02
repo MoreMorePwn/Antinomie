@@ -179,6 +179,8 @@ pub(super) struct OpenRun {
     /// Show this file in Triage's Per-file history (path, with its
     /// reconstruction open).
     file: Option<(String, bool)>,
+    /// Show this indicator in Triage's IOC section (kind, value, file path).
+    indicator: Option<(String, String, String)>,
     started: std::time::Instant,
     listed: bool,
 }
@@ -323,6 +325,7 @@ impl MonitorApp {
             rule: None,
             then_snapshots: false,
             file: None,
+            indicator: None,
             started: std::time::Instant::now(),
             listed: false,
         });
@@ -333,6 +336,20 @@ impl MonitorApp {
         self.open_sample_run(run, crate::workspace::Panel::Triage, None);
         if let Some(open) = &mut self.samples_page.open_run {
             open.file = Some((path.to_owned(), reconstruct));
+        }
+    }
+
+    /// Open `run` in Triage on one indicator of its IOC list.
+    pub(super) fn open_sample_indicator(
+        &mut self,
+        run: &RunSummary,
+        ty: &str,
+        value: &str,
+        path: &str,
+    ) {
+        self.open_sample_run(run, crate::workspace::Panel::Triage, None);
+        if let Some(open) = &mut self.samples_page.open_run {
+            open.indicator = Some((ty.to_owned(), value.to_owned(), path.to_owned()));
         }
     }
 
@@ -375,6 +392,9 @@ impl MonitorApp {
             }
             if let Some((engine, rule)) = open.rule {
                 self.triage.show_rule(&engine, &rule);
+            }
+            if let Some((ty, value, path)) = open.indicator {
+                self.triage.show_indicator(&ty, &value, &path);
             }
             if let Some((path, reconstruct)) = open.file {
                 self.triage.show_file_history(&path, reconstruct);

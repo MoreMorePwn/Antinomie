@@ -162,6 +162,17 @@ fn details_cells(indicator: &Indicator) -> Vec<Cell> {
     ]
 }
 
+/// Put `indicator` in the shared Details pane, as a click on its row does.
+pub(super) fn select_in_details(ctx: &egui::Context, indicator: &Indicator) {
+    details::select(
+        ctx,
+        DETAILS_TABLE,
+        DETAILS_HEADERS,
+        &details_cells(indicator),
+    );
+    details::clicked(ctx, DETAILS_TABLE);
+}
+
 fn time_text(us: Option<u64>) -> String {
     us.map_or("—".into(), crate::time_format::short_time_us)
 }

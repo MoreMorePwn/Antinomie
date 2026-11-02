@@ -20,6 +20,9 @@ use std::{
 
 mod artifact_rows;
 mod custody;
+mod iocs;
+mod iocs_details;
+mod iocs_export;
 mod lineage;
 mod notes_tab;
 mod output_files;
@@ -49,6 +52,7 @@ pub(super) fn second(ms: u64) -> String {
 pub(super) enum Tab {
     Summary,
     Runs,
+    Iocs,
     Custody,
     Notes,
 }
@@ -97,6 +101,8 @@ pub(super) struct Data {
     pub(super) runs: Vec<RunEntry>,
     /// What the runs' Triage digests add up to.
     pub(super) rollup: antinomie_monitor_core::samples::Rollup,
+    /// Every indicator over the runs, for the IOCs tab.
+    pub(super) iocs: antinomie_monitor_core::samples::IocUnion,
     /// What the runs left behind, for Output files.
     pub(super) outputs: Vec<output_files::Output>,
     /// The notes of the sample, newest first.
@@ -157,6 +163,8 @@ pub(super) struct Detail {
     /// The report the scan above is of, to scan again when it changes.
     scanned_report: Option<String>,
     runs: runs::RunsTab,
+    /// The IOCs tab's filters, selection and export window.
+    iocs: iocs::State,
     /// The archive is being read back.
     pub(super) verify:
         Option<Receiver<Result<antinomie_monitor_core::samples::Verification, String>>>,
@@ -191,6 +199,7 @@ impl Detail {
             scanning: None,
             scanned_report: None,
             runs: runs::RunsTab::default(),
+            iocs: iocs::State::default(),
             verify: None,
             verified: None,
             lineage: lineage::State::default(),
@@ -302,6 +311,12 @@ pub(super) fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &
             })
             .collect::<Vec<_>>(),
     );
+    let iocs = antinomie_monitor_core::samples::ioc_union(
+        &entries
+            .iter()
+            .map(|entry| (entry.number, entry.digest.as_ref()))
+            .collect::<Vec<_>>(),
+    );
     entries.reverse();
     let kept = library.artifacts(&record.sha256)?;
     let outputs = output_files::read(&entries, &kept);
@@ -317,6 +332,7 @@ pub(super) fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &
         archive,
         runs: entries,
         rollup,
+        iocs,
         outputs,
         notes: library.notes(&record.sha256)?,
         data_dir: options.data_dir.clone(),
@@ -629,12 +645,20 @@ impl MonitorApp {
             for (tab, label, count) in [
                 (Tab::Summary, "Summary", None),
                 (Tab::Runs, "Runs", Some(data.runs.len())),
+                (Tab::Iocs, "IOCs", None),
                 (Tab::Custody, "Custody log", Some(data.events.len())),
                 (Tab::Notes, "Notes", Some(data.notes.len())),
             ] {
                 let mut item = widgets::TabItem::new(label);
                 if let Some(count) = count {
                     item = item.badge(count.to_string(), Tone::Neutral);
+                }
+                if tab == Tab::Iocs {
+                    item = crate::triage::ioc_count_tab(
+                        label,
+                        data.iocs.rows.iter().filter(|row| row.matched()).count(),
+                        data.iocs.rows.len(),
+                    );
                 }
                 if widgets::tab(ui, detail.tab == tab, &item).clicked() {
                     detail.tab = tab;
@@ -645,6 +669,7 @@ impl MonitorApp {
         match detail.tab {
             Tab::Summary => self.summary_tab(ui, &data),
             Tab::Runs => self.runs_tab(ui, &data),
+            Tab::Iocs => self.iocs_tab(ui, &data),
             Tab::Custody => {
                 let verifying = detail.loading.is_some();
                 // A note's chip named an entry: bring it to the middle.
@@ -802,9 +827,11 @@ impl MonitorApp {
 impl SamplesPage {
     /// A run is selected on the open sample's Runs tab: Details show it.
     pub(in crate::app) fn wants_details(&self) -> bool {
-        self.detail
-            .as_ref()
-            .is_some_and(|detail| detail.tab == Tab::Runs && detail.runs.has_selection())
+        self.detail.as_ref().is_some_and(|detail| match detail.tab {
+            Tab::Runs => detail.runs.has_selection(),
+            Tab::Iocs => detail.iocs.has_selection(),
+            _ => false,
+        })
     }
 
     fn loading_detail(&self) -> bool {
@@ -917,6 +944,7 @@ impl SamplesPage {
         if let Some(detail) = &mut self.detail {
             detail.tab = match name {
                 "runs" => Tab::Runs,
+                "iocs" => Tab::Iocs,
                 "custody" => Tab::Custody,
                 "notes" => Tab::Notes,
                 _ => Tab::Summary,

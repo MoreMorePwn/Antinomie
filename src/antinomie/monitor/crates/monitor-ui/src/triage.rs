@@ -60,6 +60,7 @@ pub(crate) const GRAPH_WINDOW_SIZE: [f32; 2] = graph::DEFAULT_SIZE;
 mod idle_tests;
 mod ioc_scan;
 mod ioc_view;
+pub(crate) use ioc_view::{count_tab as ioc_count_tab, source_tone_of as ioc_source_tone};
 mod kernel_records;
 mod lineage_index;
 mod net_tabs;
@@ -436,6 +437,11 @@ impl TriageView {
     /// Show the Properties section.
     pub(crate) fn show_properties(&mut self) {
         self.section = Section::Properties;
+    }
+
+    /// Show one indicator in the IOC section (see `ioc_view`).
+    pub(crate) fn show_indicator(&mut self, ty: &str, value: &str, path: &str) {
+        self.show_ioc_indicator(ty, value, path);
     }
 
     /// Show Detection on `engine`'s tab, filtered to the rule `rule_id`.

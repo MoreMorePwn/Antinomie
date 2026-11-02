@@ -193,6 +193,10 @@ impl MonitorApp {
         let Some(data) = detail.data.clone() else {
             return;
         };
+        if detail.tab == Tab::Iocs {
+            self.ioc_details(ui, &data);
+            return;
+        }
         let mut state = std::mem::take(&mut detail.runs);
         state.poll();
         let selected = state
