@@ -2,7 +2,7 @@
 
 [← Back to the overview](../README.md)
 
-This page describes 0.8.0: what Antinomie isolates, what it does not, and how to run it safely.
+This page describes 0.8.1: what Antinomie isolates, what it does not, and how to run it safely.
 To report a vulnerability in Antinomie itself, see
 [SECURITY.md](../SECURITY.md).
 

@@ -56,7 +56,7 @@ is the recorded run; no VM is running.</sub>
 > sample can still do.
 
 > [!NOTE]
-> This README describes **0.8.0**, the first release since 0.7.1. Download it
+> This README describes **0.8.1**, a fix release on top of 0.8.0. Download it
 > from [Releases](https://github.com/MoreMorePwn/Antinomie/releases); the
 > [changelog](CHANGELOG.md) lists every change.
 
@@ -169,14 +169,14 @@ and network card into its disk without root; BusyBox VMs do not need it:
 sudo apt install qemu-system-x86 qemu-utils qemu-system-gui curl libsqlite3-0 bubblewrap tshark util-linux libguestfs-tools
 ```
 
-Download `antinomie-0.8.0-linux-x86_64.tar.gz` and `SHA256SUMS` from
+Download `antinomie-0.8.1-linux-x86_64.tar.gz` and `SHA256SUMS` from
 [Releases](https://github.com/MoreMorePwn/Antinomie/releases) into one folder,
 then verify, extract and install for your user (no root):
 
 ```sh
 sha256sum --check SHA256SUMS
-tar -xzf antinomie-0.8.0-linux-x86_64.tar.gz
-cd antinomie-0.8.0
+tar -xzf antinomie-0.8.1-linux-x86_64.tar.gz
+cd antinomie-0.8.1
 ./install.sh
 antinomie --check-dependencies
 antinomie
@@ -202,7 +202,7 @@ antinomie
 Install the [host build prerequisites](src/antinomie/monitor/README.md#build-and-run), then:
 
 ```sh
-git clone --branch v0.8.0 https://github.com/MoreMorePwn/Antinomie.git
+git clone --branch v0.8.1 https://github.com/MoreMorePwn/Antinomie.git
 cd Antinomie
 ./run.sh
 ```
@@ -347,6 +347,33 @@ Import the output folder with **Add base → Import base…**.
 The app checks dependencies at startup (**Tools → App dependencies**). From a
 terminal: `antinomie --check-dependencies`. The
 [full dependency list](docs/usage.md#dependencies-and-analysis-tools) names every tool.
+
+## What's new in 0.8.1
+
+0.8.1 is a fix release for the 0.8.0 line; the [changelog](CHANGELOG.md) has the
+full list.
+
+* **Hosts without KVM:** a VM on the default accelerator starts with TCG and a
+  warning instead of failing, every start wait scales for slow TCG boots, and
+  missing-KVM messages offer "Use TCG".
+* **Downloads:** a cancelled download resumes when it can and starts again when
+  it cannot, and says which.
+* **Notes** on packets, captures, memory and disk dumps, process cores and static
+  analysis rows, with chips that jump to them; notes can be edited and deleted
+  wherever they are shown.
+* **Triage:** tasks read "PID · TID", filter chips show their counts, failed
+  attempts are shown by default, the run's state and elapsed time sit beside the
+  network route, other views' notes stay out of the Summary, and the IOC details
+  open in the Details window.
+* **Sample window:** edit a sample's name and description, a click on a row's
+  text opens it, the 100 longest strings and every regex match scroll, and the
+  static analysis summary explains each check.
+* **Layout:** every table fits its window, the toolbar moves buttons into a menu
+  when narrow, and the dependencies and export windows stay inside the screen.
+* **Reliability:** a clear error screen when the app cannot start its engine, no
+  false legacy-migration warning on a fresh install, file reconstruction keeps up
+  to 16 MiB per file (a setting), and `--version` names the commit it was built
+  from.
 
 ## What's in 0.8.0
 

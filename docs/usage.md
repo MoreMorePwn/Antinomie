@@ -2,7 +2,7 @@
 
 [← Back to the overview](../README.md)
 
-This guide follows 0.8.0. Available controls depend on the application and base
+This guide follows 0.8.1. Available controls depend on the application and base
 versions; existing VMs keep their pinned base.
 
 ## Dependencies and analysis tools

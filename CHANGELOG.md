@@ -4,7 +4,17 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
-## 0.8.1 — 2026-MM-DD
+## 0.8.1 — 2026-11-03
+
+Antinomie 0.8.1 is a fix release for the 0.8.0 line; it runs the same revision-20
+bases. A VM on a host without KVM now starts with TCG and a warning instead of
+timing out, and every start wait scales for slow TCG boots. Cancelled downloads
+resume when they can. Notes reach packets, dumps, cores and static rows and can be
+edited and deleted wherever they are shown. Triage names tasks by PID and TID,
+counts what its filters hide, shows failed attempts by default and the run's state
+beside the network route, and keeps other views' notes out of its Summary. Every
+table now fits its window, and many smaller fixes from testing 0.8.0 follow.
+Details follow.
 
 ### Host
 
