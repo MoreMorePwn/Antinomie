@@ -29,8 +29,8 @@
  *            unblocks: the queued SIGCHLD is delivered then, every round (the
  *            window glibc's fork() opens by itself when the child is quick)
  *   stopself ignores SIGTERM, starts a watchdog child that sends SIGCONT after
- *            6 s, and stops the whole process with SIGSTOP in round 3 (30 on
- *            aarch64) (job control: no thread can park). After SIGCONT it calls
+ *            6 s, and stops the whole process with SIGSTOP in round 30
+ *            (job control: no thread can park). After SIGCONT it calls
  *            child_site() and prints "child_site survived": a program that
  *            lived through Stop must not find an engine breakpoint byte there
  *   killtimer arms a timer that sends the process SIGKILL after ROUNDS ms and
@@ -122,13 +122,9 @@ __attribute__((noinline, used)) long pause_now(void)
 extern char pause_syscall[];
 
 /* The round in which stopself stops itself: after the debugger attached and
- * stopped it once. An emulated (TCG) arm64 guest attaches more slowly, and its
- * watchdog's 6 s still come after this round. */
-#if defined(__aarch64__)
+ * stopped it once (1.5 s in; round 3, 150 ms, lost that race on a loaded
+ * x86-64 host as on an emulated arm64 guest), and before its watchdog's 6 s. */
 #define STOPSELF_ROUND 30
-#else
-#define STOPSELF_ROUND 3
-#endif
 extern char vfork_syscall[];
 
 static long exit_lead_ms;
