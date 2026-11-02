@@ -39,7 +39,8 @@ fn run() -> Result<(), String> {
         .clone()
         .ok_or("the configuration names no base")?;
     config.id = String::new();
-    config.name = "tcg start check".into();
+    let name = format!("tcg start check {}", std::process::id());
+    config.name = name.clone();
     let backend = Backend::new(BackendOptions {
         data_dir: PathBuf::from(&args[0]),
         bundle_dir: PathBuf::from(&args[0]).join("bases").join(base),
@@ -80,7 +81,7 @@ fn run() -> Result<(), String> {
             }
         }
         if vm_id.is_none()
-            && let Some(vm) = snapshot.vms.last()
+            && let Some(vm) = snapshot.vms.iter().find(|vm| vm.name == name)
         {
             vm_id = Some(vm.id.clone());
             started = Some(backend.send(Command::Start {

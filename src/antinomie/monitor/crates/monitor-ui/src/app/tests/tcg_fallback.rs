@@ -171,7 +171,7 @@ fn a_fallback_to_tcg_raises_one_warning_toast_per_start() {
     let ctx = context();
     let mut app = app();
     let warning = format!(
-        "KVM is not available on this host ({NO_KVM}); Lab runs with TCG software emulation, so expect much slower performance (roughly 10 to 50 times)."
+        "KVM is not available on this host ({NO_KVM}); Lab runs with TCG software emulation, so expect much slower performance."
     );
     let starting = |accelerator| antinomie_monitor_core::Snapshot {
         accelerator,

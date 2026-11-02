@@ -69,7 +69,14 @@ fn native_tcg_tour() {
                     self.next = after(2.0);
                 }
                 Phase::Created => {
-                    let Some(vm) = self.app.snapshot.vms.last().cloned() else {
+                    let Some(vm) = self
+                        .app
+                        .snapshot
+                        .vms
+                        .iter()
+                        .find(|vm| vm.name == "TCG demo")
+                        .cloned()
+                    else {
                         self.next = after(0.5);
                         return;
                     };

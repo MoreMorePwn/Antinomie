@@ -46,7 +46,7 @@ impl Choice {
     pub fn fallback_warning(&self, vm_name: &str) -> Option<String> {
         self.fallback.as_ref().map(|reason| {
             format!(
-                "{reason}; {vm_name} runs with TCG software emulation, so expect much slower performance (roughly 10 to 50 times)."
+                "{reason}; {vm_name} runs with TCG software emulation, so expect much slower performance."
             )
         })
     }

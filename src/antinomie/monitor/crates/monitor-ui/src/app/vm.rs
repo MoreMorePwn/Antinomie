@@ -996,7 +996,7 @@ fn launch_options(ui: &mut egui::Ui, launch: &mut VmLaunchOptions, kvm_problem: 
             ui.colored_label(
                 theme::warn(),
                 format!(
-                    "KVM is not available on this host ({problem}). {} TCG is software emulation, much slower (roughly 10 to 50 times).",
+                    "KVM is not available on this host ({problem}). {} TCG is much slower (roughly 10 to 50 times).",
                     if fallback {
                         "This VM will start with TCG."
                     } else {
