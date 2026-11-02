@@ -49,7 +49,7 @@ impl MemoryView {
             ui.label(RichText::new("Analyse with").color(theme::muted()));
             for analyzer in Analyzer::ALL {
                 let item = crate::widgets::TabItem::new(analyzer.product());
-                if crate::widgets::tab(ui, self.analyzer == analyzer, &item)
+                if crate::widgets::tab(ui, !self.show_content && self.analyzer == analyzer, &item)
                     .on_hover_text(match analyzer {
                         Analyzer::Volatility => {
                             "Volatility 3 plugins: any system, the broadest set of checks"
@@ -63,7 +63,18 @@ impl MemoryView {
                     .clicked()
                 {
                     self.analyzer = analyzer;
+                    self.show_content = false;
                 }
+            }
+            let item = crate::widgets::TabItem::new("Content");
+            if crate::widgets::tab(ui, self.show_content, &item)
+                .on_hover_text(
+                    "The dump's bytes as a hex dump or raw text, with on-demand Strings \
+                     and Regex searches. Read a page at a time; the dump is never loaded whole",
+                )
+                .clicked()
+            {
+                self.show_content = true;
             }
         });
     }

@@ -13,7 +13,7 @@ use std::{
 /// Octets read and searched at a time.
 const BLOCK: usize = 1 << 20;
 /// Longest string carried into the next block.
-const TAIL_MAX: usize = 8192;
+pub(crate) const TAIL_MAX: usize = 8192;
 /// Strings kept; a core with more is cut short and says so.
 pub const MAX_STRINGS: usize = 200_000;
 /// Characters of one string kept.
@@ -70,7 +70,7 @@ fn captured(mapping: &crate::core_dump::CoreMapping, file_size: u64) -> u64 {
 
 /// Where the run of octets that could still be part of a string ends the
 /// block: after the last other octet, looking back at most `TAIL_MAX`.
-fn open_tail(block: &[u8]) -> usize {
+pub(crate) fn open_tail(block: &[u8]) -> usize {
     let floor = block.len().saturating_sub(TAIL_MAX).max(1);
     let mut cut = block.len();
     while cut > floor

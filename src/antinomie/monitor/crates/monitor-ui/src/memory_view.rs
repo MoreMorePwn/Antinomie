@@ -199,6 +199,10 @@ pub(crate) struct MemoryView {
     /// Installed catalog plugins, read when the catalog opens or changes.
     catalog_installed: Option<Vec<community::Installed>>,
     hide_list: bool,
+    /// The Content tab is chosen instead of an analyser.
+    show_content: bool,
+    content: crate::content_view::ContentView,
+    content_source: Option<crate::content_view::ContentSource>,
 }
 
 impl Default for MemoryView {
@@ -239,6 +243,9 @@ impl Default for MemoryView {
             community_os: BTreeMap::new(),
             catalog_installed: None,
             hide_list: false,
+            show_content: false,
+            content: crate::content_view::ContentView::new("memory"),
+            content_source: None,
         }
     }
 }
@@ -344,6 +351,7 @@ impl MemoryView {
                     .open(Panel::Memory),
             );
         }
+        out.extend(self.content.running_jobs("memory dump", Panel::Memory));
         out
     }
 

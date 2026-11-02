@@ -40,7 +40,7 @@ pub use specimen::read_specimen_range;
 pub fn seal_retained_specimens(directory: &std::path::Path) -> Vec<String> {
     sealed::seal_tree(directory)
 }
-pub(crate) use strings::find_strings;
+pub(crate) use strings::{find_strings, find_strings_min};
 pub use unpack::{PackerVerdict, UnpackLayer, packer_verdict, unpack_layers};
 pub use worker::worker_main_if_requested;
 #[cfg(feature = "fuzzing")]

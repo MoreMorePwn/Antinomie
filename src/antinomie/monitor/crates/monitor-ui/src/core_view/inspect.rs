@@ -148,6 +148,7 @@ impl CoreView {
                         .badge(record.core.mappings.len().to_string(), Tone::Neutral),
                 ),
                 (Tab::Code, TabItem::new("Disassembly")),
+                (Tab::Content, TabItem::new("Content")),
                 (Tab::Strings, strings),
                 (
                     Tab::Notes,
@@ -160,6 +161,7 @@ impl CoreView {
             Tab::Context => self.context(ui, &record),
             Tab::Mappings => self.mappings(ui, &record),
             Tab::Code => self.disassembly(ui, &record),
+            Tab::Content => self.content(ui, &record),
             Tab::Strings => {
                 if let Some(detail) = self.strings.show(ui, &record) {
                     self.detail = Some(detail);

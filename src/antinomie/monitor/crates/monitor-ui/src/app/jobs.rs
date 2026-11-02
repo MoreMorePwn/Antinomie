@@ -364,6 +364,7 @@ impl MonitorApp {
         }
         jobs.extend(self.triage.running_jobs());
         jobs.extend(self.memory_view.running_jobs());
+        jobs.extend(self.core_view.running_jobs());
         jobs.extend(self.samples.running_jobs());
         if let Some(cancel) = self.updates.running_check() {
             jobs.push(

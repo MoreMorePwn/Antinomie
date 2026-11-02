@@ -8,6 +8,7 @@ mod bpf;
 mod branding;
 mod build_wizard;
 mod code_listing;
+mod content_view;
 mod core_budget;
 mod core_view;
 mod data_view;

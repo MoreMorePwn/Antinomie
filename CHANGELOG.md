@@ -485,6 +485,14 @@ Details follow.
   VM dialog (default still Realistic desktop) with a one-line description,
   the base's fallback warning and Details… for the full window, instead of
   one checkbox.
+- **A Content window for memory dumps and process cores.** The Memory tab has
+  a Content tab beside Volatility 3 and MemNixFS, and Core dumps has a Content tab
+  per mapping. Both show the bytes as a hex dump or as raw text, read one page at a
+  time so a multi-gigabyte dump is never loaded, with go-to-offset, paging and
+  selection with copy. On-demand Strings and Regex sub-windows search the dump (or
+  the mapping shown) only when you press Search, with progress and Cancel, list
+  their hits a page at a time in a table, show in the Jobs window with progress and Stop, and jump the view to a hit. Limits and cancels are
+  shown as Info notes. A core shows virtual addresses, with file offsets on hover.
 
 ## 0.8.0 — 2026-11-02
 

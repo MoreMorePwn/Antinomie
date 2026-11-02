@@ -10,15 +10,26 @@ pub(super) const REPORT_STRINGS: usize = 256;
 
 /// Printable ASCII (four or more octets) and UTF-16LE strings, in file order.
 pub(crate) fn find_strings(specimen: &[u8]) -> Vec<(usize, usize, &'static str, String)> {
+    find_strings_min(specimen, 4, true, true)
+}
+
+/// The same extractor with its minimum length (characters) and encodings
+/// chosen by the caller; the content window's on-demand Strings uses it.
+pub(crate) fn find_strings_min(
+    specimen: &[u8],
+    min_len: usize,
+    ascii: bool,
+    utf16: bool,
+) -> Vec<(usize, usize, &'static str, String)> {
     let value_max = super::limits::value_bytes();
     let mut found = Vec::new();
     let mut start = 0;
-    for index in 0..=specimen.len() {
+    for index in 0..=if ascii { specimen.len() } else { 0 } {
         if index < specimen.len() && (specimen[index].is_ascii_graphic() || specimen[index] == b' ')
         {
             continue;
         }
-        if index - start >= 4 {
+        if index - start >= min_len {
             let retained = &specimen[start..index.min(start + value_max)];
             found.push((
                 start,
@@ -31,7 +42,7 @@ pub(crate) fn find_strings(specimen: &[u8]) -> Vec<(usize, usize, &'static str, 
     }
     // UTF-16LE: printable ASCII code units, each followed by a zero octet.
     let mut index = 0;
-    while index + 1 < specimen.len() {
+    while utf16 && index + 1 < specimen.len() {
         let begin = index;
         let mut text = String::new();
         while index + 1 < specimen.len()
@@ -43,7 +54,7 @@ pub(crate) fn find_strings(specimen: &[u8]) -> Vec<(usize, usize, &'static str, 
             }
             index += 2;
         }
-        if index - begin >= 8 {
+        if index - begin >= 2 * min_len {
             found.push((begin, index - begin, "UTF-16LE", text));
         } else {
             index = begin + 1;

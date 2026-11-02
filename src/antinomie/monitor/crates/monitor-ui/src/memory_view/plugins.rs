@@ -27,6 +27,10 @@ impl MemoryView {
         };
         ui.add_space(2.0);
         self.analyzer_tabs(ui);
+        if self.show_content {
+            self.content_tab(ui, &dump);
+            return action;
+        }
         match self.analyzer {
             Analyzer::Volatility => {
                 if let Some(next) = self.volatility_banner(ui, cx) {
@@ -74,6 +78,55 @@ impl MemoryView {
             .frame(egui::Frame::new())
             .show_inside(ui, |ui| self.result_view(ui, &dump, cx.font_size));
         action
+    }
+
+    /// The Content tab: the dump's bytes, paged, with Strings and Regex.
+    fn content_tab(&mut self, ui: &mut egui::Ui, dump: &MemoryDump) {
+        if !dump.complete() {
+            ui.add_space(8.0);
+            match &dump.error {
+                Some(error) => {
+                    crate::activity::error(ui, error);
+                }
+                None => {
+                    ui.colored_label(theme::muted(), "This dump is still being written.");
+                }
+            }
+            return;
+        }
+        let path = dump.path();
+        let size = std::fs::metadata(&path).map(|meta| meta.len());
+        let key = format!("{}:{}", dump.id, size.as_ref().copied().unwrap_or(0));
+        if self
+            .content_source
+            .as_ref()
+            .is_none_or(|known| known.key != key)
+        {
+            self.content_source =
+                size.as_ref()
+                    .ok()
+                    .map(|size| crate::content_view::ContentSource {
+                        key: key.clone(),
+                        source: std::sync::Arc::new(
+                            antinomie_monitor_core::content_scan::FileRange {
+                                path: path.clone(),
+                                start: 0,
+                                size: *size,
+                            },
+                        ),
+                        address_base: 0,
+                        file_base: None,
+                        address_name: "Offset",
+                    });
+        }
+        ui.add_space(4.0);
+        match (&self.content_source, size) {
+            (Some(source), Ok(_)) => self.content.show(ui, source),
+            (_, Err(error)) => {
+                crate::activity::error(ui, format!("The dump file cannot be read: {error}"));
+            }
+            _ => {}
+        }
     }
 
     /// The state of Volatility's plugin list: loading, or why it failed.

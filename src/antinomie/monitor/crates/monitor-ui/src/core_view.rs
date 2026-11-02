@@ -20,6 +20,7 @@ use std::{
 };
 
 mod catalog;
+mod content;
 mod decompile;
 mod details;
 mod disassembly;
@@ -149,6 +150,7 @@ enum Tab {
     Context,
     Mappings,
     Code,
+    Content,
     Strings,
     Notes,
 }
@@ -189,6 +191,7 @@ pub(crate) struct CoreView {
     functions: Vec<CoreFunction>,
     symbol_status: String,
     hide_list: bool,
+    content: crate::content_view::ContentView,
     catalog_job: Option<Receiver<CatalogReply>>,
     function_bodies: Vec<String>,
     code_function: Option<usize>,
@@ -219,6 +222,12 @@ pub(crate) struct CoreView {
 impl CoreView {
     /// A note's chip asks for a core of the selected VM: the list selects it
     /// the next time it is drawn.
+    /// The Content searches under way, for the Jobs window.
+    pub(crate) fn running_jobs(&self) -> Vec<crate::jobs::Job> {
+        self.content
+            .running_jobs("process core", crate::workspace::Panel::CoreDump)
+    }
+
     pub(crate) fn ask_note_target(&mut self, item: String) {
         self.note_target = Some(item);
     }

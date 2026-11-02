@@ -17,6 +17,7 @@ pub mod capture;
 pub mod capture_processes;
 pub mod clipboard;
 pub mod container;
+pub mod content_scan;
 mod control;
 pub mod core_capture;
 pub mod core_dump;
