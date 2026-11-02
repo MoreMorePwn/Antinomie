@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use crate::{
-    api::{BackendOptions, VmAcceleration, VmConfig, VmCpuModel, VmLaunchOptions, VmNetwork},
+    api::{BackendOptions, VmConfig, VmCpuModel, VmLaunchOptions, VmNetwork},
     storage::{Bundle, private_dir, unique_id, vm_dir},
 };
 use rustix::fs::MemfdFlags;
@@ -172,17 +172,14 @@ fn apply_launch_settings(
     command: &mut Command,
     options: &BackendOptions,
     launch: &VmLaunchOptions,
+    accel: &crate::accel::Choice,
     stealth: &crate::stealth::StealthProfile,
     cpus: u16,
     bundle: &Bundle,
     bootstrap: u64,
 ) -> Result<(), String> {
     launch.validate_for(options)?;
-    let acceleration = if options.force_tcg || launch.acceleration == VmAcceleration::Tcg {
-        "tcg"
-    } else {
-        "kvm"
-    };
+    let acceleration = accel.accelerator.qemu_name();
     command.args(["-accel", acceleration]);
     let cpu = match launch.cpu_model {
         VmCpuModel::Default => None,
@@ -255,6 +252,11 @@ pub(crate) struct VmProcess {
     /// What the device profile asked for and the base or host could not give,
     /// one line each, for the start log and the run notes.
     pub stealth_fallbacks: Vec<String>,
+    /// The accelerator this process runs with, and why it is TCG when KVM was
+    /// wanted.
+    pub accel: crate::accel::Choice,
+    /// The waits of this process, scaled for its accelerator and the host load.
+    pub waits: crate::accel::Waits,
 }
 /// The QEMU command. Through util-linux `setpriv`, when installed, QEMU gets
 /// SIGKILL if the app dies, instead of running on with the VM's disk locked
@@ -290,6 +292,46 @@ fn qemu_log_hint(runtime_dir: &Path) -> String {
     match tail.lines().rev().find(|line| !line.trim().is_empty()) {
         Some(line) => format!("; QEMU said: {}", line.trim()),
         None => String::new(),
+    }
+}
+
+/// Whether the first word of the bootstrap page at `bootstrap` in the RAM file
+/// is nonzero. The page lies in the RAM region that contains its address.
+fn bootstrap_magic_written(ram_path: &Path, layout: &RamLayout, bootstrap: u64) -> bool {
+    use std::os::unix::fs::FileExt;
+    let Some(offset) = layout
+        .expected()
+        .into_iter()
+        .find(|&(gpa, size, _)| bootstrap >= gpa && bootstrap - gpa < size)
+        .map(|(gpa, _, offset)| offset + (bootstrap - gpa))
+    else {
+        return false;
+    };
+    let mut magic = [0u8; 4];
+    File::open(ram_path)
+        .and_then(|file| file.read_exact_at(&mut magic, offset))
+        .is_ok()
+        && magic != [0; 4]
+}
+
+/// The one-minute load average, for messages.
+pub(crate) fn host_load() -> String {
+    std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|text| text.split_whitespace().next().map(str::to_owned))
+        .unwrap_or_else(|| "unknown".into())
+}
+
+/// Why a start is slow and what the user can do about it, for the end of a
+/// timeout message; empty at KVM speed on an idle host.
+pub(crate) fn slow_hint(accel: &crate::accel::Choice, waits: &crate::accel::Waits) -> String {
+    if accel.is_tcg() {
+        format!(
+            ". TCG is software emulation, 10 to 50 times slower than KVM, and a loaded host slows it more (waits are stretched {:.0} times now). Give it longer in Tools > Settings > Advanced > VM start and guest connection timeouts (TCG multiplier), reduce the load on this host, or use KVM",
+            waits.factor()
+        )
+    } else {
+        String::new()
     }
 }
 
@@ -332,6 +374,11 @@ impl Qmp {
     /// A read against the accepted connection then returns EAGAIN when its
     /// receive timeout expires, which is the same code as a nonblocking read.
     fn connect(path: &Path, wait: Duration) -> Result<Self, String> {
+        Self::connect_with(path, wait, Duration::from_secs(5))
+    }
+    /// [`Qmp::connect`] with the time each later reply may take (`reply`: 5 s
+    /// at KVM speed, longer under TCG, where QEMU's main loop stalls).
+    fn connect_with(path: &Path, wait: Duration, reply: Duration) -> Result<Self, String> {
         let deadline = std::time::Instant::now() + wait;
         let socket = loop {
             match UnixStream::connect(path) {
@@ -348,7 +395,7 @@ impl Qmp {
         }
         socket
             .set_read_timeout(Some(remaining))
-            .and_then(|_| socket.set_write_timeout(Some(Duration::from_secs(5))))
+            .and_then(|_| socket.set_write_timeout(Some(reply)))
             .map_err(|e| e.to_string())?;
         let mut qmp = Qmp {
             writer: socket.try_clone().map_err(|e| e.to_string())?,
@@ -357,7 +404,7 @@ impl Qmp {
         qmp.reply("")?;
         qmp.reader
             .get_mut()
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(reply))
             .map_err(|e| e.to_string())?;
         qmp.reply("{\"execute\":\"qmp_capabilities\"}\n")?;
         Ok(qmp)
@@ -395,7 +442,69 @@ impl Qmp {
         }
     }
 }
+/// Times a read-only QMP question is asked before QEMU is taken for dead.
+const QMP_ATTEMPTS: u32 = 3;
+
+/// A QMP error that is only a missing reply, not a closed or refused socket.
+fn is_timeout(error: &str) -> bool {
+    error.contains("timed out waiting for a reply")
+}
+
 impl VmProcess {
+    /// What to add to a timeout message when the waits were stretched or ought
+    /// to be: why it is slow and what to do.
+    pub fn slow_hint(&self) -> String {
+        slow_hint(&self.accel, &self.waits)
+    }
+    /// Whether the guest has published its transport bootstrap page: its
+    /// first word is written last-but-not-least, so nonzero means the kernel
+    /// reached the telemetry driver.
+    pub fn bootstrap_published(&self) -> bool {
+        bootstrap_magic_written(&self.ram_path, &self.ram_layout, self.bootstrap)
+    }
+
+    /// Waits until the guest publishes its transport, QEMU exits, or the
+    /// scaled limit passes. `tick(elapsed, limit)` runs about once a second so
+    /// the caller can show that a slow boot is being waited for (or cancel it
+    /// by returning an error).
+    pub fn wait_for_guest(
+        &mut self,
+        mut tick: impl FnMut(Duration, Duration) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let limit = self.waits.guest_connect();
+        let started = std::time::Instant::now();
+        let mut last_tick = None::<std::time::Instant>;
+        loop {
+            if self.bootstrap_published() {
+                return Ok(());
+            }
+            if let Some(status) = self.child.try_wait().map_err(|e| e.to_string())? {
+                return Err(format!(
+                    "QEMU exited ({status}) before the guest connected{}",
+                    qemu_log_hint(&self.runtime_dir)
+                ));
+            }
+            let elapsed = started.elapsed();
+            if elapsed >= limit {
+                let accelerator = if self.accel.is_tcg() {
+                    "TCG software emulation"
+                } else {
+                    "KVM"
+                };
+                return Err(format!(
+                    "the guest did not connect within {} s ({accelerator}; host load {}){}",
+                    limit.as_secs(),
+                    host_load(),
+                    self.slow_hint()
+                ));
+            }
+            if last_tick.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
+                last_tick = Some(std::time::Instant::now());
+                tick(elapsed, limit)?;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
     pub fn launch(
         options: &BackendOptions,
         vm: &VmConfig,
@@ -420,6 +529,8 @@ impl VmProcess {
         incoming: bool,
     ) -> Result<Self, String> {
         vm.launch.validate_for(options)?;
+        let accel = crate::accel::choose(options, &vm.launch)?;
+        let waits = crate::accel::Waits::new(&accel, &options.start);
         crate::dependencies::require_vm(options, &vm.launch)?;
         crate::storage::validate_boot_display(vm, bundle)?;
         let initial_size = initial_size(options, &vm.launch)
@@ -598,7 +709,7 @@ impl VmProcess {
                 .push_str(&format!(" antinomie_ring_kib={}", vm.transport.ring_kib));
         }
         apply_launch_settings(
-            &mut cmd, options, &vm.launch, &stealth, vm.cpus, &boot, bootstrap,
+            &mut cmd, options, &vm.launch, &accel, &stealth, vm.cpus, &boot, bootstrap,
         )?;
         crate::stealth::apply(&mut cmd, &stealth, &runtime_dir, vm.ram_mib, vm.cpus)?;
         crate::stealth::firmware_args(
@@ -640,6 +751,8 @@ impl VmProcess {
             gateway,
             net_dir,
             stealth_fallbacks: fallbacks,
+            accel,
+            waits,
         };
         if let Some((sizing, (width, height))) = initial_size {
             process.set_initial_window_size(sizing, width, height)?;
@@ -682,22 +795,45 @@ impl VmProcess {
         // The socket is created before machine and display setup. On a busy
         // host that work runs well past a few seconds, so the greeting wait
         // has to cover startup rather than only the listen backlog.
-        let mut qmp = Qmp::connect(&self.qmp_path, Duration::from_secs(60)).map_err(|error| {
-            format!(
-                "QMP connect for RAM layout: {error}{}",
-                qemu_log_hint(&self.runtime_dir)
-            )
-        })?;
+        // A TCG guest on a loaded host can stall QEMU's main loop past one
+        // reply wait; the question is read only, so ask again before
+        // taking QEMU for dead.
+        let mut attempt = 1;
+        let mut qmp = loop {
+            match Qmp::connect_with(
+                &self.qmp_path,
+                self.waits.qmp_startup(),
+                self.waits.qmp_reply(),
+            ) {
+                Ok(qmp) => break qmp,
+                Err(error) if is_timeout(&error) && attempt < QMP_ATTEMPTS => attempt += 1,
+                Err(error) => {
+                    return Err(format!(
+                        "QMP connect for RAM layout: {error}{}{}",
+                        qemu_log_hint(&self.runtime_dir),
+                        self.slow_hint()
+                    ));
+                }
+            }
+        };
         // q35 maps the backend through aliases (`info mtree`); virt maps the
         // backend region itself, which the flat view shows at its address.
         let command = match self.machine {
             Machine::Pc => "info mtree",
             Machine::Virt => "info mtree -f",
         };
-        let mtree = qmp.reply(&format!(
+        let request = format!(
             "{}\n",
             serde_json::json!({"execute":"human-monitor-command","arguments":{"command-line":command}})
-        ))?;
+        );
+        let mut attempt = 1;
+        let mtree = loop {
+            match qmp.reply(&request) {
+                Ok(reply) => break reply,
+                Err(error) if is_timeout(&error) && attempt < QMP_ATTEMPTS => attempt += 1,
+                Err(error) => return Err(format!("{error}{}", self.slow_hint())),
+            }
+        };
         let mtree = mtree["return"]
             .as_str()
             .ok_or("QMP memory map is not text")?;
@@ -717,10 +853,27 @@ impl VmProcess {
     /// Runs one QMP command (a `{"execute": ...}` object) and returns its
     /// return value.
     pub fn qmp(&self, command: &serde_json::Value) -> Result<serde_json::Value, String> {
-        let mut qmp = Qmp::connect(&self.qmp_path, Duration::from_secs(2))
-            .map_err(|error| format!("QMP connect: {error}"))?;
-        let reply = qmp.reply(&format!("{command}\n"))?;
-        Ok(reply.get("return").cloned().unwrap_or_default())
+        // Questions can be asked again after a timeout; commands that change
+        // something are sent once (a timeout leaves their outcome unknown).
+        let query = command["execute"]
+            .as_str()
+            .is_some_and(|name| name.starts_with("query-"));
+        let attempts = if query { QMP_ATTEMPTS } else { 1 };
+        let mut attempt = 1;
+        loop {
+            let result = Qmp::connect_with(
+                &self.qmp_path,
+                self.waits.qmp_connect(),
+                self.waits.qmp_reply(),
+            )
+            .map_err(|error| format!("QMP connect: {error}"))
+            .and_then(|mut qmp| qmp.reply(&format!("{command}\n")));
+            match result {
+                Ok(reply) => return Ok(reply.get("return").cloned().unwrap_or_default()),
+                Err(error) if is_timeout(&error) && attempt < attempts => attempt += 1,
+                Err(error) => return Err(error),
+            }
+        }
     }
     /// Bytes the guest has written to its disks since QEMU started
     /// (`query-blockstats`, every device), or `None` when QMP does not answer.
@@ -804,13 +957,10 @@ impl VmProcess {
         if !output.status.success() || output.stdout.len() > 8192 {
             return Err("QEMU compatibility version is unavailable".into());
         }
-        let acceleration = if options.force_tcg || vm.launch.acceleration == VmAcceleration::Tcg {
-            "tcg"
-        } else if Path::new("/dev/kvm").exists() {
-            "kvm"
-        } else {
-            "tcg"
-        };
+        // The same decision the launch makes, so the identity matches the boot.
+        let acceleration = crate::accel::choose(options, &vm.launch)?
+            .accelerator
+            .qemu_name();
         let host_identity = if acceleration == "kvm" {
             let machine = std::fs::read_to_string("/etc/machine-id")
                 .map_err(|e| format!("full snapshot host identity is unavailable: {e}"))?;
@@ -884,7 +1034,11 @@ impl VmProcess {
         Ok(())
     }
     fn transfer_state(&self, mut file: File, incoming: bool) -> Result<(), String> {
-        let mut qmp = Qmp::connect(&self.qmp_path, Duration::from_secs(2))?;
+        let mut qmp = Qmp::connect_with(
+            &self.qmp_path,
+            self.waits.qmp_connect(),
+            self.waits.qmp_reply(),
+        )?;
         if !incoming {
             qmp.reply("{\"execute\":\"migrate-set-capabilities\",\"arguments\":{\"capabilities\":[{\"capability\":\"x-ignore-shared\",\"state\":false}]}}\n")?;
             let capabilities = qmp.reply("{\"execute\":\"query-migrate-capabilities\"}\n")?;
@@ -902,8 +1056,8 @@ impl VmProcess {
             }
         }
         let (mut host, guest) = UnixStream::pair().map_err(|e| e.to_string())?;
-        host.set_read_timeout(Some(Duration::from_secs(30)))
-            .and_then(|_| host.set_write_timeout(Some(Duration::from_secs(30))))
+        host.set_read_timeout(Some(self.waits.state_socket()))
+            .and_then(|_| host.set_write_timeout(Some(self.waits.state_socket())))
             .map_err(|e| e.to_string())?;
         let cancel = host.try_clone().map_err(|e| e.to_string())?;
         qmp.send_fd(&guest)?;
@@ -953,7 +1107,8 @@ impl VmProcess {
                 "{}\n",
                 serde_json::json!({"execute":operation,"arguments":{"uri":"fd:antinomie-state"}})
             ))?;
-            let deadline = std::time::Instant::now() + Duration::from_secs(300);
+            let limit = self.waits.migration();
+            let deadline = std::time::Instant::now() + limit;
             let mut stream_complete = false;
             loop {
                 if !stream_complete {
@@ -980,7 +1135,11 @@ impl VmProcess {
                     _ => {}
                 }
                 if std::time::Instant::now() >= deadline {
-                    return Err("QEMU snapshot migration exceeded 300 seconds".into());
+                    return Err(format!(
+                        "QEMU snapshot migration exceeded {} seconds{}",
+                        limit.as_secs(),
+                        self.slow_hint()
+                    ));
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -1036,6 +1195,14 @@ impl Drop for VmProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::VmAcceleration;
+
+    fn kvm_choice() -> crate::accel::Choice {
+        crate::accel::Choice {
+            accelerator: crate::accel::Accelerator::Kvm,
+            fallback: None,
+        }
+    }
     #[test]
     fn a_vm_boots_the_root_uuid_its_disk_was_given() {
         let base = "BOOT_IMAGE=/boot/vmlinuz-6.12.94+deb13-amd64 \
@@ -1176,6 +1343,8 @@ mod tests {
                 gateway: None,
                 net_dir: None,
                 stealth_fallbacks: Vec::new(),
+                accel: kvm_choice(),
+                waits: crate::accel::Waits::kvm_default(),
             };
             // QEMU starts as slowly as the host lets it, and one exchange
             // waits for its greeting for two seconds: ask until it answers.
@@ -1350,6 +1519,7 @@ mod tests {
             &mut command,
             options,
             launch,
+            &crate::accel::choose_with(options, launch, || None)?,
             &crate::stealth::StealthProfile::transparent(),
             4,
             &bundle(graphical),
@@ -1695,6 +1865,8 @@ FlatView #1
             gateway: None,
             net_dir: None,
             stealth_fallbacks: Vec::new(),
+            accel: kvm_choice(),
+            waits: crate::accel::Waits::kvm_default(),
         };
         drop(process);
         assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
@@ -1716,6 +1888,8 @@ FlatView #1
             gateway: None,
             net_dir: None,
             stealth_fallbacks: Vec::new(),
+            accel: kvm_choice(),
+            waits: crate::accel::Waits::kvm_default(),
         };
         let (sizing, _server) =
             crate::display::InitialWindowSize::stalled_for_test(Duration::from_millis(50));
@@ -1754,6 +1928,7 @@ FlatView #1
                             &mut command,
                             &options,
                             &launch,
+                            &crate::accel::choose_with(&options, &launch, || None).unwrap(),
                             &crate::stealth::StealthProfile::transparent(),
                             4,
                             &bundle(true),
@@ -1790,5 +1965,84 @@ FlatView #1
             qemu_path(Path::new("/tmp/a,share=off")).unwrap(),
             "/tmp/a,,share=off"
         );
+    }
+    #[test]
+    fn the_bootstrap_page_counts_as_published_once_its_first_word_is_written() {
+        let root = std::env::temp_dir().join(format!("ant-bootstrap-{}", unique_id()));
+        private_dir(&root).unwrap();
+        let ram = root.join("ram");
+        let layout = RamLayout::q35(1 << 28);
+        let bootstrap = 0x0100_0000;
+        let file = File::create(&ram).unwrap();
+        file.set_len(1 << 28).unwrap();
+        assert!(!bootstrap_magic_written(&ram, &layout, bootstrap));
+        {
+            use std::os::unix::fs::FileExt;
+            file.write_all_at(b"ANTT", bootstrap).unwrap();
+        }
+        assert!(bootstrap_magic_written(&ram, &layout, bootstrap));
+        // An address outside every RAM region, and a missing file, are not published.
+        assert!(!bootstrap_magic_written(&ram, &layout, 1 << 40));
+        assert!(!bootstrap_magic_written(
+            &root.join("none"),
+            &layout,
+            bootstrap
+        ));
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn a_stalled_qmp_reply_waits_as_long_as_it_is_given() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::net::UnixListener;
+        use std::thread;
+        let root = std::env::temp_dir().join(format!("ant-qmp-reply-{}", unique_id()));
+        private_dir(&root).unwrap();
+        let path = root.join("qmp.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        // QEMU's main loop answers the capabilities request 1.5 s late.
+        let server = thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket.write_all(b"{\"QMP\":{}}\n").unwrap();
+                let mut line = String::new();
+                BufReader::new(socket.try_clone().unwrap())
+                    .read_line(&mut line)
+                    .unwrap();
+                thread::sleep(Duration::from_millis(1500));
+                let _ = socket.write_all(b"{\"return\":{}}\n");
+            }
+        });
+        let error =
+            match Qmp::connect_with(&path, Duration::from_secs(5), Duration::from_millis(300)) {
+                Ok(_) => panic!("answered in time"),
+                Err(error) => error,
+            };
+        assert!(is_timeout(&error), "{error}");
+        Qmp::connect_with(&path, Duration::from_secs(5), Duration::from_secs(5))
+            .expect("a longer reply wait covers the stall");
+        server.join().unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn a_slow_tcg_timeout_says_why_and_what_to_do() {
+        let tcg = crate::accel::Choice {
+            accelerator: crate::accel::Accelerator::Tcg,
+            fallback: None,
+        };
+        let waits =
+            crate::accel::Waits::with_load(&tcg, &crate::api::StartSettings::default(), 2.0);
+        let hint = slow_hint(&tcg, &waits);
+        assert!(hint.contains("software emulation"));
+        assert!(hint.contains("20 times"));
+        assert!(hint.contains("TCG multiplier"));
+        assert!(hint.contains("reduce the load"));
+        assert!(hint.contains("use KVM"));
+        let kvm = crate::accel::Choice {
+            accelerator: crate::accel::Accelerator::Kvm,
+            fallback: None,
+        };
+        assert!(slow_hint(&kvm, &crate::accel::Waits::kvm_default()).is_empty());
+        assert!(is_timeout("QMP read: timed out waiting for a reply"));
+        assert!(!is_timeout("QMP closed"));
     }
 }

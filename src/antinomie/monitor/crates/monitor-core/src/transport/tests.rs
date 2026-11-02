@@ -32,6 +32,7 @@ fn a_ram_path_with_a_nul_or_that_does_not_exist_is_refused_without_a_client() {
         Path::new("/nonexistent/ram.bin"),
         crate::vm::RamLayout::q35(1 << 28),
         0x1000,
+        &crate::accel::Waits::kvm_default(),
     );
     assert!(pending.is_err());
     // A failed open registers no client, so a heartbeat has nothing to touch.

@@ -81,6 +81,8 @@ impl Worker {
         self.snapshot.process_cores.clear();
         self.snapshot.boot_id = None;
         self.snapshot.stealth_fallbacks.clear();
+        self.snapshot.accelerator = None;
+        self.snapshot.start_note = None;
         self.snapshot.network_capture = None;
         self.publish();
         self.stopping.store(false, Ordering::Relaxed);
@@ -110,7 +112,11 @@ impl Worker {
                         crate::disk_start::Via::Start,
                     )
                 });
-            let process = VmProcess::launch(&self.options, &vm, &bundle)?;
+            let mut process = VmProcess::launch(&self.options, &vm, &bundle)?;
+            self.snapshot.accelerator = Some(AcceleratorUsed {
+                record: process.accel.record(),
+                fallback_warning: process.accel.fallback_warning(&vm.name),
+            });
             self.snapshot.serial_log = Some(process.runtime_dir.join("serial.log"));
             self.snapshot
                 .stealth_fallbacks
@@ -134,14 +140,51 @@ impl Worker {
                 capture.queue_manifest(&vm, &bundle, &disk_bundle, "start-failed")?;
                 return Err(e);
             }
-            let mut transport =
-                match Transport::open(&process.ram_path, process.ram_layout, process.bootstrap) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        capture.queue_manifest(&vm, &bundle, &disk_bundle, "start-failed")?;
-                        return Err(e);
-                    }
-                };
+            // The guest publishes its transport when its kernel gets that far;
+            // under TCG that takes a long time on a loaded host, so the wait
+            // scales and says what it is waiting for.
+            let tcg = process.accel.is_tcg();
+            let stopping = self.stopping.clone();
+            let waited = process.wait_for_guest(|elapsed, limit| {
+                if stopping.load(Ordering::Relaxed) {
+                    return Err("start cancelled".into());
+                }
+                if elapsed >= Duration::from_secs(3) {
+                    self.snapshot.start_note = Some(if tcg {
+                        format!(
+                            "Waiting for a slow TCG boot: the guest has not connected after {} s (waiting up to {} s; host load {}).",
+                            elapsed.as_secs(),
+                            limit.as_secs(),
+                            crate::vm::host_load()
+                        )
+                    } else {
+                        format!(
+                            "Waiting for the guest to connect ({} s of up to {} s).",
+                            elapsed.as_secs(),
+                            limit.as_secs()
+                        )
+                    });
+                    self.publish();
+                }
+                Ok(())
+            });
+            self.snapshot.start_note = None;
+            if let Err(e) = waited {
+                capture.queue_manifest(&vm, &bundle, &disk_bundle, "start-failed")?;
+                return Err(e);
+            }
+            let mut transport = match Transport::open_with(
+                &process.ram_path,
+                process.ram_layout,
+                process.bootstrap,
+                &process.waits,
+            ) {
+                Ok(t) => t,
+                Err(e) => {
+                    capture.queue_manifest(&vm, &bundle, &disk_bundle, "start-failed")?;
+                    return Err(format!("{e}{}", process.slow_hint()));
+                }
+            };
             // Bases before 0.3.0 cannot wait for room; they keep dropping.
             if let Err(error) = transport.set_send_wait(vm.transport.send_wait_us()) {
                 self.snapshot.last_error = Some(format!(
@@ -215,6 +258,8 @@ impl Worker {
                 crate::snapshots::run_layer::ended(id);
                 crate::snapshots::run_layer::mark_due(id);
                 self.snapshot.active_vm = None;
+                self.snapshot.accelerator = None;
+                self.snapshot.start_note = None;
                 self.snapshot.state = VmState::Failed;
                 Err(e)
             }
@@ -277,6 +322,7 @@ impl Worker {
         self.reconnect = (0, None);
         let Some(mut session) = self.session.take() else {
             self.snapshot.active_vm = None;
+            self.snapshot.accelerator = None;
             self.snapshot.state = VmState::Stopped;
             return Ok(());
         };
@@ -436,6 +482,7 @@ impl Worker {
         crate::snapshots::run_layer::ended(&session.vm.id);
         crate::snapshots::run_layer::mark_due(&session.vm.id);
         self.snapshot.active_vm = None;
+        self.snapshot.accelerator = None;
         self.snapshot.state = VmState::Stopped;
         self.stopping.store(false, Ordering::Relaxed);
         if forced {

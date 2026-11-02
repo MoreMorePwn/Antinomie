@@ -17,6 +17,11 @@ pub struct RunEnvironment {
     /// How the VM's network card is connected ("Routed", "NAT", "Isolated").
     pub network: String,
     pub stealth: String,
+    /// The accelerator the boot actually used (`kvm`, `tcg`, or `tcg (KVM
+    /// unavailable)`). Written only when known, so a run record made before
+    /// this (and its hash) is what it was.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub accelerator: String,
     /// The base image's display name and identity (a SHA-256).
     pub base_name: String,
     pub base_identity: String,
@@ -47,6 +52,8 @@ pub struct Inputs<'a> {
     pub base_identity: Option<&'a str>,
     pub base_revision: Option<u32>,
     pub kernel: Option<&'a GuestKernel>,
+    /// The boot's accelerator record, when the session knows it.
+    pub accelerator: Option<&'a str>,
     pub data_dir: &'a std::path::Path,
 }
 
@@ -91,6 +98,7 @@ impl RunEnvironment {
             }
             .into(),
             stealth: vm.stealth.preset.label().into(),
+            accelerator: inputs.accelerator.unwrap_or_default().into(),
             base_name: inputs
                 .base_name
                 .map(str::trim)
@@ -145,6 +153,7 @@ mod tests {
             base_identity: Some("ab"),
             base_revision: Some(18),
             kernel: None,
+            accelerator: None,
             data_dir: dir,
         }
     }
@@ -212,5 +221,28 @@ mod tests {
             environment.compute_hash(),
             RunEnvironment::default().compute_hash()
         );
+    }
+
+    #[test]
+    fn the_accelerator_is_recorded_only_when_known_and_changes_the_hash() {
+        let dir = std::env::temp_dir().join(format!("ant-env-{}", crate::storage::unique_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let vm = vm();
+        let plain = RunEnvironment::capture(&inputs(&vm, &dir));
+        assert!(
+            serde_json::to_value(&plain)
+                .unwrap()
+                .get("accelerator")
+                .is_none()
+        );
+        let mut with = inputs(&vm, &dir);
+        with.accelerator = Some("tcg (KVM unavailable)");
+        let tcg = RunEnvironment::capture(&with);
+        assert_eq!(
+            serde_json::to_value(&tcg).unwrap()["accelerator"],
+            "tcg (KVM unavailable)"
+        );
+        assert_ne!(plain.hash, tcg.hash);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

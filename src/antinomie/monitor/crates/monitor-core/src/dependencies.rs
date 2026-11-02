@@ -7,7 +7,6 @@ pub use install::{
 };
 use rustix::fs::{Access, AtFlags, CWD, OFlags, accessat, fcntl_getfl, fcntl_setfl};
 use std::{
-    fs::OpenOptions,
     io::{self, Read},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -65,6 +64,13 @@ impl Check {
             .as_deref()
             .is_some_and(|problem| problem.contains(PROBE_TIMED_OUT))
     }
+
+    /// A failed check that is a Warning, not an Error: KVM access, because
+    /// QEMU can still run VMs with TCG software emulation. A missing QEMU
+    /// stays an error.
+    pub fn is_warning(&self) -> bool {
+        self.dependency == Dependency::Kvm
+    }
 }
 
 /// Snapshot of runtime availability. Recheck after changing host packages.
@@ -82,7 +88,15 @@ impl Report {
     pub fn has_missing(&self) -> bool {
         self.checks
             .iter()
-            .any(|check| check.problem.is_some() && !check.optional)
+            .any(|check| check.problem.is_some() && !check.optional && !check.is_warning())
+    }
+
+    /// Problems the app works around (no KVM: VMs run with TCG, slower).
+    pub fn warnings(&self) -> Vec<&Check> {
+        self.checks
+            .iter()
+            .filter(|check| check.problem.is_some() && check.is_warning())
+            .collect()
     }
 
     /// A required check failed for a reason a person can act on: a probe that
@@ -90,7 +104,12 @@ impl Report {
     pub fn needs_attention(&self) -> bool {
         self.checks
             .iter()
-            .any(|check| check.problem.is_some() && !check.optional && !check.timed_out())
+            .any(|check| {
+                check.problem.is_some()
+                    && !check.optional
+                    && !check.timed_out()
+                    && !check.is_warning()
+            })
     }
 
     /// Names of the required checks whose probe ran out of time.
@@ -350,9 +369,9 @@ pub fn check(options: &BackendOptions) -> Report {
     checks.push(Check {
         dependency: Kvm,
         name: "KVM access",
-        purpose: "Start VMs with hardware acceleration (TCG does not need it)",
+        purpose: "Start VMs with hardware acceleration; without it VMs run with TCG software emulation, roughly 10 to 50 times slower",
         problem: kvm_problem(),
-        hint: "Enable hardware virtualization and access to /dev/kvm (kvm group; sign in again), or select TCG in VM settings",
+        hint: "For fast VMs, enable hardware virtualization and access to /dev/kvm (kvm group; sign in again). Until then, VMs set to Default acceleration run with TCG; use TCG for a VM in its settings or app-wide with \"Use TCG when KVM is unavailable\"",
         optional: false,
         wrong_version: false,
     });
@@ -364,12 +383,7 @@ pub fn check(options: &BackendOptions) -> Report {
 }
 
 fn kvm_problem() -> Option<String> {
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/kvm")
-        .err()
-        .map(|error| format!("cannot open /dev/kvm: {error}"))
+    crate::accel::kvm_problem()
 }
 
 fn gtk_problem(qemu: &Path) -> Option<String> {
@@ -395,7 +409,12 @@ pub fn vm_requirements(options: &BackendOptions, launch: &VmLaunchOptions) -> Ve
     if !options.headless {
         required.push(Dependency::Gtk);
     }
-    if !options.force_tcg && launch.acceleration != VmAcceleration::Tcg {
+    // Only an explicit KVM choice needs it: Default falls back to TCG, and so
+    // does KVM when the app setting allows it.
+    if !options.force_tcg
+        && launch.acceleration == VmAcceleration::Kvm
+        && !options.start.kvm_fallback
+    {
         required.push(Dependency::Kvm);
     }
     required
@@ -415,15 +434,9 @@ pub(crate) fn require_vm(options: &BackendOptions, launch: &VmLaunchOptions) -> 
             "{problem}; on Debian/Ubuntu: sudo apt install qemu-system-gui"
         ));
     }
-    if !options.force_tcg
-        && launch.acceleration != VmAcceleration::Tcg
-        && let Some(problem) = kvm_problem()
-    {
-        return Err(format!(
-            "{problem}; enable KVM access or select TCG in VM settings"
-        ));
-    }
-    Ok(())
+    // Refuses an explicit KVM choice without KVM, with the reason and the way
+    // out; Default and the fallback setting run with TCG.
+    crate::accel::choose(options, launch).map(|_| ())
 }
 
 fn display_help(qemu: &Path, timeout: Duration) -> Result<String, String> {
@@ -762,7 +775,17 @@ mod tests {
             vm_requirements(&options, &launch),
             vec![Dependency::Qemu, Dependency::QemuImg, Dependency::Gtk]
         );
-        assert!(vm_requirements(&options, &VmLaunchOptions::default()).contains(&Dependency::Kvm));
+        // Default acceleration falls back to TCG, so it needs no KVM; an
+        // explicit KVM choice does, unless the app setting lets it fall back.
+        assert!(!vm_requirements(&options, &VmLaunchOptions::default()).contains(&Dependency::Kvm));
+        let kvm = VmLaunchOptions {
+            acceleration: VmAcceleration::Kvm,
+            ..Default::default()
+        };
+        assert!(vm_requirements(&options, &kvm).contains(&Dependency::Kvm));
+        let mut allowed = options.clone();
+        allowed.start.kvm_fallback = true;
+        assert!(!vm_requirements(&allowed, &kvm).contains(&Dependency::Kvm));
     }
 
     #[test]

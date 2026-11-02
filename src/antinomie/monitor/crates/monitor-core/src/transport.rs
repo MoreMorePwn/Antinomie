@@ -182,8 +182,25 @@ pub(crate) struct Transport {
     _owner: PhantomData<Rc<()>>,
 }
 impl Transport {
+    #[cfg(test)]
     pub fn open(path: &Path, ram: crate::vm::RamLayout, bootstrap: u64) -> Result<Self, String> {
-        Self::open_mode(path, ram, bootstrap, false)
+        Self::open_mode(
+            path,
+            ram,
+            bootstrap,
+            false,
+            &crate::accel::Waits::kvm_default(),
+        )
+    }
+    /// [`Transport::open`] with the waits of this start: how long the guest
+    /// may take to publish its bootstrap page and to answer, scaled for TCG.
+    pub fn open_with(
+        path: &Path,
+        ram: crate::vm::RamLayout,
+        bootstrap: u64,
+        waits: &crate::accel::Waits,
+    ) -> Result<Self, String> {
+        Self::open_mode(path, ram, bootstrap, false, waits)
     }
     /// Publish resume before continuing a paused incoming guest. Host
     /// heartbeats remain unregistered until `finish_resume` succeeds.
@@ -191,14 +208,16 @@ impl Transport {
         path: &Path,
         ram: crate::vm::RamLayout,
         bootstrap: u64,
+        waits: &crate::accel::Waits,
     ) -> Result<Self, String> {
-        Self::open_mode(path, ram, bootstrap, true)
+        Self::open_mode(path, ram, bootstrap, true, waits)
     }
     fn open_mode(
         path: &Path,
         layout: crate::vm::RamLayout,
         bootstrap: u64,
         pending: bool,
+        waits: &crate::accel::Waits,
     ) -> Result<Self, String> {
         let ram = layout.size();
         let path =
@@ -224,10 +243,10 @@ impl Transport {
             region_count: regions.len(),
             ram_size: ram,
             bootstrap_gpa: bootstrap,
-            init_timeout_ms: 20000,
+            init_timeout_ms: waits.guest_connect_ms(),
             // A guest whose vCPUs get no host time (a host under heavy load:
             // a 17 s stall was seen with Capture All of a desktop) is not dead.
-            health_timeout_ms: 30000,
+            health_timeout_ms: waits.guest_health_ms(),
             host_timeout_ms: 60000,
             poll_mode: 0,
             poll_sleep_us: 50,

@@ -678,6 +678,7 @@ impl Worker {
                 }
                 abandon_memory_dump(&mut self.snapshot);
                 self.snapshot.active_vm = None;
+                self.snapshot.accelerator = None;
                 self.snapshot.state = VmState::Stopped;
                 self.snapshot.vm_resources = None;
                 self.publish();

@@ -72,6 +72,36 @@ it runs.
   scrolling table with category chips and counts instead of a ten-row pager.
 - **The live malware warning in the Samples download window stays.** It has no
   close button, is not an Activity message and shows every time the window opens.
+- **A VM starts with TCG on a host without KVM, and a slow TCG boot is waited
+  for.** A VM set to Default acceleration used to refuse to start when
+  `/dev/kvm` could not be opened; it now runs with TCG software emulation and
+  says so once per start, in a Warning toast and in Activity: "KVM is not
+  available on this host (cannot open /dev/kvm: ...); <VM> runs with TCG
+  software emulation, so expect much slower performance." A VM set to KVM still
+  refuses, with the reason, and the message and the App dependencies window
+  offer "Use TCG for this VM" and "Use TCG when KVM is unavailable" (Tools >
+  Settings > Advanced, for every VM set to KVM). Missing KVM access is a Warning
+  in the App dependencies window and in `--check-dependencies` (exit code 0),
+  not "some runtime requirements are missing"; a missing QEMU stays an error.
+  The VM settings dialog warns under Acceleration. The accelerator a boot used
+  (`kvm`, `tcg`, or `tcg (KVM unavailable)`) is in the run's environment record
+  (run.json, report), the snapshot identity and the builder VM pick it the same
+  way, and the builder VM's limits stretch under TCG.
+- **A TCG VM no longer fails with "transport: Connection timed out".** The host
+  gave the guest 20 s to publish its transport, a KVM-speed limit: a BusyBox VM
+  with TCG took 15 to 22 s on an idle 8 vCPU host and longer under load, so
+  starts failed at 21 s and QEMU was stopped. Every start wait (the guest
+  connection, the guest health check, QMP replies, the snapshot stream and
+  migration, the resume handshake) is now scaled for the accelerator (a TCG
+  multiplier, 10 by default) and for the host load, a read-only QMP question is
+  asked again before QEMU is taken for dead, and the wait says "Waiting for a
+  slow TCG boot: the guest has not connected after N s (waiting up to M s)" in
+  the status instead of failing. A timeout says why (TCG is 10 to 50 times
+  slower, and host load slows it more) and what to do (raise the TCG multiplier,
+  reduce the load, or use KVM). Tools > Settings > Advanced > VM start and guest
+  connection timeouts sets the guest connection wait and the multiplier. Stop
+  cancels the wait, and a QEMU that exits is reported at once.
+
 - **Cancelled downloads resume when they can and restart when they cannot.**
   The partial file of a base, an analysis tool, the kernel source or the
   builder's Debian cloud image stays in the download's own folder (never where

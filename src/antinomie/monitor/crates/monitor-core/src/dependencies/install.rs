@@ -241,7 +241,12 @@ impl Report {
         };
         let mut steps = Vec::new();
         if let Some(manager) = self.package_manager {
-            for check in self.checks.iter().filter(|check| check.problem.is_some()) {
+            // KVM access is a device, not a package.
+            for check in self
+                .checks
+                .iter()
+                .filter(|check| check.problem.is_some() && !check.is_warning())
+            {
                 match package(check.dependency, manager) {
                     Some(name) if !plan.packages.contains(&name) => plan.packages.push(name),
                     Some(_) => {}

@@ -404,6 +404,47 @@ impl Default for TransportSettings {
     }
 }
 
+/// How long a VM start waits, and what it does without KVM (Tools > Settings >
+/// Advanced > VM start and guest connection timeouts). Applied on the next start.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct StartSettings {
+    /// Seconds a start waits for the guest to publish its transport at KVM
+    /// speed: 5..=600.
+    pub guest_connect_secs: u32,
+    /// How many times longer every start wait is under TCG software
+    /// emulation (and the wait for the guest to connect): 1..=100.
+    pub tcg_multiplier: u32,
+    /// A VM set to KVM runs with TCG when `/dev/kvm` cannot be used, instead
+    /// of refusing to start. (Default acceleration always falls back.)
+    pub kvm_fallback: bool,
+}
+impl StartSettings {
+    pub const GUEST_CONNECT_SECS: std::ops::RangeInclusive<u32> = 5..=600;
+    pub const TCG_MULTIPLIER: std::ops::RangeInclusive<u32> = 1..=100;
+    pub fn validate(&self) -> Result<(), String> {
+        if !Self::GUEST_CONNECT_SECS.contains(&self.guest_connect_secs) {
+            return Err("guest connection wait must be 5..600 seconds".into());
+        }
+        if !Self::TCG_MULTIPLIER.contains(&self.tcg_multiplier) {
+            return Err("TCG multiplier must be 1..100".into());
+        }
+        Ok(())
+    }
+}
+impl Default for StartSettings {
+    fn default() -> Self {
+        Self {
+            guest_connect_secs: 20,
+            // A BusyBox guest took 16 s to attach under TCG on a 8 vCPU
+            // host at load 6, and more than 21 s at load 12; Debian takes
+            // several times longer.
+            tcg_multiplier: 10,
+            kvm_fallback: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct BackendOptions {
     pub data_dir: PathBuf,
@@ -426,6 +467,8 @@ pub struct BackendOptions {
     pub stop_grace: Option<Duration>,
     pub bootstrap_gpa: Option<u64>,
     pub force_tcg: bool,
+    /// Waits of a VM start and the KVM fallback.
+    pub start: StartSettings,
     pub headless: bool,
     /// Test harnesses: put the kernel console and a login on the first serial
     /// port of a base whose command line names none (Debian's), so its boot
@@ -450,6 +493,7 @@ impl Default for BackendOptions {
             stop_grace: None,
             bootstrap_gpa: None,
             force_tcg: false,
+            start: StartSettings::default(),
             headless: false,
             serial_console: false,
         }
@@ -1908,6 +1952,7 @@ pub enum Command {
         bundle_dir: PathBuf,
         capture_quota_size: u64,
         shutdown_timeout_secs: u64,
+        start: StartSettings,
     },
     Upload {
         source: PathBuf,
@@ -2379,6 +2424,20 @@ pub struct Snapshot {
     /// answered, all zero for a guest without TRACER_CAPS.
     pub guest_tracer: Option<GuestTracerCaps>,
     pub last_error: Option<String>,
+    /// While a VM starts: what the host is waiting for (for example a slow
+    /// TCG boot), so the wait is not mistaken for a hang.
+    pub start_note: Option<String>,
+    /// The accelerator the running (or starting) VM uses; None while stopped.
+    pub accelerator: Option<AcceleratorUsed>,
+}
+
+/// The accelerator a VM boot actually uses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AcceleratorUsed {
+    /// `kvm`, `tcg`, or `tcg (KVM unavailable)`: what run records show.
+    pub record: String,
+    /// Set when KVM was wanted and unusable: the warning shown at the start.
+    pub fallback_warning: Option<String>,
 }
 
 /// Validated guest observations from the temporary collector; octets throughout.

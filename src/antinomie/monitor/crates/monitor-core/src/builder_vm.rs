@@ -129,6 +129,8 @@ pub(crate) struct QemuBuild<'a> {
     /// Empty directory that receives the bundle.
     pub output: &'a Path,
     pub cancel: &'a AtomicBool,
+    /// Factor over the KVM time limits when the builder runs without KVM.
+    pub tcg_multiplier: u32,
 }
 
 impl QemuBuild<'_> {
@@ -529,13 +531,18 @@ done
         timeout: Duration,
         on_line: &mut impl FnMut(&str),
     ) -> Result<(), String> {
-        let (accel, cpu) = if kvm_usable() {
-            ("kvm", "host")
-        } else {
-            on_line(
-                "no KVM access: the builder VM runs without hardware acceleration and can take many hours",
-            );
-            ("tcg", "max")
+        let (accel, cpu, timeout) = match crate::accel::kvm_problem() {
+            None => ("kvm", "host", timeout),
+            Some(problem) => {
+                // The same fallback as a VM set to Default; the limits stretch
+                // by the TCG multiplier, as the VM start waits do.
+                let timeout = timeout * self.tcg_multiplier.max(1);
+                on_line(&format!(
+                    "Warning: KVM is not available on this host ({problem}); the builder VM runs with TCG software emulation, much slower (roughly 10 to 50 times), and may take many hours (limit {} minutes)",
+                    timeout.as_secs() / 60
+                ));
+                ("tcg", "max", timeout)
+            }
         };
         let cpus = thread::available_parallelism().map_or(2, |n| n.get());
         // ttyS0 is the guest console (kernel, systemd, login prompt) and goes to a
@@ -662,14 +669,6 @@ done
             Err(error) => Err(format!("{what} failed: {error}")),
         }
     }
-}
-
-fn kvm_usable() -> bool {
-    fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/kvm")
-        .is_ok()
 }
 
 /// Least guest memory the kernel link and the symbol pass survive. The final

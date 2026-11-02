@@ -326,6 +326,7 @@ impl Worker {
                             base_identity: session.disk_bundle.base_identity.as_deref(),
                             base_revision: session.disk_bundle.antinomie_revision,
                             kernel: self.snapshot.guest_kernel.as_ref(),
+                            accelerator: Some(session.process.accel.record().as_str()),
                             data_dir: &self.options.data_dir,
                         },
                     )),

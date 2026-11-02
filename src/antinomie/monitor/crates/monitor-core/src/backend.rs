@@ -833,6 +833,8 @@ struct BuildRun {
     options: build::BuildOptions,
     data_dir: PathBuf,
     curl: PathBuf,
+    /// Settings > Advanced: how much longer the builder VM may take under TCG.
+    tcg_multiplier: u32,
     output: PathBuf,
     log_path: PathBuf,
     stage: Arc<Mutex<String>>,
@@ -987,6 +989,7 @@ impl BuildRun {
                     ccache: &crate::kit::ccache_archive(&root),
                     output,
                     cancel: &self.cancel,
+                    tcg_multiplier: self.tcg_multiplier,
                 }
                 .run(&mut *line)
             }

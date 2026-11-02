@@ -360,6 +360,7 @@ impl Worker {
                     options: request.options,
                     data_dir: self.options.data_dir.clone(),
                     curl: self.options.curl.clone(),
+                    tcg_multiplier: self.options.start.tcg_multiplier,
                     output,
                     log_path: log_path.clone(),
                     stage: stage.clone(),
@@ -796,6 +797,7 @@ impl Worker {
                 bundle_dir,
                 capture_quota_size,
                 shutdown_timeout_secs,
+                start,
             } => {
                 if self.session.is_some() {
                     return Err("stop VM before changing settings".into());
@@ -806,9 +808,11 @@ impl Worker {
                             .into(),
                     );
                 }
+                start.validate()?;
                 self.options.bundle_dir = bundle_dir;
                 self.options.capture_quota_size = capture_quota_size;
                 self.options.shutdown_timeout = Duration::from_secs(shutdown_timeout_secs);
+                self.options.start = start;
                 Ok("settings updated".into())
             }
             Command::OpenRecording { directory } => Err(format!(

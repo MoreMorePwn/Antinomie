@@ -5,8 +5,6 @@ use super::*;
 use crate::{capture_processes::CaptureProcess, snapshots};
 use serde::{Deserialize, Serialize};
 
-const RESUME_TIMEOUT_MS: i32 = 10_000;
-
 /// How long each step of a transport reconnect took, in order, for its
 /// receipt (`reconnect.json`) and result: where a slow reconnect spends its time.
 struct ReconnectPhases {
@@ -686,7 +684,9 @@ impl Worker {
                 session.forget_unanswered();
                 session.transport.begin_resume()?;
                 session.process.resume()?;
-                let report = session.transport.finish_resume(RESUME_TIMEOUT_MS)?;
+                let report = session
+                    .transport
+                    .finish_resume(session.process.waits.resume_ms())?;
                 storage::atomic_json(
                     &session
                         .capture
@@ -930,6 +930,10 @@ impl Worker {
                 &bundle,
                 &prepared.active_disk,
             )?;
+            self.snapshot.accelerator = Some(AcceleratorUsed {
+                record: process.accel.record(),
+                fallback_warning: process.accel.fallback_warning(&effective.name),
+            });
             process.load_state(
                 prepared
                     .memory_path
@@ -937,8 +941,12 @@ impl Worker {
                     .ok_or("snapshot has no memory state")?,
             )?;
             process.verify_ram_layout()?;
-            let transport =
-                Transport::open_pending(&process.ram_path, process.ram_layout, process.bootstrap)?;
+            let transport = Transport::open_pending(
+                &process.ram_path,
+                process.ram_layout,
+                process.bootstrap,
+                &process.waits,
+            )?;
             let mut session = Session::restored(
                 &self.options,
                 effective,
@@ -951,7 +959,9 @@ impl Worker {
             // Namespace exists and request is published before CPUs run. A short
             // handshake run is staged on the candidate child, never the old future.
             session.process.resume()?;
-            session.transport.finish_resume(RESUME_TIMEOUT_MS)?;
+            session
+                .transport
+                .finish_resume(session.process.waits.resume_ms())?;
             session
                 .transport
                 .set_send_wait(session.vm.transport.send_wait_us())?;
@@ -1060,7 +1070,10 @@ impl Worker {
             return self.reconnect_failed(old, error);
         }
         phases.mark("run_network_suspend");
-        let (report, wait) = match old.transport.reconnect_observed(RESUME_TIMEOUT_MS) {
+        let (report, wait) = match old
+            .transport
+            .reconnect_observed(old.process.waits.resume_ms())
+        {
             Ok(report) => report,
             Err(error) => {
                 return self.reconnect_failed(old, error);
