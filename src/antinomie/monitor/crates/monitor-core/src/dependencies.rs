@@ -102,14 +102,9 @@ impl Report {
     /// A required check failed for a reason a person can act on: a probe that
     /// only ran out of time is left out (see [`Report::unverified`]).
     pub fn needs_attention(&self) -> bool {
-        self.checks
-            .iter()
-            .any(|check| {
-                check.problem.is_some()
-                    && !check.optional
-                    && !check.timed_out()
-                    && !check.is_warning()
-            })
+        self.checks.iter().any(|check| {
+            check.problem.is_some() && !check.optional && !check.timed_out() && !check.is_warning()
+        })
     }
 
     /// Names of the required checks whose probe ran out of time.
