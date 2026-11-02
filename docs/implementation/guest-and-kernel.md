@@ -1306,7 +1306,9 @@ and contract revision unchanged (nothing changes on the wire).
   shape of the real-malware evaluation VM. vm-regress prints its calls and
   packets per second, drops and send waits; the group fails under 20,000
   calls/s (four times the convoy's rate, a quarter of the rate after the change,
-  so a busy host passes), and on every other problem a stress group fails on.
+  so a busy host passes; 10,000 on an emulated arm64 guest, twice the convoy's
+  sleep-bound rate: 18,330 calls/s under TCG on a loaded 12-thread host), and on
+  every other problem a stress group fails on.
   On 2026-11-01, same host, base revision 20:
 
   | | Before (0.8.0 series to 25 and 30) | After (patch 26) |

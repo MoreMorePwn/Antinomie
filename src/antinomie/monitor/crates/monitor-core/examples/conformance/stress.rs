@@ -30,6 +30,10 @@ pub struct StressReport {
 /// 2026-11-01, with the host's drain the limit), so a busy host still passes
 /// and a return of the convoy fails.
 const RATE_FLOOR_CALLS_PER_S: f64 = 20_000.0;
+/// The floor on an emulated guest (arm64 under TCG): twice the convoy's rate,
+/// which its sleeps bound on any CPU; an arm64 BusyBox base reached 18,330
+/// calls/s on a loaded 12-thread x86-64 host (2026-11-02).
+const EMULATED_RATE_FLOOR_CALLS_PER_S: f64 = 10_000.0;
 
 /// How a page says a call's async observations were only previewed.
 const ASYNC_PARTIAL: &str = "some calls list only the first 256 of their saved async observations";
@@ -152,9 +156,14 @@ pub fn check(
         problems.push(format!("workload: {line}"));
     }
     let seconds = run.run_seconds.max(0.001);
-    if group.name == trace::RATE_GROUP && (calls as f64 / seconds) < RATE_FLOOR_CALLS_PER_S {
+    let floor = if crate::emulated() {
+        EMULATED_RATE_FLOOR_CALLS_PER_S
+    } else {
+        RATE_FLOOR_CALLS_PER_S
+    };
+    if group.name == trace::RATE_GROUP && (calls as f64 / seconds) < floor {
         problems.push(format!(
-            "{:.0} calls/s, under the rate floor of {RATE_FLOOR_CALLS_PER_S:.0}",
+            "{:.0} calls/s, under the rate floor of {floor:.0}",
             calls as f64 / seconds
         ));
     }
