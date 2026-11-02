@@ -170,6 +170,14 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
         ui.weak("Select a row to see its details.");
         return;
     };
+    if selected.table == ioc_view::DETAILS_TABLE {
+        let id = selected.cells.get(2).map_or("", |cell| cell.text.as_str());
+        egui::ScrollArea::vertical()
+            .id_salt("triage-shared-details")
+            .auto_shrink([false, false])
+            .show(ui, |ui| view.ioc_details(ui, id));
+        return;
+    }
     egui::ScrollArea::vertical().id_salt("triage-shared-details")
         .auto_shrink([false, false]).show(ui, |ui| {
         presentation::heading(ui, title(&selected.table), "");

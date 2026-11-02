@@ -325,13 +325,12 @@ fn the_ioc_section_lists_the_tabs_the_verdicts_and_marks_a_false_positive() {
     ] {
         assert!(text.contains(wanted), "{wanted:?} missing: {text}");
     }
-    // Endpoints tab: the row, the chip and the details.
+    // Endpoints tab: the row and the chip. The details are in the shared Details pane.
     view.ioc.tab = Tab::Of(Type::Endpoint);
     let text = shown(&settle(&ctx, &mut view));
     assert!(text.contains("93.184.216.34:80"), "{text}");
     assert!(text.contains("Matched"), "{text}");
     assert!(text.contains("Mirai"), "{text}");
-    assert!(text.contains("Mark as false positive"), "{text}");
     assert!(text.contains("unattributed"), "{text}");
     // Marking writes the known false-positive list and asks for a rescan.
     let ioc = view.scan.as_ref().unwrap().ioc.clone().unwrap();

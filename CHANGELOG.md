@@ -8,6 +8,12 @@ it runs.
 
 ### Host
 
+- **Triage > IOC shows the selected indicator in the Details window, not in a
+  panel beside the table.** The entries table now takes the full width. Click a
+  row and the shared Details pane (the same place, follow-the-selection and
+  pop-out as the other Triage tabs) shows its value, kind, sources, first and
+  last seen, process, dataset records, Check online, Mark as false positive,
+  Copy and the jump to the evidence in the trace or the packets.
 - **Every table fits the box it is in.** One shared helper (`fit_table`) plans
   the columns from the width the table really has: fixed columns keep their
   width only while the table fits, every column shrinks in proportion (no 40 %

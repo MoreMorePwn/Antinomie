@@ -14,6 +14,17 @@ fn row(ui: &mut egui::Ui, name: &str, value: &str, mono: bool) {
     ui.end_row();
 }
 
+/// What the Details heading calls an indicator of this type.
+pub(super) fn kind_name(ty: Type) -> &'static str {
+    match ty {
+        Type::Endpoint => "Endpoint",
+        Type::Domain => "Domain",
+        Type::Url => "URL",
+        Type::Tls => "TLS session",
+        Type::File => "File",
+    }
+}
+
 impl View {
     pub(super) fn detail(
         &mut self,
@@ -21,10 +32,10 @@ impl View {
         ioc: &IocScan,
         selected: Option<usize>,
     ) -> Option<Jump> {
-        let Some(at) = selected else {
+        let Some(at) = selected.filter(|&at| at < self.verdicts.len()) else {
             ui.colored_label(
                 theme::muted(),
-                "Select a row to see its sources, process and dataset records.",
+                "This indicator is no longer in the scan on screen.",
             );
             return None;
         };
@@ -34,15 +45,9 @@ impl View {
             ui.set_width(ui.available_width());
             ui.horizontal_wrapped(|ui| {
                 ui.label(
-                    RichText::new(match indicator.ty {
-                        Type::Endpoint => "Endpoint",
-                        Type::Domain => "Domain",
-                        Type::Url => "URL",
-                        Type::Tls => "TLS session",
-                        Type::File => "File",
-                    })
-                    .strong()
-                    .color(theme::heading()),
+                    RichText::new(kind_name(indicator.ty))
+                        .strong()
+                        .color(theme::heading()),
                 );
                 verdict_chip(ui, &verdict);
             });

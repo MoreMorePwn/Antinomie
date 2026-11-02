@@ -26,6 +26,8 @@ mod detail;
 mod list;
 mod summary_tab;
 
+pub(super) use list::DETAILS_TABLE;
+
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum Tab {
     #[default]
@@ -528,6 +530,21 @@ impl TriageView {
                     self.ioc_jump(ui.ctx(), jump);
                 }
             }
+        }
+    }
+
+    /// The selected indicator in the shared Details pane: `id` is the one the
+    /// IOC table selected. A jump it asks for is handed on like a row's.
+    pub(super) fn ioc_details(&mut self, ui: &mut egui::Ui, id: &str) {
+        let ioc = self.scan.as_ref().and_then(|scan| scan.ioc.clone());
+        let Some(ioc) = ioc else {
+            ui.weak("The indicators of this run are not available.");
+            return;
+        };
+        self.ioc.sync(Some(&ioc));
+        let at = ioc.indicators.iter().position(|item| item.id() == id);
+        if let Some(jump) = self.ioc.detail(ui, &ioc, at) {
+            self.ioc_jump(ui.ctx(), jump);
         }
     }
 

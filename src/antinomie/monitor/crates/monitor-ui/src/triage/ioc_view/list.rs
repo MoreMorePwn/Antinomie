@@ -148,6 +148,20 @@ pub(super) fn values(indicator: &Indicator, verdict: &Verdict) -> Vec<(&'static 
     ]
 }
 
+/// The shared Details table this tab selects into.
+pub(in crate::triage) const DETAILS_TABLE: &str = "triage-ioc";
+const DETAILS_HEADERS: &[&str] = &["Indicator", "Kind", "Id"];
+
+/// The selection the shared Details pane keeps: the value, the kind and the
+/// indicator's id, which finds it again in the scan.
+fn details_cells(indicator: &Indicator) -> Vec<Cell> {
+    vec![
+        cell(&indicator.value, theme::text(), true),
+        cell(super::detail::kind_name(indicator.ty), theme::text(), false),
+        cell(indicator.id(), theme::text(), true),
+    ]
+}
+
 fn time_text(us: Option<u64>) -> String {
     us.map_or("—".into(), crate::time_format::short_time_us)
 }
@@ -267,52 +281,26 @@ impl View {
                 "JA4 and JA3S have no abuse.ch feed: they are shown, not matched.",
             );
         }
-        let selected = self
-            .selected
-            .get(&ty)
-            .and_then(|id| {
-                rows.iter()
-                    .copied()
-                    .find(|&at| ioc.indicators[at].id() == *id)
-            })
-            .or_else(|| rows.first().copied());
+        // Only a row the user picked is selected; its details are in the shared
+        // Details pane, which follows the pick.
+        let selected = self.selected.get(&ty).and_then(|id| {
+            rows.iter()
+                .copied()
+                .find(|&at| ioc.indicators[at].id() == *id)
+        });
         let mut jump = None;
-        let mut picked = None;
-        let width = ui.available_width();
-        let height = ui.available_height().max(260.0);
-        if width >= 980.0 {
-            ui.horizontal_top(|ui| {
-                ui.allocate_ui_with_layout(
-                    egui::vec2(width - 392.0, height),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        picked = self.table(ui, ioc, ty, &rows, selected, &mut jump);
-                    },
-                );
-                ui.add_space(8.0);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(380.0, height),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        egui::ScrollArea::vertical()
-                            .id_salt(("ioc-detail", ty.id()))
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                if let Some(next) = self.detail(ui, ioc, selected) {
-                                    jump = Some(next);
-                                }
-                            });
-                    },
-                );
-            });
-        } else {
-            picked = self.table(ui, ioc, ty, &rows, selected, &mut jump);
-            if let Some(next) = self.detail(ui, ioc, selected) {
-                jump = Some(next);
-            }
-        }
+        let picked = self.table(ui, ioc, ty, &rows, selected, &mut jump);
         if let Some(at) = picked {
-            self.selected.insert(ty, ioc.indicators[at].id());
+            let indicator = &ioc.indicators[at];
+            self.selected.insert(ty, indicator.id());
+            let ctx = ui.ctx();
+            details::select(
+                ctx,
+                DETAILS_TABLE,
+                DETAILS_HEADERS,
+                &details_cells(indicator),
+            );
+            details::clicked(ctx, DETAILS_TABLE);
         }
         jump
     }
