@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! A single dock tree rendered by moving each surface into its native viewport.
+#[path = "workspace_details.rs"]
+mod workspace_details;
 #[path = "workspace_drag.rs"]
 mod workspace_drag;
 #[path = "workspace_tabs.rs"]
 mod workspace_tabs;
+#[path = "workspace_viewer.rs"]
+mod workspace_viewer;
 use crate::{app::MonitorApp, theme};
 use antinomie_monitor_core::AnalysisKind;
 use eframe::egui::{self, Rect};
@@ -13,6 +17,8 @@ use egui_dock::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+pub(crate) use workspace_details::{DetailsFollow, DetailsOf};
+use workspace_viewer::Viewer;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum Panel {
@@ -94,115 +100,6 @@ impl Panel {
             Self::Terminal(_) => "Terminal",
             Self::Debugger => "Debugger",
             Self::Library(page) => page.title(),
-        }
-    }
-}
-
-/// Which main tab the bottom Details panel follows: the syscall trace, the
-/// network, memory, disks, history, triage, cores or static analysis panel.
-/// When only one is on screen it wins; when several are (split or detached),
-/// the one clicked last.
-#[derive(Default)]
-pub(crate) struct DetailsFollow {
-    followed: usize,
-    /// Pass of the main window in which each followed panel was last drawn.
-    drawn: [Option<u64>; 9],
-}
-
-/// What the Details panel shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DetailsOf {
-    Syscall,
-    Packet,
-    MemoryRow,
-    History,
-    Triage,
-    DiskEntry,
-    Core,
-    Static,
-    /// A run of the open sample, selected on the sample window's Runs tab.
-    Sample,
-}
-
-impl DetailsFollow {
-    const SIDES: [DetailsOf; 9] = [
-        DetailsOf::Syscall,
-        DetailsOf::Packet,
-        DetailsOf::MemoryRow,
-        DetailsOf::History,
-        DetailsOf::Triage,
-        DetailsOf::DiskEntry,
-        DetailsOf::Core,
-        DetailsOf::Static,
-        DetailsOf::Sample,
-    ];
-
-    fn side(panel: &Panel) -> Option<usize> {
-        match panel {
-            Panel::Trace => Some(0),
-            Panel::Network => Some(1),
-            Panel::Memory => Some(2),
-            Panel::RunHistory => Some(3),
-            Panel::Triage => Some(4),
-            Panel::Disks => Some(5),
-            Panel::CoreDump => Some(6),
-            Panel::StaticAnalysis | Panel::AnalysisSection { .. } => Some(7),
-            Panel::Library(LibraryPage::Samples) => Some(8),
-            _ => None,
-        }
-    }
-
-    /// `panel` was drawn into `ui` this pass.
-    pub(crate) fn drawn(&mut self, ui: &egui::Ui, panel: &Panel) {
-        let Some(side) = Self::side(panel) else {
-            return;
-        };
-        let now = ui.ctx().cumulative_pass_nr_for(egui::ViewportId::ROOT);
-        self.drawn[side] = Some(now);
-        // Alone on screen: it stays followed after it is hidden again (by
-        // Run History, say).
-        let alone = (0..self.drawn.len())
-            .filter(|other| *other != side)
-            .all(|other| self.drawn[other].is_none_or(|pass| pass + 1 < now));
-        let rect = ui.max_rect();
-        if alone
-            || ui.input(|input| {
-                input.pointer.any_pressed()
-                    && input
-                        .pointer
-                        .interact_pos()
-                        .is_some_and(|pos| rect.contains(pos))
-            })
-        {
-            self.followed = side;
-        }
-    }
-
-    /// The user chose `panel`'s tab.
-    pub(crate) fn chose(&mut self, panel: &Panel) {
-        if let Some(side) = Self::side(panel) {
-            self.followed = side;
-        }
-    }
-
-    /// Whether the panel `of` was drawn in the last pass: its tab is on screen.
-    pub(crate) fn on_screen(&self, ctx: &egui::Context, of: DetailsOf) -> bool {
-        let now = ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT);
-        Self::SIDES
-            .iter()
-            .position(|side| *side == of)
-            .is_some_and(|side| self.drawn[side].is_some_and(|pass| pass + 1 >= now))
-    }
-
-    /// What Details show now.
-    pub(crate) fn of(&self, ctx: &egui::Context) -> DetailsOf {
-        let now = ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT);
-        let visible: Vec<usize> = (0..self.drawn.len())
-            .filter(|side| self.drawn[*side].is_some_and(|pass| pass + 1 >= now))
-            .collect();
-        match visible.as_slice() {
-            [only] => Self::SIDES[*only],
-            _ => Self::SIDES[self.followed],
         }
     }
 }
@@ -1098,114 +995,6 @@ impl WorkspaceLayout {
             } else {
                 self.return_home(panel);
             }
-        }
-    }
-}
-
-struct Viewer<'a> {
-    app: &'a mut MonitorApp,
-    layout: &'a mut WorkspaceLayout,
-    surface: SurfaceIndex,
-    /// Tabs shown with short names because their bar is too narrow.
-    tight: Vec<Panel>,
-    /// The work area's tabs in bar order (see `WorkspaceLayout::work_tabs`).
-    work_tabs: Vec<Panel>,
-}
-
-impl Viewer<'_> {
-    /// A tab's title; `tight` swaps in the short name and less padding.
-    fn title_for(&mut self, tab: &Panel, tight: bool) -> egui::WidgetText {
-        if *tab == Panel::Activity {
-            self.app.activity_title()
-        } else if *tab == Panel::Jobs {
-            self.app.jobs_title()
-        } else if tight {
-            workspace_tabs::tight_title(&self.app.panel_title(tab)).into()
-        } else {
-            theme::tab_title(&self.app.panel_title(tab)).into()
-        }
-    }
-}
-
-impl TabViewer for Viewer<'_> {
-    type Tab = Panel;
-    fn title(&mut self, tab: &mut Panel) -> egui::WidgetText {
-        let tight = self.tight.contains(tab);
-        self.title_for(tab, tight)
-    }
-    fn id(&mut self, tab: &mut Panel) -> egui::Id {
-        egui::Id::new(format!("{tab:?}"))
-    }
-    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Panel) {
-        self.app.show_panel(ui, tab);
-    }
-    fn scroll_bars(&self, _: &Panel) -> [bool; 2] {
-        [false, false]
-    }
-    fn allowed_in_windows(&self, _: &mut Panel) -> bool {
-        false
-    }
-    fn closeable(&mut self, tab: &mut Panel) -> bool {
-        matches!(
-            tab,
-            Panel::Terminal(_) | Panel::AnalysisSection { .. } | Panel::Library(_)
-        )
-    }
-    fn on_close(&mut self, tab: &mut Panel) -> bool {
-        if let Panel::Terminal(id) = tab {
-            self.app.close_terminal_view(id);
-        }
-        true
-    }
-    fn on_tab_button(&mut self, tab: &mut Panel, response: &egui::Response) {
-        let origin = response
-            .ctx
-            .input(|input| input.viewport().inner_rect.map(|rect| rect.min))
-            .unwrap_or_default();
-        let visible = response.interact_rect.intersect(response.ctx.screen_rect());
-        if visible.is_positive() {
-            self.layout.tab_targets.push((
-                tab.clone(),
-                self.surface,
-                visible.translate(origin.to_vec2()),
-            ));
-        }
-        if response.drag_started_by(egui::PointerButton::Primary) {
-            self.layout.drag = Some((tab.clone(), self.surface));
-        }
-        if response.clicked() {
-            self.app.details_follow.chose(tab);
-        }
-        if self.layout.drag.is_none() {
-            response
-                .clone()
-                .on_hover_cursor(egui::CursorIcon::Grab)
-                .on_hover_text(format!(
-                    "{}{}\nDrag to reorder or dock at a pane edge. Right-click to detach.",
-                    self.app.panel_title(tab),
-                    self.work_tabs
-                        .iter()
-                        .take(9)
-                        .position(|candidate| candidate == tab)
-                        .and_then(crate::app::tab_shortcut)
-                        .map(|shortcut| format!(" ({})", response.ctx.format_shortcut(&shortcut)))
-                        .unwrap_or_default()
-                ));
-        }
-    }
-    fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Panel, _: SurfaceIndex, _: NodeIndex) {
-        if !self.surface.is_main()
-            && ui
-                .button("Dock")
-                .on_hover_text("Move this tab into the main window")
-                .clicked()
-        {
-            self.layout.dock_back = Some(tab.clone());
-            ui.close_menu();
-        }
-        if ui.button("Detach").clicked() {
-            self.layout.detach = Some(tab.clone());
-            ui.close_menu();
         }
     }
 }
