@@ -43,6 +43,7 @@ pub(super) fn node(
         thread: false,
         renames: Vec::new(),
         in_call: None,
+        forked: false,
     }
 }
 

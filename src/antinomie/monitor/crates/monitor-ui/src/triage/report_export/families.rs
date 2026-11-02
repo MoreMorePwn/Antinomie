@@ -61,6 +61,12 @@ const GENERIC: &[&str] = &[
     "trojan.linux",
 ];
 
+/// Platform and language words that open a signature message before the family.
+const PLATFORMS: &[&str] = &[
+    "golang", "go", "linux", "win32", "win64", "windows", "elf", "unix", "android", "rust", "mips",
+    "arm", "x86", "x64",
+];
+
 /// Names a rule pack spells in several ways.
 const ALIASES: &[(&str, &str)] = &[
     ("xor", "XorDDoS"),
@@ -88,13 +94,13 @@ pub(super) fn ids_family(message: &str) -> Option<String> {
         .iter()
         .find_map(|class| rest.strip_prefix(class))?;
     rest = after_class.trim_start();
-    // "Linux/Kaiji ..." and "Win32/Foo ..." name the platform first.
-    if let Some((platform, tail)) = rest.split_once('/') {
-        if !platform.contains(' ') {
-            rest = tail;
-        }
-    }
-    let word = rest.split_whitespace().next()?;
+    // "Linux/Kaiji ...", "Golang/Linux Kaiji ..." and "Win32/Foo ..." name the
+    // platform or language first; skip those words.
+    let normalized = rest.replace('/', " ");
+    let mut words = normalized
+        .split_whitespace()
+        .skip_while(|word| PLATFORMS.contains(&word.to_ascii_lowercase().as_str()));
+    let word = words.next()?.to_owned();
     let word = word.trim_matches(|c: char| !c.is_ascii_alphanumeric());
     // "Xorddos.F" is the family Xorddos, variant F; "DDoS.XOR" is a DDoS family XOR.
     let mut parts = word.split('.');
@@ -163,6 +169,10 @@ mod tests {
             ("ET MALWARE Kaiji Variant Activity", Some("Kaiji")),
             ("ET MALWARE Xorddos.F Checkin", Some("XorDDoS")),
             ("ET MALWARE DDoS.XOR Checkin", Some("XorDDoS")),
+            (
+                "ET MALWARE Golang/Linux Kaiji Variant Activity",
+                Some("Kaiji"),
+            ),
             ("ET MALWARE Linux/Mirai Variant CnC Activity", Some("Mirai")),
             ("ETPRO TROJAN Gafgyt Checkin", Some("Gafgyt")),
             ("ET MALWARE Possible Linux Backdoor Beacon", None),

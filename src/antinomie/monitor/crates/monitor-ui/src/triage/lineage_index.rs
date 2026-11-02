@@ -202,6 +202,7 @@ mod tests {
             thread: false,
             renames: Vec::new(),
             in_call: None,
+            forked: false,
         }
     }
 

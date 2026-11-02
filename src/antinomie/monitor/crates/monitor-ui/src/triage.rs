@@ -1055,6 +1055,10 @@ struct TaskNode {
     command_line: Option<String>,
     /// The same vector kept as arguments, for the auditd `PROCTITLE` record.
     proctitle: Option<Vec<String>>,
+    /// The image is the parent's: a fork that has not run an exec of its own.
+    forked: bool,
+    /// An exec committed here and no image name was recorded for it.
+    exec_unnamed: bool,
 }
 
 enum Spawn {
@@ -1085,6 +1089,8 @@ struct ProcessNode {
     /// The call the task was in at its last record, with its start: the entry
     /// was recorded and no exit followed (a call still blocking at the stop).
     in_call: Option<(String, u64)>,
+    /// The image is the parent's: a fork that has not run an exec of its own.
+    forked: bool,
 }
 
 const FINDING_FIELDS: &[FieldSpec<'static>] = &[

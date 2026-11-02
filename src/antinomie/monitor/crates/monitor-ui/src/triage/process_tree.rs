@@ -41,7 +41,11 @@ pub(super) fn process_rows(
                     true,
                 ),
                 cell(
-                    node.comm.clone(),
+                    if node.forked {
+                        format!("{} (fork)", node.comm)
+                    } else {
+                        node.comm.clone()
+                    },
                     theme::value(theme::ValueKind::Name),
                     true,
                 ),
@@ -303,6 +307,10 @@ pub(super) fn observe_processes(
                         .find_map(|event| program_name(Some(event), None))
                 })
                 .or_else(|| kernel_records::exec_image(invocation).and_then(|image| image.path));
+            if let Some(node) = nodes.get_mut(&key) {
+                node.forked = false;
+                node.exec_unnamed = named.is_none();
+            }
             if named.is_none() {
                 if let Some(node) = nodes.get_mut(&key) {
                     node.comm = "?".into();
@@ -363,6 +371,7 @@ pub(super) fn observe_processes(
 pub(super) fn finish_processes(
     mut nodes: std::collections::BTreeMap<TaskKey, TaskNode>,
 ) -> Vec<ProcessNode> {
+    inherit_fork_images(&mut nodes);
     let threads = attach_threads(&mut nodes);
     let mut children: std::collections::BTreeMap<TaskKey, Vec<TaskKey>> =
         std::collections::BTreeMap::new();
@@ -411,6 +420,7 @@ pub(super) fn finish_processes(
                 thread: threads.contains(&key),
                 renames: node.renames.clone(),
                 in_call: node.in_call.clone(),
+                forked: node.forked,
             });
             if let Some(kids) = children.get(&key) {
                 for child in kids.iter().rev() {
@@ -429,6 +439,42 @@ pub(super) fn finish_processes(
         }
     }
     found
+}
+
+/// A forked child that never ran an exec of its own is still its parent's
+/// program: name it after the parent image. The parent's own name can arrive
+/// after the fork was seen (the launch record), so this runs once all tasks
+/// are known, parents before children.
+fn inherit_fork_images(nodes: &mut std::collections::BTreeMap<TaskKey, TaskNode>) {
+    for _ in 0..16 {
+        let todo: Vec<(TaskKey, TaskKey)> = nodes
+            .iter()
+            .filter(|(_, node)| node.comm == "?" && !node.exec_unnamed)
+            .filter_map(|(key, node)| node.parent.map(|parent| (*key, parent)))
+            .filter(|(key, parent)| {
+                parent != key && nodes.get(parent).is_some_and(|node| node.comm != "?")
+            })
+            .collect();
+        if todo.is_empty() {
+            return;
+        }
+        for (key, parent) in todo {
+            let Some(image) = nodes.get(&parent).map(|node| {
+                (
+                    node.comm.clone(),
+                    node.argv.clone(),
+                    node.command_line.clone(),
+                    node.proctitle.clone(),
+                )
+            }) else {
+                continue;
+            };
+            if let Some(node) = nodes.get_mut(&key) {
+                (node.comm, node.argv, node.command_line, node.proctitle) = image;
+                node.forked = true;
+            }
+        }
+    }
 }
 
 /// Identity is `(task_cookie, pid)` when the cookie is non-zero. A fork child
@@ -518,6 +564,7 @@ fn link_child(
                         node.argv.clone_from(argv);
                         node.command_line.clone_from(line);
                         node.proctitle.clone_from(title);
+                        node.forked = !node.exec_unnamed;
                     }
                 }
             }
@@ -544,6 +591,7 @@ fn link_child(
                             command_line: inherited.as_ref().and_then(|image| image.2.clone()),
                             proctitle: inherited.as_ref().and_then(|image| image.3.clone()),
                             provisional: true,
+                            forked: inherited.is_some(),
                             ..TaskNode::default()
                         },
                     );

@@ -87,6 +87,13 @@ it runs.
   history, Export bytes (the file's reconstruction in Triage, where its bytes are
   saved) and Copy SHA-256. The list comes from each run's Triage digest, so a run
   Triage has not read yet is listed as such with a link to open it.
+- **A malware family is named from IDS signature messages with a platform or
+  language prefix, and forked children are no longer "?".** "ET MALWARE
+  Golang/Linux Kaiji Variant Activity" now names Kaiji in the report summary
+  (the leading `Golang/Linux` words are skipped). A forked child that never ran
+  an exec of its own shows its parent's image with "(fork)" in the Process
+  column, also when the parent's name (the launch record) became known after the
+  fork was seen.
 
 ## 0.8.1 — 2026-11-03
 
