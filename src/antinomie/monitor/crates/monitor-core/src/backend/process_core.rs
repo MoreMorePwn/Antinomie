@@ -271,7 +271,13 @@ impl Transfer {
     }
     pub(super) fn armed(reply: &[u8], run: &RunSummary) -> Result<Self, String> {
         let (id, size) = control::acquisition_bounded(reply, CORE_MAX_SUPPORTED)
-            .map_err(|error| format!("process-core arm: {error}"))?;
+            .map_err(|error| {
+                format!(
+                    "the core capture could not be armed: {error} (the guest's arm reply was {} bytes: {})",
+                    reply.len(),
+                    reply.iter().take(24).map(|b| format!("{b:02x}")).collect::<String>()
+                )
+            })?;
         // The guest reserves exactly what was asked; anything else means the
         // two sides disagree about the budget, and the host will not guess.
         if size == 0 || size != Self::accepted_size(run) {

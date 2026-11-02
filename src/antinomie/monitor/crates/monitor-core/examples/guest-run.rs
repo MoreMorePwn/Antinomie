@@ -487,11 +487,19 @@ fn run() -> Result<Value, String> {
                 .get("core_dump_on_exit")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            debug_on_start: spec
+                .get("debug_on_start")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             ..ExecRequest::default()
         };
         let launched = Instant::now();
         session.guest_command(|| Command::Execute(request.clone()), boot)?;
         session.settle(|s| s.runs.iter().any(|r| !known.contains(&r.id)), 30)?;
+        if request.debug_on_start {
+            thread::sleep(Duration::from_secs(3));
+            session.command(Command::DebugDetach { kill: false }, 30)?;
+        }
         let run_id = session
             .snapshot
             .runs

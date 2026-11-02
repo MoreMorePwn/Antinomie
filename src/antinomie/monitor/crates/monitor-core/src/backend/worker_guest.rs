@@ -416,14 +416,17 @@ impl Worker {
                     session.custody_start(&self.options.data_dir, sample, &mut run);
                 }
                 if request.core_dump_on_exit {
+                    // The core's 24-byte arm reply sits before the debugger's
+                    // 16-byte start record, which is not part of it.
                     let core_offset = 24 + usize::from(inline_acquisition) * 24;
-                    match process_core::Transfer::armed(&reply[core_offset..], &run.summary) {
+                    let core_reply = &reply[core_offset..core_offset + 24];
+                    match process_core::Transfer::armed(core_reply, &run.summary) {
                         Ok(core) => artifacts.core = Some(core),
                         Err(error) => {
                             artifacts.summary.core_state = RunArtifactState::Failed;
                             artifacts.issue(error.clone());
                             artifacts.core = Some(process_core::Transfer::failed(
-                                &reply[core_offset..],
+                                core_reply,
                                 &run.summary,
                                 error,
                             ));
