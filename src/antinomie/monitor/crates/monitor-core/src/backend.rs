@@ -22,11 +22,13 @@ mod snapshot_saving;
 mod terminal_drain;
 mod uploads;
 mod worker_artifacts;
+mod worker_base_jobs;
 mod worker_commands;
 mod worker_disks;
 mod worker_guest;
 mod worker_loop;
 mod worker_vm;
+mod worker_vm_config;
 
 pub use self::debug_service::DebugLink;
 use self::{
