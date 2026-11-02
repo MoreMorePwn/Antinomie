@@ -328,10 +328,7 @@ impl MemoryView {
                     self.text_view = false;
                 }
                 ui.separator();
-                let files = std::fs::read_dir(result.run.files())
-                    .map(|mut entries| entries.next().is_some())
-                    .unwrap_or(false);
-                if files
+                if result.has_files
                     && ui
                         .button(format!("{} Files", egui_phosphor::regular::FOLDER_OPEN))
                         .on_hover_text("Open the files this run wrote")
@@ -797,6 +794,9 @@ pub(super) fn load_result(
         (Ok(table), None) => result_branches(table, &shown),
         _ => Vec::new(),
     };
+    let has_files = std::fs::read_dir(run.files())
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false);
     LoadedResult {
         run,
         table,
@@ -807,6 +807,7 @@ pub(super) fn load_result(
         sort: request.sort,
         text: None,
         log,
+        has_files,
         total,
         source_rows,
         start,

@@ -8,6 +8,7 @@ it runs.
 
 ### Host
 
+- **Large folders and slow disks no longer freeze the memory result view.** The Files button looked up the run's files folder on every frame; it is looked up once, when the result loads.
 - **The sample window has an IOCs tab: every indicator across all runs of the
   sample.** One row per unique indicator (a file by hash and path): kind, value
   (defanged by default, with a toggle), which runs had it ("run 2, 3", "5 runs",

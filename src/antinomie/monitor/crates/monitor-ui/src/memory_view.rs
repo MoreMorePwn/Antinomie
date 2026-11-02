@@ -102,6 +102,8 @@ struct LoadedResult {
     /// The shown rows as Volatility prints them, made when first viewed.
     text: Option<Vec<String>>,
     log: String,
+    /// Whether the run wrote files; looked up once, on the loading worker.
+    has_files: bool,
     total: u64,
     source_rows: u64,
     start: u64,
