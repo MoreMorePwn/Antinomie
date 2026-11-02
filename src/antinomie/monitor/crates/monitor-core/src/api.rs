@@ -1140,10 +1140,10 @@ pub fn base_app_version(revision: Option<u32>, min_app_version: Option<&str>) ->
 /// labels carry; the app adds the version itself where it shows one.
 pub fn base_label_plain(label: &str) -> &str {
     let trimmed = label.trim_end();
-    if let Some((head, tail)) = trimmed.rsplit_once(" \u{2014} Antinomie ") {
-        if Version::parse(tail.trim()).is_some() {
-            return head.trim_end();
-        }
+    if let Some((head, tail)) = trimmed.rsplit_once(" \u{2014} Antinomie ")
+        && Version::parse(tail.trim()).is_some()
+    {
+        return head.trim_end();
     }
     label
 }

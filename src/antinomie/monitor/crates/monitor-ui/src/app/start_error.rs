@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! The screen shown instead of the app when the backend did not start: no
 //! command can reach a backend that is not there, so nothing else is drawn.
 
