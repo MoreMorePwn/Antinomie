@@ -2,6 +2,8 @@
 //! A single dock tree rendered by moving each surface into its native viewport.
 #[path = "workspace_drag.rs"]
 mod workspace_drag;
+#[path = "workspace_tabs.rs"]
+mod workspace_tabs;
 use crate::{app::MonitorApp, theme};
 use antinomie_monitor_core::AnalysisKind;
 use eframe::egui::{self, Rect};
@@ -728,15 +730,47 @@ impl WorkspaceLayout {
             app,
             layout: self,
             surface,
+            tight: Vec::new(),
         };
-        let dock_style = theme::dock_style(ui.style());
+        let fits = workspace_tabs::fit(ui, &mut viewer, &mut local, surface);
+        let mut dock_style = theme::dock_style(ui.style());
+        // The add button's slot stays free at the right end of every bar for
+        // the tab list button; the button itself is never drawn by the dock.
+        let bar_fill = dock_style.tab_bar.bg_fill;
+        let clear = egui::Color32::TRANSPARENT;
+        dock_style.buttons.add_tab_color = clear;
+        dock_style.buttons.add_tab_active_color = clear;
+        dock_style.buttons.add_tab_bg_fill = clear;
+        dock_style.buttons.add_tab_border_color = clear;
         DockArea::new(&mut local)
             .id(egui::Id::new(("native-dock", surface.0)))
             .style(dock_style)
             .draggable_tabs(false)
+            .show_add_buttons(true)
             .show_leaf_close_all_buttons(false)
             .show_leaf_collapse_buttons(false)
             .show_inside(ui, &mut viewer);
+        for leaf in fits.iter().filter(|leaf| leaf.overflows) {
+            if let Some(index) = workspace_tabs::list_button(
+                ui,
+                &mut viewer,
+                &mut local,
+                surface,
+                leaf.node,
+                bar_fill,
+            ) {
+                local.set_active_tab((SurfaceIndex::main(), leaf.node, TabIndex(index)));
+                if let Some(egui_dock::Node::Leaf { tabs, .. }) =
+                    local.main_surface().iter().nth(leaf.node.0)
+                {
+                    if let Some(tab) = tabs.get(index) {
+                        viewer.app.details_follow.chose(tab);
+                    }
+                }
+                ui.ctx().request_repaint();
+            }
+        }
+        drop(viewer);
         for (index, node) in local.main_surface().iter().enumerate() {
             if node.is_leaf() {
                 if let Some(rect) = node.rect() {
@@ -1003,16 +1037,28 @@ struct Viewer<'a> {
     app: &'a mut MonitorApp,
     layout: &'a mut WorkspaceLayout,
     surface: SurfaceIndex,
+    /// Tabs shown with short names because their bar is too narrow.
+    tight: Vec<Panel>,
+}
+
+impl Viewer<'_> {
+    /// A tab's title; `tight` swaps in the short name and less padding.
+    fn title_for(&mut self, tab: &Panel, tight: bool) -> egui::WidgetText {
+        if *tab == Panel::Activity {
+            self.app.activity_title()
+        } else if tight {
+            workspace_tabs::tight_title(&self.app.panel_title(tab)).into()
+        } else {
+            theme::tab_title(&self.app.panel_title(tab)).into()
+        }
+    }
 }
 
 impl TabViewer for Viewer<'_> {
     type Tab = Panel;
     fn title(&mut self, tab: &mut Panel) -> egui::WidgetText {
-        if *tab == Panel::Activity {
-            self.app.activity_title()
-        } else {
-            theme::tab_title(&self.app.panel_title(tab)).into()
-        }
+        let tight = self.tight.contains(tab);
+        self.title_for(tab, tight)
     }
     fn id(&mut self, tab: &mut Panel) -> egui::Id {
         egui::Id::new(format!("{tab:?}"))

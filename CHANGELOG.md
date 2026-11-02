@@ -115,6 +115,12 @@ it runs.
   (arg2.ioctl) x200"), so a high "schema gaps" count in the recorder line can be
   traced to the calls behind it. The decoder fixes themselves live in the guest
   kernel patches and are not part of this change.
+- **Every dock tab stays reachable at narrow windows.** At 1100 points the tab
+  bar clipped "Core dumps" and "Static analysis" with only a thin scroll bar to
+  find them. A bar whose tabs do not fit now uses short names ("Trace",
+  "History", "Cores", "Static"; the hover text keeps the full name) and tighter
+  padding, and when even those do not fit it scrolls the active tab into view
+  and shows a tab list button at its right end that opens every tab of the bar.
 
 ## 0.8.1 — 2026-11-03
 
