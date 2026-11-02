@@ -299,7 +299,7 @@ impl MonitorApp {
                             row.col(|ui| {
                                 let detail = [execution_detail(run), crate::run_recording::tooltip(run)];
                                 ui.add(
-                                    egui::Label::new(run_status(run))
+                                    egui::Label::new(crate::run_state_line::text(run, run_status(run)))
                                         .selectable(false)
                                         .sense(egui::Sense::hover()),
                                 )

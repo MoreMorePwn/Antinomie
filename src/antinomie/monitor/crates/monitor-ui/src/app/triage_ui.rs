@@ -43,6 +43,7 @@ impl MonitorApp {
             self.triage.run_ended_ms(),
             self.triage.alive_processes(),
         ));
+        route.run_state_color = Some(crate::run_state_line::color(&run));
         if crate::run_state_line::ticks(&run) {
             // Only the clock moves: the Triage index is not read again.
             ui.ctx()

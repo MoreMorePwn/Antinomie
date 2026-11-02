@@ -14,6 +14,13 @@ it runs.
   matched count follows it in alert red ("IOC 24 · 3", tooltip "24 indicators,
   3 matched"); nothing red when nothing matched. It uses the same tab count
   painter as the other Triage tabs.
+- **Run states have their own colour.** Run History, the sample window's Runs,
+  its Summary, the VM's recent runs and the run window's state colour each state from one palette,
+  shared with the run-finished toast and the Triage run-state line: running or
+  still recording blue, finished with exit 0 green, another exit neutral,
+  stopped grey, time limit blue-grey info, crashed or killed by a signal amber,
+  failed to start or interrupted red, recording incomplete amber. The words
+  stay, so colour is never the only cue.
 - **A Jobs window lists everything the app is running.** It sits beside Activity
   (View > Jobs), and a "3 jobs" chip in the status bar opens it. One row per job
   with its kind, target, start time, a ticking elapsed time, progress when

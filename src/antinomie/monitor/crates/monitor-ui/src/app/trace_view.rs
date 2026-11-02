@@ -719,16 +719,13 @@ impl MonitorApp {
                             ui.colored_label(theme::muted(), "No recorded runs yet");
                         }
                         for run in &runs {
-                            let detail = format!(
-                                "{}  \u{00b7}  {}",
-                                run_status(run),
-                                run.request.args.join(" ")
-                            );
+                            let args = run.request.args.join(" ");
                             if recent_row(
                                 ui,
                                 egui_phosphor::regular::TERMINAL_WINDOW,
                                 &run.request.path,
-                                detail.trim_end_matches("  \u{00b7}  "),
+                                Some((run_status(run), crate::run_state_line::color(run))),
+                                &args,
                             )
                             .on_hover_text(format!(
                                 "Open this run's recording in the trace\n{}",
@@ -749,6 +746,7 @@ impl MonitorApp {
                                 ui,
                                 egui_phosphor::regular::RECORD,
                                 &captures::scope(&capture.scope),
+                                None,
                                 captures::status(capture.state),
                             )
                             .on_hover_text(format!(
@@ -868,7 +866,13 @@ impl MonitorApp {
 }
 
 /// A clickable line of the empty trace panel: icon, title, muted detail.
-fn recent_row(ui: &mut egui::Ui, icon: &str, title: &str, detail: &str) -> egui::Response {
+fn recent_row(
+    ui: &mut egui::Ui,
+    icon: &str,
+    title: &str,
+    status: Option<(&str, egui::Color32)>,
+    detail: &str,
+) -> egui::Response {
     let size = egui::TextStyle::Body.resolve(ui.style()).size;
     let height = theme::row_height(size) + 4.0;
     let (rect, response) = ui.allocate_exact_size(
@@ -901,11 +905,21 @@ fn recent_row(ui: &mut egui::Ui, icon: &str, title: &str, detail: &str) -> egui:
             theme::text(),
         );
         let detail_x = title_x + title_width + size * 0.8;
-        let mut job = egui::text::LayoutJob::simple_singleline(
-            detail.to_owned(),
-            egui::FontId::proportional(size - 1.0),
-            theme::muted(),
-        );
+        let small = egui::FontId::proportional(size - 1.0);
+        let mut job = egui::text::LayoutJob::default();
+        let mut gap = "";
+        // The state words in the run-state colour, the arguments muted.
+        if let Some((words, color)) = status {
+            job.append(words, 0.0, egui::TextFormat::simple(small.clone(), color));
+            gap = "  \u{00b7}  ";
+        }
+        if !detail.is_empty() {
+            job.append(
+                &format!("{gap}{detail}"),
+                0.0,
+                egui::TextFormat::simple(small, theme::muted()),
+            );
+        }
         job.wrap = egui::text::TextWrapping::truncate_at_width(rect.right() - detail_x - 6.0);
         let detail = painter.layout_job(job);
         painter.galley(

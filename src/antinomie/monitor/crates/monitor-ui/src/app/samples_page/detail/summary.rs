@@ -345,6 +345,22 @@ fn family_source(data: &Data) -> Option<String> {
     }
 }
 
+/// The outcome of a run in words that carry its state where the exit alone
+/// would not ("Interrupted · Exit 0"), since the colour is never the only cue.
+fn outcome_words(run: &RunSummary) -> String {
+    let exit = super::super::exit_label(run);
+    match run.state {
+        RunState::FailedToStart | RunState::LaunchUnconfirmed => run_status(run).to_owned(),
+        RunState::Interrupted | RunState::Finalized | RunState::Stopped => {
+            format!("{} · {exit}", run_status(run))
+        }
+        _ if run.recording_error.is_some() && !run.state.never_recorded() => {
+            format!("{exit} · incomplete")
+        }
+        _ => exit,
+    }
+}
+
 /// The latest five runs, newest first; a row opens that run's Triage.
 fn recent_runs(ui: &mut egui::Ui, data: &Data, go: &mut Option<Go>, font: f32) {
     parts::section(ui, "Runs", Some(data.runs.len()), |ui| {
@@ -370,7 +386,7 @@ fn recent_runs(ui: &mut egui::Ui, data: &Data, go: &mut Option<Go>, font: f32) {
                     body.rows(table::row_height(font) + 4.0, shown.len(), |mut row| {
                         let entry = &shown[row.index()];
                         let run = &entry.run;
-                        let exit = super::super::exit_label(run);
+                        let exit = outcome_words(run);
                         row.col(|ui| {
                             ui.add(
                                 egui::Label::new(
@@ -404,9 +420,11 @@ fn recent_runs(ui: &mut egui::Ui, data: &Data, go: &mut Option<Go>, font: f32) {
                             // One line; the whole outcome is the tooltip.
                             let detail = execution_detail(run);
                             ui.add(
-                                egui::Label::new(RichText::new(&exit).color(theme::text()))
-                                    .truncate()
-                                    .selectable(false),
+                                egui::Label::new(
+                                    RichText::new(&exit).color(crate::run_state_line::color(run)),
+                                )
+                                .truncate()
+                                .selectable(false),
                             )
                             .on_hover_text(if detail.is_empty() { &exit } else { &detail });
                         });

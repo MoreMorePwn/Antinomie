@@ -7,11 +7,11 @@
 use super::*;
 use crate::{
     activity::Level,
-    run_state_line::{clock, now_ms},
+    run_state_line::{clock, crash_signal, ending, now_ms, Ending},
     toasts::{self, Action, Then},
     workspace::{LibraryPage, Panel},
 };
-use antinomie_monitor_core::{typed_fields::signal_name, WaitStatus};
+use antinomie_monitor_core::typed_fields::signal_name;
 use std::collections::HashSet;
 
 /// What the app remembers between frames: the runs it saw going, and the runs
@@ -20,60 +20,6 @@ use std::collections::HashSet;
 struct Seen {
     going: HashSet<String>,
     announced: HashSet<String>,
-}
-
-/// How a run ended, as its toast says it.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum Ending {
-    /// The root exited with code 0.
-    Success,
-    /// The root exited with another code.
-    Exit(u8),
-    /// The program was a `timeout` and its limit ran out (exit 124).
-    TimeLimit,
-    /// Stopped with the Stop button.
-    Stopped,
-    /// The root died of a signal (a crash, or a kill from inside the guest).
-    Signal { signal: u8, core: bool },
-    /// The tree ended and the guest never recorded the root's status.
-    Unknown,
-}
-
-/// The signals that mean the program crashed rather than was told to stop.
-fn crash_signal(signal: u8) -> bool {
-    matches!(signal, 4 | 5 | 6 | 7 | 8 | 11 | 31)
-}
-
-pub(super) fn ending(run: &RunSummary) -> Option<Ending> {
-    match run.state {
-        RunState::Stopped => return Some(Ending::Stopped),
-        RunState::Finished => {}
-        _ => return None,
-    }
-    let program = run.request.path.rsplit('/').next().unwrap_or_default();
-    Some(
-        match run
-            .execution
-            .as_ref()
-            .and_then(|execution| execution.root_exit.as_ref())
-        {
-            Some(WaitStatus::Exited { code: 0 }) => Ending::Success,
-            // coreutils exits 124; BusyBox's timeout re-raises the SIGTERM it sent.
-            Some(WaitStatus::Exited { code: 124 }) if program == "timeout" => Ending::TimeLimit,
-            Some(WaitStatus::Signaled { signal: 15, .. }) if program == "timeout" => {
-                Ending::TimeLimit
-            }
-            Some(WaitStatus::Exited { code }) => Ending::Exit(*code),
-            Some(WaitStatus::Signaled {
-                signal,
-                core_dumped,
-            }) => Ending::Signal {
-                signal: *signal,
-                core: *core_dumped,
-            },
-            None => Ending::Unknown,
-        },
-    )
 }
 
 /// The level, the success colour, the title and the closing words of a toast.

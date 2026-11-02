@@ -411,8 +411,14 @@ impl MonitorApp {
                                     .on_hover_text(run.request.args.join("\n"));
                             });
                             row.col(|ui| {
-                                ui.add(egui::Label::new(run_status(run)).selectable(false))
-                                    .on_hover_text(execution_detail(run));
+                                ui.add(
+                                    egui::Label::new(crate::run_state_line::text(
+                                        run,
+                                        run_status(run),
+                                    ))
+                                    .selectable(false),
+                                )
+                                .on_hover_text(execution_detail(run));
                             });
                             row.col(|ui| {
                                 ui.add(egui::Label::new(root_exit(run)).selectable(false));
