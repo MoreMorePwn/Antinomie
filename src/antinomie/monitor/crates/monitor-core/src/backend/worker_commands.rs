@@ -961,10 +961,10 @@ impl Worker {
         let location = crate::locations::prepare(&self.options, &mut vm)?;
         let dir = &location.disk_directory;
         fs::create_dir(dir).map_err(|e| e.to_string())?;
-        let result = (|| -> Result<(), String> {
+        let build = || -> Result<(), String> {
             storage::private_dir(dir).map_err(|e| e.to_string())?;
             storage::create_overlay(&self.options, dir, vm.disk_gib, &bundle)?;
-            if let Some(credentials) = credentials {
+            if let Some(credentials) = credentials.clone() {
                 let account = crate::guest_account::GuestAccount::create(
                     credentials,
                     &dir.join("disk.qcow2"),
@@ -979,10 +979,28 @@ impl Worker {
             }
             storage::atomic_json(&dir.join("config.json"), &vm)?;
             storage::sync_directory_parent(dir)
-        })();
+        };
+        let mut result = build();
+        // A busy host can run the credential tool past its deadline: start
+        // again from a fresh disk once before giving up.
+        if matches!(&result, Err(error) if error.contains(crate::guest_account::TOOL_TIMEOUT)) {
+            let _ = fs::remove_file(dir.join("disk.qcow2"));
+            result = build();
+        }
         if let Err(error) = result {
             let cleanup = fs::remove_dir_all(dir);
-            return Err(format!("{error}; creation rollback {:?}", cleanup.err()));
+            let removed = match cleanup {
+                Ok(()) => "the unfinished disk was removed".to_owned(),
+                Err(e) => format!(
+                    "the unfinished disk could not be removed ({e}); delete it from the VM folder"
+                ),
+            };
+            let reason = if error.contains(crate::guest_account::TOOL_TIMEOUT) {
+                "the host was too busy to prepare the guest account in time (tried twice); try again when it is less loaded".to_owned()
+            } else {
+                error
+            };
+            return Err(format!("VM creation failed: {reason}; {removed}"));
         }
         let publication = crate::locations::publish(&self.options, &location);
         if let Err(error) = &publication

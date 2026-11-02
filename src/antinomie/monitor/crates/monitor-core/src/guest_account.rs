@@ -23,6 +23,19 @@ const INSTALLER_GROUPS: &str =
 /// initramfs). grub-install for UEFI alone takes over a minute in the
 /// appliance on a loaded host.
 const PROVISION_TIMEOUT: Duration = Duration::from_secs(600);
+/// What a timed-out appliance run reports; VM creation retries on it once.
+pub(crate) const TOOL_TIMEOUT: &str = "the offline credential tool timed out";
+
+/// The appliance run's deadline: [`PROVISION_TIMEOUT`], longer in proportion
+/// when the host's load average is above its CPU count (at most 4 times).
+fn provision_timeout() -> Duration {
+    let load = std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|text| text.split_whitespace().next()?.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let cpus = thread::available_parallelism().map_or(1, |n| n.get()) as f64;
+    PROVISION_TIMEOUT.mul_f64((load / cpus).clamp(1.0, 4.0))
+}
 /// The interface name a disk provisioned before 0.7.1 configures: the base
 /// wrote the stanza for the NIC at PCI 00:19.0 when it was built.
 const LEGACY_INTERFACE: &str = "enp0s25";
@@ -982,7 +995,7 @@ fn validate_hash(hash: &str) -> Result<(), String> {
 /// Run an offline tool with `input` on its standard input, its output
 /// discarded or (`capture`) returned, within one appliance run's time.
 fn run_private(command: &mut Command, input: &[u8], capture: bool) -> Result<Vec<u8>, String> {
-    run_private_with_timeout(command, input, capture, PROVISION_TIMEOUT)
+    run_private_with_timeout(command, input, capture, provision_timeout())
 }
 
 fn terminate_owned_group(child: &mut Child) -> Result<(), String> {
@@ -1080,17 +1093,14 @@ fn run_private_with_timeout(
             }
             if let Some(status) = status {
                 if !status.success() {
-                    return Err("offline credential provisioning failed; unpublished disk retained for cleanup".into());
+                    return Err("the offline credential tool failed".into());
                 }
                 if output_complete {
                     return Ok(output);
                 }
             }
             if Instant::now() >= deadline {
-                return Err(
-                    "offline credential tool timed out; unpublished disk retained for cleanup"
-                        .into(),
-                );
+                return Err(TOOL_TIMEOUT.into());
             }
             thread::sleep(Duration::from_millis(10));
         }
