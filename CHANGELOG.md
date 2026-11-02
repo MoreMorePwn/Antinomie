@@ -32,6 +32,23 @@ it runs.
   indicators, and stay in Summary > Detections. Triage's run digests keep the
   sources, times, process and dataset records of each indicator from now on;
   open a run in Triage once to fill them in.
+- **Syscall Trace shows record arrays as expandable trees.** Selecting a captured
+  array (directory entries of `getdents`/`getdents64`, `cap_data`, `gid_t`,
+  `siginfo_t`, `desc_struct`, and now `pollfd`, `sembuf`, control messages of
+  `sendmsg`/`recvmsg`, classic BPF filters of `seccomp`/`prctl`/socket options,
+  `futex_waitv`, `kexec_segment`, eBPF instructions and the BTF func, line and CO-RE
+  relocation records, plain `u32`/`u64` arrays) shows "N entries" with one line per
+  record (a dirent's name and type, a pollfd's descriptor and revents, `SCM_RIGHTS`
+  descriptors, a BPF instruction as assembly, a seccomp filter with action and
+  `seccomp_data` field names), each opening to its fields. Copy row as JSON, Copy all
+  as JSON and Save as JSON (to `records/` beside the run's files) carry the records.
+  "Decode all captured (M bytes)" reads the field's whole evidence (up to 16 MiB) and
+  decodes every record past the 256-byte preview, 100 a page, with "showing X of Y";
+  a record the capture cut, or whose length field cannot be right, is named instead
+  of dropped. The trace filter reads decoded records (`records contains "name"`, or a
+  plain word), and a trace row's menu copies the call's decoded records as JSON. Only
+  the x86-64 layouts are decoded for now.
+
 - **The Triage IOC tab and its kind tabs show matches beside the total.** The
   total number of indicators is in the muted grey count style and, when any
   indicator matched (IDS, YARA, Sigma, abuse.ch or marked malicious), the
