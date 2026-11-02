@@ -603,7 +603,7 @@ fn string_table(
                 .chain(shown.iter().map(|row| cells(row).swap_remove(index))),
         )
     };
-    let mut widths: Vec<f32> = (0..titles.len())
+    let widths: Vec<f32> = (0..titles.len())
         .map(|index| {
             if index == wide {
                 0.0
@@ -623,18 +623,10 @@ fn string_table(
             }
         })
         .collect();
-    // The string column keeps at least this much; when the window is too
-    // narrow for that, the other columns give way (their text is cut and the
-    // tooltip has the whole of it) so the table never passes the window.
+    // The string column keeps at least this much; fit_table shrinks the
+    // other columns (text cut, whole on hover) before the table would pass
+    // the window.
     let keep = 160.0;
-    let room = ui.available_width() - keep - ui.spacing().item_spacing.x * titles.len() as f32;
-    let used: f32 = widths.iter().sum();
-    if used > room {
-        let scale = (room / used).clamp(0.4, 1.0);
-        for width in &mut widths {
-            *width = (*width * scale).max(48.0);
-        }
-    }
     parts::on_surface(ui, |ui| {
         let mut builder = parts::mini_table(ui, id);
         for (index, _) in titles.iter().enumerate() {
