@@ -178,7 +178,8 @@ Downloads use `curl` with HTTPS only (also across redirects) and ignore your
   from snapshot.debian.org when it builds its image); analysis tools,
   Tor and wireproxy (**Install** buttons); the rule catalog and rule packs
   (also off until **Allow outbound catalog and rule downloads** is set);
-  abuse.ch IOC datasets; MalwareBazaar and MalShare searches (they send the term you typed) and downloads;
+  abuse.ch IOC datasets (an Update first asks each server for the file's size with a HEAD
+  request); MalwareBazaar and MalShare searches (they send the term you typed) and downloads;
   IOC **Check online** (off at every start; it sends the public indicator
   values that had no offline match, never files, to `threatfox-api.abuse.ch` and
   `urlhaus-api.abuse.ch`); API key and route **Test**
@@ -220,7 +221,11 @@ confidential material.
   dumps, process cores and packet captures hold the sample, its files or its
   memory. Exports (Triage reports, IOC CSV/JSON, cores, disk images, Ghidra
   projects) are plain files wherever you save them, and so are saved File
-  Reconstructions (`reconstructed/` in the recording).
+  Reconstructions (`reconstructed/` in the recording) and the bytes
+  of a file a run deleted (**Export bytes**, with its `.json` or `.mask` record), the
+  sample window's IOC export (CSV, JSON, MISP or STIX 2.1 in `sample-reports`: raw
+  values except in CSV and JSON when you ask for defanging) and the decoded record
+  arrays saved from Syscall Trace (`records/`).
 * **Triage reports** are owner-only (0600) and go to `<recording>/report/`
   unless you choose a folder. JSON, MISP and STIX keep indicators raw;
   defanging applies only to HTML and PDF, and only when you tick it. The
