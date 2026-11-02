@@ -511,7 +511,7 @@ pub(super) fn content(
                 crate::activity::warning(ui, warning);
             }
             ui.add_space(14.0);
-            let busy = view.scan_rx.is_some();
+            let busy = view.preparing();
             let strip = view.strip.show(
                 ui,
                 &scan.graph.overview,

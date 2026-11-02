@@ -119,18 +119,52 @@ impl TriageView {
             .scan
             .as_ref()
             .map_or(0, |scan| scan.counts.failed_attempts);
+        let tab = if self.history_tab {
+            None
+        } else {
+            Some(self.files)
+        };
+        let count = tab.map_or_else(Default::default, |tab| {
+            self.scan.as_ref().map_or_else(Default::default, |scan| {
+                scan.counts.visibility[file_visibility::visibility_slot(tab)]
+            })
+        });
+        let counted = self.scan.is_some();
+        let label = |name: &str, hidden: u64| {
+            if counted {
+                format!("{name} ({hidden})")
+            } else {
+                name.to_owned()
+            }
+        };
         let visibility = &mut self.scan_request.file_visibility;
         let mut changed = false;
-        if toggle_chip(ui, "Hide stdio", visibility.hide_standard_io, None)
-            .on_hover_text("Hide stdin, stdout, stderr")
-            .clicked()
+        if toggle_chip(
+            ui,
+            &label("Hide stdio", count.stdio),
+            visibility.hide_standard_io,
+            None,
+        )
+        .on_hover_text(format!(
+            "Hide stdin, stdout, stderr. {} rows in this table are standard input/output.",
+            count.stdio
+        ))
+        .clicked()
         {
             visibility.hide_standard_io = !visibility.hide_standard_io;
             changed = true;
         }
-        if toggle_chip(ui, "Hide library", visibility.hide_libraries, None)
-            .on_hover_text("Hide shared libraries and the loader cache")
-            .clicked()
+        if toggle_chip(
+            ui,
+            &label("Hide library", count.library),
+            visibility.hide_libraries,
+            None,
+        )
+        .on_hover_text(format!(
+            "Hide shared libraries and the loader cache. {} rows in this table are libraries.",
+            count.library
+        ))
+        .clicked()
         {
             visibility.hide_libraries = !visibility.hide_libraries;
             changed = true;
@@ -141,6 +175,35 @@ impl TriageView {
         {
             visibility.show_failed = !visibility.show_failed;
             changed = true;
+        }
+        if counted && count.total > 0 {
+            let group = antinomie_monitor_core::analysis::detection::group_digits;
+            let (hide_stdio, hide_library) = (
+                self.scan_request.file_visibility.hide_standard_io,
+                self.scan_request.file_visibility.hide_libraries,
+            );
+            if count.shown == count.total {
+                ui.colored_label(theme::muted(), format!("{} rows", group(count.total)));
+            } else {
+                ui.colored_label(
+                    theme::muted(),
+                    format!(
+                        "{} of {} rows shown",
+                        group(count.shown),
+                        group(count.total)
+                    ),
+                );
+            }
+            if (hide_stdio && count.stdio > 0 || hide_library && count.library > 0)
+                && ui
+                    .small_button("Show all")
+                    .on_hover_text("Turn the Hide chips off to list every row")
+                    .clicked()
+            {
+                self.scan_request.file_visibility.hide_standard_io = false;
+                self.scan_request.file_visibility.hide_libraries = false;
+                changed = true;
+            }
         }
         if changed {
             for index in file_slots() {
@@ -355,9 +418,13 @@ impl TabSink {
             }
             let row = file_category::category_row(files, call, event, *hit);
             let at = Self::position(tab);
-            let keeps = request
-                .file_visibility
-                .keeps_with(&row, listed || request.file_visibility.show_failed);
+            let show = listed || request.file_visibility.show_failed;
+            counts.visibility[file_visibility::visibility_slot(tab)].add(
+                request.file_visibility,
+                &row,
+                show,
+            );
+            let keeps = request.file_visibility.keeps_with(&row, show);
             if keeps && self.queries[at].keep_table(&row[0].values) {
                 self.pages[at].push(row)?;
             }

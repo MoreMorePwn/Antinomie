@@ -33,6 +33,13 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, values: &[(&str, Ro
         files::number(values, "process.pid") == Some(pid)
             && files::number(values, "process.cookie").unwrap_or(0) == cookie
     };
+    ui.colored_label(
+        theme::muted(),
+        format!(
+            "Recording task id {} (internal key of this task in the recording)",
+            process_tree::task_id_text(cookie)
+        ),
+    );
     let total = files::number(values, "process.suspicious").unwrap_or(0);
     let listed: Vec<Finding> = view
         .scan

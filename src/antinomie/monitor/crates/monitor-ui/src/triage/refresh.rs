@@ -42,7 +42,7 @@ pub(super) fn source_stamp(
         )
     };
     let mut stamp = format!(
-        "files-v{FILE_INDEX_VERSION}|{pcap_open}|{}|{}|{:?}|{}|{:?}|{}/{}|rev={:?}",
+        "files-v{FILE_INDEX_VERSION}|{pcap_open}|{}|{}|{:?}|{}|{:?}|{}/{}|rebuild={}/{}|rev={:?}",
         request.run_finished,
         request.recording_open,
         request.started_ms,
@@ -52,6 +52,8 @@ pub(super) fn source_stamp(
             .map(|clock| (clock.guest_ns, clock.host_us)),
         request.write_limits.per_file,
         request.write_limits.per_run,
+        request.retention.per_file,
+        request.retention.per_run,
         request.kernel_revision,
     );
     for name in [
@@ -118,6 +120,12 @@ impl TriageView {
     fn shown(&self, ctx: &egui::Context) -> bool {
         self.shown_pass
             .is_some_and(|pass| ctx.cumulative_pass_nr().saturating_sub(pass) <= 2)
+    }
+
+    /// A new index is being prepared and the views have nothing current to
+    /// show: not a timer's read of a recording that may not have changed.
+    pub(super) fn preparing(&self) -> bool {
+        self.scan_rx.is_some() && !self.scan_is_timer
     }
 
     /// The index on screen was built while the VM still held the recording
@@ -415,7 +423,9 @@ impl TriageView {
             .map(|ioc| ioc.cache.clone());
         // Only a timer refresh may find the recording as it was; the index
         // thread then answers `UNCHANGED` without reading or writing.
-        if std::mem::take(&mut self.timer_refresh) {
+        let timer = std::mem::take(&mut self.timer_refresh);
+        self.scan_is_timer = timer && self.scan.is_some();
+        if timer {
             request.unchanged_since = self.scan.as_ref().map(|scan| scan.stamp.clone());
         }
         self.scan_began_finished = request.run_finished;
@@ -454,6 +464,7 @@ impl TriageView {
             Ok((generation, result)) => {
                 self.scan_rx = None;
                 self.scan_cancel = None;
+                self.scan_is_timer = false;
                 if self.pending_generation == Some(generation) {
                     match result {
                         Ok(scan) => {
@@ -530,6 +541,7 @@ impl TriageView {
         self.refresh_queued = false;
         self.timer_refresh = false;
         self.scan_began_finished = false;
+        self.scan_is_timer = false;
         self.hidden_poll = None;
         self.selected_call_id = None;
         self.bpf_export_status.clear();

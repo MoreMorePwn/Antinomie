@@ -116,6 +116,10 @@ struct Settings {
     analysis_time_limit_minutes: u32,
     /// Static analysis: the sizes and counts a check may reach.
     analysis_limits: antinomie_monitor_core::AnalysisLimits,
+    /// Triage Changed files: most MiB of one file's bytes rebuilt.
+    rebuild_file_mib: u32,
+    /// Triage Changed files: most MiB rebuilt over all files of a run.
+    rebuild_run_mib: u32,
     /// File activity: most MiB of written content kept for one file.
     file_write_file_mib: u32,
     /// File activity: most MiB of written content kept for a whole run.
@@ -214,6 +218,11 @@ impl Settings {
         }
     }
 
+    /// The caps on the bytes Triage rebuilds of a changed file.
+    fn rebuild_limits(&self) -> (u32, u32) {
+        (self.rebuild_file_mib, self.rebuild_run_mib)
+    }
+
     /// The caps on the earlier file bytes copied into a recording.
     fn before_limits(&self) -> antinomie_monitor_core::file_writes::Limits {
         antinomie_monitor_core::file_writes::Limits {
@@ -249,6 +258,8 @@ impl Default for Settings {
             core_budget_mib: crate::core_budget::default_mib(),
             analysis_time_limit_minutes: 0,
             analysis_limits: antinomie_monitor_core::AnalysisLimits::default(),
+            rebuild_file_mib: crate::triage::DEFAULT_REBUILD_FILE_MIB,
+            rebuild_run_mib: crate::triage::DEFAULT_REBUILD_RUN_MIB,
             file_write_file_mib: (antinomie_monitor_core::file_writes::DEFAULT_PER_FILE >> 20)
                 as u32,
             file_write_run_mib: (antinomie_monitor_core::file_writes::DEFAULT_PER_RUN >> 20) as u32,
@@ -406,6 +417,8 @@ pub struct MonitorApp {
     settings_open: bool,
     /// The analysis limit field Settings scrolls to once, after a warning's button.
     settings_focus: Option<antinomie_monitor_core::LimitSetting>,
+    /// Scroll Settings to the rebuilt file bytes limits on the next frame.
+    settings_focus_rebuild: bool,
     settings_page: settings_window::SettingsPage,
     create_open: bool,
     config_open: bool,
@@ -640,6 +653,7 @@ impl MonitorApp {
             options,
             settings_open: false,
             settings_focus: None,
+            settings_focus_rebuild: false,
             settings_page: Default::default(),
             create_open: false,
             config_open: false,

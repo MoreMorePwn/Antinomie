@@ -81,7 +81,15 @@ impl FileIndex {
                 ..Change::default()
             });
             change.cross_segment(segment, &mut self.operation_count);
-            change.apply_mapped(&record, &copied, &mut self.retained_octets);
+            let stored_before = change.stored();
+            let mut budget = super::retention::Budget {
+                used: &mut self.retained_octets,
+                retention: self.retention,
+                call: trace::key(call),
+            };
+            change.apply_mapped(&record, &copied, &mut budget);
+            self.retained_octets =
+                (self.retained_octets + change.stored()).saturating_sub(stored_before);
             if !change.changes {
                 change.call = call.call_id;
                 change.key = trace::key(call);
@@ -125,7 +133,7 @@ impl Change {
         &mut self,
         record: &FileMapped,
         copied: &CapturedPayload,
-        retained: &mut usize,
+        budget: &mut super::retention::Budget<'_>,
     ) {
         let (offset, len) = (record.offset, record.len);
         let end = offset.saturating_add(len);
@@ -143,23 +151,21 @@ impl Change {
             .into(),
         );
         let newer = self.newer_than(record.order, offset, end);
-        self.final_data
-            .retain(|at, _| !super::order::replaced(&newer, offset, len, *at));
-        self.place(
+        self.final_data.remove_replaced(&newer, offset, len);
+        self.store(
             offset,
             super::order::outside(&newer, offset, copied.iter()),
-            retained,
+            false,
+            budget,
         );
         self.note_order(record.order, offset, end);
         self.final_size = Some(record.size);
-        self.final_data.retain(|at, _| *at < record.size);
+        self.final_data.truncate(record.size);
         self.gaps.insert(MAPPED_GAP);
         if record.carried < len {
             self.gaps.insert(UNCOPIED_GAP);
         } else if (copied.len() as u64) < len {
-            self.gaps.insert(
-                "Transferred content contains capture gaps or exceeds the bounded byte preview.",
-            );
+            self.note_short_capture(budget.call, len, copied.len() as u64);
         }
         if record.unlisted > 0 || record.lost > 0 {
             self.gaps.insert(UNLISTED_GAP);

@@ -8,6 +8,11 @@ pub(super) enum Count {
     Pending,
     Unavailable,
     Ready(u64),
+    /// A table with chips on: the rows it lists out of all the run has.
+    Shown {
+        shown: u64,
+        total: u64,
+    },
 }
 
 impl Count {
@@ -16,13 +21,17 @@ impl Count {
             Self::Pending => "…".into(),
             Self::Unavailable => "—".into(),
             Self::Ready(count) => antinomie_monitor_core::analysis::detection::group_digits(count),
+            Self::Shown { shown, total } => {
+                let group = antinomie_monitor_core::analysis::detection::group_digits;
+                format!("{} / {}", group(shown), group(total))
+            }
         }
     }
 
     /// The badge tone: accent (or plain) when there is something to see.
     fn tone(self, accent: bool) -> Tone {
         match self {
-            Self::Ready(count) if count > 0 => {
+            Self::Ready(count) | Self::Shown { total: count, .. } if count > 0 => {
                 if accent {
                     Tone::Accent
                 } else {
@@ -49,6 +58,9 @@ pub(super) fn tab(
             Count::Pending => "Updating the whole-run count",
             Count::Unavailable => "No whole-run count is available",
             Count::Ready(_) => "Whole-run count before table filters and pagination",
+            Count::Shown { .. } => {
+                "Rows listed with the Hide chips on, out of all the run recorded. Turn a chip off to list the hidden rows"
+            }
         });
     widgets::tab(ui, selected, &item).clicked()
 }
@@ -68,12 +80,29 @@ enum Metric {
 
 impl TriageView {
     fn section_count(&self, metric: Metric) -> Count {
-        if self.scan_rx.is_some() {
+        if self.preparing() {
             return Count::Pending;
         }
         let Some(scan) = &self.scan else {
             return Count::Unavailable;
         };
+        let visible = |tab: FileTab| {
+            let count = scan.counts.visibility[file_visibility::visibility_slot(tab)];
+            (count.total > 0 && count.shown != count.total).then_some(Count::Shown {
+                shown: count.shown,
+                total: count.total,
+            })
+        };
+        let hidden = match metric {
+            Metric::Opened => visible(FileTab::Opened),
+            Metric::Reads => visible(FileTab::Read),
+            Metric::Changed => visible(FileTab::Changed),
+            Metric::File(tab) => visible(tab),
+            _ => None,
+        };
+        if let Some(hidden) = hidden {
+            return hidden;
+        }
         let count = match metric {
             Metric::Processes => scan.process.len() as u64,
             Metric::Findings => scan.counts.findings,

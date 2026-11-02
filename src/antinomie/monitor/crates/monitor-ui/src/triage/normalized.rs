@@ -188,6 +188,9 @@ pub(super) struct Counts {
     pub tabs: [u64; FILE_TABS],
     /// File calls that failed. They are not in any count above.
     pub failed_attempts: u64,
+    /// What the Hide stdio and Hide library chips hide in each Files table,
+    /// by [`file_visibility::visibility_slot`].
+    pub visibility: [file_visibility::VisibilityCount; FILE_TABS + 3],
     pub http: u64,
     pub dns: u64,
     pub sessions: u64,

@@ -28,6 +28,9 @@ pub(crate) struct RouteText {
     /// What the egress filter refused ("Egress filter blocked 3 connections
     /// to port 25"), when it refused anything.
     pub filter: Option<String>,
+    /// The run's overall state ("Running · 12:34 elapsed"), shown beside the
+    /// route line where the run is known.
+    pub run_state: Option<String>,
 }
 
 impl Default for RouteText {
@@ -45,6 +48,7 @@ pub(crate) fn describe(route: Option<&RouteRecord>, stats: Option<RouteStats>) -
             leaves: false,
             note: None,
             filter: None,
+            run_state: None,
         };
     };
     let mut detail = match route.via {
@@ -84,6 +88,7 @@ pub(crate) fn describe(route: Option<&RouteRecord>, stats: Option<RouteStats>) -
         }),
         detail,
         filter,
+        run_state: None,
         leaves: matches!(
             route.kind,
             RouteKind::Internet | RouteKind::Tor | RouteKind::Vpn | RouteKind::Socks5
@@ -105,6 +110,10 @@ pub(crate) fn line(ui: &mut egui::Ui, text: &RouteText) {
             .on_hover_text(&text.detail);
         if let Some(filter) = &text.filter {
             ui.label(RichText::new(filter).color(theme::warn()));
+        }
+        if let Some(state) = &text.run_state {
+            ui.label(RichText::new("·").color(theme::muted()));
+            ui.label(RichText::new(state).strong().color(theme::text()));
         }
     });
 }

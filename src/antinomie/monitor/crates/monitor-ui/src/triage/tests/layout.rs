@@ -842,7 +842,7 @@ fn clicking_a_process_opens_its_suspicious_activity() {
     let (_temp, mut view) = view(Section::Process);
     view.process = ProcessTab::Tree;
     let out = settle(&ctx, &mut view);
-    let at = find(&out, "pid 55 cookie 55").center();
+    let at = find(&out, "PID 55 · TID 55 (main)").center();
     click(&ctx, &mut view, at);
     settle(&ctx, &mut view);
     assert!(view.section == Section::Process);

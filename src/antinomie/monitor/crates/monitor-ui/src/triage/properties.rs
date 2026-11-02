@@ -145,6 +145,11 @@ impl TriageView {
         self.scan_request.write_limits = limits;
     }
 
+    /// The caps on the bytes the Changed files rebuild keeps, in MiB.
+    pub(crate) fn set_rebuild_limits(&mut self, file_mib: u32, run_mib: u32) {
+        self.scan_request.retention = files::Retention::from_mib(file_mib, run_mib);
+    }
+
     /// The kernel revision the selected run's base had (`None` when unrecorded).
     pub(crate) fn set_kernel_revision(&mut self, revision: Option<u32>) {
         self.scan_request.kernel_revision = revision;

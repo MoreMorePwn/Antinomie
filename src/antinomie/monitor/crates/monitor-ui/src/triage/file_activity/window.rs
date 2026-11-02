@@ -1001,7 +1001,7 @@ fn contents(
         ui.weak("More differences exist than are listed; Trace has the calls.");
     }
     for gap in &known.gaps {
-        crate::activity::warning(ui, *gap);
+        crate::triage::files::gap_note(ui, gap);
     }
 }
 

@@ -64,12 +64,6 @@ pub(super) fn covered(ranges: &[(u64, u64)], at: u64) -> bool {
     ranges.iter().any(|(start, end)| at >= *start && at < *end)
 }
 
-/// Whether a write of `len` bytes at `offset` replaced the byte at `at`: in
-/// its range and not held by a write applied after it.
-pub(super) fn replaced(newer: &[(u64, u64)], offset: u64, len: u64, at: u64) -> bool {
-    at >= offset && at < offset.saturating_add(len) && !covered(newer, at)
-}
-
 /// The bytes of a transfer at `offset` (relative offset, value) that no write
 /// applied after it holds.
 pub(super) fn outside<'a>(

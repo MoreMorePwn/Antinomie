@@ -283,6 +283,7 @@ pub(super) fn scan_archive_query(
     let mut change_page = sorting::Page::new(request, 2, cancel);
     let mut file_index = files::FileIndex::default();
     file_index.set_write_limits(request.write_limits);
+    file_index.set_retention(request.retention);
     file_index.set_kernel_revision(request.kernel_revision);
     let mut bpf_calls = Vec::new();
     let mut bpf_size = 0usize;
@@ -354,6 +355,11 @@ pub(super) fn scan_archive_query(
         {
             // Failed reads are listed with their result.
             counts.reads += 1;
+            counts.visibility[file_visibility::visibility_slot(FileTab::Read)].add(
+                request.file_visibility,
+                &row,
+                true,
+            );
             if request.file_visibility.keeps_with(&row, true)
                 && read_query.keep_table(&row[0].values)
             {
@@ -426,6 +432,14 @@ pub(super) fn scan_archive_query(
         .into_iter()
         .filter(|change| {
             let row = change.row(clock_anchor);
+            if request.file_visibility.show_failed || !file_visibility::FileVisibility::failed(&row)
+            {
+                counts.visibility[file_visibility::visibility_slot(FileTab::Changed)].add(
+                    request.file_visibility,
+                    &row,
+                    request.file_visibility.show_failed,
+                );
+            }
             request.file_visibility.keeps(&row) && change_query.keep_table(&row[0].values)
         })
         .collect();
@@ -462,6 +476,7 @@ pub(super) fn scan_archive_query(
             .and_then(|ns| clock_anchor.and_then(|clock| clock.host_us(ns)))
             .map(|us| us / 1000);
     }
+    let run_ended_ms = network_request.ended_ms;
     let mut network = match pcap {
         Some(path) => network_index::collect(
             &recording.directory,
@@ -717,6 +732,7 @@ pub(super) fn scan_archive_query(
     };
     Ok(ArchiveScan {
         stamp,
+        ended_ms: run_ended_ms,
         event_cache,
         counts,
         network_counts: network.counts,

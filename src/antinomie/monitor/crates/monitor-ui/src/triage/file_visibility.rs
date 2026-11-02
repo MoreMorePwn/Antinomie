@@ -28,28 +28,70 @@ impl FileVisibility {
     /// Like [`Self::keeps`], with `show_failed` decided by the caller: the
     /// Opened and Read tables always list failed attempts.
     pub fn keeps_with(self, row: &[Cell], show_failed: bool) -> bool {
-        let Some(first) = row.first() else {
-            return true;
-        };
-        if !show_failed
-            && first.values.iter().any(|(key, value)| {
+        if !show_failed && Self::failed(row) {
+            return false;
+        }
+        let (stdio, library) = Self::classes(row);
+        !(self.hide_standard_io && stdio) && !(self.hide_libraries && library)
+    }
+
+    /// The call the row stands for was refused by the kernel.
+    pub fn failed(row: &[Cell]) -> bool {
+        row.first().is_some_and(|first| {
+            first.values.iter().any(|(key, value)| {
                 *key == "file.result" && matches!(value, RowValue::Text(text) if text == "failed")
             })
-        {
-            return false;
-        }
-        if self.hide_standard_io
-            && first.values.iter().any(|(key, value)| {
-                matches!((*key, value), ("file.standard_io", RowValue::Bool(true)))
-                    || (*key == "file.fd" && matches!(value, RowValue::Number(0..=2)))
-            })
-        {
-            return false;
-        }
-        !self.hide_libraries
-            || !first.values.iter().any(|(key, value)| {
-                *key == "file.path" && matches!(value, RowValue::Text(path) if library_path(path))
-            })
+        })
+    }
+
+    /// Whether the row is standard input/output, and whether it is a library,
+    /// whatever the toggles say: what each chip would hide.
+    pub fn classes(row: &[Cell]) -> (bool, bool) {
+        let Some(first) = row.first() else {
+            return (false, false);
+        };
+        let stdio = first.values.iter().any(|(key, value)| {
+            matches!((*key, value), ("file.standard_io", RowValue::Bool(true)))
+                || (*key == "file.fd" && matches!(value, RowValue::Number(0..=2)))
+        });
+        let library = first.values.iter().any(|(key, value)| {
+            *key == "file.path" && matches!(value, RowValue::Text(path) if library_path(path))
+        });
+        (stdio, library)
+    }
+}
+
+/// What the visibility chips hide in one Files table, counted over the whole
+/// run so the chips and the tab can show the real numbers.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub(super) struct VisibilityCount {
+    /// Rows the table could list before the chips.
+    pub total: u64,
+    /// Rows the table lists with the chips as they are.
+    pub shown: u64,
+    /// Rows that are standard input/output, and rows that are libraries.
+    pub stdio: u64,
+    pub library: u64,
+}
+
+impl VisibilityCount {
+    pub(super) fn add(&mut self, visibility: FileVisibility, row: &[Cell], show_failed: bool) {
+        let (stdio, library) = FileVisibility::classes(row);
+        self.total += 1;
+        self.stdio += u64::from(stdio);
+        self.library += u64::from(library);
+        self.shown += u64::from(visibility.keeps_with(row, show_failed));
+    }
+}
+
+/// Where a Files table's visibility counts are kept: Opened, Read, Changed,
+/// then the operation tabs in slot order.
+pub(super) fn visibility_slot(tab: FileTab) -> usize {
+    match tab {
+        FileTab::Opened => 0,
+        FileTab::Read => 1,
+        FileTab::Changed => 2,
+        other => 3 + other.slot() - 8,
     }
 }
 

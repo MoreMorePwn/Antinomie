@@ -141,13 +141,55 @@ pub(super) fn process_rows(
         .collect::<Vec<_>>()
 }
 
+/// Thread tasks from which the Process tree folds them into "+N threads".
+const THREAD_FOLD: usize = 4;
+
 pub(super) fn process_tree_nodes(
     ui: &mut egui::Ui,
     nodes: &[ProcessNode],
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
     suspicious: &Suspicious,
 ) {
-    let rows = process_rows(nodes, clock, suspicious);
+    let mut rows = process_rows(nodes, clock, suspicious);
+    // Thread tasks fold into "+N threads" on their process once there are many
+    // of them; the chip lists them. The user's choice is kept for the session.
+    let thread_count = nodes.iter().filter(|node| node.thread).count();
+    let thread_id = egui::Id::new("triage-process-threads");
+    let expanded = if thread_count == 0 {
+        true
+    } else {
+        let stored: Option<bool> = ui.ctx().data(|data| data.get_temp(thread_id));
+        let expanded = stored.unwrap_or(thread_count < THREAD_FOLD);
+        ui.horizontal(|ui| {
+            let label = format!("Show threads ({thread_count})");
+            if crate::widgets::toggle_chip(ui, &label, expanded, None)
+                .on_hover_text(
+                    "Thread tasks of a process, one per recorded thread. Off, they fold into +N threads on their process.",
+                )
+                .clicked()
+            {
+                ui.ctx().data_mut(|data| data.insert_temp(thread_id, !expanded));
+            }
+        });
+        let stored: Option<bool> = ui.ctx().data(|data| data.get_temp(thread_id));
+        stored.unwrap_or(thread_count < THREAD_FOLD)
+    };
+    if !expanded {
+        let mut folded: std::collections::BTreeMap<(u32, u64), usize> = Default::default();
+        for node in nodes.iter().filter(|node| node.thread) {
+            if let Some(parent) = node.parent {
+                *folded.entry((parent.pid, parent.cookie)).or_default() += 1;
+            }
+        }
+        for (row, node) in rows.iter_mut().zip(nodes) {
+            if let Some(count) = folded.get(&(node.pid, node.cookie)) {
+                row[0].text.push_str(&format!("  +{count} threads"));
+            }
+        }
+        let keep: Vec<bool> = nodes.iter().map(|node| !node.thread).collect();
+        let mut keep = keep.into_iter();
+        rows.retain(|_| keep.next().unwrap_or(true));
+    }
     ui.ctx().data_mut(|data| {
         data.insert_temp(
             egui::Id::new(("triage-filter-target", "triage-process")),
@@ -614,16 +656,18 @@ pub(super) fn process_identity(pid: u32, tid: u32, image: Option<&str>) -> Strin
     let name = image
         .and_then(|image| image.rsplit('/').find(|part| !part.is_empty()))
         .unwrap_or("Unknown");
-    format!("{name} ({pid} / {tid})")
+    format!("{name} (PID {pid} \u{b7} TID {tid})")
 }
 
+/// A task as the user reads it: the process and the thread, never the
+/// recording's internal task cookie (that is in the details).
 pub(super) fn process_label(node: &ProcessNode) -> String {
-    let cookie = if node.cookie == 0 {
-        "unknown".to_string()
-    } else {
-        node.cookie.to_string()
-    };
-    let mut text = format!("pid {} cookie {cookie}", node.pid);
+    let mut text = format!("PID {}", node.pid);
+    match node.tid {
+        0 => text.push_str(" \u{b7} TID unknown"),
+        tid if tid == node.pid => text.push_str(&format!(" \u{b7} TID {tid} (main)")),
+        tid => text.push_str(&format!(" \u{b7} TID {tid}")),
+    }
     if node.thread {
         text.push_str("  thread");
     }
@@ -631,6 +675,15 @@ pub(super) fn process_label(node: &ProcessNode) -> String {
         text.push_str("  parent not in this trace");
     }
     text
+}
+
+/// The recording's internal id of a task, for the details.
+pub(super) fn task_id_text(cookie: u64) -> String {
+    if cookie == 0 {
+        "unknown".into()
+    } else {
+        cookie.to_string()
+    }
 }
 
 #[cfg(test)]

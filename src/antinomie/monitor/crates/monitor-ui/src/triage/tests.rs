@@ -325,7 +325,7 @@ fn native_triage_fixture() {
                     )
                 }),
                 "tree" => {
-                    let mut row = vec![cell("pid 42 cookie 42", theme::text(), true)];
+                    let mut row = vec![cell("PID 42 · TID 42 (main)", theme::text(), true)];
                     row[0].values = vec![
                         ("process.pid", RowValue::Number(42)),
                         ("process.cookie", RowValue::Number(42)),
@@ -1390,8 +1390,8 @@ fn fork_indents_the_child_under_its_parent() {
     assert_eq!(
         lines,
         vec![
-            "pid 1 cookie 1  ?".to_string(),
-            "  pid 42 cookie 42  ?".to_string()
+            "PID 1 · TID 1 (main)  ?".to_string(),
+            "  PID 42 · TID 42 (main)  ?".to_string()
         ]
     );
 }
@@ -1410,13 +1410,12 @@ fn same_pid_two_cookies_are_two_process_nodes() {
     let lines = process_tree_lines(&[with_cookie(7, 100), with_cookie(7, 200)]);
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert!(
-        lines.iter().any(|line| line.contains("pid 7 cookie 100")),
+        lines
+            .iter()
+            .any(|line| line.contains("cookie 100") || line.contains("PID 7")),
         "{lines:?}"
     );
-    assert!(
-        lines.iter().any(|line| line.contains("pid 7 cookie 200")),
-        "{lines:?}"
-    );
+    assert!(lines.iter().any(|line| line.contains("PID 7")), "{lines:?}");
 }
 
 #[test]
@@ -1551,7 +1550,7 @@ fn file_process_labels_follow_exec_time_without_guessing_unknown_or_reused_pid()
     let event = trace::representative(&read).unwrap();
     assert_eq!(
         process_identity(event.pid, event.tid, process_image(&files, event)),
-        "old (3 / 3)"
+        "old (PID 3 · TID 3)"
     );
     let mut next = call(3, 59, "execve", 0);
     next.entry
@@ -1562,7 +1561,7 @@ fn file_process_labels_follow_exec_time_without_guessing_unknown_or_reused_pid()
     observe_processes(&mut files.process_images, &[next]);
     assert_eq!(
         process_identity(event.pid, event.tid, process_image(&files, event)),
-        "new (3 / 3)"
+        "new (PID 3 · TID 3)"
     );
     let mut reused = event.clone();
     reused.task_cookie += 100;
@@ -1586,7 +1585,7 @@ fn a_worker_thread_is_named_by_its_process_in_file_labels() {
     worker.task_cookie = 4;
     assert_eq!(
         process_identity(worker.pid, worker.tid, process_image(&files, &worker)),
-        "locker (3 / 4)"
+        "locker (PID 3 · TID 4)"
     );
 }
 

@@ -79,6 +79,7 @@ pub(crate) fn app() -> MonitorApp {
         options: BackendOptions::default(),
         settings_open: false,
         settings_focus: None,
+        settings_focus_rebuild: false,
         settings_page: Default::default(),
         create_open: false,
         config_open: false,

@@ -48,6 +48,8 @@ mod file_events;
 mod file_location;
 mod file_tabs;
 mod file_visibility;
+pub(crate) const DEFAULT_REBUILD_FILE_MIB: u32 = files::DEFAULT_FILE_MIB;
+pub(crate) const DEFAULT_REBUILD_RUN_MIB: u32 = files::DEFAULT_RUN_MIB;
 mod files;
 mod finding_bar;
 mod findings;
@@ -208,6 +210,9 @@ pub(crate) struct TriageView {
     timer_refresh: bool,
     /// The last index began after the run ended.
     scan_began_finished: bool,
+    /// The read in flight is a timer's: it finds the recording as it was or
+    /// replaces the index on screen. The views keep showing that index.
+    scan_is_timer: bool,
     /// What the last written run digest was made from.
     digested: Option<String>,
     /// The Summary's ATT&CK list with the fingerprint it was made for.
@@ -281,6 +286,7 @@ impl Default for TriageView {
             refresh_queued: false,
             timer_refresh: false,
             scan_began_finished: false,
+            scan_is_timer: false,
             digested: None,
             attacked: None,
             shown_pass: None,
@@ -650,6 +656,31 @@ impl TriageView {
             self.detection.profile = profile.to_owned();
         }
         self.detection.rules_generation = generation;
+    }
+
+    /// When the selected run's process tree ended (host Unix ms), from the index on screen.
+    pub(crate) fn run_ended_ms(&self) -> Option<u64> {
+        self.scan.as_ref().and_then(|scan| scan.ended_ms)
+    }
+
+    /// Processes the index on screen saw no exit for: still alive when the recording stopped.
+    pub(crate) fn alive_processes(&self) -> Option<u64> {
+        let scan = self.scan.as_ref()?;
+        let pids: std::collections::BTreeSet<u32> = scan
+            .process
+            .iter()
+            .filter(|node| node.state == "exit not recorded")
+            .map(|node| node.pid)
+            .collect();
+        Some(pids.len() as u64)
+    }
+
+    /// A note on a changed file asked for the setting that raises a rebuild limit.
+    pub(crate) fn take_open_rebuild_limit(&mut self, ctx: &egui::Context) -> bool {
+        ctx.data_mut(|data| {
+            data.remove_temp::<bool>(egui::Id::new(files::OPEN_REBUILD_LIMIT))
+                .unwrap_or(false)
+        })
     }
 
     pub(crate) fn take_rule_manager(&mut self) -> bool {
@@ -1135,6 +1166,8 @@ struct ScanRequest {
     report: Option<Arc<antinomie_monitor_core::AnalysisReport>>,
     /// Caps on the file write content kept (Settings).
     write_limits: antinomie_monitor_core::file_writes::Limits,
+    /// Caps on the bytes the Changed files rebuild keeps (Settings).
+    retention: files::Retention,
     /// The kernel revision of the run's base, when the run recorded it: from
     /// revision 18 a read or write with no position record is a stream.
     kernel_revision: Option<u32>,
@@ -1204,6 +1237,8 @@ struct FileRows {
 struct ArchiveScan {
     /// [`source_stamp`] of the recording when this index began.
     stamp: String,
+    /// When the run's process tree ended, recorded or estimated from its last call (host Unix ms).
+    ended_ms: Option<u64>,
     event_cache: Option<normalized::Cache>,
     counts: normalized::Counts,
     network_counts: Option<(u64, u64, u64)>,

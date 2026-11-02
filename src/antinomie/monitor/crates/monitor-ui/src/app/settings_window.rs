@@ -529,6 +529,35 @@ impl MonitorApp {
                 hint(ui, crate::analysis::TIME_LIMIT_HELP);
             });
             ui.end_row();
+            let label = ui.label("Rebuilt file bytes (Triage)");
+            if std::mem::take(&mut self.settings_focus_rebuild) {
+                label.scroll_to_me(Some(egui::Align::Center));
+            }
+            ui.vertical(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut self.settings.rebuild_file_mib)
+                            .range(1..=4096)
+                            .suffix(" MiB / file"),
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut self.settings.rebuild_run_mib)
+                            .range(1..=65_536)
+                            .suffix(" MiB / run"),
+                    );
+                });
+                hint(
+                    ui,
+                    &format!(
+                        "Most bytes Triage > Files rebuilds of one changed file, and of all files of a run together, \
+                         from the writes the recording captured (memory while the run is open). Past a cap the rest \
+                         stays in the syscall evidence and the file says which cap was met. Defaults {} MiB per file, {} MiB per run.",
+                        crate::triage::DEFAULT_REBUILD_FILE_MIB,
+                        crate::triage::DEFAULT_REBUILD_RUN_MIB
+                    ),
+                );
+            });
+            ui.end_row();
         });
 
         ui.add_space(6.0);

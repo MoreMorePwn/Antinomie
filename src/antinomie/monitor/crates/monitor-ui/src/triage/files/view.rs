@@ -10,19 +10,11 @@ impl Change {
     /// What the run saw of the file's bytes, for the File activity window:
     /// the octets that differ between the first and the last it knew, in runs.
     pub fn contents(&self) -> file_activity::Contents {
-        let offsets: BTreeSet<u64> = self
-            .original
-            .keys()
-            .chain(self.final_data.keys())
-            .copied()
-            .filter(|offset| self.byte_diff(*offset))
-            .collect();
         let mut runs: Vec<file_activity::ByteRun> = Vec::new();
-        for offset in offsets {
-            let (before, after) = (
-                self.original.get(&offset).copied(),
-                self.final_data.get(&offset).copied(),
-            );
+        let differing = bytes::merged(&self.original, &self.final_data)
+            .filter(|(offset, before, after)| self.byte_diff(*offset, *before, *after));
+        for (offset, before, after) in differing {
+            let (before, after) = (before.copied(), after.copied());
             let continues = runs.last().is_some_and(|run| {
                 run.offset + run.after.len() as u64 == offset && run.after.len() < RUN_OCTETS
             });
@@ -46,7 +38,7 @@ impl Change {
             final_size: self.final_size,
             differing: self.diff_count(),
             runs,
-            gaps: self.gaps.iter().copied().collect(),
+            gaps: self.gap_notes(),
             hash: self.hash.clone(),
         }
     }
@@ -67,7 +59,7 @@ impl Change {
             cell(self.lifecycle_text(), theme::text(), false),
             cell(
                 self.count_label(),
-                if self.gaps.is_empty() {
+                if !self.has_gaps() {
                     theme::text()
                 } else {
                     theme::warn()
@@ -100,9 +92,7 @@ impl Change {
             (
                 "file.complete",
                 RowValue::Bool(
-                    self.gaps.is_empty()
-                        && self.original_size.is_some()
-                        && self.final_size.is_some(),
+                    !self.has_gaps() && self.original_size.is_some() && self.final_size.is_some(),
                 ),
             ),
             (
@@ -191,8 +181,8 @@ impl Change {
         if self.final_size.is_none() {
             ui.weak("Final size/contents were not fully captured.");
         }
-        for gap in &self.gaps {
-            crate::activity::warning(ui, *gap);
+        for gap in &self.gap_notes() {
+            gap_note(ui, gap);
         }
         if let Some(hash) = &self.hash {
             let moment = match hash.kind {
@@ -217,13 +207,12 @@ impl Change {
                 }
             }
         }
-            let offsets = self.original.keys().chain(self.final_data.keys()).copied().collect::<BTreeSet<_>>();
             let mut shown = 0;
-            for offset in &offsets {
-                if self.original.get(offset) == self.final_data.get(offset) { continue; }
+            for (offset, before, after) in bytes::merged(&self.original, &self.final_data) {
+                if before == after { continue; }
                 if shown == 512 { ui.weak("Byte preview limited to 512 differences; original syscall evidence retains captured data."); break; }
-                let before = byte_label(self.original.get(offset), self.original_size, *offset);
-                let after = byte_label(self.final_data.get(offset), self.final_size, *offset);
+                let before = byte_label(before, self.original_size, offset);
+                let after = byte_label(after, self.final_size, offset);
                 ui.monospace(format!("{offset:08x}  {before} → {after}"))
                     .on_hover_text("?? = unavailable; ∅ = outside a known file extent.");
                 shown += 1;
@@ -259,3 +248,36 @@ fn byte_label(byte: Option<&u8>, size: Option<u64>, offset: u64) -> String {
         .into()
     })
 }
+
+/// One thing said about a file's rebuild. A limit leads to its setting, and a
+/// note about a call's bytes to that call's syscall evidence.
+pub(in crate::triage) fn gap_note(ui: &mut egui::Ui, note: &retention::GapNote) {
+    ui.horizontal_wrapped(|ui| {
+        crate::activity::warning(ui, &note.text);
+    });
+    ui.horizontal(|ui| {
+        if note.limit
+            && ui
+                .small_button("Open this limit in Settings")
+                .on_hover_text("Settings > Analysis limits > Rebuilt file bytes")
+                .clicked()
+        {
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(egui::Id::new(OPEN_REBUILD_LIMIT), true));
+        }
+        if let Some((stream, cookie, call)) = note.evidence {
+            if ui
+                .small_button("Show the syscall evidence")
+                .on_hover_text("Open the call in Trace")
+                .clicked()
+            {
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(egui::Id::new("triage-call-jump"), (stream, cookie, call))
+                });
+            }
+        }
+    });
+}
+
+/// Set when a note asked for the setting that raises a rebuild limit.
+pub(in crate::triage) const OPEN_REBUILD_LIMIT: &str = "triage-open-rebuild-limit";

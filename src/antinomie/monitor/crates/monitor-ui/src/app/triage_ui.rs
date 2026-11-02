@@ -36,6 +36,18 @@ impl MonitorApp {
                 .of(ui.ctx(), &run)
                 .and_then(|labels| labels.route),
         );
+        let mut route = route;
+        route.run_state = Some(crate::run_state_line::describe(
+            &run,
+            crate::run_state_line::now_ms(),
+            self.triage.run_ended_ms(),
+            self.triage.alive_processes(),
+        ));
+        if crate::run_state_line::ticks(&run) {
+            // Only the clock moves: the Triage index is not read again.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs(1));
+        }
         crate::route_ui::line(ui, &route);
         let mut notes = crate::run_recording::note_lines(&run);
         notes.extend(route.note.clone());
@@ -78,6 +90,13 @@ impl MonitorApp {
             ));
         self.triage.set_data_dir(&self.options.data_dir);
         self.triage.set_write_limits(self.settings.write_limits());
+        let (file_mib, run_mib) = self.settings.rebuild_limits();
+        self.triage.set_rebuild_limits(file_mib, run_mib);
+        if self.triage.take_open_rebuild_limit(ui.ctx()) {
+            self.settings_open = true;
+            self.settings_page = settings_window::SettingsPage::AnalysisTools;
+            self.settings_focus_rebuild = true;
+        }
         self.triage.set_kernel_revision(
             run.environment
                 .as_ref()

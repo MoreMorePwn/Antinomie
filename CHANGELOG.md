@@ -8,6 +8,34 @@ it runs.
 
 ### Host
 
+- **Triage names a task "PID 145 · TID 150", never "PID 145 cookie 900".** The
+  Process tree, the file tables, the findings and the Trace read the process and
+  the thread; the main thread says "(main)". The recording's own task id stays
+  in the task's details ("Recording task id"). A process with many thread tasks
+  (four or more) folds them into "+10 threads" on its row, and a "Show threads
+  (N)" chip lists them.
+- **Triage rebuilds changed files from runs of bytes, with limits you can
+  raise.** A file's rebuilt contents were kept byte by byte and cut at 128 KiB
+  (4 MiB per run), so a dropped 450 KB program was cut short. They are now kept
+  as runs, with defaults of 16 MiB per file and 256 MiB per run, set in Settings >
+  Analysis tools > Rebuilt file bytes. When a limit is met the file says which one
+  (per file or per run), how much was kept, and has buttons to the setting and to
+  the call's syscall evidence. A call whose captured buffer held fewer bytes than
+  it moved says so with both byte counts.
+- **A run Triage already read is not shown as "preparing" again.** A timer read
+  of a recording that did not change keeps the tab counts and views as they are
+  (they flashed "…" at every refresh); a finished run is still indexed once. A
+  run whose program has exited but whose children are alive says "Still
+  recording: 10 processes alive".
+- **Triage Files chips carry their own counts.** "Hide stdio (118)" and "Hide
+  library (210)" show what each hides, the total sits beside them ("12 of 340
+  rows shown", with Show all), and a tab with the chips on reads "12 / 340".
+- **Triage says what state the run is in beside the Network route.** "Network
+  route: None (VM isolated network) · Running · 12:34 elapsed", "Finished after
+  5:02 (exit 0)", "Stopped by the user after 3:10", "Failed to start: …" or "Still
+  recording: N processes alive", in the Triage header and in the Summary. The
+  elapsed time ticks every second without reading the recording again.
+
 - **Cancelled downloads resume when they can and restart when they cannot.**
   The partial file of a base, an analysis tool, the kernel source or the
   builder's Debian cloud image stays in the download's own folder (never where

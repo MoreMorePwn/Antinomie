@@ -164,7 +164,7 @@ pub(super) struct Contents {
     pub differing: usize,
     pub runs: Vec<ByteRun>,
     /// Why the above is not the whole story.
-    pub gaps: Vec<&'static str>,
+    pub gaps: Vec<super::files::GapNote>,
     pub hash: Option<FileHash>,
 }
 

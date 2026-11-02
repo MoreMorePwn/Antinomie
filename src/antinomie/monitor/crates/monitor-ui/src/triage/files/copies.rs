@@ -21,30 +21,29 @@ impl Change {
         &mut self,
         copy: &FileCopy,
         data: &CapturedPayload,
-        retained: &mut usize,
+        budget: &mut super::retention::Budget<'_>,
     ) {
         let Some(offset) = copy.destination.offset else {
             return;
         };
         let end = offset.saturating_add(copy.len);
-        let in_range = |at: &u64| *at >= offset && *at < end;
         match copy.kind {
             CopyKind::Fallocate
                 if copy.mode & (FileCopy::COLLAPSE_RANGE | FileCopy::INSERT_RANGE) != 0 =>
             {
                 self.modified = true;
-                self.final_data.retain(|at, _| *at < offset);
+                self.final_data.truncate(offset);
                 self.gaps.insert(SHIFT_GAP);
             }
             CopyKind::Fallocate
                 if copy.mode & (FileCopy::PUNCH_HOLE | FileCopy::ZERO_RANGE) != 0 =>
             {
                 self.modified = true;
-                self.final_data.retain(|at, _| !in_range(at));
+                self.final_data.remove_range(offset, end);
                 // The range reads back as zeros, up to the end of the file.
                 let size = copy.destination_size.unwrap_or(end);
                 let zeros = (0..end.min(size).saturating_sub(offset)).map(|at| (at, 0u8));
-                self.place(offset, zeros, retained);
+                self.store(offset, zeros, false, budget);
             }
             // A plain allocation adds zeros past the end and changes nothing else.
             CopyKind::Fallocate => {}
@@ -52,12 +51,12 @@ impl Change {
                 self.modified = true;
                 // Bytes a racing write the file system applied later holds.
                 let newer = self.newer_than(copy.order, offset, end);
-                self.final_data
-                    .retain(|at, _| !super::order::replaced(&newer, offset, copy.len, *at));
-                self.place(
+                self.final_data.remove_replaced(&newer, offset, copy.len);
+                self.store(
                     offset,
                     super::order::outside(&newer, offset, data.iter()),
-                    retained,
+                    false,
+                    budget,
                 );
                 self.note_order(copy.order, offset, end);
                 if (data.len() as u64) < copy.len {
@@ -67,30 +66,8 @@ impl Change {
             }
         }
         if let Some(size) = copy.destination_size {
-            self.final_data.retain(|at, _| *at < size);
+            self.final_data.truncate(size);
             self.final_size = Some(size);
-        }
-    }
-
-    /// Put `bytes` (relative offset, value) at `offset`, within the retention
-    /// limits.
-    pub(super) fn place(
-        &mut self,
-        offset: u64,
-        bytes: impl Iterator<Item = (u64, u8)>,
-        retained: &mut usize,
-    ) {
-        for (relative, byte) in bytes {
-            let Some(at) = offset.checked_add(relative) else {
-                break;
-            };
-            if self.final_data.len() >= TRACKED_OCTETS || *retained >= TOTAL_OCTETS {
-                self.gaps.insert("Byte reconstruction retention limit reached; more captured data may exist in syscall evidence.");
-                break;
-            }
-            if self.final_data.insert(at, byte).is_none() {
-                *retained += 1;
-            }
         }
     }
 }

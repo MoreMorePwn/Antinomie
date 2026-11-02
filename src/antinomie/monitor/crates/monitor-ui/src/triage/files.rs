@@ -21,8 +21,11 @@ pub(super) use ioc::IocFile;
 
 const READ_NAMES: &[&str] = &["read", "pread64", "readv", "preadv", "preadv2"];
 const TRACKED_FILES: usize = 8192;
-const TRACKED_OCTETS: usize = 128 * 1024;
-const TOTAL_OCTETS: usize = 4 * 1024 * 1024;
+mod bytes;
+mod retention;
+use bytes::ByteStore;
+pub(super) use retention::{GapNote, Retention, DEFAULT_FILE_MIB, DEFAULT_RUN_MIB};
+pub(super) use view::{gap_note, OPEN_REBUILD_LIMIT};
 const TIMELINE_ROWS: usize = 1024;
 const TOTAL_OPERATIONS: usize = 32768;
 
@@ -48,8 +51,12 @@ pub(super) struct Change {
     first_ns: u64,
     pid: u32,
     tid: u32,
-    original: BTreeMap<u64, u8>,
-    final_data: BTreeMap<u64, u8>,
+    original: ByteStore,
+    final_data: ByteStore,
+    /// The first call that met a retention limit.
+    limit_hit: Option<retention::LimitHit>,
+    /// Calls whose captured buffer was shorter than what they moved.
+    short_capture: Option<retention::ShortCapture>,
     original_size: Option<u64>,
     final_size: Option<u64>,
     modified: bool,
@@ -94,24 +101,25 @@ impl Change {
         if let Some(count) = self.known_diff_count {
             return count;
         }
-        self.original
-            .keys()
-            .chain(self.final_data.keys())
-            .copied()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .filter(|offset| self.byte_diff(*offset))
+        bytes::merged(&self.original, &self.final_data)
+            .filter(|(offset, before, after)| self.byte_diff(*offset, *before, *after))
             .count()
     }
-    fn byte_diff(&self, offset: u64) -> bool {
-        let before = self.original.get(&offset);
-        let after = self.final_data.get(&offset);
+    fn byte_diff(&self, offset: u64, before: Option<&u8>, after: Option<&u8>) -> bool {
         match (before, after) {
             (Some(a), Some(b)) => a != b,
             (None, Some(_)) => self.original_size.is_some_and(|size| offset >= size),
             (Some(_), None) => self.final_size.is_some_and(|size| offset >= size),
             _ => false,
         }
+    }
+    /// Bytes of the file held, before and after.
+    fn stored(&self) -> usize {
+        self.original.len() + self.final_data.len()
+    }
+    /// Whether anything is known to be missing from what was rebuilt.
+    fn has_gaps(&self) -> bool {
+        !self.gaps.is_empty() || self.limit_hit.is_some() || self.short_capture.is_some()
     }
     /// Whether the file has a change the kernel accepted, or one with no exit.
     pub fn real(&self) -> bool {
@@ -229,7 +237,7 @@ impl Change {
     }
     fn count_label(&self) -> String {
         let count = self.diff_count();
-        if self.original_size.is_some() && self.final_size.is_some() && self.gaps.is_empty() {
+        if self.original_size.is_some() && self.final_size.is_some() && !self.has_gaps() {
             count.to_string()
         } else {
             format!("{count} known; gaps")
@@ -260,6 +268,7 @@ pub(super) struct FileIndex {
     aliases: BTreeMap<String, Vec<String>>,
     next_split: u64,
     retained_octets: usize,
+    retention: Retention,
     operation_count: usize,
     pub omitted_files: u64,
     /// Recording segment being read (0 for the first).
@@ -276,6 +285,11 @@ impl FileIndex {
     /// The caps on the write content kept per file and per run.
     pub fn set_write_limits(&mut self, limits: antinomie_monitor_core::file_writes::Limits) {
         self.activity.set_limits(limits);
+    }
+
+    /// The caps on the bytes the Changed files rebuild keeps.
+    pub fn set_retention(&mut self, retention: Retention) {
+        self.retention = retention;
     }
 
     #[cfg(test)]
@@ -799,6 +813,7 @@ impl FileIndex {
             ..Change::default()
         });
         change.cross_segment(segment, &mut self.operation_count);
+        let stored_before = change.stored();
         if let Some(id) = identity {
             change.note_identity(id, path_known.then_some(path.as_str()));
         }
@@ -868,33 +883,24 @@ impl FileIndex {
             if let Some(offset) = offset {
                 let newer = change.newer(kernel_position, offset, size);
                 if writing {
-                    change
-                        .final_data
-                        .retain(|at, _| !order::replaced(&newer, offset, size, *at));
+                    change.final_data.remove_replaced(&newer, offset, size);
                     change.modified = true;
                     change.final_size = change.final_size.and_then(|size_before| {
                         offset.checked_add(size).map(|end| size_before.max(end))
                     });
                 }
                 let was_modified = change.modified;
-                for (relative, byte) in order::outside(&newer, offset, bytes.iter()) {
-                    let Some(at) = offset.checked_add(relative) else {
-                        break;
-                    };
-                    if change.final_data.len() >= TRACKED_OCTETS
-                        || self.retained_octets >= TOTAL_OCTETS
-                    {
-                        change.gaps.insert("Byte reconstruction retention limit reached; more captured data may exist in syscall evidence.");
-                        break;
-                    }
-                    if !was_modified && !change.original.contains_key(&at) {
-                        change.original.insert(at, byte);
-                        self.retained_octets += 1;
-                    }
-                    if change.final_data.insert(at, byte).is_none() {
-                        self.retained_octets += 1;
-                    }
-                }
+                let mut budget = retention::Budget {
+                    used: &mut self.retained_octets,
+                    retention: self.retention,
+                    call: trace::key(call),
+                };
+                change.store(
+                    offset,
+                    order::outside(&newer, offset, bytes.iter()),
+                    !was_modified,
+                    &mut budget,
+                );
                 change.note_applied(kernel_position, offset, size);
             } else if size > 0 {
                 change.gaps.insert("File offset unavailable (inherited/shared descriptor, append or missing seek); transferred bytes cannot be placed safely.");
@@ -904,7 +910,7 @@ impl FileIndex {
                 }
             }
             if bytes.len() as u64 != size {
-                change.gaps.insert("Transferred content contains capture gaps or exceeds the bounded byte preview.");
+                change.note_short_capture(trace::key(call), size, bytes.len() as u64);
             }
             if !explicit {
                 if let Some((position, _)) =
@@ -926,13 +932,18 @@ impl FileIndex {
                 }
             }
         } else if let Some(copy) = copy {
-            change.kernel_copy(&copy, &copied, &mut self.retained_octets);
+            let mut budget = retention::Budget {
+                used: &mut self.retained_octets,
+                retention: self.retention,
+                call: trace::key(call),
+            };
+            change.kernel_copy(&copy, &copied, &mut budget);
         } else if success && changed {
             match name {
                 "truncate" | "ftruncate" => {
                     let size = args.map(|args| args[1]);
                     if let Some(size) = size {
-                        change.final_data.retain(|offset, _| *offset < size);
+                        change.final_data.truncate(size);
                         change.final_size = Some(size);
                     }
                     change.modified = true;
@@ -1009,6 +1020,8 @@ impl FileIndex {
             change.original_size = Some(0);
             change.final_size = Some(0);
         }
+        self.retained_octets =
+            (self.retained_octets + change.stored()).saturating_sub(stored_before);
         read_row
     }
     /// The group of the changes to the file `key`. A name already seen for the
@@ -1410,7 +1423,7 @@ mod tests {
             .unwrap();
         assert_eq!(file.operations.len(), 1);
         assert_eq!(file.operations[0].name, "fchmod");
-        assert_eq!(file.operations[0].process, "Unknown (1 / 1)");
+        assert_eq!(file.operations[0].process, "Unknown (PID 1 · TID 1)");
         assert!(file.gaps.iter().all(|gap| !gap.contains("mapped writes")));
         let synced = changes
             .iter()
@@ -2401,7 +2414,7 @@ mod tests {
             .push(copy_record(3, 1 | 2, 2, 2, 0o100644, 8, 0));
         let (index, _) = build(&[open(0x2), write, copy]);
         let change = index.changes.get("/tmp/file").unwrap();
-        let known: Vec<u64> = change.final_data.keys().copied().collect();
+        let known: Vec<u64> = change.final_data.keys().collect();
         assert_eq!(known, [0, 1, 4, 5, 6, 7]);
         assert_eq!(change.final_size, Some(8));
         assert!(change
@@ -2651,7 +2664,7 @@ mod tests {
         );
         let change = &changes[0];
         assert_eq!(change.path, "/tmp/mapped");
-        let bytes: Vec<u8> = change.final_data.values().copied().collect();
+        let bytes: Vec<u8> = change.final_data.values().collect();
         assert_eq!(bytes, b"FINALBYTES");
         assert_eq!(change.final_size, Some(10));
         assert!(change

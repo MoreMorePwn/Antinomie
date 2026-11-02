@@ -106,7 +106,7 @@ pub(super) fn stored_column(slot: usize, shown: usize) -> usize {
 
 impl TriageView {
     fn new_count(&self, which: NewTab) -> Count {
-        if self.scan_rx.is_some() {
+        if self.preparing() {
             return Count::Pending;
         }
         let Some(scan) = &self.scan else {
