@@ -1539,6 +1539,11 @@ pub struct DownloadStatus {
     pub installing: bool,
     pub finished: bool,
     pub error: Option<String>,
+    /// "Resuming ... from ..." or "Starting ... again: ..." while it runs.
+    pub note: String,
+    /// Bytes of partial download kept after a cancel or a failure; the next
+    /// download of the base resumes from them when it can.
+    pub kept: u64,
 }
 
 /// Progress and log tail of the single active local build.

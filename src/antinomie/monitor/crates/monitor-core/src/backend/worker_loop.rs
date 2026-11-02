@@ -189,6 +189,9 @@ impl Worker {
             status.stage = progress.0.clone();
             status.received = progress.1;
             status.total = progress.2;
+            if let Ok(note) = job.notes.lock() {
+                status.note.clone_from(&note);
+            }
         }
         let finished = match job.done.try_recv() {
             Ok(result) => Some(result),
@@ -214,6 +217,13 @@ impl Worker {
                     self.snapshot.remote_refreshing = false;
                     match result {
                         Ok(catalog) => {
+                            // A partial older than the catalog entry goes.
+                            if self.download.is_none() {
+                                crate::distribution::prune_partials(
+                                    &self.options.data_dir.join("downloads"),
+                                    &catalog,
+                                );
+                            }
                             self.snapshot.remote_bases =
                                 catalog.bases.iter().map(RemoteBase::from).collect();
                             self.catalog = catalog;
@@ -238,6 +248,9 @@ impl Worker {
         {
             status.received = progress.0;
             status.installing = progress.1;
+            if let Ok(note) = job.notes.lock() {
+                status.note.clone_from(&note);
+            }
         }
         let finished = self
             .download
@@ -262,6 +275,14 @@ impl Worker {
             if let Err(error) = self.refresh_locations() {
                 self.snapshot.last_error = Some(error);
             }
+            // What a cancel or a failure left to resume from.
+            let kept = if error.is_some() {
+                crate::distribution::kept_bytes(
+                    &self.options.data_dir.join("downloads").join(&job.identity),
+                )
+            } else {
+                0
+            };
             let received = if error.is_none() {
                 job.total
             } else {
@@ -278,6 +299,8 @@ impl Worker {
                 total: job.total,
                 installing: false,
                 finished: true,
+                note: String::new(),
+                kept,
                 error,
             });
             self.publish();

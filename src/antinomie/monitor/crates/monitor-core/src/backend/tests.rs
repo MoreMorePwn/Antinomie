@@ -879,6 +879,7 @@ fn attach_waiting_download(worker: &mut Worker) -> Arc<AtomicBool> {
         label: "Test".into(),
         total: 100,
         progress: Arc::new(Mutex::new((20, false))),
+        notes: Arc::new(Mutex::new(String::new())),
         cancel: cancel.clone(),
         done,
         thread,

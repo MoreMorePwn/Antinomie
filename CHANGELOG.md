@@ -4,6 +4,26 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
+## 0.8.1 — 2026-MM-DD
+
+### Host
+
+- **Cancelled downloads resume when they can and restart when they cannot.**
+  The partial file of a base, an analysis tool, the kernel source or the
+  builder's Debian cloud image stays in the download's own folder (never where
+  the app looks for installed items) with a small record of what it is. The next
+  download resumes it (`Range` with `If-Range`) when the pinned hash and size
+  still match, the server sends the same ETag or Last-Modified and answers with
+  206; otherwise it starts again from zero without an error, and says why
+  ("Resuming Ghidra from 22.0 MiB", "Starting Debian 13 again: the server
+  changed it or cannot resume it"). A resumed file is still checked against its
+  SHA-256 or SHA-512; when that fails it is deleted and fetched once more from
+  zero. Cancel stays Information and says how much was kept. A cancelled base
+  build is not resumed (a build step is not a download): it starts from the
+  beginning. Partials are deleted when the download finishes, when the base or
+  tool is removed, and when the catalog no longer lists the base. Plugin
+  and rule-pack downloads are small and always start again.
+
 ## 0.8.0 — 2026-11-02
 
 Antinomie 0.8.0 is the first release since 0.7.1. It moves to guest contract

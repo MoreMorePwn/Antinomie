@@ -794,6 +794,8 @@ struct RefreshJob {
 }
 
 struct ToolJob {
+    /// The last "Resuming ..." / "Starting ... again: ..." line.
+    notes: Arc<Mutex<String>>,
     /// Stage, received and total octets.
     progress: Arc<Mutex<(String, u64, u64)>>,
     cancel: crate::cancel::CancelToken,
@@ -806,6 +808,8 @@ struct DownloadJob {
     total: u64,
     /// Received octets and whether atomic installation has started.
     progress: Arc<Mutex<(u64, bool)>>,
+    /// The last "Resuming ..." / "Starting ... again: ..." line.
+    notes: Arc<Mutex<String>>,
     cancel: crate::cancel::CancelToken,
     done: Receiver<Result<(), String>>,
     thread: JoinHandle<()>,
@@ -906,18 +910,22 @@ impl BuildRun {
         let kit = crate::kit::materialize(&root)?;
         line(&format!("build kit {}", kit.display()));
         let mut reported = 0;
-        let orig = crate::kit::fetch_orig(
-            &self.curl,
-            &root.join("inputs"),
-            &self.cancel,
-            |received, total| {
-                let percent = (received * 100).checked_div(total).unwrap_or(0);
-                if percent >= reported + 10 {
-                    reported = percent - percent % 10;
-                    line(&format!("kernel source download {reported}%"));
-                }
-            },
-        )?;
+        let orig = {
+            let log = std::cell::RefCell::new(&mut *line);
+            crate::kit::fetch_orig(
+                &self.curl,
+                &root.join("inputs"),
+                &self.cancel,
+                |received, total| {
+                    let percent = (received * 100).checked_div(total).unwrap_or(0);
+                    if percent >= reported + 10 {
+                        reported = percent - percent % 10;
+                        (log.borrow_mut())(&format!("kernel source download {reported}%"));
+                    }
+                },
+                &mut |text| (log.borrow_mut())(text),
+            )?
+        };
         let job = serde_json::json!({
             "format": 1,
             "profile": self.profile,

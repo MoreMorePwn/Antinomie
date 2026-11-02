@@ -200,6 +200,9 @@ pub(crate) fn tool_row(
                 crate::activity::outcome(ui, error);
             }
         } else {
+            if !install.note.is_empty() {
+                crate::activity::info(ui, install.note.clone());
+            }
             let fraction = if install.total > 0 {
                 install.received as f32 / install.total as f32
             } else {

@@ -63,6 +63,7 @@ pub mod recording;
 mod recording_flush;
 pub mod report;
 mod resources;
+pub mod resume;
 pub mod route;
 pub mod ruleset;
 mod run;

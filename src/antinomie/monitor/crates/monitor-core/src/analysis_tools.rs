@@ -484,6 +484,8 @@ pub struct ToolInstall {
     pub total: u64,
     pub finished: bool,
     pub error: Option<String>,
+    /// "Resuming ... from ..." or "Starting ... again: ..." while it runs.
+    pub note: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -812,8 +814,10 @@ fn unpack(
 /// `progress` receives the stage and `(received, total)` octets. The tool
 /// replaces an earlier installation only once it is completely unpacked.
 ///
-/// A set `cancel` stops curl or pip at once and removes the partial downloads
-/// and the half-unpacked folder; an installation that was there is kept.
+/// A set `cancel` stops curl or pip at once and removes the half-unpacked
+/// folder; an installation that was there is kept, and the partial download
+/// stays in `.downloads/<tool>` so the next install resumes it when it can
+/// (see [`crate::resume`]; the stage `note:<text>` carries "Resuming ...").
 pub fn install(
     curl: &Path,
     data_dir: &Path,
@@ -827,10 +831,29 @@ pub fn install(
         .as_ref()
         .is_err_and(|e| crate::cancel::is_cancelled(e))
     {
+        // The half-unpacked folder goes; the downloads stay in `.downloads`
+        // (never where the tool is looked for) so the next install resumes.
         let tools = tools_dir(data_dir);
-        let _ = fs::remove_dir_all(tools.join(".downloads").join(package.id));
-        let _ = fs::remove_dir(tools.join(".downloads"));
         let _ = fs::remove_dir_all(tools.join(format!(".{}.partial", package.id)));
+        let kept: u64 = package
+            .downloads
+            .iter()
+            .map(|download| {
+                crate::resume::kept_size(
+                    &tools
+                        .join(".downloads")
+                        .join(package.id)
+                        .join(download.file),
+                )
+            })
+            .sum();
+        if kept > 0 {
+            return Err(format!(
+                "Cancelled. {} of the download is kept; installing {} again resumes it when it can, and starts again when it cannot.",
+                crate::byte_size::short_size(kept),
+                package.name
+            ));
+        }
     }
     result
 }
@@ -840,11 +863,12 @@ fn install_package(
     data_dir: &Path,
     package: &Package,
     cancel: &AtomicBool,
-    mut progress: impl FnMut(&str, u64, u64),
+    progress: impl FnMut(&str, u64, u64),
 ) -> Result<(), String> {
     if let Some(requirements) = &package.requirements {
         return install_python(data_dir, package, requirements, cancel, progress);
     }
+    let progress = std::cell::RefCell::new(progress);
     let tools = tools_dir(data_dir);
     let downloads = tools.join(".downloads").join(package.id);
     fs::create_dir_all(&downloads).map_err(|e| format!("{}: {e}", downloads.display()))?;
@@ -856,25 +880,41 @@ fn install_package(
             fs::metadata(path).is_ok_and(|m| m.len() == download.size)
                 && sha256_file(path).is_ok_and(|hash| hash == download.sha256)
         };
+        let key = format!("{}:{}:{}", download.url, download.size, download.sha256);
+        let item = crate::resume::Item {
+            label: package.name,
+            key: &key,
+            size: Some(download.size),
+        };
         for attempt in 0..2 {
             if complete(&path) {
                 break;
             }
             if attempt == 1 {
                 // A resumed file can be complete but corrupt: start over once.
-                let _ = fs::remove_file(&path);
+                crate::resume::discard(&path);
+                (progress.borrow_mut())(
+                    &format!(
+                        "note:Starting {} again: its SHA-256 check failed",
+                        package.name
+                    ),
+                    done,
+                    total,
+                );
             }
-            let fetched = crate::distribution::fetch_file(
+            let fetched = crate::resume::fetch(
                 curl,
                 download.url,
                 &path,
+                &item,
                 cancel,
                 "tool installation",
                 Duration::from_millis(200),
                 || {
                     let received = fs::metadata(&path).map_or(0, |m| m.len());
-                    progress("download", (done + received).min(total), total);
+                    (progress.borrow_mut())("download", (done + received).min(total), total);
                 },
+                &mut |line| (progress.borrow_mut())(&format!("note:{line}"), done, total),
             );
             if let Err(error) = fetched {
                 if crate::cancel::is_cancelled(&error) {
@@ -884,7 +924,7 @@ fn install_package(
                     return Err(format!("download failed: {}", download.url));
                 }
             }
-            progress("verify", done + download.size, total);
+            (progress.borrow_mut())("verify", done + download.size, total);
         }
         if !complete(&path) {
             return Err(format!(
@@ -894,7 +934,7 @@ fn install_package(
         }
         done += download.size;
     }
-    progress("unpack", total, total);
+    (progress.borrow_mut())("unpack", total, total);
     let partial = tools.join(format!(".{}.partial", package.id));
     let _ = fs::remove_dir_all(&partial);
     for download in package.downloads {
@@ -928,7 +968,7 @@ fn install_package(
     let _ = fs::remove_dir_all(&directory);
     fs::rename(&partial, &directory).map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&downloads);
-    progress("done", total, total);
+    (progress.borrow_mut())("done", total, total);
     Ok(())
 }
 

@@ -78,7 +78,7 @@ fn files_under(dir: &Path) -> Vec<String> {
 }
 
 #[test]
-fn a_cancelled_base_download_removes_its_staging_folder() {
+fn a_cancelled_base_download_keeps_its_partial_file_in_staging_only() {
     let dir = scratch("base");
     let curl = hanging_curl(&dir);
     let staging = dir.join("downloads").join("0".repeat(64));
@@ -100,10 +100,17 @@ fn a_cancelled_base_download_removes_its_staging_folder() {
             &staging,
             cancel,
             |_, _| {},
+            &mut |_| {},
         )
         .map(|_| ())
     });
-    assert!(!staging.exists(), "{:?}", files_under(&dir));
+    // The partial file and its record stay in the download's own folder and
+    // nowhere the app looks for installed bases.
+    let mut kept = files_under(&staging);
+    kept.sort();
+    assert_eq!(kept.len(), 2, "{kept:?}");
+    assert!(kept[0].ends_with("kernel") && kept[1].ends_with("kernel.resume"));
+    assert_eq!(files_under(&dir.join("bases")), Vec::<String>::new());
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -142,7 +149,7 @@ fn temp_catalogs() -> Vec<PathBuf> {
 }
 
 #[test]
-fn a_cancelled_tool_install_removes_its_downloads_and_keeps_the_installed_tool() {
+fn a_cancelled_tool_install_keeps_its_partial_download_and_the_installed_tool() {
     let dir = scratch("tool");
     let curl = hanging_curl(&dir);
     // A tool that is already installed stays exactly as it was.
@@ -154,15 +161,17 @@ fn a_cancelled_tool_install_removes_its_downloads_and_keeps_the_installed_tool()
         b"{\"id\":\"capa\",\"version\":\"0\"}",
     )
     .unwrap();
-    cancelled_soon(|cancel| {
+    let error = cancelled_soon(|cancel| {
         crate::analysis_tools::install(&curl, &dir, "capa", cancel, |_, _, _| {})
     });
+    assert!(error.starts_with("Cancelled. "), "{error}");
+    assert!(error.contains("resumes it when it can"), "{error}");
     let tools = crate::analysis_tools::tools_dir(&dir);
-    assert!(
-        !tools.join(".downloads").exists(),
-        "{:?}",
-        files_under(&tools)
-    );
+    let kept: Vec<_> = files_under(&tools.join(".downloads"))
+        .into_iter()
+        .filter(|path| Path::new(path).is_file())
+        .collect();
+    assert_eq!(kept.len(), 2, "{kept:?}");
     assert!(!tools.join(".capa.partial").exists());
     assert_eq!(
         fs::read(installed.join("tool.json")).unwrap(),
@@ -209,16 +218,17 @@ fn a_cancelled_plugin_install_removes_its_staging_folder() {
 }
 
 #[test]
-fn a_cancelled_kernel_source_download_removes_its_partial_file() {
+fn a_cancelled_kernel_source_download_keeps_its_partial_file_in_inputs() {
     let dir = scratch("kit");
     let curl = hanging_curl(&dir);
     let inputs = dir.join("inputs");
-    cancelled_soon(|cancel| crate::kit::fetch_orig(&curl, &inputs, cancel, |_, _| {}).map(|_| ()));
-    assert!(
-        files_under(&inputs).is_empty(),
-        "{:?}",
-        files_under(&inputs)
-    );
+    cancelled_soon(|cancel| {
+        crate::kit::fetch_orig(&curl, &inputs, cancel, |_, _| {}, &mut |_| {}).map(|_| ())
+    });
+    let mut kept = files_under(&inputs);
+    kept.sort();
+    assert_eq!(kept.len(), 2, "{kept:?}");
+    assert!(kept[0].ends_with(".part") && kept[1].ends_with(".part.resume"));
     fs::remove_dir_all(dir).unwrap();
 }
 

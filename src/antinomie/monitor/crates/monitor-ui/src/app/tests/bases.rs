@@ -244,3 +244,20 @@ fn the_base_images_page_adds_a_base_by_import_download_or_build() {
         assert!(opened(&app), "{label}");
     }
 }
+
+#[test]
+fn a_cancelled_download_says_what_was_kept_and_that_the_next_one_resumes() {
+    let status = antinomie_monitor_core::DownloadStatus {
+        label: "Debian 13".into(),
+        kept: 15 << 20,
+        ..Default::default()
+    };
+    let text = super::bases::cancelled_text(&status);
+    assert!(
+        text.contains("cancelled") && text.contains("15.0 MiB kept"),
+        "{text}"
+    );
+    assert!(text.contains("resumes from it when it can"), "{text}");
+    let nothing = super::bases::cancelled_text(&antinomie_monitor_core::DownloadStatus::default());
+    assert!(nothing.contains("nothing was kept"), "{nothing}");
+}

@@ -197,31 +197,53 @@ impl QemuBuild<'_> {
             .ok_or("Debian's SHA512SUMS does not list the genericcloud amd64 image")?;
         let target = builder.join(format!("cloud-{}.qcow2", &expected[..16]));
         let partial = builder.join("cloud.part");
+        // The checksum is the key: a partial of an older image is not resumed.
+        let key = format!("sha512:{expected}");
+        let item = crate::resume::Item {
+            label: "the Debian cloud image",
+            key: &key,
+            size: None,
+        };
         let mut reported = 0;
-        self.fetch_cached(
-            &format!("{base}/{CLOUD_IMAGE}"),
-            &partial,
-            "cloud image download",
-            |received| {
-                if received >= reported + (64 << 20) {
-                    reported = received - received % (64 << 20);
-                    on_line(&format!("cloud image download {} MiB", reported >> 20));
+        for attempt in 0..2 {
+            {
+                let log = std::cell::RefCell::new(&mut *on_line);
+                self.fetch_resumable(
+                    &format!("{base}/{CLOUD_IMAGE}"),
+                    &partial,
+                    &item,
+                    "cloud image download",
+                    |received| {
+                        if received >= reported + (64 << 20) {
+                            reported = received - received % (64 << 20);
+                            (log.borrow_mut())(&format!(
+                                "cloud image download {} MiB",
+                                reported >> 20
+                            ));
+                        }
+                    },
+                    &mut |text| (log.borrow_mut())(text),
+                )?;
+            }
+            let mut file = File::open(&partial).map_err(|e| e.to_string())?;
+            let mut digest = Sha512::new();
+            let mut chunk = vec![0; 1 << 20];
+            loop {
+                let len = file.read(&mut chunk).map_err(|e| e.to_string())?;
+                if len == 0 {
+                    break;
                 }
-            },
-        )?;
-        let mut file = File::open(&partial).map_err(|e| e.to_string())?;
-        let mut digest = Sha512::new();
-        let mut chunk = vec![0; 1 << 20];
-        loop {
-            let len = file.read(&mut chunk).map_err(|e| e.to_string())?;
-            if len == 0 {
+                digest.update(&chunk[..len]);
+            }
+            if format!("{:x}", digest.finalize()) == expected {
                 break;
             }
-            digest.update(&chunk[..len]);
-        }
-        if format!("{:x}", digest.finalize()) != expected {
-            let _ = fs::remove_file(&partial);
-            return Err("the downloaded cloud image does not match Debian's SHA-512".into());
+            crate::resume::discard(&partial);
+            if attempt == 1 {
+                return Err("the downloaded cloud image does not match Debian's SHA-512".into());
+            }
+            on_line("Starting the Debian cloud image again: its SHA-512 check failed");
+            reported = 0;
         }
         fs::rename(&partial, &target).map_err(|e| e.to_string())?;
         fs::write(target.with_extension("verified"), &expected).map_err(|e| e.to_string())?;
@@ -580,6 +602,36 @@ done
             ));
         }
         result.map_err(|error| format!("{error}; console log {}", serial_log.display()))
+    }
+
+    /// [`Self::fetch_cached`] for a large file: a cancel or a network failure
+    /// keeps the partial file in `to` (the builder folder, never used as the
+    /// image), and the next call resumes it when it can.
+    fn fetch_resumable(
+        &self,
+        url: &str,
+        to: &Path,
+        item: &crate::resume::Item,
+        what: &str,
+        mut progress: impl FnMut(u64),
+        note: &mut dyn FnMut(&str),
+    ) -> Result<(), String> {
+        let fetched = crate::resume::fetch(
+            self.curl,
+            url,
+            to,
+            item,
+            self.cancel,
+            "build",
+            Duration::from_millis(200),
+            || progress(fs::metadata(to).map_or(0, |meta| meta.len())),
+            note,
+        );
+        match fetched {
+            Ok(()) => Ok(()),
+            Err(error) if crate::cancel::is_cancelled(&error) => Err(error),
+            Err(error) => Err(format!("{what} failed: {error}")),
+        }
     }
 
     /// Download `url` to `to`; `progress` gets the partial file's size. A

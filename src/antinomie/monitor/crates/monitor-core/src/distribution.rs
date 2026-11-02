@@ -198,7 +198,7 @@ pub fn curl_version(curl: &Path) -> Result<String, String> {
         .to_string())
 }
 
-fn sha256_file(path: &Path) -> Result<String, String> {
+pub(crate) fn sha256_file(path: &Path) -> Result<String, String> {
     let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let checksum = crate::storage::sha256_uncached(file)?;
     Ok(checksum.iter().map(|b| format!("{b:02x}")).collect())
@@ -214,6 +214,7 @@ pub(crate) fn spawn_download(
     curl: &Path,
     url: &str,
     destination: &Path,
+    extra: &[String],
 ) -> Result<std::process::Child, String> {
     crate::dependencies::require_tool(curl, "curl")?;
     // HTTPS only, also across redirects. There is no overall time limit (a
@@ -240,8 +241,9 @@ pub(crate) fn spawn_download(
         "60",
         "-C",
         "-",
-        "-o",
     ])
+    .args(extra)
+    .arg("-o")
     .arg(destination)
     .arg(url)
     .stdin(Stdio::null())
@@ -252,7 +254,7 @@ pub(crate) fn spawn_download(
 }
 
 /// What a finished `curl` download means: `Ok`, or the end of its diagnostics.
-fn download_result(
+pub(crate) fn download_result(
     child: &mut std::process::Child,
     status: std::process::ExitStatus,
     url: &str,
@@ -288,7 +290,7 @@ pub(crate) fn fetch_file(
     interval: Duration,
     tick: impl FnMut(),
 ) -> Result<(), String> {
-    let mut child = spawn_download(curl, url, destination)?;
+    let mut child = spawn_download(curl, url, destination, &[])?;
     match crate::cancel::wait_every(&mut child, cancel, interval, tick)? {
         None => Err(format!("{what} cancelled")),
         Some(status) => download_result(&mut child, status, url),
@@ -300,11 +302,14 @@ fn file_len(path: &Path) -> u64 {
 }
 
 /// Download one base into `staging`, verifying size and SHA-256, and return the
-/// loaded (uninstalled) bundle. `progress` receives `(received, total)` bytes.
+/// loaded (uninstalled) bundle. `progress` receives `(received, total)` bytes;
+/// `note` hears "Resuming ..." or "Starting ... again: ..." lines.
 ///
-/// If a resumed file fails its hash, the file is removed and retried once from
-/// scratch so a corrupted partial cannot wedge the download. A cancel removes
-/// `staging` with everything in it: a download you cancel changes nothing.
+/// A file that fails its hash is removed and fetched once more from scratch,
+/// so a corrupted partial cannot wedge the download. A cancel (or a network
+/// failure) keeps `staging` with the partial file and its record, so the next
+/// download of the same base resumes (see [`crate::resume`]). `staging` is
+/// never where the app looks for installed bases.
 pub fn download_base(
     curl: &Path,
     remote_base: &str,
@@ -312,19 +317,34 @@ pub fn download_base(
     staging: &Path,
     cancel: &AtomicBool,
     progress: impl FnMut(u64, u64),
+    note: &mut dyn FnMut(&str),
 ) -> Result<Bundle, String> {
-    let result = download_files(curl, remote_base, base, staging, cancel, progress);
-    if result
-        .as_ref()
-        .is_err_and(|error| crate::cancel::is_cancelled(error))
-    {
-        let _ = fs::remove_dir_all(staging);
-        // The `downloads` folder it was in, when nothing else is there.
-        if let Some(parent) = staging.parent() {
-            let _ = fs::remove_dir(parent);
+    download_files(curl, remote_base, base, staging, cancel, progress, note)
+}
+
+/// Bytes of partial downloads kept in `staging`.
+pub fn kept_bytes(staging: &Path) -> u64 {
+    fs::read_dir(staging).map_or(0, |entries| {
+        entries
+            .flatten()
+            .filter_map(|entry| entry.metadata().ok())
+            .filter(|meta| meta.is_file())
+            .map(|meta| meta.len())
+            .sum()
+    })
+}
+
+/// Remove kept partial downloads of bases the catalog no longer lists.
+pub fn prune_partials(downloads: &Path, catalog: &Catalog) {
+    let Ok(entries) = fs::read_dir(downloads) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !catalog.bases.iter().any(|base| base.identity == name) {
+            let _ = fs::remove_dir_all(entry.path());
         }
     }
-    result
 }
 
 fn download_files(
@@ -334,6 +354,7 @@ fn download_files(
     staging: &Path,
     cancel: &AtomicBool,
     mut progress: impl FnMut(u64, u64),
+    note: &mut dyn FnMut(&str),
 ) -> Result<Bundle, String> {
     let total: u64 = base.files.iter().map(|file| file.size).sum();
     fs::create_dir_all(staging).map_err(|e| format!("{}: {e}", staging.display()))?;
@@ -361,11 +382,21 @@ fn download_files(
             && sha256_file(&destination)
                 .map(|hash| hash == file.sha256)
                 .unwrap_or(false);
+        let key = format!(
+            "{}/{}:{}:{}",
+            base.identity, file.name, file.size, file.sha256
+        );
+        let item = crate::resume::Item {
+            label: &base.label,
+            key: &key,
+            size: Some(file.size),
+        };
         if !already_done {
-            fetch_file(
+            crate::resume::fetch(
                 curl,
                 &url,
                 &destination,
+                &item,
                 cancel,
                 "download",
                 Duration::from_millis(100),
@@ -373,23 +404,31 @@ fn download_files(
                     let done = finished_size(Some(&file.name)) + file_len(&destination);
                     progress(done.min(total), total);
                 },
+                note,
             )?;
         }
-        // A resumed file can be complete but corrupt; retry once from scratch.
+        // A resumed file can be complete but corrupt; start over once, from zero.
         let matches =
             file_len(&destination) == file.size && sha256_file(&destination)? == file.sha256;
         if !matches {
-            let _ = fs::remove_file(&destination);
-            fetch_file(
+            crate::resume::discard(&destination);
+            note(&format!(
+                "Starting {} again: {} failed its SHA-256 check",
+                base.label, file.name
+            ));
+            crate::resume::fetch(
                 curl,
                 &url,
                 &destination,
+                &item,
                 cancel,
                 "download",
                 Duration::from_millis(100),
                 || progress(file_len(&destination).min(total), total),
+                &mut |_| {},
             )?;
             if file_len(&destination) != file.size || sha256_file(&destination)? != file.sha256 {
+                crate::resume::discard(&destination);
                 return Err(format!(
                     "{} failed integrity check after download",
                     file.name
@@ -612,6 +651,7 @@ mod tests {
                 assert!(received <= total);
                 last = received;
             },
+            &mut |_| {},
         )
         .unwrap();
         assert!(bundle.kernel.ends_with("kernel"));
@@ -631,7 +671,7 @@ mod tests {
     }
 
     #[test]
-    fn a_cancelled_download_removes_its_staging_folder_and_a_new_one_starts_clean() {
+    fn a_cancelled_download_keeps_its_partial_and_the_next_one_resumes_it() {
         let source = staging("cancel-source");
         let catalog = parse_catalog(sample_catalog(&source).as_bytes()).unwrap();
         let remote = format!("file://{}", source.display());
@@ -648,10 +688,11 @@ mod tests {
                     cancel.store(true, Ordering::Relaxed);
                 }
             },
+            &mut |_| {},
         )
         .unwrap_err();
         assert_eq!(error, "download cancelled");
-        assert!(!target.exists(), "a download you cancel changes nothing");
+        assert!(target.exists(), "the staging folder keeps what arrived");
         cancel.store(false, Ordering::Relaxed);
         download_base(
             Path::new("curl"),
@@ -660,11 +701,29 @@ mod tests {
             &target,
             &cancel,
             |_, _| {},
+            &mut |_| {},
         )
         .unwrap();
         assert!(target.join("bundle.json").is_file());
         fs::remove_dir_all(source).unwrap();
         fs::remove_dir_all(target).unwrap();
+    }
+
+    #[test]
+    fn partials_of_bases_the_catalog_dropped_are_pruned() {
+        let source = staging("prune-source");
+        let catalog = parse_catalog(sample_catalog(&source).as_bytes()).unwrap();
+        let downloads = staging("prune-downloads");
+        let kept = downloads.join(&catalog.bases[0].identity);
+        let gone = downloads.join("f".repeat(64));
+        for dir in [&kept, &gone] {
+            write(&dir.join("kernel"), b"partial");
+        }
+        prune_partials(&downloads, &catalog);
+        assert!(kept.is_dir() && !gone.exists());
+        assert_eq!(kept_bytes(&kept), 7);
+        fs::remove_dir_all(source).unwrap();
+        fs::remove_dir_all(downloads).unwrap();
     }
 
     #[test]
@@ -685,10 +744,10 @@ mod tests {
                     cancel.store(true, Ordering::Relaxed);
                 }
             },
+            &mut |_| {},
         )
         .unwrap_err();
         assert_eq!(error, "download cancelled");
-        assert!(!target.exists());
         fs::remove_dir_all(source).unwrap();
     }
 
@@ -711,6 +770,7 @@ mod tests {
             &target,
             &cancel,
             |_, _| {},
+            &mut |_| {},
         )
         .unwrap_err();
         assert!(error.contains("integrity"), "{error}");
@@ -744,6 +804,7 @@ mod tests {
             &target,
             &AtomicBool::new(false),
             |_, _| {},
+            &mut |_| {},
         )
         .expect("download");
         assert!(bundle.base_disk.ends_with("base.qcow2"));

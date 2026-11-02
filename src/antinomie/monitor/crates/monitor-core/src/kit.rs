@@ -261,11 +261,15 @@ fn sha256_file(path: &Path) -> Result<String, String> {
 
 /// Download the upstream tarball into `inputs` once, from the Debian pool or,
 /// when the pool no longer has it, from snapshot.debian.org; verify SHA-256.
+/// A cancel keeps the partial `.part` file (in `inputs`, never under the
+/// pinned name) and the next call resumes it when it can; a file that fails
+/// its hash is deleted and fetched once more from zero.
 pub(crate) fn fetch_orig(
     curl: &Path,
     inputs: &Path,
     cancel: &AtomicBool,
     mut progress: impl FnMut(u64, u64),
+    note: &mut dyn FnMut(&str),
 ) -> Result<PathBuf, String> {
     let input = orig_input()?;
     fs::create_dir_all(inputs).map_err(|e| format!("{}: {e}", inputs.display()))?;
@@ -274,6 +278,13 @@ pub(crate) fn fetch_orig(
         return Ok(target);
     }
     let partial = inputs.join(format!("{}.part", input.name));
+    // A partial older than the pinned tarball (another version) goes.
+    for entry in fs::read_dir(inputs).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.contains(".part") && !name.starts_with(&format!("{}.part", input.name)) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
     let urls = [
         format!(
             "https://deb.debian.org/debian/pool/main/l/linux/{}",
@@ -281,39 +292,55 @@ pub(crate) fn fetch_orig(
         ),
         format!("https://snapshot.debian.org/file/{}", input.sha1),
     ];
+    let key = format!("{}:{}", input.sha256, input.size);
+    let item = crate::resume::Item {
+        label: "the kernel source",
+        key: &key,
+        size: Some(input.size),
+    };
     let mut failures = Vec::new();
     for url in &urls {
-        let fetched = crate::distribution::fetch_file(
-            curl,
-            url,
-            &partial,
-            cancel,
-            "build",
-            Duration::from_millis(200),
-            || {
-                progress(
-                    fs::metadata(&partial).map_or(0, |meta| meta.len()),
-                    input.size,
-                );
-            },
-        );
-        if let Err(error) = &fetched
-            && crate::cancel::is_cancelled(error)
-        {
-            let _ = fs::remove_file(&partial);
-            return Err("build cancelled".into());
+        for attempt in 0..2 {
+            let fetched = crate::resume::fetch(
+                curl,
+                url,
+                &partial,
+                &item,
+                cancel,
+                "build",
+                Duration::from_millis(200),
+                || {
+                    progress(
+                        fs::metadata(&partial).map_or(0, |meta| meta.len()),
+                        input.size,
+                    );
+                },
+                note,
+            );
+            if let Err(error) = &fetched
+                && crate::cancel::is_cancelled(error)
+            {
+                return Err("build cancelled".into());
+            }
+            if fetched.is_ok() && sha256_file(&partial)? == input.sha256 {
+                fs::rename(&partial, &target).map_err(|e| format!("{}: {e}", target.display()))?;
+                return Ok(target);
+            }
+            if fetched.is_ok() {
+                crate::resume::discard(&partial);
+                if attempt == 0 {
+                    note("Starting the kernel source again: its SHA-256 check failed");
+                    continue;
+                }
+            }
+            failures.push(format!(
+                "{url}: {}",
+                fetched
+                    .err()
+                    .unwrap_or_else(|| "the file does not match the pinned SHA-256".into())
+            ));
+            break;
         }
-        if fetched.is_ok() && sha256_file(&partial)? == input.sha256 {
-            fs::rename(&partial, &target).map_err(|e| format!("{}: {e}", target.display()))?;
-            return Ok(target);
-        }
-        let _ = fs::remove_file(&partial);
-        failures.push(format!(
-            "{url}: {}",
-            fetched
-                .err()
-                .unwrap_or_else(|| "the file does not match the pinned SHA-256".into())
-        ));
     }
     Err(format!(
         "could not download {} with the pinned SHA-256 ({})",

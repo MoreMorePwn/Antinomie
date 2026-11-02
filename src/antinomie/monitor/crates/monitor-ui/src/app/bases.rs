@@ -139,6 +139,9 @@ pub(super) fn download_status(
                 status.label.clone()
             });
         });
+        if !status.note.is_empty() {
+            crate::activity::info(ui, status.note.clone());
+        }
         let fraction = if status.total > 0 {
             (status.received as f32 / status.total as f32).clamp(0.0, 1.0)
         } else {
@@ -153,7 +156,7 @@ pub(super) fn download_status(
     if let Some(status) = download.filter(|status| status.finished) {
         match &status.error {
             Some(error) if antinomie_monitor_core::cancel::is_cancelled(error) => {
-                crate::activity::info(ui, format!("{}: cancelled; nothing was kept", status.label));
+                crate::activity::info(ui, cancelled_text(status));
             }
             Some(error) => {
                 crate::activity::error_toast(ui, format!("{}: {error}", status.label));
@@ -164,6 +167,20 @@ pub(super) fn download_status(
         }
     }
     command
+}
+
+/// What a cancelled download left: "Cancelled" and, when a partial file was
+/// kept, that the next attempt resumes it when it can.
+pub(super) fn cancelled_text(status: &antinomie_monitor_core::DownloadStatus) -> String {
+    if status.kept > 0 {
+        format!(
+            "{}: cancelled. {} kept; the next download resumes from it when it can, and starts again when it cannot.",
+            status.label,
+            human_bytes(status.kept)
+        )
+    } else {
+        format!("{}: cancelled; nothing was kept", status.label)
+    }
 }
 
 pub(super) fn base_selector(

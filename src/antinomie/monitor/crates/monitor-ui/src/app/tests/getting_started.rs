@@ -417,6 +417,7 @@ fn install_all_missing_queues_only_missing_tools_and_one_runs_at_a_time() {
         total: 1,
         finished: true,
         error: None,
+        note: String::new(),
     });
     app.getting_started_tick();
     assert_eq!(installs(&app), ["one", "two"]);

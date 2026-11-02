@@ -239,6 +239,8 @@ impl Worker {
                 };
                 let progress = Arc::new(Mutex::new((0u64, false)));
                 let worker_progress = progress.clone();
+                let notes = Arc::new(Mutex::new(String::new()));
+                let worker_notes = notes.clone();
                 let (sender, receiver) = mpsc::channel();
                 let requested = base.clone();
                 let staging_thread = staging.clone();
@@ -257,6 +259,11 @@ impl Worker {
                             |received, _| {
                                 if let Ok(mut guard) = worker_progress.lock() {
                                     guard.0 = received;
+                                }
+                            },
+                            &mut |line| {
+                                if let Ok(mut guard) = worker_notes.lock() {
+                                    *guard = line.to_owned();
                                 }
                             },
                         )
@@ -285,6 +292,7 @@ impl Worker {
                     label: label.clone(),
                     total,
                     progress,
+                    notes,
                     cancel,
                     done: receiver,
                     thread,
@@ -297,6 +305,8 @@ impl Worker {
                     installing: false,
                     finished: false,
                     error: None,
+                    note: String::new(),
+                    kept: 0,
                 });
                 Ok("base download started".into())
             }
@@ -371,13 +381,16 @@ impl Worker {
                             Ok(())
                         });
                         let _ = fs::remove_dir_all(&output);
-                        // A cancelled build leaves nothing: not even its log.
-                        if result
-                            .as_ref()
-                            .is_err_and(|e| crate::cancel::is_cancelled(e))
-                        {
+                        // A cancelled build leaves nothing: not even its log. It
+                        // is not resumed (a build step is not a download); only
+                        // a download it had under way keeps its partial file.
+                        let result = result.map_err(|error| {
+                            if !crate::cancel::is_cancelled(&error) {
+                                return error;
+                            }
                             let _ = fs::remove_file(&log_path);
-                        }
+                            crate::resume::cancelled_build_text(&options.data_dir)
+                        });
                         let _ = sender.send(result);
                     })
                     .map_err(|e| e.to_string())?;
@@ -417,6 +430,8 @@ impl Worker {
                 let (sender, receiver) = mpsc::channel();
                 let (curl, data_dir) = (self.options.curl.clone(), self.options.data_dir.clone());
                 let (worker_progress, worker_cancel) = (progress.clone(), cancel.clone());
+                let notes = Arc::new(Mutex::new(String::new()));
+                let worker_notes = notes.clone();
                 thread::Builder::new()
                     .name("antinomie-tool-install".into())
                     .spawn(move || {
@@ -426,7 +441,11 @@ impl Worker {
                             package.id,
                             &worker_cancel,
                             |stage, received, total| {
-                                if let Ok(mut guard) = worker_progress.lock() {
+                                if let Some(text) = stage.strip_prefix("note:") {
+                                    if let Ok(mut guard) = worker_notes.lock() {
+                                        *guard = text.to_owned();
+                                    }
+                                } else if let Ok(mut guard) = worker_progress.lock() {
                                     *guard = (stage.to_string(), received, total);
                                 }
                             },
@@ -435,6 +454,7 @@ impl Worker {
                     })
                     .map_err(|e| e.to_string())?;
                 self.tool = Some(ToolJob {
+                    notes,
                     progress,
                     cancel,
                     done: receiver,
@@ -447,6 +467,7 @@ impl Worker {
                     total: package.size(),
                     finished: false,
                     error: None,
+                    note: String::new(),
                 });
                 Ok(format!("installing {}", package.name))
             }
@@ -514,6 +535,15 @@ impl Worker {
                     return Err("unknown base".into());
                 }
                 fs::remove_dir_all(&directory).map_err(|e| e.to_string())?;
+                // A partial download of the same base goes with it.
+                if self
+                    .download
+                    .as_ref()
+                    .is_none_or(|job| job.identity != identity)
+                {
+                    let _ =
+                        fs::remove_dir_all(self.options.data_dir.join("downloads").join(&identity));
+                }
                 self.refresh_locations()?;
                 Ok("base deleted".into())
             }

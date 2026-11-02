@@ -117,6 +117,7 @@ fn native_tools_fixture() {
                         total: 30 << 20,
                         finished: false,
                         error: None,
+                        note: String::new(),
                     });
                 }
                 "routes" => app.open_routes_settings(),
