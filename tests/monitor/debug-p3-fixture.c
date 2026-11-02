@@ -13,7 +13,8 @@
  * the form "child ..." come from a forked child, "leaf ..." from an exec'd one.
  *   fork     every third round forks a child that calls child_site() twice and
  *            exits 7; the parent calls parent_site() every round and reports
- *            the child's exit status ("child exit=7")
+ *            the child's exit status ("child exit=7"); on aarch64 from round
+ *            30 (FORK_FIRST_ROUND)
  *   vfork    every third round vforks a child that execs this program in mode
  *            leaf; the parent reports "vfork child exit=5"
  *   exec     calls parent_site() ROUNDS times, then execs this program in mode
@@ -125,6 +126,15 @@ extern char pause_syscall[];
  * stopped it once (1.5 s in; round 3, 150 ms, lost that race on a loaded
  * x86-64 host as on an emulated arm64 guest), and before its watchdog's 6 s. */
 #define STOPSELF_ROUND 30
+/* The first round fork may fork in: an emulated (TCG) arm64 guest's debugger
+ * may attach and set its fork option only after round 2 (100 ms), and a child
+ * forked before that exits and stops the program with a SIGCHLD where a test
+ * expects the fork. */
+#if defined(__aarch64__)
+#define FORK_FIRST_ROUND 30
+#else
+#define FORK_FIRST_ROUND 0
+#endif
 extern char vfork_syscall[];
 
 static long exit_lead_ms;
@@ -232,7 +242,7 @@ int main(int argc, char **argv)
     }
     for (long round = 0; round < rounds; round++) {
         parent_site(round);
-        if (!strcmp(mode, "fork") && round % 3 == 2) {
+        if (!strcmp(mode, "fork") && round % 3 == 2 && round >= FORK_FIRST_ROUND) {
             pid_t child = fork();
             if (child == 0) {
                 printf("child pid=%d\n", (int)getpid());
