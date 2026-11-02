@@ -811,6 +811,12 @@ pub fn stream_fields(
         .arg("-2")
         .arg("-r")
         .arg(&snapshot.capture_path);
+    if fields.iter().any(|field| field.contains(".geoip.")) {
+        // -n switches the MaxMind lookup off with the other name resolution;
+        // -N g turns it back on, and the databases are Antinomie's own.
+        command.args(["-N", "g"]);
+        crate::geoip::apply(&mut command);
+    }
     if !expression.trim().is_empty() {
         command.arg("-Y").arg(expression);
     }

@@ -49,6 +49,8 @@ pub enum Archive {
     TarXz { strip: usize },
     /// One file kept as it is, under the name of `Download::file`.
     File,
+    /// One gzip-compressed file, unpacked under `name`.
+    Gz { name: &'static str },
     /// A Debian package: the files of its data archive under `prefix`, placed
     /// flat (file names only).
     DebFiles { prefix: &'static str },
@@ -419,6 +421,42 @@ pub const PACKAGES: &[Package] = &[
         requirements: None,
         entry: "tor/tor",
     },
+    // The offline IP geolocation databases for TShark (country and AS, about 9 MiB
+    // downloaded). DB-IP publishes one file per month and no signature: this
+    // month is pinned here and checked like every tool; a newer month is taken
+    // by `geoip::update_latest` with its hash only recorded. Attribution to
+    // DB-IP is required wherever the data appears (CC BY 4.0).
+    Package {
+        id: "geoip",
+        name: "IP geolocation (DB-IP Lite)",
+        version: "2026-11",
+        purpose: "Country and organization of public addresses for TShark (offline)",
+        license: "CC BY 4.0 (DB-IP.com): attribution to DB-IP required",
+        downloads: &[
+            Download {
+                file: "dbip-country-lite-2026-11.mmdb.gz",
+                url: "https://download.db-ip.com/free/dbip-country-lite-2026-11.mmdb.gz",
+                sha256: "75fe430010f6d38a8c4331c202bf0df6ce3221a6e6d823b9e5a6d951e4cf9758",
+                size: 4_205_904,
+                archive: Archive::Gz {
+                    name: "dbip-country-lite.mmdb",
+                },
+                into: "",
+            },
+            Download {
+                file: "dbip-asn-lite-2026-11.mmdb.gz",
+                url: "https://download.db-ip.com/free/dbip-asn-lite-2026-11.mmdb.gz",
+                sha256: "36a8c45136877d8df48ad371de6c9c97c861dedd356277f30de730c16fc0f928",
+                size: 5_237_630,
+                archive: Archive::Gz {
+                    name: "dbip-asn-lite.mmdb",
+                },
+                into: "",
+            },
+        ],
+        requirements: None,
+        entry: "dbip-asn-lite.mmdb",
+    },
 ];
 
 pub fn package(id: &str) -> Option<&'static Package> {
@@ -527,10 +565,14 @@ pub fn statuses(data_dir: &Path) -> Vec<ToolStatus> {
             purpose: package.purpose.into(),
             version: package.version.into(),
             size: package.size(),
-            system: system_candidates(package.id)
-                .iter()
-                .find(|path| Path::new(path).is_file())
-                .map(|path| (*path).to_owned()),
+            system: if package.id == crate::geoip::TOOL_ID {
+                crate::geoip::system_databases()
+            } else {
+                system_candidates(package.id)
+                    .iter()
+                    .find(|path| Path::new(path).is_file())
+                    .map(|path| (*path).to_owned())
+            },
             installed: installed_version(data_dir, package),
             installed_path: managed_entry(data_dir, package.id)
                 .map(|path| path.display().to_string()),
@@ -808,6 +850,12 @@ fn unpack(
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).map_err(|e| e.to_string())
         }
+        Archive::Gz { name } => crate::geoip::gunzip_file(
+            archive,
+            &target.join(name),
+            crate::geoip::UNPACK_LIMIT,
+            cancel,
+        ),
         Archive::DebFiles { prefix } => unpack_tar_xz(deb_data(archive)?, &target, |path| {
             stopped()?;
             Ok(path

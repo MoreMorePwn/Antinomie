@@ -36,6 +36,7 @@ pub mod file_before_store;
 pub mod file_reconstruct;
 pub mod file_writes;
 pub mod filter_members;
+pub mod geoip;
 mod guest_account;
 mod guest_desktop;
 pub mod guest_names;

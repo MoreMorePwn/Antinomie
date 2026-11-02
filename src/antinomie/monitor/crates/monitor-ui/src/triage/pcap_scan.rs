@@ -56,6 +56,9 @@ pub(super) const TSHARK_FIELDS: &[&str] = &[
     // The size of the frame and the version a hello names.
     "frame.len",
     "tls.handshake.extensions.supported_version",
+    // The AS number of the destination, with the GeoIP columns.
+    "ip.geoip.dst_asnum",
+    "ipv6.geoip.dst_asnum",
 ];
 
 const F_PROTOCOL: usize = 36;
@@ -76,6 +79,8 @@ const F_TLS_SUPPORTED: usize = 50;
 const FINGERPRINT_FIELDS: std::ops::Range<usize> = F_JA3..F_CERT + 1;
 /// Columns of the GeoIP lookup, requested only when it is configured.
 const GEOIP_FIELDS: std::ops::Range<usize> = 31..35;
+const F_ASN: usize = 51;
+const GEOIP_ASN_FIELDS: std::ops::Range<usize> = F_ASN..F_ASN + 2;
 
 pub(super) const SESSION_HEADERS: &[&str] = &[
     "Frame",
@@ -285,7 +290,7 @@ pub(super) fn spool_packet_fields(
     let mut skipped: Vec<usize> = if geoip {
         Vec::new()
     } else {
-        GEOIP_FIELDS.collect()
+        GEOIP_FIELDS.chain(GEOIP_ASN_FIELDS).collect()
     };
     let optional: Vec<&str> = FINGERPRINT_FIELDS.map(|at| TSHARK_FIELDS[at]).collect();
     if let Ok(known) =
@@ -382,7 +387,11 @@ pub(super) fn scan_pcap_query_observed(
     let identity = antinomie_monitor_core::packet_filter::CaptureIdentity::read(path)?;
     let use_geoip = request.address_lookup != AddressLookup::Whois;
     let (spool, extent) = match spool_packet_fields(&identity, pcap_open, cancel, use_geoip) {
-        Err(error) if use_geoip && error.contains("geoip") && !cancel.load(Ordering::Relaxed) => {
+        Err(error)
+            if use_geoip
+                && (error.contains("geoip") || error.contains("resolving option"))
+                && !cancel.load(Ordering::Relaxed) =>
+        {
             spool_packet_fields(&identity, pcap_open, cancel, false)?
         }
         result => result?,
@@ -445,11 +454,18 @@ pub(super) fn scan_pcap_query_observed(
             } else {
                 field(31)
             },
-            if field(33).is_empty() {
-                field(34)
-            } else {
-                field(33)
-            },
+            &organization_with_asn(
+                if field(33).is_empty() {
+                    field(34)
+                } else {
+                    field(33)
+                },
+                if field(F_ASN).is_empty() {
+                    field(F_ASN + 1)
+                } else {
+                    field(F_ASN)
+                },
+            ),
         );
         let source = if field(2).is_empty() {
             field(3)
@@ -762,6 +778,16 @@ pub(super) fn scan_pcap_query_observed(
         extent.packet_count, extent.complete_extent, extent.file_size,
         if pcap_open { "; live prefix watermark; final capture requires reanalysis" } else { "" });
     Ok(index)
+}
+
+/// "AS150895 EZ TECHNOLOGY COMPANY LIMITED": the organization of the AS
+/// database with the AS number it came with.
+fn organization_with_asn(organization: &str, asn: &str) -> String {
+    match (asn.is_empty(), organization.is_empty()) {
+        (false, false) => format!("AS{asn} {organization}"),
+        (false, true) => format!("AS{asn}"),
+        _ => organization.to_owned(),
+    }
 }
 
 pub(super) fn text_value(text: &str) -> RowValue {
