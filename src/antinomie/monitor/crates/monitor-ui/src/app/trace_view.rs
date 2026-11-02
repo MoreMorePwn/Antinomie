@@ -800,6 +800,7 @@ impl MonitorApp {
             return;
         }
         let directory = self.invocation_directory(invocation);
+        self.inspector.directory = directory.clone();
         let read = self.inspector.show(ui, invocation, directory.is_some());
         for request in std::mem::take(&mut self.inspector.open_data) {
             self.data_windows.open(ui.ctx(), request, directory.clone());
@@ -1005,6 +1006,10 @@ fn trace_row_menu(
     ];
     if !info.is_empty() {
         items.push(("Info".to_owned(), info.clone()));
+    }
+    let records = trace::record_call_json(invocation);
+    if !records.is_empty() {
+        items.push(("Decoded records as JSON".to_owned(), records));
     }
     crate::data_view::copy_items(ui, &items);
     ui.separator();

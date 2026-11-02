@@ -17,12 +17,15 @@
 //! to the views' byte rendering. Reserved and padding members are not shown.
 use crate::FieldSummary;
 
+mod arrays;
 mod bpf;
+pub mod ebpf_asm;
 mod records;
 mod signals;
 #[cfg(test)]
 mod tests;
 
+pub use arrays::{About, Cut, CutKind, MAX_RECORDS, Record, Records, is_array, record_json};
 pub use bpf::{attach_type_name, attr_member as bpf_attr_member, map_type_name, prog_type_name};
 pub use signals::signal_name;
 
@@ -62,6 +65,9 @@ pub struct Decoded {
     /// For a [`Shape::Set`], the names are the members *not* in the set.
     pub complement: bool,
 }
+
+/// Records of an array a one-line form lists.
+const ARRAY_LINE_RECORDS: usize = 64;
 
 /// One-line forms longer than this are cut with `...`.
 const LINE_MAX: usize = 240;
@@ -223,7 +229,10 @@ pub fn decode(call: Option<&Call<'_>>, field: &FieldSummary) -> Option<Decoded> 
         "xt_counters_info" => records::counters_info(data)?,
         "user_desc" => records::user_desc(data)?,
         "desc_struct[]" => list(data, 8, records::descriptor)?,
-        _ => return None,
+        other => {
+            let records = Records::open(call, other, &field.key, data)?;
+            records.decoded(data, ARRAY_LINE_RECORDS)
+        }
     };
     // A decoder sets `more` for a record it could not finish; past that, the
     // field holds more when its capture is longer than the preview decoded.

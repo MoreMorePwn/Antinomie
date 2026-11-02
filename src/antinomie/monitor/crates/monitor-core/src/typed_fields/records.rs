@@ -182,21 +182,57 @@ pub(super) fn dirents(data: &[u8], wide: bool) -> Option<Decoded> {
             decoded.more = true;
             break;
         }
-        let record = &record[..length];
-        let kind = if wide {
-            u8_at(record, 18)?
-        } else {
-            u8_at(record, length - 1)?
-        };
-        let name_end = if wide { length } else { length - 1 };
-        let mut entry = Decoded::new(Shape::Struct);
-        entry.push("d_ino", u64_at(record, 0)?.to_string());
-        entry.push("d_off", i64_at(record, 8)?.to_string());
-        entry.push("d_reclen", length.to_string());
-        entry.push("d_type", named(u64::from(kind), DIRENT_TYPES));
-        entry.push("d_name", c_string(&record[name_at..name_end]));
-        decoded.push("", entry.full_line());
+        decoded.push("", dirent(&record[..length], wide)?.full_line());
         at += length;
+    }
+    Some(decoded)
+}
+
+/// One directory entry, `record` exactly its `d_reclen` bytes.
+pub(super) fn dirent(record: &[u8], wide: bool) -> Option<Decoded> {
+    let name_at = if wide { 19 } else { 18 };
+    let length = record.len();
+    if length < name_at + 1 {
+        return None;
+    }
+    let kind = if wide {
+        u8_at(record, 18)?
+    } else {
+        u8_at(record, length - 1)?
+    };
+    let name_end = if wide { length } else { length - 1 };
+    let mut entry = Decoded::new(Shape::Struct);
+    entry.push("d_ino", u64_at(record, 0)?.to_string());
+    entry.push("d_off", i64_at(record, 8)?.to_string());
+    entry.push("d_reclen", length.to_string());
+    entry.push("d_type", named(u64::from(kind), DIRENT_TYPES));
+    entry.push("d_name", c_string(&record[name_at..name_end]));
+    Some(entry)
+}
+
+/// One `__user_cap_data_struct`, the 32 capabilities from `32 * index` up:
+/// the capabilities each set holds, by name.
+pub(super) fn capability_element(data: &[u8], index: usize) -> Option<Decoded> {
+    let base = index.checked_mul(32)?;
+    let names = |bits: u32| -> String {
+        let parts: Vec<String> = (0..32usize)
+            .filter(|bit| bits & (1 << bit) != 0)
+            .map(|bit| {
+                CAPABILITIES
+                    .get(base + bit)
+                    .map_or_else(|| format!("CAP_{}", base + bit), |name| (*name).to_owned())
+            })
+            .collect();
+        if parts.is_empty() {
+            "0".into()
+        } else {
+            parts.join("|")
+        }
+    };
+    let mut decoded = Decoded::new(Shape::Struct);
+    decoded.push("capabilities", format!("{}-{}", base, base + 31));
+    for (name, at) in [("effective", 0), ("permitted", 4), ("inheritable", 8)] {
+        decoded.push(name, names(u32_at(data, at)?));
     }
     Some(decoded)
 }

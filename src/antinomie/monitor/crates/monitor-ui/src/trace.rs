@@ -15,6 +15,8 @@ pub(crate) mod async_browse;
 #[cfg(test)]
 mod conformance;
 mod fields;
+mod record_tree;
+pub(crate) use record_tree::call_json as record_call_json;
 mod tree_row;
 pub(crate) use fields::*;
 use tree_row::{note_row, section_row, tree_row, Row};
@@ -61,6 +63,10 @@ pub(crate) struct Inspector {
     pub(crate) open_data: Vec<OpenData>,
     /// The saved async observations past a call's preview, a page at a time.
     pub(crate) observations: async_browse::State,
+    /// The record tree of the selected array field.
+    records: record_tree::State,
+    /// The recording the selected call's captured bytes can be read from.
+    pub(crate) directory: Option<std::path::PathBuf>,
 }
 
 impl Inspector {
@@ -925,10 +931,20 @@ impl Inspector {
         ui.add(egui::Label::new(RichText::new(facts.join(" · ")).color(theme::muted())).wrap());
         let call = representative(invocation)
             .and_then(|event| field_call(event.syscall_nr, call_args(invocation)));
-        if let Some(decoded) = decoded(call.as_ref(), field) {
-            ui.add_space(2.0);
-            for line in decoded.lines() {
-                ui.add(egui::Label::new(RichText::new(line).monospace()).wrap());
+        let identity = format!("{:?}{:?}", key(invocation), self.selection);
+        let shown = record_tree::Shown {
+            identity: &identity,
+            call: call.as_ref(),
+            syscall: representative(invocation).map_or("", |event| event.syscall_name.as_str()),
+            field,
+            directory: self.directory.as_deref(),
+        };
+        if !record_tree::show(ui, &mut self.records, &shown) {
+            if let Some(decoded) = decoded(call.as_ref(), field) {
+                ui.add_space(2.0);
+                for line in decoded.lines() {
+                    ui.add(egui::Label::new(RichText::new(line).monospace()).wrap());
+                }
             }
         }
         if let Some(mark) = field.recapture {
