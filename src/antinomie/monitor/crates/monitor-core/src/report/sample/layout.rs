@@ -469,7 +469,7 @@ fn lineage_section(b: &mut Builder, report: &SampleReport) {
     )));
     table(
         &columns,
-        lineage_rows(&b, &report.lineage.parents),
+        lineage_rows(b, &report.lineage.parents),
         "No parent.",
         &mut blocks,
     );
@@ -479,7 +479,7 @@ fn lineage_section(b: &mut Builder, report: &SampleReport) {
     )));
     table(
         &columns,
-        lineage_rows(&b, &report.lineage.children),
+        lineage_rows(b, &report.lineage.children),
         "No children.",
         &mut blocks,
     );

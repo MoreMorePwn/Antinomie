@@ -180,7 +180,7 @@ impl Worker {
         }
         // A desktop run executes `/bin/sh`, so its program is acquired
         // by path after the launch instead of by the kernel's exec.
-        let wire = crate::guest_desktop::wire_request(&request)?;
+        let wire = crate::guest_desktop::wire_request(request)?;
         // Whatever hashing and launch shape the guest offers is asked
         // for; an older guest offers none and sees no new flag.
         // The offer comes from a probe after boot. A launch that beat it
