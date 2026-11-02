@@ -534,6 +534,9 @@ pub(super) fn field(invocation: &InvocationSummary, name: &str) -> Result<Resolv
     if key == "info" {
         return Ok(Resolved::Text(trace::info(invocation)));
     }
+    if key == "records" {
+        return Ok(Resolved::Text(trace::records_text(invocation)));
+    }
     if matches!(key.as_str(), "tag" | "tags") {
         return Ok(Resolved::Missing);
     }

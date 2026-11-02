@@ -893,6 +893,34 @@ pub(crate) fn info(invocation: &InvocationSummary) -> String {
         .collect()
 }
 
+/// Every decoded record of the call's array fields (from the owned previews),
+/// one `{name=value, ...}` per line: what a filter on a directory entry name,
+/// a polled descriptor or a BPF instruction reads.
+pub(crate) fn records_text(invocation: &InvocationSummary) -> String {
+    let call = representative(invocation)
+        .and_then(|event| field_call(event.syscall_nr, call_args(invocation)));
+    let mut lines = Vec::new();
+    for field in invocation
+        .entry
+        .iter()
+        .chain(invocation.exit.iter())
+        .flat_map(|event| &event.fields)
+    {
+        let layout = typed_fields::layout_type(&field.layout);
+        if !typed_fields::is_array(layout) {
+            continue;
+        }
+        let data = covered_preview(field);
+        if let Some(records) = typed_fields::Records::open(call.as_ref(), layout, &field.key, data)
+        {
+            for (_, record) in records.page(data, 0, typed_fields::MAX_RECORDS.min(1024)) {
+                lines.push(record.line());
+            }
+        }
+    }
+    lines.join("\n")
+}
+
 pub(crate) fn numeric_formats(value: u64, width: usize) -> Vec<(&'static str, String)> {
     let bits = width.clamp(1, 8) * 8;
     let value = if bits == 64 {

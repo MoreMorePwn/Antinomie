@@ -76,6 +76,11 @@ const KEYWORDS: &[(&str, &str, &str)] = &[
     ("syscall.ret", "integer", "Same as ret"),
     ("info", "text", "Rendered trace text"),
     (
+        "records",
+        "text",
+        "Decoded records of array arguments (directory entries, pollfds, control messages, BPF instructions), one {field=value, ...} per record",
+    ),
+    (
         "tag",
         "text list",
         "Annotation tag. Missing on a syscall row. On a run or result, one stored tag.",
@@ -125,12 +130,13 @@ impl Compiled {
                     return false;
                 };
                 let haystack = format!(
-                    "{} {} {} {} {}",
+                    "{} {} {} {} {} {}",
                     event.syscall_name,
                     event.tid,
                     event.task_cookie,
                     event.pid,
-                    trace::info(invocation)
+                    trace::info(invocation),
+                    trace::records_text(invocation)
                 );
                 haystack.to_lowercase().contains(&filter.to_lowercase())
             }

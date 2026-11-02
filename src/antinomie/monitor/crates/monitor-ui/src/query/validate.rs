@@ -161,6 +161,7 @@ fn known_field(name: &str) -> bool {
             | "result"
             | "syscall.ret"
             | "info"
+            | "records"
             | "tag"
             | "tags"
             | "call.id"
