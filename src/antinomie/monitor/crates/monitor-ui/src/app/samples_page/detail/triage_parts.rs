@@ -153,10 +153,14 @@ pub(super) fn rules_matched(
         );
         parts::on_surface(ui, |ui| {
             parts::mini_table(ui, "sample_summary_rules")
-                .column(egui_extras::Column::remainder().at_least(120.0).clip(true))
-                .column(egui_extras::Column::exact(kind_width))
-                .column(egui_extras::Column::exact(runs_width))
-                .column(egui_extras::Column::exact(latest_width).clip(true))
+                .column(
+                    crate::widgets::fit_table::Col::rest(80.0)
+                        .at_least(120.0)
+                        .clip(true),
+                )
+                .column(crate::widgets::fit_table::Col::fixed(kind_width))
+                .column(crate::widgets::fit_table::Col::fixed(runs_width))
+                .column(crate::widgets::fit_table::Col::fixed(latest_width).clip(true))
                 .header(table::header_height(font), |mut header| {
                     for title in ["Rule", "Kind", "Runs", "Latest hit"] {
                         header.col(|ui| table::head(ui, title));

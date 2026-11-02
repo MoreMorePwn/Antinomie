@@ -261,217 +261,203 @@ impl MonitorApp {
         };
         let mut first_visible = None;
         let mut last_visible = 0;
-        egui::ScrollArea::horizontal()
-            .id_salt("syscalls_horizontal")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.set_min_width((font / 16.0 * 760.0).max(ui.available_width()));
-                crate::widgets::table::begin(ui);
-                TableBuilder::new(ui)
-                    .id_salt((
-                        "syscall_table",
-                        width_class,
-                        self.trace_paging.page,
-                        self.settings.trace_page_size,
-                        self.trace_archive_directory(),
-                        &self.applied_filter,
-                        &self.archive_hidden_categories,
-                        self.selected_process,
-                    ))
-                    .striped(true)
-                    .resizable(true)
-                    .sense(egui::Sense::click())
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .max_scroll_height(table_height)
-                    .min_scrolled_height(0.0)
-                    .auto_shrink([false, false])
-                    .column(Column::initial(widths[0]).at_least(48.0).clip(true))
-                    .column(Column::initial(widths[1]).at_least(40.0).clip(true))
-                    .column(Column::initial(widths[2]).at_least(32.0).clip(true))
-                    .column(Column::initial(widths[3]).at_least(30.0).clip(true))
-                    .column(Column::initial(widths[4]).at_least(70.0).clip(true))
-                    .column(Column::initial(widths[5]).at_least(50.0).clip(true))
-                    .column(Column::remainder().at_least(130.0).clip(true))
-                    .header(header_height, |mut header| {
-                        for column in TraceColumn::ALL {
-                            header.col(|ui| {
-                                crate::widgets::table::head_bg(ui);
-                                let sorted =
-                                    self.trace_sort.filter(|(sorted, _)| *sorted == column);
-                                let mut job = egui::text::LayoutJob::default();
+        ui.scope(|ui| {
+            crate::widgets::table::begin(ui);
+            FitBuilder::new(ui)
+                .id_salt((
+                    "syscall_table",
+                    width_class,
+                    self.trace_paging.page,
+                    self.settings.trace_page_size,
+                    self.trace_archive_directory(),
+                    &self.applied_filter,
+                    &self.archive_hidden_categories,
+                    self.selected_process,
+                ))
+                .striped(true)
+                .resizable(true)
+                .sense(egui::Sense::click())
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .max_scroll_height(table_height)
+                .min_scrolled_height(0.0)
+                .auto_shrink([false, false])
+                .column(Col::flex(widths[0]).at_least(48.0).clip(true))
+                .column(Col::flex(widths[1]).at_least(40.0).clip(true))
+                .column(Col::flex(widths[2]).at_least(32.0).clip(true))
+                .column(Col::flex(widths[3]).at_least(30.0).clip(true))
+                .column(Col::flex(widths[4]).at_least(70.0).clip(true))
+                .column(Col::flex(widths[5]).at_least(50.0).clip(true))
+                .column(Col::rest(80.0).at_least(130.0).clip(true))
+                .header(header_height, |mut header| {
+                    for column in TraceColumn::ALL {
+                        header.col(|ui| {
+                            crate::widgets::table::head_bg(ui);
+                            let sorted = self.trace_sort.filter(|(sorted, _)| *sorted == column);
+                            let mut job = egui::text::LayoutJob::default();
+                            job.append(
+                                column.title(),
+                                0.0,
+                                egui::TextFormat::simple(body_font.clone(), palette.muted),
+                            );
+                            if let Some((_, descending)) = sorted {
                                 job.append(
-                                    column.title(),
-                                    0.0,
-                                    egui::TextFormat::simple(body_font.clone(), palette.muted),
-                                );
-                                if let Some((_, descending)) = sorted {
-                                    job.append(
-                                        if descending {
-                                            egui_phosphor::regular::CARET_DOWN
-                                        } else {
-                                            egui_phosphor::regular::CARET_UP
-                                        },
-                                        font * 0.3,
-                                        egui::TextFormat::simple(body_font.clone(), palette.accent),
-                                    );
-                                }
-                                let response = ui
-                                    .add(
-                                        egui::Label::new(job)
-                                            .truncate()
-                                            .selectable(false)
-                                            .sense(egui::Sense::click()),
-                                    )
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    .on_hover_text(format!(
-                                        "{}\nClick to sort by {}",
-                                        column.description(),
-                                        column.title()
-                                    ));
-                                if response.clicked() {
-                                    // A new column sorts ascending; the same column flips.
-                                    self.trace_sort = Some((
-                                        column,
-                                        sorted.is_some_and(|(_, descending)| !descending),
-                                    ));
-                                }
-                            });
-                        }
-                    })
-                    .body(|body| {
-                        body.rows(height, row_count, |mut row| {
-                            let index = row.index();
-                            let rank = logical_start.saturating_add(index as u64);
-                            if virtualized {
-                                first_visible.get_or_insert(rank);
-                                last_visible = rank;
-                            }
-                            let loaded_index = if virtualized {
-                                rank.checked_sub(self.trace_paging.window_start)
-                                    .and_then(|index| usize::try_from(index).ok())
-                            } else {
-                                Some(index)
-                            };
-                            let invocation = loaded_index.and_then(|index| invocations.get(index));
-                            let Some(invocation) = invocation else {
-                                for column in 0..7 {
-                                    row.col(|ui| {
-                                        if column == 4 {
-                                            ui.weak("Loading…");
-                                        }
-                                    });
-                                }
-                                return;
-                            };
-                            let event =
-                                trace::representative(invocation).expect("filtered observation");
-                            let key = trace::key(invocation);
-                            let selected = self.selected_event == Some(key);
-                            let group = SyscallGroup::of(&event.syscall_name);
-                            let fill = if selected {
-                                Some(palette.selection)
-                            } else {
-                                group.filter(|_| trace_colors).and_then(theme::syscall_tint)
-                            };
-                            let hovered = hovered_row == Some(index) && !selected;
-                            let result = invocation.exit.as_ref().and_then(|event| event.result);
-                            let failed = result.is_some_and(values::is_error);
-                            let cells = trace::cells(invocation);
-                            for (column, (parts, hover)) in cells.into_iter().enumerate() {
-                                row.col(|ui| {
-                                    // Paint the cell and half of each gap so a tinted
-                                    // row reads as one band, as in Wireshark.
-                                    let cell = ui.max_rect().expand2(egui::vec2(
-                                        ui.spacing().item_spacing.x / 2.0,
-                                        ui.spacing().item_spacing.y / 2.0,
-                                    ));
-                                    if let Some(fill) = fill {
-                                        ui.painter().rect_filled(cell, 0.0, fill);
-                                    }
-                                    if hovered {
-                                        ui.painter().rect_filled(
-                                            cell,
-                                            0.0,
-                                            if theme::is_light() {
-                                                egui::Color32::from_black_alpha(14)
-                                            } else {
-                                                egui::Color32::from_rgba_unmultiplied(
-                                                    255, 255, 255, 14,
-                                                )
-                                            },
-                                        );
-                                    }
-                                    if selected {
-                                        let stroke = egui::Stroke::new(1.0_f32, palette.accent);
-                                        ui.painter().hline(
-                                            cell.x_range(),
-                                            cell.top() + 0.5,
-                                            stroke,
-                                        );
-                                        ui.painter().hline(
-                                            cell.x_range(),
-                                            cell.bottom() - 0.5,
-                                            stroke,
-                                        );
-                                    }
-                                    if column == 0 && (failed || selected) {
-                                        let mut bar = ui.max_rect().expand2(egui::vec2(
-                                            0.0,
-                                            ui.spacing().item_spacing.y / 2.0,
-                                        ));
-                                        bar.set_width(3.0);
-                                        ui.painter().rect_filled(
-                                            bar,
-                                            0.0,
-                                            if failed {
-                                                palette.error
-                                            } else {
-                                                palette.accent
-                                            },
-                                        );
-                                    }
-                                    let font = if matches!(column, 4 | 6) {
-                                        body_font.clone()
+                                    if descending {
+                                        egui_phosphor::regular::CARET_DOWN
                                     } else {
-                                        mono.clone()
-                                    };
-                                    let mut job = egui::text::LayoutJob::default();
-                                    for (text, tone) in parts {
-                                        job.append(
-                                            &text,
-                                            0.0,
-                                            egui::TextFormat::simple(font.clone(), tone.color()),
-                                        );
-                                    }
-                                    if column == 0 {
-                                        // Clear of the failure and selection bar.
-                                        ui.add_space(3.0);
-                                    }
-                                    ui.add(
-                                        egui::Label::new(job)
-                                            .truncate()
-                                            .selectable(false)
-                                            .sense(egui::Sense::hover()),
-                                    )
-                                    .on_hover_text(hover);
-                                });
+                                        egui_phosphor::regular::CARET_UP
+                                    },
+                                    font * 0.3,
+                                    egui::TextFormat::simple(body_font.clone(), palette.accent),
+                                );
                             }
-                            let response = row.response();
-                            response.context_menu(|ui| {
-                                trace_row_menu(ui, invocation, event, note_run.as_ref());
-                            });
-                            if response.hovered() {
-                                response
-                                    .ctx
-                                    .data_mut(|data| data.insert_temp(hover_id, index));
-                            }
+                            let response = ui
+                                .add(
+                                    egui::Label::new(job)
+                                        .truncate()
+                                        .selectable(false)
+                                        .sense(egui::Sense::click()),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .on_hover_text(format!(
+                                    "{}\nClick to sort by {}",
+                                    column.description(),
+                                    column.title()
+                                ));
                             if response.clicked() {
-                                self.selected_event = Some(key);
-                                self.inspector.clear();
+                                // A new column sorts ascending; the same column flips.
+                                self.trace_sort = Some((
+                                    column,
+                                    sorted.is_some_and(|(_, descending)| !descending),
+                                ));
                             }
                         });
+                    }
+                })
+                .body(|body| {
+                    body.rows(height, row_count, |mut row| {
+                        let index = row.index();
+                        let rank = logical_start.saturating_add(index as u64);
+                        if virtualized {
+                            first_visible.get_or_insert(rank);
+                            last_visible = rank;
+                        }
+                        let loaded_index = if virtualized {
+                            rank.checked_sub(self.trace_paging.window_start)
+                                .and_then(|index| usize::try_from(index).ok())
+                        } else {
+                            Some(index)
+                        };
+                        let invocation = loaded_index.and_then(|index| invocations.get(index));
+                        let Some(invocation) = invocation else {
+                            for column in 0..7 {
+                                row.col(|ui| {
+                                    if column == 4 {
+                                        ui.weak("Loading…");
+                                    }
+                                });
+                            }
+                            return;
+                        };
+                        let event =
+                            trace::representative(invocation).expect("filtered observation");
+                        let key = trace::key(invocation);
+                        let selected = self.selected_event == Some(key);
+                        let group = SyscallGroup::of(&event.syscall_name);
+                        let fill = if selected {
+                            Some(palette.selection)
+                        } else {
+                            group.filter(|_| trace_colors).and_then(theme::syscall_tint)
+                        };
+                        let hovered = hovered_row == Some(index) && !selected;
+                        let result = invocation.exit.as_ref().and_then(|event| event.result);
+                        let failed = result.is_some_and(values::is_error);
+                        let cells = trace::cells(invocation);
+                        for (column, (parts, hover)) in cells.into_iter().enumerate() {
+                            row.col(|ui| {
+                                // Paint the cell and half of each gap so a tinted
+                                // row reads as one band, as in Wireshark.
+                                let cell = ui.max_rect().expand2(egui::vec2(
+                                    ui.spacing().item_spacing.x / 2.0,
+                                    ui.spacing().item_spacing.y / 2.0,
+                                ));
+                                if let Some(fill) = fill {
+                                    ui.painter().rect_filled(cell, 0.0, fill);
+                                }
+                                if hovered {
+                                    ui.painter().rect_filled(
+                                        cell,
+                                        0.0,
+                                        if theme::is_light() {
+                                            egui::Color32::from_black_alpha(14)
+                                        } else {
+                                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 14)
+                                        },
+                                    );
+                                }
+                                if selected {
+                                    let stroke = egui::Stroke::new(1.0_f32, palette.accent);
+                                    ui.painter().hline(cell.x_range(), cell.top() + 0.5, stroke);
+                                    ui.painter()
+                                        .hline(cell.x_range(), cell.bottom() - 0.5, stroke);
+                                }
+                                if column == 0 && (failed || selected) {
+                                    let mut bar = ui.max_rect().expand2(egui::vec2(
+                                        0.0,
+                                        ui.spacing().item_spacing.y / 2.0,
+                                    ));
+                                    bar.set_width(3.0);
+                                    ui.painter().rect_filled(
+                                        bar,
+                                        0.0,
+                                        if failed {
+                                            palette.error
+                                        } else {
+                                            palette.accent
+                                        },
+                                    );
+                                }
+                                let font = if matches!(column, 4 | 6) {
+                                    body_font.clone()
+                                } else {
+                                    mono.clone()
+                                };
+                                let mut job = egui::text::LayoutJob::default();
+                                for (text, tone) in parts {
+                                    job.append(
+                                        &text,
+                                        0.0,
+                                        egui::TextFormat::simple(font.clone(), tone.color()),
+                                    );
+                                }
+                                if column == 0 {
+                                    // Clear of the failure and selection bar.
+                                    ui.add_space(3.0);
+                                }
+                                ui.add(
+                                    egui::Label::new(job)
+                                        .truncate()
+                                        .selectable(false)
+                                        .sense(egui::Sense::hover()),
+                                )
+                                .on_hover_text(hover);
+                            });
+                        }
+                        let response = row.response();
+                        response.context_menu(|ui| {
+                            trace_row_menu(ui, invocation, event, note_run.as_ref());
+                        });
+                        if response.hovered() {
+                            response
+                                .ctx
+                                .data_mut(|data| data.insert_temp(hover_id, index));
+                        }
+                        if response.clicked() {
+                            self.selected_event = Some(key);
+                            self.inspector.clear();
+                        }
                     });
-            });
+                });
+        });
         if let Some(start) = first_visible {
             let loaded_end = self
                 .trace_paging

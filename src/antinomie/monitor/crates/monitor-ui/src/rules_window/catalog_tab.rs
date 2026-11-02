@@ -5,10 +5,10 @@ use super::{
     page::{CELL_PAD, ROW_PAD},
     theme, Model,
 };
+use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::widgets::{self, table, Tone};
 use antinomie_monitor_core::ruleset;
 use eframe::egui::{self, RichText};
-use egui_extras::{Column, TableBuilder};
 use std::path::Path;
 
 impl Model {
@@ -45,106 +45,88 @@ impl Model {
         let mut picked = None;
         let row_height = table::row_height(font) + ROW_PAD;
         let height = row_height * (offers.len().min(6) as f32 + 1.5) + 8.0;
-        egui::ScrollArea::horizontal()
-            .id_salt("rules_catalog_scroll")
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.x += CELL_PAD;
-                ui.set_min_width(640.0);
-                table::begin(ui);
-                TableBuilder::new(ui)
-                    .id_salt("rules_catalog")
-                    .sense(egui::Sense::click())
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .striped(true)
-                    .column(Column::remainder().at_least(180.0).clip(true))
-                    .column(
-                        Column::initial(130.0)
-                            .at_least(60.0)
-                            .resizable(true)
-                            .clip(true),
-                    )
-                    .column(Column::exact(90.0))
-                    .column(Column::exact(150.0))
-                    .column(
-                        Column::initial(150.0)
-                            .at_least(60.0)
-                            .resizable(true)
-                            .clip(true),
-                    )
-                    .column(Column::exact(130.0))
-                    .max_scroll_height(height)
-                    .min_scrolled_height(0.0)
-                    .header(table::header_height(font), |mut header| {
-                        for (column, title) in
-                            ["Pack", "Version", "Rules", "Size", "License", "State"]
-                                .into_iter()
-                                .enumerate()
-                        {
-                            header.col(|ui| {
-                                crate::table_sort::header_aligned(
-                                    ui,
-                                    "rules_catalog",
-                                    column,
-                                    title,
-                                    table::numeric_align(matches!(column, 2 | 3)),
-                                )
-                            });
-                        }
-                    })
-                    .body(|body| {
-                        body.rows(row_height, offers.len(), |mut row| {
-                            let offer = &offers[order[row.index()]];
-                            let selected = self.catalog_pick == offer.id;
-                            row.set_selected(selected);
-                            row.col(|ui| {
-                                table::row_mark(
-                                    ui,
-                                    if selected {
-                                        table::Mark::Selected
-                                    } else {
-                                        table::Mark::None
-                                    },
-                                );
-                                table::cell_click(ui, table::Cell::Text, &offer.name);
-                            });
-                            row.col(|ui| {
-                                table::cell_click(ui, table::Cell::Mono, &offer.version);
-                            });
-                            row.col(|ui| {
-                                table::cell_click(
-                                    ui,
-                                    table::Cell::Number,
-                                    &offer.rules.to_string(),
-                                );
-                            });
-                            row.col(|ui| {
-                                table::cell_click(
-                                    ui,
-                                    table::Cell::Number,
-                                    &crate::values::short_size(offer.size),
-                                );
-                            });
-                            row.col(|ui| {
-                                table::cell_click(ui, table::Cell::Text, &offer.license);
-                            });
-                            row.col(|ui| {
-                                let state = self.catalog_state(&catalog, offer);
-                                widgets::chip(
-                                    ui,
-                                    state,
-                                    match state {
-                                        "Installed" => Tone::Good,
-                                        "Update available" => Tone::Accent,
-                                        _ => Tone::Neutral,
-                                    },
-                                );
-                            });
-                            if row.response().clicked() {
-                                picked = Some(offer.id.clone());
-                            }
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.x += CELL_PAD;
+            table::begin(ui);
+            FitBuilder::new(ui)
+                .id_salt("rules_catalog")
+                .sense(egui::Sense::click())
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .striped(true)
+                .column(Col::rest(80.0).at_least(180.0).clip(true))
+                .column(Col::flex(130.0).at_least(60.0).resizable(true).clip(true))
+                .column(Col::fixed(90.0))
+                .column(Col::fixed(150.0))
+                .column(Col::flex(150.0).at_least(60.0).resizable(true).clip(true))
+                .column(Col::fixed(130.0))
+                .max_scroll_height(height)
+                .min_scrolled_height(0.0)
+                .header(table::header_height(font), |mut header| {
+                    for (column, title) in ["Pack", "Version", "Rules", "Size", "License", "State"]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        header.col(|ui| {
+                            crate::table_sort::header_aligned(
+                                ui,
+                                "rules_catalog",
+                                column,
+                                title,
+                                table::numeric_align(matches!(column, 2 | 3)),
+                            )
                         });
+                    }
+                })
+                .body(|body| {
+                    body.rows(row_height, offers.len(), |mut row| {
+                        let offer = &offers[order[row.index()]];
+                        let selected = self.catalog_pick == offer.id;
+                        row.set_selected(selected);
+                        row.col(|ui| {
+                            table::row_mark(
+                                ui,
+                                if selected {
+                                    table::Mark::Selected
+                                } else {
+                                    table::Mark::None
+                                },
+                            );
+                            table::cell_click(ui, table::Cell::Text, &offer.name);
+                        });
+                        row.col(|ui| {
+                            table::cell_click(ui, table::Cell::Mono, &offer.version);
+                        });
+                        row.col(|ui| {
+                            table::cell_click(ui, table::Cell::Number, &offer.rules.to_string());
+                        });
+                        row.col(|ui| {
+                            table::cell_click(
+                                ui,
+                                table::Cell::Number,
+                                &crate::values::short_size(offer.size),
+                            );
+                        });
+                        row.col(|ui| {
+                            table::cell_click(ui, table::Cell::Text, &offer.license);
+                        });
+                        row.col(|ui| {
+                            let state = self.catalog_state(&catalog, offer);
+                            widgets::chip(
+                                ui,
+                                state,
+                                match state {
+                                    "Installed" => Tone::Good,
+                                    "Update available" => Tone::Accent,
+                                    _ => Tone::Neutral,
+                                },
+                            );
+                        });
+                        if row.response().clicked() {
+                            picked = Some(offer.id.clone());
+                        }
                     });
-            });
+                });
+        });
         if let Some(id) = picked {
             self.catalog_pick = id;
         }

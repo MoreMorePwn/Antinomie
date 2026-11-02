@@ -2,12 +2,12 @@
 //! One IOC tab: the filter, the verdict chips, the rows and the details of
 //! the selected one.
 use super::*;
+use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::{
     query::{self, FieldSpec, RowValue},
     widgets::table,
 };
 use antinomie_monitor_core::ioc::indicator::Jump as Evidence;
-use egui_extras::{Column, TableBuilder};
 
 /// Where a jump to evidence goes.
 pub(in crate::triage) enum Jump {
@@ -344,193 +344,183 @@ impl View {
         let row_height = table::row_height(font) + 6.0;
         let mut picked = None;
         let height = ui.available_height().max(180.0);
-        egui::ScrollArea::horizontal()
-            .id_salt(("ioc-table", ty.id()))
-            .show(ui, |ui| {
-                ui.set_min_width(760.0);
-                table::begin(ui);
-                TableBuilder::new(ui)
-                    .id_salt(("ioc-rows", ty.id()))
-                    .sense(egui::Sense::click())
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .striped(true)
-                    .column(Column::initial(280.0).at_least(160.0).clip(true))
-                    .column(Column::exact(120.0))
-                    .column(Column::exact(130.0))
-                    .column(Column::exact(96.0))
-                    .column(Column::exact(96.0))
-                    .column(Column::remainder().at_least(140.0).clip(true))
-                    .column(Column::exact(70.0))
-                    .max_scroll_height(height)
-                    .min_scrolled_height(0.0)
-                    .header(table::header_height(font), |mut header| {
-                        let first = match ty {
-                            Type::Endpoint => "Endpoint",
-                            Type::Domain => "Domain",
-                            Type::Url => "URL",
-                            Type::Tls => "Server name",
-                            Type::File => "SHA-256",
-                        };
-                        for title in [
-                            first, "Sources", "Process", "First", "Last", "Match", "Evidence",
-                        ] {
-                            header.col(|ui| table::head(ui, title));
-                        }
-                    })
-                    .body(|body| {
-                        body.rows(row_height, rows.len(), |mut row| {
-                            let at = rows[row.index()];
-                            let (indicator, verdict) = (&ioc.indicators[at], &self.verdicts[at]);
-                            row.set_selected(selected == Some(at));
-                            row.col(|ui| {
-                                let value = if ty == Type::File && indicator.hashes.is_some() {
-                                    let hash = &indicator.value;
-                                    format!(
-                                        "{}…{}",
-                                        &hash[..16.min(hash.len())],
-                                        &hash[hash.len().saturating_sub(8)..]
-                                    )
-                                } else {
-                                    indicator.value.clone()
-                                };
-                                let sub = if ty == Type::File {
-                                    let mut sub = format!(
-                                        "{} · {}",
-                                        indicator.path,
-                                        indicator.roles.join(", ")
-                                    );
-                                    // Where its hash came from, or why it has none.
-                                    if let Some(note) = &indicator.hash_note {
-                                        sub.push_str(&format!(" · {note}"));
-                                    }
-                                    sub
-                                } else {
-                                    indicator.sub.clone()
-                                };
-                                let mut job = egui::text::LayoutJob::default();
-                                job.append(
-                                    &value,
-                                    0.0,
-                                    egui::TextFormat::simple(
-                                        egui::TextStyle::Monospace.resolve(ui.style()),
-                                        theme::text(),
-                                    ),
-                                );
-                                job.append(
-                                    &format!("   {sub}"),
-                                    0.0,
-                                    egui::TextFormat::simple(
-                                        egui::TextStyle::Small.resolve(ui.style()),
-                                        theme::muted(),
-                                    ),
-                                );
-                                ui.add(egui::Label::new(job).selectable(false).truncate());
-                            });
-                            row.col(|ui| {
-                                ui.horizontal_wrapped(|ui| {
-                                    for source in &indicator.sources {
-                                        widgets::chip(ui, source.label(), source_tone(*source));
-                                    }
-                                });
-                            });
-                            row.col(|ui| {
-                                let (text, muted) =
-                                    match (&indicator.process, indicator.candidates.len()) {
-                                        (Some(process), _) => (process.label(), false),
-                                        (None, n) if n > 0 => (format!("{n} candidates"), true),
-                                        _ if indicator.sources.contains(&Source::Pcap)
-                                            && !indicator.sources.contains(&Source::Syscall) =>
-                                        {
-                                            ("unattributed".to_owned(), true)
-                                        }
-                                        _ => ("—".to_owned(), true),
-                                    };
-                                table::cell_rich(
-                                    ui,
-                                    table::Cell::Text,
-                                    RichText::new(text).color(if muted {
-                                        theme::muted()
-                                    } else {
-                                        theme::text()
-                                    }),
-                                );
-                            });
-                            row.col(|ui| {
-                                table::cell_click(
-                                    ui,
-                                    table::Cell::Mono,
-                                    &time_text(indicator.first_us),
-                                );
-                            });
-                            row.col(|ui| {
-                                table::cell_click(
-                                    ui,
-                                    table::Cell::Mono,
-                                    &time_text(indicator.last_us),
-                                );
-                            });
-                            row.col(|ui| {
-                                ui.horizontal(|ui| {
-                                    verdict_chip(ui, verdict);
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(verdict_line(verdict))
-                                                .small()
-                                                .color(theme::muted()),
-                                        )
-                                        .selectable(false)
-                                        .truncate(),
-                                    );
-                                });
-                            });
-                            row.col(|ui| {
-                                if let Some(evidence) = indicator.evidence.first() {
-                                    if ui
-                                        .small_button("Jump ▸")
-                                        .on_hover_text(&evidence.label)
-                                        .clicked()
-                                    {
-                                        *jump = jump_of(&evidence.jump);
-                                    }
+        ui.scope(|ui| {
+            table::begin(ui);
+            FitBuilder::new(ui)
+                .id_salt(("ioc-rows", ty.id()))
+                .sense(egui::Sense::click())
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .striped(true)
+                .column(Col::flex(280.0).at_least(160.0).clip(true))
+                .column(Col::fixed(120.0))
+                .column(Col::fixed(130.0))
+                .column(Col::fixed(96.0))
+                .column(Col::fixed(96.0))
+                .column(Col::rest(80.0).at_least(140.0).clip(true))
+                .column(Col::fixed(70.0))
+                .max_scroll_height(height)
+                .min_scrolled_height(0.0)
+                .header(table::header_height(font), |mut header| {
+                    let first = match ty {
+                        Type::Endpoint => "Endpoint",
+                        Type::Domain => "Domain",
+                        Type::Url => "URL",
+                        Type::Tls => "Server name",
+                        Type::File => "SHA-256",
+                    };
+                    for title in [
+                        first, "Sources", "Process", "First", "Last", "Match", "Evidence",
+                    ] {
+                        header.col(|ui| table::head(ui, title));
+                    }
+                })
+                .body(|body| {
+                    body.rows(row_height, rows.len(), |mut row| {
+                        let at = rows[row.index()];
+                        let (indicator, verdict) = (&ioc.indicators[at], &self.verdicts[at]);
+                        row.set_selected(selected == Some(at));
+                        row.col(|ui| {
+                            let value = if ty == Type::File && indicator.hashes.is_some() {
+                                let hash = &indicator.value;
+                                format!(
+                                    "{}…{}",
+                                    &hash[..16.min(hash.len())],
+                                    &hash[hash.len().saturating_sub(8)..]
+                                )
+                            } else {
+                                indicator.value.clone()
+                            };
+                            let sub = if ty == Type::File {
+                                let mut sub =
+                                    format!("{} · {}", indicator.path, indicator.roles.join(", "));
+                                // Where its hash came from, or why it has none.
+                                if let Some(note) = &indicator.hash_note {
+                                    sub.push_str(&format!(" · {note}"));
+                                }
+                                sub
+                            } else {
+                                indicator.sub.clone()
+                            };
+                            let mut job = egui::text::LayoutJob::default();
+                            job.append(
+                                &value,
+                                0.0,
+                                egui::TextFormat::simple(
+                                    egui::TextStyle::Monospace.resolve(ui.style()),
+                                    theme::text(),
+                                ),
+                            );
+                            job.append(
+                                &format!("   {sub}"),
+                                0.0,
+                                egui::TextFormat::simple(
+                                    egui::TextStyle::Small.resolve(ui.style()),
+                                    theme::muted(),
+                                ),
+                            );
+                            ui.add(egui::Label::new(job).selectable(false).truncate());
+                        });
+                        row.col(|ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                for source in &indicator.sources {
+                                    widgets::chip(ui, source.label(), source_tone(*source));
                                 }
                             });
-                            let values = [
-                                (
-                                    "indicator.type",
-                                    crate::query::RowValue::Text(ty.id().to_owned()),
-                                ),
-                                (
-                                    "indicator.value",
-                                    crate::query::RowValue::Text(indicator.value.clone()),
-                                ),
-                                (
-                                    "indicator.path",
-                                    crate::query::RowValue::Text(indicator.path.clone()),
-                                ),
-                            ];
-                            let extras = crate::query::NoteRun::get(&row.response().ctx)
-                                .map(|run| {
-                                    run.extras(Some(antinomie_monitor_core::samples::NoteRef::new(
-                                        antinomie_monitor_core::samples::RefKind::Indicator,
-                                        format!("{}:{}", ty.id(), indicator.value),
-                                        format!("{} ({})", indicator.value, ty.id()),
-                                    )))
-                                })
-                                .unwrap_or_default();
-                            row.response().context_menu(|ui| {
-                                crate::query::row_menu_plain(
-                                    ui,
-                                    egui::Id::new(("ioc-row-menu", ty.id())),
-                                    &values,
-                                    extras,
+                        });
+                        row.col(|ui| {
+                            let (text, muted) =
+                                match (&indicator.process, indicator.candidates.len()) {
+                                    (Some(process), _) => (process.label(), false),
+                                    (None, n) if n > 0 => (format!("{n} candidates"), true),
+                                    _ if indicator.sources.contains(&Source::Pcap)
+                                        && !indicator.sources.contains(&Source::Syscall) =>
+                                    {
+                                        ("unattributed".to_owned(), true)
+                                    }
+                                    _ => ("—".to_owned(), true),
+                                };
+                            table::cell_rich(
+                                ui,
+                                table::Cell::Text,
+                                RichText::new(text).color(if muted {
+                                    theme::muted()
+                                } else {
+                                    theme::text()
+                                }),
+                            );
+                        });
+                        row.col(|ui| {
+                            table::cell_click(
+                                ui,
+                                table::Cell::Mono,
+                                &time_text(indicator.first_us),
+                            );
+                        });
+                        row.col(|ui| {
+                            table::cell_click(ui, table::Cell::Mono, &time_text(indicator.last_us));
+                        });
+                        row.col(|ui| {
+                            ui.horizontal(|ui| {
+                                verdict_chip(ui, verdict);
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(verdict_line(verdict))
+                                            .small()
+                                            .color(theme::muted()),
+                                    )
+                                    .selectable(false)
+                                    .truncate(),
                                 );
                             });
-                            if row.response().clicked() {
-                                picked = Some(at);
+                        });
+                        row.col(|ui| {
+                            if let Some(evidence) = indicator.evidence.first() {
+                                if ui
+                                    .small_button("Jump ▸")
+                                    .on_hover_text(&evidence.label)
+                                    .clicked()
+                                {
+                                    *jump = jump_of(&evidence.jump);
+                                }
                             }
                         });
+                        let values = [
+                            (
+                                "indicator.type",
+                                crate::query::RowValue::Text(ty.id().to_owned()),
+                            ),
+                            (
+                                "indicator.value",
+                                crate::query::RowValue::Text(indicator.value.clone()),
+                            ),
+                            (
+                                "indicator.path",
+                                crate::query::RowValue::Text(indicator.path.clone()),
+                            ),
+                        ];
+                        let extras = crate::query::NoteRun::get(&row.response().ctx)
+                            .map(|run| {
+                                run.extras(Some(antinomie_monitor_core::samples::NoteRef::new(
+                                    antinomie_monitor_core::samples::RefKind::Indicator,
+                                    format!("{}:{}", ty.id(), indicator.value),
+                                    format!("{} ({})", indicator.value, ty.id()),
+                                )))
+                            })
+                            .unwrap_or_default();
+                        row.response().context_menu(|ui| {
+                            crate::query::row_menu_plain(
+                                ui,
+                                egui::Id::new(("ioc-row-menu", ty.id())),
+                                &values,
+                                extras,
+                            );
+                        });
+                        if row.response().clicked() {
+                            picked = Some(at);
+                        }
                     });
-            });
+                });
+        });
         picked
     }
 

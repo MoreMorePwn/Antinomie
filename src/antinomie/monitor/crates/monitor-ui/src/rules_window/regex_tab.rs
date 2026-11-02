@@ -4,13 +4,13 @@
 //! can be switched off; patterns of your own can be added and removed. The
 //! choices are kept in the rules folder and read by the next scan.
 use super::{theme, Model};
+use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::widgets::table::{self, Cell};
 use antinomie_monitor_core::strings_regex::{
     builtin_patterns, Category, Config, CustomPattern, Origin, RuleSet, Scan, CUSTOM_MAX_COUNT,
     PATTERN_MAX_LEN,
 };
 use eframe::egui::{self, RichText};
-use egui_extras::{Column, TableBuilder};
 use std::path::Path;
 
 pub(super) struct RegexState {
@@ -252,15 +252,15 @@ impl Model {
         let mut toggle = None;
         table::begin(ui);
         let height = ui.available_height().max(160.0);
-        TableBuilder::new(ui)
+        FitBuilder::new(ui)
             .id_salt("regex_builtin")
             .max_scroll_height(height)
             .striped(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::exact(28.0))
-            .column(Column::initial(120.0).at_least(60.0).clip(true))
-            .column(Column::initial(170.0).at_least(80.0).clip(true))
-            .column(Column::remainder().at_least(120.0).clip(true))
+            .column(Col::fixed(28.0))
+            .column(Col::flex(120.0).at_least(60.0).clip(true))
+            .column(Col::flex(170.0).at_least(80.0).clip(true))
+            .column(Col::rest(80.0).at_least(120.0).clip(true))
             .header(table::header_height(font), |mut header| {
                 for title in ["On", "Category", "Type", "Pattern"] {
                     header.col(|ui| table::head(ui, title));

@@ -701,13 +701,30 @@ impl MonitorApp {
             back = true;
         }
         ui.add_space(2.0);
+        // The buttons beside the title (about 70 font heights), the verdict
+        // tags and the gaps are kept; a long name is cut to what is left,
+        // and the whole name is on hover and in Identity.
+        let wide = ui.available_width() >= self.settings.font_size * 80.0;
+        let room = if wide {
+            ui.available_width() - self.settings.font_size * 62.0
+        } else {
+            ui.available_width() - self.settings.font_size * 8.0
+        }
+        .max(120.0);
         let title = |ui: &mut egui::Ui| {
-            ui.label(
-                RichText::new(&data.record.name)
-                    .strong()
-                    .size(ui.text_style_height(&egui::TextStyle::Heading))
-                    .color(theme::identity()),
-            );
+            ui.scope(|ui| {
+                ui.set_max_width(room);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&data.record.name)
+                            .strong()
+                            .size(ui.text_style_height(&egui::TextStyle::Heading))
+                            .color(theme::identity()),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(&data.record.name);
+            });
             for tag in data
                 .tags
                 .iter()
@@ -757,7 +774,7 @@ impl MonitorApp {
         };
         // Four buttons beside the title need about 65 font heights; a
         // narrower window gives the buttons their own row.
-        if ui.available_width() < self.settings.font_size * 80.0 {
+        if !wide {
             ui.horizontal_wrapped(title);
             ui.horizontal_wrapped(buttons);
         } else {

@@ -8,7 +8,7 @@ use crate::{
 };
 use antinomie_monitor_core::debug::view::{FollowMode, ForkChoice, ForkPolicy, InferiorState};
 
-use egui_extras::{Column, TableBuilder};
+use crate::widgets::fit_table::{Col, FitBuilder};
 
 const FOLLOW_MODES: [FollowMode; 4] = [
     FollowMode::Off,
@@ -95,14 +95,14 @@ pub(super) fn pane(ui: &mut egui::Ui, view: &DebugView, actions: &mut Vec<PanelA
     });
     let row_height = table::row_height(egui::TextStyle::Body.resolve(ui.style()).size);
     table::begin(ui);
-    TableBuilder::new(ui)
+    FitBuilder::new(ui)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .id_salt(TABLE)
         .striped(true)
-        .column(Column::auto().at_least(60.0))
-        .column(Column::auto().at_least(60.0))
-        .column(Column::auto().at_least(110.0))
-        .column(Column::remainder().at_least(120.0))
+        .column(Col::flex(60.0))
+        .column(Col::flex(60.0))
+        .column(Col::flex(110.0))
+        .column(Col::rest(80.0).at_least(120.0))
         .vscroll(false)
         .header(row_height + 4.0, |mut header| {
             for (column, title) in ["PID", "Parent", "State"].into_iter().enumerate() {

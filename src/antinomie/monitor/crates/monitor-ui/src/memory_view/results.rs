@@ -513,138 +513,131 @@ impl MemoryView {
         let selected_row = self.selected_row;
         let mut clicked_row = None;
         let mut clicked_header = None;
-        egui::ScrollArea::horizontal()
-            .id_salt(("memory_result_wide", &result.run.id))
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                crate::widgets::table::begin(ui);
-                let mut builder = TableBuilder::new(ui)
-                    .id_salt(("memory_result", &result.run.id))
-                    .striped(true)
-                    .resizable(true)
-                    .sense(egui::Sense::click())
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .max_scroll_height(f32::INFINITY)
-                    .min_scrolled_height(0.0)
-                    .auto_shrink([false, false]);
-                for (index, width) in widths.iter().enumerate() {
-                    builder = if index + 1 == widths.len() && fits {
-                        builder.column(
-                            Column::remainder()
-                                .at_least(width.min(char_width * 12.0))
-                                .clip(true),
-                        )
-                    } else {
-                        builder.column(
-                            Column::initial(*width)
-                                .at_least(char_width * 4.0)
-                                .clip(true),
-                        )
-                    };
-                }
-                builder
-                    .header(row_height + 4.0, |mut header| {
-                        for (index, column) in table.columns.iter().enumerate() {
-                            header.col(|ui| {
-                                crate::widgets::table::head_bg(ui);
-                                let arrow = match result.sort {
-                                    Some(sort) if sort.column == index && sort.descending => {
-                                        format!(" {}", egui_phosphor::regular::CARET_DOWN)
-                                    }
-                                    Some(sort) if sort.column == index => {
-                                        format!(" {}", egui_phosphor::regular::CARET_UP)
-                                    }
-                                    _ => String::new(),
-                                };
-                                let response = ui
-                                    .add(
-                                        egui::Label::new(
-                                            RichText::new(format!("{}{arrow}", column.name))
-                                                .strong()
-                                                .color(theme::muted()),
-                                        )
-                                        .truncate()
-                                        .sense(egui::Sense::click()),
-                                    )
-                                    .on_hover_text(
-                                        "Sort: ascending, descending, then as the analyser gave it",
-                                    )
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                                if response.clicked() {
-                                    clicked_header = Some(index);
+        ui.scope(|ui| {
+            crate::widgets::table::begin(ui);
+            let mut builder = FitBuilder::new(ui)
+                .id_salt(("memory_result", &result.run.id))
+                .striped(true)
+                .resizable(true)
+                .sense(egui::Sense::click())
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .max_scroll_height(f32::INFINITY)
+                .min_scrolled_height(0.0)
+                .auto_shrink([false, false]);
+            for (index, width) in widths.iter().enumerate() {
+                builder = if index + 1 == widths.len() && fits {
+                    builder.column(
+                        Col::rest(80.0)
+                            .at_least(width.min(char_width * 12.0))
+                            .clip(true),
+                    )
+                } else {
+                    builder.column(Col::flex(*width).at_least(char_width * 4.0).clip(true))
+                };
+            }
+            builder
+                .header(row_height + 4.0, |mut header| {
+                    for (index, column) in table.columns.iter().enumerate() {
+                        header.col(|ui| {
+                            crate::widgets::table::head_bg(ui);
+                            let arrow = match result.sort {
+                                Some(sort) if sort.column == index && sort.descending => {
+                                    format!(" {}", egui_phosphor::regular::CARET_DOWN)
                                 }
-                            });
-                        }
-                    })
-                    .body(|body| {
-                        body.rows(row_height, result.shown.len(), |mut row| {
-                            let row_index = result.shown[row.index()];
-                            let data = &table.rows[row_index];
-                            let row_selected = selected_row == Some(row_index);
-                            row.set_selected(row_selected);
-                            let branch = result.branches.get(row.index());
-                            for (index, (value, column)) in
-                                data.values.iter().zip(&table.columns).enumerate()
-                            {
-                                row.col(|ui| {
-                                    crate::widgets::table::row_mark(
-                                        ui,
-                                        if row_selected && index == 0 {
-                                            crate::widgets::table::Mark::Selected
-                                        } else {
-                                            crate::widgets::table::Mark::None
-                                        },
-                                    );
-                                    if let Some(branch) = branch.filter(|_| index == 0) {
-                                        let reach = ui.spacing().item_spacing.y * 0.5;
-                                        let lines = ui.max_rect().expand2(egui::vec2(0.0, reach));
-                                        branch.paint(ui.painter(), lines, char_width);
-                                        ui.add_space(branch.width(char_width));
-                                    }
-                                    let text = memory::value_text(column.kind, value);
-                                    let mut label = RichText::new(&text)
-                                        .font(mono.clone())
-                                        .color(value_color(column.kind, value));
-                                    if value.get("absent").is_some() {
-                                        label = label.italics();
-                                    }
-                                    let response = ui.add(
-                                        egui::Label::new(label)
-                                            .truncate()
-                                            .sense(egui::Sense::click()),
-                                    );
-                                    if response.clicked() {
-                                        clicked_row = Some(row_index);
-                                    }
-                                    response.context_menu(|ui| {
-                                        if ui.button("Copy value").clicked() {
-                                            ui.ctx().copy_text(text.clone());
-                                            ui.close_menu();
-                                        }
-                                        if ui.button("Copy row").clicked() {
-                                            ui.ctx().copy_text(row_text(&table.columns, data));
-                                            ui.close_menu();
-                                        }
-                                        let names = column_fields(&table.columns);
-                                        let mut values = result_row(&names, &table.columns, data);
-                                        values.extend(result.record.iter().cloned());
-                                        if let Some((field, value)) = values.get(index + 1) {
-                                            crate::query::value_menu(
-                                                ui,
-                                                field,
-                                                value,
-                                                &mut self.filter,
-                                            );
-                                        }
-                                    });
-                                });
-                            }
-                            if row.response().clicked() {
-                                clicked_row = Some(row_index);
+                                Some(sort) if sort.column == index => {
+                                    format!(" {}", egui_phosphor::regular::CARET_UP)
+                                }
+                                _ => String::new(),
+                            };
+                            let response = ui
+                                .add(
+                                    egui::Label::new(
+                                        RichText::new(format!("{}{arrow}", column.name))
+                                            .strong()
+                                            .color(theme::muted()),
+                                    )
+                                    .truncate()
+                                    .sense(egui::Sense::click()),
+                                )
+                                .on_hover_text(
+                                    "Sort: ascending, descending, then as the analyser gave it",
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand);
+                            if response.clicked() {
+                                clicked_header = Some(index);
                             }
                         });
+                    }
+                })
+                .body(|body| {
+                    body.rows(row_height, result.shown.len(), |mut row| {
+                        let row_index = result.shown[row.index()];
+                        let data = &table.rows[row_index];
+                        let row_selected = selected_row == Some(row_index);
+                        row.set_selected(row_selected);
+                        let branch = result.branches.get(row.index());
+                        for (index, (value, column)) in
+                            data.values.iter().zip(&table.columns).enumerate()
+                        {
+                            row.col(|ui| {
+                                crate::widgets::table::row_mark(
+                                    ui,
+                                    if row_selected && index == 0 {
+                                        crate::widgets::table::Mark::Selected
+                                    } else {
+                                        crate::widgets::table::Mark::None
+                                    },
+                                );
+                                if let Some(branch) = branch.filter(|_| index == 0) {
+                                    let reach = ui.spacing().item_spacing.y * 0.5;
+                                    let lines = ui.max_rect().expand2(egui::vec2(0.0, reach));
+                                    branch.paint(ui.painter(), lines, char_width);
+                                    ui.add_space(branch.width(char_width));
+                                }
+                                let text = memory::value_text(column.kind, value);
+                                let mut label = RichText::new(&text)
+                                    .font(mono.clone())
+                                    .color(value_color(column.kind, value));
+                                if value.get("absent").is_some() {
+                                    label = label.italics();
+                                }
+                                let response = ui.add(
+                                    egui::Label::new(label)
+                                        .truncate()
+                                        .sense(egui::Sense::click()),
+                                );
+                                if response.clicked() {
+                                    clicked_row = Some(row_index);
+                                }
+                                response.context_menu(|ui| {
+                                    if ui.button("Copy value").clicked() {
+                                        ui.ctx().copy_text(text.clone());
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("Copy row").clicked() {
+                                        ui.ctx().copy_text(row_text(&table.columns, data));
+                                        ui.close_menu();
+                                    }
+                                    let names = column_fields(&table.columns);
+                                    let mut values = result_row(&names, &table.columns, data);
+                                    values.extend(result.record.iter().cloned());
+                                    if let Some((field, value)) = values.get(index + 1) {
+                                        crate::query::value_menu(
+                                            ui,
+                                            field,
+                                            value,
+                                            &mut self.filter,
+                                        );
+                                    }
+                                });
+                            });
+                        }
+                        if row.response().clicked() {
+                            clicked_row = Some(row_index);
+                        }
                     });
-            });
+                });
+        });
         if clicked_row.is_some() {
             self.selected_row = clicked_row;
         }

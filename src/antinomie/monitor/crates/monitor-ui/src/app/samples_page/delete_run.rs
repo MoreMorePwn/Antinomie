@@ -197,14 +197,14 @@ impl DeleteRun {
             }
         });
         table::begin(ui);
-        egui_extras::TableBuilder::new(ui)
+        crate::widgets::fit_table::FitBuilder::new(ui)
             .id_salt("samples_delete_run_rows")
             .striped(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(egui_extras::Column::auto().at_least(180.0))
-            .column(egui_extras::Column::auto().at_least(70.0))
-            .column(egui_extras::Column::remainder().at_least(160.0).clip(true))
-            .column(egui_extras::Column::auto().at_least(150.0))
+            .column(crate::widgets::fit_table::Col::flex(180.0))
+            .column(crate::widgets::fit_table::Col::flex(70.0))
+            .column(crate::widgets::fit_table::Col::rest(80.0).at_least(160.0).clip(true))
+            .column(crate::widgets::fit_table::Col::flex(150.0))
             .max_scroll_height(320.0)
             .header(table::header_height(font), |mut header| {
                 for title in ["Artifact", "Size", "For this sample", ""] {

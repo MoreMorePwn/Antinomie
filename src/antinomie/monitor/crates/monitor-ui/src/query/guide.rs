@@ -55,7 +55,7 @@ pub(crate) fn guide(ctx: &egui::Context) {
             .into_iter()
             .map(|index| rows[index])
             .collect();
-            use egui_extras::{Column, TableBuilder};
+            use crate::widgets::fit_table::{Col, FitBuilder};
             crate::widgets::table::begin(ui);
             // The field column fits the longest name shown; the type column
             // fits its longest kind. Anything longer is cut with a tooltip.
@@ -79,13 +79,13 @@ pub(crate) fn guide(ctx: &egui::Context) {
             let kind_width = (widest(&body, rows.iter().map(|row| row.1.as_str()).collect())
                 + 24.0)
                 .clamp(70.0, 140.0);
-            TableBuilder::new(ui)
+            FitBuilder::new(ui)
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .id_salt("filter-keywords")
                 .striped(true)
-                .column(Column::exact(field_width).clip(true))
-                .column(Column::exact(kind_width).clip(true))
-                .column(Column::remainder().at_least(160.0).clip(true))
+                .column(Col::fixed(field_width).clip(true))
+                .column(Col::fixed(kind_width).clip(true))
+                .column(Col::rest(80.0).at_least(160.0).clip(true))
                 .header(22.0, |mut header| {
                     for (column, title) in ["Field", "Type", "Meaning"].into_iter().enumerate() {
                         header.col(|ui| crate::table_sort::header(ui, "filter-keywords", column, title));

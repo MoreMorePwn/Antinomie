@@ -349,13 +349,13 @@ pub(in crate::app::samples_page) fn section(
         let [file, hash, run, because, size, availability] = widths;
         parts::on_surface(ui, |ui| {
             parts::click_table(ui, "sample_summary_outputs")
-                .column(egui_extras::Column::exact(file).clip(true))
-                .column(egui_extras::Column::exact(hash))
-                .column(egui_extras::Column::exact(run))
-                .column(egui_extras::Column::exact(because).clip(true))
-                .column(egui_extras::Column::exact(size).clip(true))
-                .column(egui_extras::Column::exact(availability).clip(true))
-                .column(egui_extras::Column::remainder().at_least(actions))
+                .column(crate::widgets::fit_table::Col::fixed(file).clip(true))
+                .column(crate::widgets::fit_table::Col::fixed(hash))
+                .column(crate::widgets::fit_table::Col::fixed(run))
+                .column(crate::widgets::fit_table::Col::fixed(because).clip(true))
+                .column(crate::widgets::fit_table::Col::fixed(size).clip(true))
+                .column(crate::widgets::fit_table::Col::fixed(availability).clip(true))
+                .column(crate::widgets::fit_table::Col::rest(80.0).at_least(actions))
                 .header(table::header_height(font), |mut header| {
                     for title in [
                         "File",

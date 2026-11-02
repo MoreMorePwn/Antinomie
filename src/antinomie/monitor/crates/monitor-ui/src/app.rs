@@ -46,6 +46,7 @@ pub(crate) use upload_browser::{DEPTH_LIMIT, DIRECTORY_LIMIT, PAGE_LEN};
 mod vm;
 mod widgets;
 
+use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::{
     archive::{Answer, ArchiveWorker, Request},
     build_wizard,
@@ -68,7 +69,6 @@ use antinomie_monitor_core::{
 pub(crate) use bases::selected_base;
 pub(crate) use capture::core_capture_status;
 use eframe::egui::{self, RichText};
-use egui_extras::{Column, TableBuilder};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},

@@ -92,9 +92,13 @@ pub(super) fn section(ui: &mut egui::Ui, state: &State, font: f32) -> Option<Str
         State::Done(found) => {
             parts::on_surface(ui, |ui| {
                 parts::mini_table(ui, "sample_summary_similar")
-                    .column(egui_extras::Column::remainder().at_least(200.0).clip(true))
-                    .column(egui_extras::Column::exact(90.0))
-                    .column(egui_extras::Column::exact(180.0))
+                    .column(
+                        crate::widgets::fit_table::Col::rest(80.0)
+                            .at_least(200.0)
+                            .clip(true),
+                    )
+                    .column(crate::widgets::fit_table::Col::fixed(90.0))
+                    .column(crate::widgets::fit_table::Col::fixed(180.0))
                     .header(table::header_height(font), |mut header| {
                         for title in ["Sample", "Distance", "Shared"] {
                             header.col(|ui| table::head(ui, title));

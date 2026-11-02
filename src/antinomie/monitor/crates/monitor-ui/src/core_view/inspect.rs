@@ -404,7 +404,7 @@ impl CoreView {
         let font = egui::TextStyle::Monospace.resolve(ui.style()).size;
         let mut picked = None;
         crate::widgets::table::begin(ui);
-        egui_extras::TableBuilder::new(ui)
+        crate::widgets::fit_table::FitBuilder::new(ui)
             .id_salt(("core-mappings-table", &record.dir))
             .striped(true)
             .sense(egui::Sense::click())
@@ -412,22 +412,26 @@ impl CoreView {
             .max_scroll_height(crate::widgets::table::row_height(font) * 7.0)
             .min_scrolled_height(0.0)
             .column(
-                egui_extras::Column::initial(290.0)
+                crate::widgets::fit_table::Col::flex(290.0)
                     .at_least(160.0)
                     .clip(true),
             )
-            .column(egui_extras::Column::exact(64.0))
+            .column(crate::widgets::fit_table::Col::fixed(64.0))
             .column(
-                egui_extras::Column::initial(110.0)
+                crate::widgets::fit_table::Col::flex(110.0)
                     .at_least(60.0)
                     .clip(true),
             )
             .column(
-                egui_extras::Column::initial(110.0)
+                crate::widgets::fit_table::Col::flex(110.0)
                     .at_least(60.0)
                     .clip(true),
             )
-            .column(egui_extras::Column::remainder().at_least(120.0).clip(true))
+            .column(
+                crate::widgets::fit_table::Col::rest(80.0)
+                    .at_least(120.0)
+                    .clip(true),
+            )
             .header(crate::widgets::table::header_height(font), |mut header| {
                 header.col(|ui| crate::table_sort::header(ui, "core_mappings", 0, "Range"));
                 header.col(|ui| crate::table_sort::header(ui, "core_mappings", 1, "Perms"));
@@ -788,7 +792,7 @@ fn notes_table(
     record: &CoreRecord,
     query: &mut String,
 ) -> Option<details::CoreDetail> {
-    use egui_extras::{Column, TableBuilder};
+    use crate::widgets::fit_table::{Col, FitBuilder};
     const EM_DASH: &str = "—";
     crate::query::filter_edit(
         ui,
@@ -947,17 +951,17 @@ fn notes_table(
     let table_height = (ui.available_height() - detail_height - header_height).max(80.0);
     let mut detail = None;
     crate::widgets::table::begin(ui);
-    TableBuilder::new(ui)
+    FitBuilder::new(ui)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .max_scroll_height(table_height)
         .striped(true)
         .sense(egui::Sense::click())
-        .column(Column::auto().at_least(64.0))
-        .column(Column::remainder().at_least(120.0))
-        .column(Column::auto().at_least(64.0))
-        .column(Column::remainder().at_least(160.0))
-        .column(Column::auto().at_least(80.0))
-        .column(Column::auto().at_least(88.0))
+        .column(Col::flex(64.0))
+        .column(Col::rest(80.0).at_least(120.0))
+        .column(Col::flex(64.0))
+        .column(Col::rest(80.0).at_least(160.0))
+        .column(Col::flex(80.0))
+        .column(Col::flex(88.0))
         .header(20.0, |mut header| {
             for (column, title) in ["Kind", "Name", "Thread", "Value", "Source", "Availability"]
                 .into_iter()

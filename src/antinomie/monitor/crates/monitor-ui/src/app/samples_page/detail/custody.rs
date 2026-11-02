@@ -3,8 +3,8 @@
 //! check mark per entry and the head hash to copy. The log is tamper-evident,
 //! not tamper-proof; the banner says so.
 use super::{parts, *};
+use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::{app::samples_page::custody_parts, widgets::table};
-use egui_extras::{Column, TableBuilder};
 
 /// What the tab asks of the window.
 pub(super) enum Outcome {
@@ -39,16 +39,16 @@ pub(super) fn show(
         data.events.iter().map(|event| parts::second(event.at_ms)),
     );
     table::begin(ui);
-    let mut builder = TableBuilder::new(ui)
+    let mut builder = FitBuilder::new(ui)
         .id_salt("sample_custody")
         .striped(true)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::exact(44.0))
-        .column(Column::exact(time))
-        .column(Column::exact(130.0))
-        .column(Column::exact(80.0))
-        .column(Column::remainder().at_least(160.0).clip(true))
-        .column(Column::exact(120.0))
+        .column(Col::fixed(44.0))
+        .column(Col::fixed(time))
+        .column(Col::fixed(130.0))
+        .column(Col::fixed(80.0))
+        .column(Col::rest(80.0).at_least(160.0).clip(true))
+        .column(Col::fixed(120.0))
         .max_scroll_height(height)
         .min_scrolled_height(0.0);
     if let Some(at) = scroll_to.and_then(|seq| data.events.iter().position(|e| e.seq == seq)) {

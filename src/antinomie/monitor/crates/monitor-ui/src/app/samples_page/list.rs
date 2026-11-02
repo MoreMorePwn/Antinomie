@@ -11,8 +11,6 @@ use antinomie_monitor_core::samples::TagKind;
 
 /// The first hex digits of a SHA-256 the list shows.
 const SHORT_HASH: usize = 8;
-/// The width the columns need together; narrower, the table scrolls sideways.
-const MIN_TABLE_WIDTH: f32 = 780.0;
 
 impl Row {
     /// The row matches the search text: name, description, a tag or the start
@@ -279,26 +277,22 @@ impl MonitorApp {
             });
         let height = ui.available_height().max(80.0);
         let mut action = None;
-        // Narrower than every column needs: the table scrolls sideways.
-        let width = ui.available_width();
-        egui::ScrollArea::horizontal().id_salt("library_samples_x").auto_shrink([false, false]).show(ui, |ui| {
-        ui.set_min_width(width.max(MIN_TABLE_WIDTH));
-        ui.set_max_width(width.max(MIN_TABLE_WIDTH));
+        ui.scope(|ui| {
         // Not selectable: a click on the text of any cell reaches the row.
         ui.style_mut().interaction.selectable_labels = false;
         table::begin(ui);
-        TableBuilder::new(ui)
+        FitBuilder::new(ui)
             .id_salt("library_samples")
             .sense(egui::Sense::click())
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .striped(true)
-            .column(Column::initial(140.0).at_least(110.0).resizable(true))
-            .column(Column::remainder().at_least(120.0))
-            .column(Column::initial(150.0).at_least(80.0).resizable(true))
-            .column(Column::exact(72.0))
-            .column(Column::exact(100.0))
-            .column(Column::initial(250.0).at_least(120.0).resizable(true))
-            .column(Column::exact(104.0))
+            .column(Col::flex(140.0).at_least(110.0).resizable(true))
+            .column(Col::rest(80.0).at_least(120.0))
+            .column(Col::flex(150.0).at_least(80.0).resizable(true))
+            .column(Col::fixed(72.0))
+            .column(Col::fixed(100.0))
+            .column(Col::flex(250.0).at_least(120.0).resizable(true))
+            .column(Col::fixed(104.0))
             .max_scroll_height(height)
             .min_scrolled_height(0.0)
             .header(table::header_height(font), |mut header| {

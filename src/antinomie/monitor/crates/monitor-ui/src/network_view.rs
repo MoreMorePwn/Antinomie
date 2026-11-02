@@ -4,13 +4,13 @@
 //! network interface to its pcap file, outside the guest; the list follows
 //! that file live.
 use crate::theme::{self, PacketColor, ValueKind};
+use crate::widgets::fit_table::{Col, FitBuilder};
 use antinomie_monitor_core::network::{self, NetworkCapture, NetworkPacket, Transport};
 use antinomie_monitor_core::packet_filter::{
     CaptureIdentity, FieldRegistry, PacketDetail, PacketFilterEvent, PacketFilterIndex,
     PacketFilterWorker, ParseStatus, PAGE_SIZE,
 };
 use eframe::egui::{self, RichText};
-use egui_extras::{Column, TableBuilder};
 use std::{
     collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},

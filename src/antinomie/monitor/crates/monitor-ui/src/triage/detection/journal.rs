@@ -5,12 +5,12 @@
 //! Every read runs on a worker thread, bounded and cancellable. The viewer
 //! never writes the journal; "Open file" only hands its path to the desktop.
 use super::*;
+use crate::widgets::fit_table::{Col, FitBuilder};
 use antinomie_monitor_core::analysis::detection::journal::{
     self as reader, Focus, Page, Query, PAGE_SIZE,
 };
 use antinomie_monitor_core::analysis::detection::{Event, Moment, JOURNAL_FILE};
 use antinomie_monitor_core::HostClockAnchor;
-use egui_extras::{Column, TableBuilder};
 
 const ROW_HEIGHT: f32 = 22.0;
 
@@ -439,16 +439,16 @@ impl Viewer {
                 },
             );
             crate::widgets::table::begin(ui);
-            let mut table = TableBuilder::new(ui)
+            let mut table = FitBuilder::new(ui)
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .id_salt("journal-rows")
                 .striped(true)
                 .sense(egui::Sense::click())
-                .column(Column::exact(64.0))
-                .column(Column::initial(150.0).at_least(80.0).clip(true))
-                .column(Column::initial(190.0).at_least(80.0).clip(true))
-                .column(Column::initial(220.0).at_least(80.0).clip(true))
-                .column(Column::remainder().at_least(120.0).clip(true))
+                .column(Col::fixed(64.0))
+                .column(Col::flex(150.0).at_least(80.0).clip(true))
+                .column(Col::flex(190.0).at_least(80.0).clip(true))
+                .column(Col::flex(220.0).at_least(80.0).clip(true))
+                .column(Col::rest(80.0).at_least(120.0).clip(true))
                 .min_scrolled_height(0.0)
                 .max_scroll_height(height);
             if let Some(index) = self

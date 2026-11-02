@@ -6,9 +6,9 @@
 //! same as one with ten.
 use super::*;
 use crate::query::{FieldSpec, RowValue};
+use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::widgets::table::{self, Cell, Mark};
 use antinomie_monitor_core::core_strings::{self, CoreString, Stopped};
-use egui_extras::{Column, TableBuilder};
 use std::sync::atomic::AtomicU64;
 
 /// Strings per page of the table.
@@ -354,17 +354,17 @@ impl StringsState {
         let mut chosen = None;
         let mut filter = None;
         table::begin(ui);
-        TableBuilder::new(ui)
+        FitBuilder::new(ui)
             .id_salt(("core-strings-table", &record.dir))
             .striped(true)
             .sense(egui::Sense::click())
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::initial(130.0).at_least(100.0).clip(true))
-            .column(Column::initial(80.0).at_least(60.0).clip(true))
-            .column(Column::exact(84.0))
-            .column(Column::exact(72.0))
-            .column(Column::initial(120.0).at_least(70.0).clip(true))
-            .column(Column::remainder().at_least(100.0).clip(true))
+            .column(Col::flex(130.0).at_least(100.0).clip(true))
+            .column(Col::flex(80.0).at_least(60.0).clip(true))
+            .column(Col::fixed(84.0))
+            .column(Col::fixed(72.0))
+            .column(Col::flex(120.0).at_least(70.0).clip(true))
+            .column(Col::rest(80.0).at_least(100.0).clip(true))
             .header(table::header_height(font), |mut header| {
                 for (column, title) in ["Address", "File offset", "Encoding"]
                     .into_iter()

@@ -228,28 +228,18 @@ impl MonitorApp {
         );
         ui.allocate_ui_with_layout(box_size, egui::Layout::top_down(egui::Align::Min), |ui| {
             table::begin(ui);
-            egui_extras::TableBuilder::new(ui)
+            crate::widgets::fit_table::FitBuilder::new(ui)
                 .id_salt("library_bases")
                 .sense(egui::Sense::click())
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .striped(true)
                 // The name and the status take what they need; the guest column
                 // takes the rest, so no column is squeezed by a long base name.
-                .column(
-                    Column::initial(320.0)
-                        .at_least(180.0)
-                        .resizable(true)
-                        .clip(true),
-                )
-                .column(Column::remainder().at_least(170.0).clip(true))
-                .column(Column::exact(96.0))
-                .column(Column::exact(84.0))
-                .column(
-                    Column::initial(130.0)
-                        .at_least(90.0)
-                        .resizable(true)
-                        .clip(true),
-                )
+                .column(Col::flex(320.0).at_least(180.0).resizable(true).clip(true))
+                .column(Col::rest(80.0).at_least(170.0).clip(true))
+                .column(Col::fixed(96.0))
+                .column(Col::fixed(84.0))
+                .column(Col::flex(130.0).at_least(90.0).resizable(true).clip(true))
                 .max_scroll_height(height)
                 .min_scrolled_height(0.0)
                 .header(table::header_height(font), |mut header| {

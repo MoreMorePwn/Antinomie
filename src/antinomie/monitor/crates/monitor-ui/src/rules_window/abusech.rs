@@ -4,6 +4,7 @@
 //! (which never asks a pack more often than every five minutes), the age of
 //! what is installed, and an update on demand.
 use super::{theme, Done, Model};
+use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::widgets::{self, table, Tone};
 use antinomie_monitor_core::{
     api_keys::{self, ApiKey},
@@ -11,7 +12,6 @@ use antinomie_monitor_core::{
     ruleset::{self, Fetcher, LiveState, LiveStatus, LIVE_PACKS},
 };
 use eframe::egui::{self, RichText};
-use egui_extras::{Column, TableBuilder};
 use std::path::Path;
 
 #[derive(Default)]
@@ -94,99 +94,95 @@ impl Model {
         let height = table::row_height(font) * (states.len() as f32 + 1.5) + 8.0;
         let mut picked = None;
         let mut action = None;
-        egui::ScrollArea::horizontal()
-            .id_salt("abusech_packs_scroll")
-            .show(ui, |ui| {
-                ui.set_min_width(860.0);
-                table::begin(ui);
-                TableBuilder::new(ui)
-                    .id_salt("abusech_packs")
-                    .sense(egui::Sense::click())
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .striped(true)
-                    .column(Column::initial(230.0).at_least(120.0).clip(true))
-                    .column(Column::exact(70.0))
-                    .column(Column::exact(100.0))
-                    .column(Column::exact(100.0))
-                    .column(Column::exact(130.0))
-                    .column(Column::remainder().at_least(180.0))
-                    .max_scroll_height(height)
-                    .min_scrolled_height(0.0)
-                    .header(table::header_height(font), |mut header| {
-                        for title in ["Pack", "Rules", "Installed", "Checked", "State", ""] {
-                            header.col(|ui| table::head(ui, title));
-                        }
-                    })
-                    .body(|body| {
-                        body.rows(table::row_height(font), states.len(), |mut row| {
-                            let state = &states[row.index()];
-                            let pack = state.pack;
-                            row.set_selected(self.live.pick == Some(pack.id));
-                            row.col(|ui| {
-                                table::cell_click(ui, table::Cell::Text, pack.name);
-                            });
-                            row.col(|ui| {
-                                let rules = state
-                                    .installed
-                                    .as_ref()
-                                    .map(|installed| installed.rules)
-                                    .or(state.checked.as_ref().map(|checked| checked.rules));
-                                let text =
-                                    rules.map_or("—".to_owned(), |rules| rules.to_string());
-                                table::cell_click(ui, table::Cell::Number, &text);
-                            });
-                            row.col(|ui| {
-                                let text = state.installed.as_ref().map_or("—".to_owned(), |i| {
-                                    if i.fetched_unix == 0 {
-                                        "yes".to_owned()
-                                    } else {
-                                        ago(now, i.fetched_unix)
-                                    }
-                                });
-                                table::cell_click(ui, table::Cell::Text, &text);
-                            });
-                            row.col(|ui| {
-                                let text = state
-                                    .checked
-                                    .as_ref()
-                                    .map_or("—".to_owned(), |checked| ago(now, checked.at_unix));
-                                table::cell_click(ui, table::Cell::Text, &text);
-                            });
-                            row.col(|ui| {
-                                let (text, tone) = state_chip(state);
-                                widgets::chip(ui, text, tone);
-                            });
-                            row.col(|ui| {
-                                let blocked = pack.needs_key && !has_key;
-                                ui.add_enabled_ui(!busy && !blocked, |ui| {
-                                    if ui.small_button("Check").clicked() {
-                                        action = Some((pack.id, false));
-                                    }
-                                    let label = match state.status {
-                                        LiveStatus::NotInstalled => "Install",
-                                        _ => "Update",
-                                    };
-                                    let enabled = !matches!(
-                                        state.status,
-                                        LiveStatus::Current | LiveStatus::Retired
-                                    );
-                                    if ui
-                                        .add_enabled(enabled, egui::Button::new(label).small())
-                                        .clicked()
-                                    {
-                                        action = Some((pack.id, true));
-                                    }
-                                });
-                                if blocked {
-                                    ui.weak("needs the Auth-Key");
+        ui.scope(|ui| {
+            table::begin(ui);
+            FitBuilder::new(ui)
+                .id_salt("abusech_packs")
+                .sense(egui::Sense::click())
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .striped(true)
+                .column(Col::flex(230.0).at_least(120.0).clip(true))
+                .column(Col::fixed(70.0))
+                .column(Col::fixed(100.0))
+                .column(Col::fixed(100.0))
+                .column(Col::fixed(130.0))
+                .column(Col::rest(80.0).at_least(180.0))
+                .max_scroll_height(height)
+                .min_scrolled_height(0.0)
+                .header(table::header_height(font), |mut header| {
+                    for title in ["Pack", "Rules", "Installed", "Checked", "State", ""] {
+                        header.col(|ui| table::head(ui, title));
+                    }
+                })
+                .body(|body| {
+                    body.rows(table::row_height(font), states.len(), |mut row| {
+                        let state = &states[row.index()];
+                        let pack = state.pack;
+                        row.set_selected(self.live.pick == Some(pack.id));
+                        row.col(|ui| {
+                            table::cell_click(ui, table::Cell::Text, pack.name);
+                        });
+                        row.col(|ui| {
+                            let rules = state
+                                .installed
+                                .as_ref()
+                                .map(|installed| installed.rules)
+                                .or(state.checked.as_ref().map(|checked| checked.rules));
+                            let text = rules.map_or("—".to_owned(), |rules| rules.to_string());
+                            table::cell_click(ui, table::Cell::Number, &text);
+                        });
+                        row.col(|ui| {
+                            let text = state.installed.as_ref().map_or("—".to_owned(), |i| {
+                                if i.fetched_unix == 0 {
+                                    "yes".to_owned()
+                                } else {
+                                    ago(now, i.fetched_unix)
                                 }
                             });
-                            if row.response().clicked() {
-                                picked = Some(pack.id);
+                            table::cell_click(ui, table::Cell::Text, &text);
+                        });
+                        row.col(|ui| {
+                            let text = state
+                                .checked
+                                .as_ref()
+                                .map_or("—".to_owned(), |checked| ago(now, checked.at_unix));
+                            table::cell_click(ui, table::Cell::Text, &text);
+                        });
+                        row.col(|ui| {
+                            let (text, tone) = state_chip(state);
+                            widgets::chip(ui, text, tone);
+                        });
+                        row.col(|ui| {
+                            let blocked = pack.needs_key && !has_key;
+                            ui.add_enabled_ui(!busy && !blocked, |ui| {
+                                if ui.small_button("Check").clicked() {
+                                    action = Some((pack.id, false));
+                                }
+                                let label = match state.status {
+                                    LiveStatus::NotInstalled => "Install",
+                                    _ => "Update",
+                                };
+                                let enabled = !matches!(
+                                    state.status,
+                                    LiveStatus::Current | LiveStatus::Retired
+                                );
+                                if ui
+                                    .add_enabled(enabled, egui::Button::new(label).small())
+                                    .clicked()
+                                {
+                                    action = Some((pack.id, true));
+                                }
+                            });
+                            if blocked {
+                                ui.weak("needs the Auth-Key");
                             }
                         });
+                        if row.response().clicked() {
+                            picked = Some(pack.id);
+                        }
                     });
-            });
+                });
+        });
         if let Some(id) = picked {
             self.live.pick = LIVE_PACKS
                 .iter()

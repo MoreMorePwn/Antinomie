@@ -7,13 +7,13 @@ mod tables;
 
 use crate::query::{self, FieldSpec, RowValue};
 use crate::theme::{self, ValueKind};
+use crate::widgets::fit_table::{Col as FitCol, FitBuilder};
 use antinomie_monitor_core::{
     malshare::{CatalogProgress, DatedCatalog},
     samples::{self, SampleInfo, Source, StoredSample},
     ExecRequest,
 };
 use eframe::egui::{self, RichText};
-use egui_extras::{Column, TableBuilder};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
@@ -691,7 +691,7 @@ impl SamplesView {
         let mut action = None;
         let mut open = true;
         let screen = ctx.screen_rect();
-        let largest = egui::vec2(1240.0, 820.0).min(screen.size() - egui::vec2(96.0, 300.0));
+        let largest = egui::vec2(1240.0, 700.0).min(screen.size() - egui::vec2(96.0, 300.0));
         crate::widgets::window("Malware samples")
             .id(egui::Id::new(WINDOW_ID))
             .collapsible(false)
@@ -726,7 +726,11 @@ impl SamplesView {
                 // "the rest" would make the window grow every frame.
                 let list = row * stored.len().clamp(1, 4) as f32;
                 let below = 14.0 + ui.spacing().interact_size.y + 6.0 + list + 4.0;
-                let results = (ui.available_height() - below).max(120.0);
+                // About four rows, then the table scrolls inside itself, so
+                // the window does not grow to the height of the screen.
+                let results = (ui.available_height() - below)
+                    .min(row * 5.5 + 8.0)
+                    .max(120.0);
                 ui.allocate_ui(egui::vec2(ui.available_width(), results), |ui| {
                     self.results_table(ui, cx, &stored);
                 });
@@ -1202,47 +1206,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["ARM", "x86", "x86-64"]
         );
-    }
-
-    #[test]
-    fn table_columns_fit_the_window_at_common_widths() {
-        use tables::{fit_widths, RESULT_LAST, RESULT_WIDTHS, STORED_LAST, STORED_WIDTHS};
-        for width in [860.0_f32, 1000.0, 1184.0, 1240.0, 1700.0] {
-            let ctx = egui::Context::default();
-            let mut checked = 0;
-            let _ = ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(width, 600.0),
-                    )),
-                    ..Default::default()
-                },
-                |ctx| {
-                    egui::CentralPanel::default()
-                        .frame(egui::Frame::NONE)
-                        .show(ctx, |ui| {
-                            for (columns, last) in [
-                                (&RESULT_WIDTHS[..], RESULT_LAST),
-                                (&STORED_WIDTHS[..], STORED_LAST),
-                            ] {
-                                let widths = fit_widths(ui, columns, last);
-                                let used = widths.iter().sum::<f32>()
-                                    + last
-                                    + ui.spacing().item_spacing.x * widths.len() as f32
-                                    + ui.spacing().scroll.allocated_width();
-                                assert!(used <= width + 0.5, "{used} wide in {width}");
-                                assert!(widths
-                                    .iter()
-                                    .zip(columns)
-                                    .all(|(wide, (_, least))| wide >= &(least - 1.0)));
-                                checked += 1;
-                            }
-                        });
-                },
-            );
-            assert_eq!(checked, 2);
-        }
     }
 
     #[test]

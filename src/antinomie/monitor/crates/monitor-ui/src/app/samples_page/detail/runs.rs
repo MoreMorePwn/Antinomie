@@ -6,9 +6,9 @@
 //! what analysis was enabled, and how it was launched and what it ran in.
 use super::{parts, summary::vm_name, *};
 use crate::app::captures::{self, ProcessSelection};
+use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::widgets::table;
 use antinomie_monitor_core::capture_processes::CaptureProcess;
-use egui_extras::{Column, TableBuilder};
 use std::sync::mpsc;
 
 /// The process tree of the run shown below the list.
@@ -355,19 +355,19 @@ impl MonitorApp {
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
                 table::begin(ui);
-                TableBuilder::new(ui)
+                FitBuilder::new(ui)
                     .id_salt("sample_runs")
                     .sense(egui::Sense::click())
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     .striped(true)
                     .resizable(true)
-                    .column(Column::initial(start_width).at_least(110.0))
-                    .column(Column::remainder().at_least(150.0).resizable(false))
-                    .column(Column::initial(110.0).range(70.0..=320.0))
-                    .column(Column::initial(100.0).range(70.0..=220.0))
-                    .column(Column::initial(85.0).range(60.0..=160.0))
-                    .column(Column::initial(80.0).range(60.0..=200.0))
-                    .column(Column::exact(72.0))
+                    .column(Col::flex(start_width).at_least(110.0))
+                    .column(Col::rest(80.0).at_least(150.0).resizable(false))
+                    .column(Col::flex(110.0).range(70.0..=320.0))
+                    .column(Col::flex(100.0).range(70.0..=220.0))
+                    .column(Col::flex(85.0).range(60.0..=160.0))
+                    .column(Col::flex(80.0).range(60.0..=200.0))
+                    .column(Col::fixed(72.0))
                     .max_scroll_height(height)
                     .min_scrolled_height(0.0)
                     .header(table::header_height(font), |mut header| {

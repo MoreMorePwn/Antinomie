@@ -4,6 +4,7 @@
 //! Static analysis shows it as the Regex matches tab (over Strings and FLOSS
 //! strings) and Core dumps in a window (strings and binary socket addresses);
 //! the scan runs on a worker thread.
+use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::widgets::{
     self,
     table::{self, Cell, Mark},
@@ -11,7 +12,6 @@ use crate::widgets::{
 };
 use antinomie_monitor_core::strings_regex::{Category, Config, Match, RuleSet, Scan};
 use eframe::egui;
-use egui_extras::{Column, TableBuilder};
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -328,18 +328,18 @@ impl RegexWindow {
         let mut chosen = None;
         table::begin(ui);
         let height = ui.available_height().max(120.0);
-        TableBuilder::new(ui)
+        FitBuilder::new(ui)
             .id_salt("regex-matches-table")
             .max_scroll_height(height)
             .striped(true)
             .sense(egui::Sense::click())
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::initial(110.0).at_least(70.0).clip(true))
-            .column(Column::initial(170.0).at_least(80.0).clip(true))
-            .column(Column::initial(320.0).at_least(120.0).clip(true))
-            .column(Column::initial(150.0).at_least(80.0).clip(true))
-            .column(Column::exact(44.0))
-            .column(Column::remainder().at_least(60.0).clip(true))
+            .column(Col::flex(110.0).at_least(70.0).clip(true))
+            .column(Col::flex(170.0).at_least(80.0).clip(true))
+            .column(Col::flex(320.0).at_least(120.0).clip(true))
+            .column(Col::flex(150.0).at_least(80.0).clip(true))
+            .column(Col::fixed(44.0))
+            .column(Col::rest(80.0).at_least(60.0).clip(true))
             .header(table::header_height(font), |mut header| {
                 for title in ["Category", "Type", "Match", "Found in", "Seen", "Inside"] {
                     header.col(|ui| table::head(ui, title));

@@ -4,12 +4,12 @@
 //! of every sample's chain. Replaces the list like the sample window does; a
 //! row opens its sample's Custody log tab.
 use super::custody_parts;
+use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::{theme, widgets, widgets::table};
 use antinomie_monitor_core::samples::{
     CustodyQuery, EntryState, GlobalRow, Library, LibraryCheck, KINDS,
 };
 use eframe::egui::{self, RichText};
-use egui_extras::{Column, TableBuilder};
 use std::{
     collections::BTreeSet,
     path::Path,
@@ -182,16 +182,16 @@ impl CustodyAll {
             400.0,
         );
         table::begin(ui);
-        TableBuilder::new(ui)
+        FitBuilder::new(ui)
             .id_salt("custody_all")
             .striped(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::exact(time))
-            .column(Column::exact(180.0))
-            .column(Column::exact(130.0))
-            .column(Column::exact(80.0))
-            .column(Column::remainder().at_least(160.0).clip(true))
-            .column(Column::exact(120.0))
+            .column(Col::fixed(time))
+            .column(Col::fixed(180.0))
+            .column(Col::fixed(130.0))
+            .column(Col::fixed(80.0))
+            .column(Col::rest(80.0).at_least(160.0).clip(true))
+            .column(Col::fixed(120.0))
             .max_scroll_height(height)
             .min_scrolled_height(0.0)
             .header(table::header_height(font), |mut header| {

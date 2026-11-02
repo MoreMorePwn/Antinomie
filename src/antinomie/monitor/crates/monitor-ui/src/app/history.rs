@@ -231,28 +231,28 @@ impl MonitorApp {
             |ui| {
                 crate::widgets::table::begin(ui);
                 let widths = HistoryColumns::fit(ui);
-                let mut table = TableBuilder::new(ui)
+                let mut table = FitBuilder::new(ui)
                     // A pane of another width starts its columns afresh, so the
                     // row and the icons at its end always fit the pane.
                     .id_salt(("run_history", widths.pane as i32))
-                    .column(Column::initial(widths.start).range(widths.start_least..=widths.start_least.max(widths.start).max(400.0)).clip(true))
+                    .column(Col::flex(widths.start).range(widths.start_least..=widths.start_least.max(widths.start).max(400.0)).clip(true))
                     .sense(egui::Sense::click())
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                     // Not resizable: a resizable column keeps the width it had, so a
                     // remainder in the middle stopped following the pane. This one
                     // takes whatever the others leave, and the table spans the pane.
-                    .column(Column::remainder().at_least(widths.executable_least).resizable(false));
+                    .column(Col::rest(80.0).at_least(widths.executable_least).resizable(false));
                 // A narrow pane drops the Sample and Arguments columns so the
                 // icons at the row's end are never cut off.
                 if widths.wide {
                     table = table
-                        .column(Column::initial(widths.sample).range(widths.sample_least..=400.0).clip(true))
-                        .column(Column::initial(widths.arguments).range(widths.arguments_least..=400.0).clip(true));
+                        .column(Col::flex(widths.sample).range(widths.sample_least..=400.0).clip(true))
+                        .column(Col::flex(widths.arguments).range(widths.arguments_least..=400.0).clip(true));
                 }
                 let mut table = table
-                    .column(Column::initial(widths.status).range(widths.status_least..=320.0).clip(true))
-                    .column(Column::initial(widths.exit).range(widths.exit_least..=220.0).clip(true))
-                    .column(Column::exact(widths.actions))
+                    .column(Col::flex(widths.status).range(widths.status_least..=320.0).clip(true))
+                    .column(Col::flex(widths.exit).range(widths.exit_least..=220.0).clip(true))
+                    .column(Col::fixed(widths.actions))
                     .resizable(true)
                     .striped(true)
                     .max_scroll_height(height)

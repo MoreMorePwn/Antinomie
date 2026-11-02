@@ -81,7 +81,7 @@ impl MonitorApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 // Room for the scroll bar, so no table or box runs under it.
-                ui.set_width((ui.available_width() - parts::SCROLL_GUTTER).max(320.0));
+                ui.set_width((ui.available_width() - parts::SCROLL_GUTTER).max(0.0));
                 verdict(ui, data);
                 match super::notes_tab::latest(ui, data) {
                     Some(super::notes_tab::Act::Tab) => go = Some(Go::Notes),
@@ -335,11 +335,11 @@ fn recent_runs(ui: &mut egui::Ui, data: &Data, go: &mut Option<Go>, font: f32) {
         let mut menu = None;
         parts::on_surface(ui, |ui| {
             parts::click_table(ui, "sample_summary_runs")
-                .column(egui_extras::Column::exact(120.0))
-                .column(egui_extras::Column::exact(150.0))
-                .column(egui_extras::Column::exact(140.0))
-                .column(egui_extras::Column::exact(100.0))
-                .column(egui_extras::Column::remainder().at_least(100.0))
+                .column(crate::widgets::fit_table::Col::fixed(120.0))
+                .column(crate::widgets::fit_table::Col::fixed(150.0))
+                .column(crate::widgets::fit_table::Col::fixed(140.0))
+                .column(crate::widgets::fit_table::Col::fixed(100.0))
+                .column(crate::widgets::fit_table::Col::rest(80.0).at_least(100.0))
                 .header(table::header_height(font), |mut header| {
                     for title in ["Run", "Start", "VM", "Suspicion", "Outcome"] {
                         header.col(|ui| table::head(ui, title));
@@ -639,9 +639,11 @@ fn string_table(
         let mut builder = parts::mini_table(ui, id);
         for (index, _) in titles.iter().enumerate() {
             builder = builder.column(if index == wide {
-                egui_extras::Column::remainder().at_least(keep).clip(true)
+                crate::widgets::fit_table::Col::rest(80.0)
+                    .at_least(keep)
+                    .clip(true)
             } else {
-                egui_extras::Column::initial(widths[index])
+                crate::widgets::fit_table::Col::flex(widths[index])
                     .at_least(48.0)
                     .clip(true)
             });
@@ -946,7 +948,7 @@ fn identity(
         // A gap between the two boxes, and boxes of one height.
         let spacing = ui.spacing().item_spacing.x;
         ui.spacing_mut().item_spacing.x = 16.0;
-        let left_body = |ui: &mut egui::Ui| {
+        let mut left_body = |ui: &mut egui::Ui| {
             if record.description.is_empty() {
                 ui.label(theme::hint_text("No description"));
             } else {
@@ -962,8 +964,19 @@ fn identity(
                 }
             });
             ui.add_space(8.0);
-            let value_width =
-                parts::value_width(ui, &["Type", "Added", "Also added", "Source"], 0.0);
+            let value_width = parts::value_width(
+                ui,
+                &[
+                    "Type",
+                    "Added",
+                    "Also added",
+                    "Source",
+                    "SHA-256",
+                    "SHA-1",
+                    "Archive",
+                ],
+                0.0,
+            );
             egui::Grid::new("sample_identity_left")
                 .num_columns(2)
                 .spacing([12.0, parts::ROW_GAP])
@@ -1013,106 +1026,85 @@ fn identity(
                             parts::row_in(ui, "Source", source, value_width);
                         }
                     }
+                    // The hashes and the archive share the label column of
+                    // the facts above; a long value is cut in the middle (the
+                    // whole of it on hover and in the copy button).
+                    for (label, value) in [
+                        ("SHA-256", record.sha256.as_str()),
+                        ("SHA-1", record.sha1.as_str()),
+                        ("MD5", record.md5.as_str()),
+                        ("TLSH", record.tlsh.as_str()),
+                    ] {
+                        parts::copy_row_in(ui, label, value, value_width, "Not computed");
+                    }
+                    let archive = data.archive.display().to_string();
+                    parts::copy_row_in(ui, "Archive", &archive, value_width, "–");
+                    ui.label("");
+                    archive_state(ui, data, verified, verifying, go, value_width);
+                    ui.end_row();
                 });
         };
-        let mut right_body = |ui: &mut egui::Ui| {
-            parts::hash_rows(
-                ui,
-                &[
-                    ("SHA-256", record.sha256.as_str()),
-                    ("SHA-1", record.sha1.as_str()),
-                    ("MD5", record.md5.as_str()),
-                    ("TLSH", record.tlsh.as_str()),
-                ],
-            );
-            ui.add_space(parts::ROW_GAP);
-            // Not in the grid: a long path must wrap in the box, not
-            // widen its column.
-            ui.label(RichText::new("Archive").color(theme::muted()));
-            // Not justified: a path has no spaces to stretch.
-            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(data.archive.display().to_string())
-                            .monospace()
-                            .small(),
-                    )
-                    .wrap()
-                    .selectable(true),
-                );
-            });
-            ui.horizontal_wrapped(|ui| {
-                if data.archived {
-                    widgets::chip(ui, "archive present", Tone::Good)
-                        .on_hover_text("AES zip, password infected");
-                } else {
-                    widgets::chip(ui, "✗ missing", Tone::Error);
-                }
-                if verifying {
-                    theme::spinner(ui);
-                }
-                match verified {
-                    Some((true, _)) => {
-                        widgets::chip(ui, "✓ SHA-256 matches", Tone::Good);
-                    }
-                    Some((false, why)) => {
-                        widgets::chip(ui, "✗ did not verify", Tone::Error).on_hover_text(why);
-                    }
-                    None => {}
-                }
-                if ui
-                    .add_enabled(data.archived && !verifying, egui::Button::new("Verify"))
-                    .on_hover_text("Read the archive back and compare its SHA-256")
-                    .clicked()
-                {
-                    *go = Some(Go::Verify);
-                }
-                if ui
-                    .add_enabled(data.archived, egui::Button::new("View content"))
-                    .on_hover_text("Open the archived file in the viewer")
-                    .on_disabled_hover_text("The archive was removed")
-                    .clicked()
-                {
-                    *go = Some(Go::View);
-                }
-            });
-        };
-        // Side by side when the window is wide enough, else one above the
-        // other. Side by side, the names the sample went by sit under the
-        // description and facts, so neither column ends in an empty box.
-        if ui.available_width() >= SIDE_BY_SIDE {
-            ui.columns(2, |columns| {
-                parts::panel_frame().show(&mut columns[0], |ui| {
-                    ui.set_width(ui.available_width());
-                    left_body(ui);
-                });
-                columns[0].add_space(8.0);
-                aliases(&mut columns[0], data, font);
-                parts::panel_frame().show(&mut columns[1], |ui| {
-                    ui.set_width(ui.available_width());
-                    right_body(ui);
-                });
-            });
-            ui.spacing_mut().item_spacing.x = spacing;
-        } else {
-            parts::panel_frame().show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                left_body(ui);
-            });
-            ui.add_space(8.0);
-            parts::panel_frame().show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                right_body(ui);
-            });
-            ui.spacing_mut().item_spacing.x = spacing;
-            ui.add_space(8.0);
-            aliases(ui, data, font);
-        }
+        // The facts box and the aliases take the whole width, one above the
+        // other, so neither is narrow or half empty.
+        ui.spacing_mut().item_spacing.x = spacing;
+        parts::panel_frame().show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            left_body(ui);
+        });
+        ui.add_space(8.0);
+        aliases(ui, data, font);
     });
 }
 
-/// The width Identity needs for its two boxes side by side.
-const SIDE_BY_SIDE: f32 = 880.0;
+/// The archive's state chips and its Verify and View buttons, wrapped inside
+/// `width`.
+fn archive_state(
+    ui: &mut egui::Ui,
+    data: &Data,
+    verified: Option<&(bool, String)>,
+    verifying: bool,
+    go: &mut Option<Go>,
+    width: f32,
+) {
+    ui.scope(|ui| {
+        ui.set_max_width(width);
+        ui.horizontal_wrapped(|ui| {
+            if data.archived {
+                widgets::chip(ui, "archive present", Tone::Good)
+                    .on_hover_text("AES zip, password infected");
+            } else {
+                widgets::chip(ui, "✗ missing", Tone::Error);
+            }
+            if verifying {
+                theme::spinner(ui);
+            }
+            match verified {
+                Some((true, _)) => {
+                    widgets::chip(ui, "✓ SHA-256 matches", Tone::Good);
+                }
+                Some((false, why)) => {
+                    widgets::chip(ui, "✗ did not verify", Tone::Error).on_hover_text(why);
+                }
+                None => {}
+            }
+            if ui
+                .add_enabled(data.archived && !verifying, egui::Button::new("Verify"))
+                .on_hover_text("Read the archive back and compare its SHA-256")
+                .clicked()
+            {
+                *go = Some(Go::Verify);
+            }
+            if ui
+                .add_enabled(data.archived, egui::Button::new("View content"))
+                .on_hover_text("Open the archived file in the viewer")
+                .on_disabled_hover_text("The archive was removed")
+                .clicked()
+            {
+                *go = Some(Go::View);
+            }
+        });
+    });
+}
 
 /// Every file name the sample went by.
 fn aliases(ui: &mut egui::Ui, data: &Data, font: f32) {
@@ -1163,9 +1155,13 @@ fn aliases(ui: &mut egui::Ui, data: &Data, font: f32) {
         };
         parts::on_surface(ui, |ui| {
             parts::mini_table(ui, "sample_aliases")
-                .column(egui_extras::Column::exact(name).clip(true))
-                .column(egui_extras::Column::remainder().at_least(120.0).clip(true))
-                .column(egui_extras::Column::exact(seen).clip(true))
+                .column(crate::widgets::fit_table::Col::fixed(name).clip(true))
+                .column(
+                    crate::widgets::fit_table::Col::rest(80.0)
+                        .at_least(120.0)
+                        .clip(true),
+                )
+                .column(crate::widgets::fit_table::Col::fixed(seen).clip(true))
                 .header(table::header_height(font), |mut header| {
                     for title in ["Name", "Path or source", "Where"] {
                         header.col(|ui| table::head(ui, title));

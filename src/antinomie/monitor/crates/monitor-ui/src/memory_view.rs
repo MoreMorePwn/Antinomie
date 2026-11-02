@@ -4,6 +4,7 @@
 //! plugin and its options (or a MemNixFS report), run it; every run is saved
 //! with its dump and listed beside it, so an earlier result opens again
 //! without running the plugin again.
+use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::{
     network_view::{capture_row, format_date},
     theme::{self, ValueKind},
@@ -17,7 +18,6 @@ use antinomie_monitor_core::{
     BaseSummary, VmConfig,
 };
 use eframe::egui::{self, RichText};
-use egui_extras::{Column, TableBuilder};
 use std::{
     collections::BTreeMap,
     io::Read,

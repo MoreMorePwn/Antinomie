@@ -6,12 +6,12 @@ use super::records::{self, Structure};
 use super::row_menu::{self, RowCommand};
 use super::ReportAction;
 use crate::theme;
+use crate::widgets::fit_table::{Col, FitBuilder};
 use antinomie_monitor_core::{
     AnalysisData, AnalysisEntry, AnalysisKind, AnalysisListingPage, AnalysisReport,
     AnalysisSection, ListingSort, StructureField, LISTING_PAGE_MAX_ROWS,
 };
 use eframe::egui::{self, Color32, FontId, RichText};
-use egui_extras::{Column, TableBuilder};
 
 mod fields;
 mod ghidra;
@@ -323,7 +323,7 @@ pub(super) fn show(
                 }
             });
     }
-    let structure_columns: Vec<(&str, Column)> = match state.scope {
+    let structure_columns: Vec<(&str, Col)> = match state.scope {
         Some(scope) if kind == AnalysisKind::Structures => records::columns(kind, scope, false)
             .iter()
             .enumerate()
@@ -336,213 +336,204 @@ pub(super) fn show(
                 // The last column takes what the others leave, so the table
                 // spans the pane.
                 let spec = if at + 1 == records::columns(kind, scope, false).len() {
-                    Column::remainder().at_least(70.0).clip(true)
+                    Col::rest(80.0).at_least(70.0).clip(true)
                 } else {
-                    Column::initial(width).at_least(70.0).clip(true)
+                    Col::flex(width).at_least(70.0).clip(true)
                 };
                 (column.label(), spec)
             })
             .collect(),
         _ => Vec::new(),
     };
-    let columns: &[(&str, Column)] = match kind {
+    let columns: &[(&str, Col)] = match kind {
         AnalysisKind::Structures if !structure_columns.is_empty() => &structure_columns,
         AnalysisKind::Disassembly if from_ghidra => &[
-            ("Address", Column::exact(mono.size * 7.5)),
+            ("Address", Col::fixed(mono.size * 7.5)),
             (
                 "Bytes",
-                Column::initial(mono.size * 9.0).at_least(40.0).clip(true),
+                Col::flex(mono.size * 9.0).at_least(40.0).clip(true),
             ),
-            (
-                "Instruction",
-                Column::remainder().at_least(350.0).clip(true),
-            ),
-            ("Xrefs", Column::exact(mono.size * 4.5)),
+            ("Instruction", Col::rest(80.0).at_least(350.0).clip(true)),
+            ("Xrefs", Col::fixed(mono.size * 4.5)),
         ],
         AnalysisKind::Disassembly => &[
-            ("Address", Column::exact(mono.size * 7.5)),
+            ("Address", Col::fixed(mono.size * 7.5)),
             (
                 "Bytes",
-                Column::initial(mono.size * 9.0).at_least(40.0).clip(true),
+                Col::flex(mono.size * 9.0).at_least(40.0).clip(true),
             ),
             // The last column takes what the others leave, so the listing
             // spans its pane at any width.
-            (
-                "Instruction",
-                Column::remainder().at_least(350.0).clip(true),
-            ),
+            ("Instruction", Col::rest(80.0).at_least(350.0).clip(true)),
         ],
         AnalysisKind::Decompilation => &[
-            ("Line", Column::exact(mono.size * 4.0)),
-            ("Code", Column::remainder().at_least(400.0).clip(true)),
+            ("Line", Col::fixed(mono.size * 4.0)),
+            ("Code", Col::rest(80.0).at_least(400.0).clip(true)),
         ],
         AnalysisKind::Strings => &[
-            ("Offset", Column::exact(mono.size * 8.0)),
-            ("Encoding", Column::exact(mono.size * 6.0)),
+            ("Offset", Col::fixed(mono.size * 8.0)),
+            ("Encoding", Col::fixed(mono.size * 6.0)),
             (
                 "Length",
-                Column::initial(mono.size * 12.0).at_least(40.0).clip(true),
+                Col::flex(mono.size * 12.0).at_least(40.0).clip(true),
             ),
-            ("Text", Column::remainder().at_least(200.0).clip(true)),
+            ("Text", Col::rest(80.0).at_least(200.0).clip(true)),
         ],
         _ => &[
-            ("Name", Column::initial(200.0).clip(true)),
-            ("Value", Column::remainder().at_least(200.0).clip(true)),
+            ("Name", Col::flex(200.0).clip(true)),
+            ("Value", Col::rest(80.0).at_least(200.0).clip(true)),
         ],
     };
     if split {
         let surface = ui.available_rect_before_wrap();
         ui.painter().rect_filled(surface, 0.0, theme::terminal());
     }
-    egui::ScrollArea::horizontal()
-        .id_salt(("listing-horizontal", kind_salt(kind)))
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.push_id(("listing-table", kind_salt(kind)), |ui| {
-                // Rows select on click; text selection would swallow it.
-                ui.style_mut().interaction.selectable_labels = false;
-                let focus: Option<Vec<usize>> = state.function.as_ref().map(|identity| {
-                    let mut current = None;
-                    page.rows
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, (_, entry))| {
-                            row_function_identity(entry, &names, &mut current, identity).as_deref()
-                                == Some(identity.as_str())
-                        })
-                        .map(|(index, _)| index)
-                        .collect()
-                });
-                let row_total = focus.as_ref().map_or(page.total as usize, Vec::len);
-                if focus.as_ref().is_some_and(Vec::is_empty) {
-                    ui.label("No rows of this function are in the loaded listing page.");
-                }
-                let height = ui.available_height().max(row_height);
-                crate::widgets::table::begin(ui);
-                let mut table = TableBuilder::new(ui)
-                    .id_salt(("listing", kind_salt(kind)))
-                    .striped(kind != AnalysisKind::Decompilation)
-                    .resizable(true)
-                    .sense(egui::Sense::click())
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .max_scroll_height(height);
-                if let Some(row) = state.scroll.take().filter(|_| focus.is_none()) {
-                    table = table.scroll_to_row(row as usize, Some(egui::Align::Min));
-                }
-                for (_, column) in columns {
-                    table = table.column(*column);
-                }
-                table
-                    .header(row_height, |mut header| {
-                        for (column, (title, _)) in columns.iter().enumerate() {
-                            header.col(|ui| match kind {
-                                AnalysisKind::Strings => {
-                                    crate::table_sort::header(ui, STRINGS_TABLE, column, title)
-                                }
-                                AnalysisKind::Disassembly | AnalysisKind::Decompilation => {
-                                    ordered_head(ui, title, kind)
-                                }
-                                _ => crate::table_sort::header(
-                                    ui,
-                                    &sort_table(kind, state.scope),
-                                    column,
-                                    title,
-                                ),
-                            });
-                        }
+    ui.scope(|ui| {
+        ui.push_id(("listing-table", kind_salt(kind)), |ui| {
+            // Rows select on click; text selection would swallow it.
+            ui.style_mut().interaction.selectable_labels = false;
+            let focus: Option<Vec<usize>> = state.function.as_ref().map(|identity| {
+                let mut current = None;
+                page.rows
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, entry))| {
+                        row_function_identity(entry, &names, &mut current, identity).as_deref()
+                            == Some(identity.as_str())
                     })
-                    .body(|body| {
-                        body.rows(row_height, row_total, |mut row| {
-                            let index = row.index();
-                            let Some((listing_index, entry)) = (if let Some(focus) = &focus {
-                                focus.get(index).map(|slot| &page.rows[*slot])
-                            } else {
-                                let index = index as u64;
-                                loaded
-                                    .contains(&index)
-                                    .then(|| &page.rows[(index - page.start) as usize])
-                            }) else {
-                                needed.get_or_insert(index as u64);
-                                row.col(|ui| {
-                                    ui.weak("…");
-                                });
-                                return;
-                            };
-                            let selected = state
-                                .selected
-                                .as_ref()
-                                .is_some_and(|(selected, _)| selected == listing_index);
-                            row.set_selected(selected);
-                            if from_ghidra
-                                && kind == AnalysisKind::Disassembly
-                                && matches!(
-                                    entry.record.as_ref().map(|record| &record.data),
-                                    Some(AnalysisData::Instruction { .. })
-                                )
-                            {
-                                ghidra::instruction_cells(&mut row, entry, &mono, &mut jump);
-                            } else {
-                                cells(&mut row, kind, state.scope, entry, &mono, &state.lines);
+                    .map(|(index, _)| index)
+                    .collect()
+            });
+            let row_total = focus.as_ref().map_or(page.total as usize, Vec::len);
+            if focus.as_ref().is_some_and(Vec::is_empty) {
+                ui.label("No rows of this function are in the loaded listing page.");
+            }
+            let height = ui.available_height().max(row_height);
+            crate::widgets::table::begin(ui);
+            let mut table = FitBuilder::new(ui)
+                .id_salt(("listing", kind_salt(kind)))
+                .striped(kind != AnalysisKind::Decompilation)
+                .resizable(true)
+                .sense(egui::Sense::click())
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .max_scroll_height(height);
+            if let Some(row) = state.scroll.take().filter(|_| focus.is_none()) {
+                table = table.scroll_to_row(row as usize, Some(egui::Align::Min));
+            }
+            for (_, column) in columns {
+                table = table.column(*column);
+            }
+            table
+                .header(row_height, |mut header| {
+                    for (column, (title, _)) in columns.iter().enumerate() {
+                        header.col(|ui| match kind {
+                            AnalysisKind::Strings => {
+                                crate::table_sort::header(ui, STRINGS_TABLE, column, title)
                             }
-                            row.response().context_menu(|ui| {
-                                let cells: Vec<_> = columns
-                                    .iter()
-                                    .map(|(title, _)| *title)
-                                    .zip(if from_ghidra && kind == AnalysisKind::Disassembly {
-                                        let ghidra = ghidra::texts(entry);
-                                        if ghidra.is_empty() {
-                                            row_text::texts(kind, state.scope, entry)
-                                        } else {
-                                            ghidra
-                                        }
-                                    } else {
+                            AnalysisKind::Disassembly | AnalysisKind::Decompilation => {
+                                ordered_head(ui, title, kind)
+                            }
+                            _ => crate::table_sort::header(
+                                ui,
+                                &sort_table(kind, state.scope),
+                                column,
+                                title,
+                            ),
+                        });
+                    }
+                })
+                .body(|body| {
+                    body.rows(row_height, row_total, |mut row| {
+                        let index = row.index();
+                        let Some((listing_index, entry)) = (if let Some(focus) = &focus {
+                            focus.get(index).map(|slot| &page.rows[*slot])
+                        } else {
+                            let index = index as u64;
+                            loaded
+                                .contains(&index)
+                                .then(|| &page.rows[(index - page.start) as usize])
+                        }) else {
+                            needed.get_or_insert(index as u64);
+                            row.col(|ui| {
+                                ui.weak("…");
+                            });
+                            return;
+                        };
+                        let selected = state
+                            .selected
+                            .as_ref()
+                            .is_some_and(|(selected, _)| selected == listing_index);
+                        row.set_selected(selected);
+                        if from_ghidra
+                            && kind == AnalysisKind::Disassembly
+                            && matches!(
+                                entry.record.as_ref().map(|record| &record.data),
+                                Some(AnalysisData::Instruction { .. })
+                            )
+                        {
+                            ghidra::instruction_cells(&mut row, entry, &mono, &mut jump);
+                        } else {
+                            cells(&mut row, kind, state.scope, entry, &mono, &state.lines);
+                        }
+                        row.response().context_menu(|ui| {
+                            let cells: Vec<_> = columns
+                                .iter()
+                                .map(|(title, _)| *title)
+                                .zip(if from_ghidra && kind == AnalysisKind::Disassembly {
+                                    let ghidra = ghidra::texts(entry);
+                                    if ghidra.is_empty() {
                                         row_text::texts(kind, state.scope, entry)
-                                    })
-                                    .collect();
-                                if let Some(next) =
-                                    row_menu::menu(ui, &cells, entry, report, kind, state.content)
-                                {
-                                    state.command = Some(next);
-                                }
-                                ui.separator();
-                                let field = match kind {
-                                    AnalysisKind::Disassembly => "mnemonic",
-                                    AnalysisKind::Decompilation => "code",
-                                    AnalysisKind::Strings => "text",
-                                    _ => "name",
-                                };
-                                if let Some((_, value)) = listing_row_with(entry, &state.record)
-                                    .iter()
-                                    .find(|(name, _)| *name == field)
-                                {
-                                    crate::query::value_menu(ui, field, value, &mut state.query);
-                                }
-                                ui.menu_button("Filter by field", |ui| {
-                                    for (field, value) in listing_row_with(entry, &state.record) {
-                                        ui.menu_button(field, |ui| {
-                                            crate::query::value_menu(
-                                                ui,
-                                                field,
-                                                &value,
-                                                &mut state.query,
-                                            );
-                                        });
+                                    } else {
+                                        ghidra
                                     }
-                                });
-                                if ui.button("Copy label and value").clicked() {
-                                    ui.ctx()
-                                        .copy_text(format!("{}\n{}", entry.label, entry.value));
-                                    ui.close_menu();
+                                } else {
+                                    row_text::texts(kind, state.scope, entry)
+                                })
+                                .collect();
+                            if let Some(next) =
+                                row_menu::menu(ui, &cells, entry, report, kind, state.content)
+                            {
+                                state.command = Some(next);
+                            }
+                            ui.separator();
+                            let field = match kind {
+                                AnalysisKind::Disassembly => "mnemonic",
+                                AnalysisKind::Decompilation => "code",
+                                AnalysisKind::Strings => "text",
+                                _ => "name",
+                            };
+                            if let Some((_, value)) = listing_row_with(entry, &state.record)
+                                .iter()
+                                .find(|(name, _)| *name == field)
+                            {
+                                crate::query::value_menu(ui, field, value, &mut state.query);
+                            }
+                            ui.menu_button("Filter by field", |ui| {
+                                for (field, value) in listing_row_with(entry, &state.record) {
+                                    ui.menu_button(field, |ui| {
+                                        crate::query::value_menu(
+                                            ui,
+                                            field,
+                                            &value,
+                                            &mut state.query,
+                                        );
+                                    });
                                 }
                             });
-                            let response = row.response();
-                            if response.clicked() || response.secondary_clicked() {
-                                clicked = Some((*listing_index, entry.clone()));
+                            if ui.button("Copy label and value").clicked() {
+                                ui.ctx()
+                                    .copy_text(format!("{}\n{}", entry.label, entry.value));
+                                ui.close_menu();
                             }
                         });
+                        let response = row.response();
+                        if response.clicked() || response.secondary_clicked() {
+                            clicked = Some((*listing_index, entry.clone()));
+                        }
                     });
-            });
+                });
         });
+    });
     if let Some(selection) = clicked {
         state.selected = Some(selection);
     }

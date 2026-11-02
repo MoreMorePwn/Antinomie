@@ -108,87 +108,6 @@ pub(super) fn value_width(ui: &egui::Ui, labels: &[&str], extra: f32) -> f32 {
     (ui.available_width() - widest - 12.0 - extra).max(80.0)
 }
 
-/// Hash rows (label, value, copy button) of equal height and equal gaps: the
-/// value wraps inside its own column, the label and the button sit centred
-/// beside it, and the buttons line up at the right edge. An empty value reads
-/// "Not computed" and has no button.
-pub(super) fn hash_rows(ui: &mut egui::Ui, rows: &[(&str, &str)]) {
-    let body = egui::TextStyle::Body.resolve(ui.style());
-    let mono = egui::TextStyle::Monospace.resolve(ui.style());
-    let small = egui::FontId::monospace((mono.size * 0.85).max(10.0));
-    let gap = 12.0;
-    let button = ui.spacing().interact_size.y + 4.0;
-    let label_width = rows
-        .iter()
-        .map(|(label, _)| {
-            ui.painter()
-                .layout_no_wrap((*label).to_owned(), body.clone(), theme::text())
-                .size()
-                .x
-        })
-        .fold(0.0_f32, f32::max);
-    let value_width = (ui.available_width() - label_width - button - gap * 2.0).max(80.0);
-    let height = rows
-        .iter()
-        .map(|(_, value)| {
-            ui.painter()
-                .layout(
-                    (*value).to_owned(),
-                    small.clone(),
-                    theme::text(),
-                    value_width,
-                )
-                .size()
-                .y
-        })
-        .fold(button, f32::max)
-        + 4.0;
-    for (index, (label, value)) in rows.iter().enumerate() {
-        if index > 0 {
-            ui.add_space(ROW_GAP);
-        }
-        ui.allocate_ui_with_layout(
-            egui::vec2(ui.available_width(), height),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-                ui.allocate_ui_with_layout(
-                    egui::vec2(label_width, height),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        ui.set_min_size(egui::vec2(label_width, height));
-                        ui.label(RichText::new(*label).color(theme::muted()))
-                    },
-                );
-                ui.allocate_ui_with_layout(
-                    egui::vec2(value_width, height),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        ui.set_min_size(egui::vec2(value_width, height));
-                        if value.is_empty() {
-                            ui.label(theme::hint_text("Not computed"));
-                        } else {
-                            ui.add(
-                                egui::Label::new(RichText::new(*value).font(small.clone()))
-                                    .wrap()
-                                    .selectable(true),
-                            );
-                        }
-                    },
-                );
-                if !value.is_empty()
-                    && ui
-                        .small_button(egui_phosphor::regular::COPY)
-                        .on_hover_text(format!("Copy {label}"))
-                        .clicked()
-                {
-                    ui.ctx().copy_text((*value).to_owned());
-                }
-            },
-        );
-    }
-}
-
 /// A key/value grid row whose value wraps within `max_width`.
 pub(super) fn row_in(
     ui: &mut egui::Ui,
@@ -200,6 +119,49 @@ pub(super) fn row_in(
     ui.scope(|ui| {
         ui.set_max_width(max_width);
         ui.add(egui::Label::new(value).wrap().selectable(true));
+    });
+    ui.end_row();
+}
+
+/// A grid row for a long value with a copy button: the value is cut in the
+/// middle ("7dd32a00…c1e1a3") to fit `max_width` less the button, the whole of
+/// it on hover, and the button copies the whole of it. An empty value reads
+/// `empty` and has no button.
+pub(super) fn copy_row_in(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &str,
+    max_width: f32,
+    empty: &str,
+) {
+    ui.label(RichText::new(label).color(theme::muted()));
+    ui.scope(|ui| {
+        ui.set_max_width(max_width);
+        ui.horizontal(|ui| {
+            if value.is_empty() {
+                ui.label(theme::hint_text(empty));
+                return;
+            }
+            let button = ui.spacing().interact_size.y + 4.0;
+            let room = (max_width - button - ui.spacing().item_spacing.x).max(40.0);
+            let mono = egui::TextStyle::Monospace.resolve(ui.style());
+            let shown = crate::widgets::fit_table::middle(ui, value, &mono, room);
+            let text = ui.add(
+                egui::Label::new(RichText::new(&shown).font(mono))
+                    .wrap_mode(egui::TextWrapMode::Extend)
+                    .selectable(false),
+            );
+            if shown != value {
+                text.on_hover_text(value);
+            }
+            if ui
+                .small_button(egui_phosphor::regular::COPY)
+                .on_hover_text(format!("Copy {label}"))
+                .clicked()
+            {
+                ui.ctx().copy_text(value.to_owned());
+            }
+        });
     });
     ui.end_row();
 }
@@ -245,8 +207,8 @@ pub(super) fn on_surface<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -
 
 /// A table of fixed height inside a scrolling page: the body never scrolls
 /// on its own.
-pub(super) fn mini_table<'a>(ui: &'a mut egui::Ui, id: &str) -> TableBuilder<'a> {
-    TableBuilder::new(ui)
+pub(super) fn mini_table<'a>(ui: &'a mut egui::Ui, id: &str) -> FitBuilder<'a> {
+    FitBuilder::new(ui)
         .id_salt(id)
         .striped(true)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
@@ -256,7 +218,7 @@ pub(super) fn mini_table<'a>(ui: &'a mut egui::Ui, id: &str) -> TableBuilder<'a>
 /// A `mini_table` whose rows are clickable: its labels are not selectable, so
 /// a click on the text of any cell reaches the row. Call inside `on_surface`
 /// (the style change stays in that scope).
-pub(super) fn click_table<'a>(ui: &'a mut egui::Ui, id: &str) -> TableBuilder<'a> {
+pub(super) fn click_table<'a>(ui: &'a mut egui::Ui, id: &str) -> FitBuilder<'a> {
     ui.style_mut().interaction.selectable_labels = false;
     mini_table(ui, id).sense(egui::Sense::click())
 }

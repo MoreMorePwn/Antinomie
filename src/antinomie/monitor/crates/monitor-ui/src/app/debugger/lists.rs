@@ -2,6 +2,7 @@
 //! The Threads and Breakpoints panes: sortable tables of the stopped process's
 //! threads and its breakpoints.
 use super::*;
+use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::{
     table_sort,
     widgets::table::{self, Cell, Mark},
@@ -10,7 +11,6 @@ use antinomie_monitor_core::debug::{
     signal_policy::signal_name,
     view::{BreakpointKind, DebugThread, ViewCaps, WatchAccess},
 };
-use egui_extras::{Column, TableBuilder};
 
 /// Height of the panes' table rows.
 fn row_height(ui: &egui::Ui) -> f32 {
@@ -57,14 +57,14 @@ pub(super) fn threads(
     });
     let row_height = row_height(ui);
     table::begin(ui);
-    TableBuilder::new(ui)
+    FitBuilder::new(ui)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .id_salt(TABLE)
         .striped(true)
         .sense(egui::Sense::click())
-        .column(Column::auto().at_least(76.0))
-        .column(Column::auto().at_least(100.0))
-        .column(Column::remainder().at_least(90.0))
+        .column(Col::flex(76.0))
+        .column(Col::flex(100.0))
+        .column(Col::rest(80.0).at_least(90.0))
         .vscroll(false)
         .header(row_height + 4.0, |mut header| {
             for (column, title) in ["Thread", "State", "PC"].into_iter().enumerate() {
@@ -222,15 +222,15 @@ pub(super) fn breakpoints(
     });
     let row_height = row_height(ui);
     table::begin(ui);
-    TableBuilder::new(ui)
+    FitBuilder::new(ui)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .id_salt(TABLE)
         .striped(true)
-        .column(Column::auto().at_least(40.0))
-        .column(Column::auto().at_least(110.0))
-        .column(Column::auto().at_least(50.0))
-        .column(Column::auto().at_least(50.0))
-        .column(Column::remainder().at_least(24.0))
+        .column(Col::flex(40.0))
+        .column(Col::flex(110.0))
+        .column(Col::flex(50.0))
+        .column(Col::flex(50.0))
+        .column(Col::rest(80.0).at_least(24.0))
         .vscroll(false)
         .header(row_height + 4.0, |mut header| {
             for (column, title) in ["On", "Address", "Kind", "At PC"].into_iter().enumerate() {

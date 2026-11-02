@@ -8,7 +8,7 @@ use antinomie_monitor_core::debug::{
     view::Controller,
 };
 
-use egui_extras::{Column, TableBuilder};
+use crate::widgets::fit_table::{Col, FitBuilder};
 
 /// Signals the table lists: the standard ones.
 const LISTED_MAX: u8 = 31;
@@ -49,15 +49,15 @@ pub(super) fn rows(
     });
     let row_height = widgets_table::row_height(egui::TextStyle::Body.resolve(ui.style()).size);
     widgets_table::begin(ui);
-    TableBuilder::new(ui)
+    FitBuilder::new(ui)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .id_salt(TABLE)
         .striped(true)
-        .column(Column::auto().at_least(110.0))
-        .column(Column::auto().at_least(44.0))
-        .column(Column::auto().at_least(44.0))
-        .column(Column::auto().at_least(44.0))
-        .column(Column::remainder().at_least(60.0))
+        .column(Col::flex(110.0))
+        .column(Col::flex(44.0))
+        .column(Col::flex(44.0))
+        .column(Col::flex(44.0))
+        .column(Col::rest(80.0).at_least(60.0))
         .vscroll(false)
         .header(row_height + 4.0, |mut header| {
             for (column, title) in ["Signal", "Stop", "Print", "Pass", "Changed"]

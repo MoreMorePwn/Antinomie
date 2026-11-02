@@ -4,10 +4,10 @@
 //! shows its details and source text. Catalog packs show the catalog's
 //! metadata only: their rules exist locally after install.
 use super::{first_run::ENGINES, theme, Done, Model};
+use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::widgets::{self, table, TabItem, Tone};
 use antinomie_monitor_core::ruleset::{self, IndexedRule};
 use eframe::egui::{self, RichText};
-use egui_extras::{Column, TableBuilder};
 use std::{path::Path, sync::mpsc, thread};
 
 /// The two tabs inside an engine.
@@ -400,81 +400,78 @@ impl Model {
             self.group_id.clone()
         };
         let height = row_height * (rows.len().min(5) as f32 + 1.5) + 8.0;
-        egui::ScrollArea::horizontal()
-            .id_salt("rules_sets_scroll")
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.x += CELL_PAD;
-                ui.set_min_width(520.0);
-                table::begin(ui);
-                TableBuilder::new(ui)
-                    .id_salt("rules_sets")
-                    .sense(egui::Sense::click())
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .striped(true)
-                    .column(Column::exact(34.0))
-                    .column(Column::remainder().at_least(180.0))
-                    .column(Column::initial(110.0).at_least(60.0).resizable(true))
-                    .column(Column::exact(72.0))
-                    .column(Column::initial(150.0).at_least(90.0))
-                    .max_scroll_height(height)
-                    .min_scrolled_height(0.0)
-                    .header(table::header_height(font), |mut header| {
-                        header.col(|ui| table::head(ui, "On"));
-                        for (column, title) in
-                            ["Pack", "Version", "Kind", "State"].into_iter().enumerate()
-                        {
-                            header.col(|ui| {
-                                crate::table_sort::header(ui, "rules_sets", column + 1, title)
-                            });
-                        }
-                    })
-                    .body(|body| {
-                        body.rows(row_height, rows.len(), |mut row| {
-                            let set = &rows[order[row.index()]];
-                            let is_selected = selected == set.id;
-                            row.set_selected(is_selected);
-                            row.col(|ui| {
-                                table::row_mark(
-                                    ui,
-                                    if is_selected {
-                                        table::Mark::Selected
-                                    } else {
-                                        table::Mark::None
-                                    },
-                                );
-                                let mut on = set.enabled;
-                                if ui.checkbox(&mut on, "").changed() {
-                                    toggle = Some((set.id.clone(), set.group, on));
-                                }
-                            });
-                            row.col(|ui| {
-                                table::cell_click(ui, table::Cell::Text, &set.name);
-                            });
-                            row.col(|ui| {
-                                table::cell_click(ui, table::Cell::Mono, &set.version);
-                            });
-                            row.col(|ui| {
-                                table::cell_click(
-                                    ui,
-                                    table::Cell::Text,
-                                    if set.group { "Custom" } else { "Pack" },
-                                );
-                            });
-                            row.col(|ui| {
-                                if set.update {
-                                    widgets::chip(ui, "Update available", Tone::Accent);
-                                } else if set.enabled {
-                                    widgets::chip(ui, "Enabled", Tone::Good);
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.x += CELL_PAD;
+            table::begin(ui);
+            FitBuilder::new(ui)
+                .id_salt("rules_sets")
+                .sense(egui::Sense::click())
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .striped(true)
+                .column(Col::fixed(34.0))
+                .column(Col::rest(80.0).at_least(180.0))
+                .column(Col::flex(110.0).at_least(60.0).resizable(true))
+                .column(Col::fixed(72.0))
+                .column(Col::flex(150.0).at_least(90.0))
+                .max_scroll_height(height)
+                .min_scrolled_height(0.0)
+                .header(table::header_height(font), |mut header| {
+                    header.col(|ui| table::head(ui, "On"));
+                    for (column, title) in
+                        ["Pack", "Version", "Kind", "State"].into_iter().enumerate()
+                    {
+                        header.col(|ui| {
+                            crate::table_sort::header(ui, "rules_sets", column + 1, title)
+                        });
+                    }
+                })
+                .body(|body| {
+                    body.rows(row_height, rows.len(), |mut row| {
+                        let set = &rows[order[row.index()]];
+                        let is_selected = selected == set.id;
+                        row.set_selected(is_selected);
+                        row.col(|ui| {
+                            table::row_mark(
+                                ui,
+                                if is_selected {
+                                    table::Mark::Selected
                                 } else {
-                                    widgets::chip(ui, "Disabled", Tone::Neutral);
-                                }
-                            });
-                            if row.response().clicked() {
-                                picked = Some((set.group, set.id.clone()));
+                                    table::Mark::None
+                                },
+                            );
+                            let mut on = set.enabled;
+                            if ui.checkbox(&mut on, "").changed() {
+                                toggle = Some((set.id.clone(), set.group, on));
                             }
                         });
+                        row.col(|ui| {
+                            table::cell_click(ui, table::Cell::Text, &set.name);
+                        });
+                        row.col(|ui| {
+                            table::cell_click(ui, table::Cell::Mono, &set.version);
+                        });
+                        row.col(|ui| {
+                            table::cell_click(
+                                ui,
+                                table::Cell::Text,
+                                if set.group { "Custom" } else { "Pack" },
+                            );
+                        });
+                        row.col(|ui| {
+                            if set.update {
+                                widgets::chip(ui, "Update available", Tone::Accent);
+                            } else if set.enabled {
+                                widgets::chip(ui, "Enabled", Tone::Good);
+                            } else {
+                                widgets::chip(ui, "Disabled", Tone::Neutral);
+                            }
+                        });
+                        if row.response().clicked() {
+                            picked = Some((set.group, set.id.clone()));
+                        }
                     });
-            });
+                });
+        });
         if let Some((id, group, on)) = toggle {
             let dir = data_dir.to_path_buf();
             self.spawn(move |_| {
@@ -826,21 +823,16 @@ impl Model {
             ui.set_max_width(width);
             ui.spacing_mut().item_spacing.x += CELL_PAD;
             table::begin(ui);
-            TableBuilder::new(ui)
+            FitBuilder::new(ui)
                 .id_salt("rules_list")
                 .sense(egui::Sense::click())
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .striped(true)
-                .column(Column::exact(34.0))
-                .column(Column::remainder().at_least(120.0).clip(true))
-                .column(Column::exact(84.0))
-                .column(Column::exact(84.0))
-                .column(
-                    Column::initial(100.0)
-                        .at_least(40.0)
-                        .resizable(true)
-                        .clip(true),
-                )
+                .column(Col::fixed(34.0))
+                .column(Col::rest(80.0).at_least(120.0).clip(true))
+                .column(Col::fixed(84.0))
+                .column(Col::fixed(84.0))
+                .column(Col::flex(100.0).at_least(40.0).resizable(true).clip(true))
                 .max_scroll_height(height)
                 .min_scrolled_height(0.0)
                 .header(table::header_height(font), |mut header| {

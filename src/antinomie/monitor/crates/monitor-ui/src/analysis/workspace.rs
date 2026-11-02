@@ -15,12 +15,12 @@ use super::{
     row_menu::{self, RowCommand, RowWindows},
     section_title, ReportAction,
 };
+use crate::widgets::fit_table::{Col as TableColumn, FitBuilder};
 use antinomie_monitor_core::{
     AnalysisData, AnalysisEntry, AnalysisExportFormat, AnalysisKind, AnalysisListingPage,
     AnalysisReport, AnalysisSection, AnalysisSpecimenPage, AnalysisState,
 };
 use eframe::egui;
-use egui_extras::{Column as TableColumn, TableBuilder};
 use std::collections::BTreeMap;
 
 #[derive(Default)]
@@ -1075,86 +1075,83 @@ fn table(
     let order = crate::table_sort::order(ui.ctx(), &table_id, indices.len(), |position, a, b| {
         columns[position].compare(&section.entries[indices[a]], &section.entries[indices[b]])
     });
-    egui::ScrollArea::horizontal()
-        .id_salt("analysis-table-horizontal")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            // Rows select on click; text selection would swallow it.
-            ui.style_mut().interaction.selectable_labels = false;
-            let max_height = ui.available_height().max(height);
-            crate::widgets::table::begin(ui);
-            let mut table = TableBuilder::new(ui)
-                .id_salt("analysis-table")
-                .striped(true)
-                .resizable(true)
-                .sense(egui::Sense::click())
-                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                .max_scroll_height(max_height);
-            for (position, &column) in columns.iter().enumerate() {
-                let width = if column == Column::Value {
-                    300.0
-                } else {
-                    145.0
-                };
-                // The last column takes the width the other columns leave.
-                table = table.column(if position + 1 == columns.len() {
-                    TableColumn::remainder().at_least(width).clip(true)
-                } else {
-                    TableColumn::initial(width).at_least(90.0).clip(true)
-                });
-            }
-            table
-                .header(height, |mut header| {
-                    for (position, &column) in columns.iter().enumerate() {
-                        header.col(|ui| {
-                            crate::table_sort::header(ui, &table_id, position, column.label())
-                        });
-                    }
-                })
-                .body(|body| {
-                    body.rows(height, indices.len(), |mut row| {
-                        let index = indices[order[row.index()]];
-                        let entry = &section.entries[index];
-                        let id = records::identity(index, entry);
-                        row.set_selected(view.selected == Some(id));
-                        for &column in columns {
-                            row.col(|ui| {
-                                let text = super::meaning::shown_text(
+    ui.scope(|ui| {
+        // Rows select on click; text selection would swallow it.
+        ui.style_mut().interaction.selectable_labels = false;
+        let max_height = ui.available_height().max(height);
+        crate::widgets::table::begin(ui);
+        let mut table = FitBuilder::new(ui)
+            .id_salt("analysis-table")
+            .striped(true)
+            .resizable(true)
+            .sense(egui::Sense::click())
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+            .max_scroll_height(max_height);
+        for (position, &column) in columns.iter().enumerate() {
+            let width = if column == Column::Value {
+                300.0
+            } else {
+                145.0
+            };
+            // The last column takes the width the other columns leave.
+            table = table.column(if position + 1 == columns.len() {
+                TableColumn::rest(80.0).at_least(width).clip(true)
+            } else {
+                TableColumn::flex(width).at_least(90.0).clip(true)
+            });
+        }
+        table
+            .header(height, |mut header| {
+                for (position, &column) in columns.iter().enumerate() {
+                    header.col(|ui| {
+                        crate::table_sort::header(ui, &table_id, position, column.label())
+                    });
+                }
+            })
+            .body(|body| {
+                body.rows(height, indices.len(), |mut row| {
+                    let index = indices[order[row.index()]];
+                    let entry = &section.entries[index];
+                    let id = records::identity(index, entry);
+                    row.set_selected(view.selected == Some(id));
+                    for &column in columns {
+                        row.col(|ui| {
+                            let text = super::meaning::shown_text(
+                                section.kind,
+                                column,
+                                entry,
+                                &column.text(entry),
+                            );
+                            ui.add(
+                                egui::Label::new(super::meaning::meaning_text(
                                     section.kind,
                                     column,
                                     entry,
-                                    &column.text(entry),
-                                );
-                                ui.add(
-                                    egui::Label::new(super::meaning::meaning_text(
-                                        section.kind,
-                                        column,
-                                        entry,
-                                        text.clone(),
-                                    ))
-                                    .truncate(),
-                                )
-                                .on_hover_text(text);
-                            });
-                        }
-                        row.response().context_menu(|ui| {
-                            let cells: Vec<_> = columns
-                                .iter()
-                                .map(|column| (column.label(), column.text(entry)))
-                                .collect();
-                            if let Some(next) =
-                                row_menu::menu(ui, &cells, entry, report, section.kind, content)
-                            {
-                                command = Some(next);
-                            }
+                                    text.clone(),
+                                ))
+                                .truncate(),
+                            )
+                            .on_hover_text(text);
                         });
-                        let response = row.response();
-                        if response.clicked() || response.secondary_clicked() {
-                            view.selected = Some(id);
+                    }
+                    row.response().context_menu(|ui| {
+                        let cells: Vec<_> = columns
+                            .iter()
+                            .map(|column| (column.label(), column.text(entry)))
+                            .collect();
+                        if let Some(next) =
+                            row_menu::menu(ui, &cells, entry, report, section.kind, content)
+                        {
+                            command = Some(next);
                         }
                     });
+                    let response = row.response();
+                    if response.clicked() || response.secondary_clicked() {
+                        view.selected = Some(id);
+                    }
                 });
-        });
+            });
+    });
     command
 }
 

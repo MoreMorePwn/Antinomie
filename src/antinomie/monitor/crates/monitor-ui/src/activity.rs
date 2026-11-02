@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Bounded, persisted application log and the shared dismissible notice surface.
 use crate::theme;
+use crate::widgets::fit_table::{Col, FitBuilder};
 use eframe::egui::{self, RichText};
-use egui_extras::{Column, TableBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 
@@ -272,11 +272,11 @@ impl Journal {
                     .x
             }) + 12.0
         };
-        TableBuilder::new(ui)
+        FitBuilder::new(ui)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::exact(time_width))
-            .column(Column::exact(60.0 * scale))
-            .column(Column::remainder())
+            .column(Col::fixed(time_width))
+            .column(Col::fixed(60.0 * scale))
+            .column(Col::rest(80.0))
             .min_scrolled_height(0.0)
             .auto_shrink([false, false])
             .stick_to_bottom(true)

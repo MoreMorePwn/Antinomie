@@ -3,6 +3,7 @@
 //! machine (state, size, age, terms), their switches and the manual update,
 //! and the list of known false positives. Updates run only from buttons.
 use super::{theme, Done, Model};
+use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::widgets::{self, table, Tone};
 use antinomie_monitor_core::{
     api_keys::{self, ApiKey},
@@ -11,7 +12,6 @@ use antinomie_monitor_core::{
     ruleset::{self, Fetcher},
 };
 use eframe::egui::{self, RichText};
-use egui_extras::{Column, TableBuilder};
 use std::path::Path;
 
 /// The Rule manager tab this section answers to.
@@ -181,128 +181,123 @@ impl Model {
         let busy = self.job.is_some();
         let has_key = self.ioc.key_masked.is_some();
         let height = table::row_height(font) * (rows.len() as f32 + 1.5) + 8.0;
-        egui::ScrollArea::horizontal()
-            .id_salt("ioc_feeds_scroll")
-            .show(ui, |ui| {
-                ui.set_min_width(820.0);
-                table::begin(ui);
-                TableBuilder::new(ui)
-                    .id_salt("ioc_feeds")
-                    .sense(egui::Sense::click())
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .striped(true)
-                    .column(Column::exact(44.0))
-                    .column(Column::initial(190.0).at_least(110.0).clip(true))
-                    .column(Column::initial(220.0).at_least(90.0).clip(true))
-                    .column(Column::exact(90.0))
-                    .column(Column::exact(100.0))
-                    .column(Column::exact(100.0))
-                    .column(Column::exact(60.0))
-                    .column(Column::exact(150.0))
-                    .column(Column::remainder().at_least(90.0))
-                    .max_scroll_height(height)
-                    .min_scrolled_height(0.0)
-                    .header(table::header_height(font), |mut header| {
-                        for title in [
-                            "On",
-                            "Dataset",
-                            "Used for",
-                            "Records",
-                            "Size",
-                            "Downloaded",
-                            "Age",
-                            "Status",
-                            "",
-                        ] {
-                            header.col(|ui| table::head(ui, title));
-                        }
-                    })
-                    .body(|body| {
-                        body.rows(table::row_height(font), rows.len(), |mut row| {
-                            let status = &rows[row.index()];
-                            let feed = status.feed;
-                            row.set_selected(self.ioc.pick == Some(feed.id));
-                            row.col(|ui| {
-                                let mut on = status.enabled;
-                                if ui.checkbox(&mut on, "").changed() {
-                                    toggle = Some((feed.id, on));
-                                }
-                            });
-                            row.col(|ui| {
-                                let text = format!("{} · {}", feed.name, feed.file);
-                                table::cell_click(ui, table::Cell::Text, &text);
-                            });
-                            row.col(|ui| {
-                                table::cell_click(ui, table::Cell::Text, feed.used_for);
-                            });
-                            row.col(|ui| {
-                                let text = status
-                                    .meta
-                                    .as_ref()
-                                    .map_or("—".to_owned(), |meta| thousands(meta.records));
-                                table::cell_click(ui, table::Cell::Number, &text);
-                            });
-                            row.col(|ui| {
-                                let text = status
-                                    .meta
-                                    .as_ref()
-                                    .map_or("—".to_owned(), |meta| size_text(meta.size));
-                                table::cell_click(ui, table::Cell::Number, &text);
-                            });
-                            row.col(|ui| {
-                                let text = status
-                                    .meta
-                                    .as_ref()
-                                    .map_or("—".to_owned(), |meta| meta.date());
-                                table::cell_click(ui, table::Cell::Mono, &text);
-                            });
-                            row.col(|ui| match &status.meta {
-                                Some(meta) => {
-                                    let days = meta.age_days(now);
-                                    let text = format!("{days} d");
-                                    if meta.stale(now) {
-                                        table::cell_rich(
-                                            ui,
-                                            table::Cell::Number,
-                                            RichText::new(text).color(theme::warn()),
-                                        );
-                                    } else {
-                                        table::cell_click(ui, table::Cell::Number, &text);
-                                    }
-                                }
-                                None => {
-                                    table::cell_click(ui, table::Cell::Number, "—");
-                                }
-                            });
-                            row.col(|ui| {
-                                let (text, tone) = state_chip(status, now);
-                                widgets::chip(ui, text, tone);
-                            });
-                            row.col(|ui| {
-                                let blocked = feed.needs_key && !has_key;
-                                let label = if status.meta.is_some() {
-                                    "Update"
-                                } else {
-                                    "Download"
-                                };
-                                let mut button = ui.add_enabled(
-                                    !busy && !blocked,
-                                    egui::Button::new(label).small(),
-                                );
-                                if blocked {
-                                    button = button
-                                        .on_disabled_hover_text("Needs the abuse.ch Auth-Key");
-                                }
-                                if button.clicked() {
-                                    update = Some(feed);
-                                }
-                            });
-                            if row.response().clicked() {
-                                picked = Some(feed.id);
+        ui.scope(|ui| {
+            table::begin(ui);
+            FitBuilder::new(ui)
+                .id_salt("ioc_feeds")
+                .sense(egui::Sense::click())
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .striped(true)
+                .column(Col::fixed(44.0))
+                .column(Col::flex(190.0).at_least(110.0).clip(true))
+                .column(Col::flex(220.0).at_least(90.0).clip(true))
+                .column(Col::fixed(90.0))
+                .column(Col::fixed(100.0))
+                .column(Col::fixed(100.0))
+                .column(Col::fixed(60.0))
+                .column(Col::fixed(150.0))
+                .column(Col::rest(80.0).at_least(90.0))
+                .max_scroll_height(height)
+                .min_scrolled_height(0.0)
+                .header(table::header_height(font), |mut header| {
+                    for title in [
+                        "On",
+                        "Dataset",
+                        "Used for",
+                        "Records",
+                        "Size",
+                        "Downloaded",
+                        "Age",
+                        "Status",
+                        "",
+                    ] {
+                        header.col(|ui| table::head(ui, title));
+                    }
+                })
+                .body(|body| {
+                    body.rows(table::row_height(font), rows.len(), |mut row| {
+                        let status = &rows[row.index()];
+                        let feed = status.feed;
+                        row.set_selected(self.ioc.pick == Some(feed.id));
+                        row.col(|ui| {
+                            let mut on = status.enabled;
+                            if ui.checkbox(&mut on, "").changed() {
+                                toggle = Some((feed.id, on));
                             }
                         });
+                        row.col(|ui| {
+                            let text = format!("{} · {}", feed.name, feed.file);
+                            table::cell_click(ui, table::Cell::Text, &text);
+                        });
+                        row.col(|ui| {
+                            table::cell_click(ui, table::Cell::Text, feed.used_for);
+                        });
+                        row.col(|ui| {
+                            let text = status
+                                .meta
+                                .as_ref()
+                                .map_or("—".to_owned(), |meta| thousands(meta.records));
+                            table::cell_click(ui, table::Cell::Number, &text);
+                        });
+                        row.col(|ui| {
+                            let text = status
+                                .meta
+                                .as_ref()
+                                .map_or("—".to_owned(), |meta| size_text(meta.size));
+                            table::cell_click(ui, table::Cell::Number, &text);
+                        });
+                        row.col(|ui| {
+                            let text = status
+                                .meta
+                                .as_ref()
+                                .map_or("—".to_owned(), |meta| meta.date());
+                            table::cell_click(ui, table::Cell::Mono, &text);
+                        });
+                        row.col(|ui| match &status.meta {
+                            Some(meta) => {
+                                let days = meta.age_days(now);
+                                let text = format!("{days} d");
+                                if meta.stale(now) {
+                                    table::cell_rich(
+                                        ui,
+                                        table::Cell::Number,
+                                        RichText::new(text).color(theme::warn()),
+                                    );
+                                } else {
+                                    table::cell_click(ui, table::Cell::Number, &text);
+                                }
+                            }
+                            None => {
+                                table::cell_click(ui, table::Cell::Number, "—");
+                            }
+                        });
+                        row.col(|ui| {
+                            let (text, tone) = state_chip(status, now);
+                            widgets::chip(ui, text, tone);
+                        });
+                        row.col(|ui| {
+                            let blocked = feed.needs_key && !has_key;
+                            let label = if status.meta.is_some() {
+                                "Update"
+                            } else {
+                                "Download"
+                            };
+                            let mut button =
+                                ui.add_enabled(!busy && !blocked, egui::Button::new(label).small());
+                            if blocked {
+                                button =
+                                    button.on_disabled_hover_text("Needs the abuse.ch Auth-Key");
+                            }
+                            if button.clicked() {
+                                update = Some(feed);
+                            }
+                        });
+                        if row.response().clicked() {
+                            picked = Some(feed.id);
+                        }
                     });
-            });
+                });
+        });
         if let Some(id) = picked {
             self.ioc.pick = Some(id);
         }

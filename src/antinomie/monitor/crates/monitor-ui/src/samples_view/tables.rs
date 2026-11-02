@@ -25,38 +25,6 @@ pub(super) const STORED_WIDTHS: [(f32, f32); 5] = [
 ];
 pub(super) const STORED_LAST: f32 = 380.0;
 
-/// Widths for the columns before the last one, which keeps at least `last`.
-/// Each column has the width it likes (`natural`) and the least it is squeezed
-/// to (`least`; its cell clips what does not fit). When the window is
-/// narrower than the natural widths need, the columns shrink together toward
-/// their least, and when it is wider they grow a little, so the table always
-/// fits the window instead of pushing the window wider than the screen.
-pub(super) fn fit_widths(ui: &egui::Ui, columns: &[(f32, f32)], last: f32) -> Vec<f32> {
-    let spacing = ui.spacing();
-    let gaps = spacing.item_spacing.x * columns.len() as f32;
-    let room = ui.available_width() - spacing.scroll.allocated_width() - last - gaps;
-    let natural: f32 = columns.iter().map(|(natural, _)| natural).sum();
-    let least: f32 = columns.iter().map(|(_, least)| least).sum();
-    let share = if room >= natural {
-        (room / natural).min(1.25)
-    } else if natural > least {
-        ((room - least) / (natural - least)).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    columns
-        .iter()
-        .map(|&(wide, narrow)| {
-            let width = if room >= natural {
-                wide * share
-            } else {
-                narrow + (wide - narrow) * share
-            };
-            width.floor()
-        })
-        .collect()
-}
-
 impl SamplesView {
     pub(super) fn filter_bar(&mut self, ui: &mut egui::Ui) {
         let types = choices(&self.results, |s| vec![s.file_type.to_lowercase()]);
@@ -191,18 +159,17 @@ impl SamplesView {
         crate::widgets::table::begin(ui);
         // Not resizable by hand: the widths follow the window, so the columns
         // always fit it and line up with their headers.
-        let widths = fit_widths(ui, &RESULT_WIDTHS, RESULT_LAST);
-        let mut table = TableBuilder::new(ui)
+        let mut table = FitBuilder::new(ui)
             .id_salt("samples_results")
             .sense(egui::Sense::click())
             .striped(true)
             .auto_shrink([false, false])
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
-        for width in widths {
-            table = table.column(Column::exact(width).clip(true));
+        for (natural, least) in RESULT_WIDTHS {
+            table = table.column(FitCol::flex(natural).min(least));
         }
         table
-            .column(Column::remainder().at_least(RESULT_LAST).clip(true))
+            .column(FitCol::rest(RESULT_LAST))
             .header(row_height, |mut header| {
                 for column in Col::ALL {
                     header.col(|ui| {
@@ -445,18 +412,17 @@ impl SamplesView {
                     _ => a.pushes.len().cmp(&b.pushes.len()),
                 }
             });
-        let widths = fit_widths(ui, &STORED_WIDTHS, STORED_LAST);
-        let mut table = TableBuilder::new(ui)
+        let mut table = FitBuilder::new(ui)
             .id_salt("samples_stored")
             .striped(true)
             .auto_shrink([false, true])
             .max_scroll_height(height)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
-        for width in widths {
-            table = table.column(Column::exact(width).clip(true));
+        for (natural, least) in STORED_WIDTHS {
+            table = table.column(FitCol::flex(natural).min(least));
         }
         table
-            .column(Column::remainder().at_least(STORED_LAST))
+            .column(FitCol::rest(STORED_LAST.min(300.0)))
             .header(row_height, |mut header| {
                 for (column, title) in ["File", "Signature", "Architecture", "Size", "Sent"]
                     .into_iter()

@@ -265,17 +265,14 @@ impl TriageView {
                 );
             }
             FileTab::Changed => {
-                egui::ScrollArea::horizontal()
-                    .id_salt("changed-file-columns")
-                    .show(ui, |ui| {
-                        ui.set_min_width(930.0);
-                        table_rows(
-                            ui,
-                            "triage-changed",
-                            file_tabs::CHANGED_HEADERS,
-                            &scan.changed,
-                        );
-                    });
+                ui.scope(|ui| {
+                    table_rows(
+                        ui,
+                        "triage-changed",
+                        file_tabs::CHANGED_HEADERS,
+                        &scan.changed,
+                    );
+                });
                 details::refresh(
                     ui.ctx(),
                     "triage-changed",
@@ -312,10 +309,7 @@ fn compact(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>], ke
                 .collect()
         })
         .collect();
-    egui::ScrollArea::horizontal()
-        .id_salt((id, "columns"))
-        .auto_shrink([false, true])
-        .show(ui, |ui| table_rows(ui, id, &shown_headers, &shown));
+    table_rows(ui, id, &shown_headers, &shown);
     details::refresh(ui.ctx(), id, headers, rows);
 }
 

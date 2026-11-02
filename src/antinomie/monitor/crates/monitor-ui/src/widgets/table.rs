@@ -67,10 +67,10 @@ pub enum Mark {
 /// Call before `TableBuilder::new(ui)`: the table area sits on the deepest
 /// surface, so the panel-colored header and the zebra rows read as in the
 /// mockup.
-pub fn begin(ui: &mut egui::Ui) {
-    let rect = ui.available_rect_before_wrap();
-    ui.painter().rect_filled(rect, 0.0, theme::bg());
-}
+///
+/// Kept for the tables that still call it: a `fit_table` table paints this
+/// surface itself, from the rect the table really took.
+pub fn begin(_ui: &mut egui::Ui) {}
 
 /// A header cell: muted semibold label on the panel color, rule below.
 pub fn head(ui: &mut egui::Ui, text: &str) {
