@@ -663,6 +663,7 @@ fn rows_are_capped_with_a_note_and_json_keeps_up_to_its_own_cap() {
             value: format!("d{n}.example"),
             matched: false,
             runs: vec![1],
+            ..MergedIndicator::default()
         })
         .collect();
     let html = text(&report, Format::Html, false);

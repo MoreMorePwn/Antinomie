@@ -154,6 +154,9 @@ fn push_run(runs: &mut Vec<usize>, number: usize) {
     }
 }
 
+/// The runs and rule ids that hit one ATT&CK technique.
+type TechniqueHits = (Vec<usize>, BTreeSet<String>);
+
 /// Add up `runs`.
 pub fn rollup(runs: &[RunInput<'_>]) -> Rollup {
     let mut out = Rollup {
@@ -162,8 +165,7 @@ pub fn rollup(runs: &[RunInput<'_>]) -> Rollup {
     };
     let mut top: Option<(usize, Vec<usize>)> = None;
     let mut rules: BTreeMap<(String, String), RuleRow> = BTreeMap::new();
-    let mut tactics: BTreeMap<&'static str, BTreeMap<String, (Vec<usize>, BTreeSet<String>)>> =
-        BTreeMap::new();
+    let mut tactics: BTreeMap<&'static str, BTreeMap<String, TechniqueHits>> = BTreeMap::new();
     let mut checks: BTreeMap<(&'static str, String, String), CheckRow> = BTreeMap::new();
     for run in runs {
         let Some(digest) = run.digest else { continue };

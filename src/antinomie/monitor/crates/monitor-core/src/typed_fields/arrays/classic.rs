@@ -47,7 +47,7 @@ fn seccomp_field(k: u32) -> Option<String> {
             format!(
                 "seccomp_data.args[{}] ({})",
                 at / 8,
-                if at % 8 == 0 { "low" } else { "high" }
+                if at.is_multiple_of(8) { "low" } else { "high" }
             )
         }
         _ => return None,
