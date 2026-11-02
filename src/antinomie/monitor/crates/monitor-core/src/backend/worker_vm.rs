@@ -337,7 +337,16 @@ impl Worker {
             .guest
             .as_ref()
             .is_some_and(|guest| guest.graphical);
-        let deadline = Instant::now() + shutdown_timeout(self.options.shutdown_timeout, graphical);
+        // A TCG guest needs far longer than a KVM one to power itself off.
+        let shutdown_wait = {
+            let wait = shutdown_timeout(self.options.shutdown_timeout, graphical);
+            if session.process.accel.is_tcg() {
+                session.process.waits.scaled(wait)
+            } else {
+                wait
+            }
+        };
+        let deadline = Instant::now() + shutdown_wait;
         let mut issues = Vec::new();
         let terminal_ids: Vec<_> = session
             .runs
@@ -404,10 +413,7 @@ impl Worker {
         };
         let mut forced = false;
         let mut exit_success = false;
-        let mut writeback = Writeback::new(
-            Instant::now(),
-            shutdown_timeout(self.options.shutdown_timeout, graphical),
-        );
+        let mut writeback = Writeback::new(Instant::now(), shutdown_wait);
         let mut deadline = deadline;
         loop {
             match session.process.child.try_wait() {
