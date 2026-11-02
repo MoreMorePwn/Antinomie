@@ -28,6 +28,7 @@ mod runs;
 mod similar;
 mod summary;
 mod triage_parts;
+mod written_files;
 
 /// The width a column of texts needs, within `most` (see `parts`).
 pub(super) fn fitted_up_to(

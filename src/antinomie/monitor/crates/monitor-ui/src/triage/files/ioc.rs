@@ -80,3 +80,36 @@ impl Change {
         })
     }
 }
+
+impl Change {
+    /// The file as the Samples window lists the files a sample wrote, or
+    /// `None` for one the run did not change or with no usable path.
+    pub(in crate::triage) fn written_file(
+        &self,
+    ) -> Option<antinomie_monitor_core::run_digest::WrittenFile> {
+        if !self.changes || !self.path_known || !self.path.starts_with('/') || self.standard_io {
+            return None;
+        }
+        let created = self
+            .categories
+            .iter()
+            .any(|name| name.starts_with("Created"));
+        let state = if self.deleted {
+            "deleted".to_owned()
+        } else if let Some(name) = self.names.last().filter(|name| **name != self.path) {
+            format!("renamed to {name}")
+        } else if created {
+            "written".to_owned()
+        } else {
+            "rewritten".to_owned()
+        };
+        let ioc = self.ioc_file()?;
+        Some(antinomie_monitor_core::run_digest::WrittenFile {
+            path: self.path.clone(),
+            state,
+            size: if self.deleted { None } else { self.final_size },
+            sha256: ioc.sha256.unwrap_or_default(),
+            hash_note: ioc.why.unwrap_or_default(),
+        })
+    }
+}

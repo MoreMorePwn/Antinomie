@@ -167,6 +167,23 @@ pub struct LineageExec {
     pub hash_note: String,
 }
 
+/// A file the run wrote, rewrote, deleted or renamed, as the Samples window
+/// lists it under Artifacts.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WrittenFile {
+    pub path: String,
+    /// `written` (the run created it), `rewritten` (it existed), `deleted` or
+    /// `renamed to <name>`.
+    pub state: String,
+    /// The size of the final bytes the run saw, when it knew it.
+    pub size: Option<u64>,
+    /// SHA-256 of the final bytes the guest took; empty when it took none.
+    pub sha256: String,
+    /// Why there is no hash; empty when there is one.
+    pub hash_note: String,
+}
+
 /// What a run's files and programs say about where its files came from.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -187,6 +204,9 @@ pub struct RunDigest {
     pub detections: Option<Vec<DetectionHit>>,
     pub indicators: Option<Vec<IndicatorEntry>>,
     pub lineage: Option<Lineage>,
+    /// Every file the run changed (up to [`MAX_ROWS`]); `None` for a digest
+    /// written before 0.8.2.
+    pub files: Option<Vec<WrittenFile>>,
 }
 
 /// Serialises read-modify-write cycles: the UI updates a digest from short

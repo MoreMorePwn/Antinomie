@@ -431,6 +431,11 @@ pub(super) fn scan_archive_query(
     } else {
         Default::default()
     };
+    let written_files: Vec<_> = all_changes
+        .iter()
+        .filter_map(files::Change::written_file)
+        .take(antinomie_monitor_core::run_digest::MAX_ROWS)
+        .collect();
     let ioc_files: Vec<files::IocFile> = all_changes
         .iter()
         .filter_map(files::Change::ioc_file)
@@ -750,6 +755,7 @@ pub(super) fn scan_archive_query(
         clock_anchor,
         bpf,
         bpf_omitted,
+        written_files,
         file_activity: Arc::new(activity),
         file_changes: file_changes
             .into_iter()

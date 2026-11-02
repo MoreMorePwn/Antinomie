@@ -176,6 +176,9 @@ pub(super) struct OpenRun {
     rule: Option<(String, String)>,
     /// Open the VM's Snapshots window once the run is selected.
     then_snapshots: bool,
+    /// Show this file in Triage's Per-file history (path, with its
+    /// reconstruction open).
+    file: Option<(String, bool)>,
     started: std::time::Instant,
     listed: bool,
 }
@@ -319,9 +322,18 @@ impl MonitorApp {
             trace_filter,
             rule: None,
             then_snapshots: false,
+            file: None,
             started: std::time::Instant::now(),
             listed: false,
         });
+    }
+
+    /// Open `run` in Triage on one file's history (or its reconstruction).
+    pub(super) fn open_sample_file(&mut self, run: &RunSummary, path: &str, reconstruct: bool) {
+        self.open_sample_run(run, crate::workspace::Panel::Triage, None);
+        if let Some(open) = &mut self.samples_page.open_run {
+            open.file = Some((path.to_owned(), reconstruct));
+        }
     }
 
     /// Open `run` in Triage on the hit of one detection rule.
@@ -363,6 +375,9 @@ impl MonitorApp {
             }
             if let Some((engine, rule)) = open.rule {
                 self.triage.show_rule(&engine, &rule);
+            }
+            if let Some((path, reconstruct)) = open.file {
+                self.triage.show_file_history(&path, reconstruct);
             }
             return;
         }

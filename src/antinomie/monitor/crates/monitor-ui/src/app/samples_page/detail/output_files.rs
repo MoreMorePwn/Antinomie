@@ -256,7 +256,7 @@ pub(in crate::app::samples_page) fn section(
             ui.horizontal_wrapped(|ui| {
                 ui.label(
                     RichText::new(
-                        "Files the sample wrote or changed are not artifacts: they are in each run's Triage › Files.",
+                        "Files the sample wrote or changed are not artifacts: they are listed under Files written, below, and in each run's Triage › Files.",
                     )
                     .color(theme::muted()),
                 );

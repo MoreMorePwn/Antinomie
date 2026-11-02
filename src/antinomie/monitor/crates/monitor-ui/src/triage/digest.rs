@@ -209,6 +209,7 @@ impl TriageView {
         let behaviour = behaviour(&scan.findings);
         let lineage = lineage_index::index(&scan.process, scan.ioc.as_deref());
         let indicators = scan.ioc.as_deref().map(indicators);
+        let written = scan.written_files.clone();
         let detections = detections(&self.detection.results);
         // Off the UI thread: the write is a synced file.
         let _ = std::thread::Builder::new()
@@ -217,6 +218,7 @@ impl TriageView {
                 let _ = RunDigest::update(&directory, |digest| {
                     digest.behaviour = Some(behaviour);
                     digest.lineage = Some(lineage);
+                    digest.files = Some(written);
                     if indicators.is_some() {
                         digest.indicators = indicators;
                     }

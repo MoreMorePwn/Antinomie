@@ -45,6 +45,7 @@ impl MonitorApp {
         let mut go = None;
         let mut lineage_out = None;
         let mut output_act = None;
+        let mut files_act = None;
         let mut similar_open = None;
         let mut lineage = self
             .samples_page
@@ -118,6 +119,7 @@ impl MonitorApp {
                 );
                 lineage_out = super::lineage::section(ui, &mut lineage, data);
                 output_act = super::output_files::section(ui, data, self.settings.font_size);
+                files_act = super::written_files::section(ui, data, self.settings.font_size);
                 if let Some(state) = similar {
                     similar_open = super::similar::section(ui, state, self.settings.font_size);
                 }
@@ -129,6 +131,20 @@ impl MonitorApp {
         if let Some(sha) = similar_open {
             self.samples_page.open_detail(&sha);
             return;
+        }
+        match files_act {
+            Some(super::written_files::Act::History(number, path)) => {
+                if let Some(entry) = data.runs.iter().find(|entry| entry.number == number) {
+                    self.open_sample_file(&entry.run, &path, false);
+                }
+            }
+            Some(super::written_files::Act::Export(number, path)) => {
+                if let Some(entry) = data.runs.iter().find(|entry| entry.number == number) {
+                    self.open_sample_file(&entry.run, &path, true);
+                }
+            }
+            Some(super::written_files::Act::GoToRun(number)) => go = Some(Go::Run(number)),
+            None => {}
         }
         match output_act {
             Some(super::output_files::Act::Open(number, kind)) => {

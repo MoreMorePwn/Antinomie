@@ -461,6 +461,18 @@ impl TriageView {
         }
     }
 
+    /// Show one file in Files › Per-file history, with its reconstruction
+    /// (where its bytes can be saved) open when `reconstruct`.
+    pub(crate) fn show_file_history(&mut self, path: &str, reconstruct: bool) {
+        self.section = Section::Files;
+        self.history_tab = true;
+        if reconstruct {
+            self.file_history.reconstruct(path);
+        } else {
+            self.file_history.open_on(path);
+        }
+    }
+
     /// A path the Disks tab diff was asked to show from the Details.
     pub(crate) fn take_disk_jump(&self, ctx: &egui::Context) -> Option<String> {
         ctx.data_mut(|data| {
@@ -1256,6 +1268,8 @@ struct ArchiveScan {
     coverage: String,
     clock_anchor: Option<antinomie_monitor_core::HostClockAnchor>,
     file_changes: Vec<files::Change>,
+    /// Every file the run changed, for the run's digest.
+    written_files: Vec<antinomie_monitor_core::run_digest::WrittenFile>,
     /// Every file the run touched, for the File activity window.
     file_activity: Arc<file_activity::Activity>,
     bpf: Vec<BpfNote>,

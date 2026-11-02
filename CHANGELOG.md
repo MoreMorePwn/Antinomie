@@ -64,6 +64,30 @@ it runs.
   call reads "failed (EACCES)" instead of "failed (-13)", with the number and
   its meaning on hover.
 
+- **Core dump on exit works together with Debug on start.** The host read the
+  debugger's 16-byte start record as part of the core's arm reply and failed the
+  capture with "invalid acquisition reply length or padding". The core's reply is
+  now read on its own; a capture that cannot be armed says so in plain words with
+  the size and first bytes of the guest's reply.
+- **VM creation survives a loaded host.** The offline credential tool's deadline
+  grows with the host's load (up to four times), a timeout starts again once from a
+  fresh disk, and a creation that still fails says "VM creation failed" with the
+  reason and that the unfinished disk was removed.
+- **MemNixFS explains an unvalidated page-table root.** The brute-force line is
+  translated: process and file lists from physical memory are reliable; modules,
+  mounts and the kernel log may be missing or wrong. The partial result offers
+  Run in Volatility 3 for modules (linux.lsmod), mounts (linux.mountinfo) and the
+  kernel log (linux.kmsg) in one click. The symbol table saved with a dump (and
+  the one `make-kernel-symbols.py` writes for new bases) carries the kernel's real
+  release instead of `vmlinux`, so MemNixFS no longer reports a false
+  "ISF/dump MISMATCH".
+- **A sample's Summary lists the files it wrote.** Files written shows one row per
+  file the runs wrote, rewrote, deleted or renamed, with run, state, size and
+  SHA-256, filterable and paged for ransomware-sized lists, with Open in Per-file
+  history, Export bytes (the file's reconstruction in Triage, where its bytes are
+  saved) and Copy SHA-256. The list comes from each run's Triage digest, so a run
+  Triage has not read yet is listed as such with a link to open it.
+
 ## 0.8.1 — 2026-11-03
 
 Antinomie 0.8.1 is a fix release for the 0.8.0 line; it runs the same revision-20
