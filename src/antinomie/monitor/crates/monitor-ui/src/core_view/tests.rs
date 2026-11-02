@@ -314,7 +314,7 @@ fn parsed_size_mismatch_remains_dirty_even_with_equal_file_stamp() {
     let current = core_file_stamp(&file);
     assert!(matches!(
         opened_reply(record.clone(), String::new()),
-        Reply::Open(_, _, None)
+        Reply::Open(_, _, None, _)
     ));
     let refresh = selected_core_refresh(SelectedCoreProbe {
         directory: record.dir,

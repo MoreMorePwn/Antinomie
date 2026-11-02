@@ -307,7 +307,9 @@ pub(super) fn core_file_stamp(path: &Path) -> Option<CoreFileStamp> {
 pub(super) fn opened_reply(record: CoreRecord, code: String) -> Reply {
     let stamp = core_file_stamp(&record.core.source)
         .filter(|stamp| stamp.file_size == record.core.source_size);
-    Reply::Open(Box::new(record), code, stamp)
+    // Read here, on the worker: the saved Ghidra text can be large.
+    let saved = super::decompile::saved_decompilation(&record.dir);
+    Reply::Open(Box::new(record), code, stamp, saved)
 }
 
 pub(super) fn catalog_stamp(catalog: &CoreCatalog) -> Option<CatalogStamp> {

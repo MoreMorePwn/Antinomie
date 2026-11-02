@@ -36,7 +36,13 @@ const WINDOW_SIZE: u64 = 16 * 1024 * 1024;
 const DISASSEMBLY_BYTES: usize = 65536;
 const FUNCTION_DISASSEMBLY_LIMIT: u64 = 65536;
 enum Reply {
-    Open(Box<CoreRecord>, String, Option<CoreFileStamp>),
+    /// The record, its disassembly, its file's stamp and the saved Ghidra text, if any.
+    Open(
+        Box<CoreRecord>,
+        String,
+        Option<CoreFileStamp>,
+        Option<String>,
+    ),
     Chosen(Option<PathBuf>),
     Page(u64, Vec<Option<u8>>),
     Code(String),
@@ -375,7 +381,7 @@ impl CoreView {
         // An operation started before the panel's first scope is adopted only
         // when its opened record belongs to that scope's recording roots.
         if !result.initialized && self.scope_initialized {
-            if let Ok(Reply::Open(record, _, _)) = &result.result {
+            if let Ok(Reply::Open(record, ..)) = &result.result {
                 if !self.roots.iter().any(|root| record.dir.starts_with(root)) {
                     return;
                 }
@@ -394,7 +400,7 @@ impl CoreView {
                     self.source_path = path.display().to_string();
                 }
             }
-            Ok(Reply::Open(record, code, stamp)) => {
+            Ok(Reply::Open(record, code, stamp, saved)) => {
                 let record = *record;
                 if record.core.source.parent() != Some(record.dir.as_path())
                     && !self.records.iter().any(|old| old.dir == record.dir)
@@ -428,8 +434,7 @@ impl CoreView {
                 self.strings.reset();
                 self.remember_asm_counts();
                 self.status = "Core is referenced in place; retain its original file.".into();
-                let directory = self.selected.as_ref().map(|record| record.dir.clone());
-                if let Some(text) = directory.as_deref().and_then(saved_decompilation) {
+                if let Some(text) = saved {
                     let (functions, bodies) = parse_ghidra(&text);
                     self.functions = functions;
                     self.function_bodies = bodies;

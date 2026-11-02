@@ -44,12 +44,12 @@ impl CoreView {
                 filtered_without_selection =
                     shown.len() != self.functions.len() && self.code_function.is_none();
                 if ui.button("Export functions").clicked() {
-                    match export_saved_functions(&record.dir) {
-                        Ok(path) => {
-                            self.status = format!("Exported functions to {}", path.display());
-                        }
-                        Err(error) => self.fail(error),
-                    }
+                    let dir = record.dir.clone();
+                    self.start(move || {
+                        export_saved_functions(&dir).map(|path| {
+                            Reply::Done(format!("Exported functions to {}", path.display()))
+                        })
+                    });
                 }
                 if self.functions.is_empty() {
                     ui.add(egui::Label::new("No functions indexed").wrap());
