@@ -303,7 +303,6 @@ it runs.
   gives way to the buttons at large text sizes, and the malware catalog notice
   scrolls so its checkbox and buttons stay on screen.
 
-
 ### Build and CI
 
 - **CI runs the remaining build-script suites and audits the fuzz lock.** The
