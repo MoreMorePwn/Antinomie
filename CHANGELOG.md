@@ -8,6 +8,29 @@ it runs.
 
 ### Host
 
+- **Every table fits the box it is in.** One shared helper (`fit_table`) plans
+  the columns from the width the table really has: fixed columns keep their
+  width only while the table fits, every column shrinks in proportion (no 40 %
+  floor), the text column takes the rest, cells are cut with an ellipsis and the
+  whole text on hover, and only when even the minimums do not fit does the table
+  scroll sideways inside its own area. The background is painted from the
+  table's real rect, so rows no longer pass it (the Triage Suspicious activity
+  table, the sample window, the Detection rules window and the rest).
+- **Long sample names are cut in the sample window's header and its tables.**
+  The name is cut to the space the buttons leave, the whole name on hover.
+- **The sample window's Identity shows the hashes and the archive in its first
+  box.** The SHA-256, SHA-1, MD5, TLSH and Archive rows share the label column of
+  Type, Added and Source, a long value is cut in the middle
+  ("7dd32a00…c1e1a3") with the whole value on hover and a copy button per row,
+  and the Identity box and Aliases take the whole width.
+- **The Download window's tables show about four rows, then scroll,** with the
+  same width, a background that follows the table's height, and a shorter
+  window.
+- **The toolbar never covers the VM name.** When the window is narrow, the
+  buttons that do not fit move into a ">" menu, last first (Dump core, Dump
+  memory, Capture network, Capture all, Snapshots, Kill, Run program, Stop,
+  Start stay longest), and the VM name is cut with an ellipsis.
+
 - **Triage names a task "PID 145 · TID 150", never "PID 145 cookie 900".** The
   Process tree, the file tables, the findings and the Trace read the process and
   the thread; the main thread says "(main)". The recording's own task id stays
