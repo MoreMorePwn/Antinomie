@@ -102,34 +102,18 @@ fn detector(
                     .small()
                     .color(theme::muted()),
                 );
-                // "No packets were captured…": a complete result that still
-                // evaluated nothing says so under its zero.
-                if let Some(Ok(report)) = view.detection.results[index].as_ref() {
-                    if report.state == State::Complete && counts.rules == 0 {
-                        if let Some(note) = report.warnings.first() {
-                            ui.add(
-                                egui::Label::new(RichText::new(note).small().color(theme::muted()))
-                                    .wrap(),
-                            );
-                        }
-                    }
-                }
             } else {
                 ui.label(RichText::new("—").size(27.0).color(theme::muted()));
                 ui.label(
                     RichText::new(match activity {
                         Some(detection::ScanActivity::Running) => "Scan in progress",
                         Some(detection::ScanActivity::Queued) => "Waiting for its turn",
-                        // An engine that could not run says why ("pysigma
-                        // is not installed"), not only that nothing came back.
+                        // Why an engine could not run is said in the Detection view.
                         None => match view.detection.results[index].as_ref() {
                             Some(Ok(report))
                                 if matches!(report.state, State::Unavailable | State::Missing) =>
                             {
-                                report
-                                    .warnings
-                                    .first()
-                                    .map_or("No evaluated result", String::as_str)
+                                "Not available: open Results for why"
                             }
                             _ => "No evaluated result",
                         },
@@ -457,12 +441,6 @@ pub(super) fn content(
                 });
                 return;
             };
-            if let Some(error) = &scan.event_error {
-                crate::activity::error(
-                    ui,
-                    format!("The event journal could not be written: {error}"),
-                );
-            }
             presentation::heading(ui, "Detection evidence", "");
             if ui.available_width() >= 620.0 {
                 ui.columns(3, |columns| {
@@ -484,6 +462,31 @@ pub(super) fn content(
                         destination = Some(Destination::Detection(engine));
                     }
                     ui.add_space(6.0);
+                }
+            }
+            // Notes and errors stay in the Detection view; one line says when
+            // something there needs attention.
+            let attention: Vec<Engine> = [Engine::Yara, Engine::Ids, Engine::Sigma]
+                .into_iter()
+                .enumerate()
+                .filter(|(index, _)| match view.detection.results[*index].as_ref() {
+                    Some(Ok(report)) => matches!(report.state, State::Partial | State::Missing),
+                    Some(Err(_)) => true,
+                    None => false,
+                })
+                .map(|(_, engine)| engine)
+                .collect();
+            if scan.event_error.is_some() || !attention.is_empty() {
+                let count = attention.len() + usize::from(scan.event_error.is_some());
+                let first = attention.first().copied().unwrap_or(Engine::Sigma);
+                if ui
+                    .link(format!(
+                        "Detection: {count} {} need attention (open Detection)",
+                        if count == 1 { "note" } else { "notes" }
+                    ))
+                    .clicked()
+                {
+                    destination = Some(Destination::Detection(first));
                 }
             }
             ui.add_space(8.0);
@@ -510,8 +513,11 @@ pub(super) fn content(
                 |ui| right = network(ui, scan, &view.route),
             );
             destination = left.or(right).or(destination);
-            if let Some(warning) = &scan.network_warning {
-                crate::activity::warning(ui, warning);
+            if scan.network_warning.is_some() {
+                // The note itself is in the Network view.
+                if ui.link("Network: 1 note (open Network)").clicked() {
+                    destination = Some(Destination::Http);
+                }
             }
             ui.add_space(14.0);
             let busy = view.preparing();

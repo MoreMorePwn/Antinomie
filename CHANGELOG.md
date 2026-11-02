@@ -176,6 +176,19 @@ it runs.
   (`theme::neutral_accent()`). The "Saving stopped" badge and a core with an issue
   use the error colour.
 
+- **Failed attempts are shown by default, in every Files tab.** The chip was off
+  while Opened and Read listed their failed rows anyway, so it looked off and
+  hid nothing there. It is on by default, applies to Opened, Read, Changed files
+  and the operation tabs, and its count and tooltip say how many failed rows the
+  open table has. Failed attempts still never count as changes.
+- **Triage Summary keeps other views' notes out.** The Detection scan notes
+  ("No packets were captured", why an engine is unavailable) and the network note
+  no longer repeat on the Summary; one line, "Detection: 1 note needs attention",
+  opens the Detection view when a scan is partial or failed. In the IDS view,
+  the HOME_NET fallback and "N rules loaded" are Information, and "the IDS reads
+  the VM-wide capture, so its matches are not attributed to a process" is said
+  once instead of in every scan.
+
 ### Fixed
 
 - **Library > Analysis tools shows where Antinomie's copy of a tool is

@@ -373,6 +373,10 @@ impl View {
             short.push(brief);
             long.push(full);
         };
+        let (info_notes, warnings) = self.results[index]
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .map_or_else(Default::default, |report| split_notes(&report.warnings));
         if let Some(Ok(report)) = self.results[index].as_ref() {
             // A limited result says why in the engine's words ("Suricata is
             // not installed", "pysigma is not installed"); the general line is
@@ -380,20 +384,20 @@ impl View {
             let says_why = matches!(
                 report.state,
                 State::Partial | State::Unavailable | State::Missing
-            ) && !report.warnings.is_empty();
+            ) && !warnings.is_empty();
             if let Some(line) = limitation_line(&report.state).filter(|_| !says_why) {
                 note(line.to_owned(), line.to_owned());
             }
             if says_why {
-                if let Some(first) = report.warnings.first() {
-                    let more = report.warnings.len() - 1;
+                if let Some(first) = warnings.first() {
+                    let more = warnings.len() - 1;
                     note(
                         if more == 0 {
                             first.clone()
                         } else {
                             format!("{first} (+{more} more)")
                         },
-                        report.warnings.join("\n"),
+                        warnings.join("\n"),
                     );
                 }
             }
@@ -416,14 +420,24 @@ impl View {
         // A complete result's notes (no packets to scan, an engine that a
         // later run would need) are information, not a limit.
         if let Some(Ok(report)) = self.results[index].as_ref() {
-            if report.state == State::Complete && short.is_empty() && !report.warnings.is_empty() {
-                crate::activity::notice(
-                    ui,
-                    crate::activity::Level::Info,
-                    report.warnings.join(" "),
-                );
-                return;
+            if report.state == State::Complete && short.is_empty() && !warnings.is_empty() {
+                crate::activity::notice(ui, crate::activity::Level::Info, warnings.join(" "));
             }
+        }
+        // The engine's setup facts (HOME_NET fallback, rules loaded) are
+        // information wherever they come from; the limits above stay warnings.
+        if !info_notes.is_empty() {
+            crate::activity::notice(ui, crate::activity::Level::Info, info_notes.join(" "));
+        }
+        if self.selected == Engine::Ids {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(IDS_PCAP_NOTE)
+                        .small()
+                        .color(theme::muted()),
+                )
+                .wrap(),
+            );
         }
         if short.is_empty() {
             return;
@@ -436,6 +450,33 @@ impl View {
         }
         crate::activity::warning_details(ui, short.join(" · "), long.join("\n"));
     }
+}
+
+/// A fixed limit of the IDS engine, said once in its view and not in every scan.
+const IDS_PCAP_NOTE: &str =
+    "The IDS reads the VM-wide capture, so its matches are not attributed to a process.";
+
+/// An engine note that is a setup fact and no limit of the result.
+fn is_info_note(text: &str) -> bool {
+    text.starts_with("HOME_NET is the private address ranges")
+        || text.starts_with("Suricata reported:")
+        || text.starts_with("IDS sees captured plaintext")
+}
+
+/// The notes of a result as (information, warnings), without the sentence
+/// about VM-wide capture that [`IDS_PCAP_NOTE`] already says.
+pub(super) fn split_notes(notes: &[String]) -> (Vec<String>, Vec<String>) {
+    let (mut info, mut warnings) = (Vec::new(), Vec::new());
+    for note in notes {
+        let text = note.replace(" VM-wide PCAP is not process attribution.", "");
+        let text = text.replace(" Packet evidence is not process attribution.", "");
+        if is_info_note(&text) {
+            info.push(text);
+        } else {
+            warnings.push(text);
+        }
+    }
+    (info, warnings)
 }
 
 /// Narrower rows stack the status under the scan buttons.
