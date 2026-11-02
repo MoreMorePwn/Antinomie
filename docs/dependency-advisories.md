@@ -40,3 +40,13 @@ when the corresponding feature, input format, architecture or API call changes.
 
 Maintenance warnings remain visible. Nothing here changes upstream versions,
 removes loss reporting or defers a newly demonstrated reachable vulnerability.
+
+## Python dependencies of the managed Sigma tool
+
+`cargo audit` covers only the Rust locks (the host workspace and
+`fuzz/Cargo.lock`, both in the CI `audit` job). The hash-locked pip set in
+`crates/monitor-core/assets/sigma-requirements.txt` is not audited by it.
+
+| Advisory | Assessment |
+|---|---|
+| PYSEC-2026-2447 (`diskcache` 5.6.3, unsafe pickle deserialisation, no fixed release) | pySigma 2.x requires `diskcache` (>=5.6.3,<6), so it cannot be dropped from the lock without breaking the install; the newest release is the one pinned. Only pySigma's MITRE ATT&CK and D3FEND data loaders (`sigma/data/mitre_attack.py`, `mitre_d3fend.py`, reached through the tag validator) open a `diskcache.Cache`, in `~/.cache/pysigma/` of the user running the tool. Antinomie's adapter (`sigma_scan.py`) imports only `sigma.collection` and the SQLite backend, does not run the validators, and never sets a cache path, so it never opens or writes a diskcache. Exploiting the advisory needs write access to that cache folder, which already means the same user's account. The scan runs offline; imported rules cannot name a cache path. Revisit if the adapter calls the validators or data loaders, or when pySigma drops or replaces `diskcache`. |

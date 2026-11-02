@@ -303,6 +303,21 @@ it runs.
   gives way to the buttons at large text sizes, and the malware catalog notice
   scrolls so its checkbox and buttons stay on screen.
 
+
+### Build and CI
+
+- **CI runs the remaining build-script suites and audits the fuzz lock.** The
+  publish-base-sources tests and `sync-quilt-view.py --check` join the build-script
+  step (the full-pack and refresh-bundle tests were already there), and the audit
+  job checks `fuzz/Cargo.lock` against the same reviewed list as the host lock.
+  The fuzz crate's lock moves from zip 8.6.0 to 9.2.0, the version the core crate
+  already requires (it carried both; 8.6.0 was an old lock entry, flagged by
+  Dependabot). `scripts/vm-regress.py` no longer assumes `/mnt/e`: its free-space
+  guard defaults to the filesystem of `--out` (5 GB) and `VM_REGRESS_MIN_FREE`
+  (comma-separated PATH:GB, empty for none) changes the default.
+  diskcache 5.6.3 stays: pySigma requires it (<6) and no fixed version exists;
+  see docs/dependency-advisories.md.
+
 ## 0.8.1 — 2026-11-03
 
 Antinomie 0.8.1 is a fix release for the 0.8.0 line; it runs the same revision-20

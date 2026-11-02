@@ -209,13 +209,20 @@ def disk_guard(args):
         raise Failure(f"disk: {problem}; clean up and rerun (--rerun-failed)")
 
 
-def default_min_free():
-    """On WSL the Windows drive behind the Linux disk must keep room."""
-    try:
-        wsl = "microsoft" in Path("/proc/version").read_text().lower()
-    except OSError:
-        wsl = False
-    return ["/mnt/e:5"] if wsl and Path("/mnt/e").is_dir() else []
+def default_min_free(out="."):
+    """The free-space guard used without --min-free.
+
+    VM_REGRESS_MIN_FREE (comma-separated PATH:GB, empty for none) wins; otherwise
+    the filesystem that holds the output folder must keep 5 GiB free, which on
+    WSL is the Windows drive behind the Linux disk when --out lives on it.
+    """
+    env = os.environ.get("VM_REGRESS_MIN_FREE")
+    if env is not None:
+        return [part.strip() for part in env.split(",") if part.strip()]
+    path = Path(out).resolve()
+    while not path.exists() and path != path.parent:
+        path = path.parent
+    return [f"{path}:5"]
 
 
 def safe_rmtree(path, root):
@@ -1076,7 +1083,8 @@ def parser():
                    help="do not start a check while the Linux disk uses more than this (default: %(default)s)")
     p.add_argument("--min-free", action="append", default=None, metavar="PATH:GB",
                    help="do not start a check while PATH has less than GB free (repeatable; "
-                        "default on WSL: /mnt/e:5, the Windows drive behind the Linux disk)")
+                        "default: the filesystem of --out with 5 GB; the environment variable "
+                        "VM_REGRESS_MIN_FREE (comma-separated PATH:GB, empty for none) changes the default)")
     p.add_argument("--no-build", action="store_true", help="use the examples already built")
     p.add_argument("--keep-old-host", action="store_true", help="keep the old host worktree in --out")
     p.add_argument("--mem-wait-limit", type=int, default=3 * 3600, metavar="S",
@@ -1090,7 +1098,7 @@ def parse(argv):
     if args.retries < 0:
         raise SystemExit("--retries must not be negative")
     if args.min_free is None:
-        args.min_free = default_min_free()
+        args.min_free = default_min_free(args.out)
     for spec in args.min_free:
         path, _, limit = spec.rpartition(":")
         try:
