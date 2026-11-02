@@ -258,6 +258,12 @@ impl TriageView {
         if self.history_tab {
             let activity = self.scan.as_ref().map(|scan| scan.file_activity.clone());
             let clock = self.scan.as_ref().and_then(|scan| scan.clock_anchor);
+            // Where the window notes an export in the sample's custody log.
+            if let Some(data_dir) = self.scan_request.data_dir.clone() {
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(egui::Id::new(file_activity::RECONSTRUCT_DATA_DIR), data_dir)
+                });
+            }
             self.file_history.show(
                 ui,
                 activity.as_deref(),

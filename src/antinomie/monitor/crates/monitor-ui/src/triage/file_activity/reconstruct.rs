@@ -4,6 +4,9 @@
 //! started, with the state of every byte after the chosen call, how each byte
 //! became known, the hash check against what the guest took, and a save with
 //! a mask of the bytes nobody saw.
+mod before_deletion;
+pub(in crate::triage) use before_deletion::DATA_DIR;
+
 use super::{Activity, FileActivity};
 use crate::theme;
 use crate::widgets::{self, Tone};
@@ -133,6 +136,8 @@ pub(super) struct Open {
     hashing: Option<Pending<Hashed>>,
     hashed: Option<Hashed>,
     saving: Option<Pending<Result<String, String>>>,
+    /// The state at the delete of a deleted file, worked out once.
+    before: Option<before_deletion::Prepared>,
     status: Option<String>,
     /// The line diff for a position.
     diff: Option<(usize, Result<Vec<model::DiffLine>, String>)>,
@@ -158,6 +163,7 @@ impl Open {
             hashing: None,
             hashed: None,
             saving: None,
+            before: None,
             status: None,
             diff: None,
             hovered: false,
@@ -751,6 +757,9 @@ impl Open {
         }
         if self.saving.is_some() {
             ui.weak("Saving…");
+        }
+        if file.deleted {
+            self.before_deletion(ui, file, directory);
         }
         if let Some(status) = &self.status {
             ui.add(egui::Label::new(RichText::new(status).small()).wrap());

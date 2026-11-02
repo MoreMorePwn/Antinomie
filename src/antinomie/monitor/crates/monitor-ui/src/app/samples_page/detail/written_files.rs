@@ -3,13 +3,14 @@
 //! wrote, rewrote, deleted or renamed, from the runs' Triage digests. A run
 //! Triage has not read yet has no list, and the section says so. The
 //! recording keeps the bytes; Export bytes opens the file's reconstruction in
-//! Triage, where they are saved with the existing custody rules.
+//! Triage, where they are saved. A deleted file is exported as it was just
+//! before the delete, checked against the guest's hash taken then.
 use super::{parts, *};
 use crate::widgets::table;
 use antinomie_monitor_core::run_digest::WrittenFile;
 
 /// The width the three buttons of a row need on one line.
-const ACTIONS_WIDTH: f32 = 420.0;
+const ACTIONS_WIDTH: f32 = 650.0;
 /// Rows shown before "Show more".
 const PAGE: usize = 100;
 
@@ -217,15 +218,23 @@ pub(in crate::app::samples_page) fn section(
                                     act = Some(Act::History(item.number, file.path.clone()));
                                     ui.close_menu();
                                 }
+                                let deleted = file.state == "deleted";
                                 if ui
-                                    .add_enabled(
-                                        file.state != "deleted",
-                                        egui::Button::new("Export bytes").small(),
+                                    .add(
+                                        egui::Button::new(if deleted {
+                                            "Export bytes (as before deletion)"
+                                        } else {
+                                            "Export bytes"
+                                        })
+                                        .small(),
                                     )
-                                    .on_hover_text(
-                                        "Open the file's reconstruction in Triage, where its bytes are saved",
-                                    )
-                                    .on_disabled_hover_text("The file was deleted in the run")
+                                    .on_hover_text(if deleted {
+                                        "Open the file's reconstruction in Triage: its bytes are rebuilt \
+                                         from the recorded writes as of the last moment before the \
+                                         delete, checked against the guest's hash taken then, and saved"
+                                    } else {
+                                        "Open the file's reconstruction in Triage, where its bytes are saved"
+                                    })
                                     .clicked()
                                 {
                                     act = Some(Act::Export(item.number, file.path.clone()));

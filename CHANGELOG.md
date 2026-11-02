@@ -32,6 +32,17 @@ it runs.
   program, a program that writes, runs and deletes a file, and the demo
   sample), so no host or guest change was needed for the end record itself.
 
+- **Export bytes (as before deletion) for a file the run deleted.** The sample
+  window's Files written list and the File reconstruction window in Triage
+  rebuild a deleted file from the recorded writes as of the last moment before
+  the delete. When every byte is known the file is hashed and compared with the
+  SHA-256 the guest took just before the delete: a match is "verified" and the
+  export is saved with a `.json` record of the check. With gaps (bytes never
+  recorded, or a size not known) the window says "partial: N bytes unknown" and
+  saves what is known with a `.mask` file marking the rest. The export is noted
+  in the sample's custody log (an Exported entry that names the file, its size,
+  its hash and the result).
+
 - **ATT&CK techniques are coloured by tactic.** Each of the 15 ATT&CK v20
   tactics (Defense Evasion is now Stealth and Defense Impairment) has its own
   colour, one palette for dark and one for light (every colour is at least 4.2:1
