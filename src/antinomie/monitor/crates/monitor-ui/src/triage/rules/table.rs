@@ -504,6 +504,14 @@ pub(in crate::triage) const SPECS: &[Spec] = &[
         &["T1070.004", "DET0140"],
     ),
     rule(
+        "evasion.tool_delete",
+        1,
+        T::Medium,
+        C::Evasion,
+        &["T1070.004", "DET0140"],
+    )
+    .allow(PACKAGERS),
+    rule(
         "evasion.log_clear",
         1,
         T::High,

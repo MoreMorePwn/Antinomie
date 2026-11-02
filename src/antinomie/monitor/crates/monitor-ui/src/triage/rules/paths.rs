@@ -750,6 +750,33 @@ fn removed(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) {
             format!("{} removes {path}", cx.name),
         ));
     }
+    if cx.ok
+        && touch.op == Op::Deleted
+        && !st.written.contains(path)
+        && under(
+            path,
+            &[
+                "/bin",
+                "/sbin",
+                "/usr/bin",
+                "/usr/sbin",
+                "/usr/local/bin",
+                "/usr/local/sbin",
+            ],
+        )
+        && !path.ends_with('/')
+    {
+        out.push(
+            Hit::new(
+                "evasion.tool_delete",
+                path,
+                format!("{} deletes the system program {path}", cx.name),
+            )
+            .detail(
+                "A system binary was deleted: removing tools such as wget, nc, reboot or killall hinders the user and the responder.",
+            ),
+        );
+    }
     if under(path, &["/var/backups"]) || path.starts_with("/backup") || path.ends_with(".bak") {
         out.push(Hit::new(
             "impact.inhibit_recovery",

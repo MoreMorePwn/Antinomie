@@ -94,6 +94,11 @@ it runs.
   an exec of its own shows its parent's image with "(fork)" in the Process
   column, also when the parent's name (the launch record) became known after the
   fork was seen.
+- **Deleting a system program is a finding.** New rule `evasion.tool_delete`
+  (medium, ATT&CK T1070.004): a successful delete of a file in `/bin`, `/sbin`,
+  `/usr/bin`, `/usr/sbin`, `/usr/local/bin` or `/usr/local/sbin` that the run did
+  not create itself (a botnet removing `wget`, `nc`, `reboot` or `killall`). Package
+  managers lower it one tier.
 
 ## 0.8.1 — 2026-11-03
 
