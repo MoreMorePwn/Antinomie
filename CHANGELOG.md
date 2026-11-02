@@ -130,6 +130,15 @@ it runs.
   divider, or right-click it and choose Fit columns, to fit the box again. The
   dragged widths are kept per table for the session and no longer stick after
   the window grows.
+- **The sample Download window looks the same while it loads.** Asking
+  MalwareBazaar used to show only a line of text, then the window jumped taller
+  when the results came, again when a download ended and again when the first
+  sample was stored, and at 1280x720 it was taller than the screen. Now the
+  results area (a skeleton table with the same header and columns while loading)
+  and the Downloaded list have fixed heights, the status (asking, a download's
+  outcome, the listing) is one line of fixed height, the window keeps its size
+  and scrolls inside when the screen is small, and a row's download progress
+  stays in its own cell.
 
 ## 0.8.1 — 2026-11-03
 

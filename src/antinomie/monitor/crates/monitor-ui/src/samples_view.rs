@@ -695,7 +695,7 @@ impl SamplesView {
         let mut action = None;
         let mut open = true;
         let screen = ctx.screen_rect();
-        let largest = egui::vec2(1240.0, 700.0).min(screen.size() - egui::vec2(96.0, 300.0));
+        let largest = egui::vec2(1240.0, 900.0).min(screen.size() - egui::vec2(96.0, 160.0));
         crate::widgets::window("Malware samples")
             .id(egui::Id::new(WINDOW_ID))
             .collapsible(false)
@@ -711,37 +711,50 @@ impl SamplesView {
             .max_size(largest)
             .open(&mut open)
             .show(ctx, |ui| {
-                self.warning(ui, cx);
-                ui.add_space(12.0);
-                self.source_row(ui, cx);
-                ui.add_space(10.0);
-                if !self.key_saved {
-                    self.key_row(ui);
-                    ui.add_space(12.0);
-                }
-                self.search_bar(ui, cx);
-                ui.add_space(10.0);
-                self.filter_bar(ui);
-                ui.add_space(10.0);
-                // The downloaded list keeps room for a few samples; the
-                // results take the rest.
-                let row = theme::row_height(cx.font_size).max(ui.spacing().interact_size.y + 4.0);
-                // Exactly what is drawn below the results: anything taking
-                // "the rest" would make the window grow every frame.
-                let list = row * stored.len().clamp(1, 4) as f32;
-                let below = 14.0 + ui.spacing().interact_size.y + 6.0 + list + 4.0;
-                // About four rows, then the table scrolls inside itself, so
-                // the window does not grow to the height of the screen.
-                let results = (ui.available_height() - below)
-                    .min(row * 5.5 + 8.0)
-                    .max(120.0);
-                ui.allocate_ui(egui::vec2(ui.available_width(), results), |ui| {
-                    self.results_table(ui, cx, &stored);
-                });
-                ui.add_space(14.0);
-                if let Some(next) = self.stored_list(ui, cx, &stored, list) {
-                    action = Some(next);
-                }
+                // The window never grows past its largest size: a small
+                // screen scrolls the content inside it.
+                egui::ScrollArea::vertical()
+                    .max_height(largest.y - 70.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        self.warning(ui, cx);
+                        ui.add_space(12.0);
+                        self.source_row(ui, cx);
+                        ui.add_space(10.0);
+                        if !self.key_saved {
+                            self.key_row(ui);
+                            ui.add_space(12.0);
+                        }
+                        self.search_bar(ui, cx);
+                        ui.add_space(10.0);
+                        self.filter_bar(ui);
+                        self.status_line(ui);
+                        ui.add_space(4.0);
+                        // The results and the downloaded list (its header and two
+                        // rows, scrolling inside beyond that) each keep a fixed room,
+                        // so the window is the same size before, while and after a
+                        // search or a download.
+                        let row =
+                            theme::row_height(cx.font_size).max(ui.spacing().interact_size.y + 4.0);
+                        let list = row * 2.0;
+                        let stored_area = ui.spacing().interact_size.y + 6.0 + row + list + 4.0;
+                        // About four rows, then the table scrolls inside itself. A
+                        // fixed height, not "what the window has left": that would
+                        // change with the window's size from frame to frame.
+                        let results = row * 6.5 + 8.0;
+                        ui.allocate_ui(egui::vec2(ui.available_width(), results), |ui| {
+                            ui.set_min_height(results);
+                            ui.set_max_height(results);
+                            self.results_table(ui, cx, &stored);
+                        });
+                        ui.add_space(14.0);
+                        ui.allocate_ui(egui::vec2(ui.available_width(), stored_area), |ui| {
+                            ui.set_min_height(stored_area);
+                            if let Some(next) = self.stored_list(ui, cx, &stored, list) {
+                                action = Some(next);
+                            }
+                        });
+                    });
             });
         if !open || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.open = false;
@@ -848,11 +861,28 @@ impl SamplesView {
                     ui.add_space(4.0);
                     crate::activity::warning(ui, text);
                 }
-                if let Some((message, _)) = &self.status {
-                    ui.add_space(4.0);
-                    ui.colored_label(theme::good(), message);
-                }
             });
+    }
+
+    /// One line, always the same height, between the filters and the results:
+    /// what is loading, the last outcome, or what the results are. The window
+    /// does not change size when a search or a download starts or ends.
+    fn status_line(&self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.set_min_height(ui.spacing().interact_size.y);
+            if self.searching.is_some() {
+                crate::theme::spinner(ui);
+                ui.colored_label(theme::muted(), format!("Asking {}…", self.source.label()));
+            } else if let Some((message, _)) = &self.status {
+                ui.add(egui::Label::new(RichText::new(message).color(theme::good())).truncate())
+                    .on_hover_text(message);
+            } else if !self.results.is_empty() && !self.listing.is_empty() {
+                ui.add(
+                    egui::Label::new(RichText::new(&self.listing).color(theme::muted())).truncate(),
+                )
+                .on_hover_text(&self.listing);
+            }
+        });
     }
 
     /// The source to search: each has its own key and its own results.

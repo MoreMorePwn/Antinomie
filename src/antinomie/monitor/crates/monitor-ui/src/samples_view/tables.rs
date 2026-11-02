@@ -90,10 +90,7 @@ impl SamplesView {
                 self.filters = Filters::default();
             }
             if !self.results.is_empty() {
-                ui.colored_label(
-                    theme::muted(),
-                    format!("{count} of {} · {}", self.results.len(), self.listing),
-                );
+                ui.colored_label(theme::muted(), format!("{count} of {}", self.results.len()));
             }
         });
     }
@@ -104,6 +101,10 @@ impl SamplesView {
         cx: &SamplesContext<'_>,
         stored: &[StoredSample],
     ) {
+        if self.results.is_empty() && self.key_saved && self.searching.is_some() {
+            self.loading_table(ui, cx);
+            return;
+        }
         if self.results.is_empty() {
             let text = if !self.key_saved {
                 format!(
@@ -169,6 +170,7 @@ impl SamplesView {
             // rows scroll inside it.
             .auto_shrink([false, true])
             .max_scroll_height(body_max)
+            .min_scrolled_height(0.0)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
         for (natural, least) in RESULT_WIDTHS {
             table = table.column(FitCol::flex(natural).min(least));
@@ -362,6 +364,63 @@ impl SamplesView {
         }
     }
 
+    /// The results table while the first results are still coming: the same
+    /// filter box, count line, header and column widths as the loaded table,
+    /// with placeholder rows in place of partial data, so nothing moves when
+    /// the rows arrive.
+    fn loading_table(&mut self, ui: &mut egui::Ui, cx: &SamplesContext<'_>) {
+        let _ = query::table_filter(
+            ui,
+            "sample-records",
+            "sample.family == Emotet",
+            SAMPLE_FIELDS,
+            &[],
+        );
+        ui.colored_label(theme::muted(), "Loading the catalog…");
+        let row_height = theme::row_height(cx.font_size).max(ui.spacing().interact_size.y + 4.0);
+        crate::widgets::table::begin(ui);
+        let body_max = (ui.available_height() - row_height).max(row_height * 2.0);
+        let rows = ((body_max / row_height) as usize).clamp(1, 12);
+        let mut table = FitBuilder::new(ui)
+            .id_salt("samples_results")
+            .striped(true)
+            .auto_shrink([false, true])
+            .max_scroll_height(body_max)
+            .min_scrolled_height(0.0)
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
+        for (natural, least) in RESULT_WIDTHS {
+            table = table.column(FitCol::flex(natural).min(least));
+        }
+        table
+            .column(FitCol::rest(RESULT_LAST))
+            .header(row_height, |mut header| {
+                for column in Col::ALL {
+                    header.col(|ui| {
+                        crate::widgets::table::head_bg(ui);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(column.label()).strong().color(theme::muted()),
+                            )
+                            .truncate(),
+                        );
+                    });
+                }
+                header.col(|ui| crate::widgets::table::head(ui, ""));
+            })
+            .body(|body| {
+                body.rows(row_height, rows, |mut row| {
+                    for _ in 0..=Col::ALL.len() {
+                        row.col(|ui| {
+                            let width = (ui.available_width() * 0.6).clamp(12.0, 110.0);
+                            let (bar, _) = ui
+                                .allocate_exact_size(egui::vec2(width, 10.0), egui::Sense::hover());
+                            ui.painter().rect_filled(bar, 3.0, theme::line());
+                        });
+                    }
+                });
+            });
+    }
+
     pub(super) fn stored_list(
         &mut self,
         ui: &mut egui::Ui,
@@ -422,6 +481,7 @@ impl SamplesView {
             .striped(true)
             .auto_shrink([false, true])
             .max_scroll_height(height)
+            .min_scrolled_height(0.0)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
         for (natural, least) in STORED_WIDTHS {
             table = table.column(FitCol::flex(natural).min(least));
