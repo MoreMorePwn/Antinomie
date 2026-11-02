@@ -556,7 +556,7 @@ fn finding_table_rows(
         .enumerate()
         .map(|(index, width)| {
             if index == last {
-                Col::rest(width.min(140.0).max(80.0))
+                Col::rest(width.clamp(80.0, 140.0))
             } else {
                 Col::flex(*width).min(64.0).resizable(true)
             }

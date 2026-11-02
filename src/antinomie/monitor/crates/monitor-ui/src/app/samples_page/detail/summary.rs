@@ -660,7 +660,7 @@ fn string_table(
             })
             .body(|body| {
                 body.rows(table::list_row_height(font), shown.len(), |mut row| {
-                    let values = cells(&shown[row.index()]);
+                    let values = cells(shown[row.index()]);
                     for (index, value) in values.iter().enumerate() {
                         row.col(|ui| {
                             let kind = if index == wide {
