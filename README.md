@@ -376,38 +376,6 @@ list.
 
 </details>
 
-## What was in 0.7.1
-
-<details>
-<summary><b>Show the 0.7.1 changes</b></summary>
-
-<br>
-
-* **Debian 13 Minimal base:** a console-only Debian beside BusyBox and the
-  desktop base, with rootless Debian image builds, laid out and configured as
-  the Debian installer leaves it (per-VM identities, installer timestamps,
-  Debian's own kernel packages in `/boot`, natively hashed accounts) and
-  bootable on virtio, SATA and NVMe.
-* **Static analysis:** Strings and Regex matches as separate tabs.
-* **Kernel patch series** rewritten as fourteen documented topic patches.
-* **Network routes:** a route per run (drop, Internet, InetSim, Tor, WireGuard via
-  wireproxy, SOCKS5) without root, with `tor` and `wireproxy` as managed tools.
-* **File activity:** a per-file history with the processes and writes, and an
-  analysis tree in Run History.
-* **Activity graph:** equal spacing by default with a Time toggle, an overview
-  ruler, category icons and a legend.
-* **MemNixFS** as a second memory backend for Linux dumps.
-* **abuse.ch IOC datasets** for offline indicator matching, on abuse.ch's v2
-  export endpoints.
-* **eBPF findings** for programs attached through `BPF_LINK_CREATE`, raw
-  tracepoints and perf events.
-* **Device profile fallback warnings** when a profile asks for more than a base offers.
-* **Full-pack builder** to make your own offline bundle of the managed tools.
-* **Reliability:** bounded waits for report writes and host file copies, pending
-  analyses that settle on their own, and many test-timing fixes.
-
-</details>
-
 ## Roadmap
 
 Planned and undated:
@@ -415,7 +383,7 @@ Planned and undated:
 - **Headless mode**
 - **Docker-based web interface and API**
 - **Auto mode**: a sample in, a report out
-- **arm64** and **RISC-V** guests
+- **arm64** and **MIPS** guests
 - **TLS decryption**
 - **In-memory unpacking detection**: catch and save code a sample decrypts or
   unpacks in memory
