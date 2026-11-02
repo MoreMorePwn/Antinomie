@@ -41,8 +41,10 @@ pub(super) fn source_stamp(
             },
         )
     };
+    let page_rows = request.rows();
     let mut stamp = format!(
-        "files-v{FILE_INDEX_VERSION}|{pcap_open}|{}|{}|{:?}|{}|{:?}|{}/{}|rebuild={}/{}|rev={:?}",
+        "files-v{FILE_INDEX_VERSION}|rows={}|{pcap_open}|{}|{}|{:?}|{}|{:?}|{}/{}|rebuild={}/{}|rev={:?}",
+        page_rows,
         request.run_finished,
         request.recording_open,
         request.started_ms,

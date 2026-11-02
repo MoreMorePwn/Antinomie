@@ -121,6 +121,8 @@ struct Settings {
     rebuild_file_mib: u32,
     /// Triage Changed files: most MiB rebuilt over all files of a run.
     rebuild_run_mib: u32,
+    /// Triage: rows one table keeps per page (0 reads as the default).
+    triage_page_rows: u32,
     /// File activity: most MiB of written content kept for one file.
     file_write_file_mib: u32,
     /// File activity: most MiB of written content kept for a whole run.
@@ -265,6 +267,7 @@ impl Default for Settings {
             analysis_limits: antinomie_monitor_core::AnalysisLimits::default(),
             rebuild_file_mib: crate::triage::DEFAULT_REBUILD_FILE_MIB,
             rebuild_run_mib: crate::triage::DEFAULT_REBUILD_RUN_MIB,
+            triage_page_rows: crate::triage::STORED_ROWS as u32,
             file_write_file_mib: (antinomie_monitor_core::file_writes::DEFAULT_PER_FILE >> 20)
                 as u32,
             file_write_run_mib: (antinomie_monitor_core::file_writes::DEFAULT_PER_RUN >> 20) as u32,
@@ -898,6 +901,7 @@ impl eframe::App for MonitorApp {
             .unwrap_or_else(crate::triage::TriageInput::empty);
         self.triage.set_data_dir(&self.options.data_dir);
         self.triage.set_write_limits(self.settings.write_limits());
+        self.triage.set_page_rows(self.settings.triage_page_rows);
         self.triage.set_kernel_revision(triage_run.and_then(|run| {
             run.environment
                 .as_ref()

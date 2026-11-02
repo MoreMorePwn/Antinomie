@@ -266,6 +266,33 @@ fn summary(
 
 use antinomie_monitor_core::run_digest as digest_types;
 
+/// Which calls the guest recorded without decoding an argument ("schema
+/// gaps" in the recorder line): the call and its result are in the report, only
+/// the named argument's bytes are missing. Listed so a high count can be traced.
+fn schema_gap_note(scan: &ArchiveScan) -> Option<String> {
+    if scan.schema_gaps.is_empty() {
+        return None;
+    }
+    let total: u64 = scan.schema_gaps.iter().map(|(_, count)| count).sum();
+    let listed: Vec<String> = scan
+        .schema_gaps
+        .iter()
+        .take(10)
+        .map(|(call, count)| format!("{call} x{}", crate::values::thousands(*count)))
+        .collect();
+    let more = scan.schema_gaps.len().saturating_sub(listed.len());
+    Some(format!(
+        "{} call(s) have an argument the guest had no decoder for (schema gaps): {}{}. The calls and their results are recorded; the argument bytes are not.",
+        crate::values::thousands(total),
+        listed.join(", "),
+        if more > 0 {
+            format!(" and {more} more kind(s)")
+        } else {
+            String::new()
+        }
+    ))
+}
+
 /// A tree that ended sooner than this was over before it could do much.
 const SHORT_TREE_NS: u64 = 10_000_000_000;
 
@@ -684,6 +711,9 @@ pub(super) fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
                 summary.statement
             );
         }
+    }
+    if let Some(note) = schema_gap_note(scan) {
+        report.notes.push(note);
     }
     if let Some(note) = tree_end_note(scan) {
         if let Some(summary) = report.summary.as_mut() {

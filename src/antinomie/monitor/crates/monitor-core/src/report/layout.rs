@@ -86,10 +86,13 @@ impl Builder {
             })
             .collect();
         let cut = table.rows.len().saturating_sub(DOCUMENT_ROWS) as u64 + table.omitted;
+        let total = table.rows.len() as u64 + table.omitted;
         let note = (cut > 0).then(|| {
             format!(
-                "{cut} more matching rows are not shown here; the JSON export keeps every row \
-                 the index held."
+                "First {} of {} rows. {cut} more matching rows are not shown here; the JSON \
+                 export keeps the rows the index held (the page size is a Settings value).",
+                total - cut,
+                total
             )
         });
         (

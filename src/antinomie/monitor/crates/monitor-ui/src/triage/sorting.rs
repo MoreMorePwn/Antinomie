@@ -308,7 +308,12 @@ impl Spool {
             .map_err(|error| format!("triage sort spool (256 MiB limit): {error}"))?;
         Ok(())
     }
-    fn page<T: Row>(&self, offset: usize, descending: bool) -> Result<Vec<T>, String> {
+    fn page<T: Row>(
+        &self,
+        offset: usize,
+        limit: usize,
+        descending: bool,
+    ) -> Result<Vec<T>, String> {
         self.connection
             .execute_batch("COMMIT")
             .map_err(|error| error.to_string())?;
@@ -316,7 +321,7 @@ impl Spool {
         let mut query = self.connection.prepare(&format!("SELECT payload FROM rows ORDER BY missing ASC, k {order}, seq ASC LIMIT ?1 OFFSET ?2")).map_err(|error| error.to_string())?;
         let offset = i64::try_from(offset).map_err(|_| "sorted page offset overflow")?;
         let rows = query
-            .query_map(rusqlite::params![STORED_ROWS as i64, offset], |row| {
+            .query_map(rusqlite::params![limit as i64, offset], |row| {
                 row.get::<_, Vec<u8>>(0)
             })
             .map_err(|error| error.to_string())?;
@@ -372,6 +377,8 @@ pub(super) struct Page<T> {
     index: usize,
     offset: usize,
     count: usize,
+    /// Rows the page keeps.
+    limit: usize,
     cancel: Arc<AtomicBool>,
 }
 
@@ -384,6 +391,7 @@ impl<T: Row> Page<T> {
             index,
             offset: request.offsets[index],
             count: 0,
+            limit: request.rows(),
             cancel: Arc::clone(cancel),
         }
     }
@@ -424,7 +432,7 @@ impl<T: Row> Page<T> {
                 .as_mut()
                 .ok_or("sort spool missing")?
                 .push(atom(header, sort.column, &cells), cells)?;
-        } else if self.count >= self.offset && self.rows.len() < STORED_ROWS {
+        } else if self.count >= self.offset && self.rows.len() < self.limit {
             self.rows.push(row);
         }
         self.count = self.count.saturating_add(1);
@@ -435,7 +443,11 @@ impl<T: Row> Page<T> {
             return Err("cancelled".into());
         }
         if let Some(spool) = &self.spool {
-            self.rows = spool.page(self.offset, self.sort.is_some_and(|sort| sort.descending))?;
+            self.rows = spool.page(
+                self.offset,
+                self.limit,
+                self.sort.is_some_and(|sort| sort.descending),
+            )?;
         }
         let omitted = self.count.saturating_sub(self.rows.len()) as u64;
         Ok((self.rows, omitted, self.count))

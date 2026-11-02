@@ -165,6 +165,8 @@ pub(super) fn scan_archive_query(
     let mut scoped_count = 0;
     // The last install-like call the kernel refused: "openat /var/run/x ENOENT".
     let mut last_failed: Option<FailedStep> = None;
+    // Fields the guest had no argument decoder for, by call: the recorder's "schema gaps".
+    let mut schema_gaps: std::collections::BTreeMap<String, u64> = Default::default();
     // Calls whose saved async observations the pages only preview, and how many.
     let (mut async_partial, mut async_omitted) = (0u64, 0u64);
     let (seen, complete, issues) = walk_segments(&recordings, cancel, |segment, page| {
@@ -317,7 +319,8 @@ pub(super) fn scan_archive_query(
                 .flat_map(|event| &event.fields)
                 .map(|field| field.preview.len() + field.key.len() + field.ranges.len() * 16)
                 .sum::<usize>();
-            if bpf_calls.len() < STORED_ROWS && bpf_size.saturating_add(size) <= 8 * 1024 * 1024 {
+            if bpf_calls.len() < request.rows() && bpf_size.saturating_add(size) <= 8 * 1024 * 1024
+            {
                 bpf_size += size;
                 bpf_calls.push(invocation.clone());
             } else {
@@ -336,6 +339,7 @@ pub(super) fn scan_archive_query(
         let hits = file_category::classify(&files, invocation, event);
         if real {
             note_failed_step(&mut last_failed, &files, invocation, event);
+            note_schema_gaps(&mut schema_gaps, invocation, event);
         }
         if let Some(writer) = &mut event_journal {
             if let Err(error) =
@@ -765,7 +769,7 @@ pub(super) fn scan_archive_query(
         file_changes: file_changes
             .into_iter()
             .skip(request.offsets[2])
-            .take(STORED_ROWS)
+            .take(request.rows())
             .collect(),
         read,
         read_omitted,
@@ -806,7 +810,43 @@ pub(super) fn scan_archive_query(
         network_warning: network.network_warning,
         root_crash,
         last_failed_step: last_failed.map(|step| step.text),
+        schema_gaps: {
+            let mut gaps: Vec<_> = schema_gaps.into_iter().collect();
+            gaps.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            gaps
+        },
     })
+}
+
+/// Count the fields of this call the guest had no decoder for (status
+/// NO_DECODER), under the call's name, the field and, for `ioctl`, the request.
+fn note_schema_gaps(
+    gaps: &mut std::collections::BTreeMap<String, u64>,
+    invocation: &InvocationSummary,
+    event: &EventSummary,
+) {
+    let mut keys = std::collections::BTreeSet::new();
+    for field in invocation
+        .entry
+        .iter()
+        .chain(invocation.exit.iter())
+        .flat_map(|phase| &phase.fields)
+        .filter(|field| field.status == Some(4))
+    {
+        keys.insert(field.key.as_str());
+    }
+    for key in keys {
+        let name = event.syscall_name.as_str();
+        let label = match (name, call_args(invocation)) {
+            ("ioctl", Some(args)) => format!("ioctl request {:#x} ({key})", args[1]),
+            ("arch_prctl" | "prctl" | "fcntl" | "futex", Some(args)) => {
+                format!("{name} selector {:#x} ({key})", args[0])
+            }
+            _ => format!("{name} ({key})"),
+        };
+        let count = gaps.entry(label).or_insert(0);
+        *count = count.saturating_add(1);
+    }
 }
 
 /// A call that tried to make, change or run something and was refused.

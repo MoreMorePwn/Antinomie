@@ -105,6 +105,16 @@ it runs.
   failing step: openat /var/run/dbus/x.pid ENOENT", the last refused create,
   write, delete, rename, link, permission change or exec, so a failed install
   step is no longer silent.
+- **Tables that stop at a page size say "first N of M", and the page size is a
+  setting.** Settings > Advanced > "Triage: rows per table" (default 2,000,
+  100 to 100,000) sets how many rows one Triage table and one report table keeps; a
+  table with more shows "first 2,000 of 10,897 matched" with the setting named,
+  and the report says "First 2,000 of 10,897 rows".
+- **The report lists which calls are schema gaps.** A note names each kind of call
+  the guest recorded without decoding an argument ("ioctl request 0x5421
+  (arg2.ioctl) x200"), so a high "schema gaps" count in the recorder line can be
+  traced to the calls behind it. The decoder fixes themselves live in the guest
+  kernel patches and are not part of this change.
 
 ## 0.8.1 — 2026-11-03
 

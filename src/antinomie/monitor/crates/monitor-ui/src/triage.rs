@@ -899,14 +899,25 @@ impl TriageView {
 
     fn pager(&mut self, ui: &mut egui::Ui, index: usize, retained: usize, total: u64) {
         let offset = self.scan_request.offsets[index];
-        ui.colored_label(
-            theme::muted(),
+        let rows = self.scan_request.rows();
+        let text = if offset == 0 && (retained as u64) < total {
+            // The table stops at its page size: say so, and where to change it.
             format!(
-                "{}–{} of {total} matched; page size {STORED_ROWS}",
+                "first {} of {} matched (page size {}, Settings > Advanced)",
+                crate::values::thousands(retained as u64),
+                crate::values::thousands(total),
+                crate::values::thousands(rows as u64)
+            )
+        } else {
+            format!(
+                "{}–{} of {} matched; page size {}",
                 if retained == 0 { 0 } else { offset + 1 },
-                offset + retained
-            ),
-        );
+                offset + retained,
+                crate::values::thousands(total),
+                crate::values::thousands(rows as u64)
+            )
+        };
+        ui.colored_label(theme::muted(), text);
         if ui
             .add_enabled(
                 offset > 0 && self.scan_rx.is_none(),
@@ -914,7 +925,7 @@ impl TriageView {
             )
             .clicked()
         {
-            self.scan_request.offsets[index] = offset.saturating_sub(STORED_ROWS);
+            self.scan_request.offsets[index] = offset.saturating_sub(rows);
             self.request_query_refresh();
         }
         if ui
@@ -924,7 +935,7 @@ impl TriageView {
             )
             .clicked()
         {
-            self.scan_request.offsets[index] = offset + STORED_ROWS;
+            self.scan_request.offsets[index] = offset + rows;
             self.request_query_refresh();
         }
     }
@@ -1194,6 +1205,8 @@ struct ScanRequest {
     write_limits: antinomie_monitor_core::file_writes::Limits,
     /// Caps on the bytes the Changed files rebuild keeps (Settings).
     retention: files::Retention,
+    /// Rows one table keeps per page (Settings); 0 reads as [`STORED_ROWS`].
+    page_rows: usize,
     /// The kernel revision of the run's base, when the run recorded it: from
     /// revision 18 a read or write with no position record is a stream.
     kernel_revision: Option<u32>,
@@ -1210,7 +1223,21 @@ pub(crate) fn copy_earlier_bytes(
     file_activity::copy_boot(job)
 }
 
-const STORED_ROWS: usize = 2000;
+/// The default most rows one Triage table keeps per page.
+pub(crate) const STORED_ROWS: usize = 2000;
+/// The range of the Settings value for it.
+pub(crate) const PAGE_ROWS_RANGE: std::ops::RangeInclusive<u32> = 100..=100_000;
+
+impl ScanRequest {
+    /// Rows one table keeps per page.
+    fn rows(&self) -> usize {
+        if self.page_rows == 0 {
+            STORED_ROWS
+        } else {
+            self.page_rows
+        }
+    }
+}
 /// Query tables with their own filter, sort and page: findings 0, opened 1,
 /// changed 2, http 3, dns 4, read 5, ips 6, hosts 7, the file categories 8 to
 /// 15, then the TLS, QUIC and SSH sessions, then the rebuilt Network section's
@@ -1313,6 +1340,9 @@ struct ArchiveScan {
     /// The last create, write, delete or exec the kernel refused, as
     /// "openat /var/run/dbus/x.pid ENOENT".
     last_failed_step: Option<String>,
+    /// Calls with a field the guest had no decoder for, most frequent first:
+    /// "ioctl request 0x5421 (arg2.ioctl)" and how many calls.
+    schema_gaps: Vec<(String, u64)>,
 }
 
 /// The rows of the rebuilt Network tabs and what their pages left out.

@@ -698,6 +698,24 @@ impl MonitorApp {
                 );
             });
             ui.end_row();
+            ui.label("Triage: rows per table");
+            ui.vertical(|ui| {
+                ui.add(
+                    egui::DragValue::new(&mut self.settings.triage_page_rows)
+                        .range(crate::triage::PAGE_ROWS_RANGE)
+                        .suffix(" rows"),
+                );
+                hint(
+                    ui,
+                    &format!(
+                        "Most rows one Triage table (Opened, Read, Changed, Findings, Network) keeps per page and \
+                         one report table keeps. A table with more says \"first N of M\"; Next shows the rest. \
+                         Default {}; a higher value uses more memory.",
+                        crate::values::thousands(crate::triage::STORED_ROWS as u64)
+                    ),
+                );
+            });
+            ui.end_row();
             ui.label("File activity: written content kept");
             ui.vertical(|ui| {
                 ui.horizontal_wrapped(|ui| {

@@ -145,6 +145,11 @@ impl TriageView {
         self.scan_request.write_limits = limits;
     }
 
+    /// Rows one Triage table keeps per page.
+    pub(crate) fn set_page_rows(&mut self, rows: u32) {
+        self.scan_request.page_rows = rows as usize;
+    }
+
     /// The caps on the bytes the Changed files rebuild keeps, in MiB.
     pub(crate) fn set_rebuild_limits(&mut self, file_mib: u32, run_mib: u32) {
         self.scan_request.retention = files::Retention::from_mib(file_mib, run_mib);
