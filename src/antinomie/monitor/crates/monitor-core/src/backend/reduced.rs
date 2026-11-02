@@ -43,6 +43,11 @@ impl Session {
                             ..boot.clone()
                         });
                 count(record, &verdict);
+                // Dropped on purpose: its sequence number is not a loss.
+                if matches!(verdict, Verdict::Drop(_)) {
+                    run.telemetry_loss
+                        .packet(header.task_cookie, header.packet_seq);
+                }
             }
             _ => count(boot, &verdict),
         }

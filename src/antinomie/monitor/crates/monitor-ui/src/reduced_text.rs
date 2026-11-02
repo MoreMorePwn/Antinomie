@@ -60,8 +60,6 @@ pub(crate) fn lines(reduced: &ReducedRecording, started_ms: Option<u64>) -> Vec<
             "The network capture was stopped at {} to leave the rest of the quota for system calls; packets it saved before that are kept.",
             local_seconds(stopped / 1000)
         ));
-    } else {
-        lines.push("The network capture kept running past the switch.".into());
     }
     if let Some(full) = reduced.full_at_ms {
         lines.push(format!(
