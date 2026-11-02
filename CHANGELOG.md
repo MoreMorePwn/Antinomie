@@ -8,6 +8,7 @@ it runs.
 
 ### Host
 
+- **A failed Open folder or Open file shows a toast.** The desktop opener already ran off the UI thread but only logged a failure to the terminal; it now raises an error toast and Activity row. Creating the rules and plugins folders before opening them also moved off the UI thread.
 - **Large folders and slow disks no longer freeze the memory result view.** The Files button looked up the run's files folder on every frame; it is looked up once, when the result loads.
 - **The sample window has an IOCs tab: every indicator across all runs of the
   sample.** One row per unique indicator (a file by hash and path): kind, value

@@ -341,6 +341,7 @@ pub(crate) fn counts(ctx: &egui::Context) -> Vec<(String, u32)> {
 
 /// Where the stack must stay above (the status bar's top edge).
 pub(crate) fn set_floor(ctx: &egui::Context, y: f32) {
+    crate::folders::remember_context(ctx);
     with(ctx, |toasts| toasts.floor = Some(y));
 }
 

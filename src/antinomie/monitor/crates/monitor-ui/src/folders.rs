@@ -220,17 +220,46 @@ pub(crate) fn show(directory: &Path) -> Result<(), String> {
     }
 }
 
-/// `show` on a background thread; a failure is only logged.
+/// The egui context the detached openers raise their failure toast on; the
+/// toast stack remembers it on its first frame.
+static CONTEXT: std::sync::OnceLock<eframe::egui::Context> = std::sync::OnceLock::new();
+
+pub(crate) fn remember_context(ctx: &eframe::egui::Context) {
+    CONTEXT.get_or_init(|| ctx.clone());
+}
+
+/// A failed open: a toast and an Activity row when the UI is up, else stderr.
+fn report_failure(error: &str) {
+    match CONTEXT.get() {
+        Some(ctx) => crate::toasts::notify(ctx, crate::activity::Level::Error, error),
+        None => eprintln!("{error}"),
+    }
+}
+
+/// `show` on a background thread; a failure becomes a toast.
 pub(crate) fn show_detached(directory: PathBuf) {
     thread::spawn(move || {
         if let Err(error) = show(&directory) {
-            eprintln!("{error}");
+            report_failure(&error);
+        }
+    });
+}
+
+/// Create `directory` if it is missing and show it, all on a background
+/// thread; a failure of either becomes a toast.
+pub(crate) fn show_created_detached(directory: PathBuf) {
+    thread::spawn(move || {
+        let shown = std::fs::create_dir_all(&directory)
+            .map_err(|error| format!("{}: {error}", directory.display()))
+            .and_then(|()| show(&directory));
+        if let Err(error) = shown {
+            report_failure(&error);
         }
     });
 }
 
 /// Hand an existing file to the desktop's default application on a background
-/// thread; a failure is only logged. This app opens nothing for writing: what
+/// thread; a failure becomes a toast. This app opens nothing for writing: what
 /// the other application does with the file is its own business.
 pub(crate) fn open_file_detached(file: PathBuf) {
     thread::spawn(move || {
@@ -242,8 +271,8 @@ pub(crate) fn open_file_detached(file: PathBuf) {
             .status();
         match status {
             Ok(status) if status.success() => {}
-            Ok(status) => eprintln!("Open file failed: {status}"),
-            Err(error) => eprintln!("Open file: {error}"),
+            Ok(status) => report_failure(&format!("Open file failed: {status}")),
+            Err(error) => report_failure(&format!("Open file: {error}")),
         }
     });
 }

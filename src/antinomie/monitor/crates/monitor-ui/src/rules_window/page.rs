@@ -211,8 +211,7 @@ impl Model {
             }
             if ui.button("Open rules directory").clicked() {
                 let root = ruleset::rules_root(data_dir);
-                let _ = std::fs::create_dir_all(&root);
-                crate::folders::show_detached(root);
+                crate::folders::show_created_detached(root);
             }
         });
     }
