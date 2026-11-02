@@ -609,9 +609,11 @@ fn overview(
         ui.columns(2, |columns| {
             egui::ScrollArea::vertical()
                 .id_salt("analysis-overview-identity")
+                .auto_shrink([false, false])
                 .show(&mut columns[0], |ui| action = identity(ui, report));
             egui::ScrollArea::vertical()
                 .id_salt("analysis-overview")
+                .auto_shrink([false, false])
                 .show(&mut columns[1], |ui| {
                     if let Some(next) = categories(ui, report, state) {
                         action = Some(next);
@@ -621,6 +623,7 @@ fn overview(
     } else {
         egui::ScrollArea::vertical()
             .id_salt("analysis-overview")
+            .auto_shrink([false, false])
             .show(ui, |ui| {
                 action = identity(ui, report);
                 ui.add_space(8.0);
@@ -822,7 +825,7 @@ fn categories(
                         let clicked = ui
                             .vertical(|ui| {
                                 // Why a check is not complete stands under its name.
-                                ui.set_max_width(340.0);
+                                ui.set_max_width(340.0_f32.min(ui.available_width() * 0.5));
                                 let clicked = crate::widgets::link(ui, section_title(kind))
                                     .on_hover_text(&section.summary)
                                     .clicked();

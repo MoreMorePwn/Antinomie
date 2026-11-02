@@ -221,8 +221,15 @@ impl Plan {
                 Column::remainder().at_least(col.min)
             } else if col.resizable && !self.scrolls {
                 // The widest a dragged column gets leaves the others their
-                // minimums, so a drag cannot push the table past its box.
-                let widest = (self.total - others_min(index)).max(col.min).min(col.max);
+                // minimums; a table that had to shrink does not let the
+                // widths kept from a wider window stand.
+                let widest = if self.shrunk {
+                    width
+                } else {
+                    (self.total - others_min(index)).max(col.min)
+                }
+                .min(col.max)
+                .max(col.min);
                 Column::initial(width)
                     .range(col.min..=widest)
                     .resizable(true)
