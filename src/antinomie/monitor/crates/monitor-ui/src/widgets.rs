@@ -31,6 +31,7 @@
 mod card;
 mod facts;
 mod fit;
+pub mod fit_table;
 mod info_panel;
 pub mod table;
 mod tabs;
