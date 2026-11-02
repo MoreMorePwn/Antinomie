@@ -2,7 +2,7 @@
 
 [← Back to the overview](../README.md)
 
-This guide follows 0.8.1. Available controls depend on the application and base
+This guide follows 0.8.2. Available controls depend on the application and base
 versions; existing VMs keep their pinned base.
 
 ## Dependencies and analysis tools
@@ -67,7 +67,14 @@ versions; existing VMs keep their pinned base.
   itself. Each row shows its records, size, the date it was fetched and its age
   (a warning appears when a dataset is over 14 days old), its terms (Feodo and
   SSLBL are CC0; ThreatFox and URLhaus are free under abuse.ch's fair use with
-  an Auth-Key set in **Tools > API keys**) and a switch. A download is saved
+  an Auth-Key set in **Tools > API keys**) and a switch. **Update** first asks
+  the server for the file's real size (a HEAD request) and shows "386 of 450 MB"
+  while it downloads, or "386 MB downloaded" when the server does not say;
+  **Update all** shows the total of the datasets (marked "about" while some sizes
+  are estimates), and the button's hover text shows the typical total before it
+  starts. The free-space check uses the real size. A dataset larger than four
+  times its typical size is refused before it is fetched, with its size and the
+  limit in the message. A download is saved
   whole or not at all: when one fails the previous copy stays in use and the
   status line names the dataset that failed. If abuse.ch answers that it does
   not accept the Auth-Key, the line says so (check the key in **Tools > API
@@ -216,6 +223,16 @@ for Antinomie 0.3.0 and newer):
 | Longest wait per event | In Never drop mode, how long one call may wait (default 5 s) before its record is dropped after all |
 | Host event table | How many calls the host keeps assembling at once (default 16,384) |
 
+The VM's **Summary** shows a **Snapshots** box under **Device profile**: the VM's
+snapshots as a compact tree (name, whether it is disk only or disk + memory, when
+it was taken, its size, its notes, and a **Current** marker on the one the VM runs
+from) with **Take snapshot…**, **Restore…** (**Resume…** for a disk + memory
+snapshot that can resume, and **Restore disk and boot…**) and **Open Snapshots…**
+for the full window. It uses the Snapshots window's own dialogs and rules, so
+what is allowed while the VM runs is the same in both, and the list refreshes when
+you select the VM and when it starts or stops. The label column of the Summary
+cards is as wide as its longest label.
+
 ## 3. Start it and run a program
 
 Saved **Syscall trace** recordings have a **Go to page** number beside
@@ -245,7 +262,13 @@ packet history already has it, and specimen Content supports a byte-offset jump.
    window on the VM screen runs it). Both desktop choices need the run's user
    logged in on the VM display; otherwise the app terminal says so.
 4. **Stop** ends a run together with all of its child processes. Closing a
-   terminal window does not stop the program.
+   terminal window does not stop the program, which keeps recording; the run
+   is shown as still going (and **Stop** stays available) until its processes
+   end. When a run's program tree really ends, a toast says "Run 3 finished"
+   with the program, how long it ran and how it ended, with **Open Triage**
+   (and **Open sample** for a library sample). A root that exits while children
+   live on does not toast until the run ends. See *Run states* below and
+   **Settings > Notifications**.
 5. **Static Analysis** in the launch dialog analyzes the program's file before
    it runs; pick the categories, from triage to disassembly and decompilation.
    **Strings** and **Regex matches** are two choices (Triage, on by default): the
@@ -367,8 +390,26 @@ The network capture is the guest's own view on every route.
   `file_handle` headers, `io_uring_params`, System V messages (`mtype`,
   `mtext`), iptables table headers and LDT entries. Selecting such a field
   lists every member. Other structs, times, integers and pointers show in hex.
+  A captured **array of records** (directory entries of `getdents`/`getdents64`,
+  `cap_data`, `gid_t`, `siginfo_t`, `desc_struct`, `pollfd`, `sembuf`, the
+  control messages of `sendmsg`/`recvmsg`, classic BPF filters of
+  `seccomp`/`prctl`/socket options, `futex_waitv`, `kexec_segment`, eBPF
+  instructions and the BTF func, line and CO-RE relocation records, and plain
+  `u32`/`u64` arrays) shows as "N entries" with one line per record (a dirent's
+  name and type, a pollfd's descriptor and revents, `SCM_RIGHTS` descriptors, a
+  BPF instruction as assembly, a seccomp filter with its action and
+  `seccomp_data` field names), each opening to its fields. **Copy row as JSON**,
+  **Copy all as JSON** and **Save as JSON** (into `records/` beside the run's
+  files) carry the records. The preview holds the first 256 bytes;
+  **Decode all captured (M bytes)** reads the field's whole evidence (up to
+  16 MiB) and decodes every record, 100 a page, with "showing X of Y". A record
+  the capture cut, or whose length field cannot be right, is named instead of
+  dropped. The trace filter reads decoded records (`records contains "name"`, or a
+  plain word), and a trace row's menu copies the call's decoded records as JSON.
+  Only the x86-64 layouts are decoded for now.
 - **Run History**: every run on the selected VM, including earlier boots, with
-  its command line, user, status and exit code. Double-click a run to open its
+  its command line, user, status and exit code. The state is coloured (see
+  *Run states* below). Double-click a run to open its
   Triage view. Select a trace entry to inspect its recorded call details.
   The table spans the pane. A run's details list **Analysis enabled** as a tree:
   the static analysis with its checks below it, then the capture options; a check
@@ -498,6 +539,40 @@ The network capture is the guest's own view on every route.
   fill the whole width instead of sitting in a sliver of a long run; it follows
   the Graph's **Events** or **Time** choice. In both, a run with only a few
   findings has them near the left and right edges of the plot.
+- **Triage › Summary › MITRE ATT&CK (N)** shows the techniques as a badge row
+  and **Show all N**. Open, it lists the techniques grouped by tactic in
+  kill-chain order, one foldable row each: the technique and its name, its
+  tactics, the Triage rules that cited it (with tier and count), the YARA, IDS
+  and Sigma rules that cited it, and links that open **Suspicious activity** or
+  the engine's matches in **Detection** filtered to that technique, and **Syscall
+  Trace** at the first call behind it. Whether the section and each technique are
+  open is remembered. Filtering Suspicious activity does not shrink this list.
+  Each of the 15 ATT&CK v20 tactics has its own colour (one palette for dark and
+  one for light; Defense Evasion is now Stealth and Defense Impairment). A
+  technique that ATT&CK files under several tactics takes the colour of the
+  tactic of the row it sits in (the sample window groups by tactic), else of its
+  first tactic in kill-chain order, and shows one dot per tactic. The tactic
+  names are always in the badge's tooltip and in a folded **Tactic colours**
+  legend under the Summary and the sample window's ATT&CK section. The Sigma
+  rules of low or informational severity add no techniques to the list.
+- **Triage › Summary** also names the run's root process from the launch request
+  when the recording's launch record cannot (the program and arguments the run
+  was asked to start, kept as the first name in its exec history), and the
+  Process column shows a forked child that never ran an exec as its parent's
+  image with "(fork)". A failed call reads "failed (EACCES)", with the number and
+  its meaning on hover.
+- **Recording quota reached.** When a boot has used nine tenths of its recording
+  quota (**Settings > Recording**), the recorder keeps only the system calls the
+  Triage suspicious-activity rules read (and process lifecycle), drops the rest
+  and counts what it dropped per call. The network capture keeps running until
+  half of the last tenth is left; the quota itself stays the hard ceiling. Triage,
+  Run History and the HTML/PDF report say "Recording quota reached at <time>; from
+  then on only suspicious-activity calls were kept, N calls dropped" as
+  information, not an error (`run.json` has it as `reduced`).
+- **Tables that stop at a page size** say "first N of M" (for example "first 2,000
+  of 10,897 matched") and name the setting **Settings > Advanced > Triage: rows
+  per table** (default 2,000, 100 to 100,000), which sets how many rows one Triage
+  table and one report table keeps.
 - **Settings › Notifications › Toast for live HIGH findings** (off by default):
   the first HIGH finding of each rule in a run that is still going raises one
   toast; later matches of that rule add `×N` to it. It is raised when the run's
@@ -530,7 +605,11 @@ The network capture is the guest's own view on every route.
   filter bar takes `ioc.match == matched`, `ioc.value contains example`,
   `tls.ja3 == "…"`, `file.role contains executed` and the other fields in the
   guide. Update the datasets with **Datasets…**; with none loaded every row reads
-  Not checked, and a banner says the datasets are over 14 days old.
+  Not checked, and a banner says the datasets are over 14 days old. The tab and
+  the kind tabs show the total in grey and, when any indicator matched (IDS,
+  YARA, Sigma, abuse.ch or marked malicious), the matched count after it in red:
+  "IOC 24 · 3" (tooltip "24 indicators, 3 matched"); nothing is red when nothing
+  matched.
   **Online lookups** are off at every start. When switched on (needs the Auth-Key)
   **Check online** sends only public values with no offline match (never files,
   never JA3 or certificate fingerprints, never a value a known false positive
@@ -573,6 +652,25 @@ The network capture is the guest's own view on every route.
   module list or mounts, or a symbol table whose kernel banner is not the
   dump's); a report the tool could not produce fails with the reason instead
   of showing an empty table. A report takes about a minute on a 2 GiB dump.
+  An unvalidated page-table root is explained in plain words (process and file
+  lists from physical memory are reliable; modules, mounts and the kernel log may
+  be missing or wrong), and the partial result offers **Run in Volatility 3** for
+  modules (`linux.lsmod`), mounts (`linux.mountinfo`) and the kernel log
+  (`linux.kmsg`) in one click.
+  The **Content** tab (beside Volatility 3 and MemNixFS) shows the dump's bytes as
+  a hex dump or as raw text (**Hex** and **Text**), 16 KiB a page, read a page at a
+  time so a multi-gigabyte dump is never loaded. The toolbar has **Go to** (an
+  offset in hex), **Start**, **Page up**, **Page down** and **End**, selection
+  with **Copy hex**, **Copy text** and **Copy address**. **Strings…** and
+  **Regex…** open windows that search the dump only when you press **Search**
+  (Strings: minimum length 4, ASCII and UTF-16LE; Regex: a pattern that matches
+  octets, with **Ignore case**; **Max hits** 10,000 by default, up to 200,000),
+  with progress and **Cancel**, a page of hits at a time, and a click on a hit
+  jumps the view to it. A hit limit or a cancel is shown as an information note.
+  The searches are jobs in the **Jobs** window with progress and **Stop**. In
+  **Core dumps** each mapping has the same Content tab, with virtual addresses
+  (file offsets on hover); its Strings and Regex windows search the mapping
+  shown, while the **Strings** tab searches the whole core.
 - **Static Analysis**: a **Run** button beside the file's hash opens the run the
   report belongs to in Run History. The selected run's report: an overview, then each
   category; disassembly and decompilation are full listings with search. The
@@ -600,7 +698,11 @@ The network capture is the guest's own view on every route.
   to the same report without starting the analysis again: the specimen kept with
   the report is analysed by the one check, and its tab fills in when it ends.
   The button waits while the analysis is still being made; no VM has to be
-  running, and the result is saved with the report like the others.
+  running, and the result is saved with the report like the others. Each line is
+  the check's name, its state chip, what it found and the **Open** button in fixed
+  columns, so every **Open** is in one column; why a check timed out, was partial
+  or could not run (and the limit it met) is to the right of the button, in the
+  warning colour (the error colour for a check that could not run).
 - **Static Analysis > Unpacking**: the unpack chain, one layer at a time. A
   **Layer** drop-down chooses the file as it came (packed with UPX or not) or a layer
   UPX recovered from the one before; below it are that layer's size, SHA-256 and the
@@ -675,4 +777,184 @@ be selected for one launch with `antinomie --graphics-driver d3d12`; the dialog
 can copy a command preserving the data directory. Close the app normally before
 using it. The default `--graphics-driver system` keeps the existing environment.
 
+## Run states
 
+Run History, the sample window's Runs list and Summary, the VM's recent runs, the
+run window, the run-finished toast and Triage's run-state line colour a run's
+state from one palette. The words always stay, so colour is never the only cue.
+
+| State | Colour |
+|---|---|
+| Running, stopping, or still recording after the terminal was closed or the root exited | Blue |
+| Finished with exit 0 | Green |
+| Finished with another exit code | Neutral |
+| Stopped (by you) | Grey |
+| Ended at its time limit (a `timeout` program: exit 124, or the SIGTERM BusyBox's `timeout` re-raises) | Blue-grey (info) |
+| Crashed or killed by a signal (SIGSEGV and the like), or launch not confirmed | Amber |
+| Failed to start, or interrupted | Red |
+| Recording incomplete (saving stopped part way) | Amber |
+
+A run is "going" while it still records: a run whose terminal was closed, or whose
+root exited while children live on, shows **Running** in every list and keeps its
+**Stop** button.
+
+## 5. Samples
+
+**Library > Samples** (sidebar) lists every sample across runs and VMs with its
+origins and tags; opening one shows the sample window with the tabs **Summary**,
+**Runs**, **IOCs**, **Custody log** and **Notes**. **Export report…** in its header
+is described in [the sample report guide](sample-report.md).
+
+- **Summary** holds the identity, the **Static analysis** section (each check on a
+  line: name, state chip, what it found, **Open**, and the notice to the right of
+  the button), the ATT&CK section, **Detections** and **Files written**. Files
+  written shows one row per file the runs wrote, rewrote, deleted or renamed, with
+  run, state, size and SHA-256, filterable and paged for ransomware-sized lists,
+  with **Open in Per-file history**, **Export bytes** and **Copy SHA-256**. The list
+  comes from each run's Triage digest, so a run Triage has not read yet is listed
+  as such with a link to open it. The ATT&CK section has **Show all N**: the same
+  list as in Triage, each technique with what cited it and its runs as links into
+  Triage.
+- **Runs**: the sample's runs in start order, with the run-state colours above.
+  Selecting one shows it in the shared **Details** pane.
+- **IOCs**: every indicator across all runs of the sample, one row per unique
+  indicator (a file by hash and path): kind, value, which runs had it ("run 2, 3",
+  "5 runs", "every run (4)"), how it was observed (DNS query, connect, packets,
+  file write, executed), first and last seen, the process, and the stored abuse.ch
+  records that list it (**Detections**). The kind chips carry counts ("Domains
+  (4)"); **All**, **Seen in every run** and **Only in some runs** show what
+  changed between run settings; a search box, **Hide private and reserved** and
+  **Hide guest infrastructure** (the base image's own traffic and the emulated
+  network's 10.0.2.x) narrow the list, and **Defanged** (on by default) shows
+  `hxxp` and `[.]` instead of live values, which Copy follows (**Copy raw value**
+  appears when it is on). The tab count is Triage's: the total in grey and the
+  matched count in red. The selected row is in the **Details** pane with one line
+  per run and **Open in Triage**, which opens that run on the indicator in
+  Triage > IOC. Per row: **Copy**, **Open in Triage**, **Add note** and **Check
+  online**, which is off without an abuse.ch key (**Tools > API keys**) and
+  otherwise opens the run's Triage on the row, where the existing lookup with its
+  **Cancel** and rate limits is. **Export** writes the rows listed (or the
+  selected row) as CSV, JSON, a MISP event or a STIX 2.1 bundle into the data
+  folder's `sample-reports`, defanged in CSV and JSON on request, and notes it in
+  the sample's custody log. Runs Triage has not read are named in a note: open the
+  run in Triage once to fill them in. IDS, YARA and Sigma rules match runs, not
+  single indicators, and stay in Summary > Detections.
+- **Custody log** and **Notes**: the sample's history and notes; a note chip jumps
+  to what it is about.
+
+A file a run deleted can be rebuilt from the recorded writes as of the last
+moment before the delete: **Export bytes (as before deletion)** in Files written
+and in Triage's File reconstruction window. When every byte is known, the file is
+hashed and compared with the SHA-256 the guest took just before the delete; a
+match is "verified" and the export is saved with a `.json` record of the check.
+With gaps (bytes never recorded, or a size not known) the window says "partial: N
+bytes unknown" and saves what is known with a `.mask` file marking the rest. The
+export is an **Exported** entry in the custody log (file, size, hash and result).
+
+## 6. Keys, the command palette and Jobs
+
+Menus: **File**, **VM**, **Run**, **View**, **Tools** and **Help**; the menu bar's
+**Search** button at the right (with its key) opens the command palette. Menus and
+button tooltips show the keys, and a tab's tooltip shows its Ctrl+digit.
+
+**Ctrl+K** (or **Search**, or **Help > Command palette**) opens the palette. It
+searches every menu action, the open tabs, the machines, the recent runs and the
+library samples; **Enter** runs the highlighted entry through the same code as the
+menu, **Esc** (or Ctrl+K again) closes it, and an action that cannot run now stays
+in the list with the reason ("Start the selected VM first."). A menu item, its
+shortcut and its palette entry share one action list, so they cannot disagree.
+**Help > Keyboard shortcuts** (or **?**) lists every shortcut by area.
+
+The rule for who owns the keyboard: a global shortcut never takes a key from a
+text field or the terminal (**Ctrl+K** stays with them too: it deletes to the end
+of the line, in a field and in the guest shell; use **Search** there). A focused
+button, table or graph does not block the shortcuts.
+
+| Keys | Action |
+|---|---|
+| Ctrl+K | Command palette |
+| ? | Keyboard shortcuts |
+| Ctrl+N | New VM |
+| F5, Shift+F5 | Start VM, Stop VM |
+| Ctrl+R | Run program |
+| Ctrl+U | Upload file |
+| Ctrl+D | Attach debugger (the process picker); with the picker open, attach the selected process |
+| Ctrl+Shift+Y | Type host clipboard into VM |
+| Ctrl+Comma (the app shows it so) | Settings |
+| Ctrl+Q | Exit |
+| Ctrl+1 to Ctrl+9 | Show the 1st to 9th tab of the work area, in the order the tab bar shows them (they follow a tab you dragged) |
+| Ctrl+Shift+A, Ctrl+Shift+J | Show Activity, show Jobs (the lower bar) |
+| Esc | Close the window on top (not while a field has the keyboard) |
+
+The graph, table, filter and terminal keys (arrows, `F`, `T`, Ctrl+Space, Shift+PgUp
+and the rest) are listed by area in the Keyboard shortcuts window; the Triage
+graph's are in section 4.
+
+**View > Jobs** (Ctrl+Shift+J) opens a Jobs tab beside Activity, and a "3 jobs"
+chip in the status bar (shown only while something runs) opens it. One row per
+running job: **Kind**, **Target**, **Started**, a ticking **Elapsed**, a
+**Progress** bar when it is known, the **State**, and **Open** and **Stop** where
+the job can be stopped. Jobs cover runs (also those still recording after the
+root exited), VM start (with the slow TCG boot wait) and stop, VM snapshots,
+memory dumps, process cores (also armed ones), static analysis checks per report,
+Triage preparing a recording, detection scans, Check online lookups, base
+downloads, catalog refreshes, base builds, tool installs, rule and dataset
+downloads, MalwareBazaar searches and downloads, Volatility and MemNixFS runs,
+plugin downloads, disk jobs, recording saves, exports and update checks. The
+**Finished** list keeps the last 20 jobs with how each ended (Finished, Failed or
+Cancelled), the time it took and an **Open** link, until **Clear finished**.
+Quitting while jobs run asks first and lists them (the VM is shut down and its recordings are saved first). Jobs reads the state the
+app already keeps and starts no work of its own.
+
+**Getting started** (Help) has seven steps: **Appearance**, **Base image**,
+**First VM**, **Dependencies**, **Analysis tools**, **Rules** and **Finish**. The
+first step has the same **Theme** (Dark, Light or Blue), **Text size** and **Density**
+(Compact or Comfortable) controls as
+**Settings > Appearance** (one shared piece of code, so one set of settings behind
+both) and applies each change at once. **Next** keeps what you picked and marks the
+step Ready; **Skip this step** leaves the settings as they are. **Help > Getting
+started: Appearance** is in the palette.
+
+**Settings** has the pages Appearance, Recording, Detection rules, Notifications,
+Network lookup, Network routes, Analysis tools, Disks and Advanced. It opens
+centred in the window. The settings are kept between starts: text size, theme,
+density and the debugger's remembered choices all survive a restart (0.8.2 fixed
+a bug where an unreadable debugger setting made every start fall back to the
+defaults). **Notifications** has **Toast for live HIGH findings** (off) and **Toast
+when a run finishes** (on). A failed **Open folder** or **Open file** raises an
+error toast and an **Activity** row.
+
+Layout at narrow windows: a tab bar whose tabs do not fit uses short names
+("Trace", "History", "Cores", "Static"; the hover text keeps the full name) and
+tighter padding, and when even those do not fit it scrolls the active tab into
+view and shows a tab list button at its right end that opens every tab of the bar.
+Drag a column divider in a table to widen a column: the last column gives way
+first, and when it is at its minimum the table scrolls sideways inside its own
+area. Double-click a divider, or right-click it and choose **Fit columns**, to fit
+the box again. The dragged widths are kept per table for the session.
+
+The sample **Download** window (**Tools > Download malware samples…**) keeps its
+size while it loads: the results area and the Downloaded list have fixed heights,
+the status is one line, and it scrolls inside when the screen is small.
+
+### Exported tables
+
+HTML and PDF exports never break a column title inside a word: a title wraps only
+at spaces, the table keeps the longest word of every title as its least width,
+takes a smaller font a step at a time when the longest words side by side are wider
+than a page and, as a last resort, is split into column groups with its first
+column repeated. The HTML prints on a landscape page. The exports of runs and
+samples have a **Tactic** column for ATT&CK techniques (named in text, with the
+colour as a chip in HTML and a bar in PDF).
+
+## Troubleshooting
+
+- **Settings did not survive a restart** (0.8.1 and earlier): fixed in 0.8.2; the
+  debugger's remembered choices were saved in a form the settings file could not
+  read back, so every start used the defaults. Set them once more.
+- **A VM creation failed on a busy computer**: the offline credential tool's
+  deadline grows with the host's load (up to four times) and a timeout starts again
+  once from a fresh disk; a creation that still fails says "VM creation failed"
+  with the reason and that the unfinished disk was removed.
+- **Core dump on exit with Debug on start** works together since 0.8.2; a capture
+  that cannot be armed names the size and first bytes of the guest's reply.
