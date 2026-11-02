@@ -390,7 +390,7 @@ impl Open {
                 ui.label(
                     RichText::new(format!(" {glyph} "))
                         .monospace()
-                        .color(tint(ui, state))
+                        .color(tint(state))
                         .background_color(ui.visuals().faint_bg_color),
                 )
                 .on_hover_text(state.label());
@@ -436,8 +436,7 @@ impl Open {
                                 (None, Some(byte)) => format!("{byte:02x}"),
                                 (None, None) => "!!".to_owned(),
                             };
-                            let mut rich =
-                                RichText::new(text).monospace().color(tint(ui, cell.state));
+                            let mut rich = RichText::new(text).monospace().color(tint(cell.state));
                             if self.selected == Some(at) {
                                 rich = rich
                                     .background_color(theme::primary().gamma_multiply(0.45))
@@ -784,15 +783,14 @@ fn short(state: State) -> &'static str {
 }
 
 /// The colour a byte of `state` is drawn in.
-pub(super) fn tint(ui: &egui::Ui, state: State) -> Color32 {
+pub(super) fn tint(state: State) -> Color32 {
     match state {
         State::Unknown => theme::muted().gamma_multiply(0.7),
         State::Read => theme::info(),
         State::Before => theme::text(),
         State::Written => theme::good(),
         State::NotCaptured(_) => theme::warn(),
-        State::Mapping if ui.visuals().dark_mode => Color32::from_rgb(196, 160, 255),
-        State::Mapping => Color32::from_rgb(112, 64, 190),
+        State::Mapping => theme::mapped(),
     }
 }
 
@@ -815,7 +813,7 @@ fn strip(ui: &mut egui::Ui, steps: &[model::Step], at: usize) -> Option<usize> {
         );
         let color = steps[from..to.min(steps.len())]
             .iter()
-            .map(|step| step_color(ui, step))
+            .map(step_color)
             .max_by_key(|(rank, _)| *rank)
             .map_or(theme::muted(), |(_, color)| color);
         let x = rect.left() + column as f32;
@@ -847,7 +845,7 @@ fn strip(ui: &mut egui::Ui, steps: &[model::Step], at: usize) -> Option<usize> {
         .filter(|clicked| *clicked != at)
 }
 
-fn step_color(ui: &egui::Ui, step: &model::Step) -> (u8, Color32) {
+fn step_color(step: &model::Step) -> (u8, Color32) {
     match &step.action {
         Action::Write(extents)
             if extents.iter().any(|e| {
@@ -859,23 +857,21 @@ fn step_color(ui: &egui::Ui, step: &model::Step) -> (u8, Color32) {
         {
             (
                 4,
-                tint(
-                    ui,
-                    State::NotCaptured(antinomie_monitor_core::file_writes::Gap::NotRecorded),
-                ),
+                tint(State::NotCaptured(
+                    antinomie_monitor_core::file_writes::Gap::NotRecorded,
+                )),
             )
         }
-        Action::Write(_) | Action::Zero { .. } => (3, tint(ui, State::Written)),
-        Action::Mapping { .. } => (5, tint(ui, State::Mapping)),
+        Action::Write(_) | Action::Zero { .. } => (3, tint(State::Written)),
+        Action::Mapping { .. } => (5, tint(State::Mapping)),
         Action::Changed { .. } => (
             4,
-            tint(
-                ui,
-                State::NotCaptured(antinomie_monitor_core::file_writes::Gap::NotRecorded),
-            ),
+            tint(State::NotCaptured(
+                antinomie_monitor_core::file_writes::Gap::NotRecorded,
+            )),
         ),
         Action::Resize(_) => (2, theme::heading()),
-        Action::Read(_) => (1, tint(ui, State::Read)),
+        Action::Read(_) => (1, tint(State::Read)),
     }
 }
 

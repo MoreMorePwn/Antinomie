@@ -116,13 +116,7 @@ pub(in crate::triage) fn icon(category: u8) -> &'static str {
 
 /// An icon colour that reads on a disc filled with `fill`.
 pub(in crate::triage) fn ink(fill: Color32) -> Color32 {
-    let luminance =
-        0.299 * f32::from(fill.r()) + 0.587 * f32::from(fill.g()) + 0.114 * f32::from(fill.b());
-    if luminance > 150.0 {
-        Color32::from_rgb(18, 20, 26)
-    } else {
-        Color32::WHITE
-    }
+    theme::ink_on(fill)
 }
 
 /// A finding's marker: its category's icon on a disc of the tier's colour;

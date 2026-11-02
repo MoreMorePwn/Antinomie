@@ -384,15 +384,7 @@ impl MonitorApp {
                                     ui.painter().rect_filled(cell, 0.0, fill);
                                 }
                                 if hovered {
-                                    ui.painter().rect_filled(
-                                        cell,
-                                        0.0,
-                                        if theme::is_light() {
-                                            egui::Color32::from_black_alpha(14)
-                                        } else {
-                                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 14)
-                                        },
-                                    );
+                                    ui.painter().rect_filled(cell, 0.0, theme::hover_wash());
                                 }
                                 if selected {
                                     let stroke = egui::Stroke::new(1.0_f32, palette.accent);

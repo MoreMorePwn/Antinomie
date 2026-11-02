@@ -134,6 +134,64 @@ pub fn error() -> Color32 {
 pub fn info() -> Color32 {
     palette().info
 }
+/// The 16 ANSI colours of the terminal view, as RGB (index 0..16).
+pub const ANSI_COLORS: [[u8; 3]; 16] = [
+    [0, 0, 0],
+    [205, 49, 49],
+    [13, 188, 121],
+    [229, 229, 16],
+    [36, 114, 200],
+    [188, 63, 188],
+    [17, 168, 205],
+    [229, 229, 229],
+    [102, 102, 102],
+    [241, 76, 76],
+    [35, 209, 139],
+    [245, 245, 67],
+    [59, 142, 234],
+    [214, 112, 214],
+    [41, 184, 219],
+    [255, 255, 255],
+];
+
+/// The colour of series `index` in the VM Summary's meters (amber, teal,
+/// blue; later ones repeat the blue). The same in every theme.
+pub fn series(index: usize) -> Color32 {
+    match index {
+        0 => Color32::from_rgb(234, 174, 79),
+        1 => Color32::from_rgb(82, 190, 184),
+        _ => Color32::from_rgb(115, 153, 213),
+    }
+}
+
+/// An icon colour that reads on a disc filled with `fill`: near-black on a
+/// light fill, white on a dark one.
+pub fn ink_on(fill: Color32) -> Color32 {
+    let luminance =
+        0.299 * f32::from(fill.r()) + 0.587 * f32::from(fill.g()) + 0.114 * f32::from(fill.b());
+    if luminance > 150.0 {
+        Color32::from_rgb(18, 20, 26)
+    } else {
+        Color32::WHITE
+    }
+}
+
+/// The wash drawn over the hovered cell of a table: dark on the light theme,
+/// white on the others.
+pub fn hover_wash() -> Color32 {
+    if is_light() {
+        Color32::from_black_alpha(14)
+    } else {
+        Color32::from_rgba_unmultiplied(255, 255, 255, 14)
+    }
+}
+
+/// A byte mapped into the process (the file reconstruction view): the
+/// pointer colour of the active theme.
+pub fn mapped() -> Color32 {
+    palette().pointer
+}
+
 pub fn terminal() -> Color32 {
     palette().terminal
 }

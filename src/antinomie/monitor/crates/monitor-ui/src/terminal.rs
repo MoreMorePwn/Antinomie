@@ -740,26 +740,8 @@ fn color(value: vt100::Color, default: Color32) -> Color32 {
         vt100::Color::Default => default,
         vt100::Color::Rgb(r, g, b) => Color32::from_rgb(r, g, b),
         vt100::Color::Idx(index) => {
-            const ANSI: [[u8; 3]; 16] = [
-                [0, 0, 0],
-                [205, 49, 49],
-                [13, 188, 121],
-                [229, 229, 16],
-                [36, 114, 200],
-                [188, 63, 188],
-                [17, 168, 205],
-                [229, 229, 229],
-                [102, 102, 102],
-                [241, 76, 76],
-                [35, 209, 139],
-                [245, 245, 67],
-                [59, 142, 234],
-                [214, 112, 214],
-                [41, 184, 219],
-                [255, 255, 255],
-            ];
             let rgb = if index < 16 {
-                ANSI[usize::from(index)]
+                theme::ANSI_COLORS[usize::from(index)]
             } else if index < 232 {
                 let n = index - 16;
                 let level = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
