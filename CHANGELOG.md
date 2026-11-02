@@ -35,7 +35,20 @@ it runs.
   5:02 (exit 0)", "Stopped by the user after 3:10", "Failed to start: …" or "Still
   recording: N processes alive", in the Triage header and in the Summary. The
   elapsed time ticks every second without reading the recording again.
-
+- **The whole row of a sample, a run or an output file opens it.** A click on
+  the text of any cell in the Samples list, the sample window's Runs and Output
+  files tables now opens the row, not only a click on empty space.
+- **Notes can be edited and deleted wherever they are shown.** The Latest note
+  on the Summary and each card in the Notes tab have pencil and trash buttons
+  (Delete still asks first), a right-click menu with Edit, Delete and Copy
+  text, and an "edited <time>" label; the Samples list menu has Notes…. Custody
+  entries are unchanged.
+- **Interesting strings are the 100 longest strings.** The Summary table lists
+  them with their length and offset and scrolls inside its own area. URLs,
+  addresses, domains, paths and keys are in Regex matches only, which is now one
+  scrolling table with category chips and counts instead of a ten-row pager.
+- **The live malware warning in the Samples download window stays.** It has no
+  close button, is not an Activity message and shows every time the window opens.
 - **Cancelled downloads resume when they can and restart when they cannot.**
   The partial file of a base, an analysis tool, the kernel source or the
   builder's Debian cloud image stays in the download's own folder (never where

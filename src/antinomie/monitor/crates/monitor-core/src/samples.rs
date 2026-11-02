@@ -75,7 +75,7 @@ pub use rollup::{
 };
 pub use runlog::{RunLog, file_sha256, record_push_later, settle_custody};
 pub use similar::{Shared, Similar};
-pub use summary::{StringRow, defang, interesting_strings, regex_matches};
+pub use summary::{StringRow, defang, longest_strings, regex_matches};
 
 /// MalwareBazaar's API: every call is a POST with an `Auth-Key` header.
 pub const BAZAAR_API: &str = "https://mb-api.abuse.ch/api/v1/";

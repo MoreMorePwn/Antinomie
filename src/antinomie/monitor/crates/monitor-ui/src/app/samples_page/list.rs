@@ -44,6 +44,7 @@ pub(in crate::app::samples_page) fn started(ms: Option<u64>) -> String {
 enum Action {
     Select(String),
     Open(String),
+    Notes(String),
     CopyHash(String),
     CopyName(String),
     EditTags(String, String, Vec<Tag>),
@@ -283,6 +284,8 @@ impl MonitorApp {
         egui::ScrollArea::horizontal().id_salt("library_samples_x").auto_shrink([false, false]).show(ui, |ui| {
         ui.set_min_width(width.max(MIN_TABLE_WIDTH));
         ui.set_max_width(width.max(MIN_TABLE_WIDTH));
+        // Not selectable: a click on the text of any cell reaches the row.
+        ui.style_mut().interaction.selectable_labels = false;
         table::begin(ui);
         TableBuilder::new(ui)
             .id_salt("library_samples")
@@ -430,6 +433,10 @@ impl MonitorApp {
                                 action = Some(Action::Open(sha256.to_owned()));
                                 ui.close_menu();
                             }
+                            if ui.button("Notes…").clicked() {
+                                action = Some(Action::Notes(sha256.to_owned()));
+                                ui.close_menu();
+                            }
                             if ui.button("Edit tags…").clicked() {
                                 action = Some(Action::EditTags(
                                     sha256.to_owned(),
@@ -476,6 +483,10 @@ impl MonitorApp {
             Some(Action::Open(sha256)) => {
                 self.samples_page.selected = Some(sha256.clone());
                 self.samples_page.open_detail(&sha256);
+            }
+            Some(Action::Notes(sha256)) => {
+                self.samples_page.selected = Some(sha256.clone());
+                self.samples_page.open_notes(&sha256);
             }
             Some(Action::CopyHash(text) | Action::CopyName(text)) => ctx.copy_text(text),
             Some(Action::EditTags(sha256, name, tags)) => {

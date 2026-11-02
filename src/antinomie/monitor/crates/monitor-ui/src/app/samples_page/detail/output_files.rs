@@ -348,8 +348,7 @@ pub(in crate::app::samples_page) fn section(
         }
         let [file, hash, run, because, size, availability] = widths;
         parts::on_surface(ui, |ui| {
-            parts::mini_table(ui, "sample_summary_outputs")
-                .sense(egui::Sense::click())
+            parts::click_table(ui, "sample_summary_outputs")
                 .column(egui_extras::Column::exact(file).clip(true))
                 .column(egui_extras::Column::exact(hash))
                 .column(egui_extras::Column::exact(run))

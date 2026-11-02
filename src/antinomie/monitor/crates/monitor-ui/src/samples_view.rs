@@ -356,11 +356,6 @@ pub(crate) struct SamplesView {
     acknowledged: bool,
     /// The acceptance checkbox of that warning.
     understood: bool,
-    /// The "Live malware" reminder was drawn while the window was open.
-    live_notice_shown: bool,
-    /// The reminder is shown once per app session: it was drawn in an earlier
-    /// opening of this window.
-    live_notice_done: bool,
     text: String,
     /// What the results are, in words ("Newest uploads", "Family Mirai").
     listing: String,
@@ -405,10 +400,11 @@ const FIRST_USE_POINTS: &[&str] = &[
      Samples are for research and defence only.",
 ];
 
-/// The reminder above the Samples window; it stays a warning, shown once per session.
-const LIVE_MALWARE_NOTICE: &str = "Live malware. Samples stay in encrypted archives in the data \
-     folder and are decrypted only in memory, to be sent into the VM. Nothing is run on this \
-     computer. Use a VM you can throw away, or take a snapshot first.";
+/// The reminder above the Samples window: always shown, never dismissed, and
+/// not an Activity message.
+const LIVE_MALWARE_NOTICE: &str = "Live malware: samples stay in encrypted archives and are \
+     decrypted only in memory, to be sent into a VM. Nothing is run on this computer. Use a VM \
+     you can throw away, or take a snapshot first.";
 
 /// A guest path for a sample: its hash prefix and a safe form of its name.
 /// `sent` is how many times the sample was sent before: each send gets its
@@ -669,7 +665,6 @@ impl SamplesView {
         }
         crate::toasts::take_failure(ctx, &mut self.status);
         if !self.open {
-            self.live_notice_done |= self.live_notice_shown;
             // The keys are set elsewhere: read them again when it opens.
             self.key_loaded = false;
             return None;
@@ -826,9 +821,6 @@ impl SamplesView {
     }
 
     fn warning(&mut self, ui: &mut egui::Ui, cx: &SamplesContext<'_>) {
-        if self.live_notice_done && cx.network_warning.is_none() && self.status.is_none() {
-            return;
-        }
         egui::Frame::new()
             .fill(theme::panel())
             .stroke(egui::Stroke::new(1.0_f32, theme::line()))
@@ -836,13 +828,14 @@ impl SamplesView {
             .inner_margin(egui::Margin::symmetric(14, 10))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                if !self.live_notice_done {
-                    self.live_notice_shown = true;
-                    ui.horizontal_top(|ui| {
-                        ui.colored_label(theme::warn(), egui_phosphor::regular::BIOHAZARD);
-                        crate::activity::warning(ui, LIVE_MALWARE_NOTICE);
-                    });
-                }
+                ui.horizontal_top(|ui| {
+                    ui.colored_label(theme::warn(), egui_phosphor::regular::BIOHAZARD);
+                    crate::activity::inline_only(
+                        ui,
+                        crate::activity::Level::Warn,
+                        LIVE_MALWARE_NOTICE,
+                    );
+                });
                 if let Some(text) = &cx.network_warning {
                     ui.add_space(4.0);
                     crate::activity::warning(ui, text);
@@ -1284,7 +1277,7 @@ mod tests {
     }
 
     #[test]
-    fn the_live_malware_reminder_is_shown_once_per_session() {
+    fn the_live_malware_reminder_is_permanent_and_not_an_activity_message() {
         let data = std::env::temp_dir();
         let cx = SamplesContext {
             data_dir: &data,
@@ -1304,25 +1297,18 @@ mod tests {
             journal.ingest(&ctx);
         };
         view.open = true;
-        draw(&mut view, &mut journal);
-        draw(&mut view, &mut journal);
-        assert_eq!(
-            journal.counts(),
-            (1, 0),
-            "shown as a warning the first time"
-        );
-        assert!(journal
-            .messages()
-            .iter()
-            .all(|text| text.starts_with("Live malware")));
-        // Closing the window and opening it again does not show it again.
+        for _ in 0..3 {
+            draw(&mut view, &mut journal);
+        }
+        assert!(journal.messages().is_empty(), "no Activity row, no dismiss");
+        // Closing and reopening the window keeps it.
         view.open = false;
         view.show(&ctx, &cx);
-        assert!(view.live_notice_done);
         view.open = true;
-        let before = journal.messages().len();
-        draw(&mut view, &mut journal);
-        assert_eq!(journal.messages().len(), before);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| view.warning(ui, &cx));
+        });
+        assert!(LIVE_MALWARE_NOTICE.starts_with("Live malware"));
     }
 
     #[test]

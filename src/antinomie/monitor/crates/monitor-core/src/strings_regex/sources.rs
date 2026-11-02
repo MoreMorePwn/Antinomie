@@ -53,6 +53,7 @@ pub fn scan_report(
                 return false;
             }
             let (origin, text) = row(entry);
+            scan.note_long(text, &origin.label, origin.position);
             rules.scan_text(text, &origin, &mut scan);
             false
         };

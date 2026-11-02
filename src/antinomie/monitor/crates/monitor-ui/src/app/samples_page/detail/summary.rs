@@ -5,9 +5,13 @@
 use super::{parts, *};
 use crate::{
     sample_tags,
-    widgets::{table, Tone},
+    widgets::{self, table, Tone},
 };
-use antinomie_monitor_core::{samples::TagKind, AnalysisKind, AnalysisSection};
+use antinomie_monitor_core::{
+    samples::{StringRow, TagKind},
+    strings_regex::Category,
+    AnalysisKind, AnalysisSection,
+};
 
 /// What a click in the Summary asks of the app.
 enum Go {
@@ -27,6 +31,8 @@ enum Go {
     View,
     /// The Notes tab.
     Notes,
+    /// Edit or delete the latest note.
+    Note(super::notes_tab::Act),
     /// Open the run in Syscall Trace with this filter (a check's evidence).
     Trace(usize, String),
 }
@@ -77,8 +83,10 @@ impl MonitorApp {
                 // Room for the scroll bar, so no table or box runs under it.
                 ui.set_width((ui.available_width() - parts::SCROLL_GUTTER).max(320.0));
                 verdict(ui, data);
-                if super::notes_tab::latest(ui, data) {
-                    go = Some(Go::Notes);
+                match super::notes_tab::latest(ui, data) {
+                    Some(super::notes_tab::Act::Tab) => go = Some(Go::Notes),
+                    Some(act) => go = Some(Go::Note(act)),
+                    None => {}
                 }
                 if let Some((number, engine, rule)) =
                     super::triage_parts::rules_matched(ui, data, self.settings.font_size)
@@ -191,6 +199,7 @@ impl MonitorApp {
                     self.open_sample_report(&reference.report, reference.directory.clone(), kind);
                 }
             }
+            Some(Go::Note(act)) => self.apply_note_act(data, act),
             Some(Go::Notes) => {
                 if let Some(detail) = detail {
                     detail.tab = Tab::Notes;
@@ -325,8 +334,7 @@ fn recent_runs(ui: &mut egui::Ui, data: &Data, go: &mut Option<Go>, font: f32) {
         let shown = &data.runs[..data.runs.len().min(5)];
         let mut menu = None;
         parts::on_surface(ui, |ui| {
-            parts::mini_table(ui, "sample_summary_runs")
-                .sense(egui::Sense::click())
+            parts::click_table(ui, "sample_summary_runs")
                 .column(egui_extras::Column::exact(120.0))
                 .column(egui_extras::Column::exact(150.0))
                 .column(egui_extras::Column::exact(140.0))
@@ -422,14 +430,18 @@ pub(super) fn vm_name(run: &RunSummary) -> String {
         .unwrap_or_else(|| run.vm_id.clone())
 }
 
-/// Interesting strings and Regex matches below them.
+/// Rows the Interesting strings and Regex matches tables show before they
+/// scroll inside their own area.
+const VISIBLE_ROWS: usize = 10;
+
+/// Interesting strings (the 100 longest) and Regex matches below them.
 fn strings(ui: &mut egui::Ui, data: &Data, scanned: &Scanned, go: &mut Option<Go>, font: f32) {
     let reference = data.report.as_ref();
     parts::section(
         ui,
         "Interesting strings",
         match scanned {
-            Scanned::Done(strings) => Some(strings.interesting.len()),
+            Scanned::Done(strings) => Some(strings.longest.len()),
             _ => None,
         },
         |ui| match (scanned, reference) {
@@ -441,22 +453,30 @@ fn strings(ui: &mut egui::Ui, data: &Data, scanned: &Scanned, go: &mut Option<Go
                 ui.colored_label(theme::error(), error);
             }
             (Scanned::Done(strings), Some(reference)) => {
-                let range =
-                    parts::pager_range(ui, "sample_summary_strings", strings.interesting.len());
+                ui.label(
+                    RichText::new("The 100 longest strings; URLs, addresses and keys are under Regex matches.")
+                        .small()
+                        .color(theme::muted()),
+                );
+                let rows: Vec<&StringRow> = strings.longest.iter().collect();
                 string_table(
                     ui,
                     "sample_summary_strings",
-                    &strings.interesting[range.clone()],
-                    &["Type", "String", "Offset"],
+                    &rows,
+                    &["Length", "String", "Offset"],
                     font,
-                    |row| vec![row.kind.clone(), row.shown.clone(), row.found_in.clone()],
-                    "No URLs, IPs, domains, paths or keys.",
+                    |row| {
+                        vec![
+                            row.length.to_string(),
+                            row.shown.clone(),
+                            row.found_in.clone(),
+                        ]
+                    },
+                    "No strings.",
                 );
                 let total = strings_total(&reference.report);
-                if parts::pager(
+                if parts::open_all(
                     ui,
-                    "sample_summary_strings",
-                    strings.interesting.len(),
                     &format!("Open Strings ({})", crate::values::thousands(total)),
                 ) {
                     *go = Some(Go::Report(AnalysisKind::Strings));
@@ -469,11 +489,49 @@ fn strings(ui: &mut egui::Ui, data: &Data, scanned: &Scanned, go: &mut Option<Go
         return;
     };
     parts::section(ui, "Regex matches", Some(strings.total as usize), |ui| {
-        let range = parts::pager_range(ui, "sample_summary_regex", strings.matches.len());
+        let filter_id = egui::Id::new("sample_summary_regex_category");
+        let mut chosen: Option<Category> = ui.data(|d| d.get_temp(filter_id)).flatten();
+        ui.horizontal_wrapped(|ui| {
+            let all = widgets::toggle_chip(
+                ui,
+                "All",
+                chosen.is_none(),
+                Some(strings.matches.len() as u64),
+            );
+            if all.clicked() {
+                chosen = None;
+            }
+            for category in Category::ALL {
+                let count = strings
+                    .matches
+                    .iter()
+                    .filter(|row| row.category == category)
+                    .count();
+                if count == 0 {
+                    continue;
+                }
+                if widgets::toggle_chip(
+                    ui,
+                    category.label(),
+                    chosen == Some(category),
+                    Some(count as u64),
+                )
+                .clicked()
+                {
+                    chosen = Some(category);
+                }
+            }
+        });
+        ui.data_mut(|d| d.insert_temp(filter_id, chosen));
+        let rows: Vec<&StringRow> = strings
+            .matches
+            .iter()
+            .filter(|row| chosen.is_none_or(|category| row.category == category))
+            .collect();
         string_table(
             ui,
             "sample_summary_regex",
-            &strings.matches[range],
+            &rows,
             &["Category", "Type", "Match", "Found in", "Seen"],
             font,
             |row| {
@@ -487,10 +545,8 @@ fn strings(ui: &mut egui::Ui, data: &Data, scanned: &Scanned, go: &mut Option<Go
             },
             "No regex matches.",
         );
-        if parts::pager(
+        if parts::open_all(
             ui,
-            "sample_summary_regex",
-            strings.matches.len(),
             &format!(
                 "Open Regex matches ({})",
                 crate::values::thousands(strings.total)
@@ -517,12 +573,12 @@ fn counted(section: &AnalysisSection) -> u64 {
         .map_or(section.entries.len() as u64, |listing| listing.rows)
 }
 
-/// One page of rows of text cells, the last column of a numeric table
-/// right-aligned; one line each with the full text in the tooltip.
+/// Rows of text cells in a table that scrolls inside its own area (about ten
+/// rows show); one line each with the full text in the tooltip.
 fn string_table(
     ui: &mut egui::Ui,
     id: &str,
-    rows: &[antinomie_monitor_core::samples::StringRow],
+    rows: &[&StringRow],
     titles: &[&str],
     font: f32,
     cells: impl Fn(&antinomie_monitor_core::samples::StringRow) -> Vec<String>,
@@ -551,7 +607,7 @@ fn string_table(
         .map(|index| {
             if index == wide {
                 0.0
-            } else if titles[index] == "Seen" {
+            } else if matches!(titles[index], "Seen" | "Length") {
                 60.0
             } else if titles[index] == "Found in" || titles[index] == "Offset" {
                 // Mono text: "Strings · 0x0019", whole.
@@ -591,12 +647,20 @@ fn string_table(
             });
         }
         // Like the Samples list: the columns can be dragged.
+        let row_height = table::list_row_height(font);
         builder
             .resizable(true)
+            .vscroll(true)
+            .max_scroll_height(row_height * VISIBLE_ROWS as f32)
+            .min_scrolled_height(0.0)
             .header(table::header_height(font), |mut header| {
                 for title in titles {
                     header.col(|ui| {
-                        table::head_aligned(ui, title, table::numeric_align(*title == "Seen"))
+                        table::head_aligned(
+                            ui,
+                            title,
+                            table::numeric_align(matches!(*title, "Seen" | "Length")),
+                        )
                     });
                 }
             })
@@ -607,7 +671,7 @@ fn string_table(
                         row.col(|ui| {
                             let kind = if index == wide {
                                 table::Cell::Mono
-                            } else if titles[index] == "Seen" {
+                            } else if matches!(titles[index], "Seen" | "Length") {
                                 table::Cell::Number
                             } else if titles[index] == "Found in" || titles[index] == "Offset" {
                                 table::Cell::Mono

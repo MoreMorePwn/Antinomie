@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! What the sample window's Summary draws from a static report's regex scan:
-//! the interesting strings and the regex matches, each longest first.
+//! the longest strings and the regex matches, each longest first.
 //!
 //! The scan itself is `strings_regex`; this only chooses and orders rows, so
 //! the choice is the same wherever the Summary is drawn and is testable
@@ -21,14 +21,8 @@ pub struct StringRow {
     pub found_in: String,
     /// How many times the same match was found.
     pub seen: u64,
-}
-
-/// A match is interesting when it is a URL, domain, address, key or path:
-/// the network and key categories, and any attribution or behaviour match
-/// whose type says it is a path.
-fn interesting(found: &Match) -> bool {
-    matches!(found.category, Category::Network | Category::Keys)
-        || found.kind.to_ascii_lowercase().contains("path")
+    /// Length in characters (the longest strings; 0 for a match).
+    pub length: usize,
 }
 
 /// `text` with the last dot of an IPv4 address in brackets, so a copy of it
@@ -55,6 +49,7 @@ fn row(found: &Match) -> StringRow {
         shown: defang(&found.kind, &found.text),
         found_in: at,
         seen: found.repeats + 1,
+        length: 0,
     }
 }
 
@@ -70,16 +65,27 @@ fn longest_first(rows: &mut [StringRow]) {
     });
 }
 
-/// Every interesting string of the scan, longest first.
-pub fn interesting_strings(scan: &Scan) -> Vec<StringRow> {
-    let mut rows: Vec<StringRow> = scan
-        .matches
+/// The longest strings of the scan (at most 100), longest first, ties by
+/// offset.
+pub fn longest_strings(scan: &Scan) -> Vec<StringRow> {
+    scan.longest
         .iter()
-        .filter(|found| interesting(found))
-        .map(row)
-        .collect();
-    longest_first(&mut rows);
-    rows
+        .map(|long| {
+            let at = match long.position {
+                Some(position) => format!("{} · 0x{position:04x}", long.origin),
+                None => long.origin.clone(),
+            };
+            StringRow {
+                category: Category::Custom,
+                kind: String::new(),
+                text: long.text.clone(),
+                shown: long.text.clone(),
+                found_in: at,
+                seen: 1,
+                length: long.length,
+            }
+        })
+        .collect()
 }
 
 /// Every regex match of the scan, longest first.
@@ -142,16 +148,24 @@ mod tests {
     }
 
     #[test]
-    fn interesting_strings_are_urls_addresses_keys_and_paths_longest_first() {
-        let rows = interesting_strings(&scan());
-        let texts: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
+    fn the_longest_strings_are_capped_and_longest_first_with_offset_ties() {
+        let mut scan = Scan::default();
+        for index in 0..150_u64 {
+            scan.note_long(
+                &"a".repeat(10 + (index % 50) as usize),
+                "Strings",
+                Some(index),
+            );
+        }
+        let rows = longest_strings(&scan);
+        assert_eq!(rows.len(), 100);
+        assert_eq!(rows[0].length, 59);
+        assert!(rows.windows(2).all(|pair| pair[0].length >= pair[1].length));
+        // Three strings of length 59: the lowest offsets first.
+        let first: Vec<&str> = rows.iter().take(3).map(|r| r.found_in.as_str()).collect();
         assert_eq!(
-            texts,
-            [
-                "http://example.test/a/long/path",
-                "/etc/cron.d/x",
-                "10.0.0.7"
-            ]
+            first,
+            ["Strings · 0x0031", "Strings · 0x0063", "Strings · 0x0095"]
         );
     }
 
@@ -167,7 +181,7 @@ mod tests {
 
     #[test]
     fn an_ip_is_defanged_and_the_offset_is_shown() {
-        let rows = interesting_strings(&scan());
+        let rows = regex_matches(&scan());
         let ip = rows.iter().find(|row| row.kind == "IPv4").unwrap();
         assert_eq!(ip.shown, "10.0.0[.]7");
         assert_eq!(ip.text, "10.0.0.7");

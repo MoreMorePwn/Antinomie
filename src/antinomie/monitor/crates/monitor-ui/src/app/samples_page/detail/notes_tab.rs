@@ -5,8 +5,10 @@ use super::{parts, *};
 use crate::app::samples_page::notes::{self, ChipOut};
 use antinomie_monitor_core::samples::{Note, NoteRef, RefKind};
 
-/// What a click in the tab asks for.
-enum Act {
+/// What a click in the tab, or on the Summary's Latest note, asks for.
+pub(super) enum Act {
+    /// Go to the Notes tab.
+    Tab,
     Add,
     Edit(i64),
     Delete(i64),
@@ -14,23 +16,89 @@ enum Act {
     OpenFile(NoteRef),
 }
 
-/// The newest note, with its date and a link to the tab. Absent without
-/// notes. Returns whether the link was clicked.
-pub(super) fn latest(ui: &mut egui::Ui, data: &Data) -> bool {
-    let Some(note) = data.notes.first() else {
-        return false;
-    };
-    let mut open = false;
+/// The newest note, with its date, Edit and Delete, and a link to the tab.
+/// Absent without notes.
+pub(super) fn latest(ui: &mut egui::Ui, data: &Data) -> Option<Act> {
+    let note = data.notes.first()?;
+    let mut act = None;
     parts::section(ui, "Latest note", None, |ui| {
         ui.horizontal(|ui| {
             ui.label(RichText::new(parts::second(note.created_ms)).color(theme::muted()));
+            edited_label(ui, note);
             if parts::more(ui, &format!("Notes ({}) ›", data.notes.len())).clicked() {
-                open = true;
+                act = Some(Act::Tab);
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                actions(ui, note, &mut act);
+            });
         });
-        ui.add(egui::Label::new(first_lines(&note.text, 3)).selectable(true));
+        let text = ui.add(egui::Label::new(first_lines(&note.text, 3)).sense(egui::Sense::click()));
+        note_menu(&text, note, &mut act);
     });
-    open
+    act
+}
+
+/// "edited <time>" after an edit.
+fn edited_label(ui: &mut egui::Ui, note: &Note) {
+    if let Some(ms) = note.edited_ms {
+        ui.label(
+            RichText::new(format!("edited {}", parts::second(ms)))
+                .small()
+                .color(theme::muted()),
+        );
+    }
+}
+
+fn confirm_id(note: &Note) -> egui::Id {
+    egui::Id::new(("sample_note_delete", note.id))
+}
+
+/// Edit and Delete as icon buttons; Delete asks first.
+fn actions(ui: &mut egui::Ui, note: &Note, act: &mut Option<Act>) {
+    let confirm = confirm_id(note);
+    let asking = ui.data(|d| d.get_temp::<bool>(confirm)).unwrap_or(false);
+    if asking {
+        if ui.button("Keep").clicked() {
+            ui.data_mut(|d| d.insert_temp(confirm, false));
+        }
+        if ui.button("Delete note").clicked() {
+            ui.data_mut(|d| d.insert_temp(confirm, false));
+            *act = Some(Act::Delete(note.id));
+        }
+    } else {
+        if ui
+            .add(egui::Button::new(egui_phosphor::regular::TRASH).frame(false))
+            .on_hover_text("Delete note")
+            .clicked()
+        {
+            ui.data_mut(|d| d.insert_temp(confirm, true));
+        }
+        if ui
+            .add(egui::Button::new(egui_phosphor::regular::PENCIL_SIMPLE).frame(false))
+            .on_hover_text("Edit note")
+            .clicked()
+        {
+            *act = Some(Act::Edit(note.id));
+        }
+    }
+}
+
+/// Right-click on a note: Edit, Delete (asks first) and Copy text.
+fn note_menu(response: &egui::Response, note: &Note, act: &mut Option<Act>) {
+    response.context_menu(|ui| {
+        if ui.button("Edit").clicked() {
+            *act = Some(Act::Edit(note.id));
+            ui.close_menu();
+        }
+        if ui.button("Delete…").clicked() {
+            ui.data_mut(|d| d.insert_temp(confirm_id(note), true));
+            ui.close_menu();
+        }
+        if ui.button("Copy text").clicked() {
+            ui.ctx().copy_text(note.text.clone());
+            ui.close_menu();
+        }
+    });
 }
 
 /// The first `lines` lines of a text, with an ellipsis when there is more.
@@ -50,7 +118,7 @@ fn note_card(ui: &mut egui::Ui, note: &Note, data: &Data, act: &mut Option<Act>)
         .stroke(egui::Stroke::new(1.0_f32, palette.line_soft))
         .corner_radius(6)
         .inner_margin(10);
-    frame.show(ui, |ui| {
+    let shown = frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             ui.label(
@@ -58,27 +126,9 @@ fn note_card(ui: &mut egui::Ui, note: &Note, data: &Data, act: &mut Option<Act>)
                     .small()
                     .color(theme::muted()),
             );
-            if note.edited_ms.is_some() {
-                ui.label(RichText::new("edited").small().color(theme::muted()));
-            }
+            edited_label(ui, note);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let confirm = egui::Id::new(("sample_note_delete", note.id));
-                let asking = ui.data(|d| d.get_temp::<bool>(confirm)).unwrap_or(false);
-                if asking {
-                    if ui.button("Keep").clicked() {
-                        ui.data_mut(|d| d.insert_temp(confirm, false));
-                    }
-                    if ui.button("Delete note").clicked() {
-                        *act = Some(Act::Delete(note.id));
-                    }
-                } else {
-                    if widgets::link(ui, "Delete").clicked() {
-                        ui.data_mut(|d| d.insert_temp(confirm, true));
-                    }
-                    if widgets::link(ui, "Edit").clicked() {
-                        *act = Some(Act::Edit(note.id));
-                    }
-                }
+                actions(ui, note, act);
             });
         });
         ui.add(egui::Label::new(&note.text).selectable(true));
@@ -96,6 +146,12 @@ fn note_card(ui: &mut egui::Ui, note: &Note, data: &Data, act: &mut Option<Act>)
             });
         }
     });
+    let card = ui.interact(
+        shown.response.rect,
+        shown.response.id.with("menu"),
+        egui::Sense::click(),
+    );
+    note_menu(&card, note, act);
 }
 
 fn show(ui: &mut egui::Ui, data: &Data) -> Option<Act> {
@@ -127,20 +183,8 @@ impl MonitorApp {
     pub(super) fn notes_tab(&mut self, ui: &mut egui::Ui, data: &Arc<Data>) {
         match show(ui, data) {
             Some(Act::Add) => self.samples_page.start_note(Vec::new()),
-            Some(Act::Edit(id)) => {
-                if let Some(note) = data.notes.iter().find(|note| note.id == id) {
-                    self.samples_page.edit_note(note);
-                }
-            }
-            Some(Act::Delete(id)) => {
-                let result = Library::open(&self.options.data_dir)
-                    .and_then(|mut library| library.delete_note(id));
-                self.samples_page.notice = Some(match result {
-                    Ok(()) => ("Note deleted".into(), false),
-                    Err(error) => (error, true),
-                });
-                self.samples_page.refresh();
-            }
+            Some(act @ (Act::Edit(_) | Act::Delete(_))) => self.apply_note_act(data, act),
+            Some(Act::Tab) => {}
             Some(Act::Open(reference)) => self.open_reference(data, &reference),
             Some(Act::OpenFile(reference)) => {
                 if let Some(output) = data
@@ -153,6 +197,27 @@ impl MonitorApp {
                 }
             }
             None => {}
+        }
+    }
+
+    /// Edit or delete a note (from the Notes tab or the Summary).
+    pub(super) fn apply_note_act(&mut self, data: &Arc<Data>, act: Act) {
+        match act {
+            Act::Edit(id) => {
+                if let Some(note) = data.notes.iter().find(|note| note.id == id) {
+                    self.samples_page.edit_note(note);
+                }
+            }
+            Act::Delete(id) => {
+                let result = Library::open(&self.options.data_dir)
+                    .and_then(|mut library| library.delete_note(id));
+                self.samples_page.notice = Some(match result {
+                    Ok(()) => ("Note deleted".into(), false),
+                    Err(error) => (error, true),
+                });
+                self.samples_page.refresh();
+            }
+            _ => {}
         }
     }
 

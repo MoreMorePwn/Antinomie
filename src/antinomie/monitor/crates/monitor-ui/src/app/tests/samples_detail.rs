@@ -301,10 +301,10 @@ fn the_window_reads_the_runs_and_scans_the_static_report() {
     let (runs, report, strings) = app.samples_page.detail_probe().unwrap();
     assert_eq!(runs, 2);
     assert!(report);
-    let (interesting, matches, total) = strings.unwrap();
-    // The URL, the address and the persistence path; the rest is not.
-    assert!(interesting >= 2, "{interesting} interesting strings");
-    assert!(matches >= interesting);
+    let (longest, matches, total) = strings.unwrap();
+    // The longest strings of the report; the URL and the others are matches.
+    assert!(longest >= 2, "{longest} longest strings");
+    assert!(matches >= 2);
     assert!(total >= matches as u64);
     // Newest first.
     assert_eq!(app.samples_page.detail_run_ids(), ["r2", "r1"]);

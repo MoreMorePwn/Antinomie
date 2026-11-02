@@ -117,7 +117,8 @@ pub(super) struct Data {
 
 /// The rows the Summary draws from the report's regex scan.
 pub(super) struct Strings {
-    pub(super) interesting: Vec<StringRow>,
+    /// The 100 longest strings, longest first.
+    pub(super) longest: Vec<StringRow>,
     pub(super) matches: Vec<StringRow>,
     /// Matches of the scan, repeats included: the Regex matches tab's count.
     pub(super) total: u64,
@@ -390,7 +391,7 @@ fn scan(data_dir: PathBuf, reference: &ReportRef, cancel: &AtomicBool) -> ScanRe
     let rules = RuleSet::build(&config);
     let scan = scan_report(&reference.directory, &reference.report.id, &rules, cancel)?;
     Ok(Strings {
-        interesting: antinomie_monitor_core::samples::interesting_strings(&scan),
+        longest: antinomie_monitor_core::samples::longest_strings(&scan),
         matches: antinomie_monitor_core::samples::regex_matches(&scan),
         total: scan.total(),
     })
@@ -400,6 +401,13 @@ impl SamplesPage {
     /// Open the window of a sample.
     pub(in crate::app) fn open_detail(&mut self, sha256: &str) {
         self.detail = Some(Detail::new(sha256));
+    }
+
+    /// Open the window of a sample on its Notes tab.
+    pub(super) fn open_notes(&mut self, sha256: &str) {
+        let mut detail = Detail::new(sha256);
+        detail.tab = Tab::Notes;
+        self.detail = Some(detail);
     }
 
     /// Open the window of a sample on its Custody log tab.
@@ -939,7 +947,7 @@ impl SamplesPage {
     }
 
     /// Runs read, whether a static report was found, and the rows of the
-    /// scan (interesting strings, regex matches, match count) once done.
+    /// scan (longest strings, regex matches, match count) once done.
     pub(in crate::app) fn detail_probe(&self) -> Option<Probe> {
         let detail = self.detail.as_ref()?;
         let data = detail.data.as_ref()?;
@@ -947,11 +955,9 @@ impl SamplesPage {
             data.runs.len(),
             data.report.is_some(),
             match &detail.scanned {
-                Scanned::Done(strings) => Some((
-                    strings.interesting.len(),
-                    strings.matches.len(),
-                    strings.total,
-                )),
+                Scanned::Done(strings) => {
+                    Some((strings.longest.len(), strings.matches.len(), strings.total))
+                }
                 _ => None,
             },
         ))

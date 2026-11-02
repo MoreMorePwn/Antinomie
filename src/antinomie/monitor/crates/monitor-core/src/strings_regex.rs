@@ -141,6 +141,33 @@ pub struct Match {
     pub repeats: u64,
 }
 
+/// How many of the longest strings a scan keeps.
+pub const LONGEST_COUNT: usize = 100;
+/// Characters of one long string a scan keeps.
+const LONGEST_TEXT_MAX: usize = 4096;
+
+/// One of the longest strings a scan read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LongString {
+    /// Length in characters, before any cut.
+    pub length: usize,
+    /// The text, cut at `LONGEST_TEXT_MAX` characters.
+    pub text: String,
+    /// "Strings", "FLOSS stack".
+    pub origin: String,
+    pub position: Option<u64>,
+}
+
+impl LongString {
+    /// Longest first, then the lower offset (no offset last).
+    fn key(&self) -> (std::cmp::Reverse<usize>, u64) {
+        (
+            std::cmp::Reverse(self.length),
+            self.position.unwrap_or(u64::MAX),
+        )
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Scan {
     pub matches: Vec<Match>,
@@ -149,6 +176,8 @@ pub struct Scan {
     /// Matches per type indicator.
     pub kinds: BTreeMap<String, u64>,
     pub strings: u64,
+    /// The longest strings read, longest first (see `LONGEST_COUNT`).
+    pub longest: Vec<LongString>,
     /// More matches than `MATCH_MAX_COUNT` were found.
     pub truncated: bool,
     /// The scan was stopped before it read every string.
@@ -158,6 +187,29 @@ pub struct Scan {
 }
 
 impl Scan {
+    /// Keep `text` when it is among the `LONGEST_COUNT` longest strings read.
+    pub fn note_long(&mut self, text: &str, origin: &str, position: Option<u64>) {
+        let length = text.chars().count();
+        let full = self.longest.len() >= LONGEST_COUNT;
+        if full && length < self.longest[LONGEST_COUNT - 1].length {
+            return;
+        }
+        let item = LongString {
+            length,
+            text: text.chars().take(LONGEST_TEXT_MAX).collect(),
+            origin: origin.to_owned(),
+            position,
+        };
+        let at = self
+            .longest
+            .partition_point(|have| have.key() <= item.key());
+        if at >= LONGEST_COUNT {
+            return;
+        }
+        self.longest.insert(at, item);
+        self.longest.truncate(LONGEST_COUNT);
+    }
+
     pub fn total(&self) -> u64 {
         self.counts.values().sum()
     }

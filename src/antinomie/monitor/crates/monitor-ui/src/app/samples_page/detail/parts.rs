@@ -253,6 +253,14 @@ pub(super) fn mini_table<'a>(ui: &'a mut egui::Ui, id: &str) -> TableBuilder<'a>
         .vscroll(false)
 }
 
+/// A `mini_table` whose rows are clickable: its labels are not selectable, so
+/// a click on the text of any cell reaches the row. Call inside `on_surface`
+/// (the style change stays in that scope).
+pub(super) fn click_table<'a>(ui: &'a mut egui::Ui, id: &str) -> TableBuilder<'a> {
+    ui.style_mut().interaction.selectable_labels = false;
+    mini_table(ui, id).sense(egui::Sense::click())
+}
+
 /// A text column's width for its longest text: the text, the cell's padding
 /// and a little slack, within bounds so one long name cannot take the row.
 pub(super) fn fitted_width(text_width: f32, most: f32) -> f32 {
@@ -288,65 +296,13 @@ pub(super) fn fitted_up_to(
     fitted_width(widest, most)
 }
 
-/// Rows a page of a paged table (Interesting strings, Regex matches) shows.
-const PAGE: usize = 10;
-
-/// The rows of the current page of the table `id` of `len` rows.
-pub(super) fn pager_range(ui: &egui::Ui, id: &str, len: usize) -> std::ops::Range<usize> {
-    let page = ui
-        .ctx()
-        .data(|data| data.get_temp::<usize>(egui::Id::new((id, "page"))))
-        .unwrap_or(0);
-    let pages = len.div_ceil(PAGE).max(1);
-    let start = page.min(pages - 1) * PAGE;
-    start..(start + PAGE).min(len)
-}
-
-/// Under a paged table: Previous, "11–20 of 40", Next, and a button that
-/// opens the whole list. True when that button was clicked.
-pub(super) fn pager(ui: &mut egui::Ui, id: &str, len: usize, open: &str) -> bool {
-    let key = egui::Id::new((id, "page"));
-    let pages = len.div_ceil(PAGE).max(1);
-    let mut page = ui
-        .ctx()
-        .data(|data| data.get_temp::<usize>(key))
-        .unwrap_or(0)
-        .min(pages - 1);
-    let mut opened = false;
+/// The button under a scrolling table that opens the whole list in Static
+/// analysis. True when clicked.
+pub(super) fn open_all(ui: &mut egui::Ui, text: &str) -> bool {
     ui.add_space(4.0);
-    ui.horizontal_wrapped(|ui| {
-        if pages > 1 {
-            if ui
-                .add_enabled(page > 0, egui::Button::new("‹ Previous"))
-                .clicked()
-            {
-                page -= 1;
-            }
-            let start = page * PAGE;
-            ui.label(
-                RichText::new(format!(
-                    "{}–{} of {}",
-                    start + 1,
-                    (start + PAGE).min(len),
-                    crate::values::thousands(len as u64)
-                ))
-                .color(theme::muted()),
-            );
-            if ui
-                .add_enabled(page + 1 < pages, egui::Button::new("Next ›"))
-                .clicked()
-            {
-                page += 1;
-            }
-            ui.add_space(8.0);
-        }
-        opened = ui
-            .button(open)
-            .on_hover_text("Open the whole list in Static analysis")
-            .clicked();
-    });
-    ui.ctx().data_mut(|data| data.insert_temp(key, page));
-    opened
+    ui.button(text)
+        .on_hover_text("Open the whole list in Static analysis")
+        .clicked()
 }
 
 #[cfg(test)]
