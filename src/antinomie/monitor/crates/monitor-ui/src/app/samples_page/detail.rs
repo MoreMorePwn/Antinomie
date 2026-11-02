@@ -311,12 +311,7 @@ pub(super) fn load(options: &BackendOptions, vms: &[(String, String)], sha256: &
             })
             .collect::<Vec<_>>(),
     );
-    let iocs = antinomie_monitor_core::samples::ioc_union(
-        &entries
-            .iter()
-            .map(|entry| (entry.number, entry.digest.as_ref()))
-            .collect::<Vec<_>>(),
-    );
+    let iocs = iocs::union_of(&entries);
     entries.reverse();
     let kept = library.artifacts(&record.sha256)?;
     let outputs = output_files::read(&entries, &kept);
@@ -654,11 +649,7 @@ impl MonitorApp {
                     item = item.badge(count.to_string(), Tone::Neutral);
                 }
                 if tab == Tab::Iocs {
-                    item = crate::triage::ioc_count_tab(
-                        label,
-                        data.iocs.rows.iter().filter(|row| row.matched()).count(),
-                        data.iocs.rows.len(),
-                    );
+                    item = iocs::tab_item(label, &data);
                 }
                 if widgets::tab(ui, detail.tab == tab, &item).clicked() {
                     detail.tab = tab;

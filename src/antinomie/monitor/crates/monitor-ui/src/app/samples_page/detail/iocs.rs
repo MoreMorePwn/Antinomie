@@ -61,6 +61,26 @@ impl Default for State {
     }
 }
 
+/// The union of the runs' indicators, computed with the rest of the window's
+/// data on its worker thread.
+pub(super) fn union_of(entries: &[RunEntry]) -> antinomie_monitor_core::samples::IocUnion {
+    antinomie_monitor_core::samples::ioc_union(
+        &entries
+            .iter()
+            .map(|entry| (entry.number, entry.digest.as_ref()))
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// The tab: the total in grey and the matched count in red, as Triage's.
+pub(super) fn tab_item(label: &str, data: &Data) -> widgets::TabItem {
+    crate::triage::ioc_count_tab(
+        label,
+        data.iocs.rows.iter().filter(|row| row.matched()).count(),
+        data.iocs.rows.len(),
+    )
+}
+
 /// What a click asked of the app.
 pub(super) enum Go {
     Triage(usize, RowKey),
@@ -130,12 +150,18 @@ impl State {
         }
     }
 
-    /// Every filter but the kind chips and the every-run choice.
+    /// Every filter but the kind chips and the every-run choice. The search
+    /// also finds a value typed or pasted defanged (`[.]`, `hxxp`).
     fn base(&self, row: &SampleIoc) -> bool {
+        let needle = self
+            .search
+            .trim()
+            .to_lowercase()
+            .replace("[.]", ".")
+            .replace("hxxp", "http");
         !(self.hide_private && row.private())
             && !(self.hide_guest && row.guest_infrastructure())
-            && (self.search.trim().is_empty()
-                || row.haystack().contains(&self.search.trim().to_lowercase()))
+            && (needle.is_empty() || row.haystack().contains(&needle))
     }
 
     /// Every filter but the kind chips.
@@ -383,8 +409,8 @@ impl MonitorApp {
                 .column(Col::flex(300.0).at_least(160.0).clip(true))
                 .column(Col::fixed(120.0))
                 .column(Col::flex(150.0).at_least(80.0).clip(true))
-                .column(Col::fixed(112.0))
-                .column(Col::fixed(112.0))
+                .column(Col::fixed(132.0))
+                .column(Col::fixed(132.0))
                 .column(Col::flex(130.0).at_least(70.0).clip(true))
                 .column(Col::rest(80.0).at_least(120.0).clip(true))
                 .max_scroll_height(height)
