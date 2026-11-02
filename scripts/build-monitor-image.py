@@ -52,6 +52,9 @@ def bundle_identity(manifest, hashes):
         digest.update(b"\x01" + bytes.fromhex(hashes[key]) if key in hashes else b"\x00")
     if "symbols" in hashes:
         digest.update(b"antinomie-volatility-symbols-v1" + bytes.fromhex(hashes["symbols"]))
+    if "uefi_root" in hashes and "uefi_layout" in hashes:
+        digest.update(b"antinomie-uefi-layout-v1" + bytes.fromhex(hashes["uefi_root"])
+                      + bytes.fromhex(hashes["uefi_layout"]))
     return digest.hexdigest()
 
 

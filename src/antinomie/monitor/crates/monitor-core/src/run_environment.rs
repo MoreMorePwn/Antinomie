@@ -91,7 +91,19 @@ impl RunEnvironment {
             }
             .into(),
             stealth: vm.stealth.preset.label().into(),
-            base_name: inputs.base_name.unwrap_or_default().into(),
+            base_name: inputs
+                .base_name
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                // A base without a display name is still named by its identity.
+                .or_else(|| {
+                    inputs
+                        .base_identity
+                        .filter(|identity| !identity.is_empty())
+                        .map(|identity| identity.chars().take(8).collect())
+                })
+                .unwrap_or_default(),
             base_identity: inputs.base_identity.unwrap_or_default().into(),
             base_revision: inputs.base_revision,
             kernel_release: inputs
@@ -156,6 +168,25 @@ mod tests {
         assert_eq!(first.hash, same.hash);
         first.cpus = 4;
         assert_ne!(first.hash, first.compute_hash());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_base_without_a_name_is_named_by_its_short_identity() {
+        let dir = std::env::temp_dir().join(format!("ant-env-{}", crate::storage::unique_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let vm = vm();
+        let mut given = inputs(&vm, &dir);
+        given.base_name = None;
+        given.base_identity = Some("12a308586cb1ffeedbeef");
+        assert_eq!(RunEnvironment::capture(&given).base_name, "12a30858");
+        given.base_name = Some(" ");
+        assert_eq!(RunEnvironment::capture(&given).base_name, "12a30858");
+        given.base_name = Some("Debian 13 (Minimal)");
+        assert_eq!(
+            RunEnvironment::capture(&given).base_name,
+            "Debian 13 (Minimal)"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

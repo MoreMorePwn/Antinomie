@@ -39,6 +39,49 @@ it runs.
   build is Antinomie 0.8.1 (built from abc12345)". No network; the same source
   without .git gives the same text.
 
+### Fixed
+
+- **Library > Analysis tools shows where Antinomie's copy of a tool is
+  relative to the data folder** (`tools/capa/capa`), with the full path on
+  hover, like the run views.
+- **The custody log's "Run started" line names the base** of a run on a base
+  that has no chosen name: the catalog label, else the base identity's first
+  eight characters. It used to read "base , device profile ...".
+- **Export report (sample) shows its default folder relative to the data
+  folder** (`sample-reports`) with the full path on hover. A folder typed
+  without a leading `/` is inside the data folder; an absolute one is used as
+  typed.
+- **The App dependencies window fits the main window.** Its list scrolls
+  inside the window, so the title bar and the close button stay on screen at
+  1280x820. A probe that only ran out of time ("could not check QEMU GTK
+  support: QEMU probe timed out") no longer opens the window by itself; the
+  status bar says what was not checked and Check again settles it. The GTK
+  probe retries once with 10 seconds before reporting a timeout.
+- **A base label that already ends in " — Antinomie X.Y.Z" shows the version
+  once** ("BusyBox · Antinomie 0.8.0", not "BusyBox — Antinomie 0.8.0 ·
+  Antinomie 0.8.0").
+- **`scripts/publish-base-sources.py` computes the identity of a base with
+  UEFI files** (`uefi-root.tar.xz`, `uefi-layout.json`) as the app does, and
+  `scripts/build-monitor-image.py` `bundle_identity` accepts them. A test
+  vector (`tests/monitor/fixtures/base-identity-uefi.json`) is checked by both
+  the Python and the Rust tests.
+- **A fresh install no longer says "legacy migration destination is not
+  empty".** An old data folder that holds only the window state eframe saves
+  (`app.ron`) is not old data. Installing a tool goes through the same
+  migration as the app start, and when the message is real it says what to
+  do.
+- **A backend that did not start shows an error screen** with the reason,
+  what to do, Retry and Quit, instead of a window whose buttons do nothing.
+- **Refresh catalog gives feedback.** The status line changes from
+  "refreshing base catalog" to "base catalog updated: N bases" or "catalog
+  refresh failed: ...", the spinner stays long enough to see, and
+  "Updated hh:mm" shows next to the button (Getting started and Download
+  base).
+- **Getting started > First VM has the Device profile dropdown** of the New
+  VM dialog (default still Realistic desktop) with a one-line description,
+  the base's fallback warning and Details… for the full window, instead of
+  one checkbox.
+
 ## 0.8.0 — 2026-11-02
 
 Antinomie 0.8.0 is the first release since 0.7.1. It moves to guest contract

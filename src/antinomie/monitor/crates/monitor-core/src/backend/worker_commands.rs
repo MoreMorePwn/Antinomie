@@ -234,8 +234,10 @@ impl Worker {
                     base.antinomie_revision,
                     base.min_app_version.as_deref(),
                 ) {
-                    Some(version) => format!("{} · Antinomie {version}", base.label),
-                    None => base.label.clone(),
+                    Some(version) => {
+                        format!("{} · Antinomie {version}", base_label_plain(&base.label))
+                    }
+                    None => base_label_plain(&base.label).to_owned(),
                 };
                 let progress = Arc::new(Mutex::new((0u64, false)));
                 let worker_progress = progress.clone();

@@ -17,6 +17,10 @@ use std::{
 mod install;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+/// The second try of a probe that ran out of time, for a host under load.
+const PROBE_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
+/// What a probe that ran out of time reports (see [`Check::timed_out`]).
+const PROBE_TIMED_OUT: &str = "QEMU probe timed out after its deadline";
 const PROBE_OUTPUT_SIZE: usize = 16 * 1024;
 
 /// A runtime requirement; availability is independent of the selected feature.
@@ -53,6 +57,16 @@ pub struct Check {
     pub wrong_version: bool,
 }
 
+impl Check {
+    /// The probe could not finish in time, so the tool is neither known to be
+    /// there nor known to be missing; checking again may settle it.
+    pub fn timed_out(&self) -> bool {
+        self.problem
+            .as_deref()
+            .is_some_and(|problem| problem.contains(PROBE_TIMED_OUT))
+    }
+}
+
 /// Snapshot of runtime availability. Recheck after changing host packages.
 #[derive(Clone, Debug, Default)]
 pub struct Report {
@@ -69,6 +83,23 @@ impl Report {
         self.checks
             .iter()
             .any(|check| check.problem.is_some() && !check.optional)
+    }
+
+    /// A required check failed for a reason a person can act on: a probe that
+    /// only ran out of time is left out (see [`Report::unverified`]).
+    pub fn needs_attention(&self) -> bool {
+        self.checks
+            .iter()
+            .any(|check| check.problem.is_some() && !check.optional && !check.timed_out())
+    }
+
+    /// Names of the required checks whose probe ran out of time.
+    pub fn unverified(&self) -> Vec<&'static str> {
+        self.checks
+            .iter()
+            .filter(|check| !check.optional && check.timed_out())
+            .map(|check| check.name)
+            .collect()
     }
 
     /// Reject only the listed requirements, preserving unrelated workflows.
@@ -346,7 +377,12 @@ fn gtk_problem(qemu: &Path) -> Option<String> {
         Ok(qemu) => qemu,
         Err(error) => return Some(error),
     };
-    match display_help(&qemu, PROBE_TIMEOUT) {
+    let mut help = display_help(&qemu, PROBE_TIMEOUT);
+    if help.as_ref().is_err_and(|error| error == PROBE_TIMED_OUT) {
+        // A busy host: once more, with more time, before reporting.
+        help = display_help(&qemu, PROBE_RETRY_TIMEOUT);
+    }
+    match help {
         Ok(output) if output.lines().any(|line| line.trim() == "gtk") => None,
         Ok(_) => Some("the configured QEMU has no GTK display backend".into()),
         Err(error) => Some(format!("could not check QEMU GTK support: {error}")),
@@ -448,7 +484,7 @@ fn probe_output(program: &Path, args: &[&str], timeout: Duration) -> Result<Stri
                     .map_err(|_| "QEMU probe output is not UTF-8".into());
             }
             if Instant::now() >= deadline {
-                return Err("QEMU probe timed out after its deadline".into());
+                return Err(PROBE_TIMED_OUT.into());
             }
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -473,6 +509,45 @@ fn probe_output(program: &Path, args: &[&str], timeout: Duration) -> Result<Stri
 mod tests {
     use super::*;
     use std::{fs, os::unix::fs::PermissionsExt};
+
+    #[test]
+    fn a_probe_that_only_timed_out_is_not_something_to_repair() {
+        let entry = |problem: &str| Check {
+            dependency: Dependency::Gtk,
+            name: "QEMU GTK display",
+            purpose: "the VM window",
+            problem: Some(problem.to_owned()),
+            hint: "On Debian/Ubuntu: sudo apt install qemu-system-gui",
+            optional: false,
+            wrong_version: false,
+        };
+        let slow = Report {
+            checks: vec![entry(&format!(
+                "could not check QEMU GTK support: {PROBE_TIMED_OUT}"
+            ))],
+            ..Report::default()
+        };
+        assert!(slow.has_missing() && !slow.needs_attention());
+        assert_eq!(slow.unverified(), ["QEMU GTK display"]);
+        let missing = Report {
+            checks: vec![entry("the configured QEMU has no GTK display backend")],
+            ..Report::default()
+        };
+        assert!(missing.needs_attention() && missing.unverified().is_empty());
+    }
+
+    #[test]
+    fn a_gtk_probe_that_is_slow_once_gets_a_second_try_with_more_time() {
+        // Slow only the first time: the marker file is there from then on.
+        let marker =
+            std::env::temp_dir().join(format!("ant-gtk-slow-{}", crate::storage::unique_id()));
+        let fixture = Fixture::new(&format!(
+            "if [ -e '{0}' ]; then printf 'none\\ngtk\\n'; else : > '{0}'; sleep 4; fi",
+            marker.display()
+        ));
+        assert!(gtk_problem(&fixture.executable()).is_none());
+        let _ = fs::remove_file(&marker);
+    }
 
     #[test]
     fn a_missing_optional_tool_is_not_a_startup_problem() {

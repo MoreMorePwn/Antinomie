@@ -464,6 +464,10 @@ pub struct ToolStatus {
     /// Where Antinomie's copy of the program is, when it is installed.
     #[serde(default)]
     pub installed_path: Option<String>,
+    /// `installed_path` relative to the data directory, which is what the
+    /// page shows (the full path is on hover).
+    #[serde(default)]
+    pub installed_shown: Option<String>,
 }
 
 impl ToolStatus {
@@ -530,6 +534,12 @@ pub fn statuses(data_dir: &Path) -> Vec<ToolStatus> {
             installed: installed_version(data_dir, package),
             installed_path: managed_entry(data_dir, package.id)
                 .map(|path| path.display().to_string()),
+            installed_shown: managed_entry(data_dir, package.id).map(|path| {
+                path.strip_prefix(data_dir)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string()
+            }),
         })
         .collect()
 }
@@ -865,6 +875,7 @@ fn install_package(
     cancel: &AtomicBool,
     progress: impl FnMut(&str, u64, u64),
 ) -> Result<(), String> {
+    crate::storage::ensure_data_dir(data_dir)?;
     if let Some(requirements) = &package.requirements {
         return install_python(data_dir, package, requirements, cancel, progress);
     }
@@ -1678,6 +1689,36 @@ mod tests {
         );
         remove(&data, "capa").unwrap();
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_installed_tool_is_shown_relative_to_the_data_directory() {
+        let data = scratch("tools-shown");
+        let package = package("capa").unwrap();
+        let directory = tools_dir(&data).join(package.id);
+        let entry = directory.join(package.entry);
+        fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        fs::write(&entry, b"x").unwrap();
+        fs::write(
+            directory.join("tool.json"),
+            format!(r#"{{"id":"capa","version":"{}"}}"#, package.version),
+        )
+        .unwrap();
+        let status = statuses(&data)
+            .into_iter()
+            .find(|status| status.id == "capa")
+            .unwrap();
+        assert_eq!(
+            status.installed_path.as_deref(),
+            Some(entry.to_str().unwrap())
+        );
+        let shown = status.installed_shown.unwrap();
+        assert_eq!(
+            Path::new(&shown),
+            Path::new("tools").join("capa").join(package.entry)
+        );
+        assert!(!shown.contains(data.to_str().unwrap()));
+        let _ = fs::remove_dir_all(&data);
     }
 
     fn scratch(tag: &str) -> PathBuf {

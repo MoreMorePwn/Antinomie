@@ -230,6 +230,13 @@ def bundle_identity(bundle, bundle_dir):
             hashes[key] = file_hash(bundle, bundle_dir, name)
     if bundle.get("symbols"):
         hashes["symbols"] = file_hash(bundle, bundle_dir, bundle["symbols"])
+    # A Debian Minimal base's UEFI files are part of the identity (monitor-core's
+    # Bundle::identity), both or neither.
+    if bool(bundle.get("uefi_root")) != bool(bundle.get("uefi_layout")):
+        raise SourceError("the bundle names only one of its UEFI layout files")
+    if bundle.get("uefi_root"):
+        hashes["uefi_root"] = file_hash(bundle, bundle_dir, bundle["uefi_root"])
+        hashes["uefi_layout"] = file_hash(bundle, bundle_dir, bundle["uefi_layout"])
     return builder.bundle_identity(bundle, hashes)
 
 

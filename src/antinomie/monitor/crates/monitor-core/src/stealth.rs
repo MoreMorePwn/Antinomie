@@ -81,6 +81,24 @@ impl StealthPreset {
             Self::Custom => "Custom",
         }
     }
+
+    /// One line on what the profile makes the guest look like.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::RealisticDesktop => {
+                "A branded desktop PC: real-looking BIOS, board, CPU and network card."
+            }
+            Self::RealisticLaptop => {
+                "A branded laptop: battery, laptop chassis and its usual devices."
+            }
+            Self::RealisticServer => {
+                "A rack server: server BIOS, ECC memory and a server network card."
+            }
+            Self::CloudVps => "A rented cloud machine of the chosen provider.",
+            Self::Transparent => "Plain QEMU, nothing hidden: the guest sees a QEMU machine.",
+            Self::Custom => "Your own machine identity, CPU and devices (Edit…).",
+        }
+    }
 }
 
 /// The emulated network card.

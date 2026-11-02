@@ -276,5 +276,45 @@ class BuilderRecordTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "not a 64-bit"):
                 builder.elf_needs(Path(text.name))
 
+class BaseIdentityTests(unittest.TestCase):
+    """The identity monitor-core computes (Bundle::identity), from the vector storage.rs also reads."""
+
+    VECTOR = json.loads((REPO / "tests/monitor/fixtures/base-identity-uefi.json").read_text())
+
+    def layout(self, directory, bundle):
+        for name, text in self.VECTOR["files"].items():
+            (Path(directory) / name).write_text(text)
+        return bundle
+
+    def test_a_uefi_bundle_has_the_identity_the_app_computes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self.layout(directory, dict(self.VECTOR["bundle"]))
+            self.assertEqual(publish.bundle_identity(bundle, directory), self.VECTOR["identity"])
+
+    def test_a_bundle_without_uefi_files_keeps_its_older_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self.layout(directory, dict(self.VECTOR["bundle"]))
+            del bundle["uefi_root"], bundle["uefi_layout"]
+            self.assertEqual(publish.bundle_identity(bundle, directory),
+                             self.VECTOR["identity_without_uefi"])
+
+    def test_one_uefi_file_alone_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self.layout(directory, dict(self.VECTOR["bundle"]))
+            del bundle["uefi_layout"]
+            with self.assertRaisesRegex(publish.SourceError, "only one of its UEFI"):
+                publish.bundle_identity(bundle, directory)
+
+    def test_either_uefi_file_changes_the_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = self.layout(directory, dict(self.VECTOR["bundle"]))
+            for name in ("uefi-root.tar.xz", "uefi-layout.json"):
+                original = (Path(directory) / name).read_text()
+                (Path(directory) / name).write_text(original + "x")
+                self.assertNotEqual(publish.bundle_identity(bundle, directory),
+                                    self.VECTOR["identity"])
+                (Path(directory) / name).write_text(original)
+
+
 if __name__ == "__main__":
     unittest.main()

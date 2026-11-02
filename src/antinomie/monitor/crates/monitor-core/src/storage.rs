@@ -909,7 +909,19 @@ pub(crate) fn load_vms(options: &BackendOptions) -> Result<Vec<VmConfig>, String
 
 /// Copy, validate, and atomically publish legacy data. The source is retained.
 pub(crate) fn migrate_default_data(options: &BackendOptions) -> Result<(), String> {
-    if options.data_dir != BackendOptions::default().data_dir {
+    migrate_default_data_dir(&options.data_dir)
+}
+
+/// Whatever creates the default data directory first (the backend, a tool
+/// install) calls this first, so the legacy folder is migrated into it rather
+/// than found next to a half-filled destination.
+pub(crate) fn ensure_data_dir(data_dir: &Path) -> Result<(), String> {
+    migrate_default_data_dir(data_dir)?;
+    private_dir(data_dir).map_err(|e| e.to_string())
+}
+
+fn migrate_default_data_dir(data_dir: &Path) -> Result<(), String> {
+    if data_dir != BackendOptions::default().data_dir {
         return Ok(());
     }
     let source = std::env::var_os("XDG_DATA_HOME")
@@ -918,8 +930,20 @@ pub(crate) fn migrate_default_data(options: &BackendOptions) -> Result<(), Strin
             PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share")
         })
         .join("antinomie");
-    migrate_data(&source, &options.data_dir)
+    migrate_data(&source, data_dir)
 }
+/// The old data folder holds nothing of Antinomie's: it is empty or has only
+/// the window state eframe saves there (`app.ron`), which every GUI run
+/// recreates because the application id is "antinomie".
+fn holds_only_window_state(folder: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(folder) else {
+        return false;
+    };
+    entries
+        .flatten()
+        .all(|entry| entry.file_name() == "app.ron")
+}
+
 pub fn migrate_data(source: &Path, destination: &Path) -> Result<(), String> {
     migrate_data_with_proc(source, destination, Path::new("/proc"))
 }
@@ -933,6 +957,9 @@ fn migrate_data_with_proc(
         return Err("migration destination must be absolute".into());
     }
     if !source.exists() || destination.join("migration.json").exists() {
+        return Ok(());
+    }
+    if holds_only_window_state(source) {
         return Ok(());
     }
     let source = fs::canonicalize(source).map_err(|e| e.to_string())?;
@@ -1004,7 +1031,7 @@ fn migrate_data_with_proc(
             .next()
             .is_some()
     {
-        return Err("legacy migration destination is not empty; source retained, migration needs an explicit destination".into());
+        return Err("the old data folder has data, but the new data folder is not empty and has no migration record; the old folder was kept. Close Antinomie, move or delete the new data folder if it holds nothing you need, and start again, or copy the old one over by hand".into());
     }
     let parent = destination
         .parent()
@@ -1913,6 +1940,78 @@ mod tests {
         settle_json(&blocked.join("artifacts.json"));
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn a_folder_with_only_window_state_is_not_legacy_data_in_either_order() {
+        let root = std::env::temp_dir().join(format!("ant-legacy-order-{}", unique_id()));
+        let proc_root = root.join("proc");
+        fs::create_dir_all(&proc_root).unwrap();
+        // The tool resolver first, then the GUI saved its window state.
+        let old = root.join("old-a");
+        let new = root.join("new-a");
+        fs::create_dir_all(new.join("tools")).unwrap();
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("app.ron"), b"()").unwrap();
+        migrate_data_with_proc(&old, &new, &proc_root).unwrap();
+        assert!(!new.join("migration.json").exists());
+        // The GUI first, then the tool resolver.
+        let old = root.join("old-b");
+        let new = root.join("new-b");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("app.ron"), b"()").unwrap();
+        migrate_data_with_proc(&old, &new, &proc_root).unwrap();
+        fs::create_dir_all(new.join("tools")).unwrap();
+        migrate_data_with_proc(&old, &new, &proc_root).unwrap();
+        // Real old data next to a destination the resolver filled first says what to do.
+        let old = root.join("old-c");
+        let new = root.join("new-c");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("vms.json"), b"[]").unwrap();
+        fs::create_dir_all(new.join("tools")).unwrap();
+        let message = migrate_data_with_proc(&old, &new, &proc_root).unwrap_err();
+        assert!(
+            message.contains("not empty") && message.contains("move or delete"),
+            "{message}"
+        );
+        // Old data and a fresh destination still migrate.
+        fs::remove_dir_all(&new).unwrap();
+        migrate_data_with_proc(&old, &new, &proc_root).unwrap();
+        assert!(new.join("migration.json").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The vector `tests/monitor/test-publish-base-sources.py` also checks, so
+    /// `scripts/publish-base-sources.py` and this module cannot drift apart.
+    #[test]
+    fn the_identity_matches_the_shared_uefi_vector() {
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../../tests/monitor/fixtures/base-identity-uefi.json"
+        ))
+        .unwrap();
+        let root = std::env::temp_dir().join(format!("ant-identity-vector-{}", unique_id()));
+        private_dir(&root).unwrap();
+        for (name, text) in vector["files"].as_object().unwrap() {
+            fs::write(root.join(name), text.as_str().unwrap()).unwrap();
+        }
+        let write = |bundle: &serde_json::Value| {
+            fs::write(root.join("bundle.json"), bundle.to_string()).unwrap()
+        };
+        let mut bundle = vector["bundle"].clone();
+        write(&bundle);
+        assert_eq!(
+            Bundle::load(&root).unwrap().identity().unwrap(),
+            vector["identity"].as_str().unwrap()
+        );
+        let object = bundle.as_object_mut().unwrap();
+        object.remove("uefi_root");
+        object.remove("uefi_layout");
+        write(&bundle);
+        assert_eq!(
+            Bundle::load(&root).unwrap().identity().unwrap(),
+            vector["identity_without_uefi"].as_str().unwrap()
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn revision_metadata_is_validated_preserved_and_outside_the_identity() {
         let (root, options, mut bundle, _) = guest_fixture();

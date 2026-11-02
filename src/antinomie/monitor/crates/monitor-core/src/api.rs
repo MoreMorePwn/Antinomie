@@ -1136,6 +1136,18 @@ pub fn base_app_version(revision: Option<u32>, min_app_version: Option<&str>) ->
         .or_else(|| revision.and_then(first_app_version))
 }
 
+/// A base's label without a trailing " — Antinomie X.Y.Z", which some catalog
+/// labels carry; the app adds the version itself where it shows one.
+pub fn base_label_plain(label: &str) -> &str {
+    let trimmed = label.trim_end();
+    if let Some((head, tail)) = trimmed.rsplit_once(" \u{2014} Antinomie ") {
+        if Version::parse(tail.trim()).is_some() {
+            return head.trim_end();
+        }
+    }
+    label
+}
+
 /// Split a `CONFIG_ANTINOMIE_SOURCE_ID` value, `"<revision>:<series sha256>"`.
 pub fn parse_source_id(value: &str) -> Option<(u32, String)> {
     let (revision, series) = value.split_once(':')?;
@@ -2671,6 +2683,26 @@ pub fn pair_events(events: &[EventSummary]) -> Vec<InvocationSummary> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_catalog_label_loses_its_trailing_antinomie_version() {
+        assert_eq!(
+            base_label_plain("BusyBox \u{2014} Antinomie 0.8.0"),
+            "BusyBox"
+        );
+        assert_eq!(
+            base_label_plain("Debian 13 (Minimal) \u{2014} Antinomie 0.8.0"),
+            "Debian 13 (Minimal)"
+        );
+        assert_eq!(
+            base_label_plain("Lab \u{2014} Antinomie"),
+            "Lab \u{2014} Antinomie"
+        );
+        assert_eq!(
+            base_label_plain("Lab \u{2014} my base"),
+            "Lab \u{2014} my base"
+        );
+        assert_eq!(base_label_plain("Debian"), "Debian");
+    }
     #[test]
     fn source_ids_and_revision_status() {
         let series = "0f".repeat(32);

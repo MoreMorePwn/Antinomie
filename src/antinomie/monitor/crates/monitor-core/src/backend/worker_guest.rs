@@ -318,7 +318,11 @@ impl Worker {
                     environment: Some(crate::run_environment::RunEnvironment::capture(
                         &crate::run_environment::Inputs {
                             vm: &session.vm,
-                            base_name: session.disk_bundle.name.as_deref(),
+                            base_name: session.disk_bundle.name.as_deref().or(session
+                                .disk_bundle
+                                .guest
+                                .as_ref()
+                                .map(|guest| guest.label.as_str())),
                             base_identity: session.disk_bundle.base_identity.as_deref(),
                             base_revision: session.disk_bundle.antinomie_revision,
                             kernel: self.snapshot.guest_kernel.as_ref(),

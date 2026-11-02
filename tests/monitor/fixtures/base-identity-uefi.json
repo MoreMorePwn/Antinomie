@@ -1,0 +1,33 @@
+{
+  "comment": "Shared by storage.rs (Bundle::identity) and tests/monitor/test-publish-base-sources.py: a Debian Minimal bundle layout with UEFI files, synthetic file contents. identity_without_uefi is the same bundle before 0.8.0 (no uefi_root/uefi_layout).",
+  "bundle": {
+    "kernel": "kernel",
+    "base_disk": "base.qcow2",
+    "initrd": "initrd",
+    "kernel_append": "console=ttyS0 quiet",
+    "kernel_version": "6.12.94",
+    "schema_id": 1,
+    "guest": {
+      "id": "debian-minimal",
+      "label": "Debian 13 (Minimal)",
+      "min_ram_mib": 512,
+      "min_disk_gib": 4,
+      "requires_credentials": true,
+      "graphical": false
+    },
+    "fixed_display": true,
+    "symbols": "symbols.json.xz",
+    "uefi_root": "uefi-root.tar.xz",
+    "uefi_layout": "uefi-layout.json"
+  },
+  "files": {
+    "kernel": "kernel fixture",
+    "base.qcow2": "disk fixture",
+    "initrd": "initrd fixture",
+    "symbols.json.xz": "symbols fixture",
+    "uefi-root.tar.xz": "uefi root fixture",
+    "uefi-layout.json": "{\"layout\":\"fixture\"}"
+  },
+  "identity": "e3b088a43857eb8c73d5f079671fcfc75db1d585ba3ecba71f3e7ac7c24aa146",
+  "identity_without_uefi": "5c0d03e8ac6fc6633bda7dafd7d227ba1cd888d3194c35f4856a603429895588"
+}
