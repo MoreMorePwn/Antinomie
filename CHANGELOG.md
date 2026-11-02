@@ -179,8 +179,9 @@ it runs.
 - **Failed attempts are shown by default, in every Files tab.** The chip was off
   while Opened and Read listed their failed rows anyway, so it looked off and
   hid nothing there. It is on by default, applies to Opened, Read, Changed files
-  and the operation tabs, and its count and tooltip say how many failed rows the
-  open table has. Failed attempts still never count as changes.
+  and the operation tabs, and it reads "Failed attempts (3)" with the failed calls of the open
+  tab (failed opens on Opened, failed reads on Read, ...); the tooltip gives the
+  total for the run and the count per tab. Failed attempts still never count as changes.
 - **Triage Summary keeps other views' notes out.** The Detection scan notes
   ("No packets were captured", why an engine is unavailable) and the network note
   no longer repeat on the Summary; one line, "Detection: 1 note needs attention",

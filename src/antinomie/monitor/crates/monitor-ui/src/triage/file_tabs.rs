@@ -115,10 +115,19 @@ impl TriageView {
     /// start on, and so does Failed attempts.
     pub(super) fn file_toggles(&mut self, ui: &mut egui::Ui) {
         use crate::widgets::toggle_chip;
-        let failed = self
-            .scan
-            .as_ref()
-            .map_or(0, |scan| scan.counts.failed_attempts);
+        // Failed attempts per table; a call counts once in each table it is in.
+        let per_tab: Vec<(&str, u64)> = self.scan.as_ref().map_or_else(Vec::new, |scan| {
+            FileTab::ALL
+                .into_iter()
+                .map(|tab| {
+                    (
+                        tab.title(),
+                        scan.counts.visibility[file_visibility::visibility_slot(tab)].failed,
+                    )
+                })
+                .collect()
+        });
+        let failed: u64 = per_tab.iter().map(|(_, count)| count).sum();
         let tab = if self.history_tab {
             None
         } else {
@@ -170,15 +179,30 @@ impl TriageView {
             changed = true;
         }
         let failed_here = if tab.is_some() { count.failed } else { failed };
-        if toggle_chip(
-            ui,
-            "Failed attempts",
-            visibility.show_failed,
-            Some(failed_here),
-        )
-        .on_hover_text(format!(
-            "Calls the kernel refused, with their result. {failed_here} rows in this table are failed attempts; turn this off to hide them. They do not count as changes."
-        ))
+        let breakdown = per_tab
+            .iter()
+            .filter(|(_, count)| *count > 0)
+            .map(|(title, count)| format!("{title} {count}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut hover = if tab.is_some() {
+            format!("{failed_here} failed attempts in this tab; {failed} in this run")
+        } else {
+            format!("{failed} failed attempts in this run")
+        };
+        if !breakdown.is_empty() {
+            hover.push_str(&format!(" ({breakdown})"));
+        }
+        hover.push_str(
+            ". Calls the kernel refused, with their result; turn this off to hide them. They do not count as changes.",
+        );
+        let failed_label = if counted {
+            format!("Failed attempts ({failed_here})")
+        } else {
+            "Failed attempts".to_owned()
+        };
+        if toggle_chip(ui, &failed_label, visibility.show_failed, None)
+            .on_hover_text(hover)
             .clicked()
         {
             visibility.show_failed = !visibility.show_failed;
