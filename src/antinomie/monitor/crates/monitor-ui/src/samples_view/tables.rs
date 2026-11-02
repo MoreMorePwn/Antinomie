@@ -159,11 +159,16 @@ impl SamplesView {
         crate::widgets::table::begin(ui);
         // Not resizable by hand: the widths follow the window, so the columns
         // always fit it and line up with their headers.
+        let body_max = (ui.available_height() - row_height).max(row_height * 2.0);
         let mut table = FitBuilder::new(ui)
             .id_salt("samples_results")
             .sense(egui::Sense::click())
             .striped(true)
-            .auto_shrink([false, false])
+            // The table is as tall as its rows, up to what the window gave it
+            // (about four rows): its background follows the rows, and more
+            // rows scroll inside it.
+            .auto_shrink([false, true])
+            .max_scroll_height(body_max)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
         for (natural, least) in RESULT_WIDTHS {
             table = table.column(FitCol::flex(natural).min(least));

@@ -26,6 +26,21 @@ it runs.
 - **The Download window's tables show about four rows, then scroll,** with the
   same width, a background that follows the table's height, and a shorter
   window.
+- **Static analysis category titles are no longer squeezed.** The Categories
+  card sizes its title column to the longest title (Identification, Regex
+  matches) and cuts it with an ellipsis only when the pane is narrower; a short
+  window scrolls the whole report view instead of leaving its content a few rows.
+- **The sample window's Static analysis section says what each check found,**
+  one wrapped line per check ("Identification: ELF 64-bit ..., statically linked,
+  stripped"), the reason in plain words when a check is not complete, and an
+  Open button per check; the Interesting strings caption is gone and the ATT&CK
+  tactic column keeps one width so the technique tags start at one x.
+- **Edit and Delete work again on a note card,** and right-click anywhere on the
+  card offers Edit, Delete... and Copy text.
+- **An export dialog's finished state stays inside its window.** The written
+  files show against their common folder (Copy path, Open folder), in a list of
+  at most four rows that scrolls, with names cut in the middle and the whole
+  path on hover; a long sample name no longer sets the title's width.
 - **The toolbar never covers the VM name.** When the window is narrow, the
   buttons that do not fit move into a ">" menu, last first (Dump core, Dump
   memory, Capture network, Capture all, Snapshots, Kill, Run program, Stop,
