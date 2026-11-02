@@ -451,6 +451,8 @@ pub struct MonitorApp {
     rules_summary: String,
     rules_generation: u64,
     vm_snapshots: crate::snapshots::SnapshotManager,
+    /// The VM and run state the Summary last asked the snapshot list for.
+    summary_snapshots_asked: Option<(String, bool)>,
     samples: crate::samples_view::SamplesView,
     samples_page: samples_page::SamplesPage,
     api_keys: crate::api_keys_window::ApiKeysWindow,
@@ -689,6 +691,7 @@ impl MonitorApp {
             rules_summary: String::new(),
             rules_generation: 0,
             vm_snapshots: crate::snapshots::SnapshotManager::default(),
+            summary_snapshots_asked: None,
             samples: crate::samples_view::SamplesView::default(),
             samples_page: samples_page::SamplesPage::default(),
             api_keys: Default::default(),

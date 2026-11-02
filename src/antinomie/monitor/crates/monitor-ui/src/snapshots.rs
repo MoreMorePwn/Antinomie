@@ -9,6 +9,8 @@ use antinomie_monitor_core::{
 use eframe::egui::{self, RichText};
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(crate) mod summary_box;
+
 pub(crate) const WINDOW_ID: &str = "vm_snapshots";
 const NODE_WIDTH: f32 = 210.0;
 const NODE_HEIGHT: f32 = 84.0;
@@ -109,6 +111,46 @@ impl SnapshotManager {
         self.open = true;
     }
 
+    /// Bind to a VM without opening the window: the Summary's Snapshots box
+    /// asks its questions through the same dialogs.
+    fn bind_quiet(&mut self, vm_id: &str, vm_name: &str) {
+        if self.vm_id.as_deref() != Some(vm_id) {
+            *self = Self::default();
+            self.vm_id = Some(vm_id.to_owned());
+        }
+        self.vm_name = vm_name.to_owned();
+    }
+
+    /// Take snapshot… on the Summary: the New snapshot dialog.
+    pub(crate) fn ask_create_for(&mut self, vm_id: &str, vm_name: &str, tree: &VmSnapshotTree) {
+        self.bind_quiet(vm_id, vm_name);
+        let mode = if tree.capabilities.can_create_disk {
+            VmSnapshotMode::Disk
+        } else {
+            VmSnapshotMode::Full
+        };
+        self.decision = Some(Decision::Create(Draft {
+            mode,
+            ..Draft::default()
+        }));
+    }
+
+    /// Restore… on the Summary: the Restore dialog for one checkpoint.
+    pub(crate) fn ask_restore_for(
+        &mut self,
+        vm_id: &str,
+        vm_name: &str,
+        tree: &VmSnapshotTree,
+        id: &str,
+        boot_from_disk: bool,
+    ) {
+        self.bind_quiet(vm_id, vm_name);
+        if let Some(node) = tree.nodes.iter().find(|node| node.id == id) {
+            self.selected = Some(node.id.clone());
+            self.restore_dialog(node, boot_from_disk);
+        }
+    }
+
     pub(crate) fn close(&mut self) {
         if self.decision.is_some() {
             self.decision = None;
@@ -124,7 +166,7 @@ impl SnapshotManager {
     }
 
     pub(crate) fn decision_open(&self) -> bool {
-        self.open && self.decision.is_some()
+        self.decision.is_some()
     }
 
     pub(crate) fn complete(&mut self, id: u64, success: bool, message: &str) {
@@ -141,14 +183,15 @@ impl SnapshotManager {
         progress: Option<&VmSnapshotProgress>,
         enabled: bool,
     ) -> Option<Command> {
+        let busy = self.pending.is_some() || progress.is_some();
+        let enabled = enabled && !busy;
         if !self.open {
-            return None;
+            // The Summary's box can ask a question without the window.
+            return tree.and_then(|tree| self.dialog(ctx, tree, enabled));
         }
         let mut open = true;
         let mut command = None;
         let mut close = false;
-        let busy = self.pending.is_some() || progress.is_some();
-        let enabled = enabled && !busy;
         let window = crate::widgets::window(format!("Snapshots · {}", self.vm_name))
             .id(egui::Id::new(WINDOW_ID))
             .open(&mut open)

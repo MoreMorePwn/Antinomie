@@ -54,6 +54,26 @@ pub(super) fn show(ui: &mut egui::Ui, vm: &VmConfig, snapshot: &Snapshot) {
     resource_cards(ui, "summary-stealth", 1, 1, width.max(80.0), 10, |ui, _| {
         stealth(ui, &vm.stealth, narrow, &fallbacks)
     });
+    ui.add_space(10.0);
+    resource_cards(
+        ui,
+        "summary-snapshots",
+        1,
+        1,
+        width.max(80.0),
+        10,
+        |ui, _| {
+            crate::snapshots::summary_box::show(
+                ui,
+                &vm.id,
+                snapshot.vm_snapshot_trees.get(&vm.id),
+                snapshot
+                    .vm_snapshot_progress
+                    .as_ref()
+                    .filter(|progress| progress.vm_id == vm.id),
+            )
+        },
+    );
 }
 
 fn title(ui: &mut egui::Ui, symbol: &str, text: &str, color: Color32) {

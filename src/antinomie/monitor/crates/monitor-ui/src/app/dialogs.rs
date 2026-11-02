@@ -6,7 +6,7 @@ impl MonitorApp {
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
         crate::evidence::dialogs(ctx);
         self.evidence_jobs.show(ctx);
-        if self.vm_snapshots.open {
+        if self.vm_snapshots.open || self.vm_snapshots.decision_open() {
             let tree = self
                 .vm_snapshots
                 .vm_id

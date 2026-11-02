@@ -171,6 +171,16 @@ it runs.
   what you picked and marks the step Ready; Skip this step leaves the settings as
   they are. The step list, Back and the Finish summary now have seven steps.
 
+- **The VM Summary has a Snapshots box under Device profile.** It lists the VM's
+  snapshots as a compact tree (name, whether it is disk only or disk + memory, when
+  it was taken, its size, its notes, and a Current marker on the one the VM runs
+  from), with Take snapshot…, Restore… (Resume… for a disk + memory snapshot that
+  can resume, plus Restore disk and boot…) and Open Snapshots…. An empty list says
+  so and points at Take snapshot. The box uses the Snapshots window's own dialogs
+  and rules: what is allowed while the VM runs, a running snapshot operation and
+  the compatibility of a checkpoint all come from the same data, and its list is
+  refreshed when you select the VM and when it starts or stops.
+
 ## 0.8.1 — 2026-11-03
 
 Antinomie 0.8.1 is a fix release for the 0.8.0 line; it runs the same revision-20

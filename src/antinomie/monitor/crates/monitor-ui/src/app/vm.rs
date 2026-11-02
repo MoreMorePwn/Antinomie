@@ -286,6 +286,62 @@ impl MonitorApp {
         }
     }
 
+    /// Before the Summary draws: list the selected VM's snapshots (again when
+    /// the VM starts or stops, which changes what is allowed) and tell the
+    /// Snapshots box what the manager is doing.
+    pub(super) fn prepare_summary_snapshots(&mut self, ctx: &egui::Context) {
+        use crate::snapshots::summary_box::{BoxState, STATE};
+        let Some(vm_id) = self.selected_vm().map(|vm| vm.id.clone()) else {
+            return;
+        };
+        let key = (
+            vm_id.clone(),
+            self.snapshot.active_vm.as_deref() == Some(vm_id.as_str()),
+        );
+        if self.summary_snapshots_asked.as_ref() != Some(&key)
+            && self.vm_snapshots.pending.is_none()
+            && !self.closing
+        {
+            self.summary_snapshots_asked = Some(key);
+            self.send(Command::RefreshVmSnapshots {
+                vm_id: vm_id.clone(),
+            });
+        }
+        let ours = self.vm_snapshots.vm_id.as_deref() == Some(vm_id.as_str());
+        let state = BoxState {
+            busy: self.vm_snapshots.pending.is_some() && ours,
+            result: self.vm_snapshots.result.clone().filter(|_| ours),
+        };
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new(STATE), state));
+    }
+
+    /// After the Summary drew: what its Snapshots box asked for.
+    pub(super) fn answer_summary_snapshots(&mut self, ctx: &egui::Context) {
+        use crate::snapshots::summary_box::{Action, ACTION};
+        let Some(action) = ctx.data_mut(|data| data.remove_temp::<Action>(egui::Id::new(ACTION)))
+        else {
+            return;
+        };
+        let Some(vm) = self.selected_vm().cloned() else {
+            return;
+        };
+        if matches!(action, Action::Open) {
+            self.open_snapshots();
+            return;
+        }
+        let Some(tree) = self.snapshot.vm_snapshot_trees.get(&vm.id).cloned() else {
+            return;
+        };
+        match action {
+            Action::Take => self.vm_snapshots.ask_create_for(&vm.id, &vm.name, &tree),
+            Action::Restore { id, boot_from_disk } => {
+                self.vm_snapshots
+                    .ask_restore_for(&vm.id, &vm.name, &tree, &id, boot_from_disk)
+            }
+            Action::Open => {}
+        }
+    }
+
     pub(super) fn open_vm_directory(&mut self, vm_id: &str) {
         match self
             .snapshot

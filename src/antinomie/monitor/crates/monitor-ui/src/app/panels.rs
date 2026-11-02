@@ -212,6 +212,7 @@ impl MonitorApp {
         self.details_follow.drawn(ui, panel);
         match panel {
             Panel::Summary => {
+                self.prepare_summary_snapshots(ui.ctx());
                 crate::summary::show(
                     ui,
                     &self.snapshot,
@@ -225,6 +226,7 @@ impl MonitorApp {
                 if configure == Some(true) && self.can_configure_vm() {
                     self.configure_vm();
                 }
+                self.answer_summary_snapshots(ui.ctx());
             }
             Panel::Trace => self.events(ui),
             Panel::Network => {
