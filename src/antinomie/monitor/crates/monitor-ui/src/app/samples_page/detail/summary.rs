@@ -484,21 +484,27 @@ fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go
             Some(Scanned::Done(strings)) => Some(strings.total),
             _ => None,
         };
-        let lines: Vec<(&AnalysisSection, &str, String)> = LINES
+        let lines: Vec<(&AnalysisSection, &str, String, Option<String>)> = LINES
             .iter()
             .filter_map(|(kind, label)| {
                 let section = report
                     .sections
                     .iter()
                     .find(|section| section.kind == *kind)?;
-                Some((section, *label, line_result(*kind, section, total, data)))
+                let notice = section.reason().map(|(why, _)| why);
+                Some((
+                    section,
+                    *label,
+                    line_result(*kind, section, total, data),
+                    notice,
+                ))
             })
             .collect();
         let strong = egui::TextStyle::Body.resolve(ui.style());
         let name_width = parts::fitted_up_to(
             ui,
             &strong,
-            lines.iter().map(|(_, label, _)| (*label).to_owned()),
+            lines.iter().map(|(_, label, ..)| (*label).to_owned()),
             200.0,
         ) + 6.0;
         let chip_width = state_width(ui);
@@ -508,7 +514,21 @@ fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go
                 .size()
                 .x
         }) + ui.spacing().button_padding.x * 2.0;
-        for (section, label, result) in lines {
+        // Name, state, result and Open are columns of fixed widths, so every
+        // Open button is in one column; the notice (why a check is not
+        // complete) takes what is left, to the right of the button, and wraps
+        // under itself. With no notice the result takes the rest.
+        let gap = ui.spacing().item_spacing.x;
+        let rest =
+            (ui.available_width() - name_width - chip_width - button_width - 3.0 * gap).max(0.0);
+        let any_notice = lines.iter().any(|(.., notice)| notice.is_some());
+        let (result_width, notice_width) = if any_notice {
+            let result = (rest * 0.55).max(120.0);
+            (result, (rest - result - gap).max(120.0))
+        } else {
+            (rest.max(60.0), 0.0)
+        };
+        for (section, label, result, notice) in lines {
             let kind = section.kind;
             let mut open = false;
             ui.horizontal_top(|ui| {
@@ -533,15 +553,13 @@ fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go
                 {
                     chip.on_hover_text(&section.summary);
                 }
-                // The result wraps inside what the button leaves, so none of
-                // it is cut off.
-                let room =
-                    (ui.available_width() - button_width - ui.spacing().item_spacing.x).max(60.0);
+                // The result wraps inside its own column, so none of it is cut
+                // off and the button after it stays where it is.
                 ui.allocate_ui_with_layout(
-                    egui::vec2(room, 0.0),
+                    egui::vec2(result_width, 0.0),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        ui.set_width(room);
+                        ui.set_width(result_width);
                         ui.add(egui::Label::new(&result).wrap().selectable(false))
                             .on_hover_text(&result);
                     },
@@ -550,6 +568,23 @@ fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go
                     .button("Open")
                     .on_hover_text(format!("Open {label} in Static analysis"))
                     .clicked();
+                if let Some(notice) = &notice {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(notice_width, 0.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_width(notice_width);
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(notice).small().color(section_notice(section)),
+                                )
+                                .wrap()
+                                .selectable(false),
+                            )
+                            .on_hover_text(notice);
+                        },
+                    );
+                }
             });
             if open {
                 *go = Some(if kind == AnalysisKind::Structures {
@@ -595,6 +630,16 @@ fn section_state(state: antinomie_monitor_core::AnalysisSectionState) -> (&'stat
     }
 }
 
+/// The colour of a check's notice: an error for a check that could not run, a
+/// warning for a timeout or a partial result.
+fn section_notice(section: &AnalysisSection) -> egui::Color32 {
+    if section.state == antinomie_monitor_core::AnalysisSectionState::Unavailable {
+        theme::error()
+    } else {
+        theme::warn()
+    }
+}
+
 /// The width of a state chip, so the column of them lines up.
 fn state_width(ui: &egui::Ui) -> f32 {
     widgets::chip_width(
@@ -633,7 +678,7 @@ const LINES: &[(AnalysisKind, &str)] = &[
 ];
 
 /// What a check found, in plain words from its report section; why it is not
-/// complete comes first when it is not.
+/// complete is the notice to the right of its Open button.
 fn line_result(
     kind: AnalysisKind,
     section: &AnalysisSection,
@@ -792,10 +837,7 @@ fn line_result(
         ),
         _ => first_line(&section.summary),
     };
-    match section.reason() {
-        Some((why, _)) => format!("{why} {found}"),
-        None => found,
-    }
+    found
 }
 
 fn first_line(text: &str) -> String {

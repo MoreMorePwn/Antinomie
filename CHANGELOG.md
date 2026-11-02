@@ -35,6 +35,15 @@ it runs.
   activity no longer shrinks the Summary's technique list or rewrites the run's
   saved digest with the filtered rows.
 
+- **Static analysis check lines put the notice to the right of the Open
+  button.** In the sample window's Static analysis section each line is the
+  check's name, its state chip, what it found and the Open button in fixed
+  columns, so every Open button sits in one column; why a check timed out, was
+  partial or could not run (and the limit it met) is to the right of the
+  button, wrapping under itself, in the warning colour (the error colour for a
+  check that could not run). The Static analysis tab's Categories card has the
+  same order: name, state, rows, the open-in-pane button, then the notice.
+
 ## 0.8.1 — 2026-11-03
 
 Antinomie 0.8.1 is a fix release for the 0.8.0 line; it runs the same revision-20

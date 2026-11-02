@@ -62,15 +62,7 @@ pub(super) fn categories(
                 })
                 .fold(0.0_f32, f32::max)
         }) + 2.0 * ui.spacing().button_padding.x;
-        let needs_reason = report
-            .sections
-            .iter()
-            .any(|section| section.reason().is_some());
-        let wanted = if needs_reason {
-            longest.max(220.0)
-        } else {
-            longest
-        };
+        let wanted = longest;
         let others = tag_width
             + rows_width
             + ui.spacing().interact_size.x
@@ -85,7 +77,7 @@ pub(super) fn categories(
         |_| {},
         |ui| {
             egui::Grid::new("analysis-categories")
-                .num_columns(4)
+                .num_columns(5)
                 .spacing([12.0, 6.0])
                 .show(ui, |ui| {
                     for kind in ALL_KINDS {
@@ -114,35 +106,22 @@ pub(super) fn categories(
                         };
                         let clicked = ui
                             .vertical(|ui| {
-                                // Why a check is not complete stands under its name.
                                 ui.set_width(name_width);
-                                let clicked = ui
-                                    .add(
-                                        egui::Button::new(
-                                            egui::RichText::new(section_title(kind))
-                                                .color(crate::theme::palette().accent),
-                                        )
-                                        .frame(false)
-                                        .truncate(),
+                                ui.add(
+                                    egui::Button::new(
+                                        egui::RichText::new(section_title(kind))
+                                            .color(crate::theme::palette().accent),
                                     )
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    .on_hover_text(format!(
-                                        "{}\n{}",
-                                        section_title(kind),
-                                        section.summary
-                                    ))
-                                    .clicked();
-                                if let Some((text, _)) = section.reason() {
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(text)
-                                                .small()
-                                                .color(crate::theme::warn()),
-                                        )
-                                        .wrap(),
-                                    );
-                                }
-                                clicked
+                                    .frame(false)
+                                    .truncate(),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .on_hover_text(format!(
+                                    "{}\n{}",
+                                    section_title(kind),
+                                    section.summary
+                                ))
+                                .clicked()
                             })
                             .inner;
                         if clicked {
@@ -191,6 +170,32 @@ pub(super) fn categories(
                                 report_id: report.id.clone(),
                                 kind,
                             });
+                        }
+                        // Why a check is not complete: right of the button, wrapping
+                        // under itself, so every button is in one column.
+                        if let Some((text, _)) = section.reason() {
+                            let width = ui.available_width().max(160.0);
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(width, 0.0),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.set_width(width);
+                                    let color = if section.state
+                                        == antinomie_monitor_core::AnalysisSectionState::Unavailable
+                                    {
+                                        crate::theme::error()
+                                    } else {
+                                        crate::theme::warn()
+                                    };
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(&text).small().color(color),
+                                        )
+                                        .wrap(),
+                                    )
+                                    .on_hover_text(&text);
+                                },
+                            );
                         }
                         ui.end_row();
                     }
