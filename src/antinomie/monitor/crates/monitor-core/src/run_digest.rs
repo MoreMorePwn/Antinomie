@@ -133,6 +133,50 @@ pub struct IndicatorEntry {
     pub value: String,
     /// A stored abuse.ch dataset matched it.
     pub matched: bool,
+    /// The row's second line: protocol, how a name was seen, HTTP version.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub sub: String,
+    /// `pcap`, `syscall`, `disk` or `static`. Empty in a digest written before
+    /// 0.8.2, which also has none of the fields below.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
+    /// First and last seen in the run, Unix microseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_us: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_us: Option<u64>,
+    /// "9 connections", "3 requests".
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub count: String,
+    /// The one process that made a matching call, `name · pid`; empty when
+    /// none or several did.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub process: String,
+    /// A file's path in the guest, a URL's normal form.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub path: String,
+    /// A file's roles: sample, created, executed, deleted, written at close.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<String>,
+    /// Why nothing was looked up (`private address`, `local name`).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub not_checked: String,
+    /// Why this is the base image's own traffic; empty for the sample's.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub noise: String,
+    /// The stored dataset records that matched it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hits: Vec<IndicatorHit>,
+}
+
+/// A stored abuse.ch record that matched an indicator.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IndicatorHit {
+    pub dataset: String,
+    pub family: String,
+    pub record_id: String,
+    pub reference: String,
 }
 
 /// A file of the run that counts for lineage: an executable, a script, a
@@ -337,6 +381,7 @@ mod tests {
                 ty: "domain".into(),
                 value: "bad.example".into(),
                 matched: true,
+                ..Default::default()
             }]);
         };
         assert!(RunDigest::update(&dir, set).unwrap());

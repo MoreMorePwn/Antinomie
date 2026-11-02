@@ -288,35 +288,14 @@ pub fn merge_detections(digests: &[(usize, &RunDigest)]) -> Vec<RuleHit> {
     out
 }
 
-/// Indicators of every run, one row per type and value.
+/// Indicators of every run, one row per type and value (a file also by path).
 pub fn merge_indicators(digests: &[(usize, &RunDigest)]) -> Vec<MergedIndicator> {
-    let mut merged: BTreeMap<(String, String), MergedIndicator> = BTreeMap::new();
-    for (number, digest) in digests {
-        for item in digest.indicators.iter().flatten() {
-            let entry = merged
-                .entry((item.ty.clone(), item.value.clone()))
-                .or_insert_with(|| MergedIndicator {
-                    kind: item.ty.clone(),
-                    value: item.value.clone(),
-                    ..MergedIndicator::default()
-                });
-            entry.matched |= item.matched;
-            if !entry.runs.contains(number) {
-                entry.runs.push(*number);
-            }
-        }
-    }
-    let mut out: Vec<MergedIndicator> = merged.into_values().collect();
-    for item in &mut out {
-        item.runs.sort_unstable();
-    }
-    out.sort_by(|a, b| {
-        b.matched
-            .cmp(&a.matched)
-            .then_with(|| a.kind.cmp(&b.kind))
-            .then_with(|| a.value.cmp(&b.value))
-    });
-    out
+    let runs: Vec<(usize, Option<&RunDigest>)> = digests
+        .iter()
+        .map(|(number, digest)| (*number, Some(*digest)))
+        .collect();
+    let union = crate::samples::ioc_union(&runs);
+    crate::samples::ioc_merged(&union.rows, union.listed.len())
 }
 
 fn technique_id(id: &str) -> bool {

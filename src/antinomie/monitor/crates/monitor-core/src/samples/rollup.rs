@@ -581,6 +581,7 @@ mod tests {
             ty: ty.into(),
             value: value.into(),
             matched,
+            ..Default::default()
         };
         let a = RunDigest {
             indicators: Some(vec![

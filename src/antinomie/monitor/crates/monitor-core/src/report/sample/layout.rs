@@ -490,7 +490,7 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
     // Indicators.
     let mut blocks = Vec::new();
     table(
-        &["Type", "Indicator", "Dataset", "Runs"],
+        &["Type", "Indicator", "How seen", "Dataset", "Runs"],
         report
             .indicators
             .iter()
@@ -498,8 +498,17 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
                 vec![
                     i.kind.clone(),
                     b.indicator(&i.kind, &i.value),
-                    if i.matched { "matched" } else { "no match" }.into(),
-                    runs_text(&i.runs),
+                    i.observed.join(", "),
+                    if i.hits.is_empty() {
+                        if i.matched { "matched" } else { "no match" }.to_owned()
+                    } else {
+                        i.hits.join("; ")
+                    },
+                    format!(
+                        "{}{}",
+                        runs_text(&i.runs),
+                        if i.every_run { " (every run)" } else { "" }
+                    ),
                 ]
             })
             .collect(),

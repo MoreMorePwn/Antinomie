@@ -52,26 +52,31 @@ fn digest(matched: bool, high: bool) -> RunDigest {
                 ty: "endpoint".into(),
                 value: "203.0.113.5:443".into(),
                 matched,
+                ..Default::default()
             },
             IndicatorEntry {
                 ty: "domain".into(),
                 value: "evil.example".into(),
                 matched: false,
+                ..Default::default()
             },
             IndicatorEntry {
                 ty: "url".into(),
                 value: "evil.example/x?a=1".into(),
                 matched: false,
+                ..Default::default()
             },
             IndicatorEntry {
                 ty: "tls".into(),
                 value: "ab".repeat(16),
                 matched: false,
+                ..Default::default()
             },
             IndicatorEntry {
                 ty: "file".into(),
                 value: sha(9),
                 matched: false,
+                ..Default::default()
             },
         ]),
         ..RunDigest::default()

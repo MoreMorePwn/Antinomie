@@ -272,6 +272,23 @@ pub struct MergedIndicator {
     /// A stored dataset matched it in some run.
     pub matched: bool,
     pub runs: Vec<usize>,
+    /// A file's path in the guest.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub path: String,
+    /// Every run that has an indicator list had it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub every_run: bool,
+    /// How it was observed: DNS query, connect, HTTP request, file write.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub observed: Vec<String>,
+    /// First and last seen over the runs, Unix microseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_us: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_us: Option<u64>,
+    /// The dataset records that matched, `dataset: family (id)`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hits: Vec<String>,
 }
 
 /// One entry of the custody log.

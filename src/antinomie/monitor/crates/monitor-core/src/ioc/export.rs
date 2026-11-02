@@ -30,7 +30,7 @@ pub const COLUMNS: [&str; 17] = [
     "online",
 ];
 
-fn when(us: Option<u64>) -> String {
+pub(crate) fn when(us: Option<u64>) -> String {
     us.map(|us| {
         let seconds = i64::try_from(us / 1_000_000).unwrap_or(0);
         let nanos = ((us % 1_000_000) * 1000) as u32;
@@ -116,7 +116,7 @@ pub fn row(indicator: &Indicator, verdict: &Verdict) -> Vec<String> {
     ]
 }
 
-fn cell(text: &str) -> String {
+pub(crate) fn cell(text: &str) -> String {
     let mut text = text.to_owned();
     if text.starts_with(['=', '+', '-', '@', '\t', '\r']) {
         text.insert(0, '\'');

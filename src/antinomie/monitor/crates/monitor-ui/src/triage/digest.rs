@@ -7,7 +7,8 @@ use antinomie_monitor_core::{
     analysis::detection::State,
     ioc::verdict::{OnlineResults, Outcome},
     run_digest::{
-        self, Behaviour, BehaviourHit, DetectionHit, EvasionCheck, IndicatorEntry, RunDigest,
+        self, Behaviour, BehaviourHit, DetectionHit, EvasionCheck, IndicatorEntry, IndicatorHit,
+        RunDigest,
     },
 };
 
@@ -122,6 +123,34 @@ fn indicators(ioc: &ioc_scan::IocScan) -> Vec<IndicatorEntry> {
             ty: indicator.ty.id().to_owned(),
             value: indicator.value.clone(),
             matched: verdict.outcome == Outcome::Matched,
+            sub: indicator.sub.clone(),
+            sources: indicator
+                .sources
+                .iter()
+                .map(|source| source.label().to_owned())
+                .collect(),
+            first_us: indicator.first_us,
+            last_us: indicator.last_us,
+            count: indicator.count.clone(),
+            process: indicator
+                .process
+                .as_ref()
+                .map(|process| process.label())
+                .unwrap_or_default(),
+            path: indicator.path.clone(),
+            roles: indicator.roles.clone(),
+            not_checked: indicator.not_checked.clone().unwrap_or_default(),
+            noise: indicator.noise.clone().unwrap_or_default(),
+            hits: verdict
+                .matches
+                .iter()
+                .map(|found| IndicatorHit {
+                    dataset: found.record.feed.clone(),
+                    family: found.record.family.clone(),
+                    record_id: found.record.record_id.clone(),
+                    reference: found.record.reference.clone(),
+                })
+                .collect(),
         })
         .collect()
 }

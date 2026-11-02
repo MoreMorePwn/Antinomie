@@ -26,6 +26,8 @@ mod chain_export;
 mod custody;
 mod delete_run;
 mod intake;
+mod ioc_export;
+mod ioc_union;
 mod kept;
 mod library;
 mod lineage;
@@ -52,6 +54,14 @@ pub use delete_run::{
     RunPlan, SavedTree, delete as delete_run, plan as plan_run_deletion, saved_process_tree,
 };
 pub use intake::{Added, FileProbe, NewSample, detect_type};
+pub use ioc_export::{
+    COLUMNS as IOC_COLUMNS, csv as ioc_csv, hit_texts as ioc_hit_texts, json as ioc_json,
+    merged as ioc_merged,
+};
+pub use ioc_union::{
+    KINDS as IOC_KINDS, SampleIoc, Sighting, Union as IocUnion, kind_label as ioc_kind_label,
+    union as ioc_union,
+};
 pub use kept::{
     ArtifactKind, Fate as ArtifactFate, KeptArtifact, SAVED_FILE, SavedItem, SavedKind,
     artifact_sha256, record_saved, saved_items, short_hash,

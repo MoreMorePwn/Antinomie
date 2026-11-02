@@ -232,11 +232,13 @@ pub(super) fn save_digest(run: &RunSummary, tier: &str, hit: bool) {
                 ty: "endpoint".into(),
                 value: "198.51.100.7:80".into(),
                 matched: false,
+                ..Default::default()
             },
             IndicatorEntry {
                 ty: "domain".into(),
                 value: "update.example.test".into(),
                 matched: true,
+                ..Default::default()
             },
         ]);
     })
