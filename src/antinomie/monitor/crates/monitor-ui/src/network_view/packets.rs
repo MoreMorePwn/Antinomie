@@ -72,7 +72,8 @@ impl NetworkView {
                 ui,
                 if !cx.nat {
                     "Select a saved capture to inspect it."
-                } else if self.captures.is_empty() && cx.active.is_none() {
+                } else if self.captures.is_empty() && cx.active.is_none() && self.listing.is_none()
+                {
                     "No network captures yet. Start a capture to record every packet of \
                      the VM's network interface, outside the guest."
                 } else {

@@ -132,6 +132,11 @@ pub(crate) struct NetworkView {
     /// recording folders they were listed from.
     captures: Vec<NetworkCapture>,
     captures_for: Option<(Option<PathBuf>, Vec<PathBuf>)>,
+    /// The folders being listed on a worker, and whether the newest capture
+    /// is to be opened once they are (a VM was just selected and has no
+    /// running capture).
+    listing: Option<crate::background::Task<Vec<NetworkCapture>>>,
+    open_newest_when_listed: bool,
     /// The running capture (id, file) last seen, to notice a start or stop.
     seen_active: Option<(String, PathBuf)>,
     hide_list: bool,
@@ -495,6 +500,7 @@ impl NetworkView {
         let active = cx
             .active
             .map(|capture| (capture.id.clone(), capture.file.clone()));
+        self.collect_listing();
         if self
             .captures_for
             .as_ref()
@@ -502,26 +508,28 @@ impl NetworkView {
                 current.as_deref() != cx.recordings || retained != cx.recording_roots
             })
         {
-            // Another VM: show its running capture, else its newest one.
-            self.scan(cx.recordings, cx.recording_roots);
-            let first = active
-                .as_ref()
-                .map(|(_, file)| file.clone())
-                .or_else(|| self.captures.first().map(|capture| capture.file.clone()));
-            self.list = PacketList::new(first);
+            // Another VM: show its running capture, else its newest one once
+            // the worker has listed them.
+            self.captures.clear();
+            self.scan(ui.ctx(), cx.recordings, cx.recording_roots);
+            self.open_newest_when_listed = active.is_none();
+            self.list = PacketList::new(active.as_ref().map(|(_, file)| file.clone()));
             self.release_capture();
             self.reset_display_capture();
             self.seen_active = active.clone();
         } else if self.seen_active != active {
             // A capture started or stopped: list it, and show a new one live.
-            self.scan(cx.recordings, cx.recording_roots);
+            self.scan(ui.ctx(), cx.recordings, cx.recording_roots);
             if let Some((_, file)) = &active {
                 self.open(Some(file.clone()));
             }
             self.seen_active = active.clone();
         }
-        if let Some((id, frame)) = self.note_target.take() {
-            self.open_note_target(&id, frame, &cx);
+        // A note's chip waits for the list: it looks the capture up there.
+        if self.listing.is_none() {
+            if let Some((id, frame)) = self.note_target.take() {
+                self.open_note_target(&id, frame, &cx);
+            }
         }
         let is_live =
             active.is_some() && self.list.path.as_ref() == active.as_ref().map(|(_, file)| file);

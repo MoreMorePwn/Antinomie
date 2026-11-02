@@ -19,7 +19,10 @@ impl NetworkView {
                     .on_hover_text("Refresh the list")
                     .clicked()
                 {
-                    self.scan(cx.recordings, cx.recording_roots);
+                    self.scan(ui.ctx(), cx.recordings, cx.recording_roots);
+                }
+                if self.listing.is_some() {
+                    ui.spinner();
                 }
             });
         });
@@ -131,7 +134,12 @@ impl NetworkView {
                         open = Some(capture.file.clone());
                     }
                 }
-                if cx.active.is_none() && earlier.is_empty() {
+                if cx.active.is_none() && earlier.is_empty() && self.listing.is_some() {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.colored_label(theme::muted(), "Loading captures…");
+                    });
+                } else if cx.active.is_none() && earlier.is_empty() {
                     ui.colored_label(theme::muted(), "No network captures for this VM");
                 }
             });

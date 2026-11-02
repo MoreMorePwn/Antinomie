@@ -398,9 +398,34 @@ impl NetworkView {
         }
     }
 
-    pub(super) fn scan(&mut self, recordings: Option<&Path>, recording_roots: &[PathBuf]) {
-        self.captures = capture_history(recordings, recording_roots);
-        self.captures_for = Some((recordings.map(Path::to_path_buf), recording_roots.to_vec()));
+    /// List the folders on a worker; a listing still running is replaced.
+    pub(super) fn scan(
+        &mut self,
+        ctx: &egui::Context,
+        recordings: Option<&Path>,
+        recording_roots: &[PathBuf],
+    ) {
+        let (current, retained) = (recordings.map(Path::to_path_buf), recording_roots.to_vec());
+        self.captures_for = Some((current.clone(), retained.clone()));
+        self.listing = Some(crate::background::Task::spawn(ctx, move || {
+            capture_history(current.as_deref(), &retained)
+        }));
+    }
+
+    /// Take a finished listing; for a newly selected VM, open its newest
+    /// capture if nothing was opened meanwhile.
+    pub(super) fn collect_listing(&mut self) {
+        let Some(captures) = self.listing.as_ref().and_then(|task| task.done()) else {
+            return;
+        };
+        self.listing = None;
+        self.captures = captures;
+        if std::mem::take(&mut self.open_newest_when_listed) && self.list.path.is_none() {
+            let first = self.captures.first().map(|capture| capture.file.clone());
+            self.list = PacketList::new(first);
+            self.release_capture();
+            self.reset_display_capture();
+        }
     }
 }
 
