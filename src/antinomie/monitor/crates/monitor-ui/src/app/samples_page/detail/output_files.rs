@@ -555,7 +555,7 @@ pub(in crate::app::samples_page) fn section(
                                     ui.close_menu();
                                 }
                                 ui.separator();
-                                let is_file = here && output.path.is_file();
+                                let is_file = here && crate::stat_cache::is_file(&output.path);
                                 if ui
                                     .add_enabled(is_file, egui::Button::new("Copy SHA-256"))
                                     .on_disabled_hover_text(if here {

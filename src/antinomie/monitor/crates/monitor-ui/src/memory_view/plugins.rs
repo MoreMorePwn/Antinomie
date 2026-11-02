@@ -95,7 +95,7 @@ impl MemoryView {
             return;
         }
         let path = dump.path();
-        let size = std::fs::metadata(&path).map(|meta| meta.len());
+        let size = crate::stat_cache::len(&path);
         let key = format!("{}:{}", dump.id, size.as_ref().copied().unwrap_or(0));
         if self
             .content_source
@@ -429,12 +429,7 @@ impl MemoryView {
                 }
                 if ui.button("Open community plugins folder").clicked() {
                     let dir = memory::plugins_dir(data_dir);
-                    let opened = std::fs::create_dir_all(&dir)
-                        .map_err(|error| format!("{}: {error}", dir.display()))
-                        .and_then(|()| open_directory(&dir));
-                    if let Err(error) = opened {
-                        self.status = Some((error, true));
-                    }
+                    crate::folders::show_created_detached(dir);
                     ui.close_menu();
                 }
                 if ui

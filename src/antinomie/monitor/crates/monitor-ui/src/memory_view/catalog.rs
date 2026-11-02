@@ -22,7 +22,7 @@ impl MemoryView {
         let with_symbols: Vec<&BaseSummary> = cx
             .bases
             .iter()
-            .filter(|base| base.directory.join(memory_symbols_file()).is_file())
+            .filter(|base| crate::stat_cache::is_file(&base.directory.join(memory_symbols_file())))
             .collect();
         crate::widgets::window("Import memory dump")
             .id(egui::Id::new("memory_import"))
