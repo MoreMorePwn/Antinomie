@@ -8,7 +8,9 @@ recording. The report is of the whole run, not of what the tables show: the
 export reads the recording again with every filter, sort and page cleared. The
 one default it keeps is Triage's: Hide stdio and Hide library are on, and
 failed attempts are not listed as changes. Each Triage table keeps at most
-2 000 rows per tab; the report says how many more matched (`omitted`).
+2 000 rows per tab (**Settings > Advanced > Triage: rows per table**, 100 to
+100 000); the report says how many more matched (`omitted`) and reads "First
+2,000 of 10,897 rows".
 
 Nothing in a report is a verdict. The Summary states what Triage observed (for
 example "1 indicator matched a stored dataset", "the worst rule fired at HIGH
@@ -34,6 +36,20 @@ counter is added to the name), are owner-only (0600) and are named
 - **HTML** is one self-contained file: inline CSS (light and dark by
   `prefers-color-scheme`, print styles), no script, no link and no reference to
   another file or address. It is also well-formed XML.
+- Column titles in the HTML and PDF tables never break inside a word: a title wraps
+  only at spaces, a table whose longest words side by side are wider than a page
+  takes a smaller font a step at a time and, as a last resort, is split into column
+  groups with its first column repeated. The ATT&CK section has a **Tactic** column
+  (named in text, with the colour as a chip in HTML and a bar in PDF).
+- A run that used nine tenths of its recording quota says "Recording quota
+  reached at <time>; from then on only suspicious-activity calls were kept, N calls
+  dropped" as information, and the report no longer says the recording "was still
+  being written" after the run ended; it names what is missing. A note lists each
+  kind of call the guest recorded without decoding an argument ("ioctl request
+  0x5421 (arg2.ioctl) x200"), and when every process ended within 10 s the summary
+  says "The sample's process tree ended after N ms (P processes). Last failing step:
+  ..." with the last refused create, write, delete, rename, link, permission change
+  or exec.
 - **PDF** is the same layout on A4 landscape pages: the same sections in the
   same order, tables with repeated header rows, bookmarks per section, page
   numbers and the document title. It is written by Antinomie itself with the
