@@ -8,6 +8,16 @@ conflicts with an older one, the newer section supersedes it; older sections are
 kept for the releases they describe. User-facing documentation lives in
 [`README.md`](../README.md) and [`docs/usage.md`](usage.md).
 
+How paths are written. A path such as `scripts/check-kernel-btf.py`,
+`tests/monitor/route-probe.c` or `docs/usage.md` is relative to the repository
+root. A Rust path such as `debug/rsp_client.rs` or `triage/files.rs` is relative to
+`src/antinomie/monitor/crates/monitor-core/src/` or `.../monitor-ui/src/`, whichever
+holds it. A path under `kernel/antinomie/`, `arch/`, `fs/` or `include/`, and the
+kernel's own `scripts/` files (`scripts/antinomie_btf.py`, `scripts/link-vmlinux.sh`,
+`scripts/Makefile.modfinal`), belong to the patched Linux 6.12 tree that the
+series in `src/antinomie/core/6.12/` builds, not to a folder of this repository;
+the patch that adds or changes a file is named where it matters ("Patch 0019").
+
 ## Current licensing boundary (0.7.0)
 
 Original host application, host transport, scripts, tests and product
@@ -1866,7 +1876,7 @@ cannot carry and a route that is not set up or does not answer: nothing is liste
 them. The Run form says so first: the capture box is off on a VM without a network
 card with a **VM settings…** button, and a route whose settings are missing has an
 **Open Network routes settings** button. `examples/route-check.rs` (full tier `route`) runs
-`tests/monitor/route-probe` on every route of a Routed VM with a cloud profile, on a
+`tests/monitor/route-probe.c` on every route of a Routed VM with a cloud profile, on a
 NAT VM and on a VM without a card; Tor, VPN (a stand-in wireproxy) and SOCKS5 go to
 local fake proxies that answer the probe's one HTTP request themselves and record the
 name they were asked to connect to; the Internet route sends one plain `GET /` to
@@ -3159,7 +3169,7 @@ structures and the fields it adds to stock structures.
 | Mechanism | What it covers |
 | --- | --- |
 | `kernel/antinomie/Makefile`: `ccflags-remove-y += $(DEBUG_CFLAGS)` | The recorder's own objects have no DWARF, so pahole describes none of their functions (static helpers with stock-looking names too), variables or local types. The recorder is absent from the Volatility symbol table too (the host's memory tools use stock types only); developers lose its source-level debug information in vmlinux. |
-| `scripts/antinomie_btf.py` after pahole (`scripts/link-vmlinux.sh`) | What its headers bring into stock objects: every type, member, enumerator, function, variable or parameter whose name starts with `ant_`/`antc_` after any underscores, in any case, or contains `antinomie` (stock Debian vmlinux BTF has no such name; this kernel's built-in drivers neither), then what refers to a removed type (a structure loses only that member, a data section only that variable), then anonymous types whose every referrer went. The string table keeps pahole's order and the strings pahole left unused (Debian's BTF has them too), without those of what was removed. A structure keeps its size and its other members' offsets: the removed member becomes a hole (none is left since 0.8.0's patch 0020: no stock structure carries a recorder field). |
+| `scripts/antinomie_btf.py` after pahole (`scripts/link-vmlinux.sh`; both are files of the patched kernel tree, patch 0019 adds the first and changes the second, not of this repository's `scripts/`) | What its headers bring into stock objects: every type, member, enumerator, function, variable or parameter whose name starts with `ant_`/`antc_` after any underscores, in any case, or contains `antinomie` (stock Debian vmlinux BTF has no such name; this kernel's built-in drivers neither), then what refers to a removed type (a structure loses only that member, a data section only that variable), then anonymous types whose every referrer went. The string table keeps pahole's order and the strings pahole left unused (Debian's BTF has them too), without those of what was removed. A structure keeps its size and its other members' offsets: the removed member becomes a hole (none is left since 0.8.0's patch 0020: no stock structure carries a recorder field). |
 | `scripts/Makefile.modfinal` | Each module is encoded against pahole's unfiltered vmlinux BTF (`.btf.vmlinux.full`), so it shares the types the filter changed rather than carrying its own copies of `task_struct` and all that reaches it, then filtered onto the filtered vmlinux BTF with the renumbering the vmlinux pass recorded (`.btf.vmlinux.map`). In modules only the names the vmlinux pass removed count, plus `antinomie`: stock wireless drivers have `ant_*` fields of their own (Debian's ath9k, b43, iwlwifi, ...). A module build without those files (an external module) is encoded as before. |
 | `scripts/check-kernel-btf.py`, after every build of either profile | An independent reader fails the build when a vmlinux BTF string is a recorder name, a module's has one of the names pahole's unfiltered vmlinux BTF had (or `antinomie`), or a vmlinux BTF function is one of the recorder's own (System.map `ant_text_begin`..`ant_text_end`) with no stock namesake. On the stock 6.12.94-1 kernel and its 4,225 modules it finds nothing. `tests/monitor/test-kernel-btf.py` tests it, the filter (taken from the series patch) on vmlinux and module BTF, and the wiring. |
 | `tests/monitor/stealth-probe.c` | In the guest, `kernel.btf` fails when `/sys/kernel/btf/vmlinux` is missing or names the recorder, `kernel.btf.modules` reads every module's file. |
@@ -3970,7 +3980,7 @@ Suricata is an optional system
 package, listed in App dependencies. pySigma 2.x with its SQLite backend is
 the Sigma analysis tool: Tools > Analysis tools creates
 `<data-dir>/tools/sigma/venv` with the system Python and installs a
-hash-locked set of wheels (`assets/sigma-requirements.txt`, written by
+hash-locked set of wheels (`src/antinomie/monitor/crates/monitor-core/assets/sigma-requirements.txt`, written by
 `scripts/rules/lock-sigma.py`); scans use it unless a Sigma Python is set.
 A downloaded pack does not install its engine. All execution stays in the
 existing mandatory offline sandbox. Results retain sources, versions, the
