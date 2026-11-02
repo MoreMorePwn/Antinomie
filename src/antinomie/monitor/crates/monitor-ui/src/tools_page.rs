@@ -191,7 +191,9 @@ pub(crate) fn tool_row(
     // Where Antinomie's own copy is saved, on a line of its own: the path is
     // long and the row's buttons stay at its right.
     if let (None, Some(_), Some(path)) = (&tool.system, &tool.installed, &tool.installed_path) {
-        ui.add(egui::Label::new(RichText::new(path).monospace().color(theme::muted())).wrap())
+        // Relative to the data directory; the full path is on hover.
+        let shown = tool.installed_shown.as_deref().unwrap_or(path);
+        ui.add(egui::Label::new(RichText::new(shown).monospace().color(theme::muted())).wrap())
             .on_hover_text(path);
     }
     if let Some(install) = install.filter(|install| install.id == tool.id) {

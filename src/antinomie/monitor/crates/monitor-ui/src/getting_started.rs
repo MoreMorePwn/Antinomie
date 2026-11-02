@@ -185,6 +185,8 @@ pub(crate) struct GettingStarted {
     pub catalog_requested: bool,
     /// The first VM's settings, apart from the New VM dialog's.
     pub draft: Option<VmConfig>,
+    /// The Device profile window is open for that draft (Details…).
+    pub profile_open: bool,
     /// A VM is being created: when, and how many VMs there were.
     pub vm_pending: Option<(Instant, usize)>,
     pub vm_error: Option<String>,

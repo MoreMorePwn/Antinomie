@@ -261,3 +261,12 @@ fn a_cancelled_download_says_what_was_kept_and_that_the_next_one_resumes() {
     let nothing = super::bases::cancelled_text(&antinomie_monitor_core::DownloadStatus::default());
     assert!(nothing.contains("nothing was kept"), "{nothing}");
 }
+
+#[test]
+fn a_label_that_already_ends_in_the_version_shows_it_once() {
+    let mut base = base_summary_for_revision(Some(APP_REVISION));
+    base.label = "BusyBox \u{2014} Antinomie 0.8.0".into();
+    let shown = base_choice_label(&base);
+    assert!(shown.starts_with("BusyBox \u{b7} Antinomie "), "{shown}");
+    assert_eq!(shown.matches("Antinomie").count(), 1, "{shown}");
+}

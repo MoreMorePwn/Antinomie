@@ -80,6 +80,28 @@ fn default_folder(data_dir: &std::path::Path) -> PathBuf {
     data_dir.join("sample-reports")
 }
 
+/// A folder as the dialog shows it: relative to the data directory when it is
+/// inside it (a folder outside stays as it is).
+fn shown_folder(data_dir: &std::path::Path, folder: &std::path::Path) -> String {
+    folder
+        .strip_prefix(data_dir)
+        .unwrap_or(folder)
+        .display()
+        .to_string()
+}
+
+/// The folder the files go to for what is typed in the field: empty is the
+/// default, a relative path is inside the data directory, an absolute one is
+/// used as given.
+fn chosen_folder(data_dir: &std::path::Path, typed: &str) -> PathBuf {
+    let typed = typed.trim();
+    if typed.is_empty() {
+        default_folder(data_dir)
+    } else {
+        data_dir.join(typed)
+    }
+}
+
 /// The report of the sample `data` describes. `similar` is the library
 /// comparison's answer.
 pub(super) fn build_report(
@@ -244,11 +266,7 @@ impl ReportDialog {
     }
 
     fn start(&mut self, ctx: &egui::Context, options: &BackendOptions, vms: &[(String, String)]) {
-        let folder = if self.choices.folder.trim().is_empty() {
-            default_folder(&options.data_dir)
-        } else {
-            PathBuf::from(self.choices.folder.trim())
-        };
+        let folder = chosen_folder(&options.data_dir, &self.choices.folder);
         let job = Job {
             options: options.clone(),
             vms: vms.to_vec(),
@@ -306,7 +324,8 @@ impl ReportDialog {
         let mut open = true;
         let mut start = false;
         let mut close = false;
-        let hint = default_folder(&options.data_dir).display().to_string();
+        let default = default_folder(&options.data_dir);
+        let hint = shown_folder(&options.data_dir, &default);
         widgets::window(format!("Export report: {}", self.name))
             .id(egui::Id::new("samples_export_report"))
             .open(&mut open)
@@ -347,7 +366,11 @@ impl ReportDialog {
                         egui::TextEdit::singleline(&mut self.choices.folder)
                             .hint_text(theme::hint_text(hint))
                             .desired_width(f32::INFINITY),
-                    );
+                    )
+                    .on_hover_text(format!(
+                        "Empty: {}. A path that is not absolute is inside the data folder.",
+                        default.display()
+                    ));
                 });
                 ui.add_space(4.0);
                 ui.label(
@@ -505,5 +528,31 @@ impl super::SamplesPage {
             Ok(Vec::new()),
             1_792_000_000_000,
         ))
+    }
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn the_folder_is_shown_inside_the_data_directory_and_whole_outside_it() {
+        let data = Path::new("/home/analyst/.local/share/antinomie");
+        assert_eq!(shown_folder(data, &default_folder(data)), "sample-reports");
+        assert_eq!(shown_folder(data, &data.join("exports/a")), "exports/a");
+        assert_eq!(
+            shown_folder(data, Path::new("/mnt/usb/reports")),
+            "/mnt/usb/reports"
+        );
+        assert!(!shown_folder(data, &default_folder(data)).contains("analyst"));
+    }
+
+    #[test]
+    fn a_typed_folder_is_empty_for_the_default_relative_to_the_data_directory_or_absolute() {
+        let data = Path::new("/d");
+        assert_eq!(chosen_folder(data, "  "), Path::new("/d/sample-reports"));
+        assert_eq!(chosen_folder(data, "exports"), Path::new("/d/exports"));
+        assert_eq!(chosen_folder(data, " /mnt/x "), Path::new("/mnt/x"));
     }
 }

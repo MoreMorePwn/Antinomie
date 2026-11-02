@@ -463,9 +463,10 @@ pub(super) fn open_directory(path: &Path) -> Result<(), String> {
 
 /// A base in the symbol table list: its name and the version it is for.
 pub(super) fn base_choice(base: &BaseSummary) -> String {
+    let label = antinomie_monitor_core::base_label_plain(&base.label);
     match &base.min_app_version {
-        Some(version) => format!("{} · Antinomie {version}", base.label),
-        None => base.label.clone(),
+        Some(version) => format!("{label} · Antinomie {version}"),
+        None => label.to_owned(),
     }
 }
 

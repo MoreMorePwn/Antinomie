@@ -375,6 +375,51 @@ fn the_vm_step_creates_a_vm_with_the_new_vm_defaults() {
 }
 
 #[test]
+fn the_vm_step_offers_the_device_profile_dropdown_with_every_preset() {
+    use antinomie_monitor_core::stealth::StealthPreset;
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let (mut app, root) = fresh_app("profile-list");
+    app.snapshot.bases.push(test_base("base", true));
+    app.getting_started.open = true;
+    app.getting_started.step = Step::Vm;
+    let text = shown(&mut app, &ctx);
+    // The default is what the old checkbox selected: a realistic desktop.
+    assert!(text.iter().any(|t| t == "Realistic desktop"), "{text:?}");
+    assert!(text.iter().any(|t| t == "Details\u{2026}"), "{text:?}");
+    assert!(!text
+        .iter()
+        .any(|t| t.contains("Look like a real desktop PC")));
+    assert_eq!(
+        app.getting_started.draft.as_ref().unwrap().stealth.preset,
+        StealthPreset::RealisticDesktop
+    );
+    // Opening the list shows every preset.
+    click_label(&mut app, &ctx, SIZE, "Realistic desktop");
+    let text = shown(&mut app, &ctx);
+    for preset in StealthPreset::ALL {
+        assert!(
+            text.iter().any(|t| t == preset.label()),
+            "{}: {text:?}",
+            preset.label()
+        );
+    }
+    // The pick reaches the VM that is created.
+    click_label(&mut app, &ctx, SIZE, "Realistic server");
+    click_label(&mut app, &ctx, SIZE, "Create VM");
+    let vm = app
+        .submitted
+        .iter()
+        .find_map(|command| match command {
+            Command::Create(vm) => Some(vm.clone()),
+            _ => None,
+        })
+        .expect("a Create command was sent");
+    assert_eq!(vm.stealth.preset, StealthPreset::RealisticServer);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn install_all_missing_queues_only_missing_tools_and_one_runs_at_a_time() {
     let ctx = egui::Context::default();
     theme::install(&ctx);
@@ -388,6 +433,7 @@ fn install_all_missing_queues_only_missing_tools_and_one_runs_at_a_time() {
         system: None,
         installed: installed.then(|| "1".into()),
         installed_path: None,
+        installed_shown: None,
     };
     // The first-launch rule has been applied; it would recheck the host.
     app.getting_started.decided = true;

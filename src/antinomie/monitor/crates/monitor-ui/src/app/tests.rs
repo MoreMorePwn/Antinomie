@@ -39,6 +39,7 @@ mod samples_report;
 mod samples_shots;
 mod scanned_inputs;
 mod settings_window;
+mod start_error;
 mod startup;
 mod stealth;
 mod stealth_shots;
@@ -69,6 +70,8 @@ pub(crate) fn app() -> MonitorApp {
         performance: Default::default(),
         last_frame_start: None,
         backend: None,
+        start_error: None,
+        catalog_feedback: Default::default(),
         snapshot: Snapshot::default(),
         selected: None,
         selected_base: None,

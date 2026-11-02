@@ -65,12 +65,13 @@ impl MonitorApp {
                 self.getting_started.catalog_requested = false;
                 self.getting_started.base_error = None;
             }
-            if self.snapshot.remote_refreshing {
+            if self.catalog_feedback.busy(self.snapshot.remote_refreshing) {
                 theme::loading(ui, "Fetching catalog…");
-                if ui.button("Cancel").clicked() {
-                    cancel_refresh = true;
-                }
             }
+            if self.snapshot.remote_refreshing && ui.button("Cancel").clicked() {
+                cancel_refresh = true;
+            }
+            self.catalog_feedback.show_updated(ui);
         });
         if let Some(error) = &self.getting_started.base_error {
             crate::activity::error_toast(ui, error);
@@ -187,6 +188,7 @@ impl MonitorApp {
             .clamp(min_ram, antinomie_monitor_core::storage::MAX_RAM_MIB);
         draft.disk_gib = draft.disk_gib.max(min_disk);
         let old_base = draft.base_identity.clone();
+        let fallbacks = self.stealth_fallbacks_of(&draft);
         form_grid("getting_started_vm", ui).show(ui, |ui| {
             ui.label("Installed base");
             base_selector(
@@ -218,20 +220,13 @@ impl MonitorApp {
             )
             .on_hover_text(format!("At least {min_disk} GiB for this base"));
             ui.end_row();
-            ui.label("Device profile");
-            let mut stealth =
-                draft.stealth.preset != antinomie_monitor_core::stealth::StealthPreset::Transparent;
-            if ui
-                .checkbox(&mut stealth, "Look like a real desktop PC")
-                .changed()
-            {
-                draft.stealth = if stealth {
-                    self.fresh_draft().stealth
-                } else {
-                    Default::default()
-                };
-            }
-            ui.end_row();
+            super::super::stealth::preset_row(
+                ui,
+                &mut draft.stealth,
+                &mut self.getting_started.profile_open,
+                &fallbacks,
+                "Details…",
+            );
             if credentials_required {
                 ui.label("Guest username");
                 ui.add(
@@ -258,6 +253,9 @@ impl MonitorApp {
         });
         if old_base != draft.base_identity {
             self.credentials.reset();
+        }
+        if self.getting_started.profile_open && !self.stealth_open {
+            self.profile_details_window(ui.ctx(), &mut draft);
         }
         if let Some(error) = &self.getting_started.vm_error {
             crate::activity::error_toast(ui, error);

@@ -629,7 +629,7 @@ impl MonitorApp {
                             form_grid("vm_display", ui).show(ui, |ui| {
                                 launch_options(ui, &mut app.draft.launch);
                                 let fallbacks = app.draft_stealth_fallbacks();
-                                super::stealth::preset_row(ui, &mut app.draft.stealth, &mut app.stealth_open, &fallbacks);
+                                super::stealth::preset_row(ui, &mut app.draft.stealth, &mut app.stealth_open, &fallbacks, "Edit…");
                             });
                             super::stealth::launch_advice(ui, &mut app.draft);
                         };

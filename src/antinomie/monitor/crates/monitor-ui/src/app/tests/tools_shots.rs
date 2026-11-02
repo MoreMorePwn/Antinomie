@@ -24,6 +24,7 @@ fn tool(id: &str, name: &str, version: &str, size: u64, installed: Option<&str>)
         installed: installed.map(str::to_owned),
         installed_path: installed
             .map(|_| format!("/home/analyst/.local/share/antinomie/tools/{id}/{id}")),
+        installed_shown: installed.map(|_| format!("tools/{id}/{id}")),
     }
 }
 

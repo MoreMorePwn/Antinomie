@@ -51,6 +51,38 @@ impl MonitorApp {
         antinomie_monitor_core::stealth::vm_fallbacks(vm, &self.snapshot.bases, host_support())
     }
 
+    /// The Device profile window for Getting started's first VM draft.
+    pub(super) fn profile_details_window(&mut self, ctx: &egui::Context, draft: &mut VmConfig) {
+        let base = selected_base(&self.snapshot, draft.base_identity.as_deref()).map_or(
+            antinomie_monitor_core::stealth::BaseSupport::all(),
+            |base| antinomie_monitor_core::stealth::BaseSupport::from_list(&base.stealth_support),
+        );
+        let current = selected_base(&self.snapshot, draft.base_identity.as_deref())
+            .map(|base| base.id.clone());
+        let mut fit = Fit::new(
+            &draft.stealth,
+            base,
+            &self.snapshot.bases,
+            current.as_deref(),
+        );
+        window(
+            ctx,
+            &mut self.getting_started.profile_open,
+            &mut draft.stealth,
+            &mut fit,
+            &antinomie_monitor_core::stealth::resource_hints(
+                draft.cpus,
+                draft.ram_mib,
+                draft.disk_gib,
+            ),
+            true,
+            true,
+        );
+        if let Some(base) = fit.switch.take() {
+            draft.base_identity = Some(base);
+        }
+    }
+
     pub(super) fn draft_stealth_fallbacks(&self) -> Vec<Fallback> {
         self.stealth_fallbacks_of(&self.draft)
     }
@@ -179,9 +211,12 @@ fn preset_list(ui: &mut egui::Ui, profile: &mut StealthProfile, id: &str) {
     egui::ComboBox::from_id_salt(id)
         .selected_text(preset.label())
         .width(260.0)
+        // Every preset without scrolling.
+        .height(400.0)
         .show_ui(ui, |ui| {
             for &option in StealthPreset::ALL {
-                ui.selectable_value(&mut preset, option, option.label());
+                ui.selectable_value(&mut preset, option, option.label())
+                    .on_hover_text(option.description());
             }
         });
     if preset != profile.preset {
@@ -215,6 +250,7 @@ pub(super) fn preset_row(
     profile: &mut StealthProfile,
     open: &mut bool,
     fallbacks: &[Fallback],
+    details_label: &str,
 ) {
     // The provider's list has a row of its own, so the form keeps the width
     // of one list whichever profile is chosen.
@@ -232,8 +268,9 @@ pub(super) fn preset_row(
     }
     ui.label("");
     ui.horizontal_wrapped(|ui| {
+        ui.weak(profile.preset.description());
         if ui
-            .button("Edit…")
+            .button(details_label)
             .on_hover_text("Machine identity, CPU, network card and devices")
             .clicked()
         {

@@ -34,6 +34,7 @@ mod samples_page;
 mod session;
 mod settings_window;
 mod sidebar;
+mod start_error;
 mod stealth;
 mod trace_paging;
 mod trace_view;
@@ -392,6 +393,10 @@ pub struct MonitorApp {
     performance: crate::ui_performance::Performance,
     last_frame_start: Option<Instant>,
     backend: Option<Backend>,
+    /// Why the backend did not start; the window shows only that, with Retry.
+    start_error: Option<String>,
+    /// What the last base catalog refresh left for the buttons that start one.
+    catalog_feedback: bases::CatalogFeedback,
     snapshot: Snapshot,
     selected: Option<String>,
     /// Base image highlighted on the Base images page.
@@ -606,13 +611,11 @@ impl MonitorApp {
         options.shutdown_timeout = Duration::from_secs(settings.timeout);
         // Before the backend starts: it finishes layers an earlier process left.
         antinomie_monitor_core::file_before_store::set_limits(settings.before_limits());
-        let (backend, status) = match Backend::new_with_wake(options.clone(), {
-            let ctx = cc.egui_ctx.clone();
-            std::sync::Arc::new(move || ctx.request_repaint_of(egui::ViewportId::ROOT))
-        }) {
-            Ok(backend) => (Some(backend), String::new()),
-            Err(error) => (None, error),
+        let (backend, start_error) = match start_error::start_backend(&options, &cc.egui_ctx) {
+            Ok(backend) => (Some(backend), None),
+            Err(error) => (None, Some(error)),
         };
+        let status = String::new();
         let exec = ExecRequest::default();
         let env = exec.env.join("\n");
         let dependencies =
@@ -628,6 +631,8 @@ impl MonitorApp {
             performance: crate::ui_performance::Performance::new(cc.gl.as_deref()),
             last_frame_start: None,
             backend,
+            start_error,
+            catalog_feedback: Default::default(),
             snapshot: Snapshot::default(),
             selected: None,
             selected_base: None,
@@ -804,9 +809,16 @@ impl eframe::App for MonitorApp {
             frame_started = Instant::now();
         }
         self.last_frame_start = Some(frame_started);
+        if self.start_error_screen(ctx) {
+            return;
+        }
         crate::regex_matches::remember_data_dir(&self.options.data_dir);
         self.dependencies.poll();
+        if let Some(notice) = self.dependencies.take_notice() {
+            self.status = notice;
+        }
         self.drain();
+        self.track_catalog_refresh();
         self.getting_started_tick();
         self.poll_rules(ctx);
         self.receive_clipboard(ctx);

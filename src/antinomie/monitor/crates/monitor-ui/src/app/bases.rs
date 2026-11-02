@@ -53,12 +53,13 @@ impl MonitorApp {
                     {
                         command = Some(Command::RefreshRemoteBases);
                     }
-                    if self.snapshot.remote_refreshing {
+                    if self.catalog_feedback.busy(self.snapshot.remote_refreshing) {
                         crate::theme::loading(ui, "Fetching catalog…");
-                        if ui.button("Cancel").clicked() {
-                            command = Some(Command::CancelRefresh);
-                        }
                     }
+                    if self.snapshot.remote_refreshing && ui.button("Cancel").clicked() {
+                        command = Some(Command::CancelRefresh);
+                    }
+                    self.catalog_feedback.show_updated(ui);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_enabled(
                             !older.is_empty(),
@@ -324,6 +325,7 @@ pub(super) fn versioned_label(
     revision: Option<u32>,
     min_app_version: Option<&str>,
 ) -> String {
+    let label = antinomie_monitor_core::base_label_plain(label);
     match antinomie_monitor_core::base_app_version(revision, min_app_version) {
         Some(version) => format!("{label} · Antinomie {version}"),
         None => label.to_string(),
@@ -415,4 +417,57 @@ pub(super) fn preferred_new_base<'a>(
         .iter()
         .find(|base| base.fixed_display)
         .or_else(|| snapshot.bases.first())
+}
+
+/// What a base catalog refresh left behind, so its button does not look dead
+/// when the fetch takes a second: the spinner stays a moment, the time of the
+/// last success is shown, and the status line says how it ended.
+#[derive(Default)]
+pub(super) struct CatalogFeedback {
+    was_refreshing: bool,
+    /// Local "hh:mm" of the last refresh that succeeded.
+    pub(super) updated: Option<String>,
+    shown_until: Option<Instant>,
+}
+
+/// The shortest time the "Fetching catalog" spinner stays after a refresh began.
+const SPINNER_MINIMUM: Duration = Duration::from_millis(700);
+
+impl CatalogFeedback {
+    /// "Updated hh:mm" next to a Refresh catalog button, once one succeeded.
+    pub(super) fn show_updated(&self, ui: &mut egui::Ui) {
+        if let Some(time) = &self.updated {
+            ui.label(theme::hint_text(format!("Updated {time}")));
+        }
+    }
+
+    /// The spinner is shown while a refresh runs and for a moment after.
+    pub(super) fn busy(&self, refreshing: bool) -> bool {
+        refreshing || self.shown_until.is_some_and(|until| Instant::now() < until)
+    }
+}
+
+impl MonitorApp {
+    /// Replace the "refreshing base catalog" status once the refresh ends.
+    pub(super) fn track_catalog_refresh(&mut self) {
+        let refreshing = self.snapshot.remote_refreshing;
+        let feedback = &mut self.catalog_feedback;
+        if refreshing && !feedback.was_refreshing {
+            feedback.shown_until = Some(Instant::now() + SPINNER_MINIMUM);
+        }
+        if feedback.was_refreshing && !refreshing {
+            match &self.snapshot.remote_error {
+                Some(error) => self.status = format!("catalog refresh failed: {error}"),
+                None => {
+                    let count = self.snapshot.remote_bases.len();
+                    self.status = format!(
+                        "base catalog updated: {count} base{}",
+                        if count == 1 { "" } else { "s" }
+                    );
+                    feedback.updated = Some(chrono::Local::now().format("%H:%M").to_string());
+                }
+            }
+        }
+        feedback.was_refreshing = refreshing;
+    }
 }

@@ -28,6 +28,9 @@ pub(crate) struct DependenciesWindow {
     /// The running check was asked for by another window (Getting started):
     /// its result must not open this one.
     quiet: bool,
+    /// A line for the status bar, set when a check finished without opening
+    /// the window (a probe that only ran out of time).
+    notice: Option<String>,
 }
 
 /// The network-route programs the window lists after the system checks: their
@@ -57,6 +60,7 @@ impl DependenciesWindow {
             worker: None,
             error: None,
             quiet: false,
+            notice: None,
         };
         window.recheck(options);
         window
@@ -69,6 +73,11 @@ impl DependenciesWindow {
 
     pub(crate) fn checking(&self) -> bool {
         self.worker.is_some()
+    }
+
+    /// The status line a finished check left, once.
+    pub(crate) fn take_notice(&mut self) -> Option<String> {
+        self.notice.take()
     }
 
     /// Check again for another window; the result does not open this one.
@@ -85,6 +94,7 @@ impl DependenciesWindow {
         }
         self.report = None;
         self.error = None;
+        self.notice = None;
         self.quiet = false;
         let options = options.clone();
         let wake = self.wake.clone();
@@ -112,7 +122,14 @@ impl DependenciesWindow {
         };
         match receiver.try_recv() {
             Ok(report) => {
-                self.open |= report.has_missing() && !self.quiet;
+                self.open |= report.needs_attention() && !self.quiet;
+                let unverified = report.unverified();
+                if !unverified.is_empty() && !self.open && !self.quiet {
+                    self.notice = Some(format!(
+                        "Could not check {} in time (the system is busy); open Tools > App dependencies and Check again",
+                        unverified.join(", ")
+                    ));
+                }
                 self.report = Some(report);
             }
             Err(TryRecvError::Empty) => return,
@@ -162,67 +179,75 @@ impl DependenciesWindow {
             return outcome;
         }
         let mut recheck = false;
+        let scroll_height = scroll_height(crate::title_bar::content_rect(ctx).height());
         crate::widgets::window("App dependencies")
             .id(egui::Id::new(WINDOW_ID))
             .open(&mut self.open)
             .collapsible(false)
             .default_width(640.0)
             .show(ctx, |ui| {
-                if self.worker.is_some() {
-                    crate::theme::loading(ui, "Checking this system…");
-                }
-                if let Some(error) = &self.error {
-                    crate::activity::error_toast(ui, error);
-                }
-                if let Some(report) = &self.report {
-                    egui::ScrollArea::vertical()
-                        .max_height(420.0)
-                        .show(ui, |ui| {
-                            // Put repairs first so their commands stay visible even
-                            // on a small desktop or with enlarged application text;
-                            // optional tools follow the required ones.
-                            let rank = |check: &dependencies::Check| match (
-                                &check.problem,
-                                check.optional,
-                            ) {
-                                (Some(_), false) => 0,
-                                (Some(_), true) => 1,
-                                (None, _) => 2,
-                            };
-                            let mut ordered: Vec<_> = report.checks.iter().collect();
-                            ordered.sort_by_key(|check| rank(check));
-                            for check in ordered {
-                                ui.separator();
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.label(
-                                        egui::RichText::new(check.name)
-                                            .strong()
-                                            .color(theme::heading()),
-                                    );
-                                    let (color, state) = state_of(check);
-                                    ui.colored_label(color, state);
-                                });
-                                ui.weak(check.purpose);
-                                if let Some(problem) = &check.problem {
-                                    ui.label(problem);
+                // Everything but the Check again row scrolls inside the window,
+                // which never grows past the main window: its title bar and
+                // close button stay on screen.
+                egui::ScrollArea::vertical()
+                    .id_salt("app_dependencies_scroll")
+                    .auto_shrink([false, true])
+                    .max_height(scroll_height)
+                    .show(ui, |ui| {
+                        if self.worker.is_some() {
+                            crate::theme::loading(ui, "Checking this system…");
+                        }
+                        if let Some(error) = &self.error {
+                            crate::activity::error_toast(ui, error);
+                        }
+                        if let Some(report) = &self.report {
+                            ui.scope(|ui| {
+                                // Put repairs first so their commands stay visible even
+                                // on a small desktop or with enlarged application text;
+                                // optional tools follow the required ones.
+                                let rank = |check: &dependencies::Check| match (
+                                    &check.problem,
+                                    check.optional,
+                                ) {
+                                    (Some(_), false) => 0,
+                                    (Some(_), true) => 1,
+                                    (None, _) => 2,
+                                };
+                                let mut ordered: Vec<_> = report.checks.iter().collect();
+                                ordered.sort_by_key(|check| rank(check));
+                                for check in ordered {
+                                    ui.separator();
                                     ui.horizontal_wrapped(|ui| {
-                                        ui.label(check.hint);
-                                        if let Some(command) =
-                                            check.hint.strip_prefix("On Debian/Ubuntu: ")
-                                        {
-                                            if ui.small_button("Copy command").clicked() {
-                                                ui.ctx().copy_text(command.to_owned());
-                                            }
-                                        }
+                                        ui.label(
+                                            egui::RichText::new(check.name)
+                                                .strong()
+                                                .color(theme::heading()),
+                                        );
+                                        let (color, state) = state_of(check);
+                                        ui.colored_label(color, state);
                                     });
+                                    ui.weak(check.purpose);
+                                    if let Some(problem) = &check.problem {
+                                        ui.label(problem);
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.label(check.hint);
+                                            if let Some(command) =
+                                                check.hint.strip_prefix("On Debian/Ubuntu: ")
+                                            {
+                                                if ui.small_button("Copy command").clicked() {
+                                                    ui.ctx().copy_text(command.to_owned());
+                                                }
+                                            }
+                                        });
+                                    }
                                 }
-                            }
-                        });
-                }
-                if let Some(report) = &self.report {
-                    install_section(ui, report);
-                }
-                route_programs(ui, routes, &mut outcome);
+                            });
+                        }
+                        if let Some(report) = &self.report {
+                            install_section(ui, report);
+                        }
+                        route_programs(ui, routes, &mut outcome);
+                    });
                 ui.separator();
                 recheck = ui
                     .add_enabled(
@@ -241,6 +266,12 @@ impl DependenciesWindow {
         outcome.recheck = recheck;
         outcome
     }
+}
+
+/// Room for the scrolling part of the window in a main window `area` high:
+/// what is left after the title row, the Check again row and the margins.
+fn scroll_height(area: f32) -> f32 {
+    (area - 24.0 - 150.0).max(120.0)
 }
 
 /// Tor and wireproxy, which the network routes start: whether the system or
@@ -440,6 +471,7 @@ impl DependenciesWindow {
             error: None,
             wake: None,
             quiet: false,
+            notice: None,
         }
     }
 }
@@ -601,6 +633,7 @@ mod tests {
             report: None,
             error: None,
             quiet: false,
+            notice: None,
         };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         while window.worker.is_some() {
