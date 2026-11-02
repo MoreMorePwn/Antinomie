@@ -54,7 +54,6 @@ it runs.
   of dropped. The trace filter reads decoded records (`records contains "name"`, or a
   plain word), and a trace row's menu copies the call's decoded records as JSON. Only
   the x86-64 layouts are decoded for now.
-
 - **A full recording quota no longer ends the evidence.** When a boot has used nine
   tenths of its recording quota, the recorder keeps only the system calls the Triage
   suspicious-activity rules read (and process lifecycle), drops the rest and counts
@@ -77,7 +76,6 @@ it runs.
   stopped grey, time limit blue-grey info, crashed or killed by a signal amber,
   failed to start or interrupted red, recording incomplete amber. The words
   stay, so colour is never the only cue.
-
 - **Keyboard shortcuts: command palette, tab keys and a shortcut list.**
   Ctrl+K opens a command palette that searches every menu action, the open
   tabs, the machines, the recent runs and the library samples; Enter runs the
@@ -97,7 +95,6 @@ it runs.
   guest shell); a focused button, table or graph no longer blocks the shortcuts.
   A menu item, its shortcut and its palette entry now share one action list, so
   they cannot disagree.
-
 - **A Jobs window lists everything the app is running.** It sits beside Activity
   (View > Jobs), and a "3 jobs" chip in the status bar opens it. One row per job
   with its kind, target, start time, a ticking elapsed time, progress when
@@ -121,7 +118,6 @@ it runs.
   recorded the same launch end as one without in every test recording (a tiny
   program, a program that writes, runs and deletes a file, and the demo
   sample), so no host or guest change was needed for the end record itself.
-
 - **Export bytes (as before deletion) for a file the run deleted.** The sample
   window's Files written list and the File reconstruction window in Triage
   rebuild a deleted file from the recorded writes as of the last moment before
@@ -132,7 +128,6 @@ it runs.
   saves what is known with a `.mask` file marking the rest. The export is noted
   in the sample's custody log (an Exported entry that names the file, its size,
   its hash and the result).
-
 - **ATT&CK techniques are coloured by tactic.** Each of the 15 ATT&CK v20
   tactics (Defense Evasion is now Stealth and Defense Impairment) has its own
   colour, one palette for dark and one for light (every colour is at least 4.2:1
@@ -145,7 +140,6 @@ it runs.
   ATT&CK section. The HTML and PDF exports of runs and samples get a Tactic
   column (named in text, with the colour as a chip in HTML and a bar in PDF).
   The bundled ATT&CK table now carries each technique's tactics.
-
 - **The MITRE ATT&CK techniques of a run overview open into a list.** The
   Triage Summary shows "MITRE ATT&CK (N)" with its badge row and "Show all N"
   (it replaces "+N in the report"); open, it lists the techniques grouped by
@@ -159,7 +153,6 @@ it runs.
   links into Triage. The list is the one the exports use. Filtering Suspicious
   activity no longer shrinks the Summary's technique list or rewrites the run's
   saved digest with the filtered rows.
-
 - **Static analysis check lines put the notice to the right of the Open
   button.** In the sample window's Static analysis section each line is the
   check's name, its state chip, what it found and the Open button in fixed
@@ -168,7 +161,6 @@ it runs.
   button, wrapping under itself, in the warning colour (the error colour for a
   check that could not run). The Static analysis tab's Categories card has the
   same order: name, state, rows, the open-in-pane button, then the notice.
-
 - **A toast when a run finishes.** When a run's program tree really ends, one
   toast says "Run 3 finished" with the program, how long it ran and how it
   ended, with Open Triage (and Open sample for a library sample): green for
@@ -177,7 +169,6 @@ it runs.
   like) or a kill by a signal. A root that exits while children live on does
   not toast until the run ends. Each toast is also an Activity row. Settings >
   Notifications > "Toast when a run finishes" turns it off (on by default).
-
 - **Summary and finding fixes from the third evaluation run.** The key
   behaviours of a report list each rule once (counts added, highest tier kept)
   instead of once per object ("binary_replace" 44, 2 and 1). A Sigma rule of
@@ -188,7 +179,6 @@ it runs.
   upstream T1584 and T1587) is dropped; the rule stays in Detection. A failed
   call reads "failed (EACCES)" instead of "failed (-13)", with the number and
   its meaning on hover.
-
 - **Core dump on exit works together with Debug on start.** The host read the
   debugger's 16-byte start record as part of the core's arm reply and failed the
   capture with "invalid acquisition reply length or padding". The core's reply is
@@ -288,14 +278,12 @@ it runs.
   takes a smaller font a step at a time, and as a last resort is split into
   column groups with its first column repeated. The HTML prints on a landscape
   page.
-
 - **Getting started starts with Appearance.** The new first step has the same
   Theme, Text size and Density controls as Settings > Appearance (one shared
   piece of code, so there is a single set of settings behind both) and applies
   every change at once, so the window shows the result as you choose. Next keeps
   what you picked and marks the step Ready; Skip this step leaves the settings as
   they are. The step list, Back and the Finish summary now have seven steps.
-
 - **The VM Summary has a Snapshots box under Device profile.** It lists the VM's
   snapshots as a compact tree (name, whether it is disk only or disk + memory, when
   it was taken, its size, its notes, and a Current marker on the one the VM runs
@@ -305,11 +293,9 @@ it runs.
   and rules: what is allowed while the VM runs, a running snapshot operation and
   the compatibility of a checkpoint all come from the same data, and its list is
   refreshed when you select the VM and when it starts or stops.
-
 - **The VM Summary's label column fits its longest name.** "Acceleration" no
   longer breaks into "Acceleratio" and "n" in the Compute card; the column is as
   wide as the widest label (at most half the card).
-
 - **A restart keeps your settings.** The debugger's remembered choices were saved
   in a form the settings file could not read back, so every start fell back to the
   defaults (text size, theme, density and the rest). They are now saved as one
@@ -317,7 +303,6 @@ it runs.
   opens centred in the window instead of against the right edge, its footer note
   gives way to the buttons at large text sizes, and the malware catalog notice
   scrolls so its checkbox and buttons stay on screen.
-
 - **The sample window's Runs list says "Running" for a run whose terminal was
   closed.** A run whose terminal closed while its program (or children) kept
   recording showed "Unknown" in the exit column, unlike Run History, Jobs and the
