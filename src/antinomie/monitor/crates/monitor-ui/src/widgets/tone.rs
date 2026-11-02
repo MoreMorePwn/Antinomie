@@ -60,6 +60,12 @@ impl Tone {
     }
 }
 
+/// The text colour of `tone`; `None` is the plain muted grey of a state with
+/// nothing to say (stopped, skipped, unknown).
+pub fn fg_or_muted(tone: Option<Tone>) -> Color32 {
+    tone.map_or_else(theme::muted, Tone::fg)
+}
+
 /// The text of a neutral chip: between the muted and the body color, so a
 /// source or process tag inside a line of text still reads in every theme
 /// (the muted color alone is too faint on the chip's tint).

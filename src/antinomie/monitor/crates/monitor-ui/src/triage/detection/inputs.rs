@@ -3,6 +3,7 @@
 //! rules, so a count such as "1 object evaluated" can be checked.
 use super::*;
 use crate::triage::{OpenInput, OPEN_INPUT};
+use crate::widgets::Tone;
 use antinomie_monitor_core::analysis::detection::{InputKind, InputOutcome, ScannedInput};
 use egui_phosphor::regular as icon;
 
@@ -83,12 +84,13 @@ impl Overall {
         }
     }
 
-    pub(super) fn tone(self) -> egui::Color32 {
+    /// `None` is the muted grey of a scan that skipped everything.
+    pub(super) fn tone(self) -> Option<Tone> {
         match self {
-            Self::Complete => theme::blue(),
-            Self::Partial => theme::warn(),
-            Self::Failed => theme::error(),
-            Self::Skipped => theme::muted(),
+            Self::Complete => Some(Tone::Accent),
+            Self::Partial => Some(Tone::Warn),
+            Self::Failed => Some(Tone::Error),
+            Self::Skipped => None,
         }
     }
 }

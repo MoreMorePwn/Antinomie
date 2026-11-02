@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Native per-VM operational dashboard. Host observations never imply guest utilization.
 use crate::theme;
+use crate::widgets::Tone;
 pub(crate) mod configuration;
 pub(crate) mod health;
 use antinomie_monitor_core::{Snapshot, VmConfig, VmResources, VmState};
@@ -223,11 +224,7 @@ fn fraction(value: Option<u64>, total: Option<u64>) -> Option<f64> {
         .map(|(value, total)| value as f64 / total as f64)
 }
 fn accent(index: usize) -> Color32 {
-    match index {
-        0 => Color32::from_rgb(234, 174, 79),
-        1 => Color32::from_rgb(82, 190, 184),
-        _ => Color32::from_rgb(115, 153, 213),
-    }
+    theme::series(index)
 }
 fn cpu_load_color(percent: f64, cpus: u16) -> Color32 {
     let fraction = percent / (f64::from(cpus.max(1)) * 100.0);
@@ -281,7 +278,7 @@ pub(crate) fn show(
                 indicator(
                     ui,
                     state_label(snapshot, active),
-                    state_color(snapshot, active),
+                    crate::widgets::fg_or_muted(state_tone(snapshot, active)),
                 );
                 ui.colored_label(theme::muted(), format!("{} vCPU", vm.cpus));
                 ui.colored_label(theme::muted(), format!("Network: {}", network_label(vm)));
@@ -1101,15 +1098,16 @@ fn state_label(snapshot: &Snapshot, active: bool) -> &'static str {
         VmState::Stopped => "Stopped",
     }
 }
-fn state_color(snapshot: &Snapshot, active: bool) -> Color32 {
+/// The tone of the VM state; `None` is the muted grey of a stopped VM.
+fn state_tone(snapshot: &Snapshot, active: bool) -> Option<Tone> {
     if !active {
-        return theme::muted();
+        return None;
     }
     match snapshot.state {
-        VmState::Running => theme::good(),
-        VmState::Starting | VmState::Stopping => theme::neutral_accent(),
-        VmState::Failed => theme::error(),
-        VmState::Stopped => theme::muted(),
+        VmState::Running => Some(Tone::Good),
+        VmState::Starting | VmState::Stopping => Some(Tone::Accent),
+        VmState::Failed => Some(Tone::Error),
+        VmState::Stopped => None,
     }
 }
 fn network_label(vm: &VmConfig) -> &'static str {

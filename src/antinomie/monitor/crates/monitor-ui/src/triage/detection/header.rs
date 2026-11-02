@@ -2,6 +2,7 @@
 //! The top of the Detection panel: engine tabs, the rule-set list, the scan
 //! controls, the progress bar and the matched-rule summary.
 use super::*;
+use crate::widgets::Tone;
 use antinomie_monitor_core::ruleset::EngineSet;
 
 pub(super) fn rule_set_title(sets: &[EngineSet]) -> String {
@@ -60,7 +61,7 @@ fn matched_summary(report: &Report) -> String {
 /// state it always had, and a real Partial of the engine (a budget stop, a
 /// result that could not be saved, evidence still being captured, rules that
 /// were not run) never reads Complete because every input was read.
-fn status_badge(report: &Report) -> (&'static str, egui::Color32) {
+fn status_badge(report: &Report) -> (&'static str, Option<Tone>) {
     use super::inputs::Overall;
     let overall = match report.inputs.as_deref() {
         Some(inputs) if report.state != State::NoRules => super::inputs::overall(inputs),
@@ -75,13 +76,12 @@ fn status_badge(report: &Report) -> (&'static str, egui::Color32) {
     }
 }
 
-/// The color of an engine state badge.
-fn state_tone(state_value: &State) -> egui::Color32 {
+/// The tone of an engine state badge; `None` is the muted grey.
+fn state_tone(state_value: &State) -> Option<Tone> {
     match state_value {
-        State::Complete => theme::blue(),
-        State::Partial | State::Missing => theme::warn(),
-        State::NoRules => theme::neutral_accent(),
-        State::Unavailable | State::Skipped => theme::muted(),
+        State::Complete | State::NoRules => Some(Tone::Accent),
+        State::Partial | State::Missing => Some(Tone::Warn),
+        State::Unavailable | State::Skipped => None,
     }
 }
 
@@ -486,7 +486,7 @@ const SIDE_BY_SIDE_WIDTH: f32 = 780.0;
 enum StatusPart {
     Muted(String),
     Count(String),
-    Badge(&'static str, egui::Color32),
+    Badge(&'static str, Option<Tone>),
     /// Short text and the longer wording shown on hover.
     Evaluated(String, String),
 }
@@ -503,7 +503,7 @@ impl StatusPart {
                 ui.add(label(RichText::new(text).color(theme::text())));
             }
             Self::Badge(text, tone) => {
-                presentation::badge(ui, text, *tone);
+                presentation::badge(ui, text, crate::widgets::fg_or_muted(*tone));
             }
             Self::Evaluated(short, long) => {
                 ui.add(label(RichText::new(short).small().color(theme::muted())))
@@ -849,7 +849,7 @@ mod tests {
         }]);
         assert_eq!(limitation_line(&State::Skipped), None);
         assert_eq!(state(&State::Skipped), "Skipped");
-        assert_eq!(status_badge(&skipped), ("Skipped", theme::muted()));
+        assert_eq!(status_badge(&skipped), ("Skipped", None));
         view.results[1] = Some(Ok(skipped));
         let joined = panel_text(&mut view);
         assert!(joined.contains("Skipped"), "{joined}");

@@ -2,6 +2,7 @@
 //! The panel's top: process and thread, the stop status line, run-control
 //! buttons and the endpoint an external debugger connects to.
 use super::*;
+use crate::widgets::{fg_or_muted, Tone};
 use antinomie_monitor_core::debug::view::{Controller, Pending, RunState};
 
 /// The status line: text, its color, and whether to show a spinner.
@@ -9,12 +10,12 @@ pub(super) fn status_line(view: &DebugView) -> (String, egui::Color32, bool) {
     if view.controller == Controller::Gdb {
         return (
             "Controlled by gdb (read-only here until it disconnects)".into(),
-            theme::neutral_accent(),
+            Tone::Accent.fg(),
             false,
         );
     }
     match &view.run {
-        RunState::Unknown => ("Reading the process state…".into(), theme::muted(), true),
+        RunState::Unknown => ("Reading the process state…".into(), fg_or_muted(None), true),
         RunState::Stopped { reason, pc, .. } => (
             format!("Stopped: {reason} @ {pc:#x}"),
             theme::value(theme::ValueKind::Pointer),
@@ -22,25 +23,25 @@ pub(super) fn status_line(view: &DebugView) -> (String, egui::Color32, bool) {
         ),
         RunState::Running {
             pending: Pending::Nothing,
-        } => ("Running".into(), theme::good(), false),
+        } => ("Running".into(), Tone::Good.fg(), false),
         RunState::Running {
             pending: Pending::Stopping,
-        } => ("Stopping…".into(), theme::muted(), true),
+        } => ("Stopping…".into(), fg_or_muted(None), true),
         RunState::Running {
             pending: Pending::Stepping,
-        } => ("Stepping…".into(), theme::muted(), true),
+        } => ("Stepping…".into(), fg_or_muted(None), true),
         RunState::Exited { wait_status } => (
             if wait_status & 0x7f == 0 {
                 format!("Exited with status {}", (wait_status >> 8) & 0xff)
             } else {
                 format!("Killed by signal {}", wait_status & 0x7f)
             },
-            theme::error(),
+            Tone::Error.fg(),
             false,
         ),
         RunState::Replaced => (
             "The process ran a new program; this session is over".into(),
-            theme::error(),
+            Tone::Error.fg(),
             false,
         ),
     }
