@@ -60,6 +60,7 @@ pub(crate) fn tooltip(run: &RunSummary) -> String {
             .iter()
             .map(|note| format!("Note: {}", run_note_text(note))),
     );
+    lines.extend(reduced_lines(run).into_iter().take(1));
     lines.join("\n")
 }
 
@@ -114,6 +115,20 @@ fn show_loss(ui: &mut egui::Ui, run: &RunSummary) {
     if let Some(note) = run.telemetry_loss_note() {
         crate::activity::warning(ui, note);
     }
+    // Not a failure: the recorder kept the part that matters, and says so.
+    let lines = reduced_lines(run);
+    if !lines.is_empty() {
+        crate::activity::info(ui, lines.join(" "));
+    }
+}
+
+/// What the run's recording says about the reduced mode (a full quota with
+/// only suspicious-activity calls kept); empty for a run it did not touch.
+pub(crate) fn reduced_lines(run: &RunSummary) -> Vec<String> {
+    run.reduced
+        .as_ref()
+        .map(|reduced| crate::reduced_text::lines(reduced, run.started_ms))
+        .unwrap_or_default()
 }
 
 /// The notes shown as muted lines: all but the telemetry loss.

@@ -49,6 +49,15 @@ it runs.
   plain word), and a trace row's menu copies the call's decoded records as JSON. Only
   the x86-64 layouts are decoded for now.
 
+- **A full recording quota no longer ends the evidence.** When a boot has used nine
+  tenths of its recording quota, the recorder keeps only the system calls the Triage
+  suspicious-activity rules read (and process lifecycle), drops the rest and counts
+  what it dropped per call; the network capture keeps running until half of the
+  last tenth is left, and the quota itself stays the hard ceiling. `run.json`
+  (`reduced`), Triage, Run History and the HTML/PDF report say "Recording quota
+  reached at <time>; from then on only suspicious-activity calls were kept, N calls
+  dropped" as information, not an error. The report no longer says the recording
+  "was still being written" after the run ended; it names what is missing.
 - **The Triage IOC tab and its kind tabs show matches beside the total.** The
   total number of indicators is in the muted grey count style and, when any
   indicator matched (IDS, YARA, Sigma, abuse.ch or marked malicious), the

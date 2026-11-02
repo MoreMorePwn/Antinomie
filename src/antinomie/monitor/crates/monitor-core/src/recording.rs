@@ -962,6 +962,7 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
             let id = format!("legacy-{}", entry.file_name().to_string_lossy());
             runs.push(RunSummary {
                 environment: None,
+                reduced: None,
                 started_ms: None,
                 clock_anchor: None,
                 id,
@@ -1270,6 +1271,7 @@ mod tests {
             report.state = state;
             let mut run = RunSummary {
                 environment: None,
+                reduced: None,
                 started_ms: None,
                 clock_anchor: None,
                 id: "run".into(),
@@ -1398,6 +1400,7 @@ mod tests {
         report.reason = Some("worker cleanup pending".into());
         let mut run = RunSummary {
             environment: None,
+            reduced: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),

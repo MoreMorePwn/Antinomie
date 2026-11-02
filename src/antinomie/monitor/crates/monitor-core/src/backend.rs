@@ -11,6 +11,7 @@ mod launch_failure;
 mod manual_core;
 mod process_core;
 mod recorder_health;
+mod reduced;
 mod run_network;
 mod run_route;
 mod saving;

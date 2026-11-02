@@ -29,6 +29,17 @@ pub(crate) fn is_quota_error(error: &str) -> bool {
 pub(crate) struct QuotaState {
     /// Set when the quota was reached; the text reported to the frontend.
     pub reached: Option<String>,
+    /// The reduced recording of the boot; see `crate::reduced`.
+    pub reduced: crate::reduced::Reducer,
+}
+
+impl QuotaState {
+    pub(crate) fn new(keep_calls: &[String]) -> Self {
+        Self {
+            reached: None,
+            reduced: crate::reduced::Reducer::new(keep_calls),
+        }
+    }
 }
 
 #[cfg(test)]

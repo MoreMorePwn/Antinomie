@@ -642,6 +642,7 @@ fn lifecycle_completed_dump_requires_a_regular_nonempty_elf_core() {
 fn artifact_run(directory: PathBuf) -> RunSummary {
     RunSummary {
         environment: None,
+        reduced: None,
         started_ms: None,
         clock_anchor: None,
         id: "artifact-run".into(),
@@ -1586,6 +1587,7 @@ fn pending_raw_copy_quota_failure_stops_existing_and_acknowledged_runs() {
         ProgramRun::new(
             RunSummary {
                 environment: None,
+                reduced: None,
                 started_ms: None,
                 clock_anchor: None,
                 id: cookie.to_string(),
@@ -1656,6 +1658,7 @@ fn object_saving_failure_preserves_raw_and_globally_denies_terminal_saving() {
                 let run = ProgramRun::new(
                     RunSummary {
                         environment: None,
+                        reduced: None,
                         started_ms: None,
                         clock_anchor: None,
                         id: cookie.to_string(),
@@ -1768,6 +1771,7 @@ fn final_health_counts_screen_and_keeps_errors_scoped_to_run() {
         ProgramRun::new(
             RunSummary {
                 environment: None,
+                reduced: None,
                 started_ms: None,
                 clock_anchor: None,
                 id: id.into(),

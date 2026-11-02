@@ -8,6 +8,7 @@
 //! observed, not that a sample is malicious.
 use super::*;
 
+mod calls;
 mod ctx;
 mod engine;
 mod evasion;
@@ -40,6 +41,7 @@ fn collect_hits(cx: &ctx::Ctx, st: &mut state::State) -> Vec<Hit> {
     hits
 }
 
+pub(super) use calls::watched as watched_calls;
 pub(super) use engine::{Engine, InfoMark, Options, Output, PackedImage};
 pub(super) use frames::{FrameKind, SUPPRESSION_VERSION};
 pub(super) use rows::{view_keeps, View, COL_PROCESS, COL_SUMMARY, COL_TIER, COL_TIME, HEADERS};

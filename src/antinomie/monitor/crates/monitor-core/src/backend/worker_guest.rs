@@ -330,6 +330,7 @@ impl Worker {
                             data_dir: &self.options.data_dir,
                         },
                     )),
+                    reduced: None,
                     execution: None,
                     analysis: selected.then(|| {
                         crate::analysis::jobs::new_report(&request.path, &request.analysis)

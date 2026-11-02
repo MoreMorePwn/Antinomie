@@ -408,6 +408,7 @@ mod tests {
         };
         RunSummary {
             environment: None,
+            reduced: None,
             started_ms: None,
             clock_anchor: None,
             id: id.into(),

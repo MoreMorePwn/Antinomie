@@ -379,6 +379,7 @@ impl Recording {
         fs::create_dir_all(&dir).unwrap();
         let summary = RunSummary {
             environment: None,
+            reduced: None,
             started_ms: Some(1000),
             clock_anchor: None,
             id: id.into(),

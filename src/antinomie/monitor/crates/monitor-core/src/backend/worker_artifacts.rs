@@ -364,9 +364,10 @@ impl Worker {
             .map(|capture| fs::metadata(&capture.file).map_or(0, |metadata| metadata.len()))
             .fold(0u64, u64::saturating_add);
         session.network_bytes = session.network_bytes_done.saturating_add(live);
-        if session.available() > 0 {
+        if session.available() > session.network_floor() {
             return;
         }
+        let reduced = session.note_network_stopped();
         let cookies: Vec<_> = session.run_artifacts.keys().copied().collect();
         for cookie in cookies {
             let Some(mut owner) = session.run_artifacts.remove(&cookie) else {
@@ -375,7 +376,11 @@ impl Worker {
             if owner.network.is_some() {
                 let result = session.stop_run_network(&mut owner);
                 owner.summary.network_state = RunArtifactState::Failed;
-                owner.issue("network capture reached the recording quota before tree exit".into());
+                owner.issue(if reduced {
+                    "network capture stopped before tree exit: the last of the recording quota is kept for suspicious-activity calls".into()
+                } else {
+                    "network capture reached the recording quota before tree exit".into()
+                });
                 if let Err(error) = result {
                     owner.issue(error);
                 }
@@ -391,6 +396,7 @@ impl Worker {
             Ok(String::new())
         };
         self.snapshot.last_error = Some(match result {
+            Ok(_) if reduced => "network captures stopped: the last of the recording quota is kept for suspicious-activity calls".into(),
             Ok(_) => "network captures stopped: the recording quota is full".into(),
             Err(error) => format!("network capture reached the recording quota; {error}"),
         });

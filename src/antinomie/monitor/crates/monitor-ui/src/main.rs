@@ -27,6 +27,7 @@ mod memory_probe;
 mod memory_view;
 mod network_view;
 mod query;
+mod reduced_text;
 mod regex_matches;
 mod route_ui;
 mod rules_window;
@@ -162,6 +163,7 @@ fn main() -> eframe::Result<()> {
     }
     options.bootstrap_gpa = args.bootstrap_gpa;
     options.force_tcg = args.tcg;
+    options.reduced_keep_calls = triage::watched_calls();
     if args.check_dependencies {
         let report = antinomie_monitor_core::dependencies::check(&options);
         for check in &report.checks {

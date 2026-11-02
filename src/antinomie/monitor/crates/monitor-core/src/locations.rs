@@ -424,6 +424,7 @@ mod tests {
             storage::private_dir(&directory).unwrap();
             let run = RunSummary {
                 environment: None,
+                reduced: None,
                 started_ms: None,
                 clock_anchor: None,
                 id: id.into(),

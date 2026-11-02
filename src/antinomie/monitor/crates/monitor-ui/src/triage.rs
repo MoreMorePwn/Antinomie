@@ -79,6 +79,12 @@ mod refresh;
 mod refresh_tests;
 mod report_export;
 mod rules;
+
+/// The system calls the suspicious-activity rules read: what the recorder keeps
+/// once the recording quota is nearly full.
+pub(crate) fn watched_calls() -> Vec<String> {
+    rules::watched_calls()
+}
 mod segments;
 mod sigma_events;
 #[cfg(test)]

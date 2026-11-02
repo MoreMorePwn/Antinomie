@@ -458,6 +458,9 @@ pub struct BackendOptions {
     /// Product repository checkout used for local base builds (host Linux).
     /// Shared quota for raw packets, assembled fields and terminal artifacts, in bytes.
     pub capture_quota_size: u64,
+    /// The system calls kept once the quota is nearly full (see
+    /// [`crate::reduced`]); empty keeps the older behaviour: saving stops.
+    pub reduced_keep_calls: Vec<String>,
     /// Bounds of the buffer for telemetry that arrives before its launch is acknowledged.
     pub pre_ack: crate::PreAckLimits,
     pub shutdown_timeout: Duration,
@@ -488,6 +491,7 @@ impl Default for BackendOptions {
             curl: "curl".into(),
             remote_base: crate::distribution::DEFAULT_REMOTE_BASE.to_string(),
             capture_quota_size: 4 * 1024 * 1024 * 1024,
+            reduced_keep_calls: Vec::new(),
             pre_ack: crate::PreAckLimits::default(),
             shutdown_timeout: Duration::from_secs(10),
             stop_grace: None,
@@ -869,6 +873,11 @@ pub struct RunSummary {
     /// app); absent in runs saved before it was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<crate::run_environment::RunEnvironment>,
+    /// Set when the boot's recording quota ran low while this run was going and
+    /// the recorder kept only suspicious-activity calls from then on; absent
+    /// in runs saved before it existed and in runs it did not touch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reduced: Option<crate::reduced::ReducedRecording>,
 }
 
 impl RunSummary {

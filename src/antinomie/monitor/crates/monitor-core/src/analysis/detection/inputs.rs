@@ -306,7 +306,8 @@ pub(super) fn journal_input(
     let detail = super::journal::category_detail(&categories);
     input = input.detail(detail).warning(SIGMA_COVERAGE_WARNING);
     match end {
-        None => input.note("the journal has no end record; it was still being written"),
+        None if partial => input.note("the journal has no end record; it was still being written"),
+        None => input.note("the journal has no end record; it may have been cut short"),
         Some((_, omitted)) if omitted > 0 => input.note(format!(
             "{} oversized events were left out of the journal",
             group_digits(omitted)

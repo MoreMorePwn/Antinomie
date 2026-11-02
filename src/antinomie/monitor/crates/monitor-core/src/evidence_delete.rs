@@ -715,6 +715,7 @@ mod tests {
             machine: None,
             route: None,
             environment: None,
+            reduced: None,
         };
         atomic_json(&dir.join("run.json"), &run).unwrap();
         dir

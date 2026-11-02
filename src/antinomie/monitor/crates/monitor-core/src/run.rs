@@ -470,6 +470,7 @@ mod tests {
             std::env::temp_dir().join(format!("ant-analysis-metadata-{}", storage::unique_id()));
         let summary = RunSummary {
             environment: None,
+            reduced: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -533,6 +534,7 @@ mod tests {
         };
         let summary = RunSummary {
             environment: None,
+            reduced: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -588,6 +590,7 @@ mod tests {
         };
         let summary = RunSummary {
             environment: None,
+            reduced: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -640,6 +643,7 @@ mod tests {
         };
         let summary = RunSummary {
             environment: None,
+            reduced: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -706,6 +710,7 @@ mod tests {
             std::env::temp_dir().join(format!("ant-terminal-reads-{}", storage::unique_id()));
         let summary = RunSummary {
             environment: None,
+            reduced: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -748,6 +753,7 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("ant-terminal-{}", storage::unique_id()));
         let summary = RunSummary {
             environment: None,
+            reduced: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -812,6 +818,7 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("{name}-{}", storage::unique_id()));
         let summary = RunSummary {
             environment: None,
+            reduced: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),

@@ -313,6 +313,7 @@ pub(super) fn event(phase: u8, cpu: u32) -> antinomie_monitor_core::EventSummary
 pub(super) fn run(id: &str) -> RunSummary {
     RunSummary {
         environment: None,
+        reduced: None,
         started_ms: None,
         clock_anchor: None,
         id: id.into(),

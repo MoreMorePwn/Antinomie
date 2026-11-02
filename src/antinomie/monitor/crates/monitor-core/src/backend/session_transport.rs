@@ -74,6 +74,12 @@ impl Session {
             let (ring, waited) = self.transport.last_read();
             self.read_gaps
                 .ring_wait(ring, waited, &mut snapshot.health.read_gaps);
+            // Nearly out of quota: only suspicious-activity calls are kept.
+            if let Some(header) = &header
+                && self.reduce_packet(header, packet.len())
+            {
+                continue;
+            }
             let root = header.as_ref().map_or(0, |header| header.root_task_cookie);
             let capture_cookie = header.as_ref().map_or(0, |header| header.capture_cookie);
             let observer_id = self
@@ -238,6 +244,7 @@ impl Session {
         self.flush_raw();
         if self.last_process_save.elapsed() >= Duration::from_secs(2) {
             self.last_process_save = Instant::now();
+            self.persist_reduced();
             for capture in self.captures.values_mut() {
                 capture.persist_processes();
             }

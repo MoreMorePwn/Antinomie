@@ -783,9 +783,16 @@ pub(super) fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
         }
     }
     if scan.partial {
+        report.notes.push(partial_note(
+            job.request.run_finished,
+            &scan.partial_reasons,
+        ));
+    }
+    // Not a failure either: the recorder kept the suspicious-activity calls.
+    if let Some((reduced, started)) = antinomie_monitor_core::reduced::read(&job.archive) {
         report
             .notes
-            .push("The recording was still being written; this report covers what was saved when it was read.".into());
+            .extend(crate::reduced_text::lines(&reduced, started));
     }
     // First, since every part above misses what was lost.
     if let Some(note) = telemetry_loss_note(&job.archive) {
@@ -839,4 +846,24 @@ pub(super) fn telemetry_loss_note(archive: &Path) -> Option<String> {
     )
     .ok()?
     .note()
+}
+
+/// Why the report may not cover everything. "Still being written" is only said
+/// for a run that is still going; a finished run says what was missing.
+fn partial_note(run_finished: bool, reasons: &[String]) -> String {
+    if !run_finished {
+        return "The recording was still being written; this report covers what was saved when it was read.".into();
+    }
+    let reasons: Vec<&String> = reasons.iter().collect();
+    if reasons.is_empty() {
+        "This report may not cover every recorded call.".into()
+    } else {
+        let mut text = reasons
+            .iter()
+            .map(|reason| reason.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        text.get_mut(..1).map(|first| first.make_ascii_uppercase());
+        format!("The recording has ended. This report covers what was saved: {text}.")
+    }
 }

@@ -620,6 +620,7 @@ mod forget_tests {
             machine: None,
             route: None,
             environment: None,
+            reduced: None,
         }
     }
 

@@ -70,6 +70,7 @@ impl Session {
             captures: &mut self.captures,
         }
         .quota_reached(&mut self.quota, quota_size, root);
+        self.note_reduced_full();
     }
     /// Stop saving when an object store or a capture archive reports a failure.
     /// A failed observing capture stops the boot (its packets are the ones no

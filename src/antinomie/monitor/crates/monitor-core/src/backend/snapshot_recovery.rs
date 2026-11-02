@@ -445,7 +445,7 @@ impl Session {
             pending_capture_id: None,
             boot_id,
             pre_ack: crate::pre_ack::PreAckBuffer::new(options.pre_ack),
-            quota: crate::quota::QuotaState::default(),
+            quota: crate::quota::QuotaState::new(&options.reduced_keep_calls),
             terminal_cursor: 0,
             restored_from: snapshot_id.map(str::to_owned),
             late_reads: BTreeMap::new(),

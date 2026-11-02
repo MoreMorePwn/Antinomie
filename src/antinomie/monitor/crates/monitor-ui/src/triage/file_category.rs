@@ -182,9 +182,9 @@ pub(super) fn access(files: &FdState, call: &InvocationSummary, event: &EventSum
     }
 }
 
-const READS: &[&str] = &["read", "pread64", "readv", "preadv", "preadv2"];
-const WRITES: &[&str] = &["write", "pwrite64", "writev", "pwritev", "pwritev2"];
-const PROBES: &[&str] = &[
+pub(super) const READS: &[&str] = &["read", "pread64", "readv", "preadv", "preadv2"];
+pub(super) const WRITES: &[&str] = &["write", "pwrite64", "writev", "pwritev", "pwritev2"];
+pub(super) const PROBES: &[&str] = &[
     "stat",
     "fstat",
     "lstat",

@@ -831,6 +831,7 @@ pub(super) fn listed(run: &RunSummary) -> RunSummary {
         machine: run.machine.clone(),
         route: run.route.clone(),
         environment: run.environment.clone(),
+        reduced: run.reduced.clone(),
         recording_error: run.recording_error.clone(),
         execution: run.execution.clone(),
         analysis: run
