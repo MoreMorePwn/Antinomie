@@ -332,6 +332,22 @@ impl View {
         let row_height = table::row_height(font) + 6.0;
         let mut picked = None;
         let height = ui.available_height().max(180.0);
+        // The Evidence column holds its header and the "Jump ▸" button whole:
+        // a fixed 70 px squeezed both at larger text sizes.
+        let measure = |text: &str| {
+            ui.fonts(|fonts| {
+                fonts
+                    .layout_no_wrap(
+                        text.to_owned(),
+                        egui::TextStyle::Body.resolve(ui.style()),
+                        egui::Color32::WHITE,
+                    )
+                    .size()
+                    .x
+            })
+        };
+        let evidence_width =
+            measure("Evidence").max(measure("Jump ▸")) + 2.0 * ui.spacing().button_padding.x + 12.0;
         ui.scope(|ui| {
             table::begin(ui);
             FitBuilder::new(ui)
@@ -345,7 +361,7 @@ impl View {
                 .column(Col::fixed(96.0))
                 .column(Col::fixed(96.0))
                 .column(Col::rest(80.0).at_least(140.0).clip(true))
-                .column(Col::fixed(70.0))
+                .column(Col::fixed(evidence_width).at_least(evidence_width))
                 .max_scroll_height(height)
                 .min_scrolled_height(0.0)
                 .header(table::header_height(font), |mut header| {
