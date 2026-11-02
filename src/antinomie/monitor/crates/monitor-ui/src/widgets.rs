@@ -37,6 +37,7 @@ pub mod table;
 mod tabs;
 pub(crate) mod tone;
 mod window;
+mod written;
 
 pub use card::{back_link, bounded_menu, card, detail_block, link};
 pub use facts::{fact_line, facts, titled};
@@ -45,6 +46,7 @@ pub use info_panel::{info_panel, InfoPanel};
 pub use tabs::{segmented, tab, tab_row, tabs, TabItem};
 pub use tone::{chip, chip_wide, chip_width, toggle_chip, toggle_chip_with, Tone};
 pub use window::{columns, fixed_width_body, footer, footer_split, window, Dialog};
+pub use written::{short_name, written_files};
 
 #[cfg(test)]
 mod tests;

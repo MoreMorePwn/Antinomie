@@ -412,17 +412,12 @@ impl TriageView {
                 match &self.report.state {
                     State::Done(written) => {
                         ui.label(theme::section_title(ui, "Written"));
-                        for (label, path) in &written.files {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(format!("{label}:"));
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(path.display().to_string()).monospace(),
-                                    )
-                                    .wrap(),
-                                );
-                            });
-                        }
+                        crate::widgets::written_files(
+                            ui,
+                            "report",
+                            &written.files.iter().map(|(l, p)| (l.to_string(), p.clone())).collect::<Vec<_>>(),
+                            4,
+                        );
                         if let Some(bundle) = &written.bundle {
                             for (what, why) in &bundle.skipped {
                                 ui.weak(format!("Not in the bundle: {what} ({why})"));

@@ -138,7 +138,7 @@ impl ExportDialog {
         let mut open = true;
         let mut start = false;
         let mut close = false;
-        widgets::window(format!("Export custody record: {}", self.name))
+        widgets::window(format!("Export custody record: {}", crate::widgets::short_name(&self.name)))
             .id(egui::Id::new("samples_export_custody"))
             .open(&mut open)
             .default_width(560.0)
@@ -227,14 +227,16 @@ impl ExportDialog {
                     Some(Ok(done)) => {
                         ui.colored_label(
                             theme::good(),
-                            format!("Exported {} entries to {}", done.entries, done.path.display()),
+                            format!("Exported {} entries", done.entries),
                         );
+                        let mut files = vec![("Record".to_owned(), done.path.clone())];
                         if let Some(path) = &done.verifier {
-                            ui.label(format!("Verifier: {}", path.display()));
+                            files.push(("Verifier".to_owned(), path.clone()));
                         }
                         if let Some(path) = &done.signature {
-                            ui.label(format!("Signature: {}", path.display()));
+                            files.push(("Signature".to_owned(), path.clone()));
                         }
+                        crate::widgets::written_files(ui, "custody", &files, 4);
                     }
                     Some(Err(error)) => {
                         ui.colored_label(theme::error(), error);

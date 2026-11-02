@@ -326,108 +326,108 @@ impl ReportDialog {
         let mut close = false;
         let default = default_folder(&options.data_dir);
         let hint = shown_folder(&options.data_dir, &default);
-        widgets::window(format!("Export report: {}", self.name))
-            .id(egui::Id::new("samples_export_report"))
-            .open(&mut open)
-            .resizable(false)
-            .default_width(540.0)
-            .show(ctx, |ui| {
-                ui.add_enabled_ui(!running, |ui| {
-                    ui.label(
-                        RichText::new(
-                            "Identity, static analysis, rules, every run, lineage, merged \
-                             indicators, the custody log, notes and similar samples. The \
-                             report names the sample by its hashes and holds none of its bytes.",
-                        )
-                        .weak(),
-                    );
-                    ui.add_space(6.0);
-                    ui.label(theme::section_title(ui, "Formats"));
-                    ui.horizontal_wrapped(|ui| {
-                        for format in Format::ALL {
-                            let mut on = self.choices.writes(format);
-                            if ui.checkbox(&mut on, format.label()).changed() {
-                                self.choices.set_format(format, on);
-                            }
-                        }
-                    });
-                    ui.add_space(6.0);
-                    ui.label(theme::section_title(ui, "Options"));
-                    ui.checkbox(
-                        &mut self.choices.defang,
-                        "Defang indicators in HTML, PDF and Markdown",
-                    )
-                    .on_hover_text(
-                        "hxxp://example[.]com. JSON, MISP and STIX keep the raw values.",
-                    );
-                    ui.add_space(6.0);
-                    ui.label(theme::section_title(ui, "Folder"));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.choices.folder)
-                            .hint_text(theme::hint_text(hint))
-                            .desired_width(f32::INFINITY),
-                    )
-                    .on_hover_text(format!(
-                        "Empty: {}. A path that is not absolute is inside the data folder.",
-                        default.display()
-                    ));
-                });
-                ui.add_space(4.0);
+        widgets::window(format!(
+            "Export report: {}",
+            crate::widgets::short_name(&self.name)
+        ))
+        .id(egui::Id::new("samples_export_report"))
+        .open(&mut open)
+        .resizable(false)
+        .default_width(540.0)
+        .show(ctx, |ui| {
+            ui.add_enabled_ui(!running, |ui| {
                 ui.label(
                     RichText::new(
-                        "Writing the files adds an Exported entry to the sample's custody log.",
+                        "Identity, static analysis, rules, every run, lineage, merged \
+                             indicators, the custody log, notes and similar samples. The \
+                             report names the sample by its hashes and holds none of its bytes.",
                     )
-                    .weak()
-                    .small(),
+                    .weak(),
                 );
-                match &self.state {
-                    State::Done(written) => {
-                        ui.label(theme::section_title(ui, "Written"));
-                        for (label, path) in &written.files {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(format!("{label}:"));
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(path.display().to_string()).monospace(),
-                                    )
-                                    .wrap(),
-                                );
-                            });
+                ui.add_space(6.0);
+                ui.label(theme::section_title(ui, "Formats"));
+                ui.horizontal_wrapped(|ui| {
+                    for format in Format::ALL {
+                        let mut on = self.choices.writes(format);
+                        if ui.checkbox(&mut on, format.label()).changed() {
+                            self.choices.set_format(format, on);
                         }
                     }
-                    State::Failed(error) => {
-                        ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
-                    }
-                    _ => {}
-                }
-                let ready = !self.choices.formats.is_empty();
-                widgets::footer_split(
-                    ui,
-                    |ui| {
-                        if let State::Running { status, .. } = &self.state {
-                            theme::spinner(ui);
-                            ui.label(status);
-                        }
-                    },
-                    |ui| {
-                        if running {
-                            close = ui.button("Cancel").clicked();
-                        } else {
-                            close = ui
-                                .button(if matches!(self.state, State::Done(_)) {
-                                    "Close"
-                                } else {
-                                    "Cancel"
-                                })
-                                .clicked();
-                            start = ui
-                                .add_enabled(ready, egui::Button::new("Export"))
-                                .on_disabled_hover_text("Choose a format")
-                                .clicked();
-                        }
-                    },
-                );
+                });
+                ui.add_space(6.0);
+                ui.label(theme::section_title(ui, "Options"));
+                ui.checkbox(
+                    &mut self.choices.defang,
+                    "Defang indicators in HTML, PDF and Markdown",
+                )
+                .on_hover_text("hxxp://example[.]com. JSON, MISP and STIX keep the raw values.");
+                ui.add_space(6.0);
+                ui.label(theme::section_title(ui, "Folder"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.choices.folder)
+                        .hint_text(theme::hint_text(hint))
+                        .desired_width(f32::INFINITY),
+                )
+                .on_hover_text(format!(
+                    "Empty: {}. A path that is not absolute is inside the data folder.",
+                    default.display()
+                ));
             });
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(
+                    "Writing the files adds an Exported entry to the sample's custody log.",
+                )
+                .weak()
+                .small(),
+            );
+            match &self.state {
+                State::Done(written) => {
+                    ui.label(theme::section_title(ui, "Written"));
+                    crate::widgets::written_files(
+                        ui,
+                        "report",
+                        &written
+                            .files
+                            .iter()
+                            .map(|(l, p)| (l.to_string(), p.clone()))
+                            .collect::<Vec<_>>(),
+                        4,
+                    );
+                }
+                State::Failed(error) => {
+                    ui.add(egui::Label::new(RichText::new(error).color(theme::error())).wrap());
+                }
+                _ => {}
+            }
+            let ready = !self.choices.formats.is_empty();
+            widgets::footer_split(
+                ui,
+                |ui| {
+                    if let State::Running { status, .. } = &self.state {
+                        theme::spinner(ui);
+                        ui.label(status);
+                    }
+                },
+                |ui| {
+                    if running {
+                        close = ui.button("Cancel").clicked();
+                    } else {
+                        close = ui
+                            .button(if matches!(self.state, State::Done(_)) {
+                                "Close"
+                            } else {
+                                "Cancel"
+                            })
+                            .clicked();
+                        start = ui
+                            .add_enabled(ready, egui::Button::new("Export"))
+                            .on_disabled_hover_text("Choose a format")
+                            .clicked();
+                    }
+                },
+            );
+        });
         if start {
             self.start(ctx, options, vms);
         }
