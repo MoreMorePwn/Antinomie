@@ -562,6 +562,7 @@ impl Detail {
 enum Action {
     Back,
     EditTags,
+    EditText,
     RunInVm,
     Export,
     Report,
@@ -661,6 +662,11 @@ impl MonitorApp {
                     picker::TagPicker::with(&data.tags),
                 ));
             }
+            Some(Action::EditText) => self.samples_page.edit_text_of(
+                &data.record.sha256,
+                &data.record.name,
+                &data.record.description,
+            ),
             Some(Action::RunInVm) => self.run_sample_in_vm(&data.record),
             Some(Action::Export) => {
                 self.samples_page.export = Some(super::export::ExportDialog::new(
@@ -737,10 +743,13 @@ impl MonitorApp {
             if ui.button("Edit tags…").clicked() {
                 chosen = Some(Action::EditTags);
             }
+            if ui.button("Edit name and description…").clicked() {
+                chosen = Some(Action::EditText);
+            }
         };
         // Four buttons beside the title need about 65 font heights; a
         // narrower window gives the buttons their own row.
-        if ui.available_width() < self.settings.font_size * 65.0 {
+        if ui.available_width() < self.settings.font_size * 80.0 {
             ui.horizontal_wrapped(title);
             ui.horizontal_wrapped(buttons);
         } else {

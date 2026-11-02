@@ -140,6 +140,8 @@ pub(super) struct SamplesPage {
     add: Option<add::AddDialog>,
     /// The sample whose tags are being edited, with the picker.
     editing: Option<(String, String, picker::TagPicker)>,
+    /// The sample whose name and description are being edited.
+    editing_text: Option<TextEdit>,
     /// The open sample window; the list shows when there is none.
     detail: Option<detail::Detail>,
     /// A run the sample window asked to open in its own VM.
@@ -562,6 +564,7 @@ impl MonitorApp {
         }
         self.report_export_window(ctx);
         self.edit_tags_window(ctx, &known_custom);
+        self.edit_text_window(ctx);
         self.remove_window(ctx);
         self.note_windows(ctx);
         self.delete_run_window(ctx);
@@ -636,6 +639,65 @@ impl MonitorApp {
         }
     }
 
+    /// Name and description of a sample, saved through `Library::set_text`.
+    fn edit_text_window(&mut self, ctx: &egui::Context) {
+        let Some(edit) = &mut self.samples_page.editing_text else {
+            return;
+        };
+        let mut open = true;
+        let mut save = false;
+        let mut cancel = false;
+        crate::widgets::window("Edit name and description")
+            .id(egui::Id::new("samples_edit_text"))
+            .open(&mut open)
+            .default_width(480.0)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("Name");
+                ui.add(
+                    egui::TextEdit::singleline(&mut edit.name)
+                        .char_limit(NAME_LIMIT)
+                        .desired_width(f32::INFINITY),
+                );
+                ui.label("Description");
+                ui.add(
+                    egui::TextEdit::multiline(&mut edit.description)
+                        .desired_rows(5)
+                        .desired_width(f32::INFINITY),
+                );
+                if let Some(error) = &edit.error {
+                    ui.colored_label(theme::error(), error);
+                }
+                crate::widgets::footer(ui, |ui| {
+                    save = ui.button("Save").clicked();
+                    cancel = ui.button("Cancel").clicked();
+                });
+            });
+        if save {
+            if edit.name.trim().is_empty() {
+                edit.error = Some("The name cannot be empty".into());
+                return;
+            }
+            let (sha256, name, description) = (
+                edit.sha256.clone(),
+                edit.name.clone(),
+                edit.description.clone(),
+            );
+            let result = Library::open(&self.options.data_dir)
+                .and_then(|mut library| library.set_text(&sha256, &name, &description));
+            match result {
+                Ok(()) => {
+                    self.samples_page.notice = Some(("Name and description saved".into(), false));
+                    self.samples_page.editing_text = None;
+                    self.samples_page.refresh();
+                }
+                Err(error) => edit.error = Some(error),
+            }
+        } else if cancel || !open {
+            self.samples_page.editing_text = None;
+        }
+    }
+
     fn remove_window(&mut self, ctx: &egui::Context) {
         let Some(sha256) = self.samples_page.confirm_remove.clone() else {
             return;
@@ -676,10 +738,40 @@ impl MonitorApp {
     }
 }
 
+/// The longest sample name the library takes.
+const NAME_LIMIT: usize = 256;
+
+/// The Edit name and description dialog's state.
+struct TextEdit {
+    sha256: String,
+    name: String,
+    description: String,
+    error: Option<String>,
+}
+
+impl SamplesPage {
+    pub(super) fn edit_text_of(&mut self, sha256: &str, name: &str, description: &str) {
+        self.editing_text = Some(TextEdit {
+            sha256: sha256.into(),
+            name: name.into(),
+            description: description.into(),
+            error: None,
+        });
+    }
+}
+
 #[cfg(test)]
 impl SamplesPage {
     pub(super) fn show_tag_filter(&mut self, on: bool) {
         self.tags_open = on;
+    }
+    pub(super) fn type_text(&mut self, name: &str, description: &str) {
+        let edit = self.editing_text.as_mut().expect("the dialog is open");
+        edit.name = name.into();
+        edit.description = description.into();
+    }
+    pub(super) fn text_dialog_open(&self) -> bool {
+        self.editing_text.is_some()
     }
     pub(super) fn edit_tags_of(&mut self, sha256: &str, name: &str, tags: &[Tag]) {
         self.editing = Some((sha256.into(), name.into(), picker::TagPicker::with(tags)));

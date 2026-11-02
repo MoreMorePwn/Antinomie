@@ -47,6 +47,7 @@ enum Action {
     CopyHash(String),
     CopyName(String),
     EditTags(String, String, Vec<Tag>),
+    EditText(String, String, String),
     Report(String, String),
     Remove(String),
 }
@@ -437,6 +438,14 @@ impl MonitorApp {
                                 ));
                                 ui.close_menu();
                             }
+                            if ui.button("Edit name and description…").clicked() {
+                                action = Some(Action::EditText(
+                                    sha256.to_owned(),
+                                    row.record.name.clone(),
+                                    row.record.description.clone(),
+                                ));
+                                ui.close_menu();
+                            }
                             if ui.button("Export report…").clicked() {
                                 action = Some(Action::Report(
                                     sha256.to_owned(),
@@ -471,6 +480,9 @@ impl MonitorApp {
             Some(Action::CopyHash(text) | Action::CopyName(text)) => ctx.copy_text(text),
             Some(Action::EditTags(sha256, name, tags)) => {
                 self.samples_page.editing = Some((sha256, name, TagPicker::with(&tags)));
+            }
+            Some(Action::EditText(sha256, name, description)) => {
+                self.samples_page.edit_text_of(&sha256, &name, &description)
             }
             Some(Action::Report(sha256, name)) => self.samples_page.report.open(&sha256, &name),
             Some(Action::Remove(sha256)) => self.samples_page.confirm_remove = Some(sha256),

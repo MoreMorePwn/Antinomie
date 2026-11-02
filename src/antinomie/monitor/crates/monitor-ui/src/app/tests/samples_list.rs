@@ -397,3 +397,57 @@ fn a_typed_path_is_read_when_the_field_is_left_not_after_its_first_letters() {
     std::fs::remove_dir_all(root).unwrap();
     std::fs::remove_dir_all(files).unwrap();
 }
+
+#[test]
+fn the_name_and_description_dialog_saves_cancels_and_refuses_an_empty_name() {
+    let root = temp("edit-text");
+    let (script, _, _) = fixture(&root);
+    let (mut app, ctx) = open_page(&root);
+    let events =
+        |root: &std::path::Path| Library::open(root).unwrap().events(&script).unwrap().len();
+    let before = events(&root);
+    // Cancel changes nothing.
+    app.samples_page
+        .edit_text_of(&script, "install.sh", "Cron installer");
+    app.samples_page.type_text("renamed.sh", "other");
+    click_label(&mut app, &ctx, SIZE, "Cancel");
+    assert!(!app.samples_page.text_dialog_open());
+    let record = Library::open(&root).unwrap().get(&script).unwrap().unwrap();
+    assert_eq!(record.name, "install.sh");
+    assert_eq!(events(&root), before);
+    // An empty name is refused and the dialog stays.
+    app.samples_page
+        .edit_text_of(&script, "install.sh", "Cron installer");
+    app.samples_page.type_text("  ", "x");
+    click_label(&mut app, &ctx, SIZE, "Save");
+    assert!(app.samples_page.text_dialog_open());
+    let shown = texts(&render(&mut app, &ctx, SIZE));
+    assert!(shown.iter().any(|(t, _)| t == "The name cannot be empty"));
+    assert_eq!(
+        Library::open(&root)
+            .unwrap()
+            .get(&script)
+            .unwrap()
+            .unwrap()
+            .name,
+        "install.sh"
+    );
+    // Save changes the library, the list and the custody log.
+    app.samples_page
+        .type_text("renamed.sh", "A new description");
+    click_label(&mut app, &ctx, SIZE, "Save");
+    assert!(!app.samples_page.text_dialog_open());
+    let record = Library::open(&root).unwrap().get(&script).unwrap().unwrap();
+    assert_eq!(
+        (record.name.as_str(), record.description.as_str()),
+        ("renamed.sh", "A new description")
+    );
+    assert!(events(&root) > before);
+    until(&mut app, &ctx, |app| {
+        app.samples_page
+            .rows()
+            .iter()
+            .any(|row| row.record.name == "renamed.sh")
+    });
+    let _ = std::fs::remove_dir_all(root);
+}
