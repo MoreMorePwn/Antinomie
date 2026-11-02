@@ -112,7 +112,7 @@ pub(super) fn file_slots() -> impl Iterator<Item = usize> {
 
 impl TriageView {
     /// The visibility toggles of the filter bar. Hide stdio and Hide library
-    /// start on; Failed attempts starts off.
+    /// start on, and so does Failed attempts.
     pub(super) fn file_toggles(&mut self, ui: &mut egui::Ui) {
         use crate::widgets::toggle_chip;
         let failed = self
@@ -169,8 +169,16 @@ impl TriageView {
             visibility.hide_libraries = !visibility.hide_libraries;
             changed = true;
         }
-        if toggle_chip(ui, "Failed attempts", visibility.show_failed, Some(failed))
-            .on_hover_text("Calls the kernel refused, in the change tabs and Changed files. They do not count as changes. Opened and Read always list failed attempts with their result.")
+        let failed_here = if tab.is_some() { count.failed } else { failed };
+        if toggle_chip(
+            ui,
+            "Failed attempts",
+            visibility.show_failed,
+            Some(failed_here),
+        )
+        .on_hover_text(format!(
+            "Calls the kernel refused, with their result. {failed_here} rows in this table are failed attempts; turn this off to hide them. They do not count as changes."
+        ))
             .clicked()
         {
             visibility.show_failed = !visibility.show_failed;
@@ -376,7 +384,7 @@ impl TabSink {
     }
 
     /// `hits` is the call's classification made before it was tracked. A failed
-    /// call is not counted in any badge and has a row only when asked for. Reads
+    /// call is not counted in any badge and has a row only when shown. Reads
     /// belong to the Read index and are left to it.
     pub(super) fn observe(
         &mut self,
@@ -388,12 +396,12 @@ impl TabSink {
         hits: &[file_category::Hit],
     ) -> Result<(), String> {
         let failed = file_category::outcome(call).failed();
-        // Opened and Read list failed attempts with their result; the toggle
-        // is for the change categories.
-        let toggled = |hit: &&file_category::Hit| {
-            !matches!(hit.category.tab(), FileTab::Opened | FileTab::Read)
-        };
-        if failed && hits.iter().any(|hit| toggled(&hit)) {
+        // The Failed attempts chip covers every table, Opened and Read included.
+        if failed
+            && hits
+                .iter()
+                .any(|hit| hit.category != file_category::Category::Read)
+        {
             counts.failed_attempts += 1;
         }
         for hit in hits
@@ -401,18 +409,18 @@ impl TabSink {
             .filter(|hit| hit.category != file_category::Category::Read)
         {
             let tab = hit.category.tab();
-            let listed = !toggled(&hit);
-            if !failed || listed {
+            let show = !failed || request.file_visibility.show_failed;
+            let row = file_category::category_row(files, call, event, *hit);
+            counts.visibility[file_visibility::visibility_slot(tab)].note_failed(&row);
+            if show {
                 match tab {
                     FileTab::Opened => counts.opened += 1,
                     _ => counts.tabs[tab.slot() - 8] += 1,
                 }
-            } else if !request.file_visibility.show_failed {
+            } else {
                 continue;
             }
-            let row = file_category::category_row(files, call, event, *hit);
             let at = Self::position(tab);
-            let show = listed || request.file_visibility.show_failed;
             counts.visibility[file_visibility::visibility_slot(tab)].add(
                 request.file_visibility,
                 &row,

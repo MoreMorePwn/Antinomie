@@ -353,17 +353,25 @@ pub(super) fn scan_archive_query(
         if let Some(row) =
             file_index.observe_with(&files, invocation, event, Some(&recording.directory), &hits)
         {
-            // Failed reads are listed with their result.
-            counts.reads += 1;
-            counts.visibility[file_visibility::visibility_slot(FileTab::Read)].add(
-                request.file_visibility,
-                &row,
-                true,
-            );
-            if request.file_visibility.keeps_with(&row, true)
-                && read_query.keep_table(&row[0].values)
-            {
-                read_page.push(row)?;
+            // Failed reads are listed with their result while Failed attempts is on.
+            let failed_read = file_visibility::FileVisibility::failed(&row);
+            if failed_read {
+                counts.failed_attempts += 1;
+                counts.visibility[file_visibility::visibility_slot(FileTab::Read)]
+                    .note_failed(&row);
+            }
+            if !failed_read || request.file_visibility.show_failed {
+                counts.reads += 1;
+                counts.visibility[file_visibility::visibility_slot(FileTab::Read)].add(
+                    request.file_visibility,
+                    &row,
+                    true,
+                );
+                if request.file_visibility.keeps_with(&row, true)
+                    && read_query.keep_table(&row[0].values)
+                {
+                    read_page.push(row)?;
+                }
             }
         }
         if real {
@@ -432,6 +440,7 @@ pub(super) fn scan_archive_query(
         .into_iter()
         .filter(|change| {
             let row = change.row(clock_anchor);
+            counts.visibility[file_visibility::visibility_slot(FileTab::Changed)].note_failed(&row);
             if request.file_visibility.show_failed || !file_visibility::FileVisibility::failed(&row)
             {
                 counts.visibility[file_visibility::visibility_slot(FileTab::Changed)].add(

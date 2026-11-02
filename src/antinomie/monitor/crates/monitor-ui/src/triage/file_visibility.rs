@@ -6,7 +6,8 @@ use super::*;
 pub(super) struct FileVisibility {
     pub hide_standard_io: bool,
     pub hide_libraries: bool,
-    /// List calls the kernel refused. They are never counted as changes.
+    /// List calls the kernel refused, in every Files table. On by default.
+    /// They are never counted as changes.
     pub show_failed: bool,
 }
 
@@ -15,7 +16,7 @@ impl Default for FileVisibility {
         Self {
             hide_standard_io: true,
             hide_libraries: true,
-            show_failed: false,
+            show_failed: true,
         }
     }
 }
@@ -25,8 +26,7 @@ impl FileVisibility {
         self.keeps_with(row, self.show_failed)
     }
 
-    /// Like [`Self::keeps`], with `show_failed` decided by the caller: the
-    /// Opened and Read tables always list failed attempts.
+    /// Like [`Self::keeps`], with `show_failed` decided by the caller.
     pub fn keeps_with(self, row: &[Cell], show_failed: bool) -> bool {
         if !show_failed && Self::failed(row) {
             return false;
@@ -72,9 +72,16 @@ pub(super) struct VisibilityCount {
     /// Rows that are standard input/output, and rows that are libraries.
     pub stdio: u64,
     pub library: u64,
+    /// Rows for calls the kernel refused, whether the chip lists them or not.
+    pub failed: u64,
 }
 
 impl VisibilityCount {
+    /// Count a refused call's row; [`Self::add`] counts it only when listed.
+    pub(super) fn note_failed(&mut self, row: &[Cell]) {
+        self.failed += u64::from(FileVisibility::failed(row));
+    }
+
     pub(super) fn add(&mut self, visibility: FileVisibility, row: &[Cell], show_failed: bool) {
         let (stdio, library) = FileVisibility::classes(row);
         self.total += 1;
