@@ -15,10 +15,12 @@ use eframe::egui::{self, Color32, FontId, RichText};
 
 mod fields;
 mod ghidra;
+mod parts;
 mod row_text;
 #[cfg(test)]
 pub(crate) use fields::listing_row;
 pub(crate) use fields::{listing_fields, listing_row_with};
+use parts::{filter_bar, function_panel, listing_columns, row_context_menu};
 
 #[derive(Default)]
 pub(super) struct ListingState {
@@ -147,54 +149,7 @@ pub(super) fn show(
     if kind == AnalysisKind::Disassembly {
         ghidra::source_bar(ui, report, section, state);
     }
-    let fields = listing_fields(kind);
-    let tags = state
-        .record
-        .iter()
-        .find_map(|(field, value)| {
-            if *field == "tag" {
-                if let crate::query::RowValue::List(values) = value {
-                    return Some(values.as_slice());
-                }
-            }
-            None
-        })
-        .unwrap_or_default();
-    ui.horizontal(|ui| {
-        let label = ui.label(egui_phosphor::regular::MAGNIFYING_GLASS);
-        crate::query::filter_edit_fields(
-            ui,
-            &mut state.query,
-            match kind {
-                AnalysisKind::Disassembly => "mnemonic == call",
-                AnalysisKind::Decompilation => "function contains main",
-                _ => "value contains http",
-            },
-            ui.available_width(),
-            &fields,
-            tags,
-        )
-        .labelled_by(label.id);
-    });
-    let compiled = crate::query::compile_table(&state.query, &fields);
-    if let Some(error) = compiled.error.as_ref() {
-        crate::activity::inline_only(
-            ui,
-            crate::activity::Level::Warn,
-            format!("{error} · showing the last valid filter"),
-        );
-    } else {
-        state.applied_query = state.query.clone();
-        crate::query::remember_valid_filter(ui, &state.applied_query);
-        if state
-            .selected
-            .as_ref()
-            .is_some_and(|(_, entry)| !compiled.keep_table(&listing_row_with(entry, &state.record)))
-        {
-            state.selected = None;
-            ui.weak("The selected row is hidden by this filter.");
-        }
-    }
+    filter_bar(ui, state, kind);
     let query = scoped_query(state.scope, &state.applied_query);
     let query = query.as_str();
     let current = page
@@ -268,122 +223,9 @@ pub(super) fn show(
         Vec::new()
     };
     if split {
-        let panel_id = match kind {
-            AnalysisKind::Disassembly => "listing-functions-disassembly",
-            _ => "listing-functions-decompilation",
-        };
-        egui::SidePanel::left(panel_id)
-            .resizable(true)
-            .default_width(220.0)
-            .width_range(160.0..=420.0)
-            .frame(egui::Frame::new().inner_margin(egui::Margin {
-                right: 8,
-                ..Default::default()
-            }))
-            .show_inside(ui, |ui| {
-                crate::code_listing::heading(ui, names.len(), names.len());
-                if ui
-                    .button("Export text")
-                    .on_hover_text(
-                        "Save this listing as a text file. Export category… in the report menu offers more formats.",
-                    )
-                    .clicked()
-                {
-                    action = Some(ReportAction::Export {
-                        report_id: report.id.clone(),
-                        kind: Some(kind),
-                        format: antinomie_monitor_core::AnalysisExportFormat::Text,
-                    });
-                }
-                if names.is_empty() {
-                    ui.add(egui::Label::new("No function symbols loaded.").wrap());
-                }
-                let identities: Vec<String> = names
-                    .iter()
-                    .map(|item| function_identity(item.address, &item.name))
-                    .collect();
-                let selected = state
-                    .function
-                    .as_ref()
-                    .and_then(|chosen| identities.iter().position(|identity| identity == chosen));
-                let chosen = crate::code_listing::function_list(
-                    ui,
-                    kind_salt(kind),
-                    names.len(),
-                    |index| crate::code_listing::Function {
-                        name: &names[index].name,
-                        address: names[index].address,
-                        lines: state.lines.get(&identities[index]).copied(),
-                    },
-                    selected,
-                    |_, _| {},
-                );
-                if let Some(index) = chosen {
-                    state.function = Some(identities[index].clone());
-                }
-            });
+        function_panel(ui, report, kind, &names, state, &mut action);
     }
-    let structure_columns: Vec<(&str, Col)> = match state.scope {
-        Some(scope) if kind == AnalysisKind::Structures => records::columns(kind, scope, false)
-            .iter()
-            .enumerate()
-            .map(|(at, column)| {
-                let width = if *column == records::Column::Value {
-                    300.0
-                } else {
-                    140.0
-                };
-                // The last column takes what the others leave, so the table
-                // spans the pane.
-                let spec = if at + 1 == records::columns(kind, scope, false).len() {
-                    Col::rest(80.0).at_least(70.0).clip(true)
-                } else {
-                    Col::flex(width).at_least(70.0).clip(true)
-                };
-                (column.label(), spec)
-            })
-            .collect(),
-        _ => Vec::new(),
-    };
-    let columns: &[(&str, Col)] = match kind {
-        AnalysisKind::Structures if !structure_columns.is_empty() => &structure_columns,
-        AnalysisKind::Disassembly if from_ghidra => &[
-            ("Address", Col::fixed(mono.size * 7.5)),
-            (
-                "Bytes",
-                Col::flex(mono.size * 9.0).at_least(40.0).clip(true),
-            ),
-            ("Instruction", Col::rest(80.0).at_least(350.0).clip(true)),
-            ("Xrefs", Col::fixed(mono.size * 4.5)),
-        ],
-        AnalysisKind::Disassembly => &[
-            ("Address", Col::fixed(mono.size * 7.5)),
-            (
-                "Bytes",
-                Col::flex(mono.size * 9.0).at_least(40.0).clip(true),
-            ),
-            // The last column takes what the others leave, so the listing
-            // spans its pane at any width.
-            ("Instruction", Col::rest(80.0).at_least(350.0).clip(true)),
-        ],
-        AnalysisKind::Decompilation => &[
-            ("Line", Col::fixed(mono.size * 4.0)),
-            ("Code", Col::rest(80.0).at_least(400.0).clip(true)),
-        ],
-        AnalysisKind::Strings => &[
-            ("Offset", Col::fixed(mono.size * 8.0)),
-            ("Encoding", Col::fixed(mono.size * 6.0)),
-            (
-                "Length",
-                Col::flex(mono.size * 12.0).at_least(40.0).clip(true),
-            ),
-            ("Text", Col::rest(80.0).at_least(200.0).clip(true)),
-        ],
-        _ => &[
-            ("Name", Col::flex(200.0).clip(true)),
-            ("Value", Col::rest(80.0).at_least(200.0).clip(true)),
-        ],
-    };
+    let columns = listing_columns(kind, state.scope, from_ghidra, mono.size);
     if split {
         let surface = ui.available_rect_before_wrap();
         ui.painter().rect_filled(surface, 0.0, theme::terminal());
@@ -419,9 +261,10 @@ pub(super) fn show(
             if let Some(row) = state.scroll.take().filter(|_| focus.is_none()) {
                 table = table.scroll_to_row(row as usize, Some(egui::Align::Min));
             }
-            for (_, column) in columns {
+            for (_, column) in &columns {
                 table = table.column(*column);
             }
+            let sort_name = sort_table(kind, state.scope);
             table
                 .header(row_height, |mut header| {
                     for (column, (title, _)) in columns.iter().enumerate() {
@@ -432,12 +275,7 @@ pub(super) fn show(
                             AnalysisKind::Disassembly | AnalysisKind::Decompilation => {
                                 ordered_head(ui, title, kind)
                             }
-                            _ => crate::table_sort::header(
-                                ui,
-                                &sort_table(kind, state.scope),
-                                column,
-                                title,
-                            ),
+                            _ => crate::table_sort::header(ui, &sort_name, column, title),
                         });
                     }
                 })
@@ -475,55 +313,7 @@ pub(super) fn show(
                             cells(&mut row, kind, state.scope, entry, &mono, &state.lines);
                         }
                         row.response().context_menu(|ui| {
-                            let cells: Vec<_> = columns
-                                .iter()
-                                .map(|(title, _)| *title)
-                                .zip(if from_ghidra && kind == AnalysisKind::Disassembly {
-                                    let ghidra = ghidra::texts(entry);
-                                    if ghidra.is_empty() {
-                                        row_text::texts(kind, state.scope, entry)
-                                    } else {
-                                        ghidra
-                                    }
-                                } else {
-                                    row_text::texts(kind, state.scope, entry)
-                                })
-                                .collect();
-                            if let Some(next) =
-                                row_menu::menu(ui, &cells, entry, report, kind, state.content)
-                            {
-                                state.command = Some(next);
-                            }
-                            ui.separator();
-                            let field = match kind {
-                                AnalysisKind::Disassembly => "mnemonic",
-                                AnalysisKind::Decompilation => "code",
-                                AnalysisKind::Strings => "text",
-                                _ => "name",
-                            };
-                            if let Some((_, value)) = listing_row_with(entry, &state.record)
-                                .iter()
-                                .find(|(name, _)| *name == field)
-                            {
-                                crate::query::value_menu(ui, field, value, &mut state.query);
-                            }
-                            ui.menu_button("Filter by field", |ui| {
-                                for (field, value) in listing_row_with(entry, &state.record) {
-                                    ui.menu_button(field, |ui| {
-                                        crate::query::value_menu(
-                                            ui,
-                                            field,
-                                            &value,
-                                            &mut state.query,
-                                        );
-                                    });
-                                }
-                            });
-                            if ui.button("Copy label and value").clicked() {
-                                ui.ctx()
-                                    .copy_text(format!("{}\n{}", entry.label, entry.value));
-                                ui.close_menu();
-                            }
+                            row_context_menu(ui, state, report, kind, &columns, entry, from_ghidra);
                         });
                         let response = row.response();
                         if response.clicked() || response.secondary_clicked() {
