@@ -215,10 +215,10 @@ impl ProcessPicker {
                 // its header and horizontal scrollbar at every font size.
                 let footer = (font_size + 14.0) * 2.0 + 24.0
                     + if enabled { 0.0 } else { font_size + 12.0 };
-                // egui 0.36 counts the window's bottom margin in its maximum height.
-                let margin = f32::from(ui.style().spacing.window_margin.bottom);
+                // egui 0.36 counts the window's margins in its maximum height.
+                let margin = ui.style().spacing.window_margin.sum().y;
                 let height = (viewport.bottom() - 32.0 - margin - ui.cursor().top()
-                    - (font_size + 12.0) - footer).clamp(32.0, 360.0);
+                    - (font_size + 12.0) - footer).clamp(32.0, 360.0 - margin);
                 ui.scope(|ui| {
                         FitBuilder::new(ui)
                             .id_salt("process_picker")

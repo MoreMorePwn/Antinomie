@@ -450,8 +450,12 @@ fn the_console_runs_gdb_on_a_terminal_connected_to_the_session_port() {
     }
     assert!(app.debugger.console.running());
     assert!(screen.contains("FAKE-GDB -nx -q -x"), "{screen}");
+    // The echoed command line wraps at the console's width, which depends on
+    // the length of the temporary directory's name: compare it unwrapped.
     assert!(
-        screen.contains(&format!("target remote 127.0.0.1:{port}")),
+        screen
+            .replace('\n', "")
+            .contains(&format!("target remote 127.0.0.1:{port}")),
         "{screen}"
     );
     assert!(screen.contains("connected"), "{screen}");
