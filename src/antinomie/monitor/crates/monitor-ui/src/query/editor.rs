@@ -137,7 +137,10 @@ fn filter_edit_iter<'a>(
             }
         }
     }
+    // A fixed id: a status label or spinner that appears before the field while
+    // the filter applies would move its automatic id and drop the focus.
     let mut output = egui::TextEdit::singleline(text)
+        .id(id.with("edit"))
         .hint_text(crate::theme::placeholder(ui, format!("filter e.g. {hint}")))
         .desired_width(width)
         .margin(crate::theme::TEXT_EDIT_MARGIN)
