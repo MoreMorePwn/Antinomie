@@ -158,6 +158,10 @@ impl MonitorApp {
     }
 }
 
+/// The least height of the open panes: a strip row and a few rows of the
+/// first pane. Below it the listing wins when the window is short.
+const PANES_FLOOR: f32 = 96.0;
+
 /// The whole tab: header, the listing with the registers, and the folded
 /// panes under them.
 fn show(
@@ -205,7 +209,7 @@ fn show(
                     })
                 .clamp(150.0, 420.0),
             )
-            .size_range(120.0..=(room * 0.6).max(150.0));
+            .size_range(PANES_FLOOR.min(room * 0.6)..=(room * 0.6).max(PANES_FLOOR));
     }
     bottom.show(ui, |ui| {
         if let Some(clicked) = panes::strip(ui, prefs, Some(view), panel.console.running()) {
