@@ -339,6 +339,11 @@ class DiskTests(unittest.TestCase):
                     unittest.mock.patch("sys.stderr", io.StringIO()):
                 self.args("--min-free", spec)
 
+    @unittest.mock.patch.object(
+        vm.shutil, "disk_usage",
+        # A host with 100 GiB used and 200 GiB free, whatever the real disk holds.
+        lambda path: __import__("collections").namedtuple("usage", "total used free")(
+            300 * 2**30, 100 * 2**30, 200 * 2**30))
     def test_guard_refuses_a_full_disk(self):
         self.assertIsNone(vm.disk_problem(self.args("--min-free", "/tmp:0")))
         self.assertIn("over the limit", vm.disk_problem(self.args("--max-used-gb", "0", "--min-free", "/tmp:0")))
