@@ -2713,6 +2713,24 @@ mod tests {
     }
 
     #[test]
+    fn the_vm_screen_tab_folds_details_while_it_shows() {
+        use egui_dock::Node;
+        let split = |layout: &WorkspaceLayout| match &layout.dock.main_surface()[NodeIndex::root()]
+        {
+            Node::Vertical(egui_dock::SplitNode { fraction, .. }) => *fraction,
+            other => panic!("not split: {other:?}"),
+        };
+        let mut layout = WorkspaceLayout::default();
+        layout.place_after_static(Panel::VmScreen);
+        layout.focus(Panel::VmScreen);
+        layout.fold_details_for_tab();
+        assert!(split(&layout) > 0.9, "Details and Activity fold down");
+        layout.focus(Panel::Trace);
+        layout.fold_details_for_tab();
+        assert!((split(&layout) - 0.72).abs() < 1e-6, "the split came back");
+    }
+
+    #[test]
     fn the_samples_page_folds_details_while_it_shows_and_other_pages_do_not() {
         use egui_dock::Node;
         let split = |layout: &WorkspaceLayout| match &layout.dock.main_surface()[NodeIndex::root()]

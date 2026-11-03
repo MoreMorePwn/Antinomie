@@ -52,24 +52,21 @@ impl MonitorApp {
         self.settings.sidebar_rail = !self.settings.sidebar_rail;
     }
 
-    /// The chevron row at the top of the open sidebar.
+    /// The chevron at the right end of the first section header of the
+    /// open sidebar: no row of its own, so a short window keeps Explorer.
     pub(super) fn sidebar_fold_button(&mut self, ui: &mut egui::Ui) {
         let fold = ui
-            .with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                ui.add(
-                    egui::Button::new(
-                        RichText::new(egui_phosphor::regular::CARET_DOUBLE_LEFT)
-                            .color(theme::muted()),
-                    )
-                    .frame(false),
+            .add(
+                egui::Button::new(
+                    RichText::new(egui_phosphor::regular::CARET_DOUBLE_LEFT).color(theme::muted()),
                 )
-                .on_hover_text(format!(
-                    "Fold the sidebar to icons ({})",
-                    ui.ctx().format_shortcut(&keys::TOGGLE_SIDEBAR)
-                ))
-                .clicked()
-            })
-            .inner;
+                .frame(false),
+            )
+            .on_hover_text(format!(
+                "Fold the sidebar to icons ({})",
+                ui.ctx().format_shortcut(&keys::TOGGLE_SIDEBAR)
+            ))
+            .clicked();
         if fold {
             self.toggle_sidebar();
         }
