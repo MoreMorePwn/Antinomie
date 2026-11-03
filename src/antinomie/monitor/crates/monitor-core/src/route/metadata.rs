@@ -138,7 +138,7 @@ fn utc(unix: u64) -> String {
     let day = unix % 86_400;
     format!(
         "{}T{:02}:{:02}:{:02}Z",
-        crate::ioc::feeds::date_text(unix),
+        crate::date::date_text(unix as i64),
         day / 3600,
         day % 3600 / 60,
         day % 60

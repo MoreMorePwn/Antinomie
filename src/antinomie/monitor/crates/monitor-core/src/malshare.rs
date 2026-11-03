@@ -194,23 +194,7 @@ fn text(value: &Value, name: &str) -> Option<String> {
 /// `seconds` since 1970 as `YYYY-MM-DD HH:MM:SS` (UTC), as MalwareBazaar
 /// writes dates.
 fn utc(seconds: i64) -> String {
-    let (days, rest) = (seconds.div_euclid(86_400), seconds.rem_euclid(86_400));
-    // Civil date from days (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!(
-        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02}",
-        rest / 3600,
-        rest % 3600 / 60,
-        rest % 60
-    )
+    crate::date::date_time_text(seconds)
 }
 
 /// The host of a source URL, as a tag.
@@ -612,8 +596,8 @@ pub fn dated_catalog(
     let range_label = match (days.last(), days.first()) {
         (Some(first), Some(last)) => format!(
             "{} through {}{}",
-            format_day(*first),
-            format_day(*last),
+            crate::date::day_text(*first),
+            crate::date::day_text(*last),
             if range.is_none() {
                 " (all cached metadata; not all upstream history)"
             } else {
@@ -638,7 +622,7 @@ pub fn dated_catalog(
             result.cancelled = true;
             break;
         }
-        let label = format_day(day);
+        let label = crate::date::day_text(day);
         let cached = cache.join(format!("{label}.sha256.txt"));
         let cached_body = read_daily_cache(&cached);
         let from_cache = cached_body.is_ok();
@@ -743,8 +727,8 @@ pub fn recent_date_range(day_count: u32) -> Result<(String, String), String> {
         .as_secs();
     let today = i64::try_from(seconds / 86_400).map_err(|_| "host date is out of range")?;
     Ok((
-        format_day(today - i64::from(day_count) + 1),
-        format_day(today),
+        crate::date::day_text(today - i64::from(day_count) + 1),
+        crate::date::day_text(today),
     ))
 }
 fn cached_calendar_days(cache: &Path) -> Result<Vec<i64>, String> {
@@ -977,51 +961,7 @@ fn parse_day(text: &str) -> Result<i64, String> {
     let day: u32 = parts[2]
         .parse()
         .map_err(|_| "dates are YYYY-MM-DD".to_string())?;
-    days_from_civil(year, month, day).ok_or_else(|| "dates are YYYY-MM-DD".into())
-}
-
-fn format_day(days: i64) -> String {
-    let (year, month, day) = civil_from_days(days);
-    format!("{year:04}-{month:02}-{day:02}")
-}
-
-fn days_from_civil(year: i32, month: u32, day: u32) -> Option<i64> {
-    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    let month_days = match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if leap => 29,
-        2 => 28,
-        _ => return None,
-    };
-    if !(1..=9999).contains(&year) || !(1..=month_days).contains(&day) {
-        return None;
-    }
-    let year = year as i64 - i64::from(month <= 2);
-    let era = year.div_euclid(400);
-    let yoe = year.rem_euclid(400) as u64;
-    let mp = if month > 2 { month - 3 } else { month + 9 };
-    let doy = (153 * mp as u64 + 2) / 5 + day as u64 - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    Some(era * 146097 + doe as i64 - 719468)
-}
-
-fn civil_from_days(z: i64) -> (i32, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let year = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let month_part = (5 * doy + 2) / 153;
-    let day = doy - (153 * month_part + 2) / 5 + 1;
-    let month = if month_part < 10 {
-        month_part + 3
-    } else {
-        month_part - 9
-    };
-    let year = if month <= 2 { year + 1 } else { year };
-    (year as i32, month as u32, day as u32)
+    crate::date::days_from_civil(year, month, day).ok_or_else(|| "dates are YYYY-MM-DD".into())
 }
 
 /// Download one sample, check it and keep it encrypted with its record.
@@ -1237,7 +1177,7 @@ mod tests {
             "0001-01-01",
             "9999-12-31",
         ] {
-            assert_eq!(format_day(parse_day(valid).unwrap()), valid);
+            assert_eq!(crate::date::day_text(parse_day(valid).unwrap()), valid);
         }
     }
 

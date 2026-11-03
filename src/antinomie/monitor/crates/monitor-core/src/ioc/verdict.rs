@@ -578,7 +578,7 @@ mod tests {
         let scan = scan_datasets(&dir, &all, &AtomicBool::new(false)).unwrap();
         assert_eq!(scan.loaded.len(), 6);
         let verdicts = evaluate_all(&all, &scan, &[], &OnlineResults::default());
-        let today = feeds::date_text(feeds::now_unix());
+        let today = crate::date::date_text(feeds::now_unix() as i64);
         let e1 = outcome(&all, &verdicts, "203.0.113.45:443");
         assert_eq!(e1.outcome, Outcome::Matched);
         assert_eq!(e1.date.as_deref(), Some(today.as_str()));

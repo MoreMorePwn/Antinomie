@@ -37,19 +37,10 @@ fn url(kind: &str, month: &str) -> String {
 
 /// This month and the one before, "YYYY-MM", in UTC.
 fn recent_months() -> [String; 2] {
-    let days = SystemTime::now()
+    let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs() / 86_400) as i64;
-    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = if month <= 2 { year + 1 } else { year };
+        .map_or(0, |elapsed| elapsed.as_secs()) as i64;
+    let (year, month) = crate::date::year_month(seconds);
     let (previous_year, previous) = if month == 1 {
         (year - 1, 12)
     } else {

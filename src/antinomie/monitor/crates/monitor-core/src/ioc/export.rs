@@ -41,7 +41,7 @@ pub(crate) fn when(us: Option<u64>) -> String {
 
 /// `YYYY-MM-DDTHH:MM:SS.mmmZ` without a time library.
 fn utc_text(seconds: i64, nanos: u32) -> String {
-    let date = super::feeds::date_text(u64::try_from(seconds).unwrap_or(0));
+    let date = crate::date::date_text(seconds.max(0));
     let day_seconds = seconds.rem_euclid(86_400);
     format!(
         "{date}T{:02}:{:02}:{:02}.{:03}Z",

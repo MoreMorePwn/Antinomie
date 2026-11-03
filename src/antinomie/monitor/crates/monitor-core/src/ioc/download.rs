@@ -500,7 +500,10 @@ mod tests {
         let threatfox = &statuses[0];
         let meta = threatfox.meta.as_ref().unwrap();
         assert_eq!(meta.records, 6);
-        assert_eq!(meta.date(), feeds::date_text(feeds::now_unix()));
+        assert_eq!(
+            meta.date(),
+            crate::date::date_text(feeds::now_unix() as i64)
+        );
         assert_eq!(meta.sha256.len(), 64);
         assert!(!meta.url.contains('?'));
         assert!(

@@ -317,21 +317,9 @@ impl FeedMeta {
     }
 }
 
-/// `YYYY-MM-DD` for Unix seconds.
+/// `YYYY-MM-DD` (UTC) for Unix seconds.
 pub fn date_text(unix: u64) -> String {
-    let days = (unix / SECONDS_PER_DAY) as i64;
-    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = if month <= 2 { year + 1 } else { year };
-    format!("{year:04}-{month:02}-{day:02}")
+    crate::date::date_text(unix as i64)
 }
 
 pub fn now_unix() -> u64 {

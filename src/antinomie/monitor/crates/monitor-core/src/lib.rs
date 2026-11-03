@@ -23,6 +23,7 @@ pub mod core_capture;
 pub mod core_dump;
 pub mod core_limits;
 pub mod core_strings;
+pub mod date;
 pub mod debug;
 pub mod dependencies;
 pub mod disk_start;
