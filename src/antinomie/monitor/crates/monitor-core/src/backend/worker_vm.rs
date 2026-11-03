@@ -222,6 +222,7 @@ impl Worker {
                 pending_capture_id: None,
                 boot_id,
                 boot_settled: false,
+                started: Instant::now(),
                 pre_ack: crate::pre_ack::PreAckBuffer::new(self.options.pre_ack),
                 quota: crate::quota::QuotaState::new(&self.options.reduced_keep_calls),
                 terminal_cursor: 0,

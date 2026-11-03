@@ -466,6 +466,8 @@ struct Session {
     boot_id: String,
     /// Set once the guest was seen to have finished booting (or has no boot to wait for).
     boot_settled: bool,
+    /// When this session began (the VM started or was restored).
+    started: Instant,
     /// Telemetry of root tasks whose launch the host has not been told about yet.
     pre_ack: crate::pre_ack::PreAckBuffer,
     /// Set once the recording quota is reached; see `crate::quota`.

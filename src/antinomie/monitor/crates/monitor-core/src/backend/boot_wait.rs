@@ -8,11 +8,13 @@
 //! recorded run, so the wait asks the guest kernel to open a file systemd
 //! writes (ACQUIRE, the call static analysis uses): no process starts in the
 //! guest, so nothing of the wait is in the recording or the process tree.
-//! `/run/systemd/system` tells a systemd guest from any other (BusyBox, Alpine);
-//! `/run/systemd/boot-finished` is created when systemd's start-up job queue
-//! is empty, which is what `systemctl is-system-running --wait` waits for. It
-//! is created whether or not every unit succeeded, so a degraded system counts
-//! as done.
+//! `/run/systemd/system` tells a systemd guest from any other (BusyBox, Alpine).
+//! Boot counts as finished (a degraded system counts too) when the first of
+//! these shows: `/run/systemd/boot-finished` (newer systemd, created when the
+//! start-up job queue is empty), `/run/crond.reboot` (cron has started and run
+//! its `@reboot` entries), or `/run/nologin` gone after a short floor
+//! (`systemd-user-sessions` ran, the late step of every systemd boot; the floor
+//! keeps the first seconds, before the file exists, from counting).
 use super::worker_guest::GUEST_REPLY_TIMEOUT;
 use super::*;
 use crate::boot_wait::{BootWait, BootWaitOutcome, LaunchWait, WAIT_TEXT};
@@ -21,9 +23,22 @@ use crate::boot_wait::{BootWait, BootWaitOutcome, LaunchWait, WAIT_TEXT};
 const SYSTEMD_RUNTIME: &str = "/run/systemd/system";
 /// Created by systemd's manager when start-up has finished.
 const BOOT_FINISHED: &str = "/run/systemd/boot-finished";
+/// Created by cron once it has started and run its `@reboot` entries.
+const CRON_STARTED: &str = "/run/crond.reboot";
+/// Present from early boot until `systemd-user-sessions` lets users in.
+const NOLOGIN: &str = "/run/nologin";
+/// How long after the VM started (at KVM speed) a missing `/run/nologin` is
+/// believed: it is created a few seconds into boot.
+const NOLOGIN_FLOOR: Duration = Duration::from_secs(8);
 /// Pause between two looks at the guest.
 const POLL: Duration = Duration::from_millis(1000);
 const ENOENT: i32 = 2;
+
+/// Errors that say nothing about the file: busy, out of memory, interrupted,
+/// out of handles, timed out.
+fn transient(errno: i32) -> bool {
+    matches!(errno, 4 | 11 | 12 | 16 | 23 | 24 | 110)
+}
 
 /// What the guest said about a path.
 enum Probe {
@@ -48,7 +63,7 @@ impl Worker {
         let Ok(args) = control::acquire(path, 0, 0, 4096) else {
             return Probe::Unsure;
         };
-        match session.request_typed(
+        let probe = match session.request_typed(
             control::ACQUIRE,
             &args,
             &mut self.snapshot,
@@ -66,17 +81,40 @@ impl Worker {
                     );
                     Probe::Present
                 }
+                // The guest answered with an errno for the file: any but
+                // "no such file" means the file is there (an empty file or a
+                // directory cannot be kept as a specimen).
                 Err(_) if reply.len() == 24 => {
                     match crate::parser::u32_at(&reply, 16).map(|status| status as i32) {
                         Ok(status) if status == -ENOENT => Probe::Absent,
+                        Ok(status) if status < 0 && !transient(-status) => Probe::Present,
                         _ => Probe::Unsure,
                     }
                 }
                 Err(_) => Probe::Unsure,
             },
             Err(RequestError::Rejected { status, .. }) if status == -ENOENT => Probe::Absent,
+            Err(RequestError::Rejected { status, .. }) if status < 0 && !transient(-status) => {
+                Probe::Present
+            }
             Err(_) => Probe::Unsure,
+        };
+        probe
+    }
+
+    /// Whether one of the end-of-boot markers shows; `floor` is how long after
+    /// the VM started a missing `/run/nologin` is believed.
+    fn boot_finished(&mut self, floor: Duration) -> bool {
+        if matches!(self.probe_path(BOOT_FINISHED), Probe::Present)
+            || matches!(self.probe_path(CRON_STARTED), Probe::Present)
+        {
+            return true;
         }
+        let up = self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.started.elapsed() >= floor);
+        up && matches!(self.probe_path(NOLOGIN), Probe::Absent)
     }
 
     /// Wait until the guest has finished booting, serving the app's commands
@@ -102,6 +140,7 @@ impl Worker {
         let deadline = session.process.waits.scaled(Duration::from_secs(u64::from(
             self.options.start.boot_wait_secs,
         )));
+        let floor = session.process.waits.scaled(NOLOGIN_FLOOR);
         let started = Instant::now();
         let mut systemd = None;
         // The first look decides whether there is anything to wait for.
@@ -116,7 +155,7 @@ impl Worker {
                     Probe::Unsure => {}
                 }
             }
-            if systemd.is_some() && matches!(self.probe_path(BOOT_FINISHED), Probe::Present) {
+            if systemd.is_some() && self.boot_finished(floor) {
                 break;
             }
             if started.elapsed() >= deadline {
