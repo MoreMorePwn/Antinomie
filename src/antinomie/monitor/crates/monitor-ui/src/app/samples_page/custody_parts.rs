@@ -49,6 +49,9 @@ pub(super) fn banner(ui: &mut egui::Ui, check: &ChainCheck, verifying: bool) -> 
                             check.summary().trim_end_matches('.'),
                             problem.at
                         ));
+                        if let Some(found) = problem.compared() {
+                            ui.label(RichText::new(found).monospace().color(tone.fg()));
+                        }
                     }
                 }
                 if ui

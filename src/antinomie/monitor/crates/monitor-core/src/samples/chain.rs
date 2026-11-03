@@ -375,8 +375,14 @@ fn read_index(connection: &Connection) -> Result<Vec<IndexRecord>, String> {
         .map_err(|e| e.to_string())
 }
 
+/// The entry as listed. An entry whose stored text no longer reads as an
+/// event (it was edited) is listed as unreadable, never dropped: the analyst
+/// has to be able to inspect the entry the verifier flags.
 pub(super) fn row_of(entry: &Entry) -> Option<EventRow> {
-    let event: CustodyEvent = serde_json::from_str(&entry.detail).ok()?;
+    let event: CustodyEvent =
+        serde_json::from_str(&entry.detail).unwrap_or_else(|_| CustodyEvent::Unreadable {
+            text: entry.detail.clone(),
+        });
     Some(EventRow {
         seq: entry.seq,
         at_ms: entry.at_ms,

@@ -4,7 +4,7 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
-## 0.8.3 — 2026-11-04
+## 0.8.3 — 2026-MM-DD
 
 ### Host
 
@@ -16,6 +16,7 @@ it runs.
 - **The Explorer title no longer shows a count.**
 - **The note that a read-only file has no guest hash is an info icon** beside Hash this state in a file's history; hover it for the sentence.
 - **Type clipboard is in the run terminal's header** as well as in the VM menu (Ctrl+Shift+Y and the palette entry stay); it is not in the main toolbar.
+- **A changed custody entry stays in the table.** When an entry's stored text was edited so it no longer read as an event, the Custody log (and the global custody view and the report) skipped its row, so the numbers went 1, 3, 4. The entry is now listed as "Unreadable entry" with the stored text, marked changed, and the banner, the row, the HTML export, the JSON export (`status.problem`) and the report say what the verifier compared (field, expected hash, found hash).
 
 ## 0.8.2 — 2026-11-03
 

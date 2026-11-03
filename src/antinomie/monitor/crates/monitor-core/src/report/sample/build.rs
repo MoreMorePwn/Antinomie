@@ -591,7 +591,10 @@ pub fn custody(check: &ChainCheck, events: &[EventRow]) -> (CustodySection, u64)
             problem: check
                 .problem
                 .as_ref()
-                .map(|p| format!("entry {}: {}", p.at, p.text))
+                .map(|p| match p.compared() {
+                    Some(found) => format!("entry {}: {} ({found})", p.at, p.text),
+                    None => format!("entry {}: {}", p.at, p.text),
+                })
                 .unwrap_or_default(),
             log,
         },

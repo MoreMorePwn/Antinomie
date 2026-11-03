@@ -234,7 +234,7 @@ fn render_html(value: &Value, check: &ChainCheck) -> Result<String, String> {
             super::chain_check::EntryState::Changed => "changed",
             super::chain_check::EntryState::Unverified => "unverified",
         };
-        let (label, detail) = row_of(entry).map_or_else(
+        let (label, mut detail) = row_of(entry).map_or_else(
             || (entry.kind.clone(), entry.detail.clone()),
             |row| {
                 (
@@ -248,6 +248,14 @@ fn render_html(value: &Value, check: &ChainCheck) -> Result<String, String> {
                 )
             },
         );
+        if let Some(found) = check
+            .problem
+            .as_ref()
+            .filter(|problem| problem.at == entry.seq)
+            .and_then(|problem| problem.compared())
+        {
+            detail.push_str(&format!(" [changed: {found}]"));
+        }
         rows.push_str(&format!(
             "<tr class=\"{state}\"><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>\
              <td>{state}</td><td class=\"mono\" title=\"previous {}\">{}</td></tr>\n",
@@ -268,10 +276,13 @@ fn render_html(value: &Value, check: &ChainCheck) -> Result<String, String> {
             escape(&check.head)
         ),
         Some(problem) => format!(
-            "<p class=\"bad\"><b>Log broken at entry {}.</b> {}. Entries from there on are \
+            "<p class=\"bad\"><b>Log broken at entry {}.</b> {}{}. Entries from there on are \
              unverified.</p>",
             problem.at,
-            escape(&problem.text)
+            escape(&problem.text),
+            problem
+                .compared()
+                .map_or_else(String::new, |found| format!(" ({})", escape(&found)))
         ),
     };
     // `<` as a JSON escape keeps the data from closing the script element.

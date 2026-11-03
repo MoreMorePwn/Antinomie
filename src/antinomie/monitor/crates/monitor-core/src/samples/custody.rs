@@ -114,6 +114,10 @@ pub enum CustodyEvent {
         run: String,
         detail: String,
     },
+    /// Not an event the app writes: the stored text of an entry that no
+    /// longer reads as an event (it was edited). Listed so the entry stays
+    /// visible; never stored.
+    Unreadable { text: String },
 }
 
 /// Every kind with its list name, for the filters and the export.
@@ -173,11 +177,15 @@ impl CustodyEvent {
             Self::NoteEdited { .. } => "note_edited",
             Self::NoteDeleted { .. } => "note_deleted",
             Self::RunDeleted { .. } => "run_deleted",
+            Self::Unreadable { .. } => "unreadable",
         }
     }
 
     /// The short name the list shows.
     pub fn label(&self) -> &'static str {
+        if matches!(self, Self::Unreadable { .. }) {
+            return "Unreadable entry";
+        }
         label_of(self.key())
     }
 
@@ -218,6 +226,10 @@ impl CustodyEvent {
             Self::NoteDeleted { note, hash, refs } => note_detail(*note, "deleted", hash, refs),
             Self::RunDeleted { vm, run, detail } => {
                 format!("Run {run} on {vm} deleted: {detail}")
+            }
+            Self::Unreadable { text } => {
+                let shown: String = text.chars().take(120).collect();
+                format!("the stored text is no longer a valid event: {shown}")
             }
         }
     }

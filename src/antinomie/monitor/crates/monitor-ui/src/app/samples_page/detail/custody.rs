@@ -3,8 +3,12 @@
 //! check mark per entry and the head hash to copy. The log is tamper-evident,
 //! not tamper-proof; the banner says so.
 use super::{parts, *};
-use crate::widgets::fit_table::{Col, FitBuilder};
+use crate::widgets::{
+    fit_table::{Col, FitBuilder},
+    Tone,
+};
 use crate::{app::samples_page::custody_parts, widgets::fit_table};
+use antinomie_monitor_core::samples::EntryState;
 
 /// What the tab asks of the window.
 pub(super) enum Outcome {
@@ -85,7 +89,21 @@ pub(super) fn show(
                     if event.before_chain {
                         detail.push_str(" (recorded before the custody log)");
                     }
-                    fit_table::cell(ui, fit_table::Cell::Text, &detail).on_hover_text(&detail);
+                    let mut shown = detail;
+                    if state == EntryState::Changed {
+                        if let Some(found) = data.chain.problem.as_ref().and_then(|p| p.compared())
+                        {
+                            shown.push_str(&format!(" [changed, {found}]"));
+                        }
+                        fit_table::cell_rich(
+                            ui,
+                            fit_table::Cell::Text,
+                            RichText::new(&shown).color(Tone::Error.fg()),
+                        )
+                        .on_hover_text(&shown);
+                    } else {
+                        fit_table::cell(ui, fit_table::Cell::Text, &shown).on_hover_text(&shown);
+                    }
                 });
                 row.col(|ui| {
                     custody_parts::check_mark(ui, state, &event.prev, &event.hash);

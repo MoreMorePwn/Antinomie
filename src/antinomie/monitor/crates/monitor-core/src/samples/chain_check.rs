@@ -107,6 +107,32 @@ pub struct Problem {
     /// The first entry that cannot be trusted.
     pub at: u64,
     pub text: String,
+    /// The field that does not match (`hash` or `prev`), when the check
+    /// compared one; empty otherwise.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub field: String,
+    /// What the field must hold: the hash the verifier recomputed, or the
+    /// one the library index recorded.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub expected: String,
+    /// What is stored.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub found: String,
+}
+
+impl Problem {
+    /// "hash: expected 1a2b3c4d, found 5e6f7a8b" for a compared field.
+    pub fn compared(&self) -> Option<String> {
+        if self.field.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "{}: expected {}, found {}",
+            self.field,
+            short(&self.expected),
+            short(&self.found)
+        ))
+    }
 }
 
 /// How an entry stands after a check.
@@ -167,8 +193,24 @@ pub fn short(hash: &str) -> &str {
 }
 
 fn note(problem: &mut Option<Problem>, at: u64, text: String) {
+    note_diff(problem, at, text, ("", "", ""));
+}
+
+/// [`note`] with the field that failed, what it must hold and what is stored.
+fn note_diff(
+    problem: &mut Option<Problem>,
+    at: u64,
+    text: String,
+    (field, expected, found): (&str, &str, &str),
+) {
     if problem.as_ref().is_none_or(|known| at < known.at) {
-        *problem = Some(Problem { at, text });
+        *problem = Some(Problem {
+            at,
+            text,
+            field: field.into(),
+            expected: expected.into(),
+            found: found.into(),
+        });
     }
 }
 
@@ -188,11 +230,13 @@ pub fn check_chain(sha256: &str, entries: &[Entry], heads: &[&IndexRecord]) -> C
             );
             break;
         }
-        if entry_hash(sha256, entry) != entry.hash {
-            note(
+        let recomputed = entry_hash(sha256, entry);
+        if recomputed != entry.hash {
+            note_diff(
                 &mut problem,
                 entry.seq,
                 format!("entry {} was edited after it was written", entry.seq),
+                ("hash", &recomputed, &entry.hash),
             );
             break;
         }
@@ -204,7 +248,7 @@ pub fn check_chain(sha256: &str, entries: &[Entry], heads: &[&IndexRecord]) -> C
                     "the first entry does not start the chain".into(),
                 );
             } else {
-                note(
+                note_diff(
                     &mut problem,
                     entry.seq - 1,
                     format!(
@@ -212,6 +256,7 @@ pub fn check_chain(sha256: &str, entries: &[Entry], heads: &[&IndexRecord]) -> C
                         entry.seq - 1,
                         entry.seq
                     ),
+                    ("hash", &entry.prev, &previous),
                 );
             }
             break;
@@ -237,13 +282,14 @@ pub fn check_chain(sha256: &str, entries: &[Entry], heads: &[&IndexRecord]) -> C
                         head.entry_seq
                     ),
                 ),
-                Some(entry) if entry.hash != head.entry_hash => note(
+                Some(entry) if entry.hash != head.entry_hash => note_diff(
                     &mut problem,
                     entry.seq,
                     format!(
                         "entry {} differs from what the library index recorded",
                         entry.seq
                     ),
+                    ("hash", &head.entry_hash, &entry.hash),
                 ),
                 Some(_) => {}
             }
