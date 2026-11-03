@@ -295,54 +295,17 @@ impl MemoryView {
                 .height(480.0)
                 .selected_text(RichText::new(&current.name).font(theme::mono(font_size - 1.0)))
                 .show_ui(ui, |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.search)
-                            .hint_text(crate::theme::hint_text("Search plugins"))
-                            .desired_width(f32::INFINITY),
-                    )
-                    .request_focus();
-                    ui.checkbox(&mut self.show_deprecated, "Show deprecated names");
-                    ui.separator();
-                    let needle = self.search.trim().to_lowercase();
-                    let mut group = String::new();
-                    // Volatility's own plugins, then the community folder's.
-                    let ordered = plugins
-                        .iter()
-                        .filter(|plugin| !plugin.community)
-                        .chain(plugins.iter().filter(|plugin| plugin.community));
-                    for plugin in ordered.filter(applies) {
-                        if plugin.deprecated() && !self.show_deprecated {
-                            continue;
-                        }
-                        if !needle.is_empty()
-                            && !plugin.name.to_lowercase().contains(&needle)
-                            && !plugin.help.to_lowercase().contains(&needle)
-                        {
-                            continue;
-                        }
-                        let area = if plugin.community {
-                            let os = os_of(plugin).map_or("generic", Os::prefix);
-                            format!("community · {os}")
-                        } else {
-                            plugin_area(&plugin.name)
-                        };
-                        if area != group {
-                            group = area.clone();
-                            ui.add_space(2.0);
-                            ui.label(RichText::new(area).small().color(theme::heading()));
-                        }
-                        let selected = plugin.name == current.name;
-                        if ui
-                            .selectable_label(
-                                selected,
-                                RichText::new(&plugin.name).font(theme::mono(font_size - 1.0)),
-                            )
-                            .on_hover_text(&plugin.help)
-                            .clicked()
-                        {
-                            chosen = Some(plugin.name.clone());
-                        }
-                    }
+                    chosen = plugin_choices(
+                        ui,
+                        PluginFilter {
+                            search: &mut self.search,
+                            show_deprecated: &mut self.show_deprecated,
+                        },
+                        plugins,
+                        (&applies, &os_of),
+                        &current,
+                        font_size,
+                    );
                 });
             let running = self
                 .jobs
@@ -364,29 +327,9 @@ impl MemoryView {
                 let values = self.values.get(&current.name).cloned().unwrap_or_default();
                 run = Some(memory::plugin_args(&current, &values));
             }
-            ui.menu_button(egui_phosphor::regular::GEAR, |ui| {
-                ui.set_max_width(440.0);
-                let mut online = cx.online_symbols;
-                if ui
-                    .checkbox(&mut online, "Look up symbol tables online")
-                    .changed()
-                {
-                    action = Some(MemoryAction::OnlineSymbols(online));
-                }
-                ui.label(
-                    RichText::new(format!(
-                        "For Linux and macOS dumps without a symbol table of their own (imported \
-                         dumps): after Volatility's folders, the table of the dump's kernel is \
-                         looked up by its banner in {} on GitHub, about 11,000 distribution \
-                         kernels, and kept in Volatility's cache. Dumps of Antinomie's VMs carry \
-                         their base's table and stay offline.",
-                        memory::ONLINE_SYMBOLS_NAME
-                    ))
-                    .color(theme::muted()),
-                );
-            })
-            .response
-            .on_hover_text("Memory analysis options");
+            if let Some(next) = symbols_menu(ui, cx.online_symbols) {
+                action = Some(next);
+            }
             let community = plugins.iter().filter(|plugin| plugin.community).count();
             let label = if failures.is_empty() {
                 format!(
@@ -400,121 +343,21 @@ impl MemoryView {
                     failures.len()
                 )
             };
-            ui.menu_button(label, |ui| {
-                ui.set_max_width(420.0);
-                if !failures.is_empty() {
-                    crate::widgets::bounded_menu(ui, |ui| {
-                        for failure in failures {
-                            crate::activity::error(
-                                ui,
-                                format!(
-                                    "Failed to load Volatility plugin: {}",
-                                    failure.trim_start_matches("volatility3.plugins.")
-                                ),
-                            );
-                        }
-                    });
-                }
-                ui.separator();
-                if ui
-                    .button(format!(
-                        "{} Plugin catalog…",
-                        egui_phosphor::regular::STOREFRONT
-                    ))
-                    .on_hover_text("Download community plugins checked for this Volatility")
-                    .clicked()
-                {
-                    self.catalog_open = true;
-                    ui.close_menu();
-                }
-                if ui.button("Open community plugins folder").clicked() {
-                    let dir = memory::plugins_dir(data_dir);
-                    crate::folders::show_created_detached(dir);
-                    ui.close_menu();
-                }
-                if ui
-                    .button("Reload plugin list")
-                    .on_hover_text("After adding, changing or removing plugins")
-                    .clicked()
-                {
-                    reload = true;
-                    ui.close_menu();
-                }
-            });
+            community_menu(
+                ui,
+                label,
+                failures,
+                &mut self.catalog_open,
+                data_dir,
+                &mut reload,
+            );
             // Truncated: a long description must not widen the tab.
             ui.add(egui::Label::new(RichText::new(&current.help).color(theme::muted())).truncate())
                 .on_hover_text(&current.help);
         });
         if !current.options.is_empty() {
             let values = self.values.entry(current.name.clone()).or_default();
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 10.0;
-                for option in &current.options {
-                    let at = match values.iter().position(|(name, _)| name == &option.name) {
-                        Some(at) => at,
-                        None => {
-                            values.push((option.name.clone(), String::new()));
-                            values.len() - 1
-                        }
-                    };
-                    let value = &mut values[at].1;
-                    let help = if option.help.is_empty() {
-                        option.flag()
-                    } else {
-                        format!("{}\n{}", option.flag(), option.help)
-                    };
-                    match option.kind {
-                        OptionKind::Bool => {
-                            let mut on = value == "true";
-                            if ui
-                                .checkbox(&mut on, option.name.replace('_', " "))
-                                .on_hover_text(help)
-                                .changed()
-                            {
-                                *value = if on { "true".into() } else { String::new() };
-                            }
-                        }
-                        OptionKind::Choice => {
-                            ui.label(option.name.replace('_', " ")).on_hover_text(&help);
-                            egui::ComboBox::from_id_salt(("memory_choice", &option.name))
-                                .selected_text(if value.is_empty() {
-                                    "default".to_owned()
-                                } else {
-                                    value.clone()
-                                })
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(value, String::new(), "default");
-                                    for choice in &option.choices {
-                                        ui.selectable_value(value, choice.clone(), choice);
-                                    }
-                                });
-                        }
-                        _ => {
-                            ui.label(option.name.replace('_', " ")).on_hover_text(&help);
-                            let hint = match option.kind {
-                                OptionKind::List => "values, comma-separated".to_owned(),
-                                _ => option
-                                    .default
-                                    .as_ref()
-                                    .map(|value| value.to_string())
-                                    .unwrap_or_default(),
-                            };
-                            ui.add(
-                                egui::TextEdit::singleline(value)
-                                    .hint_text(crate::theme::hint_text(hint))
-                                    .font(egui::TextStyle::Monospace)
-                                    .margin(theme::TEXT_EDIT_MARGIN)
-                                    .desired_width(if option.kind == OptionKind::Int {
-                                        90.0
-                                    } else {
-                                        170.0
-                                    }),
-                            )
-                            .on_hover_text(help);
-                        }
-                    }
-                }
-            });
+            plugin_options(ui, &current, values);
         }
         if let Some(name) = chosen {
             self.plugin = Some(name);
@@ -942,4 +785,227 @@ pub(super) fn plugin_run_row(
     ]);
 
     row
+}
+
+/// What the plugin picker edits in the filter it shows.
+struct PluginFilter<'a> {
+    search: &'a mut String,
+    show_deprecated: &'a mut bool,
+}
+
+/// The plugins of the open list that apply to the dump and match the search: the one chosen.
+fn plugin_choices(
+    ui: &mut egui::Ui,
+    filter: PluginFilter<'_>,
+    plugins: &[PluginInfo],
+    (applies, os_of): (
+        &impl Fn(&&PluginInfo) -> bool,
+        &impl Fn(&PluginInfo) -> Option<Os>,
+    ),
+    current: &PluginInfo,
+    font_size: f32,
+) -> Option<String> {
+    let mut chosen = None;
+    ui.add(
+        egui::TextEdit::singleline(filter.search)
+            .hint_text(crate::theme::hint_text("Search plugins"))
+            .desired_width(f32::INFINITY),
+    )
+    .request_focus();
+    ui.checkbox(filter.show_deprecated, "Show deprecated names");
+    ui.separator();
+    let needle = filter.search.trim().to_lowercase();
+    let mut group = String::new();
+    // Volatility's own plugins, then the community folder's.
+    let ordered = plugins
+        .iter()
+        .filter(|plugin| !plugin.community)
+        .chain(plugins.iter().filter(|plugin| plugin.community));
+    for plugin in ordered.filter(applies) {
+        if plugin.deprecated() && !*filter.show_deprecated {
+            continue;
+        }
+        if !needle.is_empty()
+            && !plugin.name.to_lowercase().contains(&needle)
+            && !plugin.help.to_lowercase().contains(&needle)
+        {
+            continue;
+        }
+        let area = if plugin.community {
+            let os = os_of(plugin).map_or("generic", Os::prefix);
+            format!("community · {os}")
+        } else {
+            plugin_area(&plugin.name)
+        };
+        if area != group {
+            group = area.clone();
+            ui.add_space(2.0);
+            ui.label(RichText::new(area).small().color(theme::heading()));
+        }
+        let selected = plugin.name == current.name;
+        if ui
+            .selectable_label(
+                selected,
+                RichText::new(&plugin.name).font(theme::mono(font_size - 1.0)),
+            )
+            .on_hover_text(&plugin.help)
+            .clicked()
+        {
+            chosen = Some(plugin.name.clone());
+        }
+    }
+    chosen
+}
+
+/// The gear menu: the one memory analysis option.
+fn symbols_menu(ui: &mut egui::Ui, online_symbols: bool) -> Option<MemoryAction> {
+    let mut action = None;
+    ui.menu_button(egui_phosphor::regular::GEAR, |ui| {
+        ui.set_max_width(440.0);
+        let mut online = online_symbols;
+        if ui
+            .checkbox(&mut online, "Look up symbol tables online")
+            .changed()
+        {
+            action = Some(MemoryAction::OnlineSymbols(online));
+        }
+        ui.label(
+            RichText::new(format!(
+                "For Linux and macOS dumps without a symbol table of their own (imported \
+                 dumps): after Volatility's folders, the table of the dump's kernel is \
+                 looked up by its banner in {} on GitHub, about 11,000 distribution \
+                 kernels, and kept in Volatility's cache. Dumps of Antinomie's VMs carry \
+                 their base's table and stay offline.",
+                memory::ONLINE_SYMBOLS_NAME
+            ))
+            .color(theme::muted()),
+        );
+    })
+    .response
+    .on_hover_text("Memory analysis options");
+    action
+}
+
+/// The Community menu: failures to load, the catalog, the folder and a reload.
+fn community_menu(
+    ui: &mut egui::Ui,
+    label: String,
+    failures: &[String],
+    catalog_open: &mut bool,
+    data_dir: &Path,
+    reload: &mut bool,
+) {
+    ui.menu_button(label, |ui| {
+        ui.set_max_width(420.0);
+        if !failures.is_empty() {
+            crate::widgets::bounded_menu(ui, |ui| {
+                for failure in failures {
+                    crate::activity::error(
+                        ui,
+                        format!(
+                            "Failed to load Volatility plugin: {}",
+                            failure.trim_start_matches("volatility3.plugins.")
+                        ),
+                    );
+                }
+            });
+        }
+        ui.separator();
+        if ui
+            .button(format!(
+                "{} Plugin catalog…",
+                egui_phosphor::regular::STOREFRONT
+            ))
+            .on_hover_text("Download community plugins checked for this Volatility")
+            .clicked()
+        {
+            *catalog_open = true;
+            ui.close_menu();
+        }
+        if ui.button("Open community plugins folder").clicked() {
+            let dir = memory::plugins_dir(data_dir);
+            crate::folders::show_created_detached(dir);
+            ui.close_menu();
+        }
+        if ui
+            .button("Reload plugin list")
+            .on_hover_text("After adding, changing or removing plugins")
+            .clicked()
+        {
+            *reload = true;
+            ui.close_menu();
+        }
+    });
+}
+
+/// The options of the plugin, one editor each, for the values the run will carry.
+fn plugin_options(ui: &mut egui::Ui, current: &PluginInfo, values: &mut Vec<(String, String)>) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        for option in &current.options {
+            let at = match values.iter().position(|(name, _)| name == &option.name) {
+                Some(at) => at,
+                None => {
+                    values.push((option.name.clone(), String::new()));
+                    values.len() - 1
+                }
+            };
+            let value = &mut values[at].1;
+            let help = if option.help.is_empty() {
+                option.flag()
+            } else {
+                format!("{}\n{}", option.flag(), option.help)
+            };
+            match option.kind {
+                OptionKind::Bool => {
+                    let mut on = value == "true";
+                    if ui
+                        .checkbox(&mut on, option.name.replace('_', " "))
+                        .on_hover_text(help)
+                        .changed()
+                    {
+                        *value = if on { "true".into() } else { String::new() };
+                    }
+                }
+                OptionKind::Choice => {
+                    ui.label(option.name.replace('_', " ")).on_hover_text(&help);
+                    egui::ComboBox::from_id_salt(("memory_choice", &option.name))
+                        .selected_text(if value.is_empty() {
+                            "default".to_owned()
+                        } else {
+                            value.clone()
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(value, String::new(), "default");
+                            for choice in &option.choices {
+                                ui.selectable_value(value, choice.clone(), choice);
+                            }
+                        });
+                }
+                _ => {
+                    ui.label(option.name.replace('_', " ")).on_hover_text(&help);
+                    let hint = match option.kind {
+                        OptionKind::List => "values, comma-separated".to_owned(),
+                        _ => option
+                            .default
+                            .as_ref()
+                            .map(|value| value.to_string())
+                            .unwrap_or_default(),
+                    };
+                    ui.add(
+                        egui::TextEdit::singleline(value)
+                            .hint_text(crate::theme::hint_text(hint))
+                            .font(egui::TextStyle::Monospace)
+                            .margin(theme::TEXT_EDIT_MARGIN)
+                            .desired_width(if option.kind == OptionKind::Int {
+                                90.0
+                            } else {
+                                170.0
+                            }),
+                    )
+                    .on_hover_text(help);
+                }
+            }
+        }
+    });
 }
