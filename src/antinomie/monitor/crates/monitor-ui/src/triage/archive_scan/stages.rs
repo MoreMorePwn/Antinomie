@@ -307,7 +307,7 @@ impl Scan {
             engine,
             ..
         } = self;
-        let (mut files, mut event_journal, mut counts) = (files, event_journal, counts);
+        let (files, mut event_journal, counts) = (files, event_journal, counts);
         let scoped = in_scope(request);
         // The last install-like call the kernel refused: "openat /var/run/x ENOENT".
         let mut last_failed: Option<FailedStep> = None;
@@ -359,23 +359,22 @@ impl Scan {
                     bpf_omitted += 1;
                 }
             }
-            engine.observe(invocation, &files, Some(&recording.directory), !real);
-            sigma_events::seed_launch_cwd(&mut files, event);
-            remember_cwd(&mut files, invocation, event);
-            remember_open(&mut files, invocation, event);
-            apply_dup(&mut files, invocation, event);
-            forget_closed(&mut files, invocation, event);
-            inherit_open_fds(&mut files, invocation, event, &cookies);
+            engine.observe(invocation, files, Some(&recording.directory), !real);
+            sigma_events::seed_launch_cwd(files, event);
+            remember_cwd(files, invocation, event);
+            remember_open(files, invocation, event);
+            apply_dup(files, invocation, event);
+            forget_closed(files, invocation, event);
+            inherit_open_fds(files, invocation, event, cookies);
             // Classified before the call is tracked: "created" means the path
             // was not seen before this call.
-            let hits = file_category::classify(&files, invocation, event);
+            let hits = file_category::classify(files, invocation, event);
             if real {
-                note_failed_step(&mut last_failed, &files, invocation, event);
+                note_failed_step(&mut last_failed, files, invocation, event);
                 note_schema_gaps(&mut schema_gaps, invocation, event);
             }
             if let Some(writer) = &mut event_journal {
-                if let Err(error) =
-                    normalized::call(writer, &mut pending, &mut files, invocation, event)
+                if let Err(error) = normalized::call(writer, &mut pending, files, invocation, event)
                 {
                     *event_error = Some(error);
                     *event_journal = None;
@@ -383,21 +382,17 @@ impl Scan {
             }
             if event_journal.is_none() {
                 // The journal tracks seen paths itself; without it, do it here.
-                sigma_events::track(&mut files, invocation, event);
+                sigma_events::track(files, invocation, event);
             }
-            tabs.observe(request, &mut counts, &files, invocation, event, &hits)?;
+            tabs.observe(request, counts, files, invocation, event, &hits)?;
             // Pages the call wrote back or unmapped were copied before its own change.
             if real {
                 let directory = Some(recording.directory.as_path());
-                file_index.observe_mapped(&files, invocation, event, directory, true);
+                file_index.observe_mapped(files, invocation, event, directory, true);
             }
-            if let Some(row) = file_index.observe_with(
-                &files,
-                invocation,
-                event,
-                Some(&recording.directory),
-                &hits,
-            ) {
+            if let Some(row) =
+                file_index.observe_with(files, invocation, event, Some(&recording.directory), &hits)
+            {
                 // Failed reads are listed with their result while Failed attempts is on.
                 let failed_read = file_visibility::FileVisibility::failed(&row);
                 if failed_read {
@@ -421,12 +416,12 @@ impl Scan {
             }
             if real {
                 let directory = Some(recording.directory.as_path());
-                file_index.observe_mapped(&files, invocation, event, directory, false);
-                file_index.observe_hashes(&files, invocation, event);
+                file_index.observe_mapped(files, invocation, event, directory, false);
+                file_index.observe_hashes(files, invocation, event);
             }
             Ok(())
         };
-        let (_, files_complete, _) = walk_segments(&recordings, cancel, |segment, page| {
+        let (_, files_complete, _) = walk_segments(recordings, cancel, |segment, page| {
             let recording = &recordings[segment];
             for submitted in page.iter().filter(&scoped) {
                 // Requests a ring's own thread submitted, once the calls reach
@@ -563,7 +558,7 @@ impl Scan {
             engine,
             ..
         } = self;
-        let (mut files, mut event_journal) = (files, event_journal);
+        let (files, mut event_journal) = (files, event_journal);
         let started_ms = *started_ms;
         let recording = recordings.last().ok_or("no recording segment")?;
         let mut network_request = request.clone();
@@ -672,11 +667,11 @@ impl Scan {
             },
         };
         if let Some(writer) = &mut event_journal {
-            if let Err(error) = normalized::flush_creations(writer, &mut files) {
+            if let Err(error) = normalized::flush_creations(writer, files) {
                 *event_error = Some(error);
             }
             let held = std::mem::take(pending);
-            if let Err(error) = normalized::flush_connections(writer, held, &files, clock_anchor) {
+            if let Err(error) = normalized::flush_connections(writer, held, files, clock_anchor) {
                 *event_error = Some(error);
                 *event_journal = None;
             }
@@ -694,7 +689,7 @@ impl Scan {
         // A program that died of a signal before its first recorded call leaves no
         // calls to judge: say so, with the signal, instead of an empty report.
         let root_crash = (*scoped_count == 0)
-            .then(|| root_exit_signal(&directory))
+            .then(|| root_exit_signal(directory))
             .flatten();
         if let Some(text) = &root_crash {
             engine.root_crash(text, clock_anchor);

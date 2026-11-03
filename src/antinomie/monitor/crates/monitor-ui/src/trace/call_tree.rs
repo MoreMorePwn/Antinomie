@@ -151,7 +151,7 @@ impl Inspector {
                     ui,
                     Row {
                         id: ui.id().with((salt, "return")),
-                        branch: &root,
+                        branch: root,
                         expand: None,
                         name: "Return",
                         name_color: theme::heading(),
@@ -192,7 +192,7 @@ impl Inspector {
                     ui,
                     Row {
                         id: ui.id().with((salt, "return")),
-                        branch: &root,
+                        branch: root,
                         expand: None,
                         name: "Task ended",
                         name_color: theme::heading(),
@@ -213,7 +213,7 @@ impl Inspector {
                     ui,
                     Row {
                         id: ui.id().with((salt, "return")),
-                        branch: &root,
+                        branch: root,
                         expand: None,
                         name: "Return",
                         name_color: theme::heading(),

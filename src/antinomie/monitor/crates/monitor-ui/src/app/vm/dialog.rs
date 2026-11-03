@@ -264,7 +264,7 @@ impl MonitorApp {
                 directory_input(
                     ui,
                     &mut app.draft.disk_root,
-                    &disk_default,
+                    disk_default,
                     &mut app.folder_picker,
                     FolderTarget {
                         generation: app.draft_generation,
@@ -276,9 +276,9 @@ impl MonitorApp {
             ui.end_row();
             ui.label("Recording parent");
             let recording_default = if creating {
-                app.draft.disk_root.as_ref().unwrap_or(&disk_default)
+                app.draft.disk_root.as_ref().unwrap_or(disk_default)
             } else {
-                &disk_default
+                disk_default
             }
             .clone();
             directory_input(

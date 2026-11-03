@@ -423,7 +423,7 @@ impl MemoryView {
                 .map(str::to_owned)
                 .collect()
         });
-        let line_height = ui.fonts(|fonts| fonts.row_height(&mono)) + 2.0;
+        let line_height = ui.fonts(|fonts| fonts.row_height(mono)) + 2.0;
         egui::Frame::new()
             .fill(theme::bg())
             .corner_radius(4.0)
@@ -453,7 +453,7 @@ impl MemoryView {
         let Ok(table) = &result.table else {
             return;
         };
-        let char_width = ui.fonts(|fonts| fonts.glyph_width(&mono, '0'));
+        let char_width = ui.fonts(|fonts| fonts.glyph_width(mono, '0'));
         let row_height = theme::row_height(font_size);
         let widths = column_widths(table, char_width);
         let total: f32 = widths.iter().sum();

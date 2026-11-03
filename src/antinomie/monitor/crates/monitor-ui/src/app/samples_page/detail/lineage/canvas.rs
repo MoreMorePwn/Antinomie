@@ -678,7 +678,7 @@ fn draw_labels<'a>(
         let mut x = pill.left() + 6.0 + font.size / 2.0;
         for kind in item.edge.kinds.keys() {
             kind_shape(
-                &painter,
+                painter,
                 *kind,
                 Pos2::new(x, pill.center().y),
                 font.size * 0.7,

@@ -347,7 +347,7 @@ impl MonitorApp {
             && self.trace_evidence.is_none()
             && self.archive_hidden_categories != self.settings.hidden_trace_categories
         {
-            self.refresh_archive_matches(&filter);
+            self.refresh_archive_matches(filter);
         }
         let total = all.len();
         let hidden = self.settings.hidden_trace_categories.clone();

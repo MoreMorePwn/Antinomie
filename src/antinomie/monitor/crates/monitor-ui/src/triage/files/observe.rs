@@ -334,7 +334,7 @@ impl FileIndex {
                 retention: self.retention,
                 call: trace::key(call),
             };
-            change.kernel_copy(&copy, &copied, &mut budget);
+            change.kernel_copy(&copy, copied, &mut budget);
         } else if success && changed {
             match name {
                 "truncate" | "ftruncate" => {

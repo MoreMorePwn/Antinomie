@@ -49,7 +49,7 @@ impl MonitorApp {
         // Copies for drawing only: they keep whether a report exists, not the
         // report's rows. The listing is rebuilt only when the runs it shows
         // change, not every frame.
-        let key = self.run_list_key(&vm_id);
+        let key = self.run_list_key(vm_id);
         if self
             .run_list_cache
             .as_ref()
@@ -71,7 +71,7 @@ impl MonitorApp {
                 .any(|run| &run.id == id && run.vm_id == vm_id)
         });
         let unfiltered_count = runs.len();
-        let draft = crate::run_filter::compile(&self.run_query, &fields);
+        let draft = crate::run_filter::compile(&self.run_query, fields);
         if let Some(error) = draft.error.as_ref() {
             crate::activity::inline_only(
                 ui,
@@ -82,7 +82,7 @@ impl MonitorApp {
             self.applied_run_query.clone_from(&self.run_query);
             crate::query::remember_valid_filter(ui, &self.run_query);
         }
-        let compiled = crate::run_filter::compile(&self.applied_run_query, &fields);
+        let compiled = crate::run_filter::compile(&self.applied_run_query, fields);
         // An empty filter keeps every run without building its filter row.
         if !compiled.keeps_everything() {
             crate::run_filter::refresh_facts(ui, &runs);

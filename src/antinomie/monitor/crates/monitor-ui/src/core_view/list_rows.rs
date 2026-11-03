@@ -421,7 +421,7 @@ impl CoreView {
                     .dir
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned());
-                let note = note_vm.as_deref().zip(folder).map(|(vm, folder)| {
+                let note = note_vm.zip(folder).map(|(vm, folder)| {
                     (
                         None,
                         antinomie_monitor_core::samples::NoteRef::new(

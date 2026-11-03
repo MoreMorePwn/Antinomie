@@ -787,10 +787,10 @@ fn packet_cell(
         ui.painter().rect_filled(cell, 0.0, tint);
     }
     let set = match column {
-        2 => address_cell(ui, &mono, &packet.source, packet.src_ip, packet.src_port),
+        2 => address_cell(ui, mono, &packet.source, packet.src_ip, packet.src_port),
         3 => address_cell(
             ui,
-            &mono,
+            mono,
             &packet.destination,
             packet.dst_ip,
             packet.dst_port,

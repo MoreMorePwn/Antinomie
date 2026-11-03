@@ -66,7 +66,7 @@ pub(super) fn http_requests(
                 &HttpRequest {
                     frame,
                     time,
-                    endpoints: &endpoints,
+                    endpoints,
                     method,
                     host: item(12),
                     uri: item(13),
@@ -256,7 +256,7 @@ pub(super) fn h2_requests(
             &HttpRequest {
                 frame,
                 time,
-                endpoints: &endpoints,
+                endpoints,
                 method,
                 host: item(F_H2_AUTHORITY),
                 uri: item(F_H2_PATH),
