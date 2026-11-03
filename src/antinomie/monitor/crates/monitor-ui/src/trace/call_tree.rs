@@ -65,7 +65,7 @@ impl Inspector {
                         .copied()
                         .filter(|(_, field)| field_argument(nr, field) == Some(index))
                         .collect();
-                    let note = argument_preview(field_call(nr, Some(args)).as_ref(), &owned)
+                    let note = info_argument(field_call(nr, Some(args)).as_ref(), &owned)
                         .map(|(_, text)| (text, theme::value(ValueKind::Text)))
                         .or_else(|| shown.raw.clone().map(|raw| (raw, theme::muted())))
                         .or_else(|| {

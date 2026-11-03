@@ -24,6 +24,18 @@ impl<'a> FieldNode<'a> {
     }
 }
 
+impl FieldNode<'_> {
+    /// Whether this field or one below it is a record array.
+    fn holds_array(&self, call: Option<&Call<'_>>) -> bool {
+        self.field
+            .is_some_and(|field| typed_fields::brief(call, field).is_some())
+            || self
+                .children
+                .iter()
+                .any(|(_, child)| child.holds_array(call))
+    }
+}
+
 /// The invocation, syscall number and phase that captured fields belong to.
 pub(super) type FieldOwner<'a> = (&'a InvocationSummary, u64, u8);
 
@@ -77,7 +89,11 @@ pub(super) fn field_tree(
         for (position, (label, child)) in node.children.iter().enumerate() {
             let branch = parent.child(position + 1 == node.children.len());
             let size = child.field.map(capture_size);
-            let shown = child.field.map(|field| preview_in(call.as_ref(), field));
+            let shown = child.field.map(|field| info_preview(call.as_ref(), field));
+            // A record array opens on its records, a row each.
+            let has_records = child
+                .field
+                .is_some_and(|field| typed_fields::brief(call.as_ref(), field).is_some());
             let (response, open) = tree_row(
                 ui,
                 Row {
@@ -85,7 +101,12 @@ pub(super) fn field_tree(
                         .id()
                         .with((key(invocation), phase, parent.levels(), label)),
                     branch: &branch,
-                    expand: (!child.children.is_empty()).then_some(false),
+                    expand: if has_records {
+                        Some(true)
+                    } else {
+                        // Nested records are open to see; other nested fields stay closed.
+                        (!child.children.is_empty()).then(|| child.holds_array(call.as_ref()))
+                    },
                     name: label,
                     name_color: theme::text(),
                     value: child
@@ -123,6 +144,10 @@ pub(super) fn field_tree(
             }
             if open {
                 show(ui, owner, child, inspector, &branch);
+                if has_records && let Some(field) = child.field {
+                    let salt = (key(invocation), phase, parent.levels(), label);
+                    record_tree::tree_rows(ui, salt, call.as_ref(), field, &branch);
+                }
             }
         }
     }
@@ -666,6 +691,26 @@ pub(crate) fn preview_in(call: Option<&Call<'_>>, field: &FieldSummary) -> Strin
     decoded(call, field).map_or_else(|| preview(field), |decoded| decoded.line())
 }
 
+/// A captured field's form in the Info column: a record array as its compact
+/// summary (`4 entries: ".", "a.txt", +2 more`), else [`preview_in`].
+pub(super) fn info_preview(call: Option<&Call<'_>>, field: &FieldSummary) -> String {
+    typed_fields::brief(call, field).map_or_else(|| preview_in(call, field), |brief| brief.line)
+}
+
+/// [`argument_preview`] for the Info column, with a record array behind the
+/// argument summarized.
+pub(super) fn info_argument(
+    call: Option<&Call<'_>>,
+    fields: &[(u8, &FieldSummary)],
+) -> Option<(Option<u32>, String)> {
+    if let Some((_, field)) = argument_data(fields)
+        && let Some(brief) = typed_fields::brief(call, field)
+    {
+        return Some((Some(field.object_id), brief.line));
+    }
+    argument_preview(call, fields)
+}
+
 /// How a piece of a trace line is colored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Tone {
@@ -722,7 +767,7 @@ pub(crate) fn info_parts(invocation: &InvocationSummary) -> Vec<(String, Tone)> 
                 .copied()
                 .filter(|(_, field)| field_argument(nr, field) == Some(index))
                 .collect();
-            match argument_preview(call.as_ref(), &owned) {
+            match info_argument(call.as_ref(), &owned) {
                 Some((id, text)) => {
                     shown_fields.extend(id);
                     parts.push((text, Tone::Value(ValueKind::Text)));
@@ -742,14 +787,15 @@ pub(crate) fn info_parts(invocation: &InvocationSummary) -> Vec<(String, Tone)> 
                     || field.key.contains("data")
                     || field.key.contains("buf")
                     || field.key.contains("address")
-                    || field.key.contains("argv"))
+                    || field.key.contains("argv")
+                    || typed_fields::is_array(typed_fields::layout_type(&field.layout)))
         })
         .take(3)
     {
         space(&mut parts);
         parts.push((format!("{}=", field.key), Tone::Label));
         parts.push((
-            preview_in(call.as_ref(), field),
+            info_preview(call.as_ref(), field),
             Tone::Value(ValueKind::Text),
         ));
     }
@@ -863,7 +909,11 @@ pub(crate) fn cells(invocation: &InvocationSummary) -> Vec<(Vec<(String, Tone)>,
         },
     };
     let info = info_parts(invocation);
-    let info_hover: String = info.iter().map(|(text, _)| text.as_str()).collect();
+    let mut info_hover: String = info.iter().map(|(text, _)| text.as_str()).collect();
+    let arrays = array_hover(invocation);
+    if !arrays.is_empty() {
+        info_hover = format!("{info_hover}\n\n{arrays}");
+    }
     vec![
         (
             plain(seconds(event.timestamp_ns)),
@@ -891,6 +941,38 @@ pub(crate) fn info(invocation: &InvocationSummary) -> String {
         .into_iter()
         .map(|(text, _)| text)
         .collect()
+}
+
+/// The hover of an Info cell with record arrays: per array field its count
+/// and every record's short form, one per line.
+fn array_hover(invocation: &InvocationSummary) -> String {
+    let call = representative(invocation)
+        .and_then(|event| field_call(event.syscall_nr, call_args(invocation)));
+    let mut blocks = Vec::new();
+    for field in invocation
+        .entry
+        .iter()
+        .chain(invocation.exit.iter())
+        .flat_map(|event| &event.fields)
+    {
+        let Some(brief) = typed_fields::brief(call.as_ref(), field) else {
+            continue;
+        };
+        let mut lines = vec![if brief.heading.is_empty() {
+            format!("{}:", field.key)
+        } else {
+            format!("{}: {}", field.key, brief.heading)
+        }];
+        lines.extend(brief.items.iter().map(|item| format!("  {item}")));
+        if brief.more {
+            lines.push(
+                "  the field holds more than this preview: select it and use Decode all captured"
+                    .to_owned(),
+            );
+        }
+        blocks.push(lines.join("\n"));
+    }
+    blocks.join("\n\n")
 }
 
 /// Every decoded record of the call's array fields (from the owned previews),

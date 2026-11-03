@@ -7,7 +7,7 @@ use crate::{
     values,
 };
 use antinomie_monitor_core::{
-    syscalls, FieldEncoding, FieldSummary, InvocationSummary, Recapture, WaitStatus,
+    syscalls, typed_fields, FieldEncoding, FieldSummary, InvocationSummary, Recapture, WaitStatus,
 };
 use eframe::egui::{self, Color32, RichText};
 
@@ -248,7 +248,9 @@ impl Inspector {
                 if covered_preview(field).is_empty() {
                     continue;
                 }
-                let rank = field_argument(nr, field).unwrap_or(6);
+                // Records of an argument come before its other data.
+                let is_array = typed_fields::is_array(typed_fields::layout_type(&field.layout));
+                let rank = field_argument(nr, field).unwrap_or(6) * 2 + usize::from(!is_array);
                 if best.is_none_or(|(best, ..)| rank < best) {
                     best = Some((rank, phase, field));
                 }

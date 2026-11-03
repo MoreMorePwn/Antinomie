@@ -10,7 +10,7 @@
 //! in the archive's 64 KiB reads, at most [`data_view::DATA_WINDOW_CAP`] bytes,
 //! and only the contiguous bytes from offset 0 are decoded: records cannot be
 //! found across a gap.
-use super::{covered_preview, theme};
+use super::{covered_preview, theme, tree_row, Row};
 use crate::data_view;
 use antinomie_monitor_core::{
     recording,
@@ -519,4 +519,79 @@ pub(crate) fn call_json(invocation: &super::InvocationSummary) -> String {
         return String::new();
     }
     format!("[\n{}\n]", arrays.join(",\n"))
+}
+
+/// Records of an array shown as rows of the Arguments tree.
+const TREE_RECORDS: usize = 100;
+
+/// The records of an array field (from its owned preview) as rows under the
+/// field's row: `[i]` and the record's summary, opening to its fields; a last
+/// line when the preview holds fewer than the field does. `parent` is the
+/// field row's prefix.
+pub(super) fn tree_rows(
+    ui: &mut egui::Ui,
+    salt: impl std::hash::Hash + std::fmt::Debug + Copy,
+    call: Option<&Call<'_>>,
+    field: &FieldSummary,
+    parent: &crate::tree_lines::Prefix,
+) {
+    let data = covered_preview(field);
+    let layout = typed_fields::layout_type(&field.layout);
+    let Some(records) = Records::open(call, layout, &field.key, data) else {
+        return;
+    };
+    let shown = records.count().min(TREE_RECORDS);
+    let holds_more = field.captured_len > data.len() as u64
+        || field.logical_len.is_some_and(|len| len > data.len() as u64);
+    let remark = if records.count() > shown {
+        Some(format!(
+            "{} more records: select this row for all of them",
+            records.count() - shown
+        ))
+    } else if holds_more || records.cut().is_some() {
+        Some(
+            "more is captured than the preview holds: select this row and use Decode all captured"
+                .to_owned(),
+        )
+    } else {
+        None
+    };
+    for (position, (index, record)) in records.page(data, 0, TREE_RECORDS).iter().enumerate() {
+        let branch = parent.child(position + 1 == shown && remark.is_none());
+        let (_, open) = tree_row(
+            ui,
+            Row {
+                id: ui.id().with((salt, "record", *index)),
+                branch: &branch,
+                expand: Some(false),
+                name: &format!("[{index}]"),
+                name_color: theme::text(),
+                value: Some((&record.summary, theme::value(theme::ValueKind::Text))),
+                note: None,
+                tag: None,
+                selected: false,
+            },
+        );
+        if open {
+            for (at, (name, value)) in record.fields.iter().enumerate() {
+                tree_row(
+                    ui,
+                    Row {
+                        id: ui.id().with((salt, "record", *index, name)),
+                        branch: &branch.child(at + 1 == record.fields.len()),
+                        expand: None,
+                        name,
+                        name_color: theme::muted(),
+                        value: Some((value, theme::value(theme::ValueKind::Text))),
+                        note: None,
+                        tag: None,
+                        selected: false,
+                    },
+                );
+            }
+        }
+    }
+    if let Some(remark) = remark {
+        super::note_row(ui, &parent.child(true), &remark, theme::muted());
+    }
 }
