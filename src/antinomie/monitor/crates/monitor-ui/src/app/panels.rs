@@ -219,209 +219,11 @@ impl MonitorApp {
         ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
         self.details_follow.drawn(ui, panel);
         match panel {
-            Panel::Summary => {
-                self.prepare_summary_snapshots(ui.ctx());
-                crate::summary::show(
-                    ui,
-                    &self.snapshot,
-                    &self.history,
-                    self.selected.as_deref(),
-                    self.settings.quota_gib,
-                    &self.cpu_history,
-                );
-                let id = egui::Id::new(crate::summary::configuration::CONFIGURE);
-                let configure = ui.ctx().data_mut(|data| data.remove_temp::<bool>(id));
-                if configure == Some(true) && self.can_configure_vm() {
-                    self.configure_vm();
-                }
-                self.answer_summary_snapshots(ui.ctx());
-            }
+            Panel::Summary => self.summary_panel(ui),
             Panel::Trace => self.events(ui),
-            Panel::Network => {
-                let vm = self.selected.clone();
-                let active = self
-                    .snapshot
-                    .network_capture
-                    .clone()
-                    .filter(|_| vm.is_some() && vm == self.snapshot.active_vm);
-                let locations = self
-                    .snapshot
-                    .vm_locations
-                    .iter()
-                    .find(|location| Some(&location.vm_id) == vm.as_ref());
-                let recordings = locations.map(|location| location.recording_directory.clone());
-                let recording_roots = locations
-                    .map(|location| location.recording_directories.as_slice())
-                    .unwrap_or_default();
-                let nat = self
-                    .snapshot
-                    .vms
-                    .iter()
-                    .any(|config| Some(&config.id) == vm.as_ref() && config.has_network());
-                let action = self.network_view.show(
-                    ui,
-                    NetworkContext {
-                        vm_id: vm.as_deref(),
-                        active: active.as_ref(),
-                        recordings: recordings.as_deref(),
-                        recording_roots,
-                        nat,
-                        running: self.running()
-                            && !self.closing
-                            && vm.is_some()
-                            && vm == self.snapshot.active_vm,
-                        boot_id: self
-                            .snapshot
-                            .boot_id
-                            .as_deref()
-                            .filter(|_| vm.is_some() && vm == self.snapshot.active_vm),
-                        pending: self.pending_network.is_some(),
-                        font_size: self.settings.font_size,
-                    },
-                );
-                match action {
-                    Some(NetworkAction::Delete(deletion)) => self.ask_delete_evidence(deletion),
-                    Some(NetworkAction::Start) if self.network_toggle_enabled() => {
-                        self.send(Command::StartNetworkCapture);
-                    }
-                    Some(NetworkAction::Stop) if self.network_toggle_enabled() => {
-                        self.send(Command::StopNetworkCapture);
-                    }
-                    _ => {}
-                }
-            }
-            Panel::CoreDump => {
-                let roots = self
-                    .snapshot
-                    .vm_locations
-                    .iter()
-                    .find(|location| Some(&location.vm_id) == self.selected.as_ref())
-                    .map(|location| location.recording_directories.clone())
-                    .unwrap_or_default();
-                let unavailable = self.manual_core_unavailable();
-                self.core_view
-                    .set_tools_dir(antinomie_monitor_core::analysis_tools::tools_dir(
-                        &self.options.data_dir,
-                    ));
-                let action = self.core_view.show(
-                    ui,
-                    &roots,
-                    self.selected.as_deref(),
-                    self.selected.is_some() && self.selected == self.snapshot.active_vm,
-                    crate::core_view::CoreControls {
-                        unavailable,
-                        captures: &self.snapshot.process_cores,
-                        boot_id: self.snapshot.boot_id.as_deref(),
-                        can_cancel: self.running()
-                            && !self.closing
-                            && self.snapshot.memory_dump.is_none()
-                            && self.selected == self.snapshot.active_vm,
-                    },
-                );
-                match action {
-                    Some(crate::core_view::CoreAction::Dump) => self.open_core_picker(),
-                    Some(crate::core_view::CoreAction::Cancel(capture_id)) => {
-                        self.send(Command::CancelCoreCapture { capture_id })
-                    }
-                    Some(crate::core_view::CoreAction::CancelRun(run_id)) => {
-                        self.send(Command::CancelProcessCore { run_id })
-                    }
-                    Some(crate::core_view::CoreAction::Delete(deletion)) => {
-                        self.ask_delete_evidence(deletion)
-                    }
-                    None => {}
-                }
-            }
-            Panel::Memory => {
-                let vm_id = self.selected.clone();
-                let vm = self
-                    .snapshot
-                    .vms
-                    .iter()
-                    .find(|config| Some(&config.id) == vm_id.as_ref())
-                    .cloned();
-                let locations = self
-                    .snapshot
-                    .vm_locations
-                    .iter()
-                    .find(|location| Some(&location.vm_id) == vm_id.as_ref())
-                    .cloned();
-                let running = self.running()
-                    && !self.closing
-                    && vm_id.is_some()
-                    && vm_id == self.snapshot.active_vm;
-                let dumping = self
-                    .snapshot
-                    .memory_dump
-                    .clone()
-                    .filter(|progress| Some(&progress.dump.vm_id) == vm_id.as_ref());
-                let volatility = self
-                    .snapshot
-                    .analysis_tools
-                    .iter()
-                    .find(|tool| tool.id == "volatility3");
-                let installing = self
-                    .snapshot
-                    .tool_install
-                    .as_ref()
-                    .is_some_and(|install| install.id == "volatility3" && !install.finished);
-                let memnixfs = self
-                    .snapshot
-                    .analysis_tools
-                    .iter()
-                    .find(|tool| tool.id == "memnixfs");
-                let installing_memnixfs = self
-                    .snapshot
-                    .tool_install
-                    .as_ref()
-                    .is_some_and(|install| install.id == "memnixfs" && !install.finished);
-                let action = self.memory_view.show(
-                    ui,
-                    crate::memory_view::MemoryContext {
-                        vm: vm.as_ref(),
-                        recordings: locations
-                            .as_ref()
-                            .map(|location| location.recording_directory.as_path()),
-                        recording_roots: locations
-                            .as_ref()
-                            .map(|location| location.recording_directories.as_slice())
-                            .unwrap_or_default(),
-                        running,
-                        dumping: dumping.as_ref(),
-                        pending: false,
-                        data_dir: &self.options.data_dir,
-                        volatility_installed: volatility
-                            .is_some_and(|tool| tool.installed.is_some()),
-                        volatility_installing: installing,
-                        memnixfs_installed: memnixfs.is_some_and(|tool| tool.installed.is_some()),
-                        memnixfs_installing: installing_memnixfs,
-                        bases: &self.snapshot.bases,
-                        font_size: self.settings.font_size,
-                        online_symbols: self.settings.memory_online_symbols,
-                        curl: &self.options.curl,
-                    },
-                );
-                match action {
-                    Some(crate::memory_view::MemoryAction::Dump) => self.send(Command::DumpMemory),
-                    Some(crate::memory_view::MemoryAction::InstallVolatility) => {
-                        self.send(Command::InstallTool {
-                            id: "volatility3".into(),
-                        })
-                    }
-                    Some(crate::memory_view::MemoryAction::InstallMemNixFs) => {
-                        self.send(Command::InstallTool {
-                            id: "memnixfs".into(),
-                        })
-                    }
-                    Some(crate::memory_view::MemoryAction::CancelInstall) => {
-                        self.send(Command::CancelToolInstall)
-                    }
-                    Some(crate::memory_view::MemoryAction::OnlineSymbols(on)) => {
-                        self.settings.memory_online_symbols = on;
-                    }
-                    None => {}
-                }
-            }
+            Panel::Network => self.network_panel(ui),
+            Panel::CoreDump => self.core_dump_panel(ui),
+            Panel::Memory => self.memory_panel(ui),
             Panel::Disks => self.disks_panel(ui),
             Panel::Library(page) => self.library_panel(ui, *page),
             Panel::Debugger => self.debugger_tab(ui),
@@ -468,112 +270,7 @@ impl MonitorApp {
                 self.analysis_action(&key, action);
             }
             Panel::Triage => self.show_triage(ui),
-            Panel::StaticAnalysis => {
-                let mut reports = BTreeMap::new();
-                for run in self.snapshot.runs.iter().chain(&self.history) {
-                    if let Some(report) = &run.analysis {
-                        reports.entry(report.id.clone()).or_insert_with(|| {
-                            format!("{} — run {} ({:?})", run.request.path, run.id, report.state)
-                        });
-                    }
-                }
-                for report in &self.snapshot.analysis_reports {
-                    reports
-                        .entry(report.id.clone())
-                        .or_insert_with(|| match &report.layer {
-                            Some(layer) => format!(
-                                "{} — layer {} unpacked by {} ({:?})",
-                                report.source_path, layer.index, layer.method, report.state
-                            ),
-                            None => format!(
-                                "{} — analysis only ({:?})",
-                                report.source_path, report.state
-                            ),
-                        });
-                }
-                let current = self
-                    .selected_analysis
-                    .as_ref()
-                    .and_then(|id| reports.get(id))
-                    .cloned()
-                    .unwrap_or_else(|| "Selected run".into());
-                ui.horizontal(|ui| {
-                    ui.label("Report");
-                    egui::ComboBox::from_id_salt("analysis-source")
-                        .selected_text(current)
-                        .width(ui.available_width())
-                        .truncate()
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.selected_analysis, None, "Selected run");
-                            for (id, label) in &reports {
-                                let label = self
-                                    .analysis_directory(id)
-                                    .map(|dir| crate::evidence::title(ui, &dir, label))
-                                    .unwrap_or_else(|| label.clone());
-                                ui.selectable_value(
-                                    &mut self.selected_analysis,
-                                    Some(id.clone()),
-                                    label,
-                                );
-                            }
-                        });
-                });
-                let shown = self.selected_analysis.clone().or_else(|| {
-                    self.selected_run
-                        .as_deref()
-                        .and_then(|id| {
-                            if self.archive_selected {
-                                self.history
-                                    .iter()
-                                    .find(|run| run.id == id)
-                                    .or_else(|| self.run(id))
-                            } else {
-                                self.run(id)
-                            }
-                        })
-                        .and_then(|run| run.analysis.as_ref())
-                        .map(|r| r.id.clone())
-                });
-                let report = shown
-                    .as_deref()
-                    .and_then(|id| self.analysis_report(id))
-                    .cloned();
-                crate::analysis::other_progress(
-                    ui,
-                    self.snapshot
-                        .runs
-                        .iter()
-                        .chain(&self.history)
-                        .filter_map(|run| run.analysis.as_ref())
-                        .chain(&self.snapshot.analysis_reports),
-                    shown.as_deref(),
-                );
-                let labels = report
-                    .as_ref()
-                    .map(|report| self.analysis_labels(ui, report));
-                let identities = report
-                    .as_ref()
-                    .map(|report| self.analysis_identities(&report.id))
-                    .unwrap_or_default();
-                let view = self.analysis_views.entry("workspace".into()).or_default();
-                view.bind(report.as_ref().map(|report| report.id.as_str()));
-                if let Some(labels) = labels.zip(report.as_ref()) {
-                    view.set_record(labels.1, labels.0, identities);
-                }
-                let action = crate::analysis::workspace(
-                    ui,
-                    report.as_ref(),
-                    &mut view.state,
-                    view.preview.as_ref(),
-                    view.listing.as_ref(),
-                );
-                let action = action.or_else(|| {
-                    view.state
-                        .take_regex_request()
-                        .map(|report_id| crate::analysis::ReportAction::ScanRegex { report_id })
-                });
-                self.analysis_action("workspace", action);
-            }
+            Panel::StaticAnalysis => self.static_analysis_panel(ui),
             Panel::RunHistory => self.run_history(ui),
             Panel::Details => match self.details_follow.of(ui.ctx()) {
                 crate::workspace::DetailsOf::Packet => {
@@ -636,6 +333,317 @@ impl MonitorApp {
                 }
             }
         }
+    }
+
+    /// The Summary tab.
+    fn summary_panel(&mut self, ui: &mut egui::Ui) {
+        self.prepare_summary_snapshots(ui.ctx());
+        crate::summary::show(
+            ui,
+            &self.snapshot,
+            &self.history,
+            self.selected.as_deref(),
+            self.settings.quota_gib,
+            &self.cpu_history,
+        );
+        let id = egui::Id::new(crate::summary::configuration::CONFIGURE);
+        let configure = ui.ctx().data_mut(|data| data.remove_temp::<bool>(id));
+        if configure == Some(true) && self.can_configure_vm() {
+            self.configure_vm();
+        }
+        self.answer_summary_snapshots(ui.ctx());
+    }
+
+    /// The Network tab and what it asks for.
+    fn network_panel(&mut self, ui: &mut egui::Ui) {
+        let vm = self.selected.clone();
+        let active = self
+            .snapshot
+            .network_capture
+            .clone()
+            .filter(|_| vm.is_some() && vm == self.snapshot.active_vm);
+        let locations = self
+            .snapshot
+            .vm_locations
+            .iter()
+            .find(|location| Some(&location.vm_id) == vm.as_ref());
+        let recordings = locations.map(|location| location.recording_directory.clone());
+        let recording_roots = locations
+            .map(|location| location.recording_directories.as_slice())
+            .unwrap_or_default();
+        let nat = self
+            .snapshot
+            .vms
+            .iter()
+            .any(|config| Some(&config.id) == vm.as_ref() && config.has_network());
+        let action = self.network_view.show(
+            ui,
+            NetworkContext {
+                vm_id: vm.as_deref(),
+                active: active.as_ref(),
+                recordings: recordings.as_deref(),
+                recording_roots,
+                nat,
+                running: self.running()
+                    && !self.closing
+                    && vm.is_some()
+                    && vm == self.snapshot.active_vm,
+                boot_id: self
+                    .snapshot
+                    .boot_id
+                    .as_deref()
+                    .filter(|_| vm.is_some() && vm == self.snapshot.active_vm),
+                pending: self.pending_network.is_some(),
+                font_size: self.settings.font_size,
+            },
+        );
+        match action {
+            Some(NetworkAction::Delete(deletion)) => self.ask_delete_evidence(deletion),
+            Some(NetworkAction::Start) if self.network_toggle_enabled() => {
+                self.send(Command::StartNetworkCapture);
+            }
+            Some(NetworkAction::Stop) if self.network_toggle_enabled() => {
+                self.send(Command::StopNetworkCapture);
+            }
+            _ => {}
+        }
+    }
+
+    /// The Core dumps tab and what it asks for.
+    fn core_dump_panel(&mut self, ui: &mut egui::Ui) {
+        let roots = self
+            .snapshot
+            .vm_locations
+            .iter()
+            .find(|location| Some(&location.vm_id) == self.selected.as_ref())
+            .map(|location| location.recording_directories.clone())
+            .unwrap_or_default();
+        let unavailable = self.manual_core_unavailable();
+        self.core_view
+            .set_tools_dir(antinomie_monitor_core::analysis_tools::tools_dir(
+                &self.options.data_dir,
+            ));
+        let action = self.core_view.show(
+            ui,
+            &roots,
+            self.selected.as_deref(),
+            self.selected.is_some() && self.selected == self.snapshot.active_vm,
+            crate::core_view::CoreControls {
+                unavailable,
+                captures: &self.snapshot.process_cores,
+                boot_id: self.snapshot.boot_id.as_deref(),
+                can_cancel: self.running()
+                    && !self.closing
+                    && self.snapshot.memory_dump.is_none()
+                    && self.selected == self.snapshot.active_vm,
+            },
+        );
+        match action {
+            Some(crate::core_view::CoreAction::Dump) => self.open_core_picker(),
+            Some(crate::core_view::CoreAction::Cancel(capture_id)) => {
+                self.send(Command::CancelCoreCapture { capture_id })
+            }
+            Some(crate::core_view::CoreAction::CancelRun(run_id)) => {
+                self.send(Command::CancelProcessCore { run_id })
+            }
+            Some(crate::core_view::CoreAction::Delete(deletion)) => {
+                self.ask_delete_evidence(deletion)
+            }
+            None => {}
+        }
+    }
+
+    /// The Memory tab and what it asks for.
+    fn memory_panel(&mut self, ui: &mut egui::Ui) {
+        let vm_id = self.selected.clone();
+        let vm = self
+            .snapshot
+            .vms
+            .iter()
+            .find(|config| Some(&config.id) == vm_id.as_ref())
+            .cloned();
+        let locations = self
+            .snapshot
+            .vm_locations
+            .iter()
+            .find(|location| Some(&location.vm_id) == vm_id.as_ref())
+            .cloned();
+        let running =
+            self.running() && !self.closing && vm_id.is_some() && vm_id == self.snapshot.active_vm;
+        let dumping = self
+            .snapshot
+            .memory_dump
+            .clone()
+            .filter(|progress| Some(&progress.dump.vm_id) == vm_id.as_ref());
+        let volatility = self
+            .snapshot
+            .analysis_tools
+            .iter()
+            .find(|tool| tool.id == "volatility3");
+        let installing = self
+            .snapshot
+            .tool_install
+            .as_ref()
+            .is_some_and(|install| install.id == "volatility3" && !install.finished);
+        let memnixfs = self
+            .snapshot
+            .analysis_tools
+            .iter()
+            .find(|tool| tool.id == "memnixfs");
+        let installing_memnixfs = self
+            .snapshot
+            .tool_install
+            .as_ref()
+            .is_some_and(|install| install.id == "memnixfs" && !install.finished);
+        let action = self.memory_view.show(
+            ui,
+            crate::memory_view::MemoryContext {
+                vm: vm.as_ref(),
+                recordings: locations
+                    .as_ref()
+                    .map(|location| location.recording_directory.as_path()),
+                recording_roots: locations
+                    .as_ref()
+                    .map(|location| location.recording_directories.as_slice())
+                    .unwrap_or_default(),
+                running,
+                dumping: dumping.as_ref(),
+                pending: false,
+                data_dir: &self.options.data_dir,
+                volatility_installed: volatility.is_some_and(|tool| tool.installed.is_some()),
+                volatility_installing: installing,
+                memnixfs_installed: memnixfs.is_some_and(|tool| tool.installed.is_some()),
+                memnixfs_installing: installing_memnixfs,
+                bases: &self.snapshot.bases,
+                font_size: self.settings.font_size,
+                online_symbols: self.settings.memory_online_symbols,
+                curl: &self.options.curl,
+            },
+        );
+        match action {
+            Some(crate::memory_view::MemoryAction::Dump) => self.send(Command::DumpMemory),
+            Some(crate::memory_view::MemoryAction::InstallVolatility) => {
+                self.send(Command::InstallTool {
+                    id: "volatility3".into(),
+                })
+            }
+            Some(crate::memory_view::MemoryAction::InstallMemNixFs) => {
+                self.send(Command::InstallTool {
+                    id: "memnixfs".into(),
+                })
+            }
+            Some(crate::memory_view::MemoryAction::CancelInstall) => {
+                self.send(Command::CancelToolInstall)
+            }
+            Some(crate::memory_view::MemoryAction::OnlineSymbols(on)) => {
+                self.settings.memory_online_symbols = on;
+            }
+            None => {}
+        }
+    }
+
+    /// The Static analysis tab: its report picker and the report.
+    fn static_analysis_panel(&mut self, ui: &mut egui::Ui) {
+        let mut reports = BTreeMap::new();
+        for run in self.snapshot.runs.iter().chain(&self.history) {
+            if let Some(report) = &run.analysis {
+                reports.entry(report.id.clone()).or_insert_with(|| {
+                    format!("{} — run {} ({:?})", run.request.path, run.id, report.state)
+                });
+            }
+        }
+        for report in &self.snapshot.analysis_reports {
+            reports
+                .entry(report.id.clone())
+                .or_insert_with(|| match &report.layer {
+                    Some(layer) => format!(
+                        "{} — layer {} unpacked by {} ({:?})",
+                        report.source_path, layer.index, layer.method, report.state
+                    ),
+                    None => format!(
+                        "{} — analysis only ({:?})",
+                        report.source_path, report.state
+                    ),
+                });
+        }
+        let current = self
+            .selected_analysis
+            .as_ref()
+            .and_then(|id| reports.get(id))
+            .cloned()
+            .unwrap_or_else(|| "Selected run".into());
+        ui.horizontal(|ui| {
+            ui.label("Report");
+            egui::ComboBox::from_id_salt("analysis-source")
+                .selected_text(current)
+                .width(ui.available_width())
+                .truncate()
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.selected_analysis, None, "Selected run");
+                    for (id, label) in &reports {
+                        let label = self
+                            .analysis_directory(id)
+                            .map(|dir| crate::evidence::title(ui, &dir, label))
+                            .unwrap_or_else(|| label.clone());
+                        ui.selectable_value(&mut self.selected_analysis, Some(id.clone()), label);
+                    }
+                });
+        });
+        let shown = self.selected_analysis.clone().or_else(|| {
+            self.selected_run
+                .as_deref()
+                .and_then(|id| {
+                    if self.archive_selected {
+                        self.history
+                            .iter()
+                            .find(|run| run.id == id)
+                            .or_else(|| self.run(id))
+                    } else {
+                        self.run(id)
+                    }
+                })
+                .and_then(|run| run.analysis.as_ref())
+                .map(|r| r.id.clone())
+        });
+        let report = shown
+            .as_deref()
+            .and_then(|id| self.analysis_report(id))
+            .cloned();
+        crate::analysis::other_progress(
+            ui,
+            self.snapshot
+                .runs
+                .iter()
+                .chain(&self.history)
+                .filter_map(|run| run.analysis.as_ref())
+                .chain(&self.snapshot.analysis_reports),
+            shown.as_deref(),
+        );
+        let labels = report
+            .as_ref()
+            .map(|report| self.analysis_labels(ui, report));
+        let identities = report
+            .as_ref()
+            .map(|report| self.analysis_identities(&report.id))
+            .unwrap_or_default();
+        let view = self.analysis_views.entry("workspace".into()).or_default();
+        view.bind(report.as_ref().map(|report| report.id.as_str()));
+        if let Some(labels) = labels.zip(report.as_ref()) {
+            view.set_record(labels.1, labels.0, identities);
+        }
+        let action = crate::analysis::workspace(
+            ui,
+            report.as_ref(),
+            &mut view.state,
+            view.preview.as_ref(),
+            view.listing.as_ref(),
+        );
+        let action = action.or_else(|| {
+            view.state
+                .take_regex_request()
+                .map(|report_id| crate::analysis::ReportAction::ScanRegex { report_id })
+        });
+        self.analysis_action("workspace", action);
     }
 }
 
