@@ -49,6 +49,10 @@ pub(crate) enum Panel {
     /// while a session lasts, and is never restored with the saved
     /// arrangement.
     Debugger,
+    /// The running VM's screen, from QEMU's private VNC socket: it opens when a
+    /// VM that shows its screen in the app starts, closes when the VM stops,
+    /// and is never restored with the saved arrangement.
+    VmScreen,
     /// A Library page: opened from the sidebar, a menu or a link, closed by
     /// its tab; never restored with the saved arrangement.
     Library(LibraryPage),
@@ -104,6 +108,7 @@ impl Panel {
             Self::Jobs => "Jobs",
             Self::Terminal(_) => "Terminal",
             Self::Debugger => "Debugger",
+            Self::VmScreen => "VM screen",
             Self::Library(page) => page.title(),
         }
     }
@@ -292,6 +297,7 @@ impl WorkspaceLayout {
                             | Panel::AnalysisSection { .. }
                             | Panel::Library(_)
                             | Panel::Debugger
+                            | Panel::VmScreen
                     ) || seen.contains(tab)
                     {
                         false
@@ -432,15 +438,40 @@ impl WorkspaceLayout {
 
     /// Put the Debugger tab right after Static analysis, wherever that went.
     fn place_debugger(&mut self) {
+        self.place_after_static(Panel::Debugger);
+    }
+
+    fn place_after_static(&mut self, panel: Panel) {
         match self.dock.find_tab(&Panel::StaticAnalysis) {
             Some(TabPath { surface, node, tab }) => {
-                self.dock[surface][node].insert_tab(TabIndex(tab.0 + 1), Panel::Debugger);
+                self.dock[surface][node].insert_tab(TabIndex(tab.0 + 1), panel);
             }
-            None => self
-                .dock
-                .main_surface_mut()
-                .push_to_first_leaf(Panel::Debugger),
+            None => self.dock.main_surface_mut().push_to_first_leaf(panel),
         }
+    }
+
+    /// Keep the VM screen tab in step with the VM: it opens (and shows) when
+    /// a VM that shows its screen in the app starts, unless the user closed
+    /// it, or when asked for; it closes when the VM stops.
+    fn follow_vm_screen(&mut self, app: &mut MonitorApp, ctx: &egui::Context) {
+        let socket = app.vm_screen_socket();
+        let open = self.dock.find_tab(&Panel::VmScreen);
+        let asked = app.take_vm_screen_request();
+        match (socket.is_some(), open) {
+            (true, None) => {
+                if asked || (app.vm_screen.is_new_boot(socket.as_deref()) && !app.vm_screen_closed()) {
+                    self.place_after_static(Panel::VmScreen);
+                    self.focus(Panel::VmScreen);
+                }
+            }
+            (false, Some(location)) => {
+                self.dock.remove_tab(location);
+                self.remove_empty_windows();
+            }
+            _ => {}
+        }
+        let open = self.dock.find_tab(&Panel::VmScreen).is_some();
+        app.vm_screen.sync(ctx, socket.as_deref(), open);
     }
 
     /// Keep the Debugger tab in step with the session: a new session opens
@@ -490,7 +521,7 @@ impl WorkspaceLayout {
     /// away keeps while it is shown; none for any other tab.
     fn folded_split(&self, panel: &Panel) -> Option<f32> {
         match panel {
-            Panel::Debugger => Some(Self::FOLDED_SPLIT),
+            Panel::Debugger | Panel::VmScreen => Some(Self::FOLDED_SPLIT),
             // Unless a run of the open sample is selected: Details show it.
             Panel::Library(LibraryPage::Samples) if !self.samples_details => {
                 Some(Self::SAMPLES_SPLIT)
@@ -597,6 +628,7 @@ impl WorkspaceLayout {
             self.open_library(page);
         }
         self.follow_debugger(app, ctx);
+        self.follow_vm_screen(app, ctx);
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(theme::bg()))
             .show(root, |ui| self.show_surface(app, ui, SurfaceIndex::main()));
@@ -1090,6 +1122,8 @@ impl WorkspaceLayout {
         for panel in panels {
             if let Panel::Terminal(id) = panel {
                 app.close_terminal_view(&id);
+            } else if panel == Panel::VmScreen {
+                app.set_vm_screen_closed(true);
             } else if matches!(panel, Panel::AnalysisSection { .. } | Panel::Library(_)) {
                 continue;
             } else if panel == Panel::Debugger {

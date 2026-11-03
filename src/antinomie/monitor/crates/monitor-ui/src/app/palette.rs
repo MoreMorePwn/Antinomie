@@ -178,6 +178,7 @@ impl MonitorApp {
                 Panel::Activity,
                 Panel::Jobs,
                 Panel::Debugger,
+                Panel::VmScreen,
             ])
             .filter(|panel| !open.contains(panel));
         let actions = Action::PALETTE

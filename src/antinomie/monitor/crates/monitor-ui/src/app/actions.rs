@@ -268,6 +268,7 @@ impl Action {
             Self::RuleDetails => "yara suricata sigma source text sid",
             Self::AbusechPacks => "suricata ids rules update check live feed",
             Self::Go(Panel::Debugger) => "gdb breakpoints attach process",
+            Self::Go(Panel::VmScreen) => "display monitor console vnc keyboard mouse",
             _ => "",
         }
     }
@@ -638,6 +639,7 @@ impl MonitorApp {
                 self.rules_ui.has_rule_selected(),
                 "Select a rule in Detection rules first.",
             ),
+            Action::Go(Panel::VmScreen) => self.vm_screen_unavailable(),
             Action::Go(Panel::Debugger) => reason(
                 self.snapshot.debug.is_some(),
                 "No debugger is attached; attach one to a process first.",
@@ -755,6 +757,10 @@ impl MonitorApp {
                 self.focus_panel = Some(Panel::Memory);
             }
             Action::DumpCore => self.open_core_picker(),
+            Action::Go(Panel::VmScreen) => {
+                self.set_vm_screen_closed(false);
+                self.vm_screen_request = true;
+            }
             Action::Go(panel) => self.show_panel_asked(panel),
             Action::ResetLayout => self.layout = WorkspaceLayout::default(),
             Action::ToggleSidebar => self.toggle_sidebar(),

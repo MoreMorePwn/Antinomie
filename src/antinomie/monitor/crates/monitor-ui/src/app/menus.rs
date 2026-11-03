@@ -123,6 +123,7 @@ impl MonitorApp {
                             Panel::Details,
                             Panel::Activity,
                             Panel::Jobs,
+                            Panel::VmScreen,
                         ]) {
                             self.menu_item(ui, Action::Go(view), None);
                         }

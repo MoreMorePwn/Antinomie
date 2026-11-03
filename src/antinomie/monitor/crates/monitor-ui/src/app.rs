@@ -52,6 +52,7 @@ mod upload;
 mod upload_browser;
 pub(crate) use upload_browser::{DEPTH_LIMIT, DIRECTORY_LIMIT, PAGE_LEN};
 mod vm;
+mod vm_screen_tab;
 mod widgets;
 
 use crate::widgets::fit_table::{Col, FitBuilder};
@@ -176,6 +177,8 @@ struct Settings {
     automatic_detection: bool,
     /// Allow the explicit catalog check and rule-pack download buttons.
     outbound_catalog: bool,
+    /// The user closed the VM screen tab: a new boot does not open it again.
+    vm_screen_closed: bool,
     /// Toast for the first HIGH finding of each rule in a run that is still going.
     /// Off by default since 0.8.0. The stored key is new: 0.7 saved the old
     /// default (on) under `toast_high_findings` for everyone, so that value
@@ -308,6 +311,7 @@ impl Default for Settings {
             address_lookup: crate::triage::AddressLookup::Tshark,
             automatic_detection: true,
             outbound_catalog: false,
+            vm_screen_closed: false,
             toast_high_findings: false,
             toast_run_finished: true,
             graph_window: crate::triage::GRAPH_WINDOW_SIZE,
@@ -531,6 +535,9 @@ pub struct MonitorApp {
     process_picker: captures::ProcessPicker,
     /// The in-app debugger panel's own state (inputs, requests in flight).
     debugger: debugger::DebuggerPanel,
+    /// The VM screen tab (VNC) and a request to open it.
+    pub(crate) vm_screen: crate::vm_screen::VmScreenView,
+    vm_screen_request: bool,
     pending_observer: Option<u64>,
     pending_core: Option<u64>,
     /// A network capture start or stop request in flight.

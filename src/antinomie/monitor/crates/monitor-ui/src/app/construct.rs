@@ -129,6 +129,8 @@ impl MonitorApp {
             capture_tab: false,
             process_picker: captures::ProcessPicker::default(),
             debugger: debugger::DebuggerPanel::default(),
+            vm_screen: Default::default(),
+            vm_screen_request: false,
             pending_observer: None,
             pending_core: None,
             pending_network: None,

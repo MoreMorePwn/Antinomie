@@ -239,6 +239,7 @@ impl MonitorApp {
             Panel::Disks => self.disks_panel(ui),
             Panel::Library(page) => self.library_panel(ui, *page),
             Panel::Debugger => self.debugger_tab(ui),
+            Panel::VmScreen => self.vm_screen_tab(ui),
             Panel::AnalysisSection { report_id, kind } => {
                 let key = format!("section:{report_id}:{kind:?}");
                 let report = self.analysis_windows.get(report_id).cloned();

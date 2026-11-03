@@ -53,6 +53,7 @@ mod trace;
 mod tree_lines;
 mod triage;
 mod typing;
+mod vm_screen;
 mod tzone;
 mod ui_performance;
 mod update_window;
