@@ -322,6 +322,9 @@ it runs.
   sample report's size reads `1234 bytes (1.2 KiB)`. Internal: the duplicate
   size formatters are gone, and the run clock, uptime, age, duration, local
   time of day, UTC date and `now_ms` helpers live in `time_format.rs`.
+- **One core date module.** Internal: the five hand-rolled day-count to year/month/day
+  conversions in core (GeoIP refresh, MalShare, sample report, IOC feeds, chain
+  export) are replaced by `monitor-core/src/date.rs`; every date text is unchanged.
 
 ### Build and CI
 
