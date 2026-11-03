@@ -360,7 +360,8 @@ impl MonitorApp {
                 // A slow start is waited for, not failed.
                 let start_note = (self.snapshot.state == VmState::Starting)
                     .then(|| self.snapshot.start_note.clone())
-                    .flatten();
+                    .flatten()
+                    .or_else(|| self.snapshot.launch_wait.as_ref().map(|wait| format!("{}…", wait.text)));
                 let loss = |count: u64| if count == 0 { theme::good() } else { theme::warn() };
                 let saved = persisted as f64 / 1_073_741_824.0;
                 ui.add_space(3.0);

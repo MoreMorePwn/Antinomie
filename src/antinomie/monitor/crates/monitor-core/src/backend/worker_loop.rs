@@ -466,7 +466,7 @@ impl Worker {
     }
 
     /// Serve the commands that are waiting (up to a bound); whether the sender is gone.
-    fn handle_commands(&mut self) -> bool {
+    pub(super) fn handle_commands(&mut self) -> bool {
         // While telemetry is flowing, take waiting commands without
         // sleeping so the next drain pass follows at once.
         self.serve_debug_requests();

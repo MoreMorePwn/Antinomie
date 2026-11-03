@@ -963,6 +963,7 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
             runs.push(RunSummary {
                 environment: None,
                 reduced: None,
+                boot_wait: None,
                 started_ms: None,
                 clock_anchor: None,
                 id,
@@ -1272,6 +1273,7 @@ mod tests {
             let mut run = RunSummary {
                 environment: None,
                 reduced: None,
+                boot_wait: None,
                 started_ms: None,
                 clock_anchor: None,
                 id: "run".into(),
@@ -1401,6 +1403,7 @@ mod tests {
         let mut run = RunSummary {
             environment: None,
             reduced: None,
+            boot_wait: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),

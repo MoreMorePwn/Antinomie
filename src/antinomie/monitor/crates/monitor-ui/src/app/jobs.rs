@@ -71,6 +71,14 @@ impl MonitorApp {
     /// Programs running in the guest, and runs still recording after the root exited.
     fn run_jobs(&self, jobs: &mut Vec<Job>) {
         let snapshot = &self.snapshot;
+        if let Some(wait) = &snapshot.launch_wait {
+            jobs.push(
+                Job::new("launch-wait", "Run start", file_name(&wait.program))
+                    .started(Some(wait.started_ms))
+                    .state(wait.text.clone())
+                    .stop(Stop::command(Command::CancelLaunchWait)),
+            );
+        }
         for run in &snapshot.runs {
             let live = run.state.is_live()
                 || (run.state == RunState::Unknown && run.root_task_cookie == 0);

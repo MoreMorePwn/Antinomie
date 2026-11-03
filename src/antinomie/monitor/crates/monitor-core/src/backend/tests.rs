@@ -172,6 +172,7 @@ fn closing_owner_returns_a_result_for_each_accepted_queued_command() {
         host_analysis: Default::default(),
         debug: DebugService::new().0,
         evidence: Default::default(),
+        boot_wait_state: Default::default(),
     };
     worker.run();
     drop(command_sender);
@@ -322,6 +323,7 @@ fn full_completion_lane_surfaces_terminal_failure_for_an_accepted_command() {
         host_analysis: Default::default(),
         debug: DebugService::new().0,
         evidence: Default::default(),
+        boot_wait_state: Default::default(),
     };
     completion_sender
         .try_send(Notification::CommandResult {
@@ -643,6 +645,7 @@ fn artifact_run(directory: PathBuf) -> RunSummary {
     RunSummary {
         environment: None,
         reduced: None,
+        boot_wait: None,
         started_ms: None,
         clock_anchor: None,
         id: "artifact-run".into(),
@@ -803,6 +806,7 @@ pub(super) fn download_worker(root: PathBuf) -> Worker {
         host_analysis: Default::default(),
         debug: DebugService::new().0,
         evidence: Default::default(),
+        boot_wait_state: Default::default(),
         wake: None,
     }
 }
@@ -1146,6 +1150,7 @@ fn invalid_launch_settings_are_rejected_before_lifecycle_io() {
         host_analysis: Default::default(),
         debug: DebugService::new().0,
         evidence: Default::default(),
+        boot_wait_state: Default::default(),
         wake: None,
     };
     for command in [
@@ -1240,6 +1245,7 @@ fn fixed_display_guards_selected_boot_without_changing_pinned_disk() {
         host_analysis: Default::default(),
         debug: DebugService::new().0,
         evidence: Default::default(),
+        boot_wait_state: Default::default(),
         wake: None,
     };
     worker
@@ -1345,6 +1351,7 @@ fn base_import_and_failed_credential_creation_preserve_published_state() {
         host_analysis: Default::default(),
         debug: DebugService::new().0,
         evidence: Default::default(),
+        boot_wait_state: Default::default(),
         wake: None,
     };
     for guest in [false, true] {
@@ -1513,6 +1520,7 @@ fn running_vm_duplicate_and_delete_guards_preserve_data() {
         host_analysis: Default::default(),
         debug: DebugService::new().0,
         evidence: Default::default(),
+        boot_wait_state: Default::default(),
         wake: None,
     };
     assert!(
@@ -1588,6 +1596,7 @@ fn pending_raw_copy_quota_failure_stops_existing_and_acknowledged_runs() {
             RunSummary {
                 environment: None,
                 reduced: None,
+                boot_wait: None,
                 started_ms: None,
                 clock_anchor: None,
                 id: cookie.to_string(),
@@ -1659,6 +1668,7 @@ fn object_saving_failure_preserves_raw_and_globally_denies_terminal_saving() {
                     RunSummary {
                         environment: None,
                         reduced: None,
+                        boot_wait: None,
                         started_ms: None,
                         clock_anchor: None,
                         id: cookie.to_string(),
@@ -1772,6 +1782,7 @@ fn final_health_counts_screen_and_keeps_errors_scoped_to_run() {
             RunSummary {
                 environment: None,
                 reduced: None,
+                boot_wait: None,
                 started_ms: None,
                 clock_anchor: None,
                 id: id.into(),

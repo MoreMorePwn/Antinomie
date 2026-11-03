@@ -8,6 +8,7 @@ pub mod api_keys;
 mod archive_io;
 mod backend;
 pub mod base_manifest;
+pub mod boot_wait;
 pub mod build;
 mod build_choices;
 mod builder_vm;

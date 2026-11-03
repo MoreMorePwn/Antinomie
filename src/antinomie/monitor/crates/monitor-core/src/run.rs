@@ -471,6 +471,7 @@ mod tests {
         let summary = RunSummary {
             environment: None,
             reduced: None,
+            boot_wait: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -535,6 +536,7 @@ mod tests {
         let summary = RunSummary {
             environment: None,
             reduced: None,
+            boot_wait: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -591,6 +593,7 @@ mod tests {
         let summary = RunSummary {
             environment: None,
             reduced: None,
+            boot_wait: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -644,6 +647,7 @@ mod tests {
         let summary = RunSummary {
             environment: None,
             reduced: None,
+            boot_wait: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -711,6 +715,7 @@ mod tests {
         let summary = RunSummary {
             environment: None,
             reduced: None,
+            boot_wait: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -754,6 +759,7 @@ mod tests {
         let summary = RunSummary {
             environment: None,
             reduced: None,
+            boot_wait: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -819,6 +825,7 @@ mod tests {
         let summary = RunSummary {
             environment: None,
             reduced: None,
+            boot_wait: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),

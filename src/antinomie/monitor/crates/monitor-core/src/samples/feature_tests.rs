@@ -380,6 +380,7 @@ impl Recording {
         let summary = RunSummary {
             environment: None,
             reduced: None,
+            boot_wait: None,
             started_ms: Some(1000),
             clock_anchor: None,
             id: id.into(),

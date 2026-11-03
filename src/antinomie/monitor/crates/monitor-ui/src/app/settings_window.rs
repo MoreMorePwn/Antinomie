@@ -748,6 +748,14 @@ impl MonitorApp {
                         "TCG is software emulation, 10 to 50 times slower than KVM. Every start wait is this many times longer when a VM runs with TCG.",
                     );
                 });
+                ui.add(
+                    egui::DragValue::new(&mut self.settings.start.boot_wait_secs)
+                        .range(antinomie_monitor_core::StartSettings::BOOT_WAIT_SECS)
+                        .suffix(" s boot wait before a run"),
+                )
+                .on_hover_text(
+                    "How long the first run of a boot waits for a systemd guest to finish booting, at KVM speed (stretched by the TCG multiplier like the other waits). A guest still booting then gets the program anyway, with a warning on the run. Guests without systemd (BusyBox) never wait.",
+                );
                 ui.checkbox(
                     &mut self.settings.start.kvm_fallback,
                     "Use TCG when KVM is unavailable",

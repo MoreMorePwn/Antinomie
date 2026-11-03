@@ -99,6 +99,7 @@ mod tests {
         let run = RunSummary {
             environment: None,
             reduced: None,
+            boot_wait: None,
             started_ms: None,
             clock_anchor: None,
             id: "one".into(),
@@ -133,6 +134,7 @@ mod tests {
         let run = RunSummary {
             environment: None,
             reduced: None,
+            boot_wait: None,
             started_ms: None,
             clock_anchor: None,
             id: "one".into(),
@@ -178,6 +180,7 @@ mod tests {
         let run = RunSummary {
             environment: None,
             reduced: None,
+            boot_wait: None,
             started_ms: None,
             clock_anchor: None,
             id: "one".into(),

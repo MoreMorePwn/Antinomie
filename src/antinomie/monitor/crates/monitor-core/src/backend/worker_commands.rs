@@ -108,6 +108,10 @@ impl Worker {
                 confirmed,
             } => self.delete_snapshot(vm_id, snapshot_id, confirmed),
             Command::ReconnectTransport => self.reconnect_transport(),
+            Command::CancelLaunchWait => {
+                self.boot_wait_state.cancel = self.boot_wait_state.waiting;
+                Ok("launch cancelled".into())
+            }
             Command::Create(vm) => self.create(vm, None),
             Command::CreateWithCredentials { vm, credentials } => {
                 self.create(vm, Some(credentials))

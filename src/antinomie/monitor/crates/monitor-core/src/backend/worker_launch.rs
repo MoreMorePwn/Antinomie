@@ -75,10 +75,16 @@ fn arm_process_core(
 impl Worker {
     /// Start a program in the guest and record the run.
     pub(super) fn execute(&mut self, mut request: ExecRequest) -> Result<String, String> {
+        if self.boot_wait_state.waiting {
+            return Err("another program is still waiting for the guest to finish booting".into());
+        }
         let session = self.session.as_mut().ok_or("VM is stopped")?;
         let boot_id = session.boot_id.clone();
         self.launch_checks(&mut request)?;
-        let plan = self.plan_launch(&request)?;
+        let boot_wait = self.wait_for_boot(&request.path)?;
+        let mut plan = self.plan_launch(&request)?;
+        plan.summary.notes.extend(boot_wait.timeout_note());
+        plan.summary.boot_wait = Some(boot_wait);
         let sent = self.send_launch(&request, plan)?;
         let ack = self.register_run(&request, sent)?;
         self.report_launch(&request, ack, boot_id)
@@ -250,6 +256,7 @@ impl Worker {
                 },
             )),
             reduced: None,
+            boot_wait: None,
             execution: None,
             analysis: selected
                 .then(|| crate::analysis::jobs::new_report(&request.path, &request.analysis)),

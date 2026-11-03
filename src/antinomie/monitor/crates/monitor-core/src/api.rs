@@ -418,8 +418,13 @@ pub struct StartSettings {
     /// A VM set to KVM runs with TCG when `/dev/kvm` cannot be used, instead
     /// of refusing to start. (Default acceleration always falls back.)
     pub kvm_fallback: bool,
+    /// Seconds a launch waits at KVM speed for a systemd guest to finish
+    /// booting before it starts the program anyway: 5..=600. Stretched like
+    /// every start wait under TCG.
+    pub boot_wait_secs: u32,
 }
 impl StartSettings {
+    pub const BOOT_WAIT_SECS: std::ops::RangeInclusive<u32> = 5..=600;
     pub const GUEST_CONNECT_SECS: std::ops::RangeInclusive<u32> = 5..=600;
     pub const TCG_MULTIPLIER: std::ops::RangeInclusive<u32> = 1..=100;
     pub fn validate(&self) -> Result<(), String> {
@@ -428,6 +433,9 @@ impl StartSettings {
         }
         if !Self::TCG_MULTIPLIER.contains(&self.tcg_multiplier) {
             return Err("TCG multiplier must be 1..100".into());
+        }
+        if !Self::BOOT_WAIT_SECS.contains(&self.boot_wait_secs) {
+            return Err("boot wait must be 5..600 seconds".into());
         }
         Ok(())
     }
@@ -441,6 +449,7 @@ impl Default for StartSettings {
             // several times longer.
             tcg_multiplier: 10,
             kvm_fallback: false,
+            boot_wait_secs: 60,
         }
     }
 }
@@ -878,6 +887,10 @@ pub struct RunSummary {
     /// in runs saved before it existed and in runs it did not touch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reduced: Option<crate::reduced::ReducedRecording>,
+    /// How long the launch waited for the guest to finish booting and how
+    /// that ended; absent in runs saved before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot_wait: Option<crate::boot_wait::BootWait>,
 }
 
 impl RunSummary {
@@ -2175,6 +2188,8 @@ pub enum Command {
         directory: PathBuf,
     },
     Stop,
+    /// Give up a launch that is waiting for the guest to finish booting.
+    CancelLaunchWait,
     Close,
 }
 
@@ -2479,6 +2494,8 @@ pub struct Snapshot {
     pub start_note: Option<String>,
     /// The accelerator the running (or starting) VM uses; None while stopped.
     pub accelerator: Option<AcceleratorUsed>,
+    /// While a launch waits for the guest to finish booting.
+    pub launch_wait: Option<crate::boot_wait::LaunchWait>,
 }
 
 /// The accelerator a VM boot actually uses.

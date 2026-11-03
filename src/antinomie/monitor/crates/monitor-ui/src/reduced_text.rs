@@ -30,7 +30,7 @@ pub(crate) fn lines(reduced: &ReducedRecording, started_ms: Option<u64>) -> Vec<
         .unwrap_or_default();
     let calls = reduced.dropped_total();
     let mut lines = vec![format!(
-        "Recording quota reached at {}{into}; from then on only suspicious-activity calls were kept, {} {} dropped.",
+        "Recording quota nearly full at {}{into}; from then on only suspicious-activity calls were kept, {} {} dropped.",
         local_seconds(reduced.at_ms / 1000),
         grouped(calls),
         if calls == 1 { "call" } else { "calls" },
@@ -63,7 +63,7 @@ pub(crate) fn lines(reduced: &ReducedRecording, started_ms: Option<u64>) -> Vec<
     }
     if let Some(full) = reduced.full_at_ms {
         lines.push(format!(
-            "The quota itself was full at {}: nothing more was saved after that.",
+            "Recording quota reached at {}: it was full, and nothing more was saved after that.",
             local_seconds(full / 1000)
         ));
     }

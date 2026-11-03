@@ -562,14 +562,15 @@ The network capture is the guest's own view on every route.
   Process column shows a forked child that never ran an exec as its parent's
   image with "(fork)". A failed call reads "failed (EACCES)", with the number and
   its meaning on hover.
-- **Recording quota reached.** When a boot has used nine tenths of its recording
+- **Recording quota nearly full.** When a boot has used nine tenths of its recording
   quota (**Settings > Recording**), the recorder keeps only the system calls the
   Triage suspicious-activity rules read (and process lifecycle), drops the rest
   and counts what it dropped per call. The network capture keeps running until
   half of the last tenth is left; the quota itself stays the hard ceiling. Triage,
-  Run History and the HTML/PDF report say "Recording quota reached at <time>; from
+  Run History and the HTML/PDF report say "Recording quota nearly full at <time>; from
   then on only suspicious-activity calls were kept, N calls dropped" as
-  information, not an error (`run.json` has it as `reduced`).
+  information, not an error (`run.json` has it as `reduced`); "Recording quota
+  reached" is said only when the quota itself was full and saving stopped.
 - **Tables that stop at a page size** say "first N of M" (for example "first 2,000
   of 10,897 matched") and name the setting **Settings > Advanced > Triage: rows
   per table** (default 2,000, 100 to 100,000), which sets how many rows one Triage

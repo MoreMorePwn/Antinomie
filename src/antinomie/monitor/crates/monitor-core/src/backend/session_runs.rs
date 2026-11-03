@@ -621,6 +621,7 @@ mod forget_tests {
             route: None,
             environment: None,
             reduced: None,
+            boot_wait: None,
         }
     }
 

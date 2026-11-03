@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Session orchestration: the frontend handle, the worker thread that owns the
 //! VM, and the session that owns one transport client.
+mod boot_wait;
 mod completions;
 mod core_sink;
 mod core_stream;
@@ -201,6 +202,7 @@ impl Backend {
                     host_analysis: crate::analysis::jobs::Jobs::with_tools(host_tools_dir),
                     debug: debug_service,
                     evidence: Default::default(),
+                    boot_wait_state: Default::default(),
                     wake,
                 }
                 .run();
@@ -462,6 +464,8 @@ struct Session {
     captures: BTreeMap<String, CaptureSession>,
     pending_capture_id: Option<String>,
     boot_id: String,
+    /// Set once the guest was seen to have finished booting (or has no boot to wait for).
+    boot_settled: bool,
     /// Telemetry of root tasks whose launch the host has not been told about yet.
     pre_ack: crate::pre_ack::PreAckBuffer,
     /// Set once the recording quota is reached; see `crate::quota`.
@@ -780,6 +784,8 @@ struct Worker {
     debug: DebugService,
     /// Evidence deletions, off this thread (see `evidence_delete`).
     evidence: evidence_delete::EvidenceDeleter,
+    /// A launch waiting for the guest to finish booting.
+    boot_wait_state: boot_wait::BootWaitState,
 }
 
 /// Attempts at reconnecting a guest that stopped answering, before the VM is

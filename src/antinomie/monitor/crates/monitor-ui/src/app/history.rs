@@ -644,6 +644,7 @@ pub(super) fn listed(run: &RunSummary) -> RunSummary {
         route: run.route.clone(),
         environment: run.environment.clone(),
         reduced: run.reduced.clone(),
+        boot_wait: run.boot_wait.clone(),
         recording_error: run.recording_error.clone(),
         execution: run.execution.clone(),
         analysis: run
