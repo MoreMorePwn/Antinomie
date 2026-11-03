@@ -53,20 +53,7 @@ fn compare_packets(column: usize, left: &NetworkPacket, right: &NetworkPacket) -
 
 impl NetworkView {
     pub(super) fn packets(&mut self, ui: &mut egui::Ui, is_live: bool, cx: &NetworkContext<'_>) {
-        if let Some(path) = self.list.path.clone() {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(crate::evidence::title(
-                    ui,
-                    &path.with_extension("metadata"),
-                    &path.file_name().unwrap_or_default().to_string_lossy(),
-                ));
-                if ui.button("Open PCAP directory").clicked() {
-                    if let Some(parent) = path.parent() {
-                        crate::evidence::reveal(ui.ctx(), parent);
-                    }
-                }
-            });
-        }
+        self.packets_path_bar(ui);
         if self.list.path.is_none() {
             empty_state(
                 ui,
@@ -95,55 +82,7 @@ impl NetworkView {
                 ),
             );
         }
-        if let Some(index) = self.display_index.clone() {
-            let mut requested_page = None;
-            let page_count = index.matching_count.div_ceil(PAGE_SIZE as u64).max(1);
-            let current_page = self.display_page_start / PAGE_SIZE as u64 + 1;
-            ui.horizontal_wrapped(|ui| {
-                ui.add_enabled_ui(!self.display_pending, |ui| {
-                    if ui
-                        .add_enabled(current_page > 1, egui::Button::new("Previous page"))
-                        .clicked()
-                    {
-                        requested_page = Some(current_page - 1);
-                    }
-                    let mut page = current_page;
-                    ui.label("Page");
-                    if ui
-                        .add(egui::DragValue::new(&mut page).range(1..=page_count))
-                        .changed()
-                    {
-                        requested_page = Some(page);
-                    }
-                    ui.label(format!("of {page_count}"));
-                    if ui
-                        .add_enabled(current_page < page_count, egui::Button::new("Next page"))
-                        .clicked()
-                    {
-                        requested_page = Some(current_page + 1);
-                    }
-                    ui.label(format!(
-                        "{}–{} of {} matching packets",
-                        if index.matching_count == 0 {
-                            0
-                        } else {
-                            self.display_page_start + 1
-                        },
-                        (self.display_page_start + self.display_page.len() as u64)
-                            .min(index.matching_count),
-                        index.matching_count
-                    ));
-                });
-                if is_live {
-                    ui.checkbox(&mut self.display_follow_live, "Follow live");
-                }
-            });
-            if let (Some(page), Some(worker)) = (requested_page, &self.display_worker) {
-                self.display_generation = worker.request_page(index, (page - 1) * PAGE_SIZE as u64);
-                self.display_pending = true;
-                ui.ctx().request_repaint_after(Duration::from_millis(50));
-            }
-        }
+        self.packet_pager(ui, is_live);
         let font_size = cx.font_size;
         let mono = theme::mono(font_size - 1.0);
         // Data columns fit their monospace contents; Info gets the rest.
@@ -247,83 +186,19 @@ impl NetworkView {
                             let elapsed = packet.time_us.saturating_sub(start) as f64 / 1e6;
                             for column in 0..7 {
                                 row.col(|ui| {
-                                    if column == 0 {
-                                        let mark = if selected {
-                                            crate::widgets::fit_table::Mark::Selected
-                                        } else if packet
-                                            .tcp_flags
-                                            .is_some_and(|flags| flags & network::TCP_RST != 0)
-                                        {
-                                            crate::widgets::fit_table::Mark::Failed
-                                        } else {
-                                            crate::widgets::fit_table::Mark::None
-                                        };
-                                        crate::widgets::fit_table::row_mark(ui, mark);
-                                    }
-                                    // Paint the cell and half of each gap so a
-                                    // tinted row reads as one band.
-                                    if let Some(tint) = tint {
-                                        let cell = ui.max_rect().expand2(egui::vec2(
-                                            ui.spacing().item_spacing.x / 2.0,
-                                            0.0,
-                                        ));
-                                        ui.painter().rect_filled(cell, 0.0, tint);
-                                    }
-                                    let set = match column {
-                                        2 => address_cell(
-                                            ui,
-                                            &mono,
-                                            &packet.source,
-                                            packet.src_ip,
-                                            packet.src_port,
-                                        ),
-                                        3 => address_cell(
-                                            ui,
-                                            &mono,
-                                            &packet.destination,
-                                            packet.dst_ip,
-                                            packet.dst_port,
-                                        ),
-                                        4 => link(
-                                            ui,
-                                            RichText::new(&packet.protocol)
-                                                .font(mono.clone())
-                                                .color(protocol_color(&packet.protocol)),
-                                            &format!("Filter by protocol {}", packet.protocol),
-                                        )
-                                        .then(|| format!("proto {}", packet.protocol)),
-                                        6 => {
-                                            ui.add(
-                                                egui::Label::new(info_text(packet, font_size))
-                                                    .selectable(false)
-                                                    .truncate(),
-                                            );
-                                            None
-                                        }
-                                        _ => {
-                                            let (text, color) = match column {
-                                                0 => (packet.number.to_string(), theme::muted()),
-                                                1 => (
-                                                    format!("{elapsed:.6}"),
-                                                    theme::value(ValueKind::Number),
-                                                ),
-                                                _ => (packet.length.to_string(), theme::text()),
-                                            };
-                                            ui.add(
-                                                egui::Label::new(
-                                                    RichText::new(text)
-                                                        .font(mono.clone())
-                                                        .color(color),
-                                                )
-                                                .selectable(false)
-                                                .truncate(),
-                                            );
-                                            None
-                                        }
-                                    };
-                                    if set.is_some() {
-                                        filter = set;
-                                    }
+                                    packet_cell(
+                                        ui,
+                                        column,
+                                        packet,
+                                        &PacketCell {
+                                            selected,
+                                            tint,
+                                            elapsed,
+                                            mono: &mono,
+                                            font_size,
+                                        },
+                                        &mut filter,
+                                    );
                                 });
                             }
                             let response = row.response();
@@ -331,35 +206,15 @@ impl NetworkView {
                                 clicked = Some(packet.clone());
                             }
                             response.context_menu(|ui| {
-                                ui.menu_button("Display filter", |ui| {
-                                    crate::widgets::bounded_menu(ui, |ui| {
-                                        for (field, clause) in packet_display_clauses(packet) {
-                                            ui.menu_button(field, |ui| {
-                                                display_clause_menu(
-                                                    ui,
-                                                    &clause,
-                                                    &mut display_filter,
-                                                );
-                                            });
-                                        }
-                                    });
-                                });
-                                if let Some(set) = filter_menu(ui, packet, filtering) {
-                                    filter = Some(set);
-                                    ui.close_menu();
-                                }
-                                ui.separator();
-                                match self.packet_note(cx.vm_id, packet) {
-                                    Some(reference) => {
-                                        crate::app::note_menu_item(ui, None, reference);
-                                    }
-                                    None => {
-                                        ui.add_enabled(false, egui::Button::new("Add note…"))
-                                            .on_disabled_hover_text(
-                                                "Select this VM's capture first",
-                                            );
-                                    }
-                                }
+                                self.packet_menu(
+                                    ui,
+                                    packet,
+                                    PacketEdits {
+                                        display_filter: &mut display_filter,
+                                        filter: &mut filter,
+                                    },
+                                    (filtering, cx.vm_id),
+                                );
                             });
                         },
                     );
@@ -400,6 +255,114 @@ impl NetworkView {
             self.display_rejected = None;
             self.display_error = None;
             ui.ctx().request_repaint();
+        }
+    }
+
+    /// The title of the selected capture and the button that opens its folder.
+    fn packets_path_bar(&self, ui: &mut egui::Ui) {
+        if let Some(path) = self.list.path.clone() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(crate::evidence::title(
+                    ui,
+                    &path.with_extension("metadata"),
+                    &path.file_name().unwrap_or_default().to_string_lossy(),
+                ));
+                if ui.button("Open PCAP directory").clicked() {
+                    if let Some(parent) = path.parent() {
+                        crate::evidence::reveal(ui.ctx(), parent);
+                    }
+                }
+            });
+        }
+    }
+
+    /// The page row of a capture TShark pages: previous, the page number, next and the count.
+    fn packet_pager(&mut self, ui: &mut egui::Ui, is_live: bool) {
+        if let Some(index) = self.display_index.clone() {
+            let mut requested_page = None;
+            let page_count = index.matching_count.div_ceil(PAGE_SIZE as u64).max(1);
+            let current_page = self.display_page_start / PAGE_SIZE as u64 + 1;
+            ui.horizontal_wrapped(|ui| {
+                ui.add_enabled_ui(!self.display_pending, |ui| {
+                    if ui
+                        .add_enabled(current_page > 1, egui::Button::new("Previous page"))
+                        .clicked()
+                    {
+                        requested_page = Some(current_page - 1);
+                    }
+                    let mut page = current_page;
+                    ui.label("Page");
+                    if ui
+                        .add(egui::DragValue::new(&mut page).range(1..=page_count))
+                        .changed()
+                    {
+                        requested_page = Some(page);
+                    }
+                    ui.label(format!("of {page_count}"));
+                    if ui
+                        .add_enabled(current_page < page_count, egui::Button::new("Next page"))
+                        .clicked()
+                    {
+                        requested_page = Some(current_page + 1);
+                    }
+                    ui.label(format!(
+                        "{}–{} of {} matching packets",
+                        if index.matching_count == 0 {
+                            0
+                        } else {
+                            self.display_page_start + 1
+                        },
+                        (self.display_page_start + self.display_page.len() as u64)
+                            .min(index.matching_count),
+                        index.matching_count
+                    ));
+                });
+                if is_live {
+                    ui.checkbox(&mut self.display_follow_live, "Follow live");
+                }
+            });
+            if let (Some(page), Some(worker)) = (requested_page, &self.display_worker) {
+                self.display_generation = worker.request_page(index, (page - 1) * PAGE_SIZE as u64);
+                self.display_pending = true;
+                ui.ctx().request_repaint_after(Duration::from_millis(50));
+            }
+        }
+    }
+
+    /// The menu of a packet row: display filters, the filter box and a note.
+    fn packet_menu(
+        &self,
+        ui: &mut egui::Ui,
+        packet: &NetworkPacket,
+        edits: PacketEdits<'_>,
+        (filtering, vm_id): (bool, Option<&str>),
+    ) {
+        let PacketEdits {
+            display_filter,
+            filter,
+        } = edits;
+        ui.menu_button("Display filter", |ui| {
+            crate::widgets::bounded_menu(ui, |ui| {
+                for (field, clause) in packet_display_clauses(packet) {
+                    ui.menu_button(field, |ui| {
+                        display_clause_menu(ui, &clause, display_filter);
+                    });
+                }
+            });
+        });
+        if let Some(set) = filter_menu(ui, packet, filtering) {
+            *filter = Some(set);
+            ui.close_menu();
+        }
+        ui.separator();
+        match self.packet_note(vm_id, packet) {
+            Some(reference) => {
+                crate::app::note_menu_item(ui, None, reference);
+            }
+            None => {
+                ui.add_enabled(false, egui::Button::new("Add note…"))
+                    .on_disabled_hover_text("Select this VM's capture first");
+            }
         }
     }
 
@@ -770,6 +733,101 @@ pub(super) fn link(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, hover: 
         );
     }
     response.clicked()
+}
+
+/// The filters a packet row's menu edits.
+struct PacketEdits<'a> {
+    display_filter: &'a mut String,
+    filter: &'a mut Option<String>,
+}
+
+/// How a cell of a packet row is drawn besides its text.
+struct PacketCell<'a> {
+    selected: bool,
+    tint: Option<egui::Color32>,
+    elapsed: f64,
+    mono: &'a egui::FontId,
+    font_size: f32,
+}
+
+/// One cell of a packet row: the mark, the tint band and the column's content.
+fn packet_cell(
+    ui: &mut egui::Ui,
+    column: usize,
+    packet: &NetworkPacket,
+    style: &PacketCell<'_>,
+    filter: &mut Option<String>,
+) {
+    let PacketCell {
+        selected,
+        tint,
+        elapsed,
+        mono,
+        font_size,
+    } = *style;
+    if column == 0 {
+        let mark = if selected {
+            crate::widgets::fit_table::Mark::Selected
+        } else if packet
+            .tcp_flags
+            .is_some_and(|flags| flags & network::TCP_RST != 0)
+        {
+            crate::widgets::fit_table::Mark::Failed
+        } else {
+            crate::widgets::fit_table::Mark::None
+        };
+        crate::widgets::fit_table::row_mark(ui, mark);
+    }
+    // Paint the cell and half of each gap so a
+    // tinted row reads as one band.
+    if let Some(tint) = tint {
+        let cell = ui
+            .max_rect()
+            .expand2(egui::vec2(ui.spacing().item_spacing.x / 2.0, 0.0));
+        ui.painter().rect_filled(cell, 0.0, tint);
+    }
+    let set = match column {
+        2 => address_cell(ui, &mono, &packet.source, packet.src_ip, packet.src_port),
+        3 => address_cell(
+            ui,
+            &mono,
+            &packet.destination,
+            packet.dst_ip,
+            packet.dst_port,
+        ),
+        4 => link(
+            ui,
+            RichText::new(&packet.protocol)
+                .font(mono.clone())
+                .color(protocol_color(&packet.protocol)),
+            &format!("Filter by protocol {}", packet.protocol),
+        )
+        .then(|| format!("proto {}", packet.protocol)),
+        6 => {
+            ui.add(
+                egui::Label::new(info_text(packet, font_size))
+                    .selectable(false)
+                    .truncate(),
+            );
+            None
+        }
+        _ => {
+            let (text, color) = match column {
+                0 => (packet.number.to_string(), theme::muted()),
+                1 => (format!("{elapsed:.6}"), theme::value(ValueKind::Number)),
+                _ => (packet.length.to_string(), theme::text()),
+            };
+            ui.add(
+                egui::Label::new(RichText::new(text).font(mono.clone()).color(color))
+                    .selectable(false)
+                    .truncate(),
+            );
+            None
+        }
+    };
+    if set.is_some() {
+        *filter = set;
+    }
 }
 
 /// A Source or Destination cell: its address and port filter separately.
