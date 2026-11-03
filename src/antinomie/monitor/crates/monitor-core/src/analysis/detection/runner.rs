@@ -819,8 +819,10 @@ pub fn load(request: &Request) -> Result<Report, String> {
     validate_run(request)?;
     let directory = result_directory(&request.directory, request.engine);
     let data = read_bounded(&directory, Path::new("report.json"), REPORT_LIMIT)?;
-    let report = serde_json::from_slice(&data).map_err(|error| error.to_string())?;
+    let mut report: Report = serde_json::from_slice(&data).map_err(|error| error.to_string())?;
     validate_report(&report, request)?;
+    // A result saved with one warning per skipped rule reads as the short form.
+    fold_selection_exclusions(&mut report, &[]);
     Ok(report)
 }
 
@@ -985,6 +987,82 @@ fn finish_report(report: &mut Report, staged: &Staged) {
     merge_staged_warnings(report, &staged.warnings);
 }
 
+/// One short line for the rules of one reason that did not apply, with the
+/// rules themselves left to the coverage list.
+fn exclusion_line(reason: CoverageReason, count: u64) -> String {
+    let (many, one) = match reason {
+        CoverageReason::TlsFingerprint => (
+            "need a TLS fingerprint keyword the bundled Suricata configuration lacks",
+            "needs a TLS fingerprint keyword the bundled Suricata configuration lacks",
+        ),
+        CoverageReason::Dataset => ("need an external dataset", "needs an external dataset"),
+        CoverageReason::DuplicateSid => (
+            "repeat a rule ID that is already loaded",
+            "repeats a rule ID that is already loaded",
+        ),
+        CoverageReason::UnsupportedCategory => (
+            "need an event category this recording does not capture",
+            "needs an event category this recording does not capture",
+        ),
+        CoverageReason::Backend => (
+            "use a feature or fields the Sigma backend does not support",
+            "uses a feature or fields the Sigma backend does not support",
+        ),
+        _ => ("were left out", "was left out"),
+    };
+    if count == 1 {
+        format!("1 rule {one}; it was skipped")
+    } else {
+        format!("{count} rules {many}; they were skipped")
+    }
+}
+
+/// A report that did not run its engine (no packets, no events) has no rule
+/// counts, so every rule its selection left out arrived as a warning of its
+/// own: dozens of lines for one reason. Count them in the coverage instead,
+/// leave one line per reason in the warnings and the rules in the coverage
+/// list. Reports saved with the long list are folded the same way on load.
+fn fold_selection_exclusions(report: &mut Report, staged: &[String]) {
+    if report.coverage.is_some() {
+        return;
+    }
+    let engine = report.engine;
+    let is_exclusion =
+        |warning: &String| crate::ruleset::selection_exclusion(engine, warning).is_some();
+    if !report.warnings.iter().any(is_exclusion) && !staged.iter().any(is_exclusion) {
+        return;
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut all = Vec::new();
+    for warning in std::mem::take(&mut report.warnings) {
+        if is_exclusion(&warning) {
+            if seen.insert(warning.clone()) {
+                all.push(warning);
+            }
+        } else {
+            report.warnings.push(warning);
+        }
+    }
+    for warning in staged.iter().filter(|warning| is_exclusion(warning)) {
+        if seen.insert(warning.clone()) {
+            all.push(warning.clone());
+        }
+    }
+    let mut coverage = Coverage::default();
+    coverage.add_selection_exclusions(engine, &all);
+    for reason in IDS_REASONS.iter().chain(SIGMA_REASONS.iter()) {
+        let count = coverage.count_of(*reason);
+        if count > 0 {
+            let line = exclusion_line(*reason, count);
+            if !report.warnings.contains(&line) {
+                report.warnings.push(line);
+            }
+        }
+    }
+    report.skipped_rules = report.skipped_rules.max(coverage.not_loadable());
+    report.coverage = Some(coverage);
+}
+
 /// Selection warnings kept in a report; the rest are counted in one line.
 const SELECTION_WARNING_LIMIT: usize = 200;
 
@@ -994,6 +1072,7 @@ const SELECTION_WARNING_LIMIT: usize = 200;
 /// that was not evaluated) is a coverage limit and never changes the state.
 /// Rules already counted in `report.coverage` are not repeated as warnings.
 fn merge_staged_warnings(report: &mut Report, warnings: &[String]) {
+    fold_selection_exclusions(report, warnings);
     let mut seen = std::collections::BTreeSet::new();
     report
         .warnings

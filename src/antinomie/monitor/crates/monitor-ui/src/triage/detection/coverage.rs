@@ -95,10 +95,14 @@ impl View {
         };
         ui.label(RichText::new(line).small().color(theme::muted()));
         if !coverage.listed.is_empty() {
+            let count = coverage.listed.len() as u64 + coverage.unlisted;
             let title = if report.engine == Engine::Ids {
-                "Rules not loaded"
+                format!("Show the {} rules not loaded", engine::group_digits(count))
             } else {
-                "Rules not applicable to this run"
+                format!(
+                    "Show the {} rules not applicable to this run",
+                    engine::group_digits(count)
+                )
             };
             egui::CollapsingHeader::new(RichText::new(title).small())
                 .id_salt(("detection-coverage", index))
