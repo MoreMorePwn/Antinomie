@@ -91,6 +91,12 @@ impl MonitorApp {
             self.empty_trace(ui);
             return;
         }
+        // A short panel (a small window at a large text size) packs the rows
+        // above the table closer so the table header stays in view.
+        let spacing_y = ui.spacing().item_spacing.y;
+        if ui.available_height() < self.settings.font_size * 14.0 {
+            ui.spacing_mut().item_spacing.y = 2.0;
+        }
         self.trace_toolbar(ui);
         if let Some(run) = self.selected_vm_run() {
             crate::run_recording::show(ui, run);
@@ -108,6 +114,7 @@ impl MonitorApp {
             crate::query::compile_note(&self.applied_filter)
         };
         let (invocations, archived) = self.shown_invocations(ui, &filter);
+        ui.spacing_mut().item_spacing.y = spacing_y;
         let font = self.settings.font_size;
         // The run a note about an entry is filed under: its VM and id, and the
         // sample it started (a run of a program that is not in the library
@@ -322,10 +329,11 @@ impl MonitorApp {
                 self.select_process(selection);
             }
             self.trace_archive_pager(ui);
-            // egui 0.36 reports the whole row as available inside a wrapped
-            // layout, so the room left is measured from the cursor.
-            let left = theme::row_room(ui) - ui.spacing().item_spacing.x;
-            let filter_width = left.max(180.0).min(ui.available_width());
+        });
+        // The filter box has a row of its own below the toolbar, as before
+        // egui 0.36, at every window and text size.
+        ui.horizontal(|ui| {
+            let filter_width = ui.available_width().max(180.0);
             crate::query::filter_edit(
                 ui,
                 &mut self.filter,
