@@ -6,8 +6,8 @@
 //! they are doing; this module keeps when each job was first seen and which
 //! ones have since gone, and draws the two lists.
 use crate::{
-    run_state_line::{clock, now_ms},
     theme,
+    time_format::{elapsed, now_ms, time_of_day},
     toasts::Action,
     widgets::fit_table::{Col, FitBuilder},
     workspace::Panel,
@@ -227,7 +227,7 @@ impl Board {
                     job.kind,
                     job.target,
                     job.state,
-                    clock(now.saturating_sub(self.started(job, now)))
+                    elapsed(now.saturating_sub(self.started(job, now)))
                 )
             })
             .collect()
@@ -377,10 +377,10 @@ impl Board {
                                 .on_hover_text(&job.target);
                         });
                         row.col(|ui| {
-                            ui.monospace(local_time(started));
+                            ui.monospace(time_of_day(started / 1000));
                         });
                         row.col(|ui| {
-                            ui.monospace(clock(now.saturating_sub(started)));
+                            ui.monospace(elapsed(now.saturating_sub(started)));
                         });
                         row.col(|ui| match job.progress {
                             Some(fraction) => {
@@ -475,10 +475,10 @@ impl Board {
                             .on_hover_text(&done.job.target);
                     });
                     row.col(|ui| {
-                        ui.monospace(local_time(done.ended_ms));
+                        ui.monospace(time_of_day(done.ended_ms / 1000));
                     });
                     row.col(|ui| {
-                        ui.monospace(clock(done.took_ms));
+                        ui.monospace(elapsed(done.took_ms));
                     });
                     row.col(|ui| {
                         ui.colored_label(done.outcome.color(), done.outcome.label());
@@ -498,17 +498,6 @@ impl Board {
             });
         request
     }
-}
-
-/// `HH:MM:SS` of a Unix-millisecond time, local.
-fn local_time(ms: u64) -> String {
-    chrono::DateTime::from_timestamp_millis(ms as i64)
-        .map(|time| {
-            time.with_timezone(&chrono::Local)
-                .format("%H:%M:%S")
-                .to_string()
-        })
-        .unwrap_or_else(|| "—".into())
 }
 
 /// Stops a flag-stopped job.

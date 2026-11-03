@@ -213,7 +213,7 @@ impl NetworkView {
         if let Some(stopped) = capture.stopped_ms {
             rows.push((
                 "Duration",
-                format_duration(stopped.saturating_sub(capture.started_ms)),
+                crate::time_format::duration_ms(stopped.saturating_sub(capture.started_ms)),
             ));
         }
         rows.push((
@@ -432,24 +432,14 @@ pub(super) fn capture_detail(
         parts.push(format!("{packets} packets"));
     }
     match capture.stopped_ms {
-        Some(stopped) if !capture.whole_boot => {
-            parts.push(format_duration(stopped.saturating_sub(capture.started_ms)))
-        }
+        Some(stopped) if !capture.whole_boot => parts.push(crate::time_format::duration_ms(
+            stopped.saturating_sub(capture.started_ms),
+        )),
         Some(_) => {}
         None => parts.push("not stopped (the app ended first)".into()),
     }
     if let Some(bytes) = capture.bytes {
-        parts.push(format_bytes(bytes));
+        parts.push(crate::values::file_size(bytes));
     }
     parts.join(" · ")
-}
-
-pub(super) fn format_duration(ms: u64) -> String {
-    let seconds = ms / 1000;
-    match seconds {
-        0 => format!("{ms} ms"),
-        1..=59 => format!("{seconds} s"),
-        60..=3599 => format!("{} min {} s", seconds / 60, seconds % 60),
-        _ => format!("{} h {} min", seconds / 3600, seconds / 60 % 60),
-    }
 }

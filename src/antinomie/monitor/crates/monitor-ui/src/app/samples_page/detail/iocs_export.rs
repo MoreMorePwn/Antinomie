@@ -136,12 +136,6 @@ impl MonitorApp {
     }
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_millis() as u64)
-}
-
 #[allow(clippy::too_many_arguments)]
 fn write(
     data: &Data,
@@ -154,7 +148,7 @@ fn write(
     defanged: bool,
 ) -> Result<String, String> {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-    let now = now_ms();
+    let now = crate::time_format::now_ms();
     let listed = data.iocs.listed.len();
     let refs: Vec<&SampleIoc> = rows.iter().collect();
     let text = match id {

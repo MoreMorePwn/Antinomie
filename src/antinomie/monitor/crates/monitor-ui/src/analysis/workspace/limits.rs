@@ -8,18 +8,6 @@ use antinomie_monitor_core::{
 };
 use eframe::egui;
 
-/// "4 minutes", "90 seconds" or "1 minute 30 seconds".
-pub(in crate::analysis) fn duration_text(seconds: u64) -> String {
-    let (minutes, rest) = (seconds / 60, seconds % 60);
-    let plural =
-        |count: u64, unit: &str| format!("{count} {unit}{}", if count == 1 { "" } else { "s" });
-    match (minutes, rest) {
-        (0, rest) => plural(rest, "second"),
-        (minutes, 0) => plural(minutes, "minute"),
-        (minutes, rest) => format!("{} {}", plural(minutes, "minute"), plural(rest, "second")),
-    }
-}
-
 /// The time limit a rerun of `limit`'s tool gets: twice the one that was hit,
 /// up to what a run may ask for. None once it is already the longest.
 pub(in crate::analysis) fn doubled(limit: &AnalysisLimit) -> Option<u64> {
@@ -68,7 +56,7 @@ pub(super) fn notes(
             if let Some(seconds) = doubled(limit)
                 && section.kind != AnalysisKind::Regex
             {
-                let label = format!("Run again with 2× time ({})", duration_text(seconds));
+                let label = format!("Run again with 2× time ({})", antinomie_monitor_core::analysis::duration_text(seconds));
                 if ui
                     .add_enabled(finished, egui::Button::new(label))
                     .on_hover_text(
@@ -276,8 +264,17 @@ mod tests {
 
     #[test]
     fn durations_read_as_minutes_and_seconds() {
-        assert_eq!(duration_text(480), "8 minutes");
-        assert_eq!(duration_text(90), "1 minute 30 seconds");
-        assert_eq!(duration_text(60), "1 minute");
+        assert_eq!(
+            antinomie_monitor_core::analysis::duration_text(480),
+            "8 minutes"
+        );
+        assert_eq!(
+            antinomie_monitor_core::analysis::duration_text(90),
+            "1 minute 30 seconds"
+        );
+        assert_eq!(
+            antinomie_monitor_core::analysis::duration_text(60),
+            "1 minute"
+        );
     }
 }

@@ -2,7 +2,7 @@
 //! What Triage, Run History and the report say about a recording that ran in
 //! reduced mode (see `antinomie_monitor_core::reduced`). One wording, so the
 //! three places agree.
-use crate::{run_state_line::clock, time_format::local_seconds};
+use crate::time_format::{elapsed, local_seconds};
 use antinomie_monitor_core::reduced::ReducedRecording;
 
 /// How many dropped calls the second line names.
@@ -26,7 +26,7 @@ fn grouped(count: u64) -> String {
 pub(crate) fn lines(reduced: &ReducedRecording, started_ms: Option<u64>) -> Vec<String> {
     let into = started_ms
         .filter(|start| reduced.at_ms >= *start)
-        .map(|start| format!(" ({} into the run)", clock(reduced.at_ms - start)))
+        .map(|start| format!(" ({} into the run)", elapsed(reduced.at_ms - start)))
         .unwrap_or_default();
     let calls = reduced.dropped_total();
     let mut lines = vec![format!(

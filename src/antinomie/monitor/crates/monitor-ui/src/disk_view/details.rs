@@ -124,9 +124,13 @@ impl DiskView {
                         None => "Raw ext4 (whole disk)".to_string(),
                     },
                 );
-                row(ui, "Logical size", format_size(dump.logical_size));
+                row(
+                    ui,
+                    "Logical size",
+                    crate::values::short_size(dump.logical_size),
+                );
                 if let Some(allocated) = dump.allocated_size {
-                    row(ui, "Allocated", format_size(allocated));
+                    row(ui, "Allocated", crate::values::short_size(allocated));
                 }
                 row(
                     ui,
@@ -147,8 +151,8 @@ impl DiskView {
                     let mut text = format!(
                         "{} · {} · {}",
                         layer.filename,
-                        format_size(layer.size),
-                        clock(layer.modified_ms / 1000)
+                        crate::values::short_size(layer.size),
+                        crate::time_format::time_of_day(layer.modified_ms / 1000)
                     );
                     if let Some(sum) = &layer.sha256 {
                         text.push_str(&format!(" · {sum}"));
@@ -268,8 +272,16 @@ impl DiskView {
                     crate::time_format::local_seconds(view.taken_ms / 1000),
                 );
                 row(ui, "Filesystem state", view.fs_state.label());
-                row(ui, "Logical size", format_size(view.logical_size));
-                row(ui, "Allocated", format_size(view.allocated_size));
+                row(
+                    ui,
+                    "Logical size",
+                    crate::values::short_size(view.logical_size),
+                );
+                row(
+                    ui,
+                    "Allocated",
+                    crate::values::short_size(view.allocated_size),
+                );
                 match &self.probe {
                     Some(Ok(probe)) => {
                         row(ui, "Label", display_name(&probe.label));
@@ -282,7 +294,11 @@ impl DiskView {
                     row(
                         ui,
                         if index == 0 { "Layers" } else { "" },
-                        format!("{} · {}", layer.filename, format_size(layer.size)),
+                        format!(
+                            "{} · {}",
+                            layer.filename,
+                            crate::values::short_size(layer.size)
+                        ),
                     );
                 }
             });
@@ -332,7 +348,11 @@ impl DiskView {
                     row(
                         ui,
                         "Size",
-                        format!("{} bytes ({})", entry.size, format_size(entry.size)),
+                        format!(
+                            "{} bytes ({})",
+                            entry.size,
+                            crate::values::short_size(entry.size)
+                        ),
                     );
                 }
                 if let Some(target) = &entry.link_target {
@@ -459,7 +479,7 @@ impl DiskView {
                 )
                 .on_disabled_hover_text(format!(
                     "Files over {} are not hashed",
-                    format_size(self.settings.hash_cap())
+                    crate::values::short_size(self.settings.hash_cap())
                 ))
                 .clicked();
             if hash {
@@ -491,8 +511,8 @@ impl DiskView {
                     format!(
                         "{} is {}, over the {} extraction limit.",
                         display_name(&path),
-                        format_size(size),
-                        format_size(self.settings.extract_cap())
+                        crate::values::short_size(size),
+                        crate::values::short_size(self.settings.extract_cap())
                     ),
                 );
                 crate::settings_link::button(ui, "Disks");
@@ -569,7 +589,7 @@ impl DiskView {
                             .on_hover_text(&file.guest_path)
                         });
                         cell(ui, size_width, height, |ui| {
-                            ui.colored_label(theme::muted(), format_size(file.size))
+                            ui.colored_label(theme::muted(), crate::values::short_size(file.size))
                         });
                         cell(ui, path_width, height, |ui| {
                             // The folder and the file name stay; the middle is cut.

@@ -185,7 +185,7 @@ impl DiskView {
                 theme::muted(),
                 format!(
                     "About {} to write into {}",
-                    format_size(job.estimate),
+                    crate::values::short_size(job.estimate),
                     match job.purpose {
                         DiskJobPurpose::Dump => "the new dump",
                         _ => "the scratch image",
@@ -238,8 +238,8 @@ impl DiskView {
                 if measure.logical_size > 0 {
                     ui.label(format!(
                         "{} logical · ≈ {} allocated{}",
-                        format_size(measure.logical_size),
-                        format_size(measure.allocated_estimate),
+                        crate::values::short_size(measure.logical_size),
+                        crate::values::short_size(measure.allocated_estimate),
                         measure
                             .selected()
                             .map(|partition| format!(" · partition {}", partition.index))
@@ -319,7 +319,7 @@ impl DiskView {
                 egui::RichText::new(format!(
                     "{} (VM off) · read {} · {} · {}{}",
                     view.source.kind.label(),
-                    clock(view.taken_ms / 1000),
+                    crate::time_format::time_of_day(view.taken_ms / 1000),
                     view.fs_state.label(),
                     view.source.active_layer,
                     view.source

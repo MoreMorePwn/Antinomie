@@ -301,11 +301,16 @@ fn hex_dump_pads_short_rows_and_marks_the_chosen_bytes() {
         .map(|section| &job.text[section.byte_range.clone()])
         .collect();
     assert_eq!(marked, "2f 20/ ");
-    assert_eq!(format_date(1_791_554_943), "2026-10-09 14:09:03 UTC");
-    assert_eq!(format_date(951_782_400), "2000-02-29 00:00:00 UTC");
-    assert_eq!(format_duration(6_404), "6 s");
-    assert_eq!(format_duration(125_000), "2 min 5 s");
-    assert_eq!(format_bytes(3_620), "3620 bytes (3.5 KiB)");
+    assert_eq!(
+        crate::time_format::utc_seconds(1_791_554_943),
+        "2026-10-09 14:09:03 UTC"
+    );
+    assert_eq!(
+        crate::time_format::utc_seconds(951_782_400),
+        "2000-02-29 00:00:00 UTC"
+    );
+    assert_eq!(crate::time_format::duration_ms(6_404), "6 s");
+    assert_eq!(crate::time_format::duration_ms(125_000), "2 min 5 s");
 }
 
 #[test]

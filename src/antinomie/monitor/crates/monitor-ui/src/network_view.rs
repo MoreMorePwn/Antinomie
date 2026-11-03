@@ -635,34 +635,5 @@ fn empty_state(ui: &mut egui::Ui, text: &str) {
     });
 }
 
-pub(crate) fn format_bytes(bytes: u64) -> String {
-    crate::values::file_size(bytes)
-}
-
-/// UTC date and time of Unix `seconds`.
-pub(crate) fn format_date(seconds: u64) -> String {
-    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
-    let days = (seconds / 86_400) as i64 + 719_468;
-    let era = days.div_euclid(146_097);
-    let day_of_era = days - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_index = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 {
-        month_index + 3
-    } else {
-        month_index - 9
-    };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    format!(
-        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} UTC",
-        seconds / 3600 % 24,
-        seconds / 60 % 60,
-        seconds % 60
-    )
-}
-
 #[cfg(test)]
 mod tests;

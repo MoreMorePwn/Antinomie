@@ -315,7 +315,7 @@ pub(super) fn seconds_in(report: &AnalysisReport, default: u64) -> u64 {
 }
 
 /// "4 minutes", "90 seconds" or "1 minute 30 seconds".
-pub(crate) fn duration_text(seconds: u64) -> String {
+pub fn duration_text(seconds: u64) -> String {
     let (minutes, rest) = (seconds / 60, seconds % 60);
     let plural =
         |count: u64, unit: &str| format!("{count} {unit}{}", if count == 1 { "" } else { "s" });

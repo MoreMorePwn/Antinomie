@@ -58,7 +58,7 @@ pub(super) fn checkpoint_label(checkpoint: &VmCheckpoint) -> String {
     format!(
         "{} · {} · {} · {}",
         display_name(&checkpoint.name),
-        clock(checkpoint.created_unix_ms / 1000),
+        crate::time_format::time_of_day(checkpoint.created_unix_ms / 1000),
         match checkpoint.mode {
             VmSnapshotMode::Disk => "Disk",
             VmSnapshotMode::Full => "Full",

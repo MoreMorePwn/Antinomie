@@ -419,12 +419,6 @@ pub(super) fn format_elapsed(ms: u64) -> String {
     }
 }
 
-/// The time of day (UTC) of a date-time.
-pub(super) fn clock(ms: u64) -> String {
-    let date = format_date(ms / 1000);
-    date.split_whitespace().nth(1).unwrap_or(&date).to_owned()
-}
-
 pub(super) fn dump_title(dump: &MemoryDump) -> String {
     if dump.imported {
         dump.file.file_name().map_or_else(
@@ -432,7 +426,7 @@ pub(super) fn dump_title(dump: &MemoryDump) -> String {
             |name| name.to_string_lossy().into_owned(),
         )
     } else {
-        format_date(dump.started_ms / 1000)
+        crate::time_format::utc_seconds(dump.started_ms / 1000)
             .trim_end_matches(" UTC")
             .to_owned()
     }

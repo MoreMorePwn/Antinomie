@@ -47,6 +47,81 @@ fn local_seconds_at(seconds: u64, zone: impl Fn(DateTime<Utc>) -> DateTime<Fixed
         .unwrap_or_else(|| "Unavailable".into())
 }
 
+/// Whole seconds as a UTC date and time: `2026-10-09 14:09:03 UTC`.
+pub(crate) fn utc_seconds(seconds: u64) -> String {
+    i64::try_from(seconds)
+        .ok()
+        .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
+        .map(|time| time.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|| "Unavailable".into())
+}
+
+/// A duration as `m:ss`, or `h:mm:ss` from an hour.
+pub(crate) fn elapsed(milliseconds: u64) -> String {
+    let seconds = milliseconds / 1000;
+    let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
+}
+
+/// A duration in its largest useful unit: `640 ms`, `6 s`, `2 min 5 s`,
+/// `1 h 3 min`.
+pub(crate) fn duration_ms(ms: u64) -> String {
+    let seconds = ms / 1000;
+    match seconds {
+        0 => format!("{ms} ms"),
+        1..=59 => format!("{seconds} s"),
+        60..=3599 => format!("{} min {} s", seconds / 60, seconds % 60),
+        _ => format!("{} h {} min", seconds / 3600, seconds / 60 % 60),
+    }
+}
+
+/// Machine uptime: `3 h 05 m 09 s`.
+pub(crate) fn uptime(milliseconds: u64) -> String {
+    let seconds = milliseconds / 1000;
+    format!(
+        "{} h {:02} m {:02} s",
+        seconds / 3600,
+        seconds / 60 % 60,
+        seconds % 60
+    )
+}
+
+/// How long ago an instant was: `12 s ago`, `3 m ago`.
+pub(crate) fn age(time: std::time::Instant) -> String {
+    let seconds = time.elapsed().as_secs();
+    if seconds < 60 {
+        format!("{seconds} s ago")
+    } else {
+        format!("{} m ago", seconds / 60)
+    }
+}
+
+/// `14:05:12` in the host zone, from epoch seconds.
+pub(crate) fn time_of_day(seconds: u64) -> String {
+    i64::try_from(seconds)
+        .ok()
+        .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
+        .map(|time| time.with_timezone(&Local).format("%H:%M:%S").to_string())
+        .unwrap_or_else(|| "—".into())
+}
+
+/// The time of day in UTC of a Unix-millisecond time: `14:09:03`.
+pub(crate) fn utc_time_of_day(ms: u64) -> String {
+    let date = utc_seconds(ms / 1000);
+    date.split_whitespace().nth(1).unwrap_or(&date).to_owned()
+}
+
+/// The host clock, Unix milliseconds.
+pub(crate) fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |time| time.as_millis() as u64)
+}
+
 pub(crate) fn unix_ms(value: Option<u64>) -> String {
     value
         .and_then(|value| value.checked_mul(1000))

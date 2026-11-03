@@ -8,7 +8,7 @@
 use super::*;
 use crate::{
     evidence,
-    network_view::{capture_row, format_date},
+    network_view::capture_row,
     query::{self, RowValue},
     theme,
 };
@@ -58,7 +58,7 @@ pub(super) fn dump_title(dump: &DiskDump) -> String {
             |name| name.to_string_lossy().into_owned(),
         )
     } else {
-        format_date(dump.started_ms / 1000)
+        crate::time_format::utc_seconds(dump.started_ms / 1000)
             .trim_end_matches(" UTC")
             .to_owned()
     }
@@ -94,8 +94,8 @@ fn dump_detail(row: &Row) -> String {
     }
     parts.push(format!(
         "{} of {}",
-        format_size(dump.allocated_size.unwrap_or(dump.logical_size)),
-        format_size(dump.logical_size)
+        crate::values::short_size(dump.allocated_size.unwrap_or(dump.logical_size)),
+        crate::values::short_size(dump.logical_size)
     ));
     if dump.sha256.is_some() {
         parts.push("SHA-256".into());

@@ -112,12 +112,6 @@ impl Dialog {
     }
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_millis() as u64)
-}
-
 /// Index the whole run, build the report and write it.
 pub(super) fn run_job(
     job: &Job,
@@ -256,7 +250,7 @@ impl TriageView {
             sample: target.sample.clone(),
             clock: target.clock,
             data_dir: self.scan_request.data_dir.clone(),
-            now_ms: now_ms(),
+            now_ms: crate::time_format::now_ms(),
             folder,
         };
         let _ = target.pcap_open;

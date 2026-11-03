@@ -634,7 +634,7 @@ impl MemoryView {
                         "{} {}\nStarted {}{}",
                         run.plugin,
                         args_summary(run),
-                        format_date(run.started_ms / 1000),
+                        crate::time_format::utc_seconds(run.started_ms / 1000),
                         if run.symbols_online.is_some() {
                             format!(
                                 "\nSymbol table looked up online ({})",
@@ -812,14 +812,21 @@ pub(super) fn run_detail(run: &PluginRun, job: Option<&memory::Progress>) -> Str
         RunState::Running => "Did not finish (the app closed)".into(),
         RunState::Finished if !run.partial.is_empty() => format!(
             "{} · {} rows · {took} · partial",
-            clock(run.started_ms),
+            crate::time_format::utc_time_of_day(run.started_ms),
             run.rows
         ),
-        RunState::Finished => format!("{} · {} rows · {took}", clock(run.started_ms), run.rows),
-        RunState::Cancelled => format!("{} · cancelled", clock(run.started_ms)),
+        RunState::Finished => format!(
+            "{} · {} rows · {took}",
+            crate::time_format::utc_time_of_day(run.started_ms),
+            run.rows
+        ),
+        RunState::Cancelled => format!(
+            "{} · cancelled",
+            crate::time_format::utc_time_of_day(run.started_ms)
+        ),
         RunState::Failed => format!(
             "{} · failed: {}",
-            clock(run.started_ms),
+            crate::time_format::utc_time_of_day(run.started_ms),
             run.error.as_deref().unwrap_or("see its messages")
         ),
     }
@@ -827,12 +834,6 @@ pub(super) fn run_detail(run: &PluginRun, job: Option<&memory::Progress>) -> Str
 
 pub(super) fn memory_symbols_file() -> &'static str {
     antinomie_monitor_core::storage::SYMBOLS_FILE
-}
-
-pub(super) fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |time| time.as_millis() as u64)
 }
 
 /// The plugin's group in the picker: its OS and module (`linux.malware`).

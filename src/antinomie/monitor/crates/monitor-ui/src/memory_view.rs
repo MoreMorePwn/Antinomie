@@ -6,7 +6,7 @@
 //! without running the plugin again.
 use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::{
-    network_view::{capture_row, format_date},
+    network_view::capture_row,
     theme::{self, ValueKind},
 };
 use antinomie_monitor_core::{
@@ -507,7 +507,9 @@ impl MemoryView {
                     !dumping
                         && newest.complete()
                         && !newest.imported
-                        && newest.finished_ms.is_some_and(|end| end + 5_000 > now_ms())
+                        && newest
+                            .finished_ms
+                            .is_some_and(|end| end + 5_000 > crate::time_format::now_ms())
                 })
                 .map(|newest| newest.id.clone());
             if fresh.is_some() {

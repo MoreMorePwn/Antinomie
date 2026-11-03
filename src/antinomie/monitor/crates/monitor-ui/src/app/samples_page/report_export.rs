@@ -69,12 +69,6 @@ struct Job {
     folder: PathBuf,
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_millis() as u64)
-}
-
 /// Where the files go when the folder is left empty.
 fn default_folder(data_dir: &std::path::Path) -> PathBuf {
     data_dir.join("sample-reports")
@@ -247,7 +241,13 @@ fn run_job(job: &Job, status: &dyn Fn(&str)) -> Result<Written, String> {
             .and_then(|library| library.similar_to(&job.sha256, &exclude))
     };
     status("Building the report...");
-    let report = build_report(&data, &job.options.data_dir, &job.vms, similar, now_ms());
+    let report = build_report(
+        &data,
+        &job.options.data_dir,
+        &job.vms,
+        similar,
+        crate::time_format::now_ms(),
+    );
     status("Writing the files...");
     let library = Library::open(&job.options.data_dir)?;
     sample::export::write_and_note(&library, &report, &job.choices, &job.folder)

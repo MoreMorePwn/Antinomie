@@ -39,7 +39,7 @@ impl MonitorApp {
         let mut route = route;
         route.run_state = Some(crate::run_state_line::describe(
             &run,
-            crate::run_state_line::now_ms(),
+            crate::time_format::now_ms(),
             self.triage.run_ended_ms(),
             self.triage.alive_processes(),
         ));

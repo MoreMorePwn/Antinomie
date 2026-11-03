@@ -112,7 +112,7 @@ impl DiskView {
             format!(
                 "open · {} · {}",
                 view.fs_state.label(),
-                clock(view.taken_ms / 1000)
+                crate::time_format::time_of_day(view.taken_ms / 1000)
             )
         } else if let Some(measure) = self
             .current_measure(cx)
@@ -121,7 +121,10 @@ impl DiskView {
             if measure.unsupported().is_some() {
                 "unsupported filesystem".to_string()
             } else {
-                format!("not opened · ≈ {}", format_size(measure.allocated_estimate))
+                format!(
+                    "not opened · ≈ {}",
+                    crate::values::short_size(measure.allocated_estimate)
+                )
             }
         } else {
             "not opened".into()

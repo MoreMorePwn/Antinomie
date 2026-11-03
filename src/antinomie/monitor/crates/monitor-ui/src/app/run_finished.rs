@@ -7,7 +7,8 @@
 use super::*;
 use crate::{
     activity::Level,
-    run_state_line::{clock, crash_signal, ending, now_ms, Ending},
+    run_state_line::{crash_signal, ending, Ending},
+    time_format::{elapsed, now_ms},
     toasts::{self, Action, Then},
     workspace::{LibraryPage, Panel},
 };
@@ -132,7 +133,7 @@ impl MonitorApp {
             .unwrap_or(&run.request.path);
         let took = run
             .started_ms
-            .map(|start| clock(now_ms().saturating_sub(start)));
+            .map(|start| elapsed(now_ms().saturating_sub(start)));
         let detail = [Some(program.to_owned()), took, Some(tail)]
             .into_iter()
             .flatten()

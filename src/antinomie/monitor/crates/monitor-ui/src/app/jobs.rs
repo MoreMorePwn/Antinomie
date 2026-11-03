@@ -6,7 +6,7 @@
 use super::*;
 use crate::{
     jobs::{Job, Outcome, Request, Stop},
-    run_state_line::now_ms,
+    time_format::now_ms,
     toasts::{Action, Then},
 };
 use antinomie_monitor_core::{

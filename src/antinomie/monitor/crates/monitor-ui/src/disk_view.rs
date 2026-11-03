@@ -40,7 +40,6 @@ mod source;
 mod tree;
 mod worker;
 
-pub(crate) use antinomie_monitor_core::disks::format_size;
 pub(crate) use diff::{
     normalize_guest_path, JUMP_KEY as DIFF_JUMP_KEY, PATHS_KEY as DIFF_PATHS_KEY,
 };
@@ -351,15 +350,6 @@ pub(crate) fn mode_rwx(kind: DiskEntryKind, mode: u32) -> String {
 /// `0755`, four digits.
 pub(crate) fn mode_numeric(mode: u32) -> String {
     format!("{:04o}", mode & 0o7777)
-}
-
-/// `14:05:12` in the host zone, from epoch seconds.
-pub(crate) fn clock(seconds: u64) -> String {
-    crate::time_format::local_seconds(seconds)
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or("")
-        .to_owned()
 }
 
 impl DiskView {
