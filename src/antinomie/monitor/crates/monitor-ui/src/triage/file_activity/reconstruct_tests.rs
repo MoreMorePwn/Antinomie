@@ -327,9 +327,8 @@ fn the_hash_check_matches_the_guests_hash_when_every_byte_is_known() {
     let file = &activity.files[index];
     let mut open = Open::new(file);
     let mut harness = Harness::new();
-    let shown = harness.settle(&mut open, &activity, file, None);
-    let button = find(&shown, "Hash this state").center();
-    harness.click(&mut open, &activity, file, None, button);
+    // A complete file is hashed without being asked.
+    harness.settle(&mut open, &activity, file, None);
     let mut text = Vec::new();
     for _ in 0..200 {
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -342,6 +341,9 @@ fn the_hash_check_matches_the_guests_hash_when_every_byte_is_known() {
         }
     }
     find(&text, "matches the guest's hash");
+    find(&text, "SHA-256");
+    find(&text, "MD5");
+    find(&text, "SHA-1");
 }
 
 #[test]
@@ -369,17 +371,9 @@ fn a_file_with_a_gap_has_no_hash_and_the_map_marks_it() {
         "{:?}",
         shown.iter().map(|s| &s.0).collect::<Vec<_>>()
     );
-    let button = find(&shown, "Hash this state").center();
-    harness.click(&mut open, &activity, file, None, button);
-    let mut text = Vec::new();
-    for _ in 0..200 {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        text = harness.frame(&mut open, &activity, file, None, Vec::new());
-        if text.iter().any(|(text, _)| text.contains("No hash")) {
-            break;
-        }
-    }
-    find(&text, "No hash: 4 bytes have no value");
+    // The hash control is off and says why.
+    find(&shown, "Hash this state");
+    find(&shown, "1 gap: a hash would not match the real file");
 }
 
 #[test]
