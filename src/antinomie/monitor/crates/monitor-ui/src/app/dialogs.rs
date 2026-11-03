@@ -21,6 +21,46 @@ impl MonitorApp {
                 self.send(command);
             }
         }
+        self.import_dialog(ctx);
+        if self.download_open {
+            let mut open = true;
+            if let Some(command) = self.download_window(ctx, &mut open) {
+                self.send(command);
+            }
+            self.download_open = open;
+        }
+        if self.rules_summary.is_empty() {
+            self.rules_summary = "Loading rules…".into();
+        }
+        self.samples_dialog(ctx);
+        self.api_keys
+            .show(ctx, &self.options.data_dir, &self.options.curl);
+        if self.api_keys.take_changed() {
+            self.samples.key_changed();
+        }
+        self.getting_started_window(ctx);
+        self.about_dialog(ctx);
+        crate::query::guide(ctx);
+        // A base's UEFI disk being laid out for its first UEFI VM (once).
+        self.uefi_layout_dialog(ctx);
+        self.build_dialog(ctx);
+        self.name_dialog(ctx);
+        if self.create_open || self.config_open {
+            self.vm_dialog(ctx);
+        }
+        self.launch_dialog(ctx);
+        self.upload_dialog(ctx);
+        if let Some(page) = crate::settings_link::take(ctx) {
+            self.open_settings_page(page);
+        }
+        if self.settings_open {
+            self.settings_window(ctx);
+        }
+        self.confirm_dialog(ctx);
+    }
+
+    /// The Import base window.
+    fn import_dialog(&mut self, ctx: &egui::Context) {
         if self.import_open {
             let mut open = true;
             let mut import = false;
@@ -88,16 +128,10 @@ impl MonitorApp {
                 self.import_open = false;
             }
         }
-        if self.download_open {
-            let mut open = true;
-            if let Some(command) = self.download_window(ctx, &mut open) {
-                self.send(command);
-            }
-            self.download_open = open;
-        }
-        if self.rules_summary.is_empty() {
-            self.rules_summary = "Loading rules…".into();
-        }
+    }
+
+    /// The sample library window and what it asks for.
+    fn samples_dialog(&mut self, ctx: &egui::Context) {
         if self.samples.open {
             let vm = self.selected_vm().cloned();
             let action = self.samples.show(
@@ -132,12 +166,10 @@ impl MonitorApp {
                 self.api_keys.open = true;
             }
         }
-        self.api_keys
-            .show(ctx, &self.options.data_dir, &self.options.curl);
-        if self.api_keys.take_changed() {
-            self.samples.key_changed();
-        }
-        self.getting_started_window(ctx);
+    }
+
+    /// The About window.
+    fn about_dialog(&mut self, ctx: &egui::Context) {
         if self.about_open {
             let mut open = true;
             crate::widgets::window("About Antinomie")
@@ -178,8 +210,10 @@ impl MonitorApp {
                 });
             self.about_open = open;
         }
-        crate::query::guide(ctx);
-        // A base's UEFI disk being laid out for its first UEFI VM (once).
+    }
+
+    /// The notice of a base's UEFI disk being laid out.
+    fn uefi_layout_dialog(&mut self, ctx: &egui::Context) {
         if let Some(progress) = self.snapshot.base_layout.clone() {
             crate::widgets::window("Preparing the UEFI disk")
                 .id(egui::Id::new("base_uefi_layout"))
@@ -203,6 +237,10 @@ impl MonitorApp {
                     );
                 });
         }
+    }
+
+    /// The Build base window.
+    fn build_dialog(&mut self, ctx: &egui::Context) {
         if self.build_open {
             let mut open = true;
             let build = self.snapshot.build.clone();
@@ -228,6 +266,10 @@ impl MonitorApp {
                 None => {}
             }
         }
+    }
+
+    /// The Rename and Duplicate window.
+    fn name_dialog(&mut self, ctx: &egui::Context) {
         if let Some((vm_id, duplicate, name)) = &mut self.name_action {
             let mut open = true;
             let mut save = false;
@@ -279,9 +321,10 @@ impl MonitorApp {
                 self.name_action = None;
             }
         }
-        if self.create_open || self.config_open {
-            self.vm_dialog(ctx);
-        }
+    }
+
+    /// The Run program window.
+    fn launch_dialog(&mut self, ctx: &egui::Context) {
         if self.launch_open {
             let mut open = true;
             let viewport = crate::title_bar::content_rect(ctx);
@@ -308,6 +351,10 @@ impl MonitorApp {
                 self.cancel_upload_handoff();
             }
         }
+    }
+
+    /// The Upload file window.
+    fn upload_dialog(&mut self, ctx: &egui::Context) {
         if self.upload_open {
             let mut open = true;
             crate::widgets::window("Upload file")
@@ -328,12 +375,10 @@ impl MonitorApp {
                 self.close_upload();
             }
         }
-        if let Some(page) = crate::settings_link::take(ctx) {
-            self.open_settings_page(page);
-        }
-        if self.settings_open {
-            self.settings_window(ctx);
-        }
+    }
+
+    /// The confirmation of a destructive or long-running action.
+    fn confirm_dialog(&mut self, ctx: &egui::Context) {
         if let Some(confirm) = &self.confirm {
             let evidence_text = match confirm {
                 Confirm::DeleteEvidence(deletion) => deletion.text(),
