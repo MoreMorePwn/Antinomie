@@ -75,6 +75,9 @@ pub(crate) struct Model {
     group_id: String,
     status: String,
     status_error: Option<String>,
+    /// The status text of a job that finished well (installed, saved, read):
+    /// shown in the success green.
+    status_done: Option<String>,
     /// The status text of a download that was asked for while downloads are
     /// off. It shows in red where it happened and is not an error.
     blocked: Option<String>,
@@ -237,12 +240,14 @@ impl Model {
                     self.detail = None;
                     self.rule_text = None;
                     self.status = format!("Indexed {} rules.", self.rows.len());
+                    self.status_done = Some(self.status.clone());
                 }
                 Ok(Done::Registry(registry, note)) => {
                     if registry.generation < self.registry.generation {
                         self.status = "A newer rules change was kept.".into();
                     } else {
                         self.registry = registry;
+                        self.status_done = Some(note.clone());
                         self.status = note;
                         self.changed = true;
                         self.list_gen += 1;
@@ -255,13 +260,17 @@ impl Model {
                     self.status = note;
                     self.changed = true;
                 }
-                Ok(Done::Status(text)) => self.status = text,
+                Ok(Done::Status(text)) => {
+                    self.status_done = Some(text.clone());
+                    self.status = text;
+                }
                 Ok(Done::Ioc(text)) => self.ioc_done(text),
                 Ok(Done::Live(text, installed)) => {
                     self.status_error = None;
                     // The registry is read again after an install and writes its
                     // own status line, so the tab keeps what happened.
                     self.live.note.clone_from(&text);
+                    self.status_done = Some(text.clone());
                     self.status = text;
                     if installed {
                         // The registry changed: read it again.

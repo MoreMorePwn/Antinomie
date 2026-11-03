@@ -247,12 +247,18 @@ impl Model {
             });
         }
         if status {
-            let level = if self.blocked.as_deref() == Some(self.status.as_str()) {
-                crate::activity::Level::Error
+            let blocked = self.blocked.as_deref() == Some(self.status.as_str());
+            // A finished job's result ("Installed ...", "Saved ...") is green;
+            // progress, hints and a cancel stay muted.
+            let done = self.status_done.as_deref() == Some(self.status.as_str());
+            let closed = if blocked {
+                crate::activity::status(ui, crate::activity::Level::Error, &self.status, None)
+            } else if done {
+                crate::activity::success(ui, &self.status, None)
             } else {
-                crate::activity::Level::Info
+                crate::activity::status(ui, crate::activity::Level::Info, &self.status, None)
             };
-            if crate::activity::status(ui, level, &self.status, None) {
+            if closed {
                 self.status.clear();
             }
         }

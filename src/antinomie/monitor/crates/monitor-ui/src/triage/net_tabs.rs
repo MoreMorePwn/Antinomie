@@ -125,6 +125,32 @@ impl TriageView {
         })
     }
 
+    /// Whether the earliest packet of the run is a whole zone offset (a
+    /// non-zero multiple of 15 minutes under 15 h, within two minutes) away
+    /// from the run's clock anchor: the sign of a capture QEMU stamped in the
+    /// host zone. Uses only what the Endpoints table already holds.
+    fn old_capture_shift(&self) -> bool {
+        let Some(scan) = &self.scan else {
+            return false;
+        };
+        let Some(clock) = scan.clock_anchor.or(self.scan_request.clock_anchor) else {
+            return false;
+        };
+        let first = scan
+            .new_tabs
+            .endpoints
+            .iter()
+            .filter_map(|row| row.first())
+            .filter_map(|cell| files::number(&cell.values, "network.first_us"))
+            .min();
+        let Some(first) = first else {
+            return false;
+        };
+        let seconds = (i128::from(first) - i128::from(clock.host_us)) / 1_000_000;
+        let offset = (seconds as f64 / 900.0).round() as i128 * 900;
+        offset != 0 && offset.abs() < 15 * 3600 && (seconds - offset).abs() <= 120
+    }
+
     pub(super) fn new_network(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
         widgets::tab_row(ui, |ui| {
             for (value, title) in [
@@ -144,6 +170,14 @@ impl TriageView {
                 }
             }
         });
+        if self.old_capture_shift() {
+            crate::activity::info(
+                ui,
+                "Capture times of runs recorded before 0.8.2 on a host that is not on UTC may be \
+                 shifted by the host's zone offset; this run's packets are about a whole zone \
+                 offset away from its start.",
+            );
+        }
         let (index, fields, example, hint) = match self.new_tab {
             NewTab::Endpoints => (
                 ENDPOINT_SLOT,

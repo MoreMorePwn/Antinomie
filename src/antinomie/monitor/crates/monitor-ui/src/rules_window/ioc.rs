@@ -51,6 +51,7 @@ impl Model {
 
     /// A job finished: read the datasets again.
     pub(super) fn ioc_done(&mut self, text: String) {
+        self.status_done = Some(text.clone());
         self.status = text;
         self.ioc.stale = true;
     }

@@ -728,12 +728,14 @@ impl View {
             }
         });
         if let Some((text, error)) = &self.status {
-            let level = if *error {
-                crate::activity::Level::Error
+            let closed = if *error {
+                crate::activity::status(ui, crate::activity::Level::Error, text, None)
+            } else if self.job.is_none() {
+                crate::activity::success(ui, text, None)
             } else {
-                crate::activity::Level::Info
+                crate::activity::status(ui, crate::activity::Level::Info, text, None)
             };
-            if crate::activity::status(ui, level, text, None) {
+            if closed {
                 self.status = None;
             }
         }
