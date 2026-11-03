@@ -293,7 +293,9 @@ pub(super) fn observe_processes(
             if invocation.task_exit.is_some() {
                 let status = invocation.task_exit_status();
                 node.end_signal = match status {
-                    Some(antinomie_monitor_core::WaitStatus::Signaled { signal, .. }) => Some(signal),
+                    Some(antinomie_monitor_core::WaitStatus::Signaled { signal, .. }) => {
+                        Some(signal)
+                    }
                     _ => None,
                 };
                 node.state = match status {

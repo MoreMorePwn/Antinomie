@@ -234,8 +234,12 @@ fn killed_text(scan: &ArchiveScan, tasks: &[&ProcessNode], start: u64) -> Option
     }
     let killed: Vec<&ProcessNode> = ended.iter().map(|(node, _, _)| *node).collect();
     let notes = &scan.signals;
-    let stopped = notes.run_flags.is_some_and(|flags| flags & STOP_REQUESTED != 0);
-    let escalated = notes.run_flags.is_some_and(|flags| flags & KILL_ESCALATED != 0);
+    let stopped = notes
+        .run_flags
+        .is_some_and(|flags| flags & STOP_REQUESTED != 0);
+    let escalated = notes
+        .run_flags
+        .is_some_and(|flags| flags & KILL_ESCALATED != 0);
     let mut names: Vec<String> = ended
         .iter()
         .map(|(_, signal, _)| signal_name(*signal))
@@ -249,11 +253,7 @@ fn killed_text(scan: &ArchiveScan, tasks: &[&ProcessNode], start: u64) -> Option
         if count == 1 { "" } else { "es" },
         names.join(", ")
     );
-    if stopped
-        && ended
-            .iter()
-            .all(|(_, signal, _)| matches!(signal, 9 | 15))
-    {
+    if stopped && ended.iter().all(|(_, signal, _)| matches!(signal, 9 | 15)) {
         return Some(format!(
             "{of}: a Stop was requested for this run, and the guest sends SIGTERM and, after the grace period, SIGKILL to every process still alive{}.",
             if escalated {
@@ -268,8 +268,8 @@ fn killed_text(scan: &ArchiveScan, tasks: &[&ProcessNode], start: u64) -> Option
     for (node, signal, last) in &ended {
         let (node, signal) = (*node, *signal);
         let at = format!(" at +{}", millis(last.saturating_sub(start)));
-        let how = sender(notes, node, signal, start)
-            .or_else(|| parent_exit(scan, notes, node, signal));
+        let how =
+            sender(notes, node, signal, start).or_else(|| parent_exit(scan, notes, node, signal));
         if how.is_none() {
             unexplained += 1;
         }

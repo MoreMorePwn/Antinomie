@@ -94,7 +94,9 @@ impl StealthPreset {
             Self::RealisticServer => {
                 "A rack server: server BIOS, ECC memory and a server network card."
             }
-            Self::CloudVps => "Reports a cloud provider's instance identity (independent imitation).",
+            Self::CloudVps => {
+                "Reports a cloud provider's instance identity (independent imitation)."
+            }
             Self::Transparent => "Plain QEMU, nothing hidden: the guest sees a QEMU machine.",
             Self::Custom => "Your own machine identity, CPU and devices (Edit…).",
         }
