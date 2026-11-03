@@ -291,7 +291,18 @@ pub(super) fn observe_processes(
                 .then(|| (start.syscall_name.clone(), start.timestamp_ns));
             }
             if invocation.task_exit.is_some() {
-                node.state = format!("task exit {:?}", invocation.task_exit_status());
+                let status = invocation.task_exit_status();
+                node.end_signal = match status {
+                    Some(antinomie_monitor_core::WaitStatus::Signaled { signal, .. }) => Some(signal),
+                    _ => None,
+                };
+                node.state = match status {
+                    Some(antinomie_monitor_core::WaitStatus::Exited { code }) => {
+                        format!("task exit {code}")
+                    }
+                    Some(status) => format!("task exit, {}", crate::values::task_end(&status)),
+                    None => "task exit".to_owned(),
+                };
             } else if node.state.is_empty() {
                 node.state = "exit not recorded".into();
             }
@@ -416,6 +427,7 @@ pub(super) fn finish_processes(
                 first_ns: node.first_ns,
                 last_ns: node.last_ns,
                 state: node.state.clone(),
+                end_signal: node.end_signal,
                 exec_history: node.exec_history.clone(),
                 thread: threads.contains(&key),
                 renames: node.renames.clone(),

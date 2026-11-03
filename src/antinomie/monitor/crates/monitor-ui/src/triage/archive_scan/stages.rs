@@ -55,6 +55,7 @@ pub(super) struct FileOut {
     bpf: Vec<BpfNote>,
     bpf_omitted: u64,
     last_failed: Option<FailedStep>,
+    signals: run_end::SignalNotes,
     schema_gaps: std::collections::BTreeMap<String, u64>,
     reach: async_files::Reach,
 }
@@ -311,6 +312,8 @@ impl Scan {
         let scoped = in_scope(request);
         // The last install-like call the kernel refused: "openat /var/run/x ENOENT".
         let mut last_failed: Option<FailedStep> = None;
+        // Signals the calls sent, and the parent-death signals they asked for.
+        let mut signals = run_end::SignalNotes::default();
         // Fields the guest had no argument decoder for, by call: the recorder's "schema gaps".
         let mut schema_gaps: std::collections::BTreeMap<String, u64> = Default::default();
         let mut pending = Vec::new();
@@ -371,6 +374,7 @@ impl Scan {
             let hits = file_category::classify(files, invocation, event);
             if real {
                 note_failed_step(&mut last_failed, files, invocation, event);
+                signals.observe(invocation, event);
                 note_schema_gaps(&mut schema_gaps, invocation, event);
             }
             if let Some(writer) = &mut event_journal {
@@ -528,6 +532,7 @@ impl Scan {
             bpf,
             bpf_omitted,
             last_failed,
+            signals,
             schema_gaps,
             reach,
         })
@@ -752,6 +757,7 @@ impl Scan {
             bpf,
             bpf_omitted,
             last_failed,
+            mut signals,
             schema_gaps,
             reach,
             ..
@@ -971,6 +977,10 @@ impl Scan {
             network_warning: network.network_warning,
             root_crash,
             last_failed_step: last_failed.map(|step| step.text),
+            signals: {
+                signals.run_flags = execution_flags(&recording.directory);
+                signals
+            },
             schema_gaps: {
                 let mut gaps: Vec<_> = schema_gaps.into_iter().collect();
                 gaps.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));

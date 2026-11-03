@@ -198,6 +198,7 @@ mod tests {
             first_ns: None,
             last_ns: None,
             state: String::new(),
+            end_signal: None,
             exec_history: vec![image.into()],
             thread: false,
             renames: Vec::new(),

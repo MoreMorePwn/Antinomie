@@ -80,6 +80,7 @@ mod refresh;
 mod refresh_tests;
 mod report_export;
 mod rules;
+mod run_end;
 
 /// The system calls the suspicious-activity rules read: what the recorder keeps
 /// once the recording quota is nearly full.
@@ -1087,6 +1088,8 @@ struct TaskNode {
     last_ns: Option<u64>,
     argv: Vec<String>,
     state: String,
+    /// The signal number that ended the task, when its exit record says it was killed.
+    end_signal: Option<u8>,
     exec_history: Vec<String>,
     renames: Vec<String>,
     in_call: Option<(String, u64)>,
@@ -1122,6 +1125,8 @@ struct ProcessNode {
     first_ns: Option<u64>,
     last_ns: Option<u64>,
     state: String,
+    /// The signal number that ended the task, when its exit record says it was killed.
+    end_signal: Option<u8>,
     exec_history: Vec<String>,
     /// A thread of the process with this pid, not a process of its own.
     thread: bool,
@@ -1374,6 +1379,8 @@ struct ArchiveScan {
     /// The last create, write, delete or exec the kernel refused, as
     /// "openat /var/run/dbus/x.pid ENOENT".
     last_failed_step: Option<String>,
+    /// The signals the run's calls sent, for saying why tasks were killed.
+    signals: run_end::SignalNotes,
     /// Calls with a field the guest had no decoder for, most frequent first:
     /// "ioctl request 0x5421 (arg2.ioctl)" and how many calls.
     schema_gaps: Vec<(String, u64)>,

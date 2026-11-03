@@ -575,7 +575,9 @@ pub(super) fn content(
                 destination = Some(Destination::Findings);
             }
             ui.add_space(14.0);
-            notes(ui, &view.notes);
+            let mut shown = view.notes.clone();
+            shown.extend(super::run_end::run_end(scan).map(|end| end.text));
+            notes(ui, &shown);
         });
     if attack_jump.is_some() {
         view.attack_jump = attack_jump;

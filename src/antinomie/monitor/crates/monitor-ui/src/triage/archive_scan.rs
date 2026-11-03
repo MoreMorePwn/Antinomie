@@ -287,6 +287,14 @@ fn root_exit_signal(directory: &Path) -> Option<String> {
     crash_text(&status)
 }
 
+/// The run status flags the guest reported, from the run's `run.json`
+/// (`execution.flags`); `None` when the file has none.
+fn execution_flags(directory: &Path) -> Option<u64> {
+    let run: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.join("run.json")).ok()?).ok()?;
+    run.pointer("/execution/flags")?.as_u64()
+}
+
 /// The words for a fatal signal; `None` for a normal exit.
 pub(super) fn crash_text(status: &antinomie_monitor_core::WaitStatus) -> Option<String> {
     let antinomie_monitor_core::WaitStatus::Signaled {

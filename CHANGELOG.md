@@ -239,6 +239,21 @@ it runs.
   failing step: openat /var/run/dbus/x.pid ENOENT", the last refused create,
   write, delete, rename, link, permission change or exec, so a failed install
   step is no longer silent.
+- **The report and Triage say why a process was killed by a signal.** A task
+  whose exit record is a signal now reads "task exit, killed by SIGKILL" in the
+  process tables (it showed the raw `Some(Signaled { signal: 9, .. })`), and the
+  report's notes and the Summary's Notes name the processes that ended on a
+  signal, whatever the tree's length: "2 of 14 processes ended on a signal
+  (SIGKILL): pid 489 "systemd" by SIGKILL at +893 ms; pid 537 by SIGKILL at +884
+  ms". Each is explained by what the recording holds: a recorded `kill`, `tkill`,
+  `tgkill` or `pidfd_send_signal` call that names it ("sent by pid 12 with kill"),
+  a parent-death signal it asked for with `prctl(PR_SET_PDEATHSIG)` whose parent
+  had exited, or the run's Stop (the run status says a Stop was requested, and
+  that the guest needed SIGKILL). With none of these the note says no Stop was
+  requested for the run and that nothing in the recorded calls names the sender,
+  and marks the likely sources as inference (the guest kernel, a timer the
+  program armed, a process outside the tree): the recording does not carry who
+  sent a signal.
 - **Tables that stop at a page size say "first N of M", and the page size is a
   setting.** Settings > Advanced > "Triage: rows per table" (default 2,000,
   100 to 100,000) sets how many rows one Triage table and one report table keeps; a
