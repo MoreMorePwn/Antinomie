@@ -19,10 +19,12 @@
 use super::{Call, Decoded, Shape, u16_at};
 use serde::{Serialize, Serializer, ser::SerializeMap};
 
+mod brief;
 mod classic;
 mod decoders;
 mod table;
 
+pub use brief::{Brief, brief};
 pub use table::is_array;
 use table::{Length, Size, Spec};
 

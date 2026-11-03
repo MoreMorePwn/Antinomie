@@ -25,7 +25,9 @@ mod signals;
 #[cfg(test)]
 mod tests;
 
-pub use arrays::{About, Cut, CutKind, MAX_RECORDS, Record, Records, is_array, record_json};
+pub use arrays::{
+    About, Brief, Cut, CutKind, MAX_RECORDS, Record, Records, brief, is_array, record_json,
+};
 pub use bpf::{attach_type_name, attr_member as bpf_attr_member, map_type_name, prog_type_name};
 pub use signals::signal_name;
 
