@@ -9,7 +9,7 @@ impl MonitorApp {
             ui,
             SectionHeader {
                 title: "Explorer",
-                count: usize::from(self.explorer_browser.root.is_some()),
+                count: None,
                 tooltip: "Host files: click to fold",
                 action: "Choose Explorer folder",
                 enabled: self.folder_picker.available(),

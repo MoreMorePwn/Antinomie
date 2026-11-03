@@ -972,7 +972,8 @@ struct SidebarRow<'a> {
 
 struct SectionHeader<'a> {
     title: &'a str,
-    count: usize,
+    /// The muted number after the title; none for a section that has no count.
+    count: Option<usize>,
     tooltip: &'a str,
     action: &'a str,
     enabled: bool,

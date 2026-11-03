@@ -156,17 +156,20 @@ pub(super) fn section_header(
                     caret,
                     color,
                 );
-                let count = line_galley(
-                    ui,
-                    &[(header.count.to_string(), theme::muted())],
-                    &small,
-                    f32::INFINITY,
-                );
+                let count = header.count.map(|count| {
+                    line_galley(
+                        ui,
+                        &[(count.to_string(), theme::muted())],
+                        &small,
+                        f32::INFINITY,
+                    )
+                });
+                let count_width = count.as_ref().map_or(0.0, |count| count.size().x + 8.0);
                 let name = line_galley(
                     ui,
                     &[(header.title.to_owned(), color)],
                     &body,
-                    rect.width() - caret_width - count.size().x - 8.0,
+                    rect.width() - caret_width - count_width,
                 );
                 let name_left = rect.left() + caret_width;
                 let name_right = name_left + name.size().x;
@@ -175,11 +178,13 @@ pub(super) fn section_header(
                     name,
                     color,
                 );
-                ui.painter().galley(
-                    egui::pos2(name_right + 8.0, rect.center().y - count.size().y * 0.5),
-                    count,
-                    theme::muted(),
-                );
+                if let Some(count) = count {
+                    ui.painter().galley(
+                        egui::pos2(name_right + 8.0, rect.center().y - count.size().y * 0.5),
+                        count,
+                        theme::muted(),
+                    );
+                }
             }
             title.on_hover_text(header.tooltip);
             let sense = if header.enabled {

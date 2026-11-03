@@ -219,7 +219,7 @@ impl MonitorApp {
                     ui,
                     SectionHeader {
                         title: "Virtual machines",
-                        count: self.snapshot.vms.len() + self.pending_vm_rows().len(),
+                        count: Some(self.snapshot.vms.len() + self.pending_vm_rows().len()),
                         tooltip: "Virtual machines: click to fold",
                         action: "New VM",
                         enabled: stopped,
