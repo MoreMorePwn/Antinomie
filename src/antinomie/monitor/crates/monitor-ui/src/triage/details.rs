@@ -374,7 +374,7 @@ mod tests {
             let rows = vec![row];
             let mut view = TriageView::default();
             let mut draw = |events, time| {
-                ctx.run(
+                ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -384,14 +384,14 @@ mod tests {
                         time: Some(time),
                         ..Default::default()
                     },
-                    |ctx| {
+                    |root| {
                         egui::Panel::right("shared-details")
                             .exact_size(400.0)
-                            .show(ctx, |ui| {
+                            .show(root, |ui| {
                                 view.details(ui);
                             });
                         egui::CentralPanel::default()
-                            .show(ctx, |ui| table(ui, table_id, &["Observation"], &rows));
+                            .show(root, |ui| table(ui, table_id, &["Observation"], &rows));
                     },
                 )
             };
@@ -451,7 +451,7 @@ mod tests {
         let label = findings[0].cells[0].text.clone();
         let mut view = TriageView::default();
         let mut draw = |events, time| {
-            ctx.run(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -461,13 +461,13 @@ mod tests {
                     time: Some(time),
                     ..Default::default()
                 },
-                |ctx| {
+                |root| {
                     egui::Panel::right("shared-details")
                         .exact_size(400.0)
-                        .show(ctx, |ui| {
+                        .show(root, |ui| {
                             view.details(ui);
                         });
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         view.suspicious_findings(ui, findings.clone(), 0);
                     });
                 },
@@ -652,7 +652,7 @@ mod disk_link_tests {
         selection: &Selection,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -661,8 +661,8 @@ mod disk_link_tests {
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| disk_diff_link(ui, selection));
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| disk_diff_link(ui, selection));
             },
         )
     }

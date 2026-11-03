@@ -108,13 +108,16 @@ fn the_graph_window_fills_its_width_with_few_findings() {
         theme::install(&ctx);
         view.open_graph_window(&ctx);
         for time in [0.0, 0.1] {
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1400.0, 900.0))),
                     time: Some(time),
                     ..Default::default()
                 },
-                |ctx| view.show_finding_windows(ctx),
+                |root| {
+                    let ctx = &root.ctx().clone();
+                    view.show_finding_windows(ctx)
+                },
             );
         }
         let rect = view.graph_window.state.drawn_in.expect("the window drew");

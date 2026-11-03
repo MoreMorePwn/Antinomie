@@ -606,14 +606,14 @@ mod tests {
         ctx.global_style_mut(|style| {
             style.animation_time = 0.0;
         });
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     action = model.page(ui, dir, outbound, tools, &mut detection);
                 });
             },
@@ -645,14 +645,14 @@ mod tests {
             |events: Vec<egui::Event>,
              model: &mut Model,
              detection: &mut antinomie_monitor_core::analysis::detection::Settings| {
-                ctx.run(
+                ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         events,
                         ..Default::default()
                     },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
+                    |root| {
+                        egui::CentralPanel::default().show(root, |ui| {
                             let _ = model.page(ui, &dir, &mut outbound, &tools, detection);
                         });
                     },

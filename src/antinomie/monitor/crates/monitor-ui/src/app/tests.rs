@@ -140,6 +140,9 @@ pub(crate) fn app() -> MonitorApp {
         archive_total: None,
         archive_source_total: None,
         evidence_jobs: Default::default(),
+        jobs: Default::default(),
+        quit_confirmed: false,
+        summary_snapshots_asked: None,
         details_follow: Default::default(),
         archived_processes: None,
         capture_history: Vec::new(),
@@ -269,7 +272,7 @@ pub(super) fn secondary_click_label(
         .1
         .center();
     for pressed in [true, false] {
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 events: vec![
@@ -283,7 +286,7 @@ pub(super) fn secondary_click_label(
                 ],
                 ..Default::default()
             },
-            |ctx| app.draw(ctx),
+            |root| app.draw(root),
         );
     }
 }
@@ -372,12 +375,12 @@ pub(super) fn render(
     ctx: &egui::Context,
     size: egui::Vec2,
 ) -> egui::FullOutput {
-    ctx.run(
+    ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
             ..Default::default()
         },
-        |ctx| app.draw(ctx),
+        |root| app.draw(root),
     )
 }
 
@@ -390,7 +393,7 @@ pub(crate) fn draw_input(
     ctx: &egui::Context,
     input: egui::RawInput,
 ) -> egui::FullOutput {
-    ctx.run(input, |ctx| app.draw(ctx))
+    ctx.run_ui(input, |root| app.draw(root))
 }
 
 pub(crate) fn texts(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
@@ -436,7 +439,7 @@ pub(super) fn click_label(
         .1
         .center();
     for pressed in [true, false] {
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 events: vec![
@@ -450,7 +453,7 @@ pub(super) fn click_label(
                 ],
                 ..Default::default()
             },
-            |ctx| app.draw(ctx),
+            |root| app.draw(root),
         );
     }
 }
@@ -515,20 +518,22 @@ pub(super) fn press(
     key: egui::Key,
     modifiers: egui::Modifiers,
 ) {
-    let _ = ctx.run(
+    let _ = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-            modifiers,
-            events: vec![egui::Event::Key {
-                key,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers,
-            }],
+            events: vec![
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                },
+            ],
             ..Default::default()
         },
-        |ctx| app.draw(ctx),
+        |root| app.draw(root),
     );
 }
 

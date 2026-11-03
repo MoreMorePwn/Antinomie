@@ -171,7 +171,7 @@ fn health_loss_rows_wrap_at_narrow_width_and_large_text() {
     snapshot.health.recorder_stats.as_mut().unwrap()[6] = 3209;
     let mut output = egui::FullOutput::default();
     for _ in 0..3 {
-        output = ctx.run(
+        output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -179,9 +179,9 @@ fn health_loss_rows_wrap_at_narrow_width_and_large_text() {
                 )),
                 ..Default::default()
             },
-            |ctx| {
+            |root| {
                 egui::CentralPanel::default()
-                    .show(ctx, |ui| Facts::new(&snapshot, &[]).show(ui, &snapshot));
+                    .show(root, |ui| Facts::new(&snapshot, &[]).show(ui, &snapshot));
             },
         );
     }

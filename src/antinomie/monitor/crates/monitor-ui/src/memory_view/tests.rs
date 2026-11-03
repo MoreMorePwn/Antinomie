@@ -153,7 +153,7 @@ fn result_worker_filters_beyond_old_prefix_and_sorts_entire_retained_source() {
     let root = std::env::temp_dir().join(format!(
         "antinomie-paged-memory-{}-{}",
         std::process::id(),
-        now_ms()
+        crate::time_format::now_ms()
     ));
     std::fs::create_dir(&root).unwrap();
     let path = root.join("result.jsonl");
@@ -294,7 +294,7 @@ fn a_note_chip_selects_its_dump_and_the_row_names_the_vm_and_the_dump() {
     crate::theme::install(&ctx);
     let data_dir = std::env::temp_dir();
     let frame = |view: &mut MemoryView| {
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -302,8 +302,8 @@ fn a_note_chip_selects_its_dump_and_the_row_names_the_vm_and_the_dump() {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     let cx = MemoryContext {
                         vm: None,
                         recordings: None,

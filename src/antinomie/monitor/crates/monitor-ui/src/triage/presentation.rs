@@ -189,7 +189,7 @@ mod tests {
     fn light_theme_emphasis_uses_heading_and_body_colors() {
         let ctx = egui::Context::default();
         theme::apply(&ctx, true);
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -197,8 +197,8 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     heading(ui, "Detection evidence", "Rule matches");
                     ui.label(
                         RichText::new("triage-sample")
@@ -243,7 +243,7 @@ mod tests {
         theme::install(&ctx);
         for width in [900.0, 480.0] {
             for _ in 0..2 {
-                let output = ctx.run(
+                let output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -251,8 +251,8 @@ mod tests {
                         )),
                         ..Default::default()
                     },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
+                    |root| {
+                        egui::CentralPanel::default().show(root, |ui| {
                             pair(
                                 ui,
                                 |ui| {

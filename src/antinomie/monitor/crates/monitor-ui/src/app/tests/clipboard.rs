@@ -2,12 +2,13 @@
 use super::*;
 
 fn paste(app: &mut MonitorApp, ctx: &egui::Context, text: &str) {
-    let _ = ctx.run(
+    let _ = ctx.run_ui(
         egui::RawInput {
             events: vec![egui::Event::Paste(text.into())],
             ..Default::default()
         },
-        |ctx| {
+        |root| {
+            let ctx = &root.ctx().clone();
             app.receive_clipboard(ctx);
             assert!(!ctx.input(|input| input
                 .events
@@ -21,7 +22,10 @@ fn paste(app: &mut MonitorApp, ctx: &egui::Context, text: &str) {
 fn clipboard_uses_native_request_and_does_not_feed_run_terminal() {
     let mut app = upload_app();
     let ctx = egui::Context::default();
-    let out = ctx.run(Default::default(), |ctx| app.request_clipboard(ctx));
+    let out = ctx.run_ui(Default::default(), |root| {
+        let ctx = &root.ctx().clone();
+        app.request_clipboard(ctx)
+    });
     assert!(out.viewport_output[&egui::ViewportId::ROOT]
         .commands
         .iter()

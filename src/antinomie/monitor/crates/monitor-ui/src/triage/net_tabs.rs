@@ -295,8 +295,8 @@ mod tests {
     fn pcap_notes_are_warnings_only_when_the_index_is_unavailable() {
         let ctx = egui::Context::default();
         let mut journal = crate::activity::Journal::default();
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 network_note(
                     ui,
                     "Address lookup limited to 24 public destinations; 3 more were not queried.",

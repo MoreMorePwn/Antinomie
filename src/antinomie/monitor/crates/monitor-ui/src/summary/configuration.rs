@@ -444,8 +444,8 @@ mod tests {
                 },
                 ..Default::default()
             };
-            output = Some(ctx.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| show(ui, vm, snapshot));
+            output = Some(ctx.run_ui(input, |root| {
+                egui::CentralPanel::default().show(root, |ui| show(ui, vm, snapshot));
             }));
         }
         let mut texts = Vec::new();

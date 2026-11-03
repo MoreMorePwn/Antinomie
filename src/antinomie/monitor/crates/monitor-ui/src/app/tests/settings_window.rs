@@ -210,7 +210,7 @@ fn the_routes_page_shows_every_route_and_says_openvpn_is_unsupported() {
     let mut app = app();
     // The page by itself on a tall screen: in the Settings window its lower
     // sections are scrolled out of view.
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -218,8 +218,8 @@ fn the_routes_page_shows_every_route_and_says_openvpn_is_unsupported() {
             )),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.routes_page(ui));
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| app.routes_page(ui));
         },
     );
     let visible = texts(&output);
@@ -260,7 +260,7 @@ fn the_routes_page_shows_install_version_and_status_of_tor_and_wireproxy() {
         tool("tor", "Tor", "0.4.9.14 (Expert Bundle 15.0.26)", None),
         tool("wireproxy", "wireproxy", "1.1.3", Some("1.1.3")),
     ];
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -268,8 +268,8 @@ fn the_routes_page_shows_install_version_and_status_of_tor_and_wireproxy() {
             )),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.routes_page(ui));
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| app.routes_page(ui));
         },
     );
     let visible = texts(&output);
@@ -330,8 +330,8 @@ fn the_run_form_names_the_fixed_network_of_a_vm_that_is_not_routed() {
         route: Some(RouteKind::Tor),
         ..ExecRequest::default()
     };
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+        egui::CentralPanel::default().show(root, |ui| {
             crate::route_ui::selector(
                 ui,
                 &mut request,

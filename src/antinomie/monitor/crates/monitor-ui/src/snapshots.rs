@@ -1063,7 +1063,7 @@ pub(crate) mod tests {
         events: Vec<egui::Event>,
     ) -> (egui::FullOutput, Option<Command>) {
         let mut command = None;
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1072,7 +1072,8 @@ pub(crate) mod tests {
                 events,
                 ..Default::default()
             },
-            |ctx| {
+            |root| {
+                let ctx = &root.ctx().clone();
                 command = manager.dialog(ctx, tree, true);
             },
         );
@@ -1296,7 +1297,7 @@ pub(crate) mod tests {
         manager.tree_view = true;
         let mut target_id = None;
         let render = |events, manager: &mut SnapshotManager, target_id: &mut Option<egui::Id>| {
-            ctx.run(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1305,8 +1306,9 @@ pub(crate) mod tests {
                     events,
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    let ctx = &root.ctx().clone();
+                    egui::CentralPanel::default().show(root, |ui| {
                         manager.tree(ui, &tree, 220.0);
                         *target_id = ctx.memory(|memory| memory.focused());
                     });
@@ -1366,7 +1368,7 @@ pub(crate) mod tests {
         theme::text_size(&ctx, 24.0);
         let mut output = egui::FullOutput::default();
         for _ in 0..3 {
-            output = ctx.run(
+            output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1374,7 +1376,8 @@ pub(crate) mod tests {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
+                |root| {
+                    let ctx = &root.ctx().clone();
                     assert!(manager.show(ctx, Some(&tree), None, true).is_none());
                 },
             );
@@ -1394,7 +1397,8 @@ pub(crate) mod tests {
             deadline: Instant,
         }
         impl eframe::App for FixtureApp {
-            fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+            fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
+                let ctx = &root.ctx().clone();
                 if Instant::now() >= self.deadline {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }

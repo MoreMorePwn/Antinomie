@@ -576,8 +576,8 @@ mod tests {
             references: Default::default(),
         });
         view.phase[2] = "running".into();
-        let output = frames(&ctx, 3, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| view.engine_tabs(ui));
+        let output = frames(&ctx, 3, |root| {
+            egui::CentralPanel::default().show(root, |ui| view.engine_tabs(ui));
         });
         let texts = rendered_text(&output);
         for label in ["YARA", "IDS", "Sigma", "1,234", "0", "…"] {
@@ -630,8 +630,8 @@ mod tests {
         let (_tx, rx) = std::sync::mpsc::channel();
         view.registry_rx = Some(rx);
         let draw = |view: &mut View| {
-            frames(&ctx, 2, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| view.rule_sets(ui, 0));
+            frames(&ctx, 2, |root| {
+                egui::CentralPanel::default().show(root, |ui| view.rule_sets(ui, 0));
             })
         };
         let loading = draw(&mut view);
@@ -652,8 +652,8 @@ mod tests {
         view.rx = Some(rx);
         view.cancel = Some(Arc::new(AtomicBool::new(false)));
         let draw = |view: &mut View| {
-            frames(&ctx, 2, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| view.scan_buttons(ui, 0, None));
+            frames(&ctx, 2, |root| {
+                egui::CentralPanel::default().show(root, |ui| view.scan_buttons(ui, 0, None));
             })
         };
         let running = draw(&mut view);
@@ -665,8 +665,8 @@ mod tests {
 
     fn panel_text(view: &mut View) -> String {
         let ctx = egui::Context::default();
-        rendered_text(&frames(&ctx, 1, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| view.show(ui, None));
+        rendered_text(&frames(&ctx, 1, |root| {
+            egui::CentralPanel::default().show(root, |ui| view.show(ui, None));
         }))
     }
 
@@ -872,13 +872,13 @@ mod tests {
         theme::install(&ctx);
         let mut shapes = Vec::new();
         for _ in 0..3 {
-            let output = ctx.run(
+            let output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         // Stands in for the run selector and section tabs above.
                         ui.add_space(above);
                         view.show(ui, None)

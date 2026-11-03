@@ -144,8 +144,8 @@ fn incomplete_table_drafts_keep_the_last_applied_filter() {
         ("address == 10 &&", false),
         ("", true),
     ] {
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 let compiled = applied_table(ui, draft, TABLE_FIELDS, "retention");
                 assert!(compiled.keep_table(&row) == expected, "{draft}");
             });
@@ -577,10 +577,11 @@ fn native_filter_autocomplete() {
         focused: bool,
     }
     impl eframe::App for App {
-        fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
             self.frames += 1;
             let elapsed = self.started.elapsed().as_secs();
-            egui::CentralPanel::default().show(ctx, |ui| {
+            egui::CentralPanel::default().show(root, |ui| {
                 ui.label(format!("refresh {elapsed}s · frame {}", self.frames));
                 ui.label("Syscall filter");
                 let syscall = crate::query::filter_edit(
@@ -682,8 +683,8 @@ fn filter_frame(ctx: &egui::Context, text: &mut String, events: Vec<egui::Event>
     });
     raw.time = Some(f64::from(frame) * 0.05);
     let mut offset = None;
-    let _ = ctx.run(raw, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let _ = ctx.run_ui(raw, |root| {
+        egui::CentralPanel::default().show(root, |ui| {
             let response = filter_edit(ui, text, "Filter", 300.0, FilterScope::Syscall);
             if !response.has_focus() {
                 response.request_focus();
@@ -706,6 +707,7 @@ fn completion_list_keeps_the_scroll_position_the_user_chose() {
     let wheel = vec![
         egui::Event::PointerMoved(egui::pos2(60.0, 80.0)),
         egui::Event::MouseWheel {
+            phase: egui::TouchPhase::Move,
             unit: egui::MouseWheelUnit::Point,
             delta: egui::vec2(0.0, -400.0),
             modifiers: egui::Modifiers::NONE,
@@ -753,8 +755,8 @@ fn empty_filter_boxes_show_a_muted_filter_e_g_placeholder() {
     crate::theme::install(&ctx);
     let mut text = String::new();
     let mut table = String::new();
-    let output = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let output = ctx.run_ui(egui::RawInput::default(), |root| {
+        egui::CentralPanel::default().show(root, |ui| {
             filter_edit(
                 ui,
                 &mut text,

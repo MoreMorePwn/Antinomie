@@ -1076,7 +1076,7 @@ mod tests {
         let mut app = crate::app::tests::app();
         let mut layout = WorkspaceLayout::default();
         for _ in 0..3 {
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1084,7 +1084,7 @@ mod tests {
                     )),
                     ..Default::default()
                 },
-                |ctx| layout.show(&mut app, ctx),
+                |root| layout.show(&mut app, root),
             );
         }
         let left = layout
@@ -1109,7 +1109,7 @@ mod tests {
         ctx: &egui::Context,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1118,7 +1118,7 @@ mod tests {
                 events,
                 ..Default::default()
             },
-            |ctx| layout.show(app, ctx),
+            |root| layout.show(app, root),
         )
     }
 
@@ -1289,7 +1289,7 @@ mod tests {
                 location.surface.is_main(),
                 "direct drag must not require a detached window"
             );
-            assert_ne!(location.1, source);
+            assert_ne!(location.node, source);
             assert_eq!(
                 layout
                     .dock
@@ -1520,7 +1520,7 @@ mod tests {
         let ctx = egui::Context::default();
         theme::install(&ctx);
         let foreign = egui::Id::new("another-widget-drag");
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1535,9 +1535,10 @@ mod tests {
                 }],
                 ..Default::default()
             },
-            |ctx| {
+            |root| {
+                let ctx = &root.ctx().clone();
                 ctx.set_dragged_id(foreign);
-                layout.show(&mut app, ctx);
+                layout.show(&mut app, root);
                 assert_eq!(ctx.dragged_id(), Some(foreign));
                 assert!(
                     ctx.input(|input| input.key_pressed(egui::Key::Escape)),
@@ -1629,6 +1630,9 @@ mod tests {
             }
             fn set_string(&mut self, _: &str, value: String) {
                 self.0 = Some(value);
+            }
+            fn remove_string(&mut self, _: &str) {
+                self.0 = None;
             }
             fn flush(&mut self) {}
         }
@@ -1753,7 +1757,7 @@ mod tests {
         let count = layout.dock.surfaces_count();
         for position in [egui::pos2(1400.0, 200.0), egui::pos2(1500.0, 300.0)] {
             layout.drop_panel(&panel, source, position);
-            assert_eq!(layout.dock.find_tab(&panel).unwrap().0, source);
+            assert_eq!(layout.dock.find_tab(&panel).unwrap().surface, source);
             assert_eq!(layout.dock.surfaces_count(), count);
             assert_eq!(
                 layout.geometry[&source.0],
@@ -1841,7 +1845,7 @@ mod tests {
         );
         let count = layout.dock.iter_all_tabs().count();
         layout.dock_panel(terminal.clone());
-        assert!(layout.dock.find_tab(&terminal).unwrap().0.is_main());
+        assert!(layout.dock.find_tab(&terminal).unwrap().surface.is_main());
         assert_eq!(layout.dock.iter_all_tabs().count(), count);
         assert!(!layout.geometry.contains_key(&surface.0));
     }
@@ -1885,7 +1889,7 @@ mod tests {
         layout.cancel_drag = true;
         layout.released = Some((SurfaceIndex::main(), egui::pos2(400.0, 250.0)));
         layout.finish_drag();
-        assert!(layout.dock.find_tab(&terminal).unwrap().0.is_main());
+        assert!(layout.dock.find_tab(&terminal).unwrap().surface.is_main());
         assert!(layout.drag.is_none());
         assert!(!layout.cancel_drag);
     }
@@ -1899,7 +1903,12 @@ mod tests {
         layout.finish_drag();
         assert!(layout.drag.is_none());
         assert_eq!(layout.dock.iter_all_tabs().count(), before);
-        assert!(layout.dock.find_tab(&Panel::Trace).unwrap().0.is_main());
+        assert!(layout
+            .dock
+            .find_tab(&Panel::Trace)
+            .unwrap()
+            .surface
+            .is_main());
     }
 
     #[test]
@@ -2008,7 +2017,8 @@ mod tests {
         let bottom = NodeIndex::root().right();
         layout
             .dock
-            .set_active_tab(TabPath::new(SurfaceIndex::main(), bottom, TabIndex(1)));
+            .set_active_tab(TabPath::new(SurfaceIndex::main(), bottom, TabIndex(1)))
+            .unwrap();
         let restored = WorkspaceLayout::restore(Some(layout));
         assert_eq!(leaf_tabs(&restored, top), Panel::MAIN);
         let egui_dock::Node::Leaf(egui_dock::LeafNode { tabs, active, .. }) =
@@ -2083,8 +2093,8 @@ mod tests {
                 .find_tab(&Panel::Disks)
                 .expect("Disks was added");
             assert_eq!(
-                (disks.0, disks.1, disks.2 .0),
-                (memory.0, memory.1, memory.2 .0 + 1)
+                (disks.surface, disks.node, disks.tab.0),
+                (memory.surface, memory.node, memory.tab.0 + 1)
             );
             restored.dock.remove_tab(disks);
             assert_eq!(
@@ -2229,8 +2239,11 @@ mod tests {
                 node,
                 tab: summary,
             } = layout.dock.find_tab(&Panel::Summary).unwrap();
-            let (history_surface, history_node, history) =
-                layout.dock.find_tab(&Panel::RunHistory).unwrap();
+            let TabPath {
+                surface: history_surface,
+                node: history_node,
+                tab: history,
+            } = layout.dock.find_tab(&Panel::RunHistory).unwrap();
             assert_eq!((surface, node), (history_surface, history_node));
             assert_eq!(summary.0 + 1, history.0);
         }
@@ -2346,7 +2359,7 @@ mod tests {
             .dock
             .find_tab(&trace)
             .expect("trace survives detachment")
-            .0;
+            .surface;
         assert!(!detached.is_main());
         layout.targets.push((
             SurfaceIndex::main(),
@@ -2358,7 +2371,7 @@ mod tests {
             .dock
             .find_tab(&trace)
             .expect("trace docked")
-            .0
+            .surface
             .is_main());
         for panel in [
             Panel::Trace,
@@ -2404,13 +2417,13 @@ mod tests {
                 ctx.set_embed_viewports(true);
                 let mut settled = None;
                 for frame in 0..90 {
-                    let _ = ctx.run(
+                    let _ = ctx.run_ui(
                         egui::RawInput {
                             screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),
                             time: Some(frame as f64 / 60.0),
                             ..Default::default()
                         },
-                        |ctx| layout.show(&mut app, ctx),
+                        |root| layout.show(&mut app, root),
                     );
                     let rect = ctx
                         .memory(|memory| memory.area_rect(id))
@@ -2441,8 +2454,8 @@ mod tests {
             Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 500.0)),
         ));
         layout.drop_panel(&first, source, egui::pos2(400.0, 250.0));
-        assert!(layout.dock.find_tab(&first).unwrap().0.is_main());
-        assert_eq!(layout.dock.find_tab(&second).unwrap().0, other);
+        assert!(layout.dock.find_tab(&first).unwrap().surface.is_main());
+        assert_eq!(layout.dock.find_tab(&second).unwrap().surface, other);
         assert_eq!(
             layout
                 .dock
@@ -2492,7 +2505,10 @@ mod tests {
         restored.validate();
         assert!(!restored.dock.is_surface_valid(stale));
         assert!(!restored.geometry.contains_key(&stale.0));
-        assert_eq!(restored.dock.find_tab(&Panel::Trace).unwrap().0, retained);
+        assert_eq!(
+            restored.dock.find_tab(&Panel::Trace).unwrap().surface,
+            retained
+        );
         assert_eq!(restored.geometry.get(&retained.0), Some(&rectangle));
         assert_eq!(restored.dock.iter_all_tabs().count(), 11);
 
@@ -2506,7 +2522,10 @@ mod tests {
         restored.dock.remove_tab(location);
         restored.remove_empty_windows();
         assert!(!restored.dock.is_surface_valid(ended));
-        assert_eq!(restored.dock.find_tab(&Panel::Trace).unwrap().0, retained);
+        assert_eq!(
+            restored.dock.find_tab(&Panel::Trace).unwrap().surface,
+            retained
+        );
         assert_eq!(restored.geometry.get(&retained.0), Some(&rectangle));
     }
 
@@ -2523,7 +2542,7 @@ mod tests {
         let mut restored = WorkspaceLayout::restore(Some(custom));
         restored.validate();
         assert_eq!(
-            restored.dock.find_tab(&Panel::Trace).unwrap().0,
+            restored.dock.find_tab(&Panel::Trace).unwrap().surface,
             detached_trace
         );
         let analysis = restored.dock.find_tab(&Panel::StaticAnalysis).unwrap();
@@ -2546,10 +2565,10 @@ mod tests {
             .dock
             .find_tab(&Panel::StaticAnalysis)
             .unwrap()
-            .0
+            .surface
             .is_main());
         assert_eq!(
-            restored.dock.find_tab(&Panel::Trace).unwrap().0,
+            restored.dock.find_tab(&Panel::Trace).unwrap().surface,
             detached_trace
         );
         assert_eq!(
@@ -2694,7 +2713,7 @@ mod tests {
         assert_eq!(surface, window);
         let memory = restored.dock.find_tab(&Panel::Memory).unwrap();
         assert_eq!(
-            (memory.0, memory.1, memory.2 .0 + 1),
+            (memory.surface, memory.node, memory.tab.0 + 1),
             (surface, node, tab.0)
         );
 

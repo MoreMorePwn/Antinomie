@@ -11,6 +11,9 @@ impl eframe::Storage for Storage {
     fn set_string(&mut self, key: &str, value: String) {
         self.0.insert(key.into(), value);
     }
+    fn remove_string(&mut self, key: &str) {
+        self.0.remove(key);
+    }
     fn flush(&mut self) {}
 }
 
@@ -132,7 +135,7 @@ fn frame(
     width: f32,
     events: Vec<egui::Event>,
 ) -> Vec<(String, egui::Rect)> {
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -141,8 +144,8 @@ fn frame(
             events,
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| journal.show(ui));
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| journal.show(ui));
         },
     );
     fn collect(shape: &egui::Shape, texts: &mut Vec<(String, egui::Rect)>) {
@@ -230,7 +233,7 @@ fn compact_notice_keeps_dismiss_button_inside_a_single_status_row() {
     let message = "A long backend failure must leave its dismiss control reachable";
     let mut dismiss_rect = egui::Rect::NOTHING;
     for _ in 0..3 {
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -238,8 +241,8 @@ fn compact_notice_keeps_dismiss_button_inside_a_single_status_row() {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     compact(ui, Level::Error, message);
                 });
             },
@@ -266,7 +269,7 @@ fn a_disabled_form_still_allows_its_notice_to_be_dismissed() {
     let mut rect = egui::Rect::NOTHING;
     let message = "Stop the VM to change these settings";
     let mut draw = |events| {
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -275,8 +278,8 @@ fn a_disabled_form_still_allows_its_notice_to_be_dismissed() {
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     ui.add_enabled_ui(false, |ui| {
                         warning(ui, message);
                     });
@@ -332,8 +335,8 @@ fn the_activity_table_sorts_by_a_clicked_header() {
 fn draw(ctx: &egui::Context, add: impl FnMut(&mut egui::Ui) + Clone) {
     for _ in 0..2 {
         let mut add = add.clone();
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| add(ui));
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| add(ui));
         });
     }
 }
@@ -343,8 +346,8 @@ fn inline_only_draws_the_text_but_writes_no_activity_row() {
     let ctx = egui::Context::default();
     theme::install(&ctx);
     let mut journal = Journal::default();
-    let output = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let output = ctx.run_ui(egui::RawInput::default(), |root| {
+        egui::CentralPanel::default().show(root, |ui| {
             inline_only(ui, Level::Warn, "bad regex · showing the last valid filter");
             inline_only(ui, Level::Error, "Enter a VM name");
         });
@@ -405,8 +408,8 @@ fn a_cancelled_job_is_an_info_row_and_a_failed_one_is_an_error() {
         "Cancelled. YARA-Forge was not changed.",
         "download failed for https://example.invalid: timed out",
     ] {
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| outcome(ui, message));
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| outcome(ui, message));
         });
         journal.ingest(&ctx);
     }

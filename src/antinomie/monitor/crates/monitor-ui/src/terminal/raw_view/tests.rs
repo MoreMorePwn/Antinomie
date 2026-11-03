@@ -8,7 +8,7 @@ fn frame(
     focus: bool,
 ) -> (egui::FullOutput, Vec<u8>) {
     let mut input = Vec::new();
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -17,10 +17,10 @@ fn frame(
             events,
             ..Default::default()
         },
-        |ctx| {
+        |root| {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
-                .show(ctx, |ui| {
+                .show(root, |ui| {
                     if focus {
                         let id = ui.next_auto_id();
                         ui.memory_mut(|memory| memory.request_focus(id));
@@ -176,6 +176,7 @@ fn raw_view_scrolls_the_same_history_and_follows_new_output() {
     let wheel = vec![
         egui::Event::PointerMoved(egui::pos2(100.0, 100.0)),
         egui::Event::MouseWheel {
+            phase: egui::TouchPhase::Move,
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, 1000.0),
             modifiers: egui::Modifiers::NONE,

@@ -255,7 +255,7 @@ fn render_run(label: &str, directory: &Path, output: &Path, summary: bool) -> us
             }
             // The inspector itself, as the Details panel draws it.
             inspector.clear();
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -263,8 +263,8 @@ fn render_run(label: &str, directory: &Path, output: &Path, summary: bool) -> us
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         inspector.show(ui, Some(invocation), false);
                     });
                 },

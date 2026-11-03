@@ -7,7 +7,7 @@ fn render(
     events: Vec<egui::Event>,
     width: f32,
 ) -> egui::FullOutput {
-    ctx.run(
+    ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -16,8 +16,8 @@ fn render(
             events,
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| identity_fields(ui, request));
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| identity_fields(ui, request));
         },
     )
 }

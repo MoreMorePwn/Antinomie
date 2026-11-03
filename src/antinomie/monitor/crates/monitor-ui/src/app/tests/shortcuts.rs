@@ -12,8 +12,9 @@ const SIZE: egui::Vec2 = egui::vec2(1400.0, 820.0);
 fn raw(events: Vec<egui::Event>, modifiers: egui::Modifiers) -> egui::RawInput {
     egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
-        modifiers,
-        events,
+        events: std::iter::once(egui::Event::ModifiersChanged(modifiers))
+            .chain(events)
+            .collect(),
         ..Default::default()
     }
 }
@@ -35,7 +36,7 @@ fn frame(
     events: Vec<egui::Event>,
     modifiers: egui::Modifiers,
 ) -> egui::FullOutput {
-    ctx.run(raw(events, modifiers), |ctx| app.draw(ctx))
+    ctx.run_ui(raw(events, modifiers), |root| app.draw(root))
 }
 
 fn ready() -> (MonitorApp, egui::Context) {
@@ -83,8 +84,8 @@ enum Holder {
 }
 
 impl Holder {
-    fn draw(self, ctx: &egui::Context, text: &mut String) {
-        egui::CentralPanel::default().show(ctx, |ui| match self {
+    fn draw(self, root: &mut egui::Ui, text: &mut String) {
+        egui::CentralPanel::default().show(root, |ui| match self {
             Holder::Field(id) => {
                 ui.add(egui::TextEdit::singleline(text).id(id))
                     .request_focus();
@@ -115,8 +116,9 @@ fn held(
     let mut text = String::new();
     // Two frames so the focus has settled.
     for events in [Vec::new(), events] {
-        let _ = ctx.run(raw(events, mods), |ctx| {
-            holder.draw(ctx, &mut text);
+        let _ = ctx.run_ui(raw(events, mods), |root| {
+            let ctx = &root.ctx().clone();
+            holder.draw(root, &mut text);
             app.shortcuts(ctx);
         });
     }
@@ -133,7 +135,8 @@ fn held_key(
 }
 
 fn nothing_held(app: &mut MonitorApp, ctx: &egui::Context, key: egui::Key, mods: egui::Modifiers) {
-    let _ = ctx.run(raw(vec![key_event(key, mods)], mods), |ctx| {
+    let _ = ctx.run_ui(raw(vec![key_event(key, mods)], mods), |root| {
+        let ctx = &root.ctx().clone();
         app.shortcuts(ctx)
     });
 }
@@ -256,7 +259,7 @@ fn text_fields_and_the_terminal_keep_their_keys() {
 
     // Once the focus leaves, the shortcuts work again.
     ctx.memory_mut(|memory| memory.surrender_focus(egui::Id::new("a_terminal_pane")));
-    let _ = ctx.run(raw(Vec::new(), egui::Modifiers::NONE), |_| {});
+    let _ = ctx.run_ui(raw(Vec::new(), egui::Modifiers::NONE), |_| {});
     assert!(!crate::typing::typing(&ctx));
     nothing_held(&mut app, &ctx, egui::Key::R, ctrl_mods);
     assert!(app.launch_open);
@@ -445,7 +448,7 @@ fn the_palette_arrows_choose_and_a_click_runs() {
         .1
         .center();
     for pressed in [true, false] {
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             raw(
                 vec![
                     egui::Event::PointerMoved(at),
@@ -458,7 +461,7 @@ fn the_palette_arrows_choose_and_a_click_runs() {
                 ],
                 egui::Modifiers::NONE,
             ),
-            |ctx| app.draw(ctx),
+            |root| app.draw(root),
         );
     }
     assert!(

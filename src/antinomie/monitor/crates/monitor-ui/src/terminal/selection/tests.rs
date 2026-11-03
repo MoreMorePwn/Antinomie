@@ -90,7 +90,7 @@ fn draw(
     enabled: bool,
 ) -> (egui::FullOutput, Vec<u8>) {
     let mut input = Vec::new();
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -99,10 +99,10 @@ fn draw(
             events,
             ..Default::default()
         },
-        |ctx| {
+        |root| {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
-                .show(ctx, |ui| {
+                .show(root, |ui| {
                     input = terminal.show_grid(ui, enabled, false).0;
                 });
         },
@@ -235,10 +235,11 @@ fn native_terminal_clipboard_roundtrip() {
         received: Vec<u8>,
     }
     impl eframe::App for Qa {
-        fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
-                .show(ctx, |ui| {
+                .show(root, |ui| {
                     ui.heading("Terminal clipboard QA");
                     ui.label("Drag a word, Ctrl+Shift+C, then Ctrl+Shift+V");
                     self.received.extend(self.terminal.show(ui, true).0);

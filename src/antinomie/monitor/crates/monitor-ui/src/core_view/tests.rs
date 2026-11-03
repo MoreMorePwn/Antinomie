@@ -645,14 +645,14 @@ pub(super) fn render(
 ) -> egui::FullOutput {
     let roots = view.roots.clone();
     let vm_id = view.vm_id.clone();
-    ctx.run(
+    ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
             events,
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 view.show(
                     ui,
                     &roots,
@@ -1170,8 +1170,8 @@ fn mapping_filter_clears_hidden_hexdump_and_preserves_missing_paths() {
         ),
         ("memory.permissions == \"rw-\"", usize::MAX),
     ] {
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 let id = ui
                     .id()
                     .with(("table-filter", ("core-mappings", &record.dir)));
@@ -1281,8 +1281,9 @@ fn native_core_view_fixture() {
         deadline: std::time::Instant,
     }
     impl eframe::App for FixtureApp {
-        fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
+            egui::CentralPanel::default().show(root, |ui| {
                 self.fixture.view.show(
                     ui,
                     &[],
@@ -1494,8 +1495,9 @@ fn native_genuine_core_disassemble() {
         status_path: PathBuf,
     }
     impl eframe::App for App {
-        fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
+            egui::CentralPanel::default().show(root, |ui| {
                 let _ = self.view.show(
                     ui,
                     std::slice::from_ref(&self.root),
@@ -1593,7 +1595,7 @@ fn frame_with_cancel(
     let roots = view.roots.clone();
     let vm_id = view.vm_id.clone();
     let mut action = None;
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -1602,8 +1604,8 @@ fn frame_with_cancel(
             events,
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 action = view.show(
                     ui,
                     &roots,

@@ -167,14 +167,14 @@ fn frame(
     ),
 ) -> (egui::FullOutput, Option<ReportAction>) {
     let mut action = None;
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
             events,
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 action = match kind {
                     Some(kind) => {
                         workspace_section(ui, Some(report), kind, state, pages.0, pages.1)
@@ -852,13 +852,13 @@ fn export_controls_emit_report_scoped_actions_and_wrap_long_failure_reason() {
     let mut overview_state = WorkspaceState::default();
     let mut overview_output = egui::FullOutput::default();
     for _ in 0..3 {
-        overview_output = ctx.run(
+        overview_output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     workspace(ui, Some(&report), &mut overview_state, None, None);
                 });
             },
@@ -925,8 +925,9 @@ fn native_analysis_workspace_fixture() {
         deadline: Instant,
     }
     impl eframe::App for FixtureApp {
-        fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
+            egui::CentralPanel::default().show(root, |ui| {
                 if let Some(action) = workspace(
                     ui,
                     Some(&self.report),
@@ -1181,13 +1182,13 @@ fn unfinished_analysis_shows_progress_until_it_completes() {
     let overview = |report: &AnalysisReport, state: &mut WorkspaceState| {
         let mut output = None;
         for _ in 0..3 {
-            output = Some(ctx.run(
+            output = Some(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         workspace(ui, Some(report), state, None, None);
                     });
                 },
@@ -1727,15 +1728,15 @@ fn hover(
         } else {
             Vec::new()
         };
-        output = ctx.run(
+        output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 events,
                 time: Some(f64::from(frame_number)),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     workspace(ui, Some(report), state, None, None);
                 });
             },
@@ -2051,8 +2052,8 @@ fn selecting_a_row_hands_it_to_the_details_panel_once() {
     click(&ctx, &report, &mut state, size, first);
     render(&ctx, &report, &mut state, size, Vec::new(), None);
     let panel = |ctx: &egui::Context| {
-        texts(&ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, details);
+        texts(&ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, details);
         }))
     };
     let shown = panel(&ctx);

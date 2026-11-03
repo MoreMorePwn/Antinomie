@@ -10,17 +10,22 @@ fn context() -> egui::Context {
 
 const SIZE: egui::Vec2 = egui::vec2(1000.0, 700.0);
 
-fn run(ctx: &egui::Context, time: f64, events: Vec<egui::Event>) -> (egui::FullOutput, Vec<Panel>) {
+fn run(
+    ctx: &egui::Context,
+    time: f64,
+    events: Vec<egui::Event>,
+) -> (egui::FullOutput, Vec<Action>) {
     let mut followed = Vec::new();
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
             time: Some(time),
             events,
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |_| {});
+        |root| {
+            let ctx = &root.ctx().clone();
+            egui::CentralPanel::default().show(root, |_| {});
             followed = show(ctx);
         },
     );
@@ -295,8 +300,8 @@ fn quiet_notices_and_state_labels_do_not_toast() {
     let ctx = context();
     let mut journal = Journal::default();
     crate::activity::report_quiet(&ctx, Level::Warn, "Recording incomplete for run 1");
-    let _ = ctx.run(Default::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let _ = ctx.run_ui(Default::default(), |root| {
+        egui::CentralPanel::default().show(root, |ui| {
             crate::activity::warning(ui, "Stop the VM to change these settings.");
         });
     });
@@ -330,7 +335,7 @@ fn clicking_the_action_follows_it_and_dismisses_the_toast() {
         }
         followed.extend(run(&ctx, 0.2 + index as f64 * 0.05, events).1);
     }
-    assert_eq!(followed, [Panel::Activity]);
+    assert_eq!(followed, [Action::open_activity()]);
     assert_eq!(level_count(&ctx), 0);
 }
 
@@ -428,12 +433,13 @@ fn a_failed_status_leaves_the_view_as_a_toast_and_a_success_stays() {
 
 /// One frame in which the app reports `message` (or not), then logs it.
 fn frame_reporting(ctx: &egui::Context, journal: &mut Journal, time: f64, message: Option<&str>) {
-    let _ = ctx.run(
+    let _ = ctx.run_ui(
         egui::RawInput {
             time: Some(time),
             ..Default::default()
         },
-        |ctx| {
+        |root| {
+            let ctx = &root.ctx().clone();
             if let Some(message) = message {
                 crate::activity::report(ctx, Level::Error, message);
             }
@@ -529,6 +535,8 @@ fn the_fraction_is_zero_at_expiry_and_never_leaves_zero_to_one() {
         title: String::new(),
         detail: String::new(),
         action: None,
+        second: None,
+        success: false,
         count: 1,
         left: Some(0.0),
         hovered: false,

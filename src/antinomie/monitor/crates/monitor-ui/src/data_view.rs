@@ -1051,7 +1051,7 @@ mod tests {
     }
 
     fn render(ctx: &egui::Context, windows: &mut DataWindows) -> egui::FullOutput {
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1059,7 +1059,10 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| windows.show(ctx),
+            |root| {
+                let ctx = &root.ctx().clone();
+                windows.show(ctx)
+            },
         )
     }
 
@@ -1100,13 +1103,16 @@ mod tests {
             let id = windows.windows[0].id();
             let mut settled = None;
             for frame in 0..90 {
-                let _ = ctx.run(
+                let _ = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         time: Some(frame as f64 / 60.0),
                         ..Default::default()
                     },
-                    |ctx| windows.show(ctx),
+                    |root| {
+                        let ctx = &root.ctx().clone();
+                        windows.show(ctx)
+                    },
                 );
                 let rect = ctx.memory(|memory| memory.area_rect(id)).unwrap();
                 if frame == 2 {

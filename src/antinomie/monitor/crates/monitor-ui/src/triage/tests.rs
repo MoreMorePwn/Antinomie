@@ -21,15 +21,16 @@ fn native_triage_fixture() {
         details_width: f32,
     }
     impl eframe::App for Fixture {
-        fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
             self.view.show_report_dialog(ctx);
             egui::Panel::right("shared-details-fixture")
                 .exact_size(self.details_width)
-                .show(ctx, |ui| {
+                .show(root, |ui| {
                     ui.heading("Details");
                     self.view.details(ui);
                 });
-            egui::CentralPanel::default().show(ctx, |ui| {
+            egui::CentralPanel::default().show(root, |ui| {
                 ui.heading("Run triage — synthetic fixture");
                 let _ = self.view.show(
                     ui,
@@ -417,7 +418,7 @@ fn double_click_table_text_requests_its_exact_evidence() {
         };
         let rows = vec![vec![c]];
         let draw = |events, time| {
-            ctx.run(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -427,8 +428,8 @@ fn double_click_table_text_requests_its_exact_evidence() {
                     time: Some(time),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         table(ui, "pointer-evidence", &["Evidence"], &rows)
                     });
                 },
@@ -2006,7 +2007,7 @@ fn a_long_content_cell_shows_a_bounded_hover_and_keeps_the_full_value() {
     ]];
     let headers = ["Time", "Path", "Transferred / content"];
     let draw = |events, time| {
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -2016,9 +2017,9 @@ fn a_long_content_cell_shows_a_bounded_hover_and_keeps_the_full_value() {
                 time: Some(time),
                 ..Default::default()
             },
-            |ctx| {
+            |root| {
                 egui::CentralPanel::default()
-                    .show(ctx, |ui| table(ui, "triage-read", &headers, &rows));
+                    .show(root, |ui| table(ui, "triage-read", &headers, &rows));
             },
         )
     };
@@ -2074,8 +2075,8 @@ fn every_filter_slot_draws_its_filter_bar() {
     let ctx = egui::Context::default();
     let mut view = TriageView::default();
     for index in 0..SLOTS {
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 view.query_bar(
                     ui,
                     index,

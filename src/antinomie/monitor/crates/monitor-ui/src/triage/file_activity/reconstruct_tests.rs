@@ -155,14 +155,15 @@ impl Harness {
         events: Vec<egui::Event>,
     ) -> Vec<(String, Rect)> {
         self.time += 0.05;
-        let output = self.ctx.run(
+        let output = self.ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1300.0, 800.0))),
                 events,
                 time: Some(self.time),
                 ..Default::default()
             },
-            |ctx| {
+            |root| {
+                let ctx = &root.ctx().clone();
                 open.show(ctx, activity, file, None, directory);
             },
         );
@@ -449,15 +450,15 @@ fn the_per_file_history_opens_the_reconstruction_from_its_button_and_from_a_row_
     let mut time = 0.0;
     let mut run = |window: &mut Window| {
         time += 0.05;
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1400.0, 900.0))),
                 time: Some(time),
                 ..Default::default()
             },
-            |ctx| {
+            |root| {
                 egui::CentralPanel::default()
-                    .show(ctx, |ui| window.show(ui, Some(&activity), None, None));
+                    .show(root, |ui| window.show(ui, Some(&activity), None, None));
             },
         );
     };

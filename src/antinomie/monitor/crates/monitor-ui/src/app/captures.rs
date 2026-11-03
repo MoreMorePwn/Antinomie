@@ -1047,8 +1047,8 @@ mod tests {
         let mut text = String::new();
         let mut selected = Some("first".to_owned());
         let mut actual = None;
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 history(ui, &captures, selected.as_deref(), 16.0);
                 ui.memory_mut(|memory| memory.request_focus(ui.id().with("capture-history-focus")));
             });
@@ -1069,8 +1069,8 @@ mod tests {
                 }],
                 ..Default::default()
             };
-            let _ = ctx.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = ctx.run_ui(input, |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     actual = history(ui, &captures, selected.as_deref(), 16.0);
                 });
             });
@@ -1080,14 +1080,14 @@ mod tests {
             );
             selected = actual.take().map(|(id, _)| id);
         }
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 history(ui, &captures, selected.as_deref(), 16.0);
                 ui.add(egui::TextEdit::singleline(&mut text))
                     .request_focus();
             });
         });
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key: egui::Key::End,
@@ -1098,8 +1098,8 @@ mod tests {
                 }],
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     actual = history(ui, &captures, selected.as_deref(), 16.0);
                     ui.add(egui::TextEdit::singleline(&mut text));
                 });
@@ -1138,8 +1138,8 @@ mod tests {
             ("pid ==", false),
             ("", true),
         ] {
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     let id = ui.id().with(("table-filter", "capture-history"));
                     let filter = crate::query::applied_table(ui, draft, &capture_fields(), id);
                     assert_eq!(filter.keep_table(&capture_row(ui, &capture)), expected);

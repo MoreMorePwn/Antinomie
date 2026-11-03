@@ -47,8 +47,9 @@ fn native_tcg_tour() {
         }
     }
     impl eframe::App for Tour {
-        fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-            eframe::App::update(&mut self.app, ctx, frame);
+        fn ui(&mut self, root: &mut egui::Ui, frame: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
+            eframe::App::ui(&mut self.app, root, frame);
             ctx.request_repaint_after(Duration::from_millis(100));
             if self.started.elapsed() > Duration::from_secs(900) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);

@@ -19,16 +19,16 @@ fn frame(
     events: Vec<egui::Event>,
 ) -> (egui::FullOutput, bool) {
     let mut shown = false;
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
             events,
             ..Default::default()
         },
-        |ctx| {
-            shown = app.start_error_screen(ctx);
+        |root| {
+            shown = app.start_error_screen(root);
             if !shown {
-                app.draw(ctx);
+                app.draw(root);
             }
         },
     );

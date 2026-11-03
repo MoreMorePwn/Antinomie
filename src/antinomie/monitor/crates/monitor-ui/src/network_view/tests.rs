@@ -14,6 +14,7 @@ fn explicit_evidence_jump_reveals_a_frame_hidden_by_prior_filters() {
 }
 
 use super::*;
+use eframe::egui::epaint::text::ByteRangeExt;
 
 #[test]
 fn disconnected_capture_warning_is_visible_while_inspecting_saved_packets() {
@@ -27,7 +28,7 @@ fn disconnected_capture_warning_is_visible_while_inspecting_saved_packets() {
         theme::install(&ctx);
         let mut output = egui::FullOutput::default();
         for _ in 0..3 {
-            output = ctx.run(
+            output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -35,8 +36,8 @@ fn disconnected_capture_warning_is_visible_while_inspecting_saved_packets() {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         view.show(
                             ui,
                             NetworkContext {
@@ -298,7 +299,7 @@ fn hex_dump_pads_short_rows_and_marks_the_chosen_bytes() {
         .sections
         .iter()
         .filter(|section| section.format.background == theme::palette().selection)
-        .map(|section| &job.text[section.byte_range.clone()])
+        .map(|section| section.byte_range.slice(&job.text))
         .collect();
     assert_eq!(marked, "2f 20/ ");
     assert_eq!(
@@ -586,7 +587,7 @@ fn network_frame(
     time: f64,
     events: Vec<egui::Event>,
 ) -> egui::FullOutput {
-    ctx.run(
+    ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -596,8 +597,8 @@ fn network_frame(
             events,
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 view.show(
                     ui,
                     NetworkContext {
@@ -731,7 +732,7 @@ fn clicking_a_capture_shows_its_record_in_details_and_hover_shows_no_tooltip() {
     network_frame(&ctx, &mut view, 4.0, vec![click(true)]);
     network_frame(&ctx, &mut view, 4.1, vec![click(false)]);
     assert!(view.capture_details.is_some());
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -739,8 +740,8 @@ fn clicking_a_capture_shows_its_record_in_details_and_hover_shows_no_tooltip() {
             )),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| view.details(ui, 16.0));
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| view.details(ui, 16.0));
         },
     );
     for needle in [
@@ -774,7 +775,7 @@ fn delete_frame(
     boot_id: Option<&str>,
 ) -> (egui::FullOutput, Option<NetworkAction>) {
     let mut action = None;
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -784,8 +785,8 @@ fn delete_frame(
             events,
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 action = view.show(
                     ui,
                     NetworkContext {
@@ -954,7 +955,7 @@ fn without_tshark_the_list_is_raw_frames_with_a_clear_notice() {
     theme::install(&ctx);
     let mut shown = Vec::new();
     for _ in 0..3 {
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -962,8 +963,8 @@ fn without_tshark_the_list_is_raw_frames_with_a_clear_notice() {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     view.show(
                         ui,
                         NetworkContext {
@@ -1033,7 +1034,7 @@ fn big_capture_frame_times() {
     let mut done = None;
     while started.elapsed() < Duration::from_secs(120) {
         let frame = Instant::now();
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1041,8 +1042,8 @@ fn big_capture_frame_times() {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     view.show(
                         ui,
                         NetworkContext {
@@ -1083,7 +1084,7 @@ fn details_frame(
     ctx: &egui::Context,
     events: Vec<egui::Event>,
 ) -> Vec<(String, egui::Rect)> {
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -1092,8 +1093,8 @@ fn details_frame(
             events,
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| view.details(ui, 16.0));
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| view.details(ui, 16.0));
         },
     );
     crate::app::tests::texts(&output)

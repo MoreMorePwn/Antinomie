@@ -69,7 +69,8 @@ fn native_workspace_fixture() {
         evidence: Arc<Mutex<Evidence>>,
     }
     impl eframe::App for QaApp {
-        fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        fn ui(&mut self, root: &mut egui::Ui, frame: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
             let close = ctx.input(|input| input.viewport().close_requested())
                 || Instant::now() >= self.deadline;
             if close {
@@ -100,7 +101,7 @@ fn native_workspace_fixture() {
                 self.app.snapshot.state = VmState::Stopped;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            eframe::App::update(&mut self.app, ctx, frame);
+            eframe::App::ui(&mut self.app, root, frame);
         }
     }
     let fixture = Fixture(std::env::temp_dir().join(format!(

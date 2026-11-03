@@ -30,12 +30,13 @@ fn native_ui_performance_probe() {
         directory: PathBuf,
     }
     impl eframe::App for Probe {
-        fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        fn ui(&mut self, root: &mut egui::Ui, frame: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
             if !self.warmed && self.started.elapsed() >= Duration::from_secs(1) {
                 self.app.performance.reset_for_probe();
                 self.warmed = true;
             }
-            eframe::App::update(&mut self.app, ctx, frame);
+            eframe::App::ui(&mut self.app, root, frame);
             if self.previous_cadence {
                 ctx.request_repaint_after(Duration::from_millis(50));
             }

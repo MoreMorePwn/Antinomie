@@ -899,8 +899,8 @@ mod tests {
             };
             let mut view = SamplesView::default();
             let ctx = egui::Context::default();
-            let output = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| view.warning(ui, &cx));
+            let output = ctx.run_ui(egui::RawInput::default(), |root| {
+                egui::CentralPanel::default().show(root, |ui| view.warning(ui, &cx));
             });
             crate::app::tests::texts(&output)
                 .into_iter()
@@ -931,8 +931,8 @@ mod tests {
         let mut view = SamplesView::default();
         let mut journal = crate::activity::Journal::default();
         let draw = |view: &mut SamplesView, journal: &mut crate::activity::Journal| {
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| view.warning(ui, &cx));
+            let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+                egui::CentralPanel::default().show(root, |ui| view.warning(ui, &cx));
             });
             journal.ingest(&ctx);
         };
@@ -945,8 +945,8 @@ mod tests {
         view.open = false;
         view.show(&ctx, &cx);
         view.open = true;
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| view.warning(ui, &cx));
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| view.warning(ui, &cx));
         });
         assert!(LIVE_MALWARE_NOTICE.starts_with("Live malware"));
     }
@@ -968,7 +968,8 @@ mod tests {
         let mut view = SamplesView::default();
         view.open = true;
         for _ in 0..2 {
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+                let ctx = &root.ctx().clone();
                 view.show(ctx, &cx);
             });
         }
@@ -1000,14 +1001,16 @@ mod tests {
         let mut view = SamplesView::default();
         view.open = true;
         let ctx = egui::Context::default();
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            let ctx = &root.ctx().clone();
             assert!(view.show(ctx, &cx).is_none());
         });
         assert!(view.open && !view.acknowledged);
         samples::acknowledge(&data).unwrap();
         let mut view = SamplesView::default();
         view.open = true;
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            let ctx = &root.ctx().clone();
             view.show(ctx, &cx);
         });
         assert!(view.acknowledged);
@@ -1068,7 +1071,8 @@ mod tests {
             deadline: std::time::Instant,
         }
         impl eframe::App for QaApp {
-            fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+            fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
+                let ctx = &root.ctx().clone();
                 if std::time::Instant::now() >= self.deadline {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -1080,7 +1084,7 @@ mod tests {
                     network_warning: None,
                     font_size: 16.0,
                 };
-                egui::CentralPanel::default().show(ctx, |_| {});
+                egui::CentralPanel::default().show(root, |_| {});
                 self.view.show(ctx, &cx);
                 ctx.request_repaint_after(Duration::from_millis(200));
             }

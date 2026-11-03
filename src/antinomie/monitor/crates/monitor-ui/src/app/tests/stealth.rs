@@ -8,7 +8,7 @@ fn cloud_advice_frame(
     vm: &mut VmConfig,
     events: Vec<egui::Event>,
 ) -> egui::FullOutput {
-    ctx.run(
+    ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -17,8 +17,8 @@ fn cloud_advice_frame(
             events,
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 crate::app::stealth::launch_advice(ui, vm);
             });
         },
@@ -454,7 +454,7 @@ fn the_run_header_lists_what_the_vm_started_without() {
     sample.notes.push(line.into());
     let ctx = egui::Context::default();
     theme::install(&ctx);
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -462,8 +462,8 @@ fn the_run_header_lists_what_the_vm_started_without() {
             )),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| crate::run_recording::show(ui, &sample));
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| crate::run_recording::show(ui, &sample));
         },
     );
     let lines: Vec<String> = texts(&output).into_iter().map(|(text, _)| text).collect();

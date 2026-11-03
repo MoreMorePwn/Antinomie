@@ -884,7 +884,7 @@ mod panel {
 
     fn click_at(app: &mut MonitorApp, ctx: &egui::Context, pos: egui::Pos2) {
         for pressed in [true, false] {
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
                     events: vec![
@@ -898,7 +898,7 @@ mod panel {
                     ],
                     ..Default::default()
                 },
-                |ctx| app.draw(ctx),
+                |root| app.draw(root),
             );
         }
     }

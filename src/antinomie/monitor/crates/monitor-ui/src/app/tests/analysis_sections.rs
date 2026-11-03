@@ -33,8 +33,8 @@ fn section_windows_keep_report_identity_and_prune_only_unreferenced_reports() {
     app.select_archive_run("archived".into());
     let ctx = egui::Context::default();
     theme::install(&ctx);
-    let output = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let output = ctx.run_ui(egui::RawInput::default(), |root| {
+        egui::CentralPanel::default().show(root, |ui| {
             app.show_panel(
                 ui,
                 &Panel::AnalysisSection {
@@ -99,7 +99,7 @@ fn summary_is_compact_with_thousands_of_rows_and_section_renders_only_its_kind()
         let report = section_report("summary", "METADATA MARKER");
         // A grid lays itself out on its first frame and paints on the next.
         let frame = || {
-            ctx.run(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -107,8 +107,8 @@ fn summary_is_compact_with_thousands_of_rows_and_section_renders_only_its_kind()
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         assert!(crate::analysis::workspace(
                             ui,
                             Some(&report),
@@ -137,8 +137,8 @@ fn summary_is_compact_with_thousands_of_rows_and_section_renders_only_its_kind()
             output.shapes.len() < 250,
             "summary size must not depend on evidence row count"
         );
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let output = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 crate::analysis::workspace_section(
                     ui,
                     Some(&report),
@@ -168,14 +168,14 @@ fn summary_open_button_requests_only_the_chosen_section_without_backend_work() {
     let ctx = egui::Context::default();
     theme::install(&ctx);
     let render = |app: &mut MonitorApp, events| {
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 events,
                 ..Default::default()
             },
-            |ctx| {
+            |root| {
                 egui::CentralPanel::default()
-                    .show(ctx, |ui| app.show_panel(ui, &Panel::StaticAnalysis));
+                    .show(root, |ui| app.show_panel(ui, &Panel::StaticAnalysis));
             },
         )
     };
@@ -226,7 +226,8 @@ fn native_analysis_sections_fixture() {
         reported: bool,
     }
     impl eframe::App for QaApp {
-        fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        fn ui(&mut self, root: &mut egui::Ui, frame: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
             self.updates += 1;
             ctx.input(|input| {
                 self.held_updates += usize::from(input.pointer.primary_down());
@@ -255,7 +256,7 @@ fn native_analysis_sections_fixture() {
                 }
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            eframe::App::update(&mut self.app, ctx, frame);
+            eframe::App::ui(&mut self.app, root, frame);
         }
     }
     let small = std::env::var_os("ANTINOMIE_ANALYSIS_QA_SMALL").is_some();

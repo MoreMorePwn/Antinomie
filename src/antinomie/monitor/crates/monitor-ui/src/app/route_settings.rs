@@ -616,8 +616,8 @@ mod tests {
         let mut routes = RouteSettings::unloaded();
         assert!(routes.draft.filter.enabled);
         let ctx = egui::Context::default();
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let output = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 filter_form(ui, &mut routes.draft.filter, &mut routes.ports_text);
             });
         });

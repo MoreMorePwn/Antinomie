@@ -4,6 +4,21 @@ use super::*;
 
 const SIZE: egui::Vec2 = egui::vec2(1280.0, 900.0);
 
+/// A file the window manager dropped. egui 0.36 hands over a handle that
+/// always has a path, so a drop without one no longer exists.
+#[derive(Debug)]
+struct Dropped(PathBuf);
+
+impl egui::DroppedFile for Dropped {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|error| error.to_string())
+    }
+}
+
 fn input(hovered: Vec<Option<PathBuf>>, dropped: Vec<Option<PathBuf>>) -> egui::RawInput {
     egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
@@ -16,10 +31,8 @@ fn input(hovered: Vec<Option<PathBuf>>, dropped: Vec<Option<PathBuf>>) -> egui::
             .collect(),
         dropped_files: dropped
             .into_iter()
-            .map(|path| egui::DroppedFile {
-                path,
-                ..Default::default()
-            })
+            .flatten()
+            .map(|path| std::sync::Arc::new(Dropped(path)) as egui::DroppedFileHandle)
             .collect(),
         ..Default::default()
     }
@@ -172,7 +185,6 @@ fn dropping_several_files_or_a_folder_leaves_the_form_alone_and_says_why() {
             "one file at a time",
         ),
         (vec![Some(folder)], "Folders cannot be uploaded"),
-        (vec![None], "no host file path"),
         (vec![Some(fixture.0.join("missing"))], "regular files"),
     ] {
         let mut app = running_app();

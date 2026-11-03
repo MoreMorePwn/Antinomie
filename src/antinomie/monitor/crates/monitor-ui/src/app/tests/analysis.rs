@@ -38,13 +38,13 @@ fn run_setup_title_can_move_and_reopen_without_resetting_position() {
             modifiers: egui::Modifiers::NONE,
         }],
     ] {
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 events,
                 ..Default::default()
             },
-            |ctx| app.draw(ctx),
+            |root| app.draw(root),
         );
     }
     for _ in 0..3 {
@@ -106,7 +106,7 @@ fn run_setup_keeps_final_actions_visible_and_dispatches_a_selection_snapshot() {
             "the main action is rightmost"
         );
         for pressed in [true, false] {
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     events: vec![
@@ -120,7 +120,7 @@ fn run_setup_keeps_final_actions_visible_and_dispatches_a_selection_snapshot() {
                     ],
                     ..Default::default()
                 },
-                |ctx| app.draw(ctx),
+                |root| app.draw(root),
             );
         }
         assert!(app.submitted.iter().any(|command| matches!(command, Command::Execute(request) if request.analysis.enabled && request.analysis.checks.len() == 2)), "Run action did not submit at {size:?}/{font}");
@@ -146,7 +146,7 @@ fn run_in_is_offered_for_graphical_bases_remembered_and_sent_with_the_launch() {
         let offered = visible.iter().any(|(text, _)| text == "Run in");
         let run = app.launch_action_rects.unwrap().0.center();
         for pressed in [true, false] {
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     events: vec![
@@ -160,7 +160,7 @@ fn run_in_is_offered_for_graphical_bases_remembered_and_sent_with_the_launch() {
                     ],
                     ..Default::default()
                 },
-                |ctx| app.draw(ctx),
+                |root| app.draw(root),
             );
         }
         let sent = app
@@ -237,8 +237,8 @@ fn static_analysis_uses_selected_archive_report_without_submitting_work() {
     app.history.push(live);
     app.selected_run = Some("same-run".into());
     app.archive_selected = true;
-    let output = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| app.show_panel(ui, &Panel::StaticAnalysis));
+    let output = ctx.run_ui(egui::RawInput::default(), |root| {
+        egui::CentralPanel::default().show(root, |ui| app.show_panel(ui, &Panel::StaticAnalysis));
     });
     let visible = texts(&output);
     assert!(visible
@@ -426,7 +426,7 @@ fn analyze_only_and_cancel_do_not_launch_or_stop_a_program() {
         .1
         .center();
     for pressed in [true, false] {
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 events: vec![
@@ -440,7 +440,7 @@ fn analyze_only_and_cancel_do_not_launch_or_stop_a_program() {
                 ],
                 ..Default::default()
             },
-            |ctx| app.draw(ctx),
+            |root| app.draw(root),
         );
     }
     assert!(app.submitted.iter().any(|command| matches!(command, Command::AnalyzeOnly { analysis, path, .. } if analysis.enabled && path == "/usr/bin/sample")));
@@ -462,8 +462,8 @@ fn analyze_only_and_cancel_do_not_launch_or_stop_a_program() {
             limits: None,
         });
     app.selected_analysis = Some("standalone-job".into());
-    let output = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| app.show_panel(ui, &Panel::StaticAnalysis));
+    let output = ctx.run_ui(egui::RawInput::default(), |root| {
+        egui::CentralPanel::default().show(root, |ui| app.show_panel(ui, &Panel::StaticAnalysis));
     });
     let target = texts(&output)
         .into_iter()
@@ -472,7 +472,7 @@ fn analyze_only_and_cancel_do_not_launch_or_stop_a_program() {
         .1
         .center();
     for pressed in [true, false] {
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 events: vec![
                     egui::Event::PointerMoved(target),
@@ -485,9 +485,9 @@ fn analyze_only_and_cancel_do_not_launch_or_stop_a_program() {
                 ],
                 ..Default::default()
             },
-            |ctx| {
+            |root| {
                 egui::CentralPanel::default()
-                    .show(ctx, |ui| app.show_panel(ui, &Panel::StaticAnalysis));
+                    .show(root, |ui| app.show_panel(ui, &Panel::StaticAnalysis));
             },
         );
     }
@@ -508,12 +508,13 @@ fn native_analysis_setup_fixture() {
         deadline: Instant,
     }
     impl eframe::App for QaApp {
-        fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        fn ui(&mut self, root: &mut egui::Ui, frame: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
             if Instant::now() >= self.deadline {
                 self.app.snapshot.active_vm = None;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            eframe::App::update(&mut self.app, ctx, frame);
+            eframe::App::ui(&mut self.app, root, frame);
         }
     }
     let small = std::env::var_os("ANTINOMIE_ANALYSIS_QA_SMALL").is_some();
@@ -682,7 +683,7 @@ fn a_limit_warning_opens_settings_at_its_field_and_the_fields_edit_the_limits() 
     assert_eq!(app.settings_focus, Some(LimitSetting::FlossFile));
     let ctx = egui::Context::default();
     crate::theme::install(&ctx);
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -690,8 +691,8 @@ fn a_limit_warning_opens_settings_at_its_field_and_the_fields_edit_the_limits() 
             )),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| app.analysis_limit_fields(ui));
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| app.analysis_limit_fields(ui));
         },
     );
     // The focus is spent, and every setting has its label.

@@ -63,15 +63,15 @@ impl Panel {
     fn draw(&mut self, events: Vec<egui::Event>) -> Vec<(String, egui::Rect)> {
         self.time += 0.05;
         let app = &mut self.app;
-        texts(&self.ctx.run(
+        texts(&self.ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
                 events,
                 time: Some(self.time),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.history_detail(ui));
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| app.history_detail(ui));
             },
         ))
     }
@@ -89,6 +89,7 @@ impl Panel {
         self.draw(vec![
             egui::Event::PointerMoved(at),
             egui::Event::MouseWheel {
+                phase: egui::TouchPhase::Move,
                 unit: egui::MouseWheelUnit::Point,
                 delta,
                 modifiers: egui::Modifiers::NONE,

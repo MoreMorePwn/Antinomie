@@ -6,7 +6,7 @@ use super::*;
 use crate::evidence_delete::Kind;
 
 fn draw(app: &mut MonitorApp, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
-    ctx.run(
+    ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -15,7 +15,7 @@ fn draw(app: &mut MonitorApp, ctx: &egui::Context, events: Vec<egui::Event>) -> 
             events,
             ..Default::default()
         },
-        |ctx| app.draw(ctx),
+        |root| app.draw(root),
     )
 }
 
@@ -205,13 +205,13 @@ fn the_run_form_turns_off_capture_without_a_network_card_and_opens_the_settings_
         let mut routes = false;
         let mut output = egui::FullOutput::default();
         for events in [Vec::new(), events.clone(), Vec::new()] {
-            output = ctx.run(
+            output = ctx.run_ui(
                 egui::RawInput {
                     events,
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         let mut step = crate::analysis::LaunchOutcome::default();
                         crate::analysis::capture_selection_for_tests(
                             ui,

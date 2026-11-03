@@ -521,7 +521,7 @@ fn core_picker_captures_the_complete_identity_and_requires_supported_selected_vm
         .1
         .center();
     for pressed in [true, false] {
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 events: vec![
@@ -535,7 +535,7 @@ fn core_picker_captures_the_complete_identity_and_requires_supported_selected_vm
                 ],
                 ..Default::default()
             },
-            |ctx| app.draw(ctx),
+            |root| app.draw(root),
         );
     }
     assert!(
@@ -621,7 +621,8 @@ fn native_capture_controls_fixture() {
         deadline: Instant,
     }
     impl eframe::App for QaApp {
-        fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        fn ui(&mut self, root: &mut egui::Ui, frame: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
             if Instant::now() >= self.deadline {
                 eprintln!("native capture QA commands: {:?}", self.app.submitted);
                 assert!(self.app.terminals.is_empty());
@@ -635,7 +636,7 @@ fn native_capture_controls_fixture() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 return;
             }
-            eframe::App::update(&mut self.app, ctx, frame);
+            eframe::App::ui(&mut self.app, root, frame);
         }
     }
     let small = std::env::var_os("ANTINOMIE_CAPTURE_QA_SMALL").is_some();

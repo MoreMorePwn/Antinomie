@@ -153,7 +153,8 @@ fn native_ui_polish_fixture() {
         seeded: bool,
     }
     impl eframe::App for QaApp {
-        fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        fn ui(&mut self, root: &mut egui::Ui, frame: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
             if Instant::now() >= self.deadline {
                 // A running VM would ask before the window may close.
                 self.app.snapshot.active_vm = None;
@@ -188,9 +189,9 @@ fn native_ui_polish_fixture() {
             }
             if self.scene == "details" {
                 // The run's Details alone, tall enough to show all of it.
-                egui::CentralPanel::default().show(ctx, |ui| self.app.history_detail(ui));
+                egui::CentralPanel::default().show(root, |ui| self.app.history_detail(ui));
             } else {
-                eframe::App::update(&mut self.app, ctx, frame);
+                eframe::App::ui(&mut self.app, root, frame);
             }
             ctx.request_repaint_after(Duration::from_millis(200));
         }

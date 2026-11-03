@@ -128,9 +128,9 @@ fn password_widget_does_not_retain_undo_history() {
     for text in ["first-private-password", "second-private-password", ""] {
         password.clear();
         password.push_str(text);
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
             egui::CentralPanel::default()
-                .show(ctx, |ui| password_input(ui, &mut password, "private_qa"));
+                .show(root, |ui| password_input(ui, &mut password, "private_qa"));
         });
         let state =
             egui::widgets::text_edit::TextEditState::load(&ctx, egui::Id::new("private_qa"))
@@ -230,7 +230,7 @@ fn editing_and_clearing_folder_text_preserves_automatic_fallback() {
     let mut picker = FolderPicker::new();
     let mut status = String::new();
     let mut draw = |path: &mut Option<PathBuf>, events: Vec<egui::Event>| {
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -239,8 +239,8 @@ fn editing_and_clearing_folder_text_preserves_automatic_fallback() {
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     directory_input(
                         ui,
                         path,
@@ -342,35 +342,45 @@ fn snapshot_decision_blocks_global_shortcuts_without_editor_focus() {
             memory.surrender_focus(id);
         }
     });
-    let _ = ctx.run(
+    let _ = ctx.run_ui(
         egui::RawInput {
-            events: vec![egui::Event::Key {
-                key: keys::RUN_PROGRAM.logical_key,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: keys::RUN_PROGRAM.modifiers,
-            }],
-            modifiers: keys::RUN_PROGRAM.modifiers,
+            events: vec![
+                egui::Event::ModifiersChanged(keys::RUN_PROGRAM.modifiers),
+                egui::Event::Key {
+                    key: keys::RUN_PROGRAM.logical_key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: keys::RUN_PROGRAM.modifiers,
+                },
+            ],
             ..Default::default()
         },
-        |ctx| app.shortcuts(ctx),
+        |root| {
+            let ctx = &root.ctx().clone();
+            app.shortcuts(ctx)
+        },
     );
     assert!(!app.launch_open);
     app.vm_snapshots.close();
-    let _ = ctx.run(
+    let _ = ctx.run_ui(
         egui::RawInput {
-            events: vec![egui::Event::Key {
-                key: keys::RUN_PROGRAM.logical_key,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: keys::RUN_PROGRAM.modifiers,
-            }],
-            modifiers: keys::RUN_PROGRAM.modifiers,
+            events: vec![
+                egui::Event::ModifiersChanged(keys::RUN_PROGRAM.modifiers),
+                egui::Event::Key {
+                    key: keys::RUN_PROGRAM.logical_key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: keys::RUN_PROGRAM.modifiers,
+                },
+            ],
             ..Default::default()
         },
-        |ctx| app.shortcuts(ctx),
+        |root| {
+            let ctx = &root.ctx().clone();
+            app.shortcuts(ctx)
+        },
     );
     assert!(app.launch_open);
 }
@@ -472,7 +482,7 @@ fn debian_credentials_are_transient_and_creation_uses_validated_api() {
         .1
         .center();
     for pressed in [true, false] {
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 events: vec![
@@ -486,7 +496,7 @@ fn debian_credentials_are_transient_and_creation_uses_validated_api() {
                 ],
                 ..Default::default()
             },
-            |ctx| app.draw(ctx),
+            |root| app.draw(root),
         );
     }
     assert!(!app.create_open);
@@ -650,11 +660,12 @@ fn native_debian_setup_fixture() {
         deadline: Instant,
     }
     impl eframe::App for QaApp {
-        fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        fn ui(&mut self, root: &mut egui::Ui, frame: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
             if Instant::now() >= self.deadline {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            eframe::App::update(&mut self.app, ctx, frame);
+            eframe::App::ui(&mut self.app, root, frame);
         }
     }
     eframe::run_native(

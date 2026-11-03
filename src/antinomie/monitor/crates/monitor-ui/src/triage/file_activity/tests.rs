@@ -291,16 +291,16 @@ impl Harness {
     fn frame(&mut self, activity: &Activity, events: Vec<egui::Event>) -> Vec<(String, Rect)> {
         self.time += 0.05;
         let window = &mut self.window;
-        let output = self.ctx.run(
+        let output = self.ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.size)),
                 events,
                 time: Some(self.time),
                 ..Default::default()
             },
-            |ctx| {
+            |root| {
                 egui::CentralPanel::default()
-                    .show(ctx, |ui| window.show(ui, Some(activity), None, None));
+                    .show(root, |ui| window.show(ui, Some(activity), None, None));
             },
         );
         fn collect(shape: &egui::epaint::Shape, out: &mut Vec<(String, Rect)>) {
@@ -544,7 +544,8 @@ fn a_long_process_name_is_cut_to_the_gutter_and_the_graph_leaves_it_room() {
     let font = egui::FontId::proportional(11.0);
     let long = "123456 /usr/lib/very/long/path/to/an/image/with/a/long/name";
     let width = 150.0;
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+    let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+        let ctx = &root.ctx().clone();
         let painter = ctx.layer_painter(egui::LayerId::background());
         let short = graph::fit(&painter, long, &font, width);
         assert!(short.ends_with('…') && short.len() < long.len(), "{short}");
@@ -565,13 +566,13 @@ fn a_long_process_name_is_cut_to_the_gutter_and_the_graph_leaves_it_room() {
 fn an_unindexed_run_says_so() {
     let mut harness = Harness::new();
     let window = &mut harness.window;
-    let output = harness.ctx.run(
+    let output = harness.ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| window.show(ui, None, None, None));
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| window.show(ui, None, None, None));
         },
     );
     assert!(!output.shapes.is_empty());

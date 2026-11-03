@@ -378,8 +378,8 @@ mod tests {
             unreachable!()
         };
         let ctx = egui::Context::default();
-        let shapes = frames(&ctx, 2, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let shapes = frames(&ctx, 2, |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 let _ = match_cards(ui, report, TABLES[0], &view.rows[0]);
             });
         });
@@ -407,8 +407,8 @@ mod tests {
             unreachable!()
         };
         let ctx = egui::Context::default();
-        let shapes = frames(&ctx, 2, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let shapes = frames(&ctx, 2, |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 let _ = match_cards(ui, report, TABLES[0], &view.rows[0]);
             });
         });
@@ -450,7 +450,7 @@ mod tests {
         let ctx = egui::Context::default();
         let draw = |ctx: &egui::Context, events: Vec<egui::Event>| {
             let mut opened = None;
-            let output = ctx.run(
+            let output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -459,8 +459,8 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         if let Some(key) = match_cards(ui, report, TABLES[0], &view.rows[0]) {
                             opened = Some(key);
                         }

@@ -59,7 +59,7 @@ fn recorded_workload_triage() {
     for pass in 0..3 {
         for pane in 0..10 {
             let started = Instant::now();
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -67,8 +67,8 @@ fn recorded_workload_triage() {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| match pane {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| match pane {
                         0 => {
                             view.process = ProcessTab::Tree;
                             view.process(ui, &input);

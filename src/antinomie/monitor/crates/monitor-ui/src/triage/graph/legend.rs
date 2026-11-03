@@ -149,7 +149,7 @@ mod tests {
         theme::install(&ctx);
         let mut output = egui::FullOutput::default();
         for time in 0..3 {
-            output = ctx.run(
+            output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -158,8 +158,8 @@ mod tests {
                     time: Some(f64::from(time) * 0.02),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, body);
+                |root| {
+                    egui::CentralPanel::default().show(root, body);
                 },
             );
         }

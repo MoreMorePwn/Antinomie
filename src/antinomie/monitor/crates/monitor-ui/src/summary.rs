@@ -1330,14 +1330,14 @@ mod tests {
         history.observe(snapshot, selected);
         let mut output = egui::FullOutput::default();
         for _ in 0..3 {
-            output = ctx.run(
+            output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     ..Default::default()
                 },
-                |ctx| {
+                |root| {
                     egui::CentralPanel::default()
-                        .show(ctx, |ui| show(ui, snapshot, &[], selected, 4, &history));
+                        .show(root, |ui| show(ui, snapshot, &[], selected, 4, &history));
                 },
             );
         }
@@ -1591,7 +1591,7 @@ mod tests {
                         Some("active"),
                         base + Duration::from_secs(u64::from(frame)),
                     );
-                    let output = ctx.run(
+                    let output = ctx.run_ui(
                         egui::RawInput {
                             time: Some(f64::from(frame) * 10.0),
                             screen_rect: Some(egui::Rect::from_min_size(
@@ -1600,8 +1600,8 @@ mod tests {
                             )),
                             ..Default::default()
                         },
-                        |ctx| {
-                            egui::CentralPanel::default().show(ctx, |ui| {
+                        |root| {
+                            egui::CentralPanel::default().show(root, |ui| {
                                 show(ui, &snapshot, &[], Some("active"), 4, &history)
                             });
                         },
@@ -1667,9 +1667,10 @@ mod tests {
             deadline: Instant,
         }
         impl eframe::App for Fixture {
-            fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+            fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+                let ctx = &root.ctx().clone();
                 self.history.observe(&self.snapshot, Some("active"));
-                egui::CentralPanel::default().show(ctx, |ui| {
+                egui::CentralPanel::default().show(root, |ui| {
                     show(ui, &self.snapshot, &[], Some("active"), 4, &self.history)
                 });
                 if Instant::now() >= self.deadline {

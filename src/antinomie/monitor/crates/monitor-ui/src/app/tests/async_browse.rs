@@ -43,7 +43,7 @@ fn render(
     row: &InvocationSummary,
     events: Vec<egui::Event>,
 ) -> Vec<String> {
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -52,8 +52,8 @@ fn render(
             events,
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 inspector.show(ui, Some(row), true);
             });
         },
@@ -63,7 +63,7 @@ fn render(
 
 /// Open the closed "Async" section by clicking its header.
 fn open_async(ctx: &egui::Context, inspector: &mut trace::Inspector, row: &InvocationSummary) {
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -71,8 +71,8 @@ fn open_async(ctx: &egui::Context, inspector: &mut trace::Inspector, row: &Invoc
             )),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 inspector.show(ui, Some(row), true);
             });
         },

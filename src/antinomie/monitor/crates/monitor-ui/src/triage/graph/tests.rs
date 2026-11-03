@@ -794,16 +794,17 @@ impl Harness {
         self.time += 0.03;
         let mut actions = Vec::new();
         let (state, rect, spacing) = (&mut self.state, &mut self.rect, self.spacing);
-        let _ = self.ctx.run(
+        let _ = self.ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
-                events,
-                modifiers: self.modifiers,
+                events: std::iter::once(egui::Event::ModifiersChanged(self.modifiers))
+                    .chain(events)
+                    .collect(),
                 time: Some(self.time),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     *rect = Rect::from_min_size(
                         ui.available_rect_before_wrap().min,
                         egui::vec2(ui.available_width(), WIDGET_HEIGHT),
@@ -1023,6 +1024,7 @@ fn ctrl_wheel_zooms_shift_wheel_pans_and_the_wheel_scrolls_lanes() {
     let frame = harness.layout(&index).frame;
     let over = Pos2::new(frame.plot.center().x, frame.lanes.center().y);
     let wheel = |delta: egui::Vec2, modifiers| Event::MouseWheel {
+        phase: egui::TouchPhase::Move,
         unit: egui::MouseWheelUnit::Line,
         delta,
         modifiers,
@@ -1258,13 +1260,13 @@ fn the_widget_paints_in_each_theme_with_that_themes_colors() {
         theme::apply_theme(&ctx, theme);
         let mut state = State::default();
         let colors = Colors::of(theme.palette());
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     let config = Config {
                         index: &index,
                         colors,

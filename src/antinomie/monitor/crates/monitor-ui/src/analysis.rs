@@ -804,8 +804,8 @@ mod tests {
                 core_dump_on_exit: true,
                 ..ExecRequest::default()
             };
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     capture_selection(
                         ui,
                         &mut request,
@@ -830,8 +830,8 @@ mod tests {
             core_dump_on_exit: true,
             ..ExecRequest::default()
         };
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 capture_selection(
                     ui,
                     &mut request,
@@ -865,9 +865,9 @@ mod tests {
                 debug_on_start: true,
                 ..ExecRequest::default()
             };
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            let _ = ctx.run_ui(egui::RawInput::default(), |root| {
                 egui::CentralPanel::default()
-                    .show(ctx, |ui| debugger_selection(ui, &mut request, supported));
+                    .show(root, |ui| debugger_selection(ui, &mut request, supported));
             });
             assert_eq!(request.debug_on_start, kept);
         }
@@ -959,13 +959,13 @@ mod tests {
     fn master_checkbox_accepts_keyboard_toggle_and_retains_individual_choices() {
         let ctx = egui::Context::default();
         let mut choices = AnalysisSelection::default();
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 selection(ui, &mut choices, &[], &mut false).request_focus();
             });
         });
         for enabled in [true, false] {
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     events: vec![egui::Event::Key {
                         key: egui::Key::Space,
@@ -976,15 +976,15 @@ mod tests {
                     }],
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         selection(ui, &mut choices, &[], &mut false);
                     });
                 },
             );
             assert_eq!(choices.enabled, enabled);
             assert_eq!(choices.checks, AnalysisKind::TRIAGE);
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     events: vec![egui::Event::Key {
                         key: egui::Key::Space,
@@ -995,8 +995,8 @@ mod tests {
                     }],
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         selection(ui, &mut choices, &[], &mut false);
                     });
                 },
@@ -1013,7 +1013,7 @@ mod tests {
             ..Default::default()
         };
         let shown = |choices: &mut AnalysisSelection| {
-            let output = ctx.run(
+            let output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1021,8 +1021,8 @@ mod tests {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         selection(ui, choices, &[], &mut false);
                     });
                 },
@@ -1053,7 +1053,7 @@ mod tests {
         };
         let original = choices.checks.clone();
         let render = |choices: &mut AnalysisSelection, events| {
-            ctx.run(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1062,8 +1062,8 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         selection(ui, choices, &[], &mut false);
                     });
                 },

@@ -295,13 +295,13 @@ fn strings_regex_adds_patterns_with_grey_hints_and_a_full_width_expression() {
         let (dir, outbound) = (&fixture.dir, &mut fixture.outbound);
         let mut detection = antinomie_monitor_core::analysis::detection::Settings::default();
         let tools = ruleset::ToolConfig::default();
-        fixture.ctx.run(
+        fixture.ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     let _ = model.page(ui, dir, outbound, &tools, &mut detection);
                 });
             },
@@ -384,8 +384,9 @@ fn native_regex_tab_fixture() {
         deadline: std::time::Instant,
     }
     impl eframe::App for App {
-        fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
+            egui::CentralPanel::default().show(root, |ui| {
                 let mut detection =
                     antinomie_monitor_core::analysis::detection::Settings::default();
                 let tools = ruleset::ToolConfig::default();
@@ -460,8 +461,9 @@ fn native_rules_pack_fixture() {
         _fixture: Fixture,
     }
     impl eframe::App for App {
-        fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
+            egui::CentralPanel::default().show(root, |ui| {
                 let mut detection =
                     antinomie_monitor_core::analysis::detection::Settings::default();
                 let tools = ruleset::ToolConfig::default();

@@ -16,9 +16,9 @@ fn run(
     ctx: &egui::Context,
     events: Vec<egui::Event>,
     size: egui::Vec2,
-    add: impl FnMut(&egui::Context),
+    add: impl FnMut(&mut egui::Ui),
 ) -> egui::FullOutput {
-    ctx.run(
+    ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
             events,
@@ -50,7 +50,7 @@ fn click(
     ctx: &egui::Context,
     pos: egui::Pos2,
     size: egui::Vec2,
-    add: &mut dyn FnMut(&egui::Context),
+    add: &mut dyn FnMut(&mut egui::Ui),
 ) {
     for pressed in [true, false] {
         let events = vec![
@@ -70,8 +70,8 @@ fn click(
 fn clicking_a_tab_selects_it_and_a_disabled_tab_stays_put() {
     let ctx = context();
     let selected = std::cell::Cell::new(0_u8);
-    let mut draw = |ctx: &egui::Context| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let mut draw = |root: &mut egui::Ui| {
+        egui::CentralPanel::default().show(root, |ui| {
             let mut value = selected.get();
             tabs(
                 ui,
@@ -115,8 +115,8 @@ fn tabs_wrap_inside_a_narrow_pane_at_every_text_size() {
         let mut bounds = egui::Rect::NOTHING;
         let mut output = None;
         for _ in 0..3 {
-            output = Some(run(&ctx, vec![], egui::vec2(width, 500.0), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            output = Some(run(&ctx, vec![], egui::vec2(width, 500.0), |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     tabs(
                         ui,
                         [
@@ -168,7 +168,10 @@ fn a_window_keeps_its_title_above_a_body_that_caps_its_height_and_closes_on_x() 
     };
     let mut output = None;
     for _ in 0..3 {
-        output = Some(run(&ctx, vec![], SIZE, |ctx| draw(ctx, &mut open)));
+        output = Some(run(&ctx, vec![], SIZE, |root| {
+            let ctx = &root.ctx().clone();
+            draw(ctx, &mut open)
+        }));
     }
     let rects = text_rects(output.as_ref().unwrap());
     let title = rects
@@ -191,7 +194,10 @@ fn a_window_keeps_its_title_above_a_body_that_caps_its_height_and_closes_on_x() 
         .unwrap();
     assert!(title.left() < area.left() + 40.0, "{title:?} in {area:?}");
     // The window does not grow from one frame to the next.
-    let again = run(&ctx, vec![], SIZE, |ctx| draw(ctx, &mut open));
+    let again = run(&ctx, vec![], SIZE, |root| {
+        let ctx = &root.ctx().clone();
+        draw(ctx, &mut open)
+    });
     drop(again);
     let later = ctx
         .memory(|memory| memory.area_rect(egui::Id::new("probe-window")))
@@ -199,7 +205,7 @@ fn a_window_keeps_its_title_above_a_body_that_caps_its_height_and_closes_on_x() 
     assert_eq!(area.size(), later.size());
     // Clicking the close button closes it.
     let pos = egui::pos2(area.right() - 11.0 - 16.0, title.center().y);
-    let mut draw_once = |ctx: &egui::Context| draw(ctx, &mut open);
+    let mut draw_once = |root: &mut egui::Ui| draw(&root.ctx().clone(), &mut open);
     click(&ctx, pos, SIZE, &mut draw_once);
     assert!(!open, "the close button must clear `open`");
 }
@@ -224,8 +230,8 @@ fn toggle_chips_show_their_state_and_count_and_segmented_shows_badges() {
     let mut selected = 0;
     let mut out = egui::FullOutput::default();
     for n in 0..3 {
-        out = run(&ctx, vec![], SIZE, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        out = run(&ctx, vec![], SIZE, |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 toggle_chip(ui, "Hide stdio", true, None);
                 toggle_chip(ui, "Failed attempts", false, Some(2));
                 segmented(
@@ -253,8 +259,8 @@ fn a_card_shows_its_title_header_and_body_inside_the_width_it_is_given() {
     let size = egui::vec2(600.0, 300.0);
     let mut output = None;
     for _ in 0..3 {
-        output = Some(run(&ctx, vec![], size, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        output = Some(run(&ctx, vec![], size, |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 card(
                     ui,
                     "Identity",

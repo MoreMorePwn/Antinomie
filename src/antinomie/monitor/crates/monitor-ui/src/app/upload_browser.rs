@@ -339,7 +339,7 @@ pub(crate) mod tests {
         let ctx = egui::Context::default();
         theme::install(&ctx);
         for pass in 0..4 {
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -348,8 +348,8 @@ pub(crate) mod tests {
                     time: Some(pass as f64 * 0.1),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         browser.show_explorer(ui, 200.0, true);
                     });
                 },
@@ -363,8 +363,8 @@ pub(crate) mod tests {
             assert!(!browser.rows_dirty);
         }
         let allocation = browser.rows.as_ptr();
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(Default::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 browser.show_explorer(ui, 200.0, true);
             });
         });
@@ -400,8 +400,8 @@ pub(crate) mod tests {
         browser.expanded.insert(root.join("a"));
         let ctx = egui::Context::default();
         theme::install(&ctx);
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 let view = View {
                     id: "branches",
                     height: 200.0,
@@ -502,7 +502,7 @@ pub(crate) mod tests {
         let mut render = |events| {
             time += 0.016;
             let mut action = None;
-            let output = ctx.run(
+            let output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -512,8 +512,8 @@ pub(crate) mod tests {
                     events,
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         action = browser.show_explorer(ui, 300.0, true);
                     });
                 },
@@ -586,11 +586,11 @@ pub(crate) mod tests {
                     result: Some(read_page(&fixture.0, 0, &AtomicBool::new(false))),
                 },
             );
-            let _ = ctx.run(egui::RawInput {
+            let _ = ctx.run_ui(egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0))),
                 ..Default::default()
-            }, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            }, |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     let expected = ui.available_rect_before_wrap().right();
                     let area = ui.scope(|ui| { browser.show_explorer(ui, 250.0, true); });
                     assert!((area.response.rect.right() - expected).abs() < 1.0,

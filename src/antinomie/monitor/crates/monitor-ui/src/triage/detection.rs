@@ -968,11 +968,11 @@ mod tests {
     pub(super) fn frames(
         ctx: &egui::Context,
         frames: usize,
-        mut run: impl FnMut(&egui::Context),
+        mut run: impl FnMut(&mut egui::Ui),
     ) -> Vec<egui::epaint::ClippedShape> {
         let mut shapes = Vec::new();
         for _ in 0..frames {
-            let output = ctx.run(
+            let output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1251,7 +1251,7 @@ mod tests {
                 "preparation did not finish"
             );
             frames.push(held_up(|| {
-                let _ = ctx.run(
+                let _ = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -1259,8 +1259,8 @@ mod tests {
                         )),
                         ..Default::default()
                     },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
+                    |root| {
+                        egui::CentralPanel::default().show(root, |ui| {
                             view.show(ui, None);
                         });
                     },

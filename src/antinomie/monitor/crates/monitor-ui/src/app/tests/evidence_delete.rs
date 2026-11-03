@@ -13,7 +13,7 @@ fn capture_deletion(test: &str) -> Deletion {
 }
 
 fn draw(app: &mut MonitorApp, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
-    ctx.run(
+    ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -22,7 +22,7 @@ fn draw(app: &mut MonitorApp, ctx: &egui::Context, events: Vec<egui::Event>) -> 
             events,
             ..Default::default()
         },
-        |ctx| app.draw(ctx),
+        |root| app.draw(root),
     )
 }
 

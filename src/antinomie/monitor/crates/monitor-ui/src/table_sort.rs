@@ -68,7 +68,7 @@ pub(crate) mod testing {
         events: Vec<egui::Event>,
         show: &mut dyn FnMut(&mut egui::Ui),
     ) -> Vec<(String, egui::Rect)> {
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -77,8 +77,8 @@ pub(crate) mod testing {
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| show(ui));
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| show(ui));
             },
         );
         let mut texts = Vec::new();

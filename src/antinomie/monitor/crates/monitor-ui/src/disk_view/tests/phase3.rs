@@ -543,8 +543,8 @@ fn comparing_with_a_checkpoint_asks_the_backend_for_a_reference_then_starts_the_
     let source = DiskSourceSpec::Checkpoint("cp-1".into());
     // The menu's choice, made directly.
     let mut action = None;
-    let _ = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+        egui::CentralPanel::default().show(root, |ui| {
             let cx = DiskContext {
                 vm: scene.vm.as_ref(),
                 recordings: None,

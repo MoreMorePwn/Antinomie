@@ -142,7 +142,7 @@ fn click_pane_tab(app: &mut MonitorApp, ctx: &egui::Context, size: egui::Vec2, p
         .next()
         .unwrap_or_else(|| panic!("no strip tab {}: {shown:?}", pane.label()));
     for pressed in [true, false] {
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 events: vec![
@@ -156,7 +156,7 @@ fn click_pane_tab(app: &mut MonitorApp, ctx: &egui::Context, size: egui::Vec2, p
                 ],
                 ..Default::default()
             },
-            |ctx| app.draw(ctx),
+            |root| app.draw(root),
         );
     }
 }
@@ -522,6 +522,7 @@ fn the_flavour_is_chosen_in_settings_and_defaults_to_gef() {
         &mut app,
         &ctx,
         input(vec![egui::Event::MouseWheel {
+            phase: egui::TouchPhase::Move,
             unit: egui::MouseWheelUnit::Point,
             delta: egui::vec2(0.0, -200.0),
             modifiers: egui::Modifiers::NONE,

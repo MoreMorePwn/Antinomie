@@ -213,8 +213,8 @@ mod tests {
         report.coverage = Some(coverage);
         view.results[1] = Some(Ok(report));
         let draw = |view: &View| {
-            super::super::tests::rendered_text(&super::super::tests::frames(&ctx, 2, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| view.coverage_section(ui, 1));
+            super::super::tests::rendered_text(&super::super::tests::frames(&ctx, 2, |root| {
+                egui::CentralPanel::default().show(root, |ui| view.coverage_section(ui, 1));
             }))
         };
         let text = draw(&view);
@@ -245,8 +245,8 @@ mod tests {
         report.engine = Engine::Sigma;
         view.results[2] = Some(Ok(report));
         let text =
-            super::super::tests::rendered_text(&super::super::tests::frames(&ctx, 1, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| view.coverage_section(ui, 2));
+            super::super::tests::rendered_text(&super::super::tests::frames(&ctx, 1, |root| {
+                egui::CentralPanel::default().show(root, |ui| view.coverage_section(ui, 2));
             }));
         assert!(!text.contains("rules"), "{text}");
     }

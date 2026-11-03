@@ -777,7 +777,8 @@ mod tests {
         install(&ctx);
         let width = |family: FontFamily| {
             let mut width = 0.0;
-            let _ = ctx.run(Default::default(), |ctx| {
+            let _ = ctx.run_ui(Default::default(), |root| {
+                let ctx = &root.ctx().clone();
                 width = ctx.fonts_mut(|fonts| {
                     fonts
                         .layout_no_wrap(
@@ -976,8 +977,8 @@ mod tests {
     fn loading_draws_a_spinner_left_of_the_text_on_one_row() {
         let ctx = egui::Context::default();
         let mut rows = None;
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let output = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 let response = loading(ui, "Reading…");
                 rows = Some(response.rect);
             });
@@ -1112,7 +1113,10 @@ mod close_button_tests {
             super::set_compact(&ctx, compact);
             let mut open = true;
             for _ in 0..3 {
-                let _ = ctx.run(input(vec![]), |ctx| draw(ctx, &mut open));
+                let _ = ctx.run_ui(input(vec![]), |root| {
+                    let ctx = &root.ctx().clone();
+                    draw(ctx, &mut open)
+                });
             }
             ctx
         };
@@ -1136,7 +1140,10 @@ mod close_button_tests {
                     vec![press(false)],
                     vec![],
                 ] {
-                    let _ = ctx.run(input(events), |ctx| draw(ctx, &mut open));
+                    let _ = ctx.run_ui(input(events), |root| {
+                        let ctx = &root.ctx().clone();
+                        draw(ctx, &mut open)
+                    });
                 }
                 if !open {
                     return true;

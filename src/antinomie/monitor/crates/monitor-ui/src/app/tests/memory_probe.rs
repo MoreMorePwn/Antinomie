@@ -9,14 +9,14 @@ const SIZE: egui::Vec2 = egui::vec2(1400.0, 900.0);
 
 /// One frame as the window runs it: layout, then tessellation.
 fn frame(app: &mut MonitorApp, ctx: &egui::Context, index: u64, events: Vec<egui::Event>) {
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
             time: Some(index as f64 / 60.0),
             events,
             ..Default::default()
         },
-        |ctx| app.draw(ctx),
+        |root| app.draw(root),
     );
     let _ = ctx.tessellate(output.shapes, output.pixels_per_point);
 }

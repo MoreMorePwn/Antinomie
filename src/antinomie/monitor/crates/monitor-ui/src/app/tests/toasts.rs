@@ -2,6 +2,7 @@
 //! Warnings and errors reach the user as toasts, not in their old places.
 use super::*;
 use crate::activity::Level;
+use eframe::egui::epaint::text::ByteRangeExt;
 
 const SIZE: egui::Vec2 = egui::vec2(1280.0, 820.0);
 
@@ -14,13 +15,13 @@ fn context() -> egui::Context {
 fn frames(app: &mut MonitorApp, ctx: &egui::Context, count: u32) -> egui::FullOutput {
     let mut output = egui::FullOutput::default();
     for frame in 0..count {
-        output = ctx.run(
+        output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
                 time: Some(f64::from(frame) * 0.02),
                 ..Default::default()
             },
-            |ctx| app.draw(ctx),
+            |root| app.draw(root),
         );
     }
     output
@@ -171,7 +172,7 @@ fn the_activity_tab_shows_warnings_and_errors_as_two_chips() {
         .filter(|section| section.format.background != egui::Color32::TRANSPARENT)
         .map(|section| {
             (
-                job.text[section.byte_range.clone()].trim().to_owned(),
+                section.byte_range.slice(&job.text).trim().to_owned(),
                 section.format.color,
                 section.format.background,
             )

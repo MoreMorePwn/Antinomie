@@ -62,7 +62,7 @@ fn click_lowest_label(app: &mut MonitorApp, ctx: &egui::Context, size: egui::Vec
         .1
         .center();
     for pressed in [true, false] {
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 events: vec![
@@ -76,7 +76,7 @@ fn click_lowest_label(app: &mut MonitorApp, ctx: &egui::Context, size: egui::Vec
                 ],
                 ..Default::default()
             },
-            |ctx| app.draw(ctx),
+            |root| app.draw(root),
         );
     }
 }

@@ -21,7 +21,7 @@ fn settle(app: &mut MonitorApp, ctx: &egui::Context, size: egui::Vec2) -> egui::
 
 fn click(app: &mut MonitorApp, ctx: &egui::Context, size: egui::Vec2, pos: egui::Pos2) {
     for pressed in [true, false] {
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                 events: vec![
@@ -35,7 +35,7 @@ fn click(app: &mut MonitorApp, ctx: &egui::Context, size: egui::Vec2, pos: egui:
                 ],
                 ..Default::default()
             },
-            |ctx| app.draw(ctx),
+            |root| app.draw(root),
         );
     }
 }

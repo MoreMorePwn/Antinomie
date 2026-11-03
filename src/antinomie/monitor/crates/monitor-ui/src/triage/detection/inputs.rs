@@ -516,8 +516,8 @@ mod tests {
     }
 
     fn shown(view: &mut View, ctx: &egui::Context) -> String {
-        rendered_text(&frames(ctx, 2, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
+        rendered_text(&frames(ctx, 2, |root| {
+            egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
         }))
     }
 
@@ -624,8 +624,8 @@ mod tests {
         let mut view = view(Some(rows));
         view.inputs_open[0] = true;
         let mut position = None;
-        for shape in frames(&ctx, 2, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
+        for shape in frames(&ctx, 2, |root| {
+            egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
         }) {
             super::super::tests::each_galley_rect(&shape.shape, &mut |text, rect| {
                 if text == "sample" {
@@ -635,7 +635,7 @@ mod tests {
         }
         let position = position.expect("sample row");
         for pressed in [true, false] {
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -652,8 +652,8 @@ mod tests {
                     ],
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
                 },
             );
         }
@@ -675,7 +675,7 @@ mod tests {
         let mut view = view(Some(many));
         view.inputs_open[0] = true;
         // Tall enough that no row is culled.
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -683,8 +683,8 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
             },
         );
         let text = rendered_text(&output.shapes);
@@ -702,8 +702,8 @@ mod tests {
     /// Presses the primary button on the first text equal to `label`.
     fn click(view: &mut View, ctx: &egui::Context, label: &str) {
         let mut position = None;
-        for shape in frames(ctx, 2, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
+        for shape in frames(ctx, 2, |root| {
+            egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
         }) {
             super::super::tests::each_galley_rect(&shape.shape, &mut |text, rect| {
                 if text == label && position.is_none() {
@@ -713,7 +713,7 @@ mod tests {
         }
         let position = position.unwrap_or_else(|| panic!("{label} is not painted"));
         for pressed in [true, false] {
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -730,8 +730,8 @@ mod tests {
                     ],
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
                 },
             );
         }
@@ -762,8 +762,8 @@ mod tests {
         let ctx = egui::Context::default();
         theme::install(&ctx);
         let mut view = run_view();
-        let output = frames(&ctx, 2, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
+        let output = frames(&ctx, 2, |root| {
+            egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
         });
         let (mut again, mut scan, mut log) = (0, 0, 0);
         for shape in &output {
@@ -788,8 +788,8 @@ mod tests {
         assert_eq!(view.busy, Some(0), "the YARA scan started");
         assert_eq!(view.phase[0], "running");
         // While it runs the rows show a spinner and no Scan button.
-        let output = frames(&ctx, 2, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
+        let output = frames(&ctx, 2, |root| {
+            egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
         });
         let text = rendered_text(&output);
         assert!(text.contains("Scanning…"), "{text}");
@@ -809,8 +809,8 @@ mod tests {
     fn the_sigma_caveat_above_the_findings_is_a_plain_note_and_other_warnings_stay_warnings() {
         let ctx = egui::Context::default();
         let first_color = |text: &str| {
-            let output = frames(&ctx, 2, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| super::super::input_note(ui, text));
+            let output = frames(&ctx, 2, |root| {
+                egui::CentralPanel::default().show(root, |ui| super::super::input_note(ui, text));
             });
             let mut color = None;
             for shape in &output {
@@ -864,8 +864,8 @@ mod tests {
         assert!(text.contains("no packets captured"), "{text}");
         assert!(!text.to_lowercase().contains("partial"), "{text}");
         // The caveat is ordinary text, not a warning.
-        let output = frames(&ctx, 2, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
+        let output = frames(&ctx, 2, |root| {
+            egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
         });
         let mut color = None;
         for shape in &output {

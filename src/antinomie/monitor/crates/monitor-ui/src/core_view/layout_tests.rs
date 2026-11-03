@@ -277,8 +277,8 @@ fn the_details_panel_names_what_is_selected_or_asks_for_a_selection() {
     let ctx = context();
     let mut view = CoreView::default();
     let shown = |view: &CoreView| {
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| view.details(ui));
+        let output = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| view.details(ui));
         });
         texts(&output)
     };

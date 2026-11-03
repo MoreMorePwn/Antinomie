@@ -143,7 +143,7 @@ mod tests {
         let ctx = egui::Context::default();
         theme::install(&ctx);
         let mut draw = |events, time| {
-            ctx.run(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -153,8 +153,8 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         show(&mut view, ui, &TriageInput::empty());
                     });
                 },
@@ -207,7 +207,7 @@ mod tests {
         let draw = |view: &mut TriageView| {
             let mut texts = Vec::new();
             for time in [0.0, 0.01] {
-                let output = ctx.run(
+                let output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -216,8 +216,8 @@ mod tests {
                         time: Some(time),
                         ..Default::default()
                     },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
+                    |root| {
+                        egui::CentralPanel::default().show(root, |ui| {
                             show(view, ui, &TriageInput::empty());
                         });
                     },
@@ -265,7 +265,7 @@ mod tests {
         let draw = |view: &mut TriageView| {
             let mut texts = Vec::new();
             for time in [0.0, 0.01] {
-                let output = ctx.run(
+                let output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -274,8 +274,8 @@ mod tests {
                         time: Some(time),
                         ..Default::default()
                     },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
+                    |root| {
+                        egui::CentralPanel::default().show(root, |ui| {
                             show(view, ui, &TriageInput::empty());
                         });
                     },
@@ -317,8 +317,9 @@ mod tests {
             _files: PacketSpool,
         }
         impl eframe::App for Fixture {
-            fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+                let ctx = &root.ctx().clone();
+                egui::CentralPanel::default().show(root, |ui| {
                     let input = TriageInput {
                         analysis: Some(&self.analysis),
                         run_finished: true,
@@ -542,7 +543,7 @@ mod tests {
             theme::text_size(&ctx, if width < 700.0 { 24.0 } else { 16.0 });
             for _ in 0..3 {
                 let mut bounds = egui::Rect::NOTHING;
-                let output = ctx.run(
+                let output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -550,8 +551,8 @@ mod tests {
                         )),
                         ..Default::default()
                     },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
+                    |root| {
+                        egui::CentralPanel::default().show(root, |ui| {
                             show(&mut view, ui, &TriageInput::empty());
                             bounds = ui.min_rect();
                         });

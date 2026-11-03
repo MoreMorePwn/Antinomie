@@ -46,9 +46,9 @@ fn terminal_close_flushes_queued_enter_before_hiding_and_stops_at_focus_loss() {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(820.0, 520.0));
         let render = |terminal: &mut RunTerminal, input: egui::RawInput| {
             let mut commands = Vec::new();
-            let output = ctx.run(input, |ctx| {
+            let output = ctx.run_ui(input, |root| {
                 commands = show_terminal_viewport(
-                    ctx,
+                    root,
                     egui::ViewportClass::Immediate,
                     terminal,
                     true,
@@ -162,13 +162,13 @@ fn clicking_trace_cell_text_selects_its_invocation() {
                 modifiers: egui::Modifiers::NONE,
             }],
         ] {
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     events,
                     ..Default::default()
                 },
-                |ctx| app.draw(ctx),
+                |root| app.draw(root),
             );
         }
         assert_eq!(
@@ -191,18 +191,18 @@ fn click_history_row(clicks: usize) -> MonitorApp {
     app.history = vec![saved];
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 500.0));
     let draw = |app: &mut MonitorApp, events: Vec<egui::Event>, time: f64| {
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(screen),
                 events,
                 time: Some(time),
                 ..Default::default()
             },
-            |ctx| {
+            |root| {
                 egui::Panel::bottom("history-details")
                     .exact_size(180.0)
-                    .show(ctx, |ui| app.history_detail(ui));
-                egui::CentralPanel::default().show(ctx, |ui| app.run_history(ui));
+                    .show(root, |ui| app.history_detail(ui));
+                egui::CentralPanel::default().show(root, |ui| app.run_history(ui));
             },
         )
     };
@@ -274,7 +274,7 @@ fn run_history_details_show_the_process_tree_then_the_enabled_analysis_only() {
     let mut time = 0.0;
     let mut draw = |app: &mut MonitorApp, events: Vec<egui::Event>| {
         time += 0.05;
-        texts(&ctx.run(
+        texts(&ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -284,8 +284,8 @@ fn run_history_details_show_the_process_tree_then_the_enabled_analysis_only() {
                 time: Some(time),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.history_detail(ui));
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| app.history_detail(ui));
             },
         ))
     };
@@ -341,6 +341,7 @@ fn run_history_details_show_the_process_tree_then_the_enabled_analysis_only() {
         vec![
             egui::Event::PointerMoved(egui::pos2(450.0, 10.0)),
             egui::Event::MouseWheel {
+                phase: egui::TouchPhase::Move,
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(0.0, -3000.0),
                 modifiers: egui::Modifiers::NONE,

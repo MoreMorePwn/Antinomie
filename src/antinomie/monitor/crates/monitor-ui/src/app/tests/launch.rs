@@ -30,13 +30,13 @@ fn long_health_messages_do_not_overlap_figures_and_keep_full_hover_text() {
             let size = egui::vec2(width, 900.0);
             let mut output = egui::FullOutput::default();
             for frame in 0..4 {
-                output = ctx.run(
+                output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         time: Some(frame as f64),
                         ..Default::default()
                     },
-                    |ctx| app.health(ctx),
+                    |root| app.health(root),
                 );
             }
             let visible = texts(&output);
@@ -78,14 +78,14 @@ fn long_health_messages_do_not_overlap_figures_and_keep_full_hover_text() {
             );
             let mut hovered = output;
             for frame in 4..8 {
-                hovered = ctx.run(
+                hovered = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         time: Some(frame as f64),
                         events: vec![egui::Event::PointerMoved(message_rect.center())],
                         ..Default::default()
                     },
-                    |ctx| app.health(ctx),
+                    |root| app.health(root),
                 );
             }
             assert!(

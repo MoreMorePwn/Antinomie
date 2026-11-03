@@ -50,14 +50,14 @@ fn text_color(output: &egui::FullOutput, label: &str) -> Option<egui::Color32> {
 fn colors(ctx: &egui::Context, rows: &[Vec<Cell>]) -> Vec<(String, egui::Color32)> {
     let mut output = egui::FullOutput::default();
     for frame in 0..3 {
-        output = ctx.run(
+        output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
                 time: Some(f64::from(frame) * 0.1),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     table::table_rows(ui, "theme-switch", &HEADERS, rows)
                 });
             },

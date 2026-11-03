@@ -794,7 +794,10 @@ mod tests {
         view.open_window(view.windows[0].clone());
         assert_eq!(view.windows.len(), 1);
         let ctx = egui::Context::default();
-        let shapes = frames(&ctx, 4, |ctx| view.show_windows(ctx));
+        let shapes = frames(&ctx, 4, |root| {
+            let ctx = &root.ctx().clone();
+            view.show_windows(ctx)
+        });
         let joined = rendered_text(&shapes);
         assert!(joined.contains("rule sample_rule {"), "{joined}");
         assert!(joined.contains("condition: true"), "{joined}");
@@ -826,14 +829,20 @@ mod tests {
             title: "Old result".into(),
         });
         let ctx = egui::Context::default();
-        let joined = rendered_text(&frames(&ctx, 4, |ctx| view.show_windows(ctx)));
+        let joined = rendered_text(&frames(&ctx, 4, |root| {
+            let ctx = &root.ctx().clone();
+            view.show_windows(ctx)
+        }));
         assert!(
             joined.contains("not retained for results saved before this version"),
             "{joined}"
         );
         assert!(!joined.contains("Copy rule"), "{joined}");
         view.results[0] = None;
-        let _ = frames(&ctx, 1, |ctx| view.show_windows(ctx));
+        let _ = frames(&ctx, 1, |root| {
+            let ctx = &root.ctx().clone();
+            view.show_windows(ctx)
+        });
         assert!(view.windows.is_empty());
     }
 }

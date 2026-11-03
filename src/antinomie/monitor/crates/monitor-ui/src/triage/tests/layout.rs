@@ -37,15 +37,15 @@ fn draw(
         pcap: Some(Path::new("/nonexistent/capture.pcap")),
         ..TriageInput::empty()
     };
-    ctx.run(
+    ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
             events,
             time: Some(time),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 view.show(ui, input);
             });
         },
@@ -155,14 +155,14 @@ fn a_process_row_carries_its_suspicious_count_as_a_warn_chip() {
     let ctx = context();
     let mut out = egui::FullOutput::default();
     for time in 0..3 {
-        out = ctx.run(
+        out = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
                 time: Some(f64::from(time) * 0.02),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     process_tree_nodes(ui, &scan.process, None, &scan.suspicious);
                 });
             },
@@ -320,14 +320,14 @@ fn flagged_file_rows_get_a_warn_bar_and_a_warn_location() {
         let rows = vec![row_with_location(tags)];
         let mut found = 0;
         for time in 0..3 {
-            let out = ctx.run(
+            let out = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
                     time: Some(f64::from(time) * 0.02),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         table(ui, "triage-opened", &["Time"], &rows);
                     });
                 },
@@ -425,14 +425,14 @@ fn without_a_capture_open_packets_is_disabled() {
     };
     let out = (0..3)
         .map(|n| {
-            ctx.run(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
                     time: Some(f64::from(n) * 0.02),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| view.show(ui, input));
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| view.show(ui, input));
                 },
             )
         })
@@ -454,7 +454,7 @@ fn click_without_input(
     input: TriageInput<'_>,
 ) {
     for (n, pressed) in [true, false].into_iter().enumerate() {
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
                 time: Some(1.0 + n as f64 * 0.02),
@@ -469,8 +469,8 @@ fn click_without_input(
                 ],
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| view.show(ui, input));
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| view.show(ui, input));
             },
         );
     }
@@ -510,7 +510,7 @@ fn a_narrow_header_puts_the_status_under_wrapped_tabs_not_over_them() {
         view.last_refresh = Some(Instant::now());
         let mut out = egui::FullOutput::default();
         for time in 0..4 {
-            out = ctx.run(
+            out = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -519,8 +519,8 @@ fn a_narrow_header_puts_the_status_under_wrapped_tabs_not_over_them() {
                     time: Some(f64::from(time) * 0.02),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         view.show(
                             ui,
                             TriageInput {
@@ -762,7 +762,7 @@ fn the_details_of_an_evasion_row_list_each_check_the_answer_and_why_it_has_its_t
     let label = probe.cells[0].text.clone();
     let mut view = TriageView::default();
     let mut draw = |events, time| {
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -772,13 +772,13 @@ fn the_details_of_an_evasion_row_list_each_check_the_answer_and_why_it_has_its_t
                 time: Some(time),
                 ..Default::default()
             },
-            |ctx| {
+            |root| {
                 egui::Panel::right("shared-details")
                     .exact_size(560.0)
-                    .show(ctx, |ui| {
+                    .show(root, |ui| {
                         view.details(ui);
                     });
-                egui::CentralPanel::default().show(ctx, |ui| {
+                egui::CentralPanel::default().show(root, |ui| {
                     view.suspicious_findings(ui, vec![probe.clone()], 0);
                 });
             },

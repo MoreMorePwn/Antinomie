@@ -164,13 +164,13 @@ mod tests {
                     },
                 ];
             }
-            let output = ctx.run(
+            let output = ctx.run_ui(
                 egui::RawInput {
                     events,
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         if let Some(next) = notes(ui, report, &report.sections[at], false) {
                             action = Some(next);
                         }
@@ -186,7 +186,7 @@ mod tests {
         }
         // Release on the next frame completes the click.
         let pos = rect.unwrap_or(egui::Rect::ZERO).center();
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 events: vec![egui::Event::PointerButton {
                     pos,
@@ -196,8 +196,8 @@ mod tests {
                 }],
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     if let Some(next) = notes(ui, report, &report.sections[at], false) {
                         action = Some(next);
                     }

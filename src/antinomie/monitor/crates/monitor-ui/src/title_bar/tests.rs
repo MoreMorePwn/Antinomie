@@ -16,11 +16,12 @@ fn frame(
         .get_mut(&egui::ViewportId::ROOT)
         .unwrap()
         .maximized = Some(maximized);
-    ctx.run(raw, |ctx| {
-        show(ctx, "Antinomie custom title bar");
+    ctx.run_ui(raw, |root| {
+        let ctx = &root.ctx().clone();
+        show(root, "Antinomie custom title bar");
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
-            .show(ctx, |ui| {
+            .show(root, |ui| {
                 ui.label("Window contents");
                 ui.interact(
                     ui.max_rect(),
@@ -215,7 +216,8 @@ fn native_custom_title_bar_controls() {
         start: Instant,
     }
     impl eframe::App for Qa {
-        fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
             if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) {
                 eprintln!(
                     "native press {:?}; screen {:?}; viewport {:?}",
@@ -224,8 +226,8 @@ fn native_custom_title_bar_controls() {
                     ctx.input(|i| (i.viewport().maximized, i.viewport().inner_rect))
                 );
             }
-            show(ctx, "Antinomie — Custom title bar QA");
-            egui::CentralPanel::default().show(ctx, |ui| {
+            show(root, "Antinomie — Custom title bar QA");
+            egui::CentralPanel::default().show(root, |ui| {
                 ui.heading("Native window controls");
                 ui.label(
                     "Drag the title bar; resize a corner; maximize, restore, minimize and close.",
@@ -292,12 +294,12 @@ fn native_custom_title_bar_controls() {
 #[test]
 fn fps_counter_slot_sits_left_of_the_window_buttons() {
     let ctx = egui::Context::default();
-    let _ = ctx.run(
+    let _ = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
             ..Default::default()
         },
-        |ctx| show(ctx, "Antinomie"),
+        |root| show(root, "Antinomie"),
     );
     let (height, left) = caption_slot(&ctx);
     assert!(height > 0.0);

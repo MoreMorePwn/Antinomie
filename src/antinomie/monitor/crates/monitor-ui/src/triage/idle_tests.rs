@@ -28,7 +28,7 @@ fn frame(
     finished: bool,
     time: f64,
 ) -> Duration {
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -37,8 +37,9 @@ fn frame(
             time: Some(time),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            let ctx = &root.ctx().clone();
+            egui::CentralPanel::default().show(root, |ui| {
                 view.show(ui, input(archive, finished));
             });
             view.show_finding_windows(ctx);

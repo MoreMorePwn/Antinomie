@@ -198,7 +198,7 @@ pub(super) fn draw(ctx: &egui::Context, view: &mut TriageView, time: f64) -> egu
         run_id: Some("run"),
         ..TriageInput::empty()
     };
-    ctx.run(
+    ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -207,8 +207,8 @@ pub(super) fn draw(ctx: &egui::Context, view: &mut TriageView, time: f64) -> egu
             time: Some(time),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 view.show(ui, input);
             });
         },
@@ -362,7 +362,7 @@ fn strip_text(
     events: Vec<egui::Event>,
 ) -> (Vec<(String, egui::Rect)>, bool) {
     let mut open = false;
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -371,8 +371,8 @@ fn strip_text(
             events,
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 open |= strip
                     .show(ui, index, tiers, None, false, Spacing::Events)
                     .open_graph;
@@ -481,18 +481,19 @@ fn strip_pass(
     events: Vec<egui::Event>,
     modifiers: egui::Modifiers,
 ) -> Vec<(String, egui::Rect)> {
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 egui::vec2(1000.0, 900.0),
             )),
-            events,
-            modifiers,
+            events: std::iter::once(egui::Event::ModifiersChanged(modifiers))
+                .chain(events)
+                .collect(),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 strip.show(ui, index, [1, 0, 1, 0], None, false, Spacing::Events);
             });
         },
@@ -614,6 +615,7 @@ fn the_strip_buttons_and_ctrl_wheel_zoom_it_and_the_percentage_resets_it() {
             &busy,
             &ctx,
             vec![egui::Event::MouseWheel {
+                phase: egui::TouchPhase::Move,
                 unit: egui::MouseWheelUnit::Line,
                 delta: egui::vec2(0.0, 1.0),
                 modifiers: egui::Modifiers::CTRL,
@@ -628,6 +630,7 @@ fn the_strip_buttons_and_ctrl_wheel_zoom_it_and_the_percentage_resets_it() {
             &busy,
             &ctx,
             vec![egui::Event::MouseWheel {
+                phase: egui::TouchPhase::Move,
                 unit: egui::MouseWheelUnit::Line,
                 delta: egui::vec2(0.0, -1.0),
                 modifiers: egui::Modifiers::CTRL,
@@ -653,6 +656,7 @@ fn the_strip_buttons_and_ctrl_wheel_zoom_it_and_the_percentage_resets_it() {
             &busy,
             &ctx,
             vec![egui::Event::MouseWheel {
+                phase: egui::TouchPhase::Move,
                 unit: egui::MouseWheelUnit::Line,
                 delta: egui::vec2(0.0, 3.0),
                 modifiers: egui::Modifiers::NONE,
@@ -712,7 +716,7 @@ fn opening_the_graph_from_the_strip_or_its_window_adds_no_filter_and_drops_stale
     let mut time = 0.0;
     let mut pass = |view: &mut TriageView, events: Vec<egui::Event>| {
         time += 0.05;
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -722,8 +726,8 @@ fn opening_the_graph_from_the_strip_or_its_window_adds_no_filter_and_drops_stale
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     crate::triage::summary::show(view, ui, &TriageInput::empty());
                 });
             },
@@ -884,8 +888,9 @@ fn native_graph_fixture() {
         deadline: std::time::Instant,
     }
     impl eframe::App for Fixture {
-        fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
+            egui::CentralPanel::default().show(root, |ui| {
                 if self.scene == "legend" {
                     super::legend::body(ui);
                 } else if self.scene == "strip" {
@@ -988,7 +993,8 @@ fn native_graph_view_fixture() {
         _spool: Option<PacketSpool>,
     }
     impl eframe::App for Fixture {
-        fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
             let input = TriageInput {
                 vm_id: Some("vm"),
                 boot_id: Some("boot"),
@@ -997,7 +1003,7 @@ fn native_graph_view_fixture() {
                 ..TriageInput::empty()
             };
             self.view.set_graph_window_size(super::window::DEFAULT_SIZE);
-            egui::CentralPanel::default().show(ctx, |ui| {
+            egui::CentralPanel::default().show(root, |ui| {
                 ui.set_max_height(self.pane);
                 self.view.show(ui, input);
             });

@@ -112,14 +112,14 @@ fn process_tree_panel_cost_is_flat_with_many_orphan_roots() {
             let mut times = Vec::new();
             for frame in 0..3 {
                 let started = Instant::now();
-                let _ = ctx.run(
+                let _ = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
                         time: Some(f64::from(frame)),
                         ..Default::default()
                     },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
+                    |root| {
+                        egui::CentralPanel::default().show(root, |ui| {
                             super::super::captures::process_tree(ui, &processes, None, 16.0);
                         });
                     },

@@ -357,7 +357,7 @@ fn button_frame(
     active: bool,
     time: f64,
 ) -> egui::FullOutput {
-    ctx.run(
+    ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -367,8 +367,8 @@ fn button_frame(
             time: Some(time),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 super::super::widgets::tool_button(
                     ui,
                     super::super::ToolButton {

@@ -135,15 +135,15 @@ fn draw(
         pcap: Some(pcap),
         ..TriageInput::empty()
     };
-    ctx.run(
+    ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
             events,
             time: Some(time),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 view.show(ui, input);
             });
         },
@@ -467,14 +467,14 @@ fn a_run_without_a_capture_says_the_network_tabs_were_skipped() {
         run_id: Some("run"),
         ..TriageInput::empty()
     };
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
             time: Some(1.0),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 view.show(ui, input);
             });
         },

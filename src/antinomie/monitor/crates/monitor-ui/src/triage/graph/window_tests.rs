@@ -32,7 +32,10 @@ fn pass(
     if let Some(info) = viewport {
         raw.viewports.insert(window_id("run-a"), info);
     }
-    ctx.run(raw, |ctx| view.show_finding_windows(ctx))
+    ctx.run_ui(raw, |root| {
+        let ctx = &root.ctx().clone();
+        view.show_finding_windows(ctx)
+    })
 }
 
 fn context() -> egui::Context {
@@ -199,15 +202,15 @@ fn a_click_beside_details_does_not_bring_the_details_panel_forward() {
                      state: &mut State,
                      events: Vec<egui::Event>,
                      time: f64| {
-            ctx.run(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 800.0))),
                     events,
                     time: Some(time),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         origin.set(ui.available_rect_before_wrap().min);
                         let width = ui.available_width();
                         let _ = width;
@@ -339,13 +342,13 @@ fn every_label_fits_in_its_column_at_the_roomy_sizes() {
     ctx.set_pixels_per_point(1.0);
     let index = scene();
     let mut state = State::default();
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1280.0, 800.0))),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 let config = widget::Config {
                     index: &index,
                     colors: Colors::of(Theme::Dark.palette()),
@@ -409,14 +412,14 @@ fn draw_at(ctx: &egui::Context, view: &mut TriageView, height: f32, time: f64) -
         run_id: Some("run"),
         ..TriageInput::empty()
     };
-    ctx.run(
+    ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1280.0, height))),
             time: Some(time),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 view.show(ui, input);
             });
         },
@@ -439,7 +442,7 @@ fn the_pop_out_button_and_the_strip_icon_open_the_window() {
         .1;
     let at = button.center();
     for (n, pressed) in [true, false].into_iter().enumerate() {
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1280.0, 900.0))),
                 time: Some(1.0 + n as f64 * 0.03),
@@ -454,8 +457,8 @@ fn the_pop_out_button_and_the_strip_icon_open_the_window() {
                 ],
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     view.show(
                         ui,
                         TriageInput {
@@ -487,7 +490,7 @@ fn the_pop_out_button_and_the_strip_icon_open_the_window() {
         .1;
     let at = icon.center();
     for (n, pressed) in [true, false].into_iter().enumerate() {
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1280.0, 900.0))),
                 time: Some(4.0 + n as f64 * 0.03),
@@ -502,8 +505,8 @@ fn the_pop_out_button_and_the_strip_icon_open_the_window() {
                 ],
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     view.show(
                         ui,
                         TriageInput {

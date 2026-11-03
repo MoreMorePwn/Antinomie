@@ -50,7 +50,7 @@ fn badge_states_are_grouped_muted_or_accented_and_wrap_in_both_themes() {
             assert_eq!(Count::Ready(1).tone(false), Tone::Plain);
             for _ in 0..3 {
                 let mut bounds = egui::Rect::NOTHING;
-                let output = ctx.run(
+                let output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -58,8 +58,8 @@ fn badge_states_are_grouped_muted_or_accented_and_wrap_in_both_themes() {
                         )),
                         ..Default::default()
                     },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
+                    |root| {
+                        egui::CentralPanel::default().show(root, |ui| {
                             ui.horizontal_wrapped(|ui| {
                                 for (title, count) in [
                                     ("Suspicious activity", Count::Ready(1234)),

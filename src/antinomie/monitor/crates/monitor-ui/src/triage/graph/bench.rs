@@ -132,13 +132,13 @@ fn median(mut times: Vec<Duration>) -> Duration {
 /// tessellating them, as the app does every frame it repaints.
 fn frame_time(ctx: &egui::Context, state: &mut State, index: &GraphIndex) -> Duration {
     timed(|| {
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1280.0, 800.0))),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     let config = Config {
                         index,
                         colors: Colors::of(Theme::Dark.palette()),
@@ -223,13 +223,13 @@ fn an_idle_graph_asks_for_no_repaint() {
     let mut state = State::default();
     let mut delay = Duration::ZERO;
     for _ in 0..4 {
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1280.0, 800.0))),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     let config = Config {
                         index: &index,
                         colors: Colors::of(Theme::Dark.palette()),

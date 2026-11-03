@@ -240,7 +240,7 @@ mod layout_tests {
         crate::theme::install(&ctx);
         open_guide(&ctx);
         for _ in 0..3 {
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -248,7 +248,7 @@ mod layout_tests {
                     )),
                     ..Default::default()
                 },
-                guide,
+                |root| guide(&root.ctx().clone()),
             );
         }
         let area = ctx

@@ -330,8 +330,8 @@ mod tests {
 
     fn draw(request: &mut ExecRequest, choice: RouteChoice) {
         let ctx = egui::Context::default();
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| selector(ui, request, &choice));
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| selector(ui, request, &choice));
         });
     }
 
@@ -374,8 +374,8 @@ mod tests {
             .detail
             .contains("Egress filter blocked 3 connections to port 25."));
         let ctx = egui::Context::default();
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| line(ui, &text));
+        let output = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| line(ui, &text));
         });
         let shown = crate::app::tests::texts(&output);
         assert!(shown
@@ -416,8 +416,8 @@ mod tests {
             ..ExecRequest::default()
         };
         let choice = RouteChoice::new(VmNetwork::Routed, &RouteConfig::default());
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| selector(ui, &mut request, &choice));
+        let output = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| selector(ui, &mut request, &choice));
         });
         let shown = crate::app::tests::texts(&output);
         assert!(shown
@@ -447,8 +447,8 @@ mod tests {
         };
         let mut choice = RouteChoice::new(VmNetwork::Routed, &RouteConfig::default());
         choice.cloud = Some("Hetzner Cloud");
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| selector(ui, &mut request, &choice));
+        let output = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| selector(ui, &mut request, &choice));
         });
         let shown = crate::app::tests::texts(&output);
         assert!(

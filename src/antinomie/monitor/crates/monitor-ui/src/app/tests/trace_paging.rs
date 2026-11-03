@@ -189,6 +189,7 @@ fn all_mode_renders_a_million_row_extent_without_loading_a_million_calls() {
             events: vec![
                 egui::Event::PointerMoved(position),
                 egui::Event::MouseWheel {
+                    phase: egui::TouchPhase::Move,
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, -20_000.0),
                     modifiers: egui::Modifiers::NONE,

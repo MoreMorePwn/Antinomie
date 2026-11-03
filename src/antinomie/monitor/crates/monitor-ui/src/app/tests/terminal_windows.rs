@@ -25,14 +25,15 @@ fn native_terminal_geometry_regression() {
         settled_after: Option<f32>,
     }
     impl eframe::App for QaApp {
-        fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        fn ui(&mut self, root: &mut egui::Ui, frame: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
             let elapsed = self.started.elapsed().as_secs_f32();
             let viewport = egui::ViewportId::from_hash_of(("workspace", 1usize));
             if elapsed >= 8.0 {
                 self.app.snapshot.active_vm = None;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            eframe::App::update(&mut self.app, ctx, frame);
+            eframe::App::ui(&mut self.app, root, frame);
             if elapsed >= 0.5 && (!self.closed || self.reopened) {
                 if let Some((outer, inner)) = ctx.input_for(viewport, |input| {
                     Some((input.viewport().outer_rect?, input.viewport().inner_rect?))
@@ -219,14 +220,15 @@ fn native_terminal_window_maximizes_and_grows_its_grid() {
         maximized: bool,
     }
     impl eframe::App for QaApp {
-        fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        fn ui(&mut self, root: &mut egui::Ui, frame: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
             let elapsed = self.started.elapsed().as_secs_f32();
             let viewport = egui::ViewportId::from_hash_of(("workspace", 1usize));
             if elapsed >= 5.0 {
                 self.app.snapshot.active_vm = None;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            eframe::App::update(&mut self.app, ctx, frame);
+            eframe::App::ui(&mut self.app, root, frame);
             let inner = ctx.input_for(viewport, |input| input.viewport().inner_rect);
             let maximized = ctx.input_for(viewport, |input| input.viewport().maximized);
             let grid = self.app.terminals["maximize"].terminal.size();

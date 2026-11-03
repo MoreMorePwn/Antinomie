@@ -40,7 +40,7 @@ fn scan_of(texts: &[&str]) -> Scan {
 }
 
 fn frame(ctx: &egui::Context, window: &mut RegexWindow) -> Vec<String> {
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -48,7 +48,10 @@ fn frame(ctx: &egui::Context, window: &mut RegexWindow) -> Vec<String> {
             )),
             ..Default::default()
         },
-        |ctx| window.show(ctx, "test"),
+        |root| {
+            let ctx = &root.ctx().clone();
+            window.show(ctx, "test")
+        },
     );
     texts(&output)
 }

@@ -799,13 +799,13 @@ mod tests {
         let original = terminal.contents();
         for pane in [egui::vec2(160.0, 80.0), egui::vec2(800.0, 600.0)] {
             let mut resize = None;
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, pane)),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         resize = terminal.show_grid(ui, false, false).1;
                     });
                 },
@@ -830,7 +830,7 @@ mod tests {
         terminal.process(b"while-hidden");
         terminal.last_show = Some(Instant::now() - Duration::from_secs(2));
         let mut result = (Vec::new(), None);
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -839,10 +839,10 @@ mod tests {
                 events: vec![egui::Event::Text("typed-unfocused".into())],
                 ..Default::default()
             },
-            |ctx| {
+            |root| {
                 egui::CentralPanel::default()
                     .frame(egui::Frame::NONE)
-                    .show(ctx, |ui| {
+                    .show(root, |ui| {
                         result = terminal.show_grid(ui, false, true);
                     });
             },
@@ -916,15 +916,15 @@ mod tests {
             let mut resize = None;
             let mut cell = egui::Vec2::ZERO;
             let mut allocation = egui::Rect::NOTHING;
-            let output = ctx.run(
+            let output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, pane)),
                     ..Default::default()
                 },
-                |ctx| {
+                |root| {
                     egui::CentralPanel::default()
                         .frame(egui::Frame::NONE)
-                        .show(ctx, |ui| {
+                        .show(root, |ui| {
                             let font = TextStyle::Monospace.resolve(ui.style());
                             cell = ui.fonts_mut(|fonts| {
                                 egui::vec2(fonts.glyph_width(&font, 'M'), fonts.row_height(&font))
@@ -1040,16 +1040,16 @@ mod tests {
         live: bool,
     ) -> (egui::FullOutput, Vec<u8>, Option<(u16, u16)>) {
         let mut result = (Vec::new(), None);
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, pane)),
                 events,
                 ..Default::default()
             },
-            |ctx| {
+            |root| {
                 egui::CentralPanel::default()
                     .frame(egui::Frame::NONE)
-                    .show(ctx, |ui| {
+                    .show(root, |ui| {
                         if live {
                             let focus = ui.next_auto_id();
                             ui.memory_mut(|memory| memory.request_focus(focus));
@@ -1091,6 +1091,7 @@ mod tests {
         vec![
             egui::Event::PointerMoved(at),
             egui::Event::MouseWheel {
+                phase: egui::TouchPhase::Move,
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(0.0, lines),
                 modifiers: egui::Modifiers::NONE,
@@ -1376,6 +1377,7 @@ mod tests {
             vec![
                 egui::Event::PointerMoved(pane.to_pos2() / 2.0),
                 egui::Event::MouseWheel {
+                    phase: egui::TouchPhase::Move,
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(-1e5, 0.0),
                     modifiers: egui::Modifiers::NONE,

@@ -30,13 +30,13 @@ fn past_run(id: &str, path: &str, started_ms: u64) -> RunSummary {
 fn frames(app: &mut MonitorApp, ctx: &egui::Context, count: usize) -> egui::FullOutput {
     let mut out = egui::FullOutput::default();
     for frame in 0..count {
-        out = ctx.run(
+        out = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
                 time: Some(frame as f64 * 0.05),
                 ..Default::default()
             },
-            |ctx| app.draw(ctx),
+            |root| app.draw(root),
         );
     }
     out
@@ -469,13 +469,13 @@ fn capture_history_filter_keeps_its_selected_capture_and_identifies_it_as_hidden
         .push(observer("selected-capture", CaptureState::Stopped));
     app.selected_capture = Some("selected-capture".into());
     let ctx = context();
-    let output = ctx.run(
+    let output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
                 let filter_id = ui.id().with(("table-filter", "capture-history"));
                 ui.data_mut(|data| data.insert_temp(filter_id, "cookie == 7".to_owned()));
                 app.run_history(ui);
@@ -615,15 +615,16 @@ fn full_run_warning_is_dismissible_and_deduplicates_with_activity_without_hiding
     let message = crate::run_recording::warning_message(&partial).unwrap();
     let mut journal = crate::activity::Journal::default();
     let draw = |run: &RunSummary, events| {
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
                 events,
                 ..Default::default()
             },
-            |ctx| {
+            |root| {
+                let ctx = &root.ctx().clone();
                 crate::activity::report(ctx, crate::activity::Level::Error, &message);
-                egui::CentralPanel::default().show(ctx, |ui| crate::run_recording::show(ui, run));
+                egui::CentralPanel::default().show(root, |ui| crate::run_recording::show(ui, run));
             },
         )
     };

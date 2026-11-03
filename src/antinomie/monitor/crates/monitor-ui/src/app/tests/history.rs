@@ -91,8 +91,8 @@ fn async_only_row_keeps_missing_phases_and_renders_observation_loss() {
     let ctx = egui::Context::default();
     theme::install(&ctx);
     let mut inspector = trace::Inspector::default();
-    let output = ctx.run(egui::RawInput::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let output = ctx.run_ui(egui::RawInput::default(), |root| {
+        egui::CentralPanel::default().show(root, |ui| {
             inspector.show(ui, Some(&row), false);
         });
     });
@@ -111,7 +111,7 @@ fn a_call_the_task_ended_in_shows_how_it_ended_and_empty_reads_say_why() {
         let ctx = egui::Context::default();
         theme::install(&ctx);
         let mut inspector = trace::Inspector::default();
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -119,8 +119,8 @@ fn a_call_the_task_ended_in_shows_how_it_ended_and_empty_reads_say_why() {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     inspector.show(ui, Some(row), false);
                 });
             },
@@ -244,7 +244,7 @@ fn details_values_copy_in_many_forms_and_captured_fields_open_data_windows() {
     theme::install(&ctx);
     let mut inspector = trace::Inspector::default();
     let frame = |inspector: &mut trace::Inspector, events: Vec<egui::Event>| {
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -253,8 +253,8 @@ fn details_values_copy_in_many_forms_and_captured_fields_open_data_windows() {
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     inspector.show(ui, Some(&row), false);
                 });
             },
@@ -919,7 +919,7 @@ fn a_click_in_the_run_tree_filters_the_trace_to_that_process() {
     crate::theme::install(&ctx);
     let mut at = None;
     for _ in 0..4 {
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -927,8 +927,8 @@ fn a_click_in_the_run_tree_filters_the_trace_to_that_process() {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.history_detail(ui));
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| app.history_detail(ui));
             },
         );
         at = texts(&output)
@@ -938,7 +938,7 @@ fn a_click_in_the_run_tree_filters_the_trace_to_that_process() {
     }
     let at = at.expect("the tree lists sh");
     for pressed in [true, false] {
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -955,8 +955,8 @@ fn a_click_in_the_run_tree_filters_the_trace_to_that_process() {
                 ],
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| app.history_detail(ui));
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| app.history_detail(ui));
             },
         );
     }

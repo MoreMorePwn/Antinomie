@@ -59,7 +59,8 @@ fn view_for(spool: &PacketSpool) -> View {
 fn pump(view: &mut View, ctx: &egui::Context, ready: impl Fn(&Viewer) -> bool) -> String {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        let shapes = frames(ctx, 2, |ctx| {
+        let shapes = frames(ctx, 2, |root| {
+            let ctx = &root.ctx().clone();
             view.journal.show(ctx, view.identity.as_ref(), None)
         });
         if ready(&view.journal) || Instant::now() > deadline {
@@ -69,7 +70,7 @@ fn pump(view: &mut View, ctx: &egui::Context, ready: impl Fn(&Viewer) -> bool) -
     }
 }
 
-fn click(ctx: &egui::Context, text: &str, run: &mut impl FnMut(&egui::Context)) {
+fn click(ctx: &egui::Context, text: &str, run: &mut impl FnMut(&mut egui::Ui)) {
     let mut position = None;
     for shape in frames(ctx, 2, &mut *run) {
         each_galley_rect(&shape.shape, &mut |shown, rect| {
@@ -80,7 +81,7 @@ fn click(ctx: &egui::Context, text: &str, run: &mut impl FnMut(&egui::Context)) 
     }
     let position = position.unwrap_or_else(|| panic!("{text} not drawn"));
     for pressed in [true, false] {
-        let _ = ctx.run(
+        let _ = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -121,8 +122,8 @@ fn the_event_journal_row_routes_to_the_viewer() {
     assert!(!view.journal.is_open());
 
     let ctx = egui::Context::default();
-    click(&ctx, "triage-events.jsonl", &mut |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| view.scanned_inputs(ui, 0, None));
+    click(&ctx, "triage-events.jsonl", &mut |root| {
+        egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
     });
     assert!(view.journal.is_open(), "clicking the row opens the viewer");
     assert_eq!(view.journal.scanned.as_deref(), Some(digest.as_str()));
@@ -230,7 +231,8 @@ fn a_finding_event_opens_the_viewer_on_that_event_and_links_to_its_call() {
     assert_eq!(selected.event.category, "file_access");
 
     // The event's Source button leaves the call for Syscall Trace.
-    click(&ctx, "Open syscall 1/7/2", &mut |ctx| {
+    click(&ctx, "Open syscall 1/7/2", &mut |root| {
+        let ctx = &root.ctx().clone();
         view.journal.show(ctx, view.identity.as_ref(), None)
     });
     let jump = ctx.data_mut(|data| {
@@ -268,7 +270,8 @@ fn a_changed_journal_refuses_event_numbers_and_a_run_switch_cancels_the_read() {
     assert!(text.contains("changed after this scan"), "{text}");
 
     view.journal.open(&ctx, None, None);
-    let _ = frames(&ctx, 1, |ctx| {
+    let _ = frames(&ctx, 1, |root| {
+        let ctx = &root.ctx().clone();
         view.journal.show(ctx, view.identity.as_ref(), None)
     });
     let cancel = Arc::clone(&view.journal.job.as_ref().expect("a read is running").cancel);
@@ -280,6 +283,9 @@ fn a_changed_journal_refuses_event_numbers_and_a_run_switch_cancels_the_read() {
     assert!(!view.journal.is_open() && view.journal.page.is_none());
     // Without a run the viewer closes itself.
     view.journal.open(&ctx, None, None);
-    let _ = frames(&ctx, 1, |ctx| view.journal.show(ctx, None, None));
+    let _ = frames(&ctx, 1, |root| {
+        let ctx = &root.ctx().clone();
+        view.journal.show(ctx, None, None)
+    });
     assert!(!view.journal.is_open());
 }

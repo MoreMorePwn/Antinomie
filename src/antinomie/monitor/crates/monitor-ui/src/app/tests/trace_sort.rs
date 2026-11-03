@@ -71,13 +71,13 @@ fn clicking_a_trace_header_sorts_and_shows_the_direction() {
                 modifiers: egui::Modifiers::default(),
             }],
         ] {
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     events,
                     ..Default::default()
                 },
-                |ctx| app.draw(ctx),
+                |root| app.draw(root),
             );
         }
     };

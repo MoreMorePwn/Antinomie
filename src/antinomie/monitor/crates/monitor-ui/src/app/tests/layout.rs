@@ -32,13 +32,13 @@ fn loss_counter_labels_and_values_have_their_own_definition_tooltips() {
                 .center();
             let mut output = egui::FullOutput::default();
             for _ in 0..12 {
-                output = ctx.run(
+                output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         events: vec![egui::Event::PointerMoved(pos)],
                         ..Default::default()
                     },
-                    |ctx| app.draw(ctx),
+                    |root| app.draw(root),
                 );
             }
             assert!(
@@ -68,13 +68,13 @@ fn spawned_terminal_window_does_not_expand_each_frame() {
         let id = egui::Id::new(("workspace-fallback", 1_usize));
         let mut settled = None;
         for frame in 0..90 {
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     time: Some(frame as f64 / 60.0),
                     ..Default::default()
                 },
-                |ctx| app.draw(ctx),
+                |root| app.draw(root),
             );
             let rect = ctx
                 .memory(|memory| memory.area_rect(id))
@@ -136,13 +136,13 @@ fn tool_dialogs_do_not_keep_growing_after_their_initial_layout() {
             const SETTLED_FRAME: usize = 10;
             let mut settled = None;
             for frame in 0..90 {
-                let _ = ctx.run(
+                let _ = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         time: Some(frame as f64 / 60.0),
                         ..Default::default()
                     },
-                    |ctx| app.draw(ctx),
+                    |root| app.draw(root),
                 );
                 let rect = ctx
                     .memory(|memory| memory.area_rect(dialog.window_id()))
@@ -213,13 +213,13 @@ fn run_program_does_not_widen_itself_at_fractional_text_sizes() {
         theme::text_size(&ctx, font_size);
         let mut first = None;
         for frame in 0..120 {
-            let _ = ctx.run(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                     time: Some(frame as f64 / 2.0),
                     ..Default::default()
                 },
-                |ctx| app.draw(ctx),
+                |root| app.draw(root),
             );
             let rect = ctx
                 .memory(|memory| memory.area_rect(Dialog::Launch.window_id()))

@@ -29,13 +29,13 @@ fn a_backend_error_is_a_toast_not_the_status_line() {
     app.status = "Uploaded: review program settings, then press Run".into();
     let mut out = egui::FullOutput::default();
     for frame in 0..4 {
-        out = ctx.run(
+        out = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
                 time: Some(f64::from(frame)),
                 ..Default::default()
             },
-            |ctx| app.health(ctx),
+            |root| app.health(root),
         );
     }
     let shown = texts(&out);

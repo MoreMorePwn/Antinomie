@@ -621,7 +621,7 @@ mod tests {
         view.tick(&ctx, &input);
         view.result = Some(Ok(result.clone()));
         let draw = |view: &mut View, events| {
-            ctx.run(
+            ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -630,8 +630,8 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| view.show(ui, &input));
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| view.show(ui, &input));
                 },
             )
         };
@@ -816,7 +816,7 @@ mod tests {
                 }
                 for _ in 0..2 {
                     let mut bounds = egui::Rect::NOTHING;
-                    let output = ctx.run(
+                    let output = ctx.run_ui(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
                                 egui::Pos2::ZERO,
@@ -824,8 +824,8 @@ mod tests {
                             )),
                             ..Default::default()
                         },
-                        |ctx| {
-                            egui::CentralPanel::default().show(ctx, |ui| {
+                        |root| {
+                            egui::CentralPanel::default().show(root, |ui| {
                                 view.show_specimen_status(
                                     ui,
                                     &TriageInput {
@@ -873,8 +873,8 @@ mod tests {
             let mut shapes = Vec::new();
             for _ in 0..2 {
                 shapes = ctx
-                    .run(egui::RawInput::default(), |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
+                    .run_ui(egui::RawInput::default(), |root| {
+                        egui::CentralPanel::default().show(root, |ui| {
                             view.show_specimen_status(
                                 ui,
                                 &TriageInput {
@@ -906,7 +906,7 @@ mod tests {
             let mut view = View::default();
             for frame in 0..3 {
                 let mut bounds = egui::Rect::NOTHING;
-                let output = ctx.run(
+                let output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -915,8 +915,9 @@ mod tests {
                         time: Some(f64::from(frame) / 60.0),
                         ..Default::default()
                     },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| {
+                    |root| {
+                        let ctx = &root.ctx().clone();
+                        egui::CentralPanel::default().show(root, |ui| {
                             let input = TriageInput {
                                 analysis: Some(&report),
                                 archive: Some(Path::new("/fixture/run")),
@@ -955,8 +956,9 @@ mod tests {
             deadline: Instant,
         }
         impl eframe::App for Fixture {
-            fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+                let ctx = &root.ctx().clone();
+                egui::CentralPanel::default().show(root, |ui| {
                     let input = TriageInput {
                         analysis: Some(&self.report),
                         archive: Some(Path::new("/fixture/run")),
@@ -1100,7 +1102,7 @@ mod tests {
         let mut rows = Vec::new();
         let mut texts = Vec::new();
         for frame in 0..3 {
-            let output = ctx.run(
+            let output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1109,8 +1111,9 @@ mod tests {
                     time: Some(f64::from(frame) / 60.0),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    let ctx = &root.ctx().clone();
+                    egui::CentralPanel::default().show(root, |ui| {
                         let input = TriageInput {
                             analysis: Some(&report),
                             archive: Some(Path::new("/fixture/run")),

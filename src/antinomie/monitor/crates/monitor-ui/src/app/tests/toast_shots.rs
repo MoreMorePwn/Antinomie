@@ -20,7 +20,8 @@ fn native_toast_fixture() {
         seeded: bool,
     }
     impl eframe::App for QaApp {
-        fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        fn ui(&mut self, root: &mut egui::Ui, frame: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
             if Instant::now() >= self.deadline {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
@@ -31,7 +32,7 @@ fn native_toast_fixture() {
             }
             // A screenshot needs the stack to stay.
             toasts::keep_alive(ctx);
-            eframe::App::update(&mut self.app, ctx, frame);
+            eframe::App::ui(&mut self.app, root, frame);
             ctx.request_repaint_after(Duration::from_millis(200));
         }
     }

@@ -539,14 +539,14 @@ fn the_ruler_shows_the_brush_and_follows_the_filter() {
     let selection = Colors::of(Theme::Dark.palette()).selection;
     let painted = |harness: &mut Harness| -> bool {
         let mut found = false;
-        let output = harness.ctx.run(
+        let output = harness.ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
                 time: Some(harness.time + 0.5),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     let config = Config {
                         index: &index,
                         colors: Colors::of(Theme::Dark.palette()),
@@ -597,13 +597,13 @@ fn a_graph_in_events_spacing_with_120k_findings_paints_within_the_budget_and_idl
     let frame = |state: &mut State| {
         let mut delay = Duration::MAX;
         let took = super::bench::timed(|| {
-            let output = ctx.run(
+            let output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1280.0, 800.0))),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         let config = Config {
                             index: &index,
                             colors: Colors::of(Theme::Dark.palette()),

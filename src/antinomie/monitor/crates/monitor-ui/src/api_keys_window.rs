@@ -323,7 +323,7 @@ mod tests {
     }
 
     fn frame(ctx: &egui::Context, window: &mut ApiKeysWindow, dir: &Path) -> String {
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -331,7 +331,10 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| window.show(ctx, dir, Path::new("curl")),
+            |root| {
+                let ctx = &root.ctx().clone();
+                window.show(ctx, dir, Path::new("curl"))
+            },
         );
         fn collect(shape: &egui::epaint::Shape, out: &mut Vec<String>) {
             match shape {

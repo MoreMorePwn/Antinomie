@@ -350,7 +350,7 @@ fn frame(
     events: Vec<egui::Event>,
     time: f64,
 ) -> egui::FullOutput {
-    ctx.run(
+    ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -360,7 +360,10 @@ fn frame(
             time: Some(time),
             ..Default::default()
         },
-        |ctx| view.show_report_dialog(ctx),
+        |root| {
+            let ctx = &root.ctx().clone();
+            view.show_report_dialog(ctx)
+        },
     )
 }
 
@@ -590,7 +593,7 @@ fn the_summary_and_the_export_agree_on_the_attack_techniques() {
         .attack
         .unwrap();
     view.scan = Some(scan);
-    let shown = view.attack_techniques().to_vec();
+    let shown = view.attack_list().0.to_vec();
     assert_eq!(shown, exported);
     let ids: Vec<&str> = shown.iter().map(|t| t.id.as_str()).collect();
     assert!(ids.contains(&"T1486") && ids.contains(&"T1036"), "{ids:?}");

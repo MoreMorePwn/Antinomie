@@ -113,14 +113,14 @@ impl Scene {
         events: Vec<egui::Event>,
     ) -> (egui::FullOutput, Option<DiskAction>) {
         let mut action = None;
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     let next = view.show(
                         ui,
                         DiskContext {
@@ -204,13 +204,13 @@ impl Scene {
         let mut action = None;
         let mut output = None;
         for _ in 0..3 {
-            output = Some(ctx.run(
+            output = Some(ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
                         action = view.details(ui).or(action.take());
                     });
                 },
@@ -262,14 +262,14 @@ impl Scene {
         events: Vec<egui::Event>,
     ) -> (egui::FullOutput, Option<DiskAction>) {
         let mut action = None;
-        let output = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     action = view.details(ui);
                 });
             },
@@ -594,7 +594,7 @@ fn an_open_view_shows_its_header_and_tree_rows() {
     let texts = scene.settle(&mut view, &ctx);
     let header = format!(
         "Current disk (VM off) · read {} · clean · snapshots/ab12.qcow2",
-        clock(1_800_000_000)
+        crate::time_format::time_of_day(1_800_000_000)
     );
     assert!(has(&texts, &header), "{texts:?}");
     assert!(
@@ -2247,15 +2247,16 @@ fn native_disks_fixture() {
         deadline: Instant,
     }
     impl eframe::App for QaApp {
-        fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
+            let ctx = &root.ctx().clone();
             if Instant::now() >= self.deadline {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             let mut action = None;
             egui::Panel::right("qa_details")
                 .default_size(420.0)
-                .show(ctx, |ui| action = self.view.details(ui));
-            egui::CentralPanel::default().show(ctx, |ui| {
+                .show(root, |ui| action = self.view.details(ui));
+            egui::CentralPanel::default().show(root, |ui| {
                 let scene = &mut self.scene;
                 let next = self.view.show(
                     ui,

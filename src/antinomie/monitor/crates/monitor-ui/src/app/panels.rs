@@ -682,12 +682,13 @@ fn terminal_header(ui: &mut egui::Ui, terminal: &mut RunTerminal) {
 
 #[cfg(test)]
 pub(super) fn show_terminal_viewport(
-    ctx: &egui::Context,
+    root: &mut egui::Ui,
     class: egui::ViewportClass,
     terminal: &mut RunTerminal,
     live: bool,
     interactive: bool,
 ) -> Vec<Command> {
+    let ctx = &root.ctx().clone();
     let close_requested = ctx.input(|input| input.viewport().close_requested());
     let id = terminal.run.id.clone();
     let mut commands = Vec::new();
@@ -713,7 +714,7 @@ pub(super) fn show_terminal_viewport(
             }
         }
     };
-    if class == egui::ViewportClass::Embedded {
+    if class == egui::ViewportClass::EmbeddedWindow {
         let mut open = terminal.open;
         crate::widgets::window(format!(
             "{} / PID {}",
@@ -731,7 +732,7 @@ pub(super) fn show_terminal_viewport(
                     .fill(theme::terminal())
                     .inner_margin(egui::Margin::same(4)),
             )
-            .show(ctx, content);
+            .show(root, content);
     }
     if close_requested {
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);

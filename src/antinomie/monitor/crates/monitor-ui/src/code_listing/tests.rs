@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use super::*;
 use crate::table_sort::testing;
+use eframe::egui::epaint::text::ByteRangeExt;
 
 #[test]
 fn lines_read_as_a_count_a_single_line_or_not_counted() {
@@ -92,7 +93,7 @@ fn decompiled_lines_keep_keyword_string_and_comment_colors() {
     let color = |line: &str, token: &str| {
         let job = highlight(line, &font);
         job.sections.iter().find_map(|section| {
-            let text = &job.text[section.byte_range.clone()];
+            let text = section.byte_range.slice(&job.text);
             if text == token {
                 Some(section.format.color)
             } else {

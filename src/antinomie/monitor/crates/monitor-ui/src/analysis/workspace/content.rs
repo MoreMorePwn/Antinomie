@@ -423,9 +423,9 @@ mod tests {
         state.go_to(5000);
         let frame = |state: &mut ContentState| {
             let mut action = None;
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            let _ = ctx.run_ui(egui::RawInput::default(), |root| {
                 egui::CentralPanel::default()
-                    .show(ctx, |ui| action = show(ui, &report, state, None));
+                    .show(root, |ui| action = show(ui, &report, state, None));
             });
             action
         };
@@ -483,7 +483,7 @@ mod tests {
         time: f64,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        ctx.run(
+        ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -494,8 +494,8 @@ mod tests {
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     let _ = show(ui, report, state, Some(preview));
                 });
             },
@@ -587,6 +587,7 @@ mod tests {
 
     fn wheel(dy: f32, ctrl: bool) -> egui::Event {
         egui::Event::MouseWheel {
+            phase: egui::TouchPhase::Move,
             unit: egui::MouseWheelUnit::Point,
             delta: egui::vec2(0.0, dy),
             modifiers: egui::Modifiers {
