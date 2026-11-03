@@ -970,4 +970,4 @@ only with a minor release (`revisions.json`).
   layout shows them as bytes.
 
 The conformance suite checks each (`tests/monitor/conformance/README.md`), and
-`docs/implementation.md` describes the host side.
+`docs/implementation/guest-and-kernel.md` describes the host side.

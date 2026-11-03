@@ -164,7 +164,7 @@ the guest conformance tier as for any kernel change.
 ## History
 
 The series was reorganised by topic for 0.7.1. Before that it was 60 patches in
-development order, which `docs/implementation.md` and `CHANGELOG.md` cite by
+development order, which `docs/implementation/` and `CHANGELOG.md` cite by
 number. The old patches went into these topics:
 
 | Topic | Old patches |

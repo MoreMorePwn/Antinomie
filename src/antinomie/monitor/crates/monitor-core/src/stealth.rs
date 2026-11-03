@@ -1358,7 +1358,7 @@ impl StealthProfile {
             found.push("the pointer's input name (QEMU) in the VM window");
         }
         // Not covered by any entry: needed by Antinomie, outside QEMU options
-        // or beyond what the guest kernel can hide (docs/implementation.md,
+        // or beyond what the guest kernel can hide (docs/implementation/bases-and-stealth.md,
         // "Guest stealth").
         found.extend([
             "timing of VM exits (CPUID, I/O) and of traced calls",

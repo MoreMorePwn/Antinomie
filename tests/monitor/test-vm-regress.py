@@ -23,7 +23,7 @@ class TierTests(unittest.TestCase):
         return vm.choose_tier(paths, revision)[0]
 
     def test_ordinary_changes_are_quick(self):
-        self.assertEqual(self.tier("docs/implementation.md", "src/antinomie/monitor/crates/monitor-ui/src/lib.rs"),
+        self.assertEqual(self.tier("docs/implementation/host-ui.md", "src/antinomie/monitor/crates/monitor-ui/src/lib.rs"),
                          "quick")
         self.assertEqual(self.tier(), "quick")
 

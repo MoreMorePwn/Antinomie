@@ -346,7 +346,7 @@ for it, and its children live in a directory of the same name (`app.rs` with
 - **VM regression.** Run `scripts/vm-regress.py quick BASE` for every change;
   a change under the guest patches, transport or protocol folders, or to
   `ANTC_REVISION`, needs the `full` tier (`auto` decides). See "VM regression
-  tiers" in `docs/implementation.md`.
+  tiers" in `docs/implementation/guest-and-kernel.md`.
 - **Size.** A file holds at most 1,200 lines of non-test code.
   `scripts/check-module-size.py` enforces this in CI. Files that were already
   larger are listed in `scripts/module-size-allowlist.txt` and may shrink but

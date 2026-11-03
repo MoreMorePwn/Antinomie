@@ -1583,7 +1583,7 @@ security advisories in bundled libraries are closed. Details follow.
   `/sys/kernel/btf` in the guest. No stock structure carries a recorder
   field any more (next entry), so every structure has Debian's layout; the
   minimal profile's configuration still differs from Debian's (see
-  docs/implementation.md). Building the minimal kernel now needs `pahole`
+  docs/implementation/bases-and-stealth.md). Building the minimal kernel now needs `pahole`
   (dwarves).
 
 ## 0.7.1 — 2026-10-26
@@ -1918,7 +1918,7 @@ section lists both.
   QEMU's CD-ROM still answers `QEMU DVD-ROM` and its NVMe controller names
   QEMU, so the presets use neither. `stealth-check` gains profile entries and
   a `boots` mode; the probe checks firmware, disks, NAT addresses, PCI
-  subsystems, OEM strings and CPU threads. See docs/implementation.md,
+  subsystems, OEM strings and CPU threads. See docs/implementation/bases-and-stealth.md,
   "Stealth profile, part 2".
 - **Debugger check p2 "dynamic" no longer depends on the host's /tmp.** gdb
   ran with the host's root as its sysroot, so a file named `p2ld.so` or
@@ -2005,7 +2005,7 @@ section lists both.
   takes about 16,000 cycles), the virtio disk and the emulated display, the q35
   layout with Red Hat PCI subsystem IDs, QEMU's ACPI tables and fw_cfg port to
   root, a fresh boot's uptime and QEMU's NAT addresses; see
-  docs/implementation.md "Guest stealth" for every check and limit. Bases
+  docs/implementation/bases-and-stealth.md "Guest stealth" for every check and limit. Bases
   built before this change keep their old traces until rebuilt.
 - **Written files and the launched program are hashed; user names; a
   reconnected run is read whole; the gdb console checked on a live VM.** Guest
@@ -3114,7 +3114,7 @@ section lists both.
   ended are no longer marked failed, and closed captures stay as they were.
   Packets nobody owns are saved once while a capture observes them, not in
   both the capture and the boot archive. The quota rules are in
-  docs/implementation.md.
+  docs/implementation/disks-memory.md.
 
 - **Clearer errors.** A normal Stop is recorded as clean even when the guest's
   acknowledgement races its exit; a launch the guest rejects says so (and
