@@ -65,227 +65,28 @@ impl MonitorApp {
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     ui.add_enabled_ui(editable, |ui| {
-                        let machine = |app: &mut Self, ui: &mut egui::Ui, credentials_required: &mut bool| {
-                            dialog_section(ui, "Machine");
-                            form_grid("vm_machine", ui).show(ui, |ui| {
-                                let old_base = app.draft.base_identity.clone();
-                                ui.label("Installed base");
-                                base_selector(ui, &app.snapshot, &mut app.draft.base_identity, "vm_base");
-                                ui.end_row();
-                                if old_base != app.draft.base_identity {
-                                    app.credentials.reset();
-                                }
-                                let base = app
-                                    .snapshot
-                                    .bases
-                                    .iter()
-                                    .find(|base| Some(&base.id) == app.draft.base_identity.as_ref());
-                                let min_ram = base.map_or(256, |base| base.min_ram_mib);
-                                let min_disk = base.map_or(1, |base| base.min_disk_gib);
-                                *credentials_required = creating
-                                    && base
-                                        .and_then(|base| base.guest.as_ref())
-                                        .is_some_and(|guest| guest.requires_credentials);
-                                app.draft.ram_mib = app.draft.ram_mib.max(min_ram);
-                                if creating {
-                                    app.draft.disk_gib = app.draft.disk_gib.max(min_disk);
-                                }
-                                ui.label("Name");
-                                ui.add(text_field(&mut app.draft.name).desired_width(280.0));
-                                ui.end_row();
-                                ui.label("CPU count");
-                                ui.add(egui::DragValue::new(&mut app.draft.cpus).range(1..=64))
-                                    .on_hover_text("A real PC has 4 to 16 threads (checks flag 1)");
-                                ui.end_row();
-                                ui.label("RAM");
-                                ui.add(
-                                    egui::DragValue::new(&mut app.draft.ram_mib)
-                                        .range(min_ram..=antinomie_monitor_core::storage::MAX_RAM_MIB)
-                                        .suffix(" MiB"),
-                                )
-                                .on_hover_text(format!(
-                                    "At least {min_ram} MiB for this base; a real PC has 8 to 32 GiB \
-                                     (checks flag under 4 GiB)"
-                                ));
-                                ui.end_row();
-                                ui.label("Disk");
-                                if creating {
-                                    ui.add(
-                                        egui::DragValue::new(&mut app.draft.disk_gib)
-                                            .range(min_disk..=2048)
-                                            .suffix(" GiB"),
-                                    )
-                                    .on_hover_text(format!(
-                                        "At least {min_disk} GiB for this base; a real PC has 256 GiB \
-                                         or more (checks flag under 60 GiB); a BusyBox base grows its \
-                                         filesystem on the first boot (256 GiB: about 400 MiB of image, \
-                                         two minutes)"
-                                    ));
-                                } else {
-                                    ui.label(
-                                        RichText::new(format!("{} GiB", app.draft.disk_gib))
-                                            .monospace(),
-                                    )
-                                    .on_hover_text("Set when the VM was created");
-                                }
-                                ui.end_row();
-                            });
-                            vm_section(ui, "Display and emulation");
-                            form_grid("vm_display", ui).show(ui, |ui| {
-                                let kvm_problem = app.kvm_problem();
-                                launch_options(ui, &mut app.draft.launch, kvm_problem.as_deref());
-                                let fallbacks = app.draft_stealth_fallbacks();
-                                super::stealth::preset_row(ui, &mut app.draft.stealth, &mut app.stealth_open, &fallbacks, "Edit…");
-                            });
-                            super::stealth::launch_advice(ui, &mut app.draft);
-                        };
-                        let storage = |app: &mut Self, ui: &mut egui::Ui, credentials_required: bool| {
-                            vm_section(ui, "Storage");
-                            form_grid("vm_storage", ui).show(ui, |ui| {
-                                ui.label("Disk parent");
-                                ui.add_enabled_ui(creating, |ui| {
-                                    directory_input(
-                                        ui,
-                                        &mut app.draft.disk_root,
-                                        &disk_default,
-                                        &mut app.folder_picker,
-                                        FolderTarget {
-                                            generation: app.draft_generation,
-                                            kind: FolderKind::Disk,
-                                        },
-                                        &mut app.status,
-                                    );
-                                });
-                                ui.end_row();
-                                ui.label("Recording parent");
-                                let recording_default = if creating {
-                                    app.draft.disk_root.as_ref().unwrap_or(&disk_default)
-                                } else {
-                                    &disk_default
-                                }
-                                .clone();
-                                directory_input(
-                                    ui,
-                                    &mut app.draft.recording_root,
-                                    &recording_default,
-                                    &mut app.folder_picker,
-                                    FolderTarget {
-                                        generation: app.draft_generation,
-                                        kind: FolderKind::Recording,
-                                    },
-                                    &mut app.status,
-                                );
-                                ui.end_row();
-                            });
-                            if !creating {
-                                if let Some(location) = app
-                                    .snapshot
-                                    .vm_locations
-                                    .iter()
-                                    .find(|location| location.vm_id == app.draft.id)
-                                {
-                                    for (name, path) in [
-                                        ("Disk", &location.disk_directory),
-                                        ("Recordings", &location.recording_directory),
-                                    ] {
-                                        ui.horizontal(|ui| {
-                                            ui.label(RichText::new(name).color(theme::muted()));
-                                            ui.add(
-                                                egui::Label::new(
-                                                    RichText::new(path.display().to_string())
-                                                        .monospace(),
-                                                )
-                                                .truncate(),
-                                            )
-                                            .on_hover_text(path.display().to_string());
-                                        });
-                                    }
-                                }
-                                ui.label(
-                                    RichText::new(
-                                        "Recording parent changes apply to future recordings. Earlier recordings are retained.",
-                                    )
-                                    .small()
-                                    .color(theme::muted()),
-                                );
-                            }
-                            if credentials_required {
-                                vm_section(ui, "Guest account");
-                                form_grid("vm_account", ui).show(ui, |ui| {
-                                    ui.label("Username");
-                                    ui.add(
-                                        text_field(&mut app.credentials.username)
-                                            .char_limit(32)
-                                            .desired_width(280.0),
-                                    );
-                                    ui.end_row();
-                                    ui.label("Password");
-                                    password_input(ui, &mut app.credentials.password, "guest_password");
-                                    ui.end_row();
-                                    ui.label("Confirm password");
-                                    password_input(
-                                        ui,
-                                        &mut app.credentials.confirmation,
-                                        "guest_confirmation",
-                                    );
-                                    ui.end_row();
-                                });
-                            }
-                            vm_section(ui, "Network and telemetry");
-                            form_grid("vm_network", ui).show(ui, |ui| {
-                                ui.label("Network");
-                                const MODES: [&str; 4] = ["Disconnected", "Isolated", "NAT (Internet)", "Routed (route per run)"];
-                                let mut mode = if app.draft.isolated_network { 1 } else if app.draft.routed { 3 } else if app.draft.nat { 2 } else { 0 };
-                                let previous = mode;
-                                egui::ComboBox::from_id_salt("network-mode").selected_text(MODES[mode])
-                                    .show_ui(ui, |ui| { for (value, label) in MODES.iter().enumerate() {
-                                        ui.selectable_value(&mut mode, value, *label);
-                                    } });
-                                if mode != previous {
-                                    app.draft.nat = mode == 2;
-                                    app.draft.isolated_network = mode == 1;
-                                    app.draft.routed = mode == 3;
-                                }
-                                ui.end_row();
-                                ui.label("Transport");
-                                if ui
-                                    .button("Telemetry transport…")
-                                    .on_hover_text(
-                                        "Guest buffers, never-drop mode and the host event table",
-                                    )
-                                    .clicked()
-                                {
-                                    app.transport_open = !app.transport_open;
-                                }
-                                ui.end_row();
-                            });
-                            if app.draft.isolated_network {
-                                ui.colored_label(theme::muted(), "Isolated: no host or Internet access.");
-                            }
-                            if app.draft.routed && !app.draft.isolated_network {
-                                ui.colored_label(theme::muted(), "Routed: each run picks a route (Tools > Settings > Network routes).");
-                            }
-                            if !app.draft.has_network() {
-                                ui.colored_label(theme::muted(), "Disconnected: no network capture. Choose Isolated, Routed or NAT.");
-                            }
-                            if app.draft.nat {
-                                ui.colored_label(
-                                    theme::warn(),
-                                    "NAT: the guest can reach the host network and Internet.",
-                                );
-                            }
-                            if let Some(note) = running_network_note(&app.snapshot, &app.draft) {
-                                ui.colored_label(note.1, note.0);
-                            }
-                        };
                         if wide {
                             crate::widgets::columns(ui, 2, |columns| {
-                                machine(self, &mut columns[0], &mut credentials_required);
-                                storage(self, &mut columns[1], credentials_required);
+                                self.vm_machine_column(
+                                    &mut columns[0],
+                                    creating,
+                                    &mut credentials_required,
+                                );
+                                self.vm_storage_column(
+                                    &mut columns[1],
+                                    creating,
+                                    credentials_required,
+                                    &disk_default,
+                                );
                             });
                         } else {
-                            machine(self, ui, &mut credentials_required);
-                            storage(self, ui, credentials_required);
+                            self.vm_machine_column(ui, creating, &mut credentials_required);
+                            self.vm_storage_column(
+                                ui,
+                                creating,
+                                credentials_required,
+                                &disk_default,
+                            );
                         }
                     });
                 });
@@ -326,55 +127,10 @@ impl MonitorApp {
             });
         });
         if self.transport_open && open && !cancel {
-            let tunable = self
-                .snapshot
-                .bases
-                .iter()
-                .find(|base| Some(&base.id) == self.draft.base_identity.as_ref())
-                .is_some_and(|base| base.revision.is_some_and(|revision| revision >= 13));
-            let editable = creating || self.snapshot.active_vm.as_ref() != Some(&self.draft.id);
-            transport_window(
-                ctx,
-                &mut self.transport_open,
-                &mut self.draft.transport,
-                self.draft.cpus,
-                tunable,
-                editable,
-            );
+            self.vm_transport_window(ctx, creating);
         }
         if self.stealth_open && open && !cancel {
-            let editable = creating || self.snapshot.active_vm.as_ref() != Some(&self.draft.id);
-            // What the VM's base boots with; none chosen yet offers all.
-            let base = selected_base(&self.snapshot, self.draft.base_identity.as_deref()).map_or(
-                antinomie_monitor_core::stealth::BaseSupport::all(),
-                |base| {
-                    antinomie_monitor_core::stealth::BaseSupport::from_list(&base.stealth_support)
-                },
-            );
-            let current = selected_base(&self.snapshot, self.draft.base_identity.as_deref())
-                .map(|base| base.id.clone());
-            let mut fit = super::stealth::Fit::new(
-                &self.draft.stealth,
-                base,
-                &self.snapshot.bases,
-                current.as_deref(),
-            );
-            super::stealth::window(
-                ctx,
-                &mut self.stealth_open,
-                &mut self.draft.stealth,
-                &mut fit,
-                &antinomie_monitor_core::stealth::resource_hints(
-                    self.draft.cpus,
-                    self.draft.ram_mib,
-                    self.draft.disk_gib,
-                ),
-                editable,
-                creating,
-            );
-            if let Some(base) = fit.switch.take() {
-                self.draft.base_identity = Some(base);
-            }
+            self.vm_stealth_window(ctx, creating);
         }
         let open = open && !cancel;
         if !open {
@@ -404,6 +160,305 @@ impl MonitorApp {
             }
             self.create_open = false;
             self.config_open = false;
+        }
+    }
+
+    /// The Machine section and the display and emulation options: the left column.
+    fn vm_machine_column(
+        &mut self,
+        ui: &mut egui::Ui,
+        creating: bool,
+        credentials_required: &mut bool,
+    ) {
+        let app = self;
+        dialog_section(ui, "Machine");
+        form_grid("vm_machine", ui).show(ui, |ui| {
+            let old_base = app.draft.base_identity.clone();
+            ui.label("Installed base");
+            base_selector(ui, &app.snapshot, &mut app.draft.base_identity, "vm_base");
+            ui.end_row();
+            if old_base != app.draft.base_identity {
+                app.credentials.reset();
+            }
+            let base = app
+                .snapshot
+                .bases
+                .iter()
+                .find(|base| Some(&base.id) == app.draft.base_identity.as_ref());
+            let min_ram = base.map_or(256, |base| base.min_ram_mib);
+            let min_disk = base.map_or(1, |base| base.min_disk_gib);
+            *credentials_required = creating
+                && base
+                    .and_then(|base| base.guest.as_ref())
+                    .is_some_and(|guest| guest.requires_credentials);
+            app.draft.ram_mib = app.draft.ram_mib.max(min_ram);
+            if creating {
+                app.draft.disk_gib = app.draft.disk_gib.max(min_disk);
+            }
+            ui.label("Name");
+            ui.add(text_field(&mut app.draft.name).desired_width(280.0));
+            ui.end_row();
+            ui.label("CPU count");
+            ui.add(egui::DragValue::new(&mut app.draft.cpus).range(1..=64))
+                .on_hover_text("A real PC has 4 to 16 threads (checks flag 1)");
+            ui.end_row();
+            ui.label("RAM");
+            ui.add(
+                egui::DragValue::new(&mut app.draft.ram_mib)
+                    .range(min_ram..=antinomie_monitor_core::storage::MAX_RAM_MIB)
+                    .suffix(" MiB"),
+            )
+            .on_hover_text(format!(
+                "At least {min_ram} MiB for this base; a real PC has 8 to 32 GiB \
+                     (checks flag under 4 GiB)"
+            ));
+            ui.end_row();
+            ui.label("Disk");
+            if creating {
+                ui.add(
+                    egui::DragValue::new(&mut app.draft.disk_gib)
+                        .range(min_disk..=2048)
+                        .suffix(" GiB"),
+                )
+                .on_hover_text(format!(
+                    "At least {min_disk} GiB for this base; a real PC has 256 GiB \
+                         or more (checks flag under 60 GiB); a BusyBox base grows its \
+                         filesystem on the first boot (256 GiB: about 400 MiB of image, \
+                         two minutes)"
+                ));
+            } else {
+                ui.label(RichText::new(format!("{} GiB", app.draft.disk_gib)).monospace())
+                    .on_hover_text("Set when the VM was created");
+            }
+            ui.end_row();
+        });
+        vm_section(ui, "Display and emulation");
+        form_grid("vm_display", ui).show(ui, |ui| {
+            let kvm_problem = app.kvm_problem();
+            launch_options(ui, &mut app.draft.launch, kvm_problem.as_deref());
+            let fallbacks = app.draft_stealth_fallbacks();
+            super::stealth::preset_row(
+                ui,
+                &mut app.draft.stealth,
+                &mut app.stealth_open,
+                &fallbacks,
+                "Edit…",
+            );
+        });
+        super::stealth::launch_advice(ui, &mut app.draft);
+    }
+
+    /// Storage, the guest account and networking: the right column.
+    fn vm_storage_column(
+        &mut self,
+        ui: &mut egui::Ui,
+        creating: bool,
+        credentials_required: bool,
+        disk_default: &std::path::PathBuf,
+    ) {
+        let app = self;
+        vm_section(ui, "Storage");
+        form_grid("vm_storage", ui).show(ui, |ui| {
+            ui.label("Disk parent");
+            ui.add_enabled_ui(creating, |ui| {
+                directory_input(
+                    ui,
+                    &mut app.draft.disk_root,
+                    &disk_default,
+                    &mut app.folder_picker,
+                    FolderTarget {
+                        generation: app.draft_generation,
+                        kind: FolderKind::Disk,
+                    },
+                    &mut app.status,
+                );
+            });
+            ui.end_row();
+            ui.label("Recording parent");
+            let recording_default = if creating {
+                app.draft.disk_root.as_ref().unwrap_or(&disk_default)
+            } else {
+                &disk_default
+            }
+            .clone();
+            directory_input(
+                ui,
+                &mut app.draft.recording_root,
+                &recording_default,
+                &mut app.folder_picker,
+                FolderTarget {
+                    generation: app.draft_generation,
+                    kind: FolderKind::Recording,
+                },
+                &mut app.status,
+            );
+            ui.end_row();
+        });
+        if !creating {
+            if let Some(location) = app
+                .snapshot
+                .vm_locations
+                .iter()
+                .find(|location| location.vm_id == app.draft.id)
+            {
+                for (name, path) in [
+                    ("Disk", &location.disk_directory),
+                    ("Recordings", &location.recording_directory),
+                ] {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(name).color(theme::muted()));
+                        ui.add(
+                            egui::Label::new(RichText::new(path.display().to_string()).monospace())
+                                .truncate(),
+                        )
+                        .on_hover_text(path.display().to_string());
+                    });
+                }
+            }
+            ui.label(
+                    RichText::new(
+                        "Recording parent changes apply to future recordings. Earlier recordings are retained.",
+                    )
+                    .small()
+                    .color(theme::muted()),
+                );
+        }
+        if credentials_required {
+            vm_section(ui, "Guest account");
+            form_grid("vm_account", ui).show(ui, |ui| {
+                ui.label("Username");
+                ui.add(
+                    text_field(&mut app.credentials.username)
+                        .char_limit(32)
+                        .desired_width(280.0),
+                );
+                ui.end_row();
+                ui.label("Password");
+                password_input(ui, &mut app.credentials.password, "guest_password");
+                ui.end_row();
+                ui.label("Confirm password");
+                password_input(ui, &mut app.credentials.confirmation, "guest_confirmation");
+                ui.end_row();
+            });
+        }
+        vm_section(ui, "Network and telemetry");
+        form_grid("vm_network", ui).show(ui, |ui| {
+            ui.label("Network");
+            const MODES: [&str; 4] = [
+                "Disconnected",
+                "Isolated",
+                "NAT (Internet)",
+                "Routed (route per run)",
+            ];
+            let mut mode = if app.draft.isolated_network {
+                1
+            } else if app.draft.routed {
+                3
+            } else if app.draft.nat {
+                2
+            } else {
+                0
+            };
+            let previous = mode;
+            egui::ComboBox::from_id_salt("network-mode")
+                .selected_text(MODES[mode])
+                .show_ui(ui, |ui| {
+                    for (value, label) in MODES.iter().enumerate() {
+                        ui.selectable_value(&mut mode, value, *label);
+                    }
+                });
+            if mode != previous {
+                app.draft.nat = mode == 2;
+                app.draft.isolated_network = mode == 1;
+                app.draft.routed = mode == 3;
+            }
+            ui.end_row();
+            ui.label("Transport");
+            if ui
+                .button("Telemetry transport…")
+                .on_hover_text("Guest buffers, never-drop mode and the host event table")
+                .clicked()
+            {
+                app.transport_open = !app.transport_open;
+            }
+            ui.end_row();
+        });
+        if app.draft.isolated_network {
+            ui.colored_label(theme::muted(), "Isolated: no host or Internet access.");
+        }
+        if app.draft.routed && !app.draft.isolated_network {
+            ui.colored_label(
+                theme::muted(),
+                "Routed: each run picks a route (Tools > Settings > Network routes).",
+            );
+        }
+        if !app.draft.has_network() {
+            ui.colored_label(
+                theme::muted(),
+                "Disconnected: no network capture. Choose Isolated, Routed or NAT.",
+            );
+        }
+        if app.draft.nat {
+            ui.colored_label(
+                theme::warn(),
+                "NAT: the guest can reach the host network and Internet.",
+            );
+        }
+        if let Some(note) = running_network_note(&app.snapshot, &app.draft) {
+            ui.colored_label(note.1, note.0);
+        }
+    }
+
+    /// The telemetry transport window of the dialog.
+    fn vm_transport_window(&mut self, ctx: &egui::Context, creating: bool) {
+        let tunable = self
+            .snapshot
+            .bases
+            .iter()
+            .find(|base| Some(&base.id) == self.draft.base_identity.as_ref())
+            .is_some_and(|base| base.revision.is_some_and(|revision| revision >= 13));
+        let editable = creating || self.snapshot.active_vm.as_ref() != Some(&self.draft.id);
+        transport_window(
+            ctx,
+            &mut self.transport_open,
+            &mut self.draft.transport,
+            self.draft.cpus,
+            tunable,
+            editable,
+        );
+    }
+
+    /// The stealth window of the dialog.
+    fn vm_stealth_window(&mut self, ctx: &egui::Context, creating: bool) {
+        let editable = creating || self.snapshot.active_vm.as_ref() != Some(&self.draft.id);
+        // What the VM's base boots with; none chosen yet offers all.
+        let base = selected_base(&self.snapshot, self.draft.base_identity.as_deref()).map_or(
+            antinomie_monitor_core::stealth::BaseSupport::all(),
+            |base| antinomie_monitor_core::stealth::BaseSupport::from_list(&base.stealth_support),
+        );
+        let current = selected_base(&self.snapshot, self.draft.base_identity.as_deref())
+            .map(|base| base.id.clone());
+        let mut fit = super::stealth::Fit::new(
+            &self.draft.stealth,
+            base,
+            &self.snapshot.bases,
+            current.as_deref(),
+        );
+        super::stealth::window(
+            ctx,
+            &mut self.stealth_open,
+            &mut self.draft.stealth,
+            &mut fit,
+            &antinomie_monitor_core::stealth::resource_hints(
+                self.draft.cpus,
+                self.draft.ram_mib,
+                self.draft.disk_gib,
+            ),
+            editable,
+            creating,
+        );
+        if let Some(base) = fit.switch.take() {
+            self.draft.base_identity = Some(base);
         }
     }
 }
