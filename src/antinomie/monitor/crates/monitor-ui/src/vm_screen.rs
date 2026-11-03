@@ -404,9 +404,14 @@ impl VmScreenView {
             return;
         };
         let mut buttons = 0u8;
-        let (hover, wheel) = ctx.input(|input| {
+        // Asked of the response before `ctx.input` takes its lock: a response
+        // reads the context itself, and nesting the two can deadlock.
+        let active = response.hovered() || response.dragged();
+        let hovered = response.hovered();
+        let hover = response.interact_pointer_pos().or(response.hover_pos());
+        let wheel = ctx.input(|input| {
             let mut wheel = 0i32;
-            if response.hovered() {
+            if hovered {
                 for event in &input.events {
                     if let egui::Event::MouseWheel { unit, delta, .. } = event {
                         let notches = match unit {
@@ -423,11 +428,11 @@ impl VmScreenView {
                 (egui::PointerButton::Middle, 2),
                 (egui::PointerButton::Secondary, 4),
             ] {
-                if (response.hovered() || response.dragged()) && input.pointer.button_down(button) {
+                if active && input.pointer.button_down(button) {
                     buttons |= bit;
                 }
             }
-            (response.interact_pointer_pos().or(response.hover_pos()), wheel)
+            wheel
         });
         match client.pointer_mode() {
             PointerMode::Absolute => {
