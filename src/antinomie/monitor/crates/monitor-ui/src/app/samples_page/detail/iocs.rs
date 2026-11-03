@@ -209,7 +209,7 @@ pub(super) fn check_online(
             "Opens the newest run with this indicator in Triage; turn on online lookups there",
         )
         .on_disabled_hover_text(
-            "No abuse.ch key is stored. Add one in Settings > API keys to ask abuse.ch about an indicator.",
+            "No abuse.ch key is stored. Add one in Tools > API keys to ask abuse.ch about an indicator.",
         );
     if response.clicked() {
         if let Some(seen) = row.sightings.last() {
@@ -370,7 +370,7 @@ impl MonitorApp {
                         .on_disabled_hover_text(if key {
                             "Select an indicator first"
                         } else {
-                            "No abuse.ch key is stored. Add one in Settings > API keys to ask abuse.ch about an indicator."
+                            "No abuse.ch key is stored. Add one in Tools > API keys to ask abuse.ch about an indicator."
                         });
                 }
             }
