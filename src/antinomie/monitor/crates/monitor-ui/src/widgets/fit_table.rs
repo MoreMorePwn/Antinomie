@@ -337,7 +337,15 @@ pub fn show_keyed<R>(
     } else {
         (plan.total + gutter).min(full)
     };
-    let bottom = ui.min_rect().bottom().max(start.y);
+    // Where the table ends, not where the surrounding page does: a page that
+    // fills its tab has a min rect down to the tab's bottom, and a fill
+    // painted to it would run under whatever follows the table (the Jobs
+    // window's Finished list). In a column the layout cursor is that end.
+    let bottom = if ui.layout().is_vertical() {
+        (ui.cursor().min.y - ui.spacing().item_spacing.y).max(start.y)
+    } else {
+        ui.min_rect().bottom().max(start.y)
+    };
     let rect = Rect::from_min_max(start, Pos2::new(start.x + width, bottom));
     ui.painter().set(
         slot,
