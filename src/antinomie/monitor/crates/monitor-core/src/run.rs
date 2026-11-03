@@ -42,6 +42,8 @@ pub(crate) struct ProgramRun {
     pub custody: Option<crate::samples::RunLog>,
     /// Packets of the run that never arrived, from the guest's numbering.
     pub(crate) telemetry_loss: crate::telemetry_loss::LossTracker,
+    /// The live rule judge of a run with a dump trigger.
+    pub(crate) watch: Option<crate::dump_trigger::Watch>,
 }
 
 impl ProgramRun {
@@ -81,6 +83,7 @@ impl ProgramRun {
             ended_ms: None,
             custody: None,
             telemetry_loss: Default::default(),
+            watch: None,
         };
         run.refresh_analysis_metadata()?;
         run.persist_summary()?;
@@ -472,6 +475,7 @@ mod tests {
             environment: None,
             reduced: None,
             boot_wait: None,
+            triggers: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -537,6 +541,7 @@ mod tests {
             environment: None,
             reduced: None,
             boot_wait: None,
+            triggers: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -594,6 +599,7 @@ mod tests {
             environment: None,
             reduced: None,
             boot_wait: None,
+            triggers: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -648,6 +654,7 @@ mod tests {
             environment: None,
             reduced: None,
             boot_wait: None,
+            triggers: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -716,6 +723,7 @@ mod tests {
             environment: None,
             reduced: None,
             boot_wait: None,
+            triggers: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -760,6 +768,7 @@ mod tests {
             environment: None,
             reduced: None,
             boot_wait: None,
+            triggers: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -826,6 +835,7 @@ mod tests {
             environment: None,
             reduced: None,
             boot_wait: None,
+            triggers: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),

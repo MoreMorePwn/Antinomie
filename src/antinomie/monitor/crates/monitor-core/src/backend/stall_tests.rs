@@ -11,6 +11,7 @@ fn summary(directory: PathBuf) -> RunSummary {
         environment: None,
         reduced: None,
         boot_wait: None,
+        triggers: None,
         started_ms: None,
         clock_anchor: None,
         id: "stalled-run".into(),

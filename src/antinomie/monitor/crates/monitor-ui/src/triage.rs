@@ -55,6 +55,7 @@ mod finding_bar;
 mod findings;
 mod geoip_fill;
 mod graph;
+mod live_judge;
 pub(crate) use graph::Spacing as GraphSpacing;
 pub(crate) const GRAPH_WINDOW_SIZE: [f32; 2] = graph::DEFAULT_SIZE;
 #[cfg(test)]
@@ -84,6 +85,15 @@ mod run_end;
 
 /// The system calls the suspicious-activity rules read: what the recorder keeps
 /// once the recording quota is nearly full.
+/// Where the app leaves the selected run's dump-trigger log for Triage, and
+/// where Triage leaves a request to open the Memory or Core dumps tab.
+pub(crate) const TRIGGER_LOG: &str = "run-trigger-log";
+pub(crate) const OPEN_DUMP_TAB: &str = "open-dump-tab";
+
+pub(crate) fn register_live_judge() {
+    live_judge::register();
+}
+
 pub(crate) fn watched_calls() -> Vec<String> {
     rules::watched_calls()
 }

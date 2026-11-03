@@ -72,6 +72,7 @@ impl Session {
             core_dump_on_exit: false,
             core_max_size: None,
             core_timeout_ms: None,
+            dump_trigger: None,
             debug_on_start: false,
             route: None,
             host_copy: None,

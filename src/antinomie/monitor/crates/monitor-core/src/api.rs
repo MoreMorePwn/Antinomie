@@ -543,6 +543,11 @@ pub struct ExecRequest {
     /// Serialization deadline of the exit core, milliseconds; None is 5000.
     #[serde(default)]
     pub core_timeout_ms: Option<u32>,
+    /// Dump on suspicious activity: what to take, and how often, when a
+    /// Triage rule of the chosen tier matches while the program runs. The
+    /// core uses `core_max_size` and `core_timeout_ms`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dump_trigger: Option<crate::dump_trigger::DumpTrigger>,
     /// Debug on start: the guest parks the new program before its first user
     /// instruction and the app opens the debugger on it (a revision-17 base with
     /// the Phase 2 debugger; the run starts "Stopped at entry").
@@ -782,6 +787,13 @@ pub enum RunArtifactState {
 }
 
 impl RunArtifactState {
+    /// Nothing more will be written.
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Complete | Self::Partial | Self::Interrupted | Self::Failed | Self::Disabled
+        )
+    }
     /// The evidence is still being written or waited for, so it cannot be
     /// deleted or treated as final.
     pub fn in_progress(self) -> bool {
@@ -891,6 +903,10 @@ pub struct RunSummary {
     /// that ended; absent in runs saved before it existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boot_wait: Option<crate::boot_wait::BootWait>,
+    /// What the run's dump trigger did; absent when no trigger was set or
+    /// nothing matched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triggers: Option<crate::dump_trigger::TriggerLog>,
 }
 
 impl RunSummary {
@@ -1865,6 +1881,7 @@ impl Default for ExecRequest {
             core_dump_on_exit: false,
             core_max_size: None,
             core_timeout_ms: None,
+            dump_trigger: None,
             debug_on_start: false,
             route: None,
             host_copy: None,

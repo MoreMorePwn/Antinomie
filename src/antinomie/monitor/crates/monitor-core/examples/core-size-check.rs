@@ -253,6 +253,7 @@ fn launch(
         core_dump_on_exit: core,
         core_max_size: core.then_some(options.budget << 20),
         core_timeout_ms: core.then_some(timeout),
+        dump_trigger: None,
         ..Default::default()
     }))?;
     driver.wait("run publication", 20, |snapshot| {

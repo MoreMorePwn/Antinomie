@@ -204,6 +204,7 @@ fn run_summary(directory: &std::path::Path) -> RunSummary {
         environment: None,
         reduced: None,
         boot_wait: None,
+        triggers: None,
         started_ms: None,
         clock_anchor: None,
         id: "run".into(),

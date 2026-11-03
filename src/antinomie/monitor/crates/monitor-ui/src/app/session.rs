@@ -769,6 +769,7 @@ fn requests_match(left: &ExecRequest, right: &ExecRequest) -> bool {
         && left.core_dump_on_exit == right.core_dump_on_exit
         && left.core_max_size == right.core_max_size
         && left.core_timeout_ms == right.core_timeout_ms
+        && left.dump_trigger == right.dump_trigger
         && left.debug_on_start == right.debug_on_start
 }
 

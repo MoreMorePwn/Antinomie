@@ -129,6 +129,11 @@ impl Session {
                 );
                 match run.assembler.ingest(&packet) {
                     Ok(event) => {
+                        if run.assembler.just_finished
+                            && let (Some(watch), Some(done)) = (run.watch.as_mut(), event.as_ref())
+                        {
+                            watch.event(done.clone());
+                        }
                         note_guest_loss(&mut snapshot.health, event.as_ref());
                         if let Some(hash) = event.as_ref().and_then(launch_image_hash) {
                             self.analysis

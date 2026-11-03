@@ -645,6 +645,7 @@ pub(super) fn listed(run: &RunSummary) -> RunSummary {
         environment: run.environment.clone(),
         reduced: run.reduced.clone(),
         boot_wait: run.boot_wait.clone(),
+        triggers: run.triggers.clone(),
         recording_error: run.recording_error.clone(),
         execution: run.execution.clone(),
         analysis: run
@@ -737,6 +738,18 @@ impl Feature {
     }
 }
 
+fn artifact_state_text(state: antinomie_monitor_core::RunArtifactState) -> &'static str {
+    use antinomie_monitor_core::RunArtifactState as S;
+    match state {
+        S::Complete => "saved",
+        S::Partial => "partial",
+        S::Failed => "failed",
+        S::Interrupted => "interrupted",
+        S::Queued | S::InProgress | S::Recording => "being taken",
+        _ => "not taken",
+    }
+}
+
 /// Whether a saved capture or core can still be opened.
 fn artifact_available(state: Option<&str>) -> bool {
     !matches!(state, Some("Deleted" | "Failed" | "Interrupted"))
@@ -825,6 +838,58 @@ pub(super) fn feature_tree(run: &RunSummary, labels: Option<run_labels::Labels>)
         );
         feature.available = artifact_available(state);
         features.push(feature);
+    }
+    if let Some(plan) = &request.dump_trigger {
+        let what = match (plan.memory, plan.core) {
+            (true, true) => "memory and core",
+            (true, false) => "memory",
+            _ => "core",
+        };
+        let log = run.triggers.as_ref();
+        let taken = log.map_or(0, |log| log.records.len());
+        features.push(Feature::new(
+            0,
+            format!(
+                "Dump on suspicious activity · {} or higher · {what} · {taken} of {} taken",
+                plan.min_tier.label(),
+                plan.max_dumps
+            ),
+        ));
+        for record in log.iter().flat_map(|log| &log.records) {
+            for (kind, dump) in [("Memory", &record.memory), ("Core", &record.core)] {
+                let Some(dump) = dump else { continue };
+                let mut feature = Feature::new(
+                    1,
+                    format!(
+                        "{kind} for {} (pid {}): {}{}",
+                        record.finding.rule,
+                        record.finding.pid,
+                        artifact_state_text(dump.state),
+                        dump.size
+                            .map(|size| format!(
+                                " · {}",
+                                antinomie_monitor_core::byte_size::file_size(size)
+                            ))
+                            .unwrap_or_default()
+                    ),
+                );
+                feature.available =
+                    !matches!(dump.state, antinomie_monitor_core::RunArtifactState::Failed);
+                feature.hover = dump.error.clone();
+                features.push(feature);
+            }
+        }
+        if let Some(log) = log
+            && log.skipped > 0
+        {
+            features.push(Feature::new(
+                1,
+                format!(
+                    "{} more match(es) took no dump: over the budget or inside the cooldown",
+                    log.skipped
+                ),
+            ));
+        }
     }
     features
 }

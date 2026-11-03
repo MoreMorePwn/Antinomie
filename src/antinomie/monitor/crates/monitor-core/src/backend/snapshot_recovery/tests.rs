@@ -36,6 +36,7 @@ fn run(id: &str, vm_id: &str, root: u64, session: u64) -> RunSummary {
         environment: None,
         reduced: None,
         boot_wait: None,
+        triggers: None,
         started_ms: None,
         clock_anchor: None,
         id: id.into(),

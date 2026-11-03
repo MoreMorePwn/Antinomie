@@ -120,6 +120,28 @@ impl Worker {
                 request.core_timeout_ms.unwrap_or(5000),
             )?;
         }
+        if let Some(plan) = &request.dump_trigger {
+            plan.validate()?;
+            if plan.core {
+                if !self
+                    .snapshot
+                    .guest_kernel
+                    .as_ref()
+                    .and_then(|kernel| kernel.revision)
+                    .is_some_and(|revision| revision >= 16)
+                {
+                    return Err("a core on suspicious activity requires a revision-16 base".into());
+                }
+                crate::core_limits::CoreLimits::check_known(
+                    self.snapshot.guest_core_limits,
+                    u64::from(request.core_max_size.unwrap_or(64 << 20)),
+                    request.core_timeout_ms.unwrap_or(5000),
+                )?;
+            }
+            if crate::dump_trigger::judge_missing() {
+                return Err("this build has no live Triage rules to trigger a dump".into());
+            }
+        }
         if request.core_dump_on_exit && request.run_in.guest_desktop() {
             return Err("process Core Dump on Exit currently requires App Terminal; desktop wrappers do not identify the selected executable as the root group".into());
         }
@@ -257,6 +279,7 @@ impl Worker {
             )),
             reduced: None,
             boot_wait: None,
+            triggers: None,
             execution: None,
             analysis: selected
                 .then(|| crate::analysis::jobs::new_report(&request.path, &request.analysis)),
@@ -304,6 +327,9 @@ impl Worker {
         run.assembler
             .set_event_table(session.vm.transport.event_table as usize);
         run.summary.recording_error = None;
+        run.watch = request.dump_trigger.as_ref().and_then(|plan| {
+            crate::dump_trigger::Watch::new(plan, &self.options.reduced_keep_calls)
+        });
         // What the VM started without, so a run that evaded on a
         // setting that was never applied says so in its notes.
         run.add_stealth_fallbacks(&session.process.stealth_fallbacks);

@@ -622,6 +622,7 @@ mod forget_tests {
             environment: None,
             reduced: None,
             boot_wait: None,
+            triggers: None,
         }
     }
 

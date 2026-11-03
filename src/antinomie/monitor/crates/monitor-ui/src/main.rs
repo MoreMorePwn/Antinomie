@@ -167,6 +167,7 @@ fn main() -> eframe::Result<()> {
     options.bootstrap_gpa = args.bootstrap_gpa;
     options.force_tcg = args.tcg;
     options.reduced_keep_calls = triage::watched_calls();
+    triage::register_live_judge();
     if args.check_dependencies {
         let report = antinomie_monitor_core::dependencies::check(&options);
         for check in &report.checks {

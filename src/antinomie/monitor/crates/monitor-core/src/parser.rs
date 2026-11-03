@@ -526,6 +526,8 @@ pub struct Assembler {
     evicted: VecDeque<EventSummary>,
     /// Finished events, oldest first: they leave the table before unfinished ones.
     finished: VecDeque<Key>,
+    /// The last packet ingested completed its event.
+    pub(crate) just_finished: bool,
     /// Events the table holds before it retires or evicts one.
     capacity: usize,
     /// The recording writer thread's first object write error.
@@ -557,6 +559,7 @@ impl Assembler {
             chunk_count: 0,
             evicted: VecDeque::new(),
             finished: VecDeque::new(),
+            just_finished: false,
             capacity: MAX_RETAINED_FIELDS / 2,
             write_error,
         }
@@ -679,6 +682,7 @@ impl Assembler {
             .saturating_sub(event.fields.values().map(|f| f.chunks.len()).sum());
     }
     pub fn ingest(&mut self, packet: &[u8]) -> Result<Option<EventSummary>> {
+        self.just_finished = false;
         let result = self.ingest_packet(packet);
         if let Ok((h, _)) = parse_packet(packet) {
             let key = (h.stream_id, h.task_cookie, h.call_id, h.phase, h.event_seq);
@@ -688,6 +692,7 @@ impl Assembler {
                 && event.fields.values().all(|field| field.end.is_some())
             {
                 event.finished = true;
+                self.just_finished = true;
                 self.finished.push_back(key);
             }
         }

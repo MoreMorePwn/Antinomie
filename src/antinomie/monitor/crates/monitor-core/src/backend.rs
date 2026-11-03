@@ -6,6 +6,7 @@ mod completions;
 mod core_sink;
 mod core_stream;
 mod debug_service;
+mod dump_trigger;
 mod evidence_delete;
 mod guest_resource_control;
 mod launch_failure;

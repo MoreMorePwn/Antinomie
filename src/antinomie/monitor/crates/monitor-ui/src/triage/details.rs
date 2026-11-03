@@ -291,8 +291,60 @@ fn finding_details(ui: &mut egui::Ui, values: &[(&'static str, RowValue)]) {
         "Details"
     };
     section(ui, title, lines("finding.detail"));
+    dump_taken(ui, values);
     evidence_link(ui, values);
     section(ui, "Why this tier", lines("finding.why"));
+}
+
+/// "Dump taken" under a finding that triggered one, with a link to the tab.
+fn dump_taken(ui: &mut egui::Ui, values: &[(&'static str, RowValue)]) {
+    use antinomie_monitor_core::dump_trigger::TriggerLog;
+    let Some(log) = ui.ctx().data(|data| {
+        data.get_temp::<std::sync::Arc<TriggerLog>>(egui::Id::new(super::TRIGGER_LOG))
+    }) else {
+        return;
+    };
+    let key = (
+        files::number(values, "stream.id"),
+        files::number(values, "process.cookie"),
+        files::number(values, "event.id"),
+    );
+    let Some(record) = log.records.iter().find(|record| {
+        let f = &record.finding;
+        key == (Some(f.stream_id), Some(f.task_cookie), Some(f.call_id))
+    }) else {
+        return;
+    };
+    ui.label(RichText::new("Dump taken").small().color(theme::muted()));
+    for (name, dump, tab) in [
+        ("Memory dump", &record.memory, "memory"),
+        ("Core", &record.core, "core"),
+    ] {
+        let Some(dump) = dump else { continue };
+        ui.horizontal_wrapped(|ui| {
+            let size = dump
+                .size
+                .map(|size| format!(" ({})", antinomie_monitor_core::byte_size::short_size(size)))
+                .unwrap_or_default();
+            ui.label(format!("{name}{size}: {:?}", dump.state));
+            if ui
+                .link(if tab == "memory" {
+                    "Open Memory dumps"
+                } else {
+                    "Open Core dumps"
+                })
+                .clicked()
+            {
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(egui::Id::new(super::OPEN_DUMP_TAB), tab);
+                });
+            }
+        });
+        if let Some(error) = &dump.error {
+            ui.colored_label(theme::warn(), error);
+        }
+    }
+    ui.add_space(8.0);
 }
 
 /// The Trace filter that shows the calls a finding cites, in its process when

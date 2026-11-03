@@ -286,6 +286,16 @@ pub(super) fn validate_saved(saved: &ProcessCoreCapture) -> Result<(), String> {
 impl Session {
     pub(super) fn start_manual_core(
         &mut self,
+        request: ProcessCoreRequest,
+    ) -> Result<String, String> {
+        let id = self.queue_manual_core(request)?;
+        Ok(format!(
+            "Manual core {id} queued; target resumes before host saving completes"
+        ))
+    }
+    /// Queue a manual core; the answer is its capture id.
+    pub(super) fn queue_manual_core(
+        &mut self,
         mut request: ProcessCoreRequest,
     ) -> Result<String, String> {
         core_capture::validate_request(&request)?;
@@ -353,9 +363,7 @@ impl Session {
         owner.summary.guest_max_size = Some(limits.max_size);
         self.manual_record_count += 1;
         self.manual_cores.insert(id.clone(), owner);
-        Ok(format!(
-            "Manual core {id} queued; target resumes before host saving completes"
-        ))
+        Ok(id)
     }
     pub(super) fn cancel_manual_core(&mut self, id: &str) -> Result<String, String> {
         let owner = self

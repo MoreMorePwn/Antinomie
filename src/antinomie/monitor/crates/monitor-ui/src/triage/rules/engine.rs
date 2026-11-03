@@ -99,9 +99,64 @@ pub(in crate::triage) struct Engine {
     /// Matches past the bound on rows held; they are counted, not kept.
     dropped: u64,
     notes: Vec<String>,
+    /// Rows a live judge has not yet looked at, by index in `aggs`.
+    touched: Vec<usize>,
+    /// The tier each row had when a live judge last reported it.
+    announced: HashMap<usize, Tier>,
+}
+
+/// A row of a live run that is new, or raised to a higher tier.
+pub(in crate::triage) struct LiveRow {
+    pub rule: &'static str,
+    pub summary: String,
+    pub tier: Tier,
+    pub pid: u32,
+    pub tid: u32,
+    pub cookie: u64,
+    pub stream: u64,
+    pub call_id: u64,
+    pub ns: u64,
+    pub syscall: String,
 }
 
 impl Engine {
+    /// The rows the last calls created or raised, with the tier the final
+    /// pass would give them so far.
+    pub(in crate::triage) fn live_changes(&mut self) -> Vec<LiveRow> {
+        let mut touched = std::mem::take(&mut self.touched);
+        touched.sort_unstable();
+        touched.dedup();
+        let mut rows = Vec::new();
+        for at in touched {
+            let mut agg = self.aggs[at].clone();
+            super::noise::settle(&mut agg);
+            if agg.hidden() || agg.tier == Tier::Info {
+                continue;
+            }
+            if self
+                .announced
+                .get(&at)
+                .is_some_and(|seen| *seen >= agg.tier)
+            {
+                continue;
+            }
+            self.announced.insert(at, agg.tier);
+            rows.push(LiveRow {
+                rule: agg.rule,
+                summary: agg.summary,
+                tier: agg.tier,
+                pid: agg.pid,
+                tid: agg.tid,
+                cookie: agg.cookie,
+                stream: agg.stream,
+                call_id: agg.call_id,
+                ns: agg.first_ns,
+                syscall: agg.evidence.split(' ').nth(1).unwrap_or("").to_owned(),
+            });
+        }
+        rows
+    }
+
     pub(in crate::triage) fn new(options: Options) -> Self {
         let mut state = State::with_packed(options.packed.clone());
         state.cloud_profile = options.cloud_profile;
@@ -114,6 +169,8 @@ impl Engine {
             info_matches: 0,
             dropped: 0,
             notes: Vec::new(),
+            touched: Vec::new(),
+            announced: HashMap::new(),
         }
     }
 
@@ -162,6 +219,7 @@ impl Engine {
         let time = cx.time();
         let key = (spec.id, task, hit.object.clone());
         if let Some(&at) = self.index.get(&key) {
+            self.touched.push(at);
             let agg = &mut self.aggs[at];
             agg.count += 1;
             agg.failed += u64::from(failed);
@@ -219,6 +277,7 @@ impl Engine {
             why: Vec::new(),
         };
         self.index.insert(key, self.aggs.len());
+        self.touched.push(self.aggs.len());
         self.aggs.push(agg);
     }
 

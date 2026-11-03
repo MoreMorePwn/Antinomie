@@ -789,6 +789,7 @@ impl Worker {
         self.poll_disk_job();
         self.host_analysis_tick();
         self.check_run_artifacts();
+        self.check_triggers();
         self.poll_flush();
         self.poll_evidence_deletes();
         if self.last_publish.elapsed() >= Duration::from_millis(250)

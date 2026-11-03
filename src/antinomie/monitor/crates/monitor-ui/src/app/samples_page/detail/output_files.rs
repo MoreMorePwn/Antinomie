@@ -125,7 +125,7 @@ fn row(
     path: PathBuf,
     deleted: bool,
     state: &str,
-    because: &'static str,
+    because: &str,
 ) -> Output {
     let size = if deleted { None } else { size_of(&path) };
     Output {
@@ -193,6 +193,25 @@ pub(in crate::app::samples_page) fn read(
                 &state(artifacts.core_state, artifacts.core_deleted),
                 "Core dump on exit",
             ));
+        }
+        for record in entry.run.triggers.iter().flat_map(|log| &log.records) {
+            for (kind, dump) in [(Kind::Memory, &record.memory), (Kind::Core, &record.core)] {
+                let Some(dump) = dump else { continue };
+                let Some(path) = &dump.path else { continue };
+                out.push(row(
+                    entry.number,
+                    kind,
+                    path.clone(),
+                    false,
+                    &state(dump.state, false),
+                    &format!(
+                        "Triggered by {} ({}, pid {})",
+                        record.finding.rule,
+                        record.finding.tier.label(),
+                        record.finding.pid
+                    ),
+                ));
+            }
         }
         for path in &artifacts.network_captures {
             out.push(row(

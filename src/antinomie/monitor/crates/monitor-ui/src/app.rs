@@ -703,6 +703,26 @@ impl eframe::App for MonitorApp {
                 .find(|run| run.id == id)
                 .or_else(|| self.history.iter().find(|run| run.id == id))
         });
+        let run_triggers = triage_run.and_then(|run| run.triggers.clone());
+        ctx.data_mut(|data| match run_triggers {
+            Some(log) => {
+                data.insert_temp(egui::Id::new(crate::triage::TRIGGER_LOG), Arc::new(log));
+            }
+            None => {
+                data.remove_temp::<Arc<antinomie_monitor_core::dump_trigger::TriggerLog>>(
+                    egui::Id::new(crate::triage::TRIGGER_LOG),
+                );
+            }
+        });
+        if let Some(panel) = ctx.data_mut(|data| {
+            data.remove_temp::<&'static str>(egui::Id::new(crate::triage::OPEN_DUMP_TAB))
+        }) {
+            self.focus_panel = Some(if panel == "memory" {
+                Panel::Memory
+            } else {
+                Panel::CoreDump
+            });
+        }
         let input = triage_run
             .map(|run| crate::triage::TriageInput {
                 analysis: run.analysis.as_ref(),

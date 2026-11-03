@@ -58,7 +58,10 @@ impl Worker {
     pub(super) fn start_memory_dump(&mut self) -> Result<String, String> {
         self.start_memory_dump_for(None)
     }
-    fn start_memory_dump_for(&mut self, owner_cookie: Option<u64>) -> Result<String, String> {
+    pub(super) fn start_memory_dump_for(
+        &mut self,
+        owner_cookie: Option<u64>,
+    ) -> Result<String, String> {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
         if self.snapshot.memory_dump.is_some() {
             return Err("a memory dump is already being written".into());
@@ -253,6 +256,7 @@ impl Worker {
                 }
             }
         }
+        self.settle_memory_trigger(&dump);
         self.snapshot.memory_dump = None;
         self.publish();
     }

@@ -116,9 +116,10 @@ fn capture_selection(
     )
     .on_hover_text("Capture the launched root process before exit, including thread registers and selected memory. Linux x86-64; memory is filtered and bounded by the budget below, so captures may be partial. Some fatal exits, including SIGKILL, may leave register context unavailable. Thread synchronization and page faults may delay exit.")
     .on_disabled_hover_text(core_unavailable_reason(core_supported));
+    let trigger_core = request.dump_trigger.as_ref().is_some_and(|plan| plan.core);
     if core_enabled && request.core_dump_on_exit {
         core_budget_row(ui, request, capabilities);
-    } else {
+    } else if !(core_supported && trigger_core) {
         request.core_max_size = None;
         request.core_timeout_ms = None;
     }
@@ -128,6 +129,7 @@ fn capture_selection(
                 .wrap(),
         );
     }
+    trigger_selection(ui, request, capabilities);
     ui.add_space(12.0);
     crate::theme::section(ui, "Network");
     // A VM without a network card has nothing to capture: the box is off
@@ -214,6 +216,86 @@ fn core_budget_row(ui: &mut egui::Ui, request: &mut ExecRequest, capabilities: L
     if limits.is_some() {
         request.core_max_size = Some(budget);
         request.core_timeout_ms = Some(timeout);
+    }
+}
+
+/// Dump on suspicious activity: which Triage tier, what to take, how often.
+fn trigger_selection(
+    ui: &mut egui::Ui,
+    request: &mut ExecRequest,
+    capabilities: LaunchCapabilities,
+) {
+    use antinomie_monitor_core::dump_trigger::{DumpTrigger, TriggerTier};
+    ui.add_space(12.0);
+    crate::theme::section(ui, "Triggers");
+    let mut on = request.dump_trigger.is_some();
+    ui.checkbox(&mut on, "Dump when suspicious activity is seen")
+        .on_hover_text("While the program runs, the Triage rules judge each call as it arrives. The first match at or above the chosen tier takes the dump you pick, within the budget below. The program is not stopped; a memory dump pauses the VM while QEMU writes it.");
+    if !on {
+        request.dump_trigger = None;
+        return;
+    }
+    let plan = request
+        .dump_trigger
+        .get_or_insert_with(DumpTrigger::default);
+    let core_ok = capabilities.core_on_exit;
+    ui.indent("dump-trigger", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("At tier");
+            egui::ComboBox::from_id_salt("dump-trigger-tier")
+                .selected_text(format!("{} or higher", plan.min_tier.label()))
+                .show_ui(ui, |ui| {
+                    for tier in TriggerTier::ALL {
+                        ui.selectable_value(
+                            &mut plan.min_tier,
+                            tier,
+                            format!("{} or higher", tier.label()),
+                        );
+                    }
+                })
+                .response
+                .on_hover_text("The tiers Triage gives its findings; there is nothing above High.");
+        });
+        ui.checkbox(&mut plan.memory, "Memory dump")
+            .on_hover_text("Dump the VM's RAM. Skipped when the VM has more RAM than the cap below or the disk is too full.");
+        ui.add_enabled(
+            core_ok,
+            egui::Checkbox::new(&mut plan.core, "Core of the process that triggered it"),
+        )
+        .on_hover_text("A core of the process whose call matched, taken while it runs. Linux x86-64; bounded by the budget.")
+        .on_disabled_hover_text(core_unavailable_reason(core_ok));
+        if !core_ok {
+            plan.core = false;
+        }
+        if !plan.memory && !plan.core {
+            ui.colored_label(crate::theme::warn(), "Pick a memory dump, a core, or both.");
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.label("At most");
+            ui.add(egui::DragValue::new(&mut plan.max_dumps).range(1..=DumpTrigger::MAX_DUMPS));
+            ui.label("dump(s) per run, at least");
+            ui.add(
+                egui::DragValue::new(&mut plan.cooldown_secs)
+                    .range(0..=3600)
+                    .suffix(" s"),
+            );
+            ui.label("apart");
+        });
+        if plan.memory {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Memory dump only if the VM has at most");
+                ui.add(
+                    egui::DragValue::new(&mut plan.memory_max_mib)
+                        .range(256..=65536)
+                        .speed(64.0)
+                        .suffix(" MiB"),
+                );
+            });
+        }
+    });
+    let core = request.dump_trigger.as_ref().is_some_and(|plan| plan.core);
+    if core && !request.core_dump_on_exit {
+        core_budget_row(ui, request, capabilities);
     }
 }
 
