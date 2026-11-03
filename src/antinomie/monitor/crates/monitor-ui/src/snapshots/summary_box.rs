@@ -4,7 +4,7 @@
 //! Snapshots. It only draws and asks; the app answers through the snapshot
 //! manager's own dialogs, so every rule of the Snapshots window applies
 //! (what the VM state allows, a busy operation, compatibility).
-use super::{created_time, graph_layout, mode_label, primary};
+use super::{created_time, primary};
 use crate::{theme, widgets};
 use antinomie_monitor_core::{VmSnapshotMode, VmSnapshotProgress, VmSnapshotTree};
 use eframe::egui::{self, RichText};
@@ -157,94 +157,55 @@ pub(crate) fn show(
     if let Some(note) = &tree.recovery_note {
         crate::activity::warning(ui, note);
     }
+    // The same diagram as the Snapshots window, fitted to the box and drawn
+    // with no snapshots too: the base image and the "You are here" node.
+    ui.add_space(2.0);
+    let body = ui.text_style_height(&egui::TextStyle::Body);
+    let height = super::graph::natural_height(tree, body * 6.0, body * 20.0);
+    super::graph::paint(
+        ui,
+        tree,
+        &mut selected,
+        &mut super::graph::GraphView::default(),
+        height,
+        false,
+    );
     if tree.nodes.is_empty() {
         ui.add(
             egui::Label::new(
-                RichText::new(
-                    "No snapshots: Take snapshot keeps this VM's state so you can return to it.",
-                )
-                .color(theme::muted()),
+                RichText::new("Take snapshot keeps this VM's state so you can return to it.")
+                    .small()
+                    .color(theme::muted()),
             )
             .wrap(),
         );
-        finish(ui, key, selected, action);
-        return;
+    } else if let Some(node) = node {
+        let mut meta = format!(
+            "{} · {} · {}",
+            if node.deleted {
+                "Hidden checkpoint"
+            } else {
+                node.name.as_str()
+            },
+            created_time(node.created_unix_ms),
+            crate::values::short_size(node.disk_size + node.memory_size)
+        );
+        if !node.description.is_empty() && !node.deleted {
+            meta.push_str(" · ");
+            meta.push_str(node.description.lines().next().unwrap_or_default());
+        }
+        ui.add(egui::Label::new(RichText::new(meta).small().color(theme::muted())).wrap());
+    } else {
+        ui.add(
+            egui::Label::new(
+                RichText::new("Select a snapshot in the diagram to restore it.")
+                    .small()
+                    .color(theme::muted()),
+            )
+            .wrap(),
+        );
     }
-    ui.add_space(2.0);
-    let body = ui.text_style_height(&egui::TextStyle::Body);
-    egui::ScrollArea::vertical()
-        .id_salt(("summary_snapshots_list", vm_id))
-        // The box sits in a horizontal row, which offers a single line of
-        // height: ask for the room explicitly.
-        .max_height(body * 16.0)
-        .min_scrolled_height(body * 12.0)
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Base image").strong().color(theme::text()));
-                if tree.active_parent_id.is_none() {
-                    current_chip(ui);
-                }
-            });
-            let items = graph_layout(tree);
-            let depths: Vec<_> = items.iter().map(|item| item.depth + 1).collect();
-            let mono = egui::TextStyle::Monospace.resolve(ui.style());
-            let char_width = crate::tree_lines::char_width(ui, &mono);
-            for (item, branch) in items.iter().zip(crate::tree_lines::prefixes(&depths)) {
-                let node = &tree.nodes[item.index];
-                crate::tree_lines::row(ui, &branch, char_width, |ui| {
-                    ui.vertical(|ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            let name = if node.deleted {
-                                "Hidden checkpoint"
-                            } else {
-                                node.name.as_str()
-                            };
-                            let response = ui.add(egui::Button::selectable(
-                                selected.as_deref() == Some(node.id.as_str()),
-                                name,
-                            ));
-                            if response.clicked() {
-                                selected = Some(node.id.clone());
-                            }
-                            widgets::chip(
-                                ui,
-                                mode_label(node.mode),
-                                if node.mode == VmSnapshotMode::Full {
-                                    widgets::Tone::Info
-                                } else {
-                                    widgets::Tone::Neutral
-                                },
-                            );
-                            if tree.active_parent_id.as_deref() == Some(node.id.as_str()) {
-                                current_chip(ui);
-                            }
-                        });
-                        let mut meta = format!(
-                            "{} · {}",
-                            created_time(node.created_unix_ms),
-                            crate::values::short_size(node.disk_size + node.memory_size)
-                        );
-                        if !node.description.is_empty() && !node.deleted {
-                            meta.push_str(" · ");
-                            meta.push_str(node.description.lines().next().unwrap_or_default());
-                        }
-                        ui.add(
-                            egui::Label::new(RichText::new(meta).small().color(theme::muted()))
-                                .wrap(),
-                        )
-                        .on_hover_text(&node.description);
-                    });
-                });
-            }
-        });
     finish(ui, key, selected, action);
-}
-
-/// The marker of the checkpoint the next snapshot hangs from.
-fn current_chip(ui: &mut egui::Ui) {
-    widgets::chip(ui, "Current", widgets::Tone::Good)
-        .on_hover_text("The VM runs from here; a new snapshot branches from this one");
 }
 
 fn finish(ui: &mut egui::Ui, key: egui::Id, selected: Option<String>, action: Option<Action>) {

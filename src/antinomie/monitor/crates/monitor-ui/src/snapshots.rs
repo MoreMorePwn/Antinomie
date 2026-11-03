@@ -9,13 +9,10 @@ use antinomie_monitor_core::{
 use eframe::egui::{self, RichText};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod graph;
 pub(crate) mod summary_box;
 
 pub(crate) const WINDOW_ID: &str = "vm_snapshots";
-const NODE_WIDTH: f32 = 210.0;
-const NODE_HEIGHT: f32 = 84.0;
-const COLUMN_STEP: f32 = 252.0;
-const ROW_STEP: f32 = 108.0;
 
 #[derive(Clone)]
 struct Draft {
@@ -68,9 +65,7 @@ pub(crate) struct SnapshotManager {
     vm_name: String,
     pub(crate) selected: Option<String>,
     tree_view: bool,
-    zoom: f32,
-    pan: egui::Vec2,
-    fit: bool,
+    view: graph::GraphView,
     decision: Option<Decision>,
     pub(crate) pending: Option<u64>,
     pub(crate) result: Option<(bool, String)>,
@@ -87,9 +82,7 @@ impl Default for SnapshotManager {
             vm_name: String::new(),
             selected: None,
             tree_view: false,
-            zoom: 1.0,
-            pan: egui::Vec2::ZERO,
-            fit: true,
+            view: graph::GraphView::default(),
             decision: None,
             pending: None,
             result: None,
@@ -253,16 +246,17 @@ impl SnapshotManager {
                 }
                 if !self.tree_view {
                     if ui.button("Fit").clicked() {
-                        self.fit = true;
+                        self.view.fit = true;
                     }
                     if ui.button("−").on_hover_text("Zoom out").clicked() {
-                        self.zoom = (self.zoom / 1.2).max(0.001);
+                        self.view.zoom = (self.view.zoom / 1.2).max(0.001);
                     }
                     if ui.button("+").on_hover_text("Zoom in").clicked() {
-                        self.zoom = (self.zoom * 1.2).min(2.0);
+                        self.view.zoom = (self.view.zoom * 1.2).min(2.0);
                     }
                     ui.label(
-                        RichText::new(format!("{:.1}%", self.zoom * 100.0)).color(theme::muted()),
+                        RichText::new(format!("{:.1}%", self.view.zoom * 100.0))
+                            .color(theme::muted()),
                     );
                 }
             });
@@ -407,146 +401,7 @@ impl SnapshotManager {
     }
 
     fn graph(&mut self, ui: &mut egui::Ui, tree: &VmSnapshotTree, height: f32) {
-        let size = egui::vec2(ui.available_width().max(100.0), height);
-        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 6.0, theme::bg());
-        painter.rect_stroke(
-            rect,
-            6.0,
-            egui::Stroke::new(1.0_f32, theme::line_soft()),
-            egui::StrokeKind::Inside,
-        );
-        let items = graph_layout(tree);
-        let points: BTreeMap<&str, egui::Pos2> = items
-            .iter()
-            .map(|item| {
-                (
-                    tree.nodes[item.index].id.as_str(),
-                    egui::pos2(
-                        (item.depth + 1) as f32 * COLUMN_STEP,
-                        item.row as f32 * ROW_STEP,
-                    ),
-                )
-            })
-            .collect();
-        let current_parent = tree
-            .active_parent_id
-            .as_deref()
-            .and_then(|id| points.get(id))
-            .copied()
-            .unwrap_or(egui::Pos2::ZERO);
-        let current_row = items
-            .iter()
-            .map(|item| item.row)
-            .max()
-            .map_or(0, |row| row + 1);
-        let current = egui::pos2(
-            current_parent.x + COLUMN_STEP,
-            current_row as f32 * ROW_STEP,
-        );
-        if self.fit {
-            let max_x = points.values().map(|p| p.x).fold(current.x, f32::max) + NODE_WIDTH;
-            let max_y = points.values().map(|p| p.y).fold(current.y, f32::max) + NODE_HEIGHT;
-            self.zoom = ((rect.width() - 32.0) / max_x.max(1.0))
-                .min((rect.height() - 32.0) / max_y.max(1.0))
-                .clamp(0.001, 1.2);
-            self.pan = egui::vec2(16.0, 16.0);
-            self.fit = false;
-        }
-        if response.dragged() {
-            self.pan += response.drag_delta();
-        }
-        if response.hovered() {
-            let scroll = ui.input(|input| input.smooth_scroll_delta);
-            if ui.input(|input| input.modifiers.ctrl || input.modifiers.command) {
-                self.zoom = (self.zoom * (scroll.y * 0.002).exp()).clamp(0.001, 2.0);
-            } else {
-                self.pan += scroll;
-            }
-        }
-        let transform = |point: egui::Pos2| rect.min + self.pan + point.to_vec2() * self.zoom;
-        let node_size = egui::vec2(NODE_WIDTH, NODE_HEIGHT) * self.zoom;
-        let font_size = ui.style().text_styles[&egui::TextStyle::Body].size * self.zoom;
-        let edge = |parent: egui::Pos2, child: egui::Pos2, color| {
-            let start = transform(parent) + egui::vec2(node_size.x, node_size.y * 0.5);
-            let end = transform(child) + egui::vec2(0.0, node_size.y * 0.5);
-            let x = (start.x + end.x) * 0.5;
-            painter.add(egui::Shape::line(
-                vec![start, egui::pos2(x, start.y), egui::pos2(x, end.y), end],
-                egui::Stroke::new(1.5_f32, color),
-            ));
-        };
-        for item in &items {
-            let node = &tree.nodes[item.index];
-            let point = points[&node.id.as_str()];
-            let parent = node
-                .parent_id
-                .as_deref()
-                .and_then(|id| points.get(id))
-                .copied()
-                .unwrap_or(egui::Pos2::ZERO);
-            edge(parent, point, theme::line());
-        }
-        edge(current_parent, current, theme::good());
-        paint_node(
-            &painter,
-            egui::Rect::from_min_size(transform(egui::Pos2::ZERO), node_size),
-            "Base image",
-            "Initial disk",
-            theme::line(),
-            false,
-            font_size,
-        );
-        for item in &items {
-            let node = &tree.nodes[item.index];
-            let node_rect =
-                egui::Rect::from_min_size(transform(points[&node.id.as_str()]), node_size);
-            let selected = self.selected.as_deref() == Some(&node.id);
-            let color = if selected {
-                theme::blue()
-            } else if !node.compatible {
-                theme::warn()
-            } else {
-                theme::line()
-            };
-            paint_node(
-                &painter,
-                node_rect,
-                if node.deleted {
-                    "Hidden checkpoint"
-                } else {
-                    &node.name
-                },
-                mode_label(node.mode),
-                color,
-                selected,
-                font_size,
-            );
-            if node_rect.intersects(rect) {
-                let hit = ui.interact(
-                    node_rect.intersect(rect),
-                    response.id.with(&node.id),
-                    egui::Sense::click(),
-                );
-                if hit.clicked() {
-                    self.selected = Some(node.id.clone());
-                }
-                hit.on_hover_text(format!("{}\n{}", node.name, node.description));
-            }
-        }
-        paint_node(
-            &painter,
-            egui::Rect::from_min_size(transform(current), node_size),
-            "You are here",
-            "Unsaved changes",
-            theme::good(),
-            false,
-            font_size,
-        );
-        response.on_hover_text(
-            "Drag to pan. Scroll to pan; Ctrl + scroll to zoom. Use Tree for keyboard navigation.",
-        );
+        graph::paint(ui, tree, &mut self.selected, &mut self.view, height, true);
     }
 
     fn details(&mut self, ui: &mut egui::Ui, tree: &VmSnapshotTree, enabled: bool) {
@@ -921,62 +776,6 @@ fn graph_layout(tree: &VmSnapshotTree) -> Vec<PlacedNode> {
         }
     }
     output
-}
-
-fn paint_node(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    name: &str,
-    detail: &str,
-    color: egui::Color32,
-    selected: bool,
-    font_size: f32,
-) {
-    painter.rect_filled(
-        rect,
-        4.0,
-        if selected {
-            theme::palette().selection
-        } else {
-            theme::raised()
-        },
-    );
-    painter.rect_stroke(
-        rect,
-        4.0,
-        egui::Stroke::new(if selected { 2.0_f32 } else { 1.0_f32 }, color),
-        egui::StrokeKind::Inside,
-    );
-    if rect.height() < 20.0 {
-        painter.circle_filled(rect.center(), 2.0, color);
-        return;
-    }
-    let font = egui::FontId::proportional(font_size.clamp(12.0, 24.0));
-    // Room between the text and the node's border, growing with the zoom.
-    let pad = (rect.height() * 0.1).clamp(4.0, 12.0);
-    let mut job = egui::text::LayoutJob::simple(
-        name.to_owned(),
-        font,
-        theme::text(),
-        (rect.width() - 2.0 * pad).max(1.0),
-    );
-    job.wrap.max_rows = 1;
-    let galley = painter.layout_job(job);
-    let clip = painter.with_clip_rect(painter.clip_rect().intersect(rect.shrink(pad / 2.0)));
-    clip.galley(rect.min + egui::vec2(pad, pad), galley, theme::text());
-    if rect.height() >= 32.0 {
-        clip.text(
-            rect.left_bottom() + egui::vec2(pad, -pad),
-            egui::Align2::LEFT_BOTTOM,
-            detail,
-            egui::FontId::proportional((font_size * 0.81).clamp(12.0, 24.0)),
-            if color == theme::line() {
-                theme::muted()
-            } else {
-                color
-            },
-        );
-    }
 }
 
 fn mode_label(mode: VmSnapshotMode) -> &'static str {
