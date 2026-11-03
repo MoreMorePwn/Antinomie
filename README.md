@@ -56,7 +56,7 @@ is the recorded run; no VM is running.</sub>
 > sample can still do.
 
 > [!NOTE]
-> This README describes **0.8.1**, a fix release on top of 0.8.0. Download it
+> This README describes **0.8.2**, a host-only release on the 0.8 line. Download it
 > from [Releases](https://github.com/MoreMorePwn/Antinomie/releases); the
 > [changelog](CHANGELOG.md) lists every change.
 
@@ -169,14 +169,14 @@ and network card into its disk without root; BusyBox VMs do not need it:
 sudo apt install qemu-system-x86 qemu-utils qemu-system-gui curl libsqlite3-0 bubblewrap tshark util-linux libguestfs-tools
 ```
 
-Download `antinomie-0.8.1-linux-x86_64.tar.gz` and `SHA256SUMS` from
+Download `antinomie-0.8.2-linux-x86_64.tar.gz` and `SHA256SUMS` from
 [Releases](https://github.com/MoreMorePwn/Antinomie/releases) into one folder,
 then verify, extract and install for your user (no root):
 
 ```sh
 sha256sum --check SHA256SUMS
-tar -xzf antinomie-0.8.1-linux-x86_64.tar.gz
-cd antinomie-0.8.1
+tar -xzf antinomie-0.8.2-linux-x86_64.tar.gz
+cd antinomie-0.8.2
 ./install.sh
 antinomie --check-dependencies
 antinomie
@@ -202,7 +202,7 @@ antinomie
 Install the [host build prerequisites](src/antinomie/monitor/README.md#build-and-run), then:
 
 ```sh
-git clone --branch v0.8.1 https://github.com/MoreMorePwn/Antinomie.git
+git clone --branch v0.8.2 https://github.com/MoreMorePwn/Antinomie.git
 cd Antinomie
 ./run.sh
 ```
@@ -239,7 +239,7 @@ download anything, **you build a full pack** yourself:
 4. Inspect the live views, then reopen the saved run from **Run History**.
 
 <div align="center">
-<img src="assets/screenshots/getting-started.png" alt="Antinomie 0.8.0's Getting started window on a fresh install, listing the BusyBox, Debian 13 Minimal and Debian 13 GNOME bases from the catalog" width="640">
+<img src="assets/screenshots/getting-started.png" alt="Antinomie 0.8.2's Getting started window on a fresh install, on the Base image step, listing the BusyBox, Debian 13 Minimal and Debian 13 GNOME bases from the catalog" width="640">
 <br>
 <sub>First launch on an empty data directory: the Getting started guide.</sub>
 </div>
@@ -374,6 +374,36 @@ Import the output folder with **Add base → Import base…**.
 The app checks dependencies at startup (**Tools → App dependencies**). From a
 terminal: `antinomie --check-dependencies`. The
 [full dependency list](docs/usage.md#dependencies-and-analysis-tools) names every tool.
+
+## What's new in 0.8.2
+
+0.8.2 runs the same revision-20 bases as 0.8.0 and 0.8.1; the
+[changelog](CHANGELOG.md) has every change, including the fixes.
+
+* **Find your way:** a command palette (**Ctrl+K**) that opens every window and
+  action, keyboard shortcuts for the work-area tabs and common actions (press
+  **?** for the list), a **Jobs** window with progress and Stop for long work, a
+  notification when a run finishes, run states in one colour scheme, an
+  **Appearance** step in Getting started and a **time zone** setting that every
+  view and report follows.
+* **Memory dumps and process cores:** a **Content** view (hex and text, go to
+  offset or address) with on-demand **Strings** and **Regex** search, and core
+  mappings named like `/proc/PID/maps` (`[stack]`, `[heap]`, `[vdso]`).
+* **Syscall Trace:** captured record arrays (directory entries, poll fds, control
+  messages, BPF programs and more) as expandable trees with short summaries in the
+  table, and **Decode all captured** for records past the preview.
+* **Samples and indicators:** an **IOCs** tab in the sample window with every
+  indicator across a sample's runs, filters and CSV, JSON, MISP and STIX 2.1
+  export; the Triage IOC tab shows how many indicators matched a dataset.
+* **ATT&CK:** techniques coloured by tactic and an expandable list that leads to
+  the rules and evidence behind each one.
+* **Recordings:** when the recording quota is nearly full, Antinomie keeps the
+  calls the suspicious-activity rules use and counts the rest instead of stopping;
+  a run waits for a systemd guest to finish booting before it starts; reports say
+  why a process ended on a signal.
+* **Network and VMs:** offline IP geolocation for TShark (an optional DB-IP Lite
+  download or your own MaxMind GeoLite2 folder), and a snapshot diagram on the VM
+  Summary.
 
 ## What's new in 0.8.1
 

@@ -4,7 +4,16 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
-## 0.8.2 — 2026-MM-DD
+## 0.8.2 — 2026-11-03
+
+Antinomie 0.8.2 is a host-only release on the 0.8 line; it runs the same
+revision-20 bases as 0.8.0 and 0.8.1. It adds a command palette, keyboard
+shortcuts and a Jobs window; a Content view with Strings and Regex search for
+memory dumps and process cores; record arrays as trees in the Syscall Trace; an
+IOCs tab in the sample window; ATT&CK coloured by tactic; reduced recording when
+the quota is nearly full; a wait for the guest to finish booting before a run;
+offline IP geolocation for TShark; and a time zone setting. The interface moved to
+egui 0.36, and saved settings now survive a restart again. Details follow.
 
 ### Host
 
