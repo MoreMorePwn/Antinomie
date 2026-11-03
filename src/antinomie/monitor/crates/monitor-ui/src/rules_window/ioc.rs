@@ -31,14 +31,6 @@ pub(super) struct State {
     pub(super) fetcher: Option<std::sync::Arc<dyn Fetcher + Send + Sync>>,
 }
 
-fn size_text(bytes: u64) -> String {
-    crate::values::short_size(bytes)
-}
-
-fn thousands(value: u64) -> String {
-    crate::values::thousands(value)
-}
-
 impl Model {
     /// Open on the IOC tab (the IOC section's Datasets button).
     pub(crate) fn show_ioc(&mut self) {
@@ -115,7 +107,7 @@ impl Model {
                         } else {
                             "Fetches the datasets that need no key; ThreatFox and URLhaus wait for the Auth-Key"
                         },
-                        size_text(typical)
+                        crate::values::short_size(typical)
                     )
                 })
                 .clicked()
@@ -141,7 +133,7 @@ impl Model {
             ui.weak(format!(
                 "{usable} of {} loaded · {}",
                 self.ioc.statuses.iter().filter(|s| s.enabled).count(),
-                size_text(total)
+                crate::values::short_size(total)
             ));
         });
         self.ioc_table(ui, data_dir, *outbound, now);
@@ -247,17 +239,15 @@ impl Model {
                             table::cell_click(ui, table::Cell::Text, feed.used_for);
                         });
                         row.col(|ui| {
-                            let text = status
-                                .meta
-                                .as_ref()
-                                .map_or("—".to_owned(), |meta| thousands(meta.records));
+                            let text = status.meta.as_ref().map_or("—".to_owned(), |meta| {
+                                crate::values::thousands(meta.records)
+                            });
                             table::cell_click(ui, table::Cell::Number, &text);
                         });
                         row.col(|ui| {
-                            let text = status
-                                .meta
-                                .as_ref()
-                                .map_or("—".to_owned(), |meta| size_text(meta.size));
+                            let text = status.meta.as_ref().map_or("—".to_owned(), |meta| {
+                                crate::values::short_size(meta.size)
+                            });
                             table::cell_click(ui, table::Cell::Number, &text);
                         });
                         row.col(|ui| {
@@ -369,8 +359,8 @@ impl Model {
                     ui,
                     format!(
                         "Stored copy: {} records, {}, fetched {} ({} days ago), sha256 {}",
-                        thousands(meta.records),
-                        size_text(meta.size),
+                        crate::values::thousands(meta.records),
+                        crate::values::short_size(meta.size),
                         meta.date(),
                         meta.age_days(now),
                         &meta.sha256[..meta.sha256.len().min(16)]

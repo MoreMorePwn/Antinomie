@@ -269,7 +269,7 @@ impl Viewer {
                 RichText::new(format!(
                     "{} · {} · SHA-256 {}",
                     path.display(),
-                    crate::network_view::format_bytes(page.size),
+                    crate::values::file_size(page.size),
                     page.sha256
                 ))
                 .small()

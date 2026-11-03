@@ -307,7 +307,7 @@ fn row(
             action.route = target;
         }
         if let Some(size) = input.size {
-            ui.label(RichText::new(crate::network_view::format_bytes(size)).color(theme::muted()));
+            ui.label(RichText::new(crate::values::file_size(size)).color(theme::muted()));
         }
         if let Some(sha256) = &input.sha256 {
             ui.label(

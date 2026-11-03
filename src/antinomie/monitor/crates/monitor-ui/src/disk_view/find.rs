@@ -70,8 +70,8 @@ fn content_limits_note() -> String {
     format!(
         "Content search reads regular files: at most the first {} of each, {} in all, for up to \
          {CONTENT_SECONDS} s. Longer files and later files are not searched.",
-        format_size(CONTENT_FILE_LIMIT),
-        format_size(CONTENT_TOTAL_LIMIT)
+        crate::values::short_size(CONTENT_FILE_LIMIT),
+        crate::values::short_size(CONTENT_TOTAL_LIMIT)
     )
 }
 
@@ -221,7 +221,7 @@ impl DiskView {
                 format!(
                     "{} files read, {}{}",
                     found.files_read,
-                    format_size(found.bytes_read),
+                    crate::values::short_size(found.bytes_read),
                     if found.partial_files > 0 {
                         format!(
                             ", {} larger than the per-file limit searched in part",

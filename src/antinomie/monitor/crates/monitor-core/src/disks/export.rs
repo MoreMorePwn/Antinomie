@@ -5,7 +5,7 @@
 //! A plain copy is avoided on purpose: it can fill the holes of the image on
 //! some filesystems. `qemu-img convert` with the source format given
 //! explicitly as `raw` never probes the (guest-controlled) content.
-use super::{SPACE_MARGIN, format_size, job::parse_progress, measure};
+use super::{SPACE_MARGIN, job::parse_progress, measure};
 use std::{
     fs::{self, File},
     io::Read,
@@ -102,8 +102,8 @@ pub fn export(
         return Err(format!(
             "{} needs about {} of free space; {} is available",
             folder.display(),
-            format_size(need),
-            format_size(free)
+            crate::byte_size::short_size(need),
+            crate::byte_size::short_size(free)
         ));
     }
     let temporary = folder.join(format!(

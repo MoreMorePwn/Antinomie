@@ -178,7 +178,10 @@ pub(super) fn details(ui: &mut egui::Ui, health: &Health) {
             gaps_text(health).unwrap_or_else(|| "none".into()),
         ),
         ("Packets persisted", health.persisted_packets.to_string()),
-        ("Write backlog", super::size(health.write_backlog)),
+        (
+            "Write backlog",
+            crate::values::short_size(health.write_backlog),
+        ),
         ("Parser errors", health.parser_errors.to_string()),
         ("Reply stalls", health.reply_stalls.to_string()),
     ] {

@@ -300,8 +300,8 @@ fn build_tree(
                     };
                     progress(&format!(
                         "{label}: {} of {about}{}",
-                        human_bytes(received),
-                        human_bytes(source.size)
+                        crate::byte_size::short_size(received),
+                        crate::byte_size::short_size(source.size)
                     ));
                 }
                 last = received;
@@ -530,10 +530,6 @@ fn unlisted_ok(filter: &SourceFilter, path: &str) -> bool {
     }
 }
 
-fn human_bytes(bytes: u64) -> String {
-    crate::byte_size::short_size(bytes)
-}
-
 /// The provenance recorded in a retained version's manifest.
 pub(super) fn retained_source(version_dir: &Path) -> Result<Option<SourceProvenance>, String> {
     let data = fs::read(version_dir.join("manifest.json")).map_err(|error| error.to_string())?;
@@ -556,12 +552,4 @@ pub fn source_update<'a>(catalog: &'a Catalog, pack: &InstalledPack) -> Option<&
         .map(|source| source.options.iter().cloned().collect())
         .unwrap_or_default();
     (entry.version(&options) != pack.version).then_some(entry)
-}
-
-#[cfg(test)]
-mod size_text_tests {
-    #[test]
-    fn source_download_sizes_show_only_the_rounded_unit() {
-        assert_eq!(super::human_bytes(1500), "1.5 KiB");
-    }
 }

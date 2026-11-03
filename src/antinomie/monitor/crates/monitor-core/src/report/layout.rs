@@ -136,10 +136,6 @@ impl Builder {
     }
 }
 
-fn size_text(size: Option<u64>) -> String {
-    size.map_or(String::new(), |size| format!("{size} bytes"))
-}
-
 /// The document for `report`. `defang` rewrites indicators for reading.
 pub fn document(report: &Report, defang: bool) -> Document {
     let mut b = Builder {
@@ -172,7 +168,12 @@ pub fn document(report: &Report, defang: bool) -> Document {
         head.push(("Sample".into(), sample.name.clone()));
         head.push(("Sample SHA-256".into(), sample.sha256.clone()));
         if sample.size.is_some() {
-            head.push(("Sample size".into(), size_text(sample.size)));
+            head.push((
+                "Sample size".into(),
+                sample
+                    .size
+                    .map_or(String::new(), crate::byte_size::file_size),
+            ));
         }
     }
     head.retain(|(_, value)| !value.is_empty());

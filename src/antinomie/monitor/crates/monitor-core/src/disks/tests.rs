@@ -6,17 +6,6 @@ use super::{
 use serde_json::json;
 
 #[test]
-fn sizes_read_in_binary_units() {
-    assert_eq!(format_size(0), "0 B");
-    assert_eq!(format_size(1023), "1023 B");
-    assert_eq!(format_size(1024), "1.0 KiB");
-    assert_eq!(format_size(812 * 1024 * 1024), "812 MiB");
-    assert_eq!(format_size(2_040_109_466), "1.9 GiB");
-    assert_eq!(format_size(16 * 1024 * 1024 * 1024), "16.0 GiB");
-    assert_eq!(format_size(u64::MAX), "16384 PiB");
-}
-
-#[test]
 fn the_superblock_state_tells_clean_from_forced_off() {
     require_tools!();
     let fixture = Fixture::new();

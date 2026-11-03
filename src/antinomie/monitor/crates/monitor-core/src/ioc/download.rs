@@ -10,6 +10,7 @@ use super::{
 };
 use crate::{
     api_keys::{self, Secret},
+    byte_size::short_size,
     ruleset::{Fetcher, redact_url},
 };
 use sha2::{Digest, Sha256};
@@ -126,44 +127,15 @@ fn unpack(
     copy_limited(entry, text, text_limit, feed.file)
 }
 
-/// A size for people: `386 MB`, `1.4 GB`, `512 KB`.
-fn human(bytes: u64) -> String {
-    const MB: f64 = (1u64 << 20) as f64;
-    let value = bytes as f64;
-    if bytes >= 1 << 30 {
-        format!("{:.1} GB", value / (MB * 1024.0))
-    } else if bytes >= 1 << 20 {
-        format!("{} MB", bytes >> 20)
-    } else {
-        format!("{} KB", (bytes >> 10).max(1))
-    }
-}
-
-/// `386 of 450 MB` when the size is known, `386 MB downloaded` when not; both
-/// figures in one unit.
+/// `386.0 MiB of 450.0 MiB` when the size is known, `386.0 MiB downloaded` when not.
 fn progress_text(received: u64, total: Option<u64>) -> String {
     let Some(total) = total else {
-        return format!("{} downloaded", human(received));
-    };
-    let (unit, shift) = if total >= 1 << 30 {
-        ("GB", 30)
-    } else if total >= 1 << 20 {
-        ("MB", 20)
-    } else {
-        ("KB", 10)
-    };
-    let scale = (1u64 << shift) as f64;
-    let figure = |bytes: u64| {
-        if shift == 30 {
-            format!("{:.1}", bytes as f64 / scale)
-        } else {
-            (bytes >> shift).to_string()
-        }
+        return format!("{} downloaded", short_size(received));
     };
     format!(
-        "{} of {} {unit}",
-        figure(received.min(total)),
-        figure(total)
+        "{} of {}",
+        short_size(received.min(total)),
+        short_size(total)
     )
 }
 
@@ -247,8 +219,8 @@ fn update_inner(
         if known.is_some_and(|real| real > cap) {
             return Err(format!(
                 "{name} is {}, over the {} safety limit for this dataset",
-                human(size),
-                human(cap)
+                short_size(size),
+                short_size(cap)
             ));
         }
         // The download, then the plain text it unpacks to, with room to spare.
@@ -259,9 +231,9 @@ fn update_inner(
         if free < needed {
             return Err(format!(
                 "not enough free space ({} free, about {} needed for the {} download and what it unpacks to)",
-                human(free),
-                human(needed),
-                human(size)
+                short_size(free),
+                short_size(needed),
+                short_size(size)
             ));
         }
         let download = staging.join("download");
@@ -283,7 +255,7 @@ fn update_inner(
                 if error.contains("sent more than") {
                     format!(
                         "{name} is larger than the {} safety limit for this dataset",
-                        human(limit)
+                        short_size(limit)
                     )
                 } else {
                     error
@@ -371,7 +343,11 @@ pub fn update_all(
         .map(|(status, size)| size.unwrap_or(status.feed.expected_size))
         .sum();
     let exact = sizes.iter().all(Option::is_some);
-    let overall = format!("{}{} in all", if exact { "" } else { "about " }, human(all));
+    let overall = format!(
+        "{}{} in all",
+        if exact { "" } else { "about " },
+        short_size(all)
+    );
     let mut outcomes = Vec::new();
     for (status, size) in enabled.iter().zip(sizes) {
         if cancel.load(Ordering::Relaxed) {

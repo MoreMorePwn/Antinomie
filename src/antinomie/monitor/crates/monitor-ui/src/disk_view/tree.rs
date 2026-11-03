@@ -3,7 +3,7 @@
 //! design (lazy listings, pages of `PAGE_LEN`, a cap on expanded folders and
 //! on depth, only the viewport's rows create widgets) over the reader's
 //! listings. Symbolic links are shown with their target and never followed.
-use super::{display_name, format_size, mode_numeric, mode_rwx};
+use super::{display_name, mode_numeric, mode_rwx};
 use crate::{
     app::{DEPTH_LIMIT, DIRECTORY_LIMIT, PAGE_LEN},
     theme,
@@ -545,7 +545,7 @@ fn entry_row(
         mode_rwx(entry.kind, entry.mode)
     };
     let size = match entry.kind {
-        DiskEntryKind::File | DiskEntryKind::Symlink => format_size(entry.size),
+        DiskEntryKind::File | DiskEntryKind::Symlink => crate::values::short_size(entry.size),
         DiskEntryKind::Dir => String::new(),
         _ => "—".into(),
     };

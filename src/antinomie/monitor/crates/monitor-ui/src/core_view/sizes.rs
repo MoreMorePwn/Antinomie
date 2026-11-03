@@ -5,20 +5,6 @@ use antinomie_monitor_core::{
     CoreReason, ProcessCoreCapture, ProcessCorePhase, RunArtifactState, RunArtifacts,
 };
 
-const MIB: f64 = 1024.0 * 1024.0;
-
-/// A size as a user reads it: whole MiB without a fraction, else one decimal.
-pub(super) fn size_text(size: u64) -> String {
-    let mib = size as f64 / MIB;
-    if size > 0 && size.is_multiple_of(1 << 20) {
-        format!("{} MiB", size >> 20)
-    } else if mib >= 0.1 {
-        format!("{mib:.1} MiB")
-    } else {
-        format!("{size} B")
-    }
-}
-
 /// What a run's exit core recorded about its sizes and reason.
 #[derive(Clone, Default, serde::Serialize)]
 pub(super) struct CoreSizes {
@@ -54,12 +40,15 @@ fn outcome(
     reason: Option<&CoreReason>,
 ) -> Option<String> {
     match state {
-        RunArtifactState::Complete => {
-            Some(format!("Complete · {}", size_text(logical.or(expected)?)))
-        }
+        RunArtifactState::Complete => Some(format!(
+            "Complete · {}",
+            crate::values::short_size(logical.or(expected)?)
+        )),
         RunArtifactState::Partial => {
-            let saved = size_text(logical?);
-            let of = expected.map_or(String::new(), |size| format!(" of {}", size_text(size)));
+            let saved = crate::values::short_size(logical?);
+            let of = expected.map_or(String::new(), |size| {
+                format!(" of {}", crate::values::short_size(size))
+            });
             let why = reason.map_or(String::new(), |reason| {
                 format!(" · {}", reason.code.label())
             });
@@ -88,12 +77,12 @@ pub(super) fn manual_status(core: &ProcessCoreCapture) -> String {
             "Capturing process; waiting for resume confirmation".into()
         }
         ProcessCorePhase::Transfer => core.guest_size.map_or_else(
-            || format!("Saving {}", size_text(core.stored_size)),
+            || format!("Saving {}", crate::values::short_size(core.stored_size)),
             |size| {
                 format!(
                     "Saving {} / {}",
-                    size_text(core.stored_size),
-                    size_text(size)
+                    crate::values::short_size(core.stored_size),
+                    crate::values::short_size(size)
                 )
             },
         ),
@@ -119,24 +108,32 @@ pub(super) fn details(
     reason: Option<&CoreReason>,
 ) -> Option<String> {
     requested?;
-    let mut first = vec![format!("Requested {}", size_text(requested?))];
+    let mut first = vec![format!(
+        "Requested {}",
+        crate::values::short_size(requested?)
+    )];
     if let Some(size) = accepted {
-        first.push(format!("Accepted {}", size_text(size)));
+        first.push(format!("Accepted {}", crate::values::short_size(size)));
     }
     if let Some(size) = guest_max {
-        first.push(format!("Guest max {}", size_text(size)));
+        first.push(format!("Guest max {}", crate::values::short_size(size)));
     }
     let mut second = Vec::new();
     if let Some(size) = expected {
-        second.push(format!("Expected {} (ELF)", size_text(size)));
+        second.push(format!(
+            "Expected {} (ELF)",
+            crate::values::short_size(size)
+        ));
     }
     match (saved, logical) {
         (Some(saved), Some(logical)) => second.push(format!(
             "Saved {} stored, {} file",
-            size_text(saved),
-            size_text(logical)
+            crate::values::short_size(saved),
+            crate::values::short_size(logical)
         )),
-        (None, Some(logical)) => second.push(format!("Saved {} file", size_text(logical))),
+        (None, Some(logical)) => {
+            second.push(format!("Saved {} file", crate::values::short_size(logical)))
+        }
         _ => {}
     }
     if let Some(reason) = reason {
@@ -166,9 +163,9 @@ mod tests {
 
     #[test]
     fn sizes_read_in_mib() {
-        assert_eq!(size_text(64 << 20), "64 MiB");
-        assert_eq!(size_text(134_660_096), "128.4 MiB");
-        assert_eq!(size_text(100), "100 B");
+        assert_eq!(crate::values::short_size(64 << 20), "64.0 MiB");
+        assert_eq!(crate::values::short_size(134_660_096), "128.4 MiB");
+        assert_eq!(crate::values::short_size(100), "100 B");
     }
 
     #[test]
@@ -182,11 +179,11 @@ mod tests {
                 Some(&reason)
             )
             .unwrap(),
-            "Partial · 64 MiB of 128.4 MiB · budget reached"
+            "Partial · 64.0 MiB of 128.4 MiB · budget reached"
         );
         assert_eq!(
             outcome(RunArtifactState::Complete, Some(480 << 20), None, None).unwrap(),
-            "Complete · 480 MiB"
+            "Complete · 480.0 MiB"
         );
         let disk = CoreReason::new(
             CoreReasonCode::HostDisk,
@@ -212,7 +209,9 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(text.starts_with("Requested 256 MiB · Accepted 256 MiB · Guest max 384 MiB\n"));
+        assert!(
+            text.starts_with("Requested 256.0 MiB · Accepted 256.0 MiB · Guest max 384.0 MiB\n")
+        );
         assert!(text.contains("Expected 128.4 MiB (ELF) · Saved 128.4 MiB stored, 128.4 MiB file"));
         assert!(details(None, None, None, None, None, None, None).is_none());
     }

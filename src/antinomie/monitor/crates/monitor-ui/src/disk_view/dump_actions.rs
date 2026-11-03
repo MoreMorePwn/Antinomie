@@ -263,8 +263,8 @@ impl DiskView {
                                 "Saved {} to {}: {} on disk of {}.",
                                 format.label().to_lowercase(),
                                 done.path.display(),
-                                format_size(done.allocated),
-                                format_size(done.size)
+                                crate::values::short_size(done.allocated),
+                                crate::values::short_size(done.size)
                             ),
                             false,
                         )),

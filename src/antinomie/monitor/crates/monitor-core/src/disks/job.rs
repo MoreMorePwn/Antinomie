@@ -408,9 +408,9 @@ impl Run {
         if free < need.saturating_add(super::SPACE_MARGIN) {
             return Err(format!(
                 "the partition needs about {} of free space under {}; {} is available",
-                super::format_size(need),
+                crate::byte_size::short_size(need),
                 folder.display(),
-                super::format_size(free)
+                crate::byte_size::short_size(free)
             ));
         }
         self.set_stage(DiskJobStage::Converting { percent: 0.0 });
@@ -711,7 +711,7 @@ impl Run {
                 let _ = join_within(errors, KILLED_JOIN_WAIT);
                 return Err(format!(
                     "the converted image grew past {}, the free space left for it",
-                    super::format_size(limit)
+                    crate::byte_size::short_size(limit)
                 ));
             }
             match child.try_wait() {

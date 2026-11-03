@@ -150,8 +150,8 @@ pub(super) fn download_status(
         };
         ui.add(egui::ProgressBar::new(fraction).text(format!(
             "{} of {}",
-            human_bytes(status.received),
-            human_bytes(status.total)
+            crate::values::short_size(status.received),
+            crate::values::short_size(status.total)
         )));
     }
     if let Some(status) = download.filter(|status| status.finished) {
@@ -177,7 +177,7 @@ pub(super) fn cancelled_text(status: &antinomie_monitor_core::DownloadStatus) ->
         format!(
             "{}: cancelled. {} kept; the next download resumes from it when it can, and starts again when it cannot.",
             status.label,
-            human_bytes(status.kept)
+            crate::values::short_size(status.kept)
         )
     } else {
         format!("{}: cancelled; nothing was kept", status.label)
@@ -258,7 +258,7 @@ pub(super) fn download_row(
                 let short = &base.identity[..12.min(base.identity.len())];
                 let mut facts = vec![
                     format!("Linux {}", base.kernel_version),
-                    human_bytes(base.total_size),
+                    crate::values::short_size(base.total_size),
                     format!(
                         "{} MiB RAM, {} GiB disk minimum",
                         base.min_ram_mib, base.min_disk_gib

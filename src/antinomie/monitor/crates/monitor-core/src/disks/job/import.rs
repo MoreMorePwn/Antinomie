@@ -90,8 +90,8 @@ pub fn check_info(info: &Value) -> Result<Qcow2Facts, String> {
     if virtual_size > VIRTUAL_SIZE_LIMIT {
         return Err(format!(
             "the qcow2 image claims {} of disk; imports are limited to {}",
-            crate::disks::format_size(virtual_size),
-            crate::disks::format_size(VIRTUAL_SIZE_LIMIT)
+            crate::byte_size::short_size(virtual_size),
+            crate::byte_size::short_size(VIRTUAL_SIZE_LIMIT)
         ));
     }
     Ok(Qcow2Facts {
@@ -177,9 +177,9 @@ impl Run {
         if limit < facts.actual_size.min(facts.virtual_size) {
             return Err(format!(
                 "the image needs about {} of free space under {}; {} is available",
-                crate::disks::format_size(facts.actual_size.min(facts.virtual_size)),
+                crate::byte_size::short_size(facts.actual_size.min(facts.virtual_size)),
                 spec.disks_dir.display(),
-                crate::disks::format_size(free)
+                crate::byte_size::short_size(free)
             ));
         }
         self.estimate

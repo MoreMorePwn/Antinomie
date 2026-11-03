@@ -84,7 +84,7 @@ impl Partition {
             text.push_str(&self.name);
         }
         text.push_str(" · ");
-        text.push_str(&super::format_size(self.length));
+        text.push_str(&crate::byte_size::short_size(self.length));
         text.push_str(" · ");
         text.push_str(&self.kind);
         text

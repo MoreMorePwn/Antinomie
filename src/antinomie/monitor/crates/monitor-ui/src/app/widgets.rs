@@ -2,11 +2,6 @@
 //! Small shared widgets and formatting helpers.
 use super::*;
 
-/// Byte size for catalog rows and download progress: the rounded unit only.
-pub(super) fn human_bytes(bytes: u64) -> String {
-    crate::values::short_size(bytes)
-}
-
 pub(super) fn unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -449,17 +444,4 @@ pub(super) fn icon(ui: &mut egui::Ui, icon: &str, tooltip: &str, enabled: bool) 
         .clicked()
     })
     .inner
-}
-
-#[cfg(test)]
-mod size_tests {
-    #[test]
-    fn download_and_catalog_sizes_show_only_the_rounded_unit() {
-        assert_eq!(super::human_bytes(3_620), "3.5 KiB");
-        assert_eq!(super::human_bytes(7), "7 bytes");
-        assert_eq!(
-            crate::network_view::format_bytes(5 * 1024 * 1024),
-            "5242880 bytes (5.0 MiB)"
-        );
-    }
 }

@@ -399,7 +399,10 @@ impl MonitorApp {
                     && ui
                         .add_enabled(
                             !running && !queued && !self.closing,
-                            egui::Button::new(format!("Install · {}", human_bytes(tool.size))),
+                            egui::Button::new(format!(
+                                "Install · {}",
+                                crate::values::short_size(tool.size)
+                            )),
                         )
                         .clicked()
                 {
@@ -550,7 +553,7 @@ impl MonitorApp {
                 ui.weak(format!(
                     "about {} rules · {} · {} · from {}",
                     offer.rules,
-                    human_bytes(offer.size),
+                    crate::values::short_size(offer.size),
                     offer.license,
                     offer.hosts
                 ));

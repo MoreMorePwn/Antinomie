@@ -79,14 +79,6 @@ impl GapNote {
     }
 }
 
-fn size(bytes: usize) -> String {
-    if bytes >= MIB {
-        format!("{} MiB", bytes / MIB)
-    } else {
-        format!("{} KiB", bytes.div_ceil(1024))
-    }
-}
-
 impl Change {
     /// Put the bytes of a transfer at `offset` (relative offset, value) in the
     /// rebuilt file, within the caps. With `original`, bytes not known before
@@ -194,8 +186,8 @@ impl Change {
                 text: format!(
                     "Byte reconstruction stopped at {which}: {} kept of {} allowed ({setting} in Settings > Analysis limits). \
                      The rest of this file's bytes are in the syscall evidence of the writes.",
-                    size(hit.kept),
-                    size(hit.cap)
+                    crate::values::short_size(hit.kept as u64),
+                    crate::values::short_size(hit.cap as u64)
                 ),
                 limit: true,
                 evidence: Some(hit.call),

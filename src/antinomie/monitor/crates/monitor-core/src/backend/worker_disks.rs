@@ -490,7 +490,7 @@ impl Worker {
                 format!(
                     "Partition saved to {} ({})",
                     path.display(),
-                    disks::format_size(size)
+                    crate::byte_size::short_size(size)
                 ),
             ),
             Ok(JobResult::Opened(view)) => {
@@ -509,7 +509,7 @@ impl Worker {
                     "Disk dump of {} saved ({}, {})",
                     dump.vm_name,
                     dump.fs_state.label(),
-                    disks::format_size(dump.allocated_size.unwrap_or(0))
+                    crate::byte_size::short_size(dump.allocated_size.unwrap_or(0))
                 ),
             ),
             Ok(JobResult::Kept(dump, view)) => {

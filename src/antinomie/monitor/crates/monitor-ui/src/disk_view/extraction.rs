@@ -74,8 +74,8 @@ impl DiskView {
                 format!(
                     "{} is {}: files over {} are Save-to-host only, not loaded into the viewer.",
                     display_name(&path),
-                    format_size(size),
-                    format_size(VIEW_CAP)
+                    crate::values::short_size(size),
+                    crate::values::short_size(VIEW_CAP)
                 ),
                 true,
             ));
@@ -94,7 +94,7 @@ impl DiskView {
                     format!(
                         "{} is larger than the {} hard limit.",
                         display_name(&path),
-                        format_size(CONFIRMED_CAP)
+                        crate::values::short_size(CONFIRMED_CAP)
                     ),
                     true,
                 ));
@@ -114,8 +114,8 @@ impl DiskView {
                     self.status = Some((
                         format!(
                             "Not enough free space for {}: {} available in {}.",
-                            format_size(size),
-                            format_size(free),
+                            crate::values::short_size(size),
+                            crate::values::short_size(free),
                             directory.display()
                         ),
                         true,
@@ -170,7 +170,7 @@ impl DiskView {
             format!(
                 "Extracted {} ({}) to {}: private, never executable.",
                 display_name(&path),
-                format_size(receipt.size),
+                crate::values::short_size(receipt.size),
                 host.display()
             ),
             false,

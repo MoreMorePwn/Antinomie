@@ -52,25 +52,6 @@ const EXT4_MAGIC: u16 = 0xEF53;
 /// `EXT4_VALID_FS`: the filesystem was unmounted cleanly.
 const EXT4_VALID_FS: u16 = 1;
 
-/// A size in 1024-based units: `1.9 GiB`, `812 MiB`, `640 B`.
-pub fn format_size(size: u64) -> String {
-    const UNITS: [&str; 5] = ["KiB", "MiB", "GiB", "TiB", "PiB"];
-    if size < 1024 {
-        return format!("{size} B");
-    }
-    let mut value = size as f64 / 1024.0;
-    let mut unit = 0;
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if value >= 100.0 {
-        format!("{value:.0} {}", UNITS[unit])
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
-}
-
 pub(crate) fn unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -308,9 +289,9 @@ impl DiskMeasure {
         (self.free_space < self.needed_space()).then(|| {
             format!(
                 "the current disk needs about {} of free space under {}; {} is available{}",
-                format_size(self.needed_space()),
+                crate::byte_size::short_size(self.needed_space()),
                 self.directory.display(),
-                format_size(self.free_space),
+                crate::byte_size::short_size(self.free_space),
                 if self.sparse_supported {
                     ""
                 } else {
@@ -335,8 +316,8 @@ pub fn quota_error(size: u64, ceiling: u64) -> Option<String> {
         format!(
             "a disk dump of about {} exceeds the recording quota of {}; raise the quota in \
              Settings to dump this disk",
-            format_size(size),
-            format_size(ceiling)
+            crate::byte_size::short_size(size),
+            crate::byte_size::short_size(ceiling)
         )
     })
 }

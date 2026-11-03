@@ -33,10 +33,6 @@ fn fetched_at(seconds: u64) -> String {
     crate::time_format::local_seconds(seconds)
 }
 
-fn size_text(bytes: u64) -> String {
-    crate::values::short_size(bytes)
-}
-
 fn note(ui: &mut egui::Ui, text: impl Into<String>, color: egui::Color32) {
     let text = text.into();
     if color == theme::warn() {
@@ -119,7 +115,7 @@ impl Model {
             ui,
             format!(
                 "Downloads {} from {}",
-                size_text(pack.download_size()),
+                crate::values::short_size(pack.download_size()),
                 pack.primary_hosts().join(", ")
             ),
             theme::muted(),
@@ -258,7 +254,7 @@ impl Model {
                         format!(
                             "{} · {} · sha256 {} · {check}",
                             fetched.url,
-                            size_text(fetched.size),
+                            crate::values::short_size(fetched.size),
                             &fetched.download_sha256[..fetched.download_sha256.len().min(16)]
                         ),
                         if fetched.verified {
@@ -378,14 +374,5 @@ impl Model {
                 "Removed {id}. Earlier scan results keep their own record."
             )))
         });
-    }
-}
-
-#[cfg(test)]
-mod size_tests {
-    #[test]
-    fn rule_pack_sizes_show_only_the_rounded_unit() {
-        assert_eq!(super::size_text(2048), "2.0 KiB");
-        assert_eq!(super::size_text(3 * 1024 * 1024), "3.0 MiB");
     }
 }

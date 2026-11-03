@@ -287,7 +287,7 @@ impl MonitorApp {
                             table::cell_click(
                                 ui,
                                 table::Cell::Number,
-                                &format!("{:.1} GiB", base.size as f64 / 1073741824.0),
+                                &crate::values::short_size(base.size),
                             );
                         });
                         row.col(|ui| {

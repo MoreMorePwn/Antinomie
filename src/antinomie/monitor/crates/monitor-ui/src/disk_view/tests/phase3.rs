@@ -626,7 +626,7 @@ fn content_find_queues_a_bounded_search_and_shows_where_it_hit() {
     assert!(
         texts.iter().any(|text| text
             .starts_with("Content search reads regular files: at most the first 16.0 MiB")
-            && text.contains("512 MiB in all")
+            && text.contains("512.0 MiB in all")
             && text.contains("60 s")),
         "{texts:?}"
     );

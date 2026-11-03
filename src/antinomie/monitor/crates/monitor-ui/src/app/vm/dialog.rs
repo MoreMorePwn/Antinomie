@@ -604,9 +604,5 @@ fn transport_options(
 }
 
 fn ring_label(kib: u32) -> String {
-    if kib >= 1024 && kib.is_multiple_of(1024) {
-        format!("{} MiB", kib / 1024)
-    } else {
-        format!("{kib} KiB")
-    }
+    crate::values::short_size(u64::from(kib) * 1024)
 }

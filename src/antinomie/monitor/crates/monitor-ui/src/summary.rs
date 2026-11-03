@@ -301,7 +301,7 @@ pub(crate) fn show(
                 ui.colored_label(theme::muted(), "Resources");
                 if let Some(sample) = resources {
                     if let Some(value) = sample.uptime_ms {
-                        ui.colored_label(theme::muted(), uptime(value));
+                        ui.colored_label(theme::muted(), crate::time_format::uptime(value));
                     }
                 }
                 if live.is_some() {
@@ -309,7 +309,7 @@ pub(crate) fn show(
                 } else if let Some(last) = retained {
                     ui.colored_label(
                         theme::muted(),
-                        format!("Last observation {}", age(last.seen)),
+                        format!("Last observation {}", crate::time_format::age(last.seen)),
                     );
                     if let Some(stopped) = series.and_then(|series| series.stopped_at) {
                         ui.colored_label(
@@ -413,7 +413,7 @@ pub(crate) fn show(
                     ui.horizontal_wrapped(|ui| {
                         ui.strong("Capture storage");
                         ui.label(if active {
-                            format!("{} / {quota_gib} GiB", size(snapshot.health.persisted_len))
+                            format!("{} / {quota_gib} GiB", crate::values::short_size(snapshot.health.persisted_len))
                         } else {
                             format!("Limit {quota_gib} GiB")
                         });
@@ -623,7 +623,7 @@ fn resident_meter(ui: &mut egui::Ui, sample: &VmResources, vm: &VmConfig) {
             available: sample.host_memory_available_size.map(|available| {
                 (
                     "Host RAM available",
-                    format!("{:.2} GiB", available as f64 / 1_073_741_824.0),
+                    crate::values::short_size(available),
                 )
             }),
             color: accent(1),
@@ -635,7 +635,7 @@ fn resident_meter(ui: &mut egui::Ui, sample: &VmResources, vm: &VmConfig) {
         egui::Label::new(
             RichText::new(format!(
                 "Guest capacity {} · host visible {}",
-                size(u64::from(vm.ram_mib) * 1_048_576),
+                crate::values::short_size(u64::from(vm.ram_mib) * 1_048_576),
                 optional_size(sample.host_memory_total_size)
             ))
             .small()
@@ -666,7 +666,7 @@ fn volume_meter(ui: &mut egui::Ui, sample: &VmResources, vm: &VmConfig) {
             RichText::new(format!(
                 "{} volume · {} guest disk",
                 optional_size(sample.data_disk_total_size),
-                size(u64::from(vm.disk_gib) * 1_073_741_824)
+                crate::values::short_size(u64::from(vm.disk_gib) * 1_073_741_824)
             ))
             .small()
             .color(theme::muted()),
@@ -693,7 +693,7 @@ fn volume_meter(ui: &mut egui::Ui, sample: &VmResources, vm: &VmConfig) {
         );
     }
     if let Some(used) = sample.data_disk_used_size {
-        crate::widgets::fact_line(ui, "Data volume used", &format!("{:.2} GiB", used as f64 / 1_073_741_824.0))
+        crate::widgets::fact_line(ui, "Data volume used", &crate::values::short_size(used))
             .on_hover_text("Host statvfs: (f_blocks - f_bfree) × f_frsize. Reserved free blocks are not counted as used; this is not guest filesystem usage.");
     }
 }
@@ -946,7 +946,7 @@ fn trend(
     } else if kind == 0 {
         format!("{scale:.0}%")
     } else {
-        size(scale.max(0.0) as u64)
+        crate::values::short_size(scale.max(0.0) as u64)
     };
     painter.text(
         response.rect.min,
@@ -1035,9 +1035,9 @@ fn trend(
             if kind == 0 {
                 format!("{value:.1}%")
             } else {
-                size(value as u64)
+                crate::values::short_size(value as u64)
             },
-            age(time)
+            crate::time_format::age(time)
         ));
     }
 }
@@ -1118,57 +1118,15 @@ fn network_label(vm: &VmConfig) -> &'static str {
         antinomie_monitor_core::VmNetwork::Disconnected => "Disconnected",
     }
 }
-fn age(time: Instant) -> String {
-    let seconds = time.elapsed().as_secs();
-    if seconds < 60 {
-        format!("{seconds} s ago")
-    } else {
-        format!("{} m ago", seconds / 60)
-    }
-}
 fn format_utc(time: SystemTime) -> String {
     match time.duration_since(UNIX_EPOCH) {
         Ok(d) => crate::time_format::local_seconds(d.as_secs()),
         Err(_) => "Unavailable".into(),
     }
 }
-fn split_size(value: Option<u64>) -> (Option<String>, &'static str) {
-    let Some(value) = value else {
-        return (None, "Unavailable");
-    };
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut n = value as f64;
-    let mut unit = 0;
-    while n >= 1024.0 && unit < 4 {
-        n /= 1024.0;
-        unit += 1;
-    }
-    (
-        Some(if unit == 0 {
-            format!("{n:.0}")
-        } else {
-            format!("{n:.1}")
-        }),
-        UNITS[unit],
-    )
-}
-fn size(value: u64) -> String {
-    let (n, u) = split_size(Some(value));
-    format!("{} {u}", n.unwrap_or_else(|| "—".into()))
-}
 fn optional_size(value: Option<u64>) -> String {
-    value.map_or_else(|| "Unavailable".into(), size)
+    value.map_or_else(|| "Unavailable".into(), crate::values::short_size)
 }
-fn uptime(milliseconds: u64) -> String {
-    let seconds = milliseconds / 1000;
-    format!(
-        "{} h {:02} m {:02} s",
-        seconds / 3600,
-        seconds / 60 % 60,
-        seconds % 60
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1524,8 +1482,8 @@ mod tests {
             .into_iter()
             .map(|(text, _)| text)
             .collect();
-        assert!(text.contains("Host RAM available: 8.00 GiB"));
-        assert!(text.contains("Data volume used") && text.contains("492.00 GiB"));
+        assert!(text.contains("Host RAM available: 8.0 GiB"));
+        assert!(text.contains("Data volume used") && text.contains("492.0 GiB"));
         assert!(text.contains("Guest RAM utilization unavailable"));
     }
 

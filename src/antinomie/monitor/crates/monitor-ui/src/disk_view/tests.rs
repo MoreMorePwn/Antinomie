@@ -852,7 +852,7 @@ fn selecting_a_file_fills_the_details() {
         "parent-7",
         "clean",
         "16.0 GiB",
-        "812 MiB",
+        "812.0 MiB",
     ] {
         assert!(has(&texts, expected), "{expected:?} in {texts:?}");
     }
@@ -1575,9 +1575,9 @@ fn dumps_are_listed_newest_first_with_their_badges() {
     let output = scene.frame(&mut view, &ctx, Vec::new()).0;
     let texts_now = shown(&output);
     let details = [
-        "clean · 812 MiB of 16.0 GiB · SHA-256",
-        "not cleanly unmounted · 812 MiB of 16.0 GiB",
-        "clean · imported · 812 MiB of 16.0 GiB · SHA-256",
+        "clean · 812.0 MiB of 16.0 GiB · SHA-256",
+        "not cleanly unmounted · 812.0 MiB of 16.0 GiB",
+        "clean · imported · 812.0 MiB of 16.0 GiB · SHA-256",
         "file moved",
         "Failed: No space left on device",
         "incomplete",
@@ -1775,7 +1775,7 @@ fn the_dump_record_fills_the_details_dock() {
         "clean",
         "Raw ext4 (whole disk)",
         "16.0 GiB",
-        "812 MiB",
+        "812.0 MiB",
         &"ab".repeat(32),
         "Current disk",
         "snapshots/ab12.qcow2",
@@ -1789,7 +1789,7 @@ fn the_dump_record_fills_the_details_dock() {
             && text.ends_with(&"cd".repeat(32))));
     assert!(texts
         .iter()
-        .any(|text| text.starts_with("/data/base.qcow2 · 900 MiB")));
+        .any(|text| text.starts_with("/data/base.qcow2 · 900.0 MiB")));
     for button in [
         "Save image to host…",
         "Save as qcow2…",

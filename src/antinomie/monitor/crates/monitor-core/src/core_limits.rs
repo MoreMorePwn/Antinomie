@@ -239,14 +239,6 @@ pub struct CoreOutcome {
     pub limits: CoreLimits,
 }
 
-fn mib(size: u64) -> String {
-    if size.is_multiple_of(MIB) {
-        format!("{} MiB", size / MIB)
-    } else {
-        format!("{:.1} MiB", size as f64 / MIB as f64)
-    }
-}
-
 /// The reason a terminal guest status gives for an incomplete core; None for a
 /// complete one. The errno is the guest's, so each reading means one thing
 /// (`ANTC_CORE_STATUS` documents the table).
@@ -261,20 +253,21 @@ pub fn guest_reason(outcome: &CoreOutcome) -> Option<CoreReason> {
             )
         });
     }
-    let reached = mib(outcome.stored.unwrap_or(outcome.size.min(outcome.budget)));
+    let reached =
+        crate::byte_size::short_size(outcome.stored.unwrap_or(outcome.size.min(outcome.budget)));
     Some(match errno {
         27 => CoreReason::new(
             CoreReasonCode::Budget,
             Some(-27),
             format!(
                 "stored-byte budget of {} reached at file offset {} of {} expected; mappings after it have no captured bytes{}",
-                mib(outcome.budget),
+                crate::byte_size::short_size(outcome.budget),
                 outcome.size,
                 outcome.expected,
                 if outcome.limits.advertised {
                     format!(
                         " - raise the core budget for this VM (guest maximum {})",
-                        mib(outcome.limits.max_size)
+                        crate::byte_size::short_size(outcome.limits.max_size)
                     )
                 } else {
                     String::new()
@@ -414,8 +407,8 @@ mod tests {
         };
         let budget = reason(-27, 8).unwrap();
         assert_eq!(budget.code, CoreReasonCode::Budget);
-        assert!(budget.text.contains("64 MiB") && budget.text.contains("66834432"));
-        assert!(budget.text.contains("134660096") && budget.text.contains("384 MiB"));
+        assert!(budget.text.contains("64.0 MiB") && budget.text.contains("66834432"));
+        assert!(budget.text.contains("134660096") && budget.text.contains("384.0 MiB"));
         for (status, code) in [
             (-12, CoreReasonCode::GuestMemory),
             (-110, CoreReasonCode::Deadline),

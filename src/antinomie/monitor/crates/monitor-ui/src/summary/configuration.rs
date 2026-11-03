@@ -141,11 +141,7 @@ fn figure(ui: &mut egui::Ui, value: &str, unit: &str) {
 fn compute(ui: &mut egui::Ui, vm: &VmConfig) {
     title(ui, icon::CPU, "Compute", theme::blue());
     figure(ui, &vm.cpus.to_string(), "vCPU");
-    let ram = if vm.ram_mib.is_multiple_of(1024) {
-        format!("{} GiB", vm.ram_mib / 1024)
-    } else {
-        format!("{} MiB", vm.ram_mib)
-    };
+    let ram = crate::values::short_size(u64::from(vm.ram_mib) << 20);
     rows(
         ui,
         "summary-config-compute",
