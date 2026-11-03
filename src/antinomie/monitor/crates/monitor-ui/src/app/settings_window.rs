@@ -340,8 +340,10 @@ impl MonitorApp {
                 .width(260.0)
                 .show_ui(ui, |ui| {
                     let mut filter: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
-                    let edit =
-                        ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Filter zones"));
+                    let edit = ui.add(
+                        egui::TextEdit::singleline(&mut filter)
+                            .hint_text(crate::theme::placeholder(ui, "Filter zones")),
+                    );
                     if !edit.has_focus() && filter.is_empty() {
                         edit.request_focus();
                     }
