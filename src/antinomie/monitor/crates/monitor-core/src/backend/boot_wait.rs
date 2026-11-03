@@ -8,13 +8,18 @@
 //! recorded run, so the wait asks the guest kernel to open a file systemd
 //! writes (ACQUIRE, the call static analysis uses): no process starts in the
 //! guest, so nothing of the wait is in the recording or the process tree.
-//! `/run/systemd/system` tells a systemd guest from any other (BusyBox, Alpine).
-//! Boot counts as finished (a degraded system counts too) when the first of
-//! these shows: `/run/systemd/boot-finished` (newer systemd, created when the
-//! start-up job queue is empty), `/run/crond.reboot` (cron has started and run
-//! its `@reboot` entries), or `/run/nologin` gone after a short floor
-//! (`systemd-user-sessions` ran, the late step of every systemd boot; the floor
-//! keeps the first seconds, before the file exists, from counting).
+//! Whether the guest runs systemd is decided from the base, not from the
+//! guest: a base with a guest profile is a full distribution (Debian) and
+//! boots with systemd; one without (BusyBox) does not. Asking the guest
+//! (`/run/systemd/system`) is wrong early in boot, when `/run` is not mounted
+//! yet but the in-kernel control channel already answers, so an absent file
+//! there says nothing; it is only used for a base without a profile.
+//! A systemd guest has finished booting when `/run/systemd/system` is there
+//! (userspace runs, `/run` is mounted) and `/run/systemd/boot-finished`
+//! (systemd's start-up job queue is empty, so `local-fs.target`, `tmp.mount`
+//! and `basic.target` are done; a degraded system counts too) or
+//! `/run/crond.reboot` (cron has started and run its `@reboot` entries) shows.
+//! A probe that is unsure or absent keeps the wait going until the timeout.
 use super::worker_guest::GUEST_REPLY_TIMEOUT;
 use super::*;
 use crate::boot_wait::{BootWait, BootWaitOutcome, LaunchWait, WAIT_TEXT};
@@ -25,11 +30,6 @@ const SYSTEMD_RUNTIME: &str = "/run/systemd/system";
 const BOOT_FINISHED: &str = "/run/systemd/boot-finished";
 /// Created by cron once it has started and run its `@reboot` entries.
 const CRON_STARTED: &str = "/run/crond.reboot";
-/// Present from early boot until `systemd-user-sessions` lets users in.
-const NOLOGIN: &str = "/run/nologin";
-/// How long after the VM started (at KVM speed) a missing `/run/nologin` is
-/// believed: it is created a few seconds into boot.
-const NOLOGIN_FLOOR: Duration = Duration::from_secs(8);
 /// Pause between two looks at the guest.
 const POLL: Duration = Duration::from_millis(1000);
 const ENOENT: i32 = 2;
@@ -101,19 +101,12 @@ impl Worker {
         }
     }
 
-    /// Whether one of the end-of-boot markers shows; `floor` is how long after
-    /// the VM started a missing `/run/nologin` is believed.
-    fn boot_finished(&mut self, floor: Duration) -> bool {
-        if matches!(self.probe_path(BOOT_FINISHED), Probe::Present)
-            || matches!(self.probe_path(CRON_STARTED), Probe::Present)
-        {
-            return true;
-        }
-        let up = self
-            .session
-            .as_ref()
-            .is_some_and(|session| session.started.elapsed() >= floor);
-        up && matches!(self.probe_path(NOLOGIN), Probe::Absent)
+    /// Whether a systemd guest has finished booting: userspace is up (`/run`
+    /// is mounted) and one of the end-of-boot markers is there.
+    fn boot_finished(&mut self) -> bool {
+        matches!(self.probe_path(SYSTEMD_RUNTIME), Probe::Present)
+            && (matches!(self.probe_path(BOOT_FINISHED), Probe::Present)
+                || matches!(self.probe_path(CRON_STARTED), Probe::Present))
     }
 
     /// Wait until the guest has finished booting, serving the app's commands
@@ -139,22 +132,22 @@ impl Worker {
         let deadline = session.process.waits.scaled(Duration::from_secs(u64::from(
             self.options.start.boot_wait_secs,
         )));
-        let floor = session.process.waits.scaled(NOLOGIN_FLOOR);
         let started = Instant::now();
-        let mut systemd = None;
-        // The first look decides whether there is anything to wait for.
+        // A base with a guest profile is a full distribution that boots with
+        // systemd; any other is asked once (a BusyBox base has no systemd).
+        let mut systemd = session.bundle.guest.is_some();
         loop {
-            if systemd.is_none() {
+            if !systemd {
                 match self.probe_path(SYSTEMD_RUNTIME) {
                     Probe::Absent => {
                         self.finish_boot_wait();
                         return Ok(skipped("the guest does not run systemd"));
                     }
-                    Probe::Present => systemd = Some(true),
+                    Probe::Present => systemd = true,
                     Probe::Unsure => {}
                 }
             }
-            if systemd.is_some() && self.boot_finished(floor) {
+            if systemd && self.boot_finished() {
                 break;
             }
             if started.elapsed() >= deadline {
