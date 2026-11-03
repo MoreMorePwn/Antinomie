@@ -335,11 +335,16 @@ impl MonitorApp {
         let filter_id = ui.id().with("time-zone-filter");
         ui.vertical(|ui| {
             egui::ComboBox::from_id_salt("settings_time_zone")
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .selected_text(label(&chosen))
                 .width(260.0)
                 .show_ui(ui, |ui| {
                     let mut filter: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
-                    ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Filter zones"));
+                    let edit =
+                        ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Filter zones"));
+                    if !edit.has_focus() && filter.is_empty() {
+                        edit.request_focus();
+                    }
                     ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
                     let needle = filter.to_lowercase().replace(' ', "_");
                     egui::ScrollArea::vertical()
@@ -355,7 +360,12 @@ impl MonitorApp {
                                 {
                                     continue;
                                 }
-                                ui.selectable_value(&mut chosen, name.clone(), label(&name));
+                                if ui
+                                    .selectable_value(&mut chosen, name.clone(), label(&name))
+                                    .clicked()
+                                {
+                                    ui.close();
+                                }
                             }
                         });
                 });

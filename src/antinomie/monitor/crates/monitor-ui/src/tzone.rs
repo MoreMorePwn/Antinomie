@@ -377,7 +377,7 @@ pub(crate) fn choices() -> Vec<String> {
     let mut found = Vec::new();
     collect(std::path::Path::new(ZONEINFO), "", &mut found, 0);
     if found.is_empty() {
-        found = antinomie_monitor_core::TIMEZONES
+        found = antinomie_monitor_core::build::TIMEZONES
             .iter()
             .map(|name| (*name).to_owned())
             .collect();

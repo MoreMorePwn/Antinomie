@@ -72,7 +72,7 @@ fn table(columns: &[&str], rows: Vec<Vec<String>>, empty: &str, blocks: &mut Vec
 
 fn time(ms: Option<u64>) -> String {
     ms.filter(|ms| *ms > 0)
-        .map_or(String::new(), |ms| crate::report::shown(ms))
+        .map_or(String::new(), crate::report::shown)
 }
 
 fn runs_text(runs: &[usize]) -> String {
