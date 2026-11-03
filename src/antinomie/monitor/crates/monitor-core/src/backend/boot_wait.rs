@@ -63,7 +63,7 @@ impl Worker {
         let Ok(args) = control::acquire(path, 0, 0, 4096) else {
             return Probe::Unsure;
         };
-        let probe = match session.request_typed(
+        match session.request_typed(
             control::ACQUIRE,
             &args,
             &mut self.snapshot,
@@ -98,8 +98,7 @@ impl Worker {
                 Probe::Present
             }
             Err(_) => Probe::Unsure,
-        };
-        probe
+        }
     }
 
     /// Whether one of the end-of-boot markers shows; `floor` is how long after
