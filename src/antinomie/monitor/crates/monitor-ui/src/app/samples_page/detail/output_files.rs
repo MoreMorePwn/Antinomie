@@ -273,80 +273,10 @@ pub(in crate::app::samples_page) fn section(
             return;
         }
         super::artifact_rows::request_hashes(ui.ctx(), data.data_dir(), &data.outputs);
-        ui.horizontal_wrapped(|ui| {
-            for kind in [
-                Kind::Memory,
-                Kind::Core,
-                Kind::Capture,
-                Kind::Snapshot,
-                Kind::Saved,
-                Kind::StaticReport,
-            ] {
-                let here = data
-                    .outputs
-                    .iter()
-                    .filter(|o| o.kind == kind && o.is_present())
-                    .count();
-                let gone = data
-                    .outputs
-                    .iter()
-                    .filter(|o| o.kind == kind && !o.is_present())
-                    .count();
-                if here + gone == 0 {
-                    continue;
-                }
-                ui.label(RichText::new(here.to_string()).strong());
-                let plural = kind.core().plural();
-                ui.label(if here == 1 {
-                    plural.trim_end_matches('s')
-                } else {
-                    plural
-                });
-                if gone > 0 {
-                    ui.label(theme::hint_text(format!("+{gone} gone")));
-                }
-                ui.add_space(12.0);
-            }
-        });
+        kind_counts(ui, data);
         ui.add_space(4.0);
-        let body = egui::TextStyle::Body.resolve(ui.style());
-        let widest = |title: &str, text: &dyn Fn(&Output) -> String| {
-            parts::fitted(
-                ui,
-                &body,
-                std::iter::once(title.to_owned()).chain(data.outputs.iter().map(text)),
-            )
-        };
-        let file = widest("File", &|output| output.kind.label().to_owned());
-        let because = widest("Saved because", &|output| output.saved_because.clone());
-        let mono = egui::TextStyle::Monospace.resolve(ui.style());
-        let hash = parts::fitted(ui, &mono, ["SHA-256".to_owned(), "00000000".to_owned()]);
-        let size = widest("Size", &|output| {
-            output.size.map_or(
-                "–".to_owned(),
-                antinomie_monitor_core::byte_size::short_size,
-            )
-        });
-        // The three buttons need about this much; a narrower last column
-        // puts them on separate lines, in taller rows, instead of cutting
-        // them, and the text columns give way (their text is cut, the
-        // tooltip has it) so the table never passes the window.
-        let gap = ui.spacing().item_spacing.x * 6.0;
-        let room = ui.available_width() - gap - 2.0;
-        let mut widths = [file, hash, 70.0, because, size, 170.0];
-        let roomy = room - widths.iter().sum::<f32>() >= ACTIONS_WIDTH;
-        let actions = if roomy { ACTIONS_WIDTH } else { STACKED_WIDTH };
-        // (column, least width)
-        let mut over = widths.iter().sum::<f32>() + actions - room;
-        for (index, least) in [(3, 80.0), (5, 140.0), (4, 104.0), (0, 90.0), (2, 56.0)] {
-            if over <= 0.0 {
-                break;
-            }
-            let cut = over.min((widths[index] - least).max(0.0));
-            widths[index] -= cut;
-            over -= cut;
-        }
-        let [file, hash, run, because, size, availability] = widths;
+        let ([file, hash, run, because, size, availability], roomy, actions) =
+            artifact_widths(ui, data);
         parts::on_surface(ui, |ui| {
             parts::click_table(ui, "sample_summary_outputs")
                 .column(crate::widgets::fit_table::Col::fixed(file).clip(true))
@@ -409,116 +339,10 @@ pub(in crate::app::samples_page) fn section(
                                     antinomie_monitor_core::byte_size::short_size,
                                 ));
                             });
-                            row.col(|ui| {
-                                ui.horizontal(|ui| match &output.availability {
-                                    Availability::InRun => {
-                                        widgets::chip(
-                                            ui,
-                                            format!("In run {} folder", output.number),
-                                            if output.state == "Complete" {
-                                                Tone::Good
-                                            } else {
-                                                Tone::Warn
-                                            },
-                                        )
-                                        .on_hover_text(format!("State: {}", output.state));
-                                    }
-                                    Availability::Deleted => {
-                                        widgets::chip(
-                                            ui,
-                                            match output.deleted_ms {
-                                                Some(ms) => {
-                                                    format!(
-                                                        "Deleted by you · {}",
-                                                        super::second(ms)
-                                                    )
-                                                }
-                                                None => "Deleted by you".to_owned(),
-                                            },
-                                            Tone::Neutral,
-                                        );
-                                    }
-                                    Availability::Kept(stored, ms) => {
-                                        widgets::chip(ui, "Kept in Samples", Tone::Good)
-                                            .on_hover_text(format!(
-                                                "Moved when run {} was deleted, {}: {}",
-                                                output.number,
-                                                super::second(*ms),
-                                                stored.display()
-                                            ));
-                                    }
-                                    Availability::WithVm => {
-                                        widgets::chip(ui, "With the VM", Tone::Info).on_hover_text(
-                                            if output.kind == Kind::Snapshot {
-                                                "A VM snapshot stays in the VM's snapshot tree"
-                                            } else {
-                                                "Left in the VM's recording"
-                                            },
-                                        );
-                                    }
-                                    Availability::InRecord => {
-                                        widgets::chip(ui, "In the sample record", Tone::Info)
-                                            .on_hover_text("Copied with the run's record");
-                                    }
-                                    Availability::Missing => {
-                                        widgets::chip(ui, "Missing", Tone::Error)
-                                            .on_hover_text("Not deleted through the app");
-                                    }
-                                });
-                            });
+                            row.col(|ui| availability_chip(ui, output));
                             row.col(|ui| {
                                 let buttons = |ui: &mut egui::Ui| {
-                                    let why = match output.availability {
-                                        Availability::Deleted => "The file was deleted",
-                                        Availability::Kept(..) => {
-                                            "The file was moved into Samples; use Open folder"
-                                        }
-                                        Availability::InRecord => "Open it from the Summary",
-                                        _ => "The file is missing",
-                                    };
-                                    let can_open = (here
-                                        || output.availability == Availability::WithVm
-                                            && output.kind == Kind::Snapshot)
-                                        && run_there;
-                                    let reason = output.kind.open_unavailable().unwrap_or(why);
-                                    if ui
-                                        .add_enabled(
-                                            can_open && output.kind.open_unavailable().is_none(),
-                                            egui::Button::new(output.kind.open_label()).small(),
-                                        )
-                                        .on_disabled_hover_text(if run_there {
-                                            reason
-                                        } else {
-                                            "The run's folder was deleted"
-                                        })
-                                        .clicked()
-                                    {
-                                        act = Some(Act::Open(output.number, output.kind));
-                                    }
-                                    if ui
-                                        .add_enabled(
-                                            run_there,
-                                            egui::Button::new("Go to run").small(),
-                                        )
-                                        .on_disabled_hover_text("The run's folder was deleted")
-                                        .clicked()
-                                    {
-                                        act = Some(Act::GoToRun(output.number));
-                                    }
-                                    let folder = matches!(
-                                        output.availability,
-                                        Availability::InRun | Availability::Kept(..)
-                                    ) && !output.path.as_os_str().is_empty();
-                                    if ui
-                                        .add_enabled(
-                                            folder,
-                                            egui::Button::new("Open folder").small(),
-                                        )
-                                        .on_disabled_hover_text(why)
-                                        .clicked()
-                                    {
-                                        crate::evidence::reveal(ui.ctx(), &output.path);
-                                    }
+                                    artifact_buttons(ui, output, (here, run_there), &mut act);
                                 };
                                 // A narrow table keeps one button, which opens the
                                 // three, so a row stays one line.
@@ -529,45 +353,7 @@ pub(in crate::app::samples_page) fn section(
                                 }
                             });
                             row.response().context_menu(|ui| {
-                                let why = match output.availability {
-                                    Availability::Deleted => "The file was deleted",
-                                    _ => "The file is missing",
-                                };
-                                if ui
-                                    .add_enabled(here, egui::Button::new(output.kind.open_label()))
-                                    .on_disabled_hover_text(why)
-                                    .clicked()
-                                {
-                                    act = Some(Act::Open(output.number, output.kind));
-                                    ui.close_menu();
-                                }
-                                if ui.button("Go to run").clicked() {
-                                    act = Some(Act::GoToRun(output.number));
-                                    ui.close_menu();
-                                }
-                                if ui
-                                    .add_enabled(here, egui::Button::new("Open folder"))
-                                    .on_disabled_hover_text(why)
-                                    .clicked()
-                                {
-                                    crate::evidence::reveal(ui.ctx(), &output.path);
-                                    ui.close_menu();
-                                }
-                                ui.separator();
-                                let is_file = here && crate::stat_cache::is_file(&output.path);
-                                if ui
-                                    .add_enabled(is_file, egui::Button::new("Copy SHA-256"))
-                                    .on_disabled_hover_text(if here {
-                                        "A memory dump is a folder of files"
-                                    } else {
-                                        why
-                                    })
-                                    .clicked()
-                                {
-                                    copy_sha256(ui.ctx(), output.path.clone());
-                                    ui.close_menu();
-                                }
-                                super::super::notes::menu_item(ui, || output.reference());
+                                artifact_menu(ui, output, here, &mut act);
                             });
                         },
                     );
@@ -575,6 +361,235 @@ pub(in crate::app::samples_page) fn section(
         });
     });
     act
+}
+
+/// How many of each kind of artifact are here and how many are gone.
+fn kind_counts(ui: &mut egui::Ui, data: &Data) {
+    ui.horizontal_wrapped(|ui| {
+        for kind in [
+            Kind::Memory,
+            Kind::Core,
+            Kind::Capture,
+            Kind::Snapshot,
+            Kind::Saved,
+            Kind::StaticReport,
+        ] {
+            let here = data
+                .outputs
+                .iter()
+                .filter(|o| o.kind == kind && o.is_present())
+                .count();
+            let gone = data
+                .outputs
+                .iter()
+                .filter(|o| o.kind == kind && !o.is_present())
+                .count();
+            if here + gone == 0 {
+                continue;
+            }
+            ui.label(RichText::new(here.to_string()).strong());
+            let plural = kind.core().plural();
+            ui.label(if here == 1 {
+                plural.trim_end_matches('s')
+            } else {
+                plural
+            });
+            if gone > 0 {
+                ui.label(theme::hint_text(format!("+{gone} gone")));
+            }
+            ui.add_space(12.0);
+        }
+    });
+}
+
+/// The widths of the table's columns, whether the buttons fit in a row, and their column.
+fn artifact_widths(ui: &mut egui::Ui, data: &Data) -> ([f32; 6], bool, f32) {
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let widest = |title: &str, text: &dyn Fn(&Output) -> String| {
+        parts::fitted(
+            ui,
+            &body,
+            std::iter::once(title.to_owned()).chain(data.outputs.iter().map(text)),
+        )
+    };
+    let file = widest("File", &|output| output.kind.label().to_owned());
+    let because = widest("Saved because", &|output| output.saved_because.clone());
+    let mono = egui::TextStyle::Monospace.resolve(ui.style());
+    let hash = parts::fitted(ui, &mono, ["SHA-256".to_owned(), "00000000".to_owned()]);
+    let size = widest("Size", &|output| {
+        output.size.map_or(
+            "–".to_owned(),
+            antinomie_monitor_core::byte_size::short_size,
+        )
+    });
+    // The three buttons need about this much; a narrower last column
+    // puts them on separate lines, in taller rows, instead of cutting
+    // them, and the text columns give way (their text is cut, the
+    // tooltip has it) so the table never passes the window.
+    let gap = ui.spacing().item_spacing.x * 6.0;
+    let room = ui.available_width() - gap - 2.0;
+    let mut widths = [file, hash, 70.0, because, size, 170.0];
+    let roomy = room - widths.iter().sum::<f32>() >= ACTIONS_WIDTH;
+    let actions = if roomy { ACTIONS_WIDTH } else { STACKED_WIDTH };
+    // (column, least width)
+    let mut over = widths.iter().sum::<f32>() + actions - room;
+    for (index, least) in [(3, 80.0), (5, 140.0), (4, 104.0), (0, 90.0), (2, 56.0)] {
+        if over <= 0.0 {
+            break;
+        }
+        let cut = over.min((widths[index] - least).max(0.0));
+        widths[index] -= cut;
+        over -= cut;
+    }
+    (widths, roomy, actions)
+}
+
+/// Where the artifact is now.
+fn availability_chip(ui: &mut egui::Ui, output: &Output) {
+    ui.horizontal(|ui| match &output.availability {
+        Availability::InRun => {
+            widgets::chip(
+                ui,
+                format!("In run {} folder", output.number),
+                if output.state == "Complete" {
+                    Tone::Good
+                } else {
+                    Tone::Warn
+                },
+            )
+            .on_hover_text(format!("State: {}", output.state));
+        }
+        Availability::Deleted => {
+            widgets::chip(
+                ui,
+                match output.deleted_ms {
+                    Some(ms) => {
+                        format!("Deleted by you · {}", super::second(ms))
+                    }
+                    None => "Deleted by you".to_owned(),
+                },
+                Tone::Neutral,
+            );
+        }
+        Availability::Kept(stored, ms) => {
+            widgets::chip(ui, "Kept in Samples", Tone::Good).on_hover_text(format!(
+                "Moved when run {} was deleted, {}: {}",
+                output.number,
+                super::second(*ms),
+                stored.display()
+            ));
+        }
+        Availability::WithVm => {
+            widgets::chip(ui, "With the VM", Tone::Info).on_hover_text(
+                if output.kind == Kind::Snapshot {
+                    "A VM snapshot stays in the VM's snapshot tree"
+                } else {
+                    "Left in the VM's recording"
+                },
+            );
+        }
+        Availability::InRecord => {
+            widgets::chip(ui, "In the sample record", Tone::Info)
+                .on_hover_text("Copied with the run's record");
+        }
+        Availability::Missing => {
+            widgets::chip(ui, "Missing", Tone::Error).on_hover_text("Not deleted through the app");
+        }
+    });
+}
+
+/// The Open, Go to run and Open folder buttons of an artifact.
+fn artifact_buttons(
+    ui: &mut egui::Ui,
+    output: &Output,
+    (here, run_there): (bool, bool),
+    act: &mut Option<Act>,
+) {
+    let why = match output.availability {
+        Availability::Deleted => "The file was deleted",
+        Availability::Kept(..) => "The file was moved into Samples; use Open folder",
+        Availability::InRecord => "Open it from the Summary",
+        _ => "The file is missing",
+    };
+    let can_open = (here
+        || output.availability == Availability::WithVm && output.kind == Kind::Snapshot)
+        && run_there;
+    let reason = output.kind.open_unavailable().unwrap_or(why);
+    if ui
+        .add_enabled(
+            can_open && output.kind.open_unavailable().is_none(),
+            egui::Button::new(output.kind.open_label()).small(),
+        )
+        .on_disabled_hover_text(if run_there {
+            reason
+        } else {
+            "The run's folder was deleted"
+        })
+        .clicked()
+    {
+        *act = Some(Act::Open(output.number, output.kind));
+    }
+    if ui
+        .add_enabled(run_there, egui::Button::new("Go to run").small())
+        .on_disabled_hover_text("The run's folder was deleted")
+        .clicked()
+    {
+        *act = Some(Act::GoToRun(output.number));
+    }
+    let folder = matches!(
+        output.availability,
+        Availability::InRun | Availability::Kept(..)
+    ) && !output.path.as_os_str().is_empty();
+    if ui
+        .add_enabled(folder, egui::Button::new("Open folder").small())
+        .on_disabled_hover_text(why)
+        .clicked()
+    {
+        crate::evidence::reveal(ui.ctx(), &output.path);
+    }
+}
+
+/// The menu of an artifact's row.
+fn artifact_menu(ui: &mut egui::Ui, output: &Output, here: bool, act: &mut Option<Act>) {
+    let why = match output.availability {
+        Availability::Deleted => "The file was deleted",
+        _ => "The file is missing",
+    };
+    if ui
+        .add_enabled(here, egui::Button::new(output.kind.open_label()))
+        .on_disabled_hover_text(why)
+        .clicked()
+    {
+        *act = Some(Act::Open(output.number, output.kind));
+        ui.close_menu();
+    }
+    if ui.button("Go to run").clicked() {
+        *act = Some(Act::GoToRun(output.number));
+        ui.close_menu();
+    }
+    if ui
+        .add_enabled(here, egui::Button::new("Open folder"))
+        .on_disabled_hover_text(why)
+        .clicked()
+    {
+        crate::evidence::reveal(ui.ctx(), &output.path);
+        ui.close_menu();
+    }
+    ui.separator();
+    let is_file = here && crate::stat_cache::is_file(&output.path);
+    if ui
+        .add_enabled(is_file, egui::Button::new("Copy SHA-256"))
+        .on_disabled_hover_text(if here {
+            "A memory dump is a folder of files"
+        } else {
+            why
+        })
+        .clicked()
+    {
+        copy_sha256(ui.ctx(), output.path.clone());
+        ui.close_menu();
+    }
+    super::super::notes::menu_item(ui, || output.reference());
 }
 
 /// Copy a file's SHA-256 once it is read (on a thread: dumps are large).
