@@ -90,6 +90,7 @@ impl MonitorApp {
             api_keys: Default::default(),
             dependencies,
             updates: Default::default(),
+            import_job: None,
             getting_started: Default::default(),
             show_older_bases: false,
             build_wizard: build_wizard::BuildWizard::default(),

@@ -341,7 +341,20 @@ impl Worker {
             .is_some_and(|guest| guest.graphical);
         // A TCG guest needs far longer than a KVM one to power itself off.
         let shutdown_wait = {
-            let wait = shutdown_timeout(self.options.shutdown_timeout, graphical);
+            let mut wait = shutdown_timeout(self.options.shutdown_timeout, graphical);
+            // The guest kernel syncs its disks before it powers off; a
+            // distribution still starting its services (and writing its
+            // journal) takes longer than one at rest, so it gets more time
+            // before the VM is forced off.
+            if session.disk_bundle.guest.is_some() {
+                let booting = !session.boot_settled
+                    && session.started.elapsed() < session.process.waits.scaled(BOOT_PERIOD);
+                wait = wait.max(if !booting {
+                    DISTRIBUTION_SHUTDOWN
+                } else {
+                    BOOTING_SHUTDOWN
+                });
+            }
             if session.process.accel.is_tcg() {
                 session.process.waits.scaled(wait)
             } else {
@@ -581,6 +594,13 @@ impl Writeback {
 /// Least time a graphical guest gets to shut down: a loaded desktop session
 /// takes longer than a console guest to stop its services.
 const GRAPHICAL_SHUTDOWN: Duration = Duration::from_secs(30);
+
+/// Least time a full distribution (Debian) gets to power off under host load.
+const DISTRIBUTION_SHUTDOWN: Duration = Duration::from_secs(30);
+/// How long after the VM started a distribution counts as still booting.
+const BOOT_PERIOD: Duration = Duration::from_secs(90);
+/// Least time one gets that is still booting, when Stop is clicked soon after Start.
+const BOOTING_SHUTDOWN: Duration = Duration::from_secs(60);
 
 /// How long Stop waits for the guest before forcing the VM off.
 fn shutdown_timeout(configured: Duration, graphical: bool) -> Duration {

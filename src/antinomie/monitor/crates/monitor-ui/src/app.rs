@@ -475,6 +475,8 @@ pub struct MonitorApp {
     api_keys: crate::api_keys_window::ApiKeysWindow,
     dependencies: crate::dependencies_window::DependenciesWindow,
     updates: crate::update_window::UpdateWindow,
+    /// The base import in progress: request id, folder name, start (ms).
+    import_job: Option<(u64, String, u64)>,
     getting_started: crate::getting_started::GettingStarted,
     /// Download base: also list bases for earlier Antinomie versions.
     show_older_bases: bool,

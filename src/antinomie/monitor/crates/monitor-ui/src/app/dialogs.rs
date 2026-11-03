@@ -122,9 +122,13 @@ impl MonitorApp {
                 });
             self.import_open = open && !cancel;
             if import {
-                self.send(Command::ImportBase {
-                    directory: crate::folders::user_path(&self.import_directory),
-                });
+                let directory = crate::folders::user_path(&self.import_directory);
+                let name = directory
+                    .file_name()
+                    .map_or_else(|| "base".into(), |n| n.to_string_lossy().into_owned());
+                if let Some(id) = self.send_request(Command::ImportBase { directory }) {
+                    self.import_job = Some((id, name, crate::time_format::now_ms()));
+                }
                 self.import_open = false;
             }
         }

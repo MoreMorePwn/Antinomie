@@ -112,6 +112,7 @@ pub(crate) fn app() -> MonitorApp {
         api_keys: Default::default(),
         dependencies: crate::dependencies_window::DependenciesWindow::ready_for_test(),
         updates: Default::default(),
+        import_job: None,
         getting_started: Default::default(),
         show_older_bases: false,
         build_wizard: build_wizard::BuildWizard::default(),

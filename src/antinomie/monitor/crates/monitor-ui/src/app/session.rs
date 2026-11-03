@@ -343,6 +343,9 @@ impl MonitorApp {
                     if self.pending_kill == Some(id) {
                         self.pending_kill = None;
                     }
+                    if self.import_job.as_ref().is_some_and(|job| job.0 == id) {
+                        self.import_job = None;
+                    }
                     self.debugger.command_result(id, success);
                     if self.consume_stale_command_id(id) {
                         continue;

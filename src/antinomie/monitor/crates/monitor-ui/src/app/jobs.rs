@@ -401,6 +401,13 @@ impl MonitorApp {
                     .open(Panel::Library(LibraryPage::Rules)),
             );
         }
+        if let Some((_, name, started)) = &self.import_job {
+            jobs.push(
+                Job::new("base-import", "Base import", name.clone())
+                    .started(Some(*started))
+                    .state("Verifying and copying the base"),
+            );
+        }
         jobs.extend(self.triage.running_jobs());
         jobs.extend(self.memory_view.running_jobs());
         jobs.extend(self.core_view.running_jobs());
