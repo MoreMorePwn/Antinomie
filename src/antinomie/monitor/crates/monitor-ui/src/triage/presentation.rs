@@ -51,6 +51,10 @@ pub(super) fn heading_busy(ui: &mut egui::Ui, title: &str, subtitle: &str, busy:
 }
 
 pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui, input: &TriageInput<'_>) {
+    // The palette's Export report… asked for the dialog.
+    if std::mem::take(&mut view.report.requested) {
+        view.open_report(input);
+    }
     // Process, Files and Network keep their refresh status at the right of
     // the bar; the other sections have none or their own row.
     let trail = matches!(

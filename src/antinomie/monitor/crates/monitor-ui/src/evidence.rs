@@ -89,8 +89,16 @@ pub(crate) fn menu(ui: &mut egui::Ui, directory: &Path) {
         ui.close();
     }
 }
+/// Open the Edit tags window for the evidence in `directory` (the palette's way in).
+pub(crate) fn edit_tags(ctx: &egui::Context, directory: &Path) {
+    open_editor_in(ctx, directory, Field::Tags);
+}
 fn open_editor(ui: &mut egui::Ui, directory: &Path, field: Field) {
-    let shared = state(ui.ctx());
+    open_editor_in(ui.ctx(), directory, field);
+    ui.close();
+}
+fn open_editor_in(ctx: &egui::Context, directory: &Path, field: Field) {
+    let shared = state(ctx);
     let mut data = shared.lock().unwrap_or_else(|e| e.into_inner());
     match annotations::load(directory) {
         Ok(stored) => {
@@ -107,7 +115,6 @@ fn open_editor(ui: &mut egui::Ui, directory: &Path, field: Field) {
         }
         Err(error) => data.error = Some(error),
     }
-    ui.close();
 }
 fn merge_annotation(stored: &Annotation, field: Field, draft: &str) -> Annotation {
     match field {

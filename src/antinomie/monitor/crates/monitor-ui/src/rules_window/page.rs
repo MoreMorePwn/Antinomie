@@ -186,6 +186,17 @@ impl Model {
         }
     }
 
+    /// Open the IDS engine on its abuse.ch packs tab.
+    pub(crate) fn show_abusech(&mut self) {
+        self.show_engine("ids", false);
+        self.tab = Tab::Abusech;
+    }
+
+    /// A rule is selected, so the details pane has something to show.
+    pub(crate) fn has_rule_selected(&self) -> bool {
+        self.detail.is_some_and(|index| index < self.rows.len())
+    }
+
     /// Forget the selected pack or group and the rules listed for it.
     fn select_none(&mut self) {
         self.pack_id.clear();

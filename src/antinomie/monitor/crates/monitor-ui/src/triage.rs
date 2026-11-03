@@ -275,6 +275,13 @@ pub(crate) struct TriageView {
     report: report_export::Dialog,
 }
 
+impl TriageView {
+    /// Open Export report… when the Triage bar is next drawn.
+    pub(crate) fn request_report(&mut self) {
+        self.report.requested = true;
+    }
+}
+
 impl Default for TriageView {
     fn default() -> Self {
         Self {

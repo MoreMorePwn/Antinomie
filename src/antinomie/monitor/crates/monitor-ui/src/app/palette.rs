@@ -173,7 +173,12 @@ impl MonitorApp {
         let open = self.layout.all_tabs();
         let closed = Panel::MAIN
             .into_iter()
-            .chain([Panel::Details, Panel::Activity, Panel::Jobs])
+            .chain([
+                Panel::Details,
+                Panel::Activity,
+                Panel::Jobs,
+                Panel::Debugger,
+            ])
             .filter(|panel| !open.contains(panel));
         let actions = Action::PALETTE
             .into_iter()

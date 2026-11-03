@@ -62,6 +62,8 @@ pub(super) struct Dialog {
     choices: Choices,
     /// The person changed a choice that the app has not stored yet.
     changed: bool,
+    /// The palette asked for the dialog: the Triage bar opens it on its next frame.
+    pub(super) requested: bool,
 }
 
 impl Default for Dialog {
@@ -72,6 +74,7 @@ impl Default for Dialog {
             state: State::Idle,
             choices: Choices::default(),
             changed: false,
+            requested: false,
         }
     }
 }

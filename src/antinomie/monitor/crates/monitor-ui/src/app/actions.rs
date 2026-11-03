@@ -79,6 +79,22 @@ pub(super) enum Action {
     ImportCore,
     /// Choose the host folder the sidebar's Explorer shows.
     ExplorerFolder,
+    /// The selected VM's Telemetry transport window.
+    TelemetryTransport,
+    /// The selected VM's Device profile window.
+    DeviceProfile,
+    /// The terminal of the selected run, as its Run History row opens it.
+    OpenTerminal,
+    /// Edit tags of the selected run.
+    EditRunTags,
+    /// Delete the selected run (one that never recorded).
+    DeleteRun,
+    /// Triage > Export report of the selected run.
+    ExportReport,
+    /// The details of the rule selected in Detection rules.
+    RuleDetails,
+    /// The IDS rules' abuse.ch packs tab.
+    AbusechPacks,
 }
 
 const DOCUMENTATION_URL: &str = "https://antinomie.moremorepwn.blog/docs/";
@@ -161,6 +177,14 @@ impl Action {
             Self::ImportDiskImage,
             Self::ImportCore,
             Self::ExplorerFolder,
+            Self::TelemetryTransport,
+            Self::DeviceProfile,
+            Self::OpenTerminal,
+            Self::EditRunTags,
+            Self::DeleteRun,
+            Self::ExportReport,
+            Self::RuleDetails,
+            Self::AbusechPacks,
         ]);
         actions
     }
@@ -229,6 +253,15 @@ impl Action {
             Self::ImportDiskImage => "ext4 qcow2 raw open analyse",
             Self::ImportCore => "process core elf open analyse",
             Self::ExplorerFolder => "sidebar host files browse",
+            Self::TelemetryTransport => "vm configuration channel serial vsock connection",
+            Self::DeviceProfile => "stealth firmware bios uefi cpu identity hardware profile",
+            Self::OpenTerminal => "shell console run program output",
+            Self::EditRunTags => "label annotate run history evidence",
+            Self::DeleteRun => "remove failed run history evidence",
+            Self::ExportReport => "html pdf json misp stix write triage",
+            Self::RuleDetails => "yara suricata sigma source text sid",
+            Self::AbusechPacks => "suricata ids rules update check live feed",
+            Self::Go(Panel::Debugger) => "gdb breakpoints attach process",
             _ => "",
         }
     }
@@ -268,6 +301,9 @@ impl Action {
             Self::ImportDiskImage => "Disks",
             Self::ImportCore => "Core dumps",
             Self::ExplorerFolder => "Explorer",
+            Self::TelemetryTransport | Self::DeviceProfile => "VM",
+            Self::OpenTerminal | Self::EditRunTags | Self::DeleteRun | Self::ExportReport => "Run",
+            Self::RuleDetails | Self::AbusechPacks => "Rules",
             Self::Settings
             | Self::AnalysisTools
             | Self::DetectionRules
@@ -384,6 +420,14 @@ impl Action {
             Self::ImportDiskImage => "Import disk image…".into(),
             Self::ImportCore => "Import process core…".into(),
             Self::ExplorerFolder => "Choose Explorer folder…".into(),
+            Self::TelemetryTransport => "Telemetry transport…".into(),
+            Self::DeviceProfile => "Device profile…".into(),
+            Self::OpenTerminal => "Open terminal of the selected run".into(),
+            Self::EditRunTags => "Edit tags of the selected run…".into(),
+            Self::DeleteRun => "Delete the selected run…".into(),
+            Self::ExportReport => "Export report…".into(),
+            Self::RuleDetails => "Rule details".into(),
+            Self::AbusechPacks => "IDS rules: abuse.ch packs".into(),
         }
     }
 
@@ -554,7 +598,40 @@ impl MonitorApp {
                 self.folder_picker.available(),
                 "Install Zenity to choose a folder.",
             ),
-            Action::Go(_)
+            Action::TelemetryTransport | Action::DeviceProfile => {
+                if self.can_configure_vm() {
+                    None
+                } else if self.selected.is_none() {
+                    Some("Select a VM first.".into())
+                } else {
+                    Some("Stop the VM to change its configuration.".into())
+                }
+            }
+            Action::OpenTerminal | Action::EditRunTags | Action::ExportReport => {
+                reason(self.selected_vm_run().is_some(), "Select a run first.")
+            }
+            Action::DeleteRun => match self.selected_vm_run() {
+                None => Some("Select a run first.".into()),
+                Some(run) if !run.state.never_recorded() => Some(
+                    "Only a run that never recorded is deleted here; delete the others from \
+                     their sample in Samples."
+                        .into(),
+                ),
+                Some(run) if self.snapshot.runs.iter().any(|live| live.id == run.id) => Some(
+                    "The VM still owns this launch's cleanup; try again after it stops.".into(),
+                ),
+                Some(_) => None,
+            },
+            Action::RuleDetails => reason(
+                self.rules_ui.has_rule_selected(),
+                "Select a rule in Detection rules first.",
+            ),
+            Action::Go(Panel::Debugger) => reason(
+                self.snapshot.debug.is_some(),
+                "No debugger is attached; attach one to a process first.",
+            ),
+            Action::AbusechPacks
+            | Action::Go(_)
             | Action::Quit
             | Action::DownloadBase
             | Action::BuildBase
@@ -721,6 +798,48 @@ impl MonitorApp {
             Action::ImportCore => {
                 self.core_view.open_import_window();
                 self.focus_panel = Some(Panel::CoreDump);
+            }
+            Action::TelemetryTransport => {
+                self.configure_vm();
+                self.transport_open = true;
+            }
+            Action::DeviceProfile => {
+                self.configure_vm();
+                self.stealth_open = true;
+            }
+            Action::OpenTerminal => {
+                if let Some(run) = self.selected_vm_run().cloned() {
+                    self.reopen(run);
+                }
+            }
+            Action::EditRunTags => {
+                if let Some(run) = self.selected_vm_run() {
+                    crate::evidence::edit_tags(ctx, &run.directory);
+                }
+            }
+            Action::DeleteRun => {
+                if let Some(run) = self.selected_vm_run().cloned() {
+                    let title = run
+                        .request
+                        .path
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or("run")
+                        .to_owned();
+                    self.ask_delete_evidence(crate::evidence_delete::Deletion::failed_run(
+                        &run.directory,
+                        &title,
+                    ));
+                }
+            }
+            Action::ExportReport => {
+                self.triage.request_report();
+                self.focus_panel = Some(Panel::Triage);
+            }
+            Action::RuleDetails => self.open_library(LibraryPage::Rules),
+            Action::AbusechPacks => {
+                self.rules_ui.show_abusech();
+                self.open_library(LibraryPage::Rules);
             }
             Action::ExplorerFolder => {
                 if let Err(error) = self.folder_picker.choose(FolderTarget {
