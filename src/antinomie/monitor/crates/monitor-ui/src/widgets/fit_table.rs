@@ -403,7 +403,7 @@ fn dividers(
             ui.painter().vline(
                 x,
                 rect.y_range(),
-                egui::Stroke::new(2.0_f32, ui.visuals().widgets.active.bg_stroke.color),
+                egui::Stroke::new(1.0_f32, ui.visuals().widgets.active.bg_stroke.color),
             );
         }
         if response.dragged() {
