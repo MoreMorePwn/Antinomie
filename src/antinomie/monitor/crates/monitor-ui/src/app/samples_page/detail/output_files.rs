@@ -4,7 +4,7 @@
 //! where it is now and what can be done with it. Rows are read with the rest
 //! of the window, so drawing never touches the disk.
 use super::{parts, *};
-use crate::widgets::{table, Tone};
+use crate::widgets::{fit_table, Tone};
 use antinomie_monitor_core::RunArtifactState::{Complete, Partial};
 use std::path::PathBuf;
 
@@ -356,7 +356,7 @@ pub(in crate::app::samples_page) fn section(
                 .column(crate::widgets::fit_table::Col::fixed(size).clip(true))
                 .column(crate::widgets::fit_table::Col::fixed(availability).clip(true))
                 .column(crate::widgets::fit_table::Col::rest(80.0).at_least(actions))
-                .header(table::header_height(font), |mut header| {
+                .header(fit_table::header_height(font), |mut header| {
                     for title in [
                         "File",
                         "SHA-256",
@@ -366,12 +366,12 @@ pub(in crate::app::samples_page) fn section(
                         "Availability",
                         "",
                     ] {
-                        header.col(|ui| table::head(ui, title));
+                        header.col(|ui| fit_table::head(ui, title));
                     }
                 })
                 .body(|body| {
                     body.rows(
-                        table::row_height(font) + 6.0,
+                        fit_table::row_height(font) + 6.0,
                         data.outputs.len(),
                         |mut row| {
                             let output = &data.outputs[row.index()];
@@ -385,13 +385,12 @@ pub(in crate::app::samples_page) fn section(
                                     .on_hover_text(output.kind.label());
                             });
                             row.col(|ui| {
-                                table::cell(ui, table::Cell::Mono, &output.short()).on_hover_text(
-                                    if output.hash.is_empty() {
+                                fit_table::cell(ui, fit_table::Cell::Mono, &output.short())
+                                    .on_hover_text(if output.hash.is_empty() {
                                         "SHA-256 of the file"
                                     } else {
                                         output.hash.as_str()
-                                    },
-                                );
+                                    });
                             });
                             row.col(|ui| {
                                 ui.label(if output.number == 0 {

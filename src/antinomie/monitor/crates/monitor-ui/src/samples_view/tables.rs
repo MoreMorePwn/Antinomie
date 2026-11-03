@@ -157,7 +157,6 @@ impl SamplesView {
         let row_height = theme::row_height(cx.font_size).max(ui.spacing().interact_size.y + 4.0);
         let mut download = None;
         let mut clicked = None;
-        crate::widgets::table::begin(ui);
         // Not resizable by hand: the widths follow the window, so the columns
         // always fit it and line up with their headers.
         let body_max = (ui.available_height() - row_height).max(row_height * 2.0);
@@ -180,7 +179,7 @@ impl SamplesView {
             .header(row_height, |mut header| {
                 for column in Col::ALL {
                     header.col(|ui| {
-                        crate::widgets::table::head_bg(ui);
+                        crate::widgets::fit_table::head_bg(ui);
                         let mark = match self.sort {
                             Some(sort) if sort.column == column => {
                                 if sort.descending {
@@ -208,7 +207,7 @@ impl SamplesView {
                         }
                     });
                 }
-                header.col(|ui| crate::widgets::table::head(ui, ""));
+                header.col(|ui| crate::widgets::fit_table::head(ui, ""));
             })
             .body(|body| {
                 body.rows(row_height, order.len(), |mut row| {
@@ -378,7 +377,6 @@ impl SamplesView {
         );
         ui.colored_label(theme::muted(), "Loading the catalog…");
         let row_height = theme::row_height(cx.font_size).max(ui.spacing().interact_size.y + 4.0);
-        crate::widgets::table::begin(ui);
         let body_max = (ui.available_height() - row_height).max(row_height * 2.0);
         let rows = ((body_max / row_height) as usize).clamp(1, 12);
         let mut table = FitBuilder::new(ui)
@@ -396,7 +394,7 @@ impl SamplesView {
             .header(row_height, |mut header| {
                 for column in Col::ALL {
                     header.col(|ui| {
-                        crate::widgets::table::head_bg(ui);
+                        crate::widgets::fit_table::head_bg(ui);
                         ui.add(
                             egui::Label::new(
                                 RichText::new(column.label()).strong().color(theme::muted()),
@@ -405,7 +403,7 @@ impl SamplesView {
                         );
                     });
                 }
-                header.col(|ui| crate::widgets::table::head(ui, ""));
+                header.col(|ui| crate::widgets::fit_table::head(ui, ""));
             })
             .body(|body| {
                 body.rows(row_height, rows, |mut row| {
@@ -452,7 +450,6 @@ impl SamplesView {
         let pending = self.pending.is_some() || self.awaiting.is_some();
         let mono = theme::mono(cx.font_size - 1.0);
         let row_height = theme::row_height(cx.font_size).max(ui.spacing().interact_size.y + 4.0);
-        crate::widgets::table::begin(ui);
         let order =
             crate::table_sort::order(ui.ctx(), "samples_stored", stored.len(), |column, a, b| {
                 let (a, b) = (&stored[a], &stored[b]);
@@ -495,7 +492,7 @@ impl SamplesView {
                 {
                     header.col(|ui| crate::table_sort::header(ui, "samples_stored", column, title));
                 }
-                header.col(|ui| crate::widgets::table::head(ui, ""));
+                header.col(|ui| crate::widgets::fit_table::head(ui, ""));
             })
             .body(|body| {
                 body.rows(row_height, stored.len(), |mut row| {

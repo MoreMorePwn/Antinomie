@@ -5,7 +5,7 @@
 //! Keep, everything else as Delete. The files are read, moved and removed on
 //! a thread; a run that is still running is refused.
 use super::*;
-use crate::widgets::{self, table, Tone};
+use crate::widgets::{self, fit_table, Tone};
 use antinomie_monitor_core::samples::{
     delete_run, plan_run_deletion, ArtifactKind, ArtifactPlace, DeletedRun, RunPlan, RunPlanItem,
 };
@@ -196,7 +196,6 @@ impl DeleteRun {
                 }
             }
         });
-        table::begin(ui);
         crate::widgets::fit_table::FitBuilder::new(ui)
             .id_salt("samples_delete_run_rows")
             .striped(true)
@@ -206,13 +205,13 @@ impl DeleteRun {
             .column(crate::widgets::fit_table::Col::rest(80.0).at_least(160.0).clip(true))
             .column(crate::widgets::fit_table::Col::flex(150.0))
             .max_scroll_height(320.0)
-            .header(table::header_height(font), |mut header| {
+            .header(fit_table::header_height(font), |mut header| {
                 for title in ["Artifact", "Size", "For this sample", ""] {
-                    header.col(|ui| table::head(ui, title));
+                    header.col(|ui| fit_table::head(ui, title));
                 }
             })
             .body(|body| {
-                body.rows(table::row_height(font) + 6.0, plan.items.len(), |mut row| {
+                body.rows(fit_table::row_height(font) + 6.0, plan.items.len(), |mut row| {
                     let item = &plan.items[row.index()];
                     let others = self.others.get(&item.kind).copied().unwrap_or(0);
                     row.col(|ui| {

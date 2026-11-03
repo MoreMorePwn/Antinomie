@@ -17,19 +17,28 @@
 //!   below their fitted width the table scrolls sideways instead (header and
 //!   body together). A double click on a column divider, or "Fit columns" in
 //!   its menu, returns the table to fitting its box;
-//! - every cell is clipped (use the `table::cell*` helpers);
+//! - every cell is clipped (use the `cell*` helpers below);
 //! - the background is painted from the table's final rect.
 //!
+//! The look of a table's cells is here too (the mockup's table style): a
+//! header row in the panel color with muted semibold labels and a rule under
+//! it ([`head`], [`head_cell`]), zebra rows, hover and selection fills from
+//! the theme's visuals, a 3 px accent bar on the selected row ([`row_mark`]),
+//! monospace and right-aligned numeric columns ([`cell`] with a [`Cell`]
+//! kind). Row height comes from [`row_height`] and the header's from
+//! [`header_height`]. Contents and logic stay with each view.
+//!
 //! ```ignore
-//! let cols = [Col::fixed(90.0), Col::flex(160.0), Col::rest(120.0)];
-//! fit_table::show(ui, &cols, |ui, plan| {
-//!     plan.apply(TableBuilder::new(ui).striped(true))
-//!         .header(h, |mut header| { /* header.col(...) per column */ })
-//!         .body(|body| { /* rows */ });
-//! });
+//! FitBuilder::new(ui)
+//!     .striped(true)
+//!     .column(Col::fixed(90.0))
+//!     .column(Col::flex(160.0))
+//!     .column(Col::rest(120.0))
+//!     .header(h, |mut header| { /* header.col(...) per column */ })
+//!     .body(|body| { /* rows */ });
 //! ```
 use crate::theme;
-use eframe::egui::{self, Pos2, Rect, Shape, Ui};
+use eframe::egui::{self, vec2, Align, Layout, Pos2, Rect, RichText, Shape, Stroke, Ui};
 use egui_extras::{Column, TableBuilder};
 
 /// Narrowest a fixed column gets squeezed to when its table is too tight.
@@ -277,27 +286,12 @@ impl Plan {
 /// bar), a horizontal scroll area wraps the table only when the minimums do
 /// not fit, and the deepest-surface background is painted from the rect the
 /// table finally took (not the rest of the page below it).
-pub fn show<R>(ui: &mut Ui, cols: &[Col], add: impl FnOnce(&mut Ui, &Plan) -> R) -> R {
-    show_with(ui, cols, true, add)
-}
-
-/// [`show`] for a table whose body may not scroll (`vscroll(false)`): no
-/// room is kept for a scroll bar.
-pub fn show_with<R>(
-    ui: &mut Ui,
-    cols: &[Col],
-    vscroll: bool,
-    add: impl FnOnce(&mut Ui, &Plan) -> R,
-) -> R {
-    let font = ui.text_style_height(&egui::TextStyle::Body).max(14.0);
-    let header = crate::widgets::table::header_height(font);
-    let key = ui.id().with("fit-widths");
-    show_keyed(ui, key, header, cols, vscroll, add)
-}
-
-/// [`show_with`] for a table that has a name of its own (`key`) and a header
-/// row `header` high (0 for none): the widths the person drags on the header's
-/// dividers are kept under `key` for the session.
+///
+/// A table that has a name of its own (`key`) and a header row `header` high
+/// (0 for none): the widths the person drags on the header's dividers are
+/// kept under `key` for the session. `vscroll` is false for a table whose
+/// body may not scroll: no room is kept for a scroll bar. [`FitBuilder`] is
+/// the way to draw one.
 pub fn show_keyed<R>(
     ui: &mut Ui,
     key: egui::Id,
@@ -666,4 +660,184 @@ pub fn middle(ui: &Ui, text: &str, font: &egui::FontId, width: f32) -> String {
         }
     }
     build(low)
+}
+
+/// Height of one body row for text of `font_size` (density aware).
+pub fn row_height(font_size: f32) -> f32 {
+    theme::row_height(font_size)
+}
+
+/// Height of the header row.
+pub fn header_height(font_size: f32) -> f32 {
+    theme::row_height(font_size) + 4.0
+}
+
+/// Height of one body row of a list table (Samples, Run History, a sample's
+/// Runs): a little taller than a data table's rows, because a cell holds a
+/// name or a chip.
+pub fn list_row_height(font_size: f32) -> f32 {
+    row_height(font_size) + 8.0
+}
+
+/// How a cell's text is set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cell {
+    /// Proportional text.
+    Text,
+    /// Monospace: times, PIDs, addresses, hashes, results.
+    Mono,
+    /// Right-aligned monospace: sizes, counts, durations.
+    Number,
+}
+
+/// A flag bar at the left edge of a row's first cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mark {
+    None,
+    /// The selected row: accent.
+    Selected,
+    /// A flagged row: warn.
+    Flagged,
+    /// A failed row: error.
+    Failed,
+}
+
+/// A header cell: muted semibold label on the panel color, rule below.
+pub fn head(ui: &mut egui::Ui, text: &str) {
+    crate::query::note_head(ui, text);
+    head_cell(ui, |ui| {
+        ui.add(egui::Label::new(head_text(text)).truncate());
+    });
+}
+
+/// `Align::Max` for a numeric column, `Align::Min` for text.
+pub fn numeric_align(numeric: bool) -> Align {
+    if numeric {
+        Align::Max
+    } else {
+        Align::Min
+    }
+}
+
+/// Run `add` with its widgets at the left (`Align::Min`) or right
+/// (`Align::Max`) edge of the cell, centred in its height: for headers.
+pub fn aligned(ui: &mut egui::Ui, align: Align, add: impl FnOnce(&mut egui::Ui)) {
+    if align == Align::Max {
+        ui.with_layout(Layout::right_to_left(Align::Center), add);
+    } else {
+        add(ui);
+    }
+}
+
+/// [`aligned`] for body cells of a table whose cells are centred in the row
+/// (`cell_layout(left_to_right(Center))`): a right-aligned cell is centred in
+/// the row too, so numbers and text in one row share a middle line however
+/// their fonts differ.
+pub fn aligned_cell(ui: &mut egui::Ui, align: Align, add: impl FnOnce(&mut egui::Ui)) {
+    if align == Align::Max {
+        ui.with_layout(Layout::right_to_left(Align::Center), add);
+    } else {
+        add(ui);
+    }
+}
+
+/// A header cell with its label at the left or right edge (numeric columns
+/// align right, like their cells).
+pub fn head_aligned(ui: &mut egui::Ui, text: &str, align: Align) {
+    crate::query::note_head(ui, text);
+    head_bg(ui);
+    aligned(ui, align, |ui| {
+        ui.add(egui::Label::new(head_text(text)).truncate());
+    });
+}
+
+/// The header label style, for headers that draw their own widget (a sort
+/// button): muted, strong.
+pub fn head_text(text: impl Into<String>) -> RichText {
+    RichText::new(text).strong().color(theme::muted())
+}
+
+/// A header cell around custom content: paints the header fill and rule,
+/// then runs `content`.
+pub fn head_cell<R>(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    head_bg(ui);
+    content(ui)
+}
+
+/// Paint only the header fill and rule of the current cell; call first in a
+/// header cell that draws its own widget (a sort button).
+pub fn head_bg(ui: &mut egui::Ui) {
+    let spacing = ui.spacing().item_spacing;
+    let rect = ui
+        .max_rect()
+        .expand2(vec2(spacing.x / 2.0, spacing.y / 2.0));
+    let painter = ui.painter();
+    painter.rect_filled(rect, 0.0, theme::panel());
+    painter.hline(
+        rect.x_range(),
+        rect.bottom() - 0.5,
+        Stroke::new(1.0_f32, theme::line()),
+    );
+}
+
+/// Text in a body cell, truncated to the column. Colors stay the theme's
+/// text color; pass value colors through `RichText` yourself when needed.
+pub fn cell(ui: &mut egui::Ui, kind: Cell, text: &str) -> egui::Response {
+    cell_rich(ui, kind, RichText::new(text))
+}
+
+/// `cell` for text that is already styled (a value color, strikethrough).
+pub fn cell_rich(ui: &mut egui::Ui, kind: Cell, text: RichText) -> egui::Response {
+    crate::query::note_cell(ui, text.text());
+    match kind {
+        Cell::Text => ui.add(egui::Label::new(text).truncate()),
+        Cell::Mono => ui.add(egui::Label::new(text.monospace()).truncate()),
+        Cell::Number => {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.add(egui::Label::new(text.monospace()).truncate())
+            })
+            .inner
+        }
+    }
+}
+
+/// `cell` for a table whose rows are clickable: the text is not selectable,
+/// so a click on it reaches the row.
+pub fn cell_click(ui: &mut egui::Ui, kind: Cell, text: &str) -> egui::Response {
+    crate::query::note_cell(ui, text);
+    let text = RichText::new(text);
+    match kind {
+        Cell::Text => ui.add(egui::Label::new(text).selectable(false).truncate()),
+        Cell::Mono => ui.add(
+            egui::Label::new(text.monospace())
+                .selectable(false)
+                .truncate(),
+        ),
+        Cell::Number => {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.add(
+                    egui::Label::new(text.monospace())
+                        .selectable(false)
+                        .truncate(),
+                )
+            })
+            .inner
+        }
+    }
+}
+
+/// The 3 px bar at a row's left edge; call in the row's first cell.
+pub fn row_mark(ui: &mut egui::Ui, mark: Mark) {
+    let color = match mark {
+        Mark::None => return,
+        Mark::Selected => theme::palette().accent,
+        Mark::Flagged => theme::palette().warn,
+        Mark::Failed => theme::palette().error,
+    };
+    let spacing = ui.spacing().item_spacing;
+    let rect = ui
+        .max_rect()
+        .expand2(vec2(spacing.x / 2.0, spacing.y / 2.0));
+    let bar = egui::Rect::from_min_size(rect.min, vec2(3.0, rect.height()));
+    ui.painter().rect_filled(bar, 0.0, color);
 }

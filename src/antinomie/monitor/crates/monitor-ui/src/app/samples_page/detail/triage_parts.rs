@@ -4,7 +4,7 @@
 //! indicators. They read the runs' digests; a run Triage never opened has
 //! none and the sections say so instead of guessing.
 use super::{parts, *};
-use crate::widgets::{table, Tone};
+use crate::widgets::{fit_table, Tone};
 use antinomie_monitor_core::samples::Rollup;
 
 /// "3 of 4 runs"; the run numbers are the tooltip.
@@ -161,14 +161,14 @@ pub(super) fn rules_matched(
                 .column(crate::widgets::fit_table::Col::fixed(kind_width))
                 .column(crate::widgets::fit_table::Col::fixed(runs_width))
                 .column(crate::widgets::fit_table::Col::fixed(latest_width).clip(true))
-                .header(table::header_height(font), |mut header| {
+                .header(fit_table::header_height(font), |mut header| {
                     for title in ["Rule", "Kind", "Runs", "Latest hit"] {
-                        header.col(|ui| table::head(ui, title));
+                        header.col(|ui| fit_table::head(ui, title));
                     }
                 })
                 .body(|body| {
                     body.rows(
-                        table::row_height(font) + 4.0,
+                        fit_table::row_height(font) + 4.0,
                         rollup.rules.len(),
                         |mut row| {
                             let rule = &rollup.rules[row.index()];

@@ -336,7 +336,6 @@ impl ScanPane {
             .iter()
             .collect();
         let columns = [Col::fixed(150.0), Col::fixed(64.0), Col::rest(160.0)];
-        crate::widgets::table::begin(ui);
         FitBuilder::new(ui)
             .id_salt((self.title(), "content-hits", self.page))
             .striped(true)

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Bounded evidence tables and the jump from a row to its evidence.
 use super::*;
+use crate::widgets::fit_table;
 
 /// An outcome cell "failed (EACCES)" gets the errno number on hover.
 fn hover_errno(response: egui::Response, text: &str) {
@@ -240,8 +241,8 @@ pub(super) fn request_evidence_jump(ctx: &egui::Context, values: &[(&str, RowVal
 }
 
 /// The bar at a row's left edge: the selection, else a flagged file path.
-fn mark_of(selected: bool, first: &Cell) -> crate::widgets::table::Mark {
-    use crate::widgets::table::Mark;
+fn mark_of(selected: bool, first: &Cell) -> fit_table::Mark {
+    use fit_table::Mark;
     if selected {
         Mark::Selected
     } else if file_category::row_flagged(&first.values) {
@@ -262,8 +263,7 @@ fn table_rows_with(
     rows: &[Vec<Cell>],
     branches: Option<&[crate::tree_lines::Prefix]>,
 ) {
-    use crate::widgets::fit_table::Col;
-    use egui_extras::TableBuilder;
+    use fit_table::{Col, FitBuilder};
     if rows.is_empty() {
         ui.colored_label(theme::muted(), "Nothing recorded for this view.");
         return;
@@ -283,7 +283,7 @@ fn table_rows_with(
         *first += deepest.fold(0.0, f32::max).min(branch_char * 64.0);
     }
     let font = ui.text_style_height(&egui::TextStyle::Body).max(14.0);
-    let row_height = crate::widgets::table::row_height(font);
+    let row_height = fit_table::row_height(font);
     let selected_id = egui::Id::new(("triage-selected-row", id));
     let selected = ui.ctx().data(|data| data.get_temp::<String>(selected_id));
     let filter_id = ui
@@ -316,184 +316,160 @@ fn table_rows_with(
             }
         })
         .collect();
-    let widths_key = ui.id().with(("triage-062-widths", id));
-    crate::widgets::fit_table::show_keyed(
-        ui,
-        widths_key,
-        crate::widgets::table::header_height(font),
-        &cols,
-        true,
-        |ui, plan| {
-            let mut builder = TableBuilder::new(ui)
-                .id_salt(("triage-062", id))
-                .striped(true)
-                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                .vscroll(true)
-                .max_scroll_height(max_height)
-                .min_scrolled_height(0.0)
-                .sense(egui::Sense::click());
-            builder = plan.apply(builder);
-            builder
-                .header(crate::widgets::table::header_height(font), |mut header| {
-                    for (column, title) in headers.iter().enumerate() {
-                        header.col(|ui| {
-                            crate::widgets::table::aligned(
-                                ui,
-                                crate::widgets::table::numeric_align(numeric_column(title)),
-                                |ui| sorting::header(ui, id, column, title),
-                            );
-                        });
-                    }
-                })
-                .body(|body| {
-                    body.rows(row_height, rows.len(), |mut row| {
-                        let cells = &rows[order
-                            .as_ref()
-                            .map_or(row.index(), |order| order[row.index()])];
-                        let key = evidence_key(cells);
-                        let row_selected = selected.as_ref() == Some(&key);
-                        row.set_selected(row_selected);
-                        let branch = branches.map(|branches| &branches[row.index()]);
-                        for (column, cell) in cells.iter().enumerate() {
-                            row.col(|ui| {
-                                if column == 0 {
-                                    crate::widgets::table::row_mark(
-                                        ui,
-                                        mark_of(row_selected, cell),
-                                    );
-                                }
-                                let indent = branch.filter(|_| column == 0).map(|branch| {
-                                    let reach = ui.spacing().item_spacing.y * 0.5;
-                                    let lines = ui.max_rect().expand2(egui::vec2(0.0, reach));
-                                    branch.paint(ui.painter(), lines, branch_char);
-                                    branch.width(branch_char)
-                                });
-                                let mut text =
-                                    RichText::new(display_cell(&cell.text)).color(cell.color());
-                                if cell.mono {
-                                    text = text.monospace();
-                                }
-                                let label = egui::Label::new(text)
-                                    .truncate()
-                                    .selectable(false)
-                                    .sense(egui::Sense::hover());
-                                let draw = |ui: &mut egui::Ui| match indent {
-                                    Some(width) => {
-                                        let mut rect = ui.max_rect();
-                                        rect.min.x += width;
-                                        ui.scope_builder(
-                                            egui::UiBuilder::new().max_rect(rect),
-                                            |ui| {
-                                                hover_errno(ui.add(label), &cell.text);
-                                            },
-                                        );
-                                    }
-                                    None => {
-                                        hover_errno(ui.add(label), &cell.text);
-                                    }
-                                };
-                                // The count of suspicious observations is a chip at the
-                                // right of the process cell; the label takes the rest.
-                                let suspect = (column == 0 && id == "triage-process")
-                                    .then(|| files::number(&cell.values, "process.suspicious"))
-                                    .flatten()
-                                    .filter(|count| *count > 0);
-                                if let Some(count) = suspect {
-                                    // The chip wears the colour of the worst tier among
-                                    // the process's observations.
-                                    let tone = cell
-                                        .values
-                                        .iter()
-                                        .find_map(|(key, value)| match value {
-                                            RowValue::Text(tag) if *key == "process.worst_tier" => {
-                                                rules::Tier::from_tag(tag)
-                                            }
-                                            _ => None,
-                                        })
-                                        .map_or(crate::widgets::Tone::Neutral, rules::Tier::tone);
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            crate::widgets::chip(ui, count.to_string(), tone)
-                                                .on_hover_text(
-                                                    "Suspicious observations in this process",
-                                                );
-                                            ui.with_layout(
-                                                egui::Layout::left_to_right(egui::Align::Center),
-                                                draw,
-                                            );
-                                        },
-                                    );
-                                } else {
-                                    crate::widgets::table::aligned_cell(
-                                        ui,
-                                        crate::widgets::table::numeric_align(numeric_column(
-                                            headers[column],
-                                        )),
-                                        draw,
-                                    );
-                                }
-                            });
-                        }
-                        if row.response().clicked() {
-                            details::select(&row.response().ctx, id, headers, cells);
-                            if id == "triage-process" {
-                                // A process opens its Suspicious activity; Details keep it selected.
-                                if let Some(pid) = cells
-                                    .first()
-                                    .and_then(|cell| files::number(&cell.values, "process.pid"))
-                                {
-                                    row.response().ctx.data_mut(|data| {
-                                        data.insert_temp(
-                                            egui::Id::new(process_details::PROCESS_SCOPE),
-                                            pid,
-                                        )
-                                    });
-                                }
-                            } else {
-                                details::clicked(&row.response().ctx, id);
-                            }
-                            row.response()
-                                .ctx
-                                .data_mut(|data| data.insert_temp(selected_id, key));
-                        }
-                        if row.response().double_clicked() {
-                            request_evidence_jump(
-                                &row.response().ctx,
-                                cells
-                                    .first()
-                                    .map(|cell| cell.values.as_slice())
-                                    .unwrap_or_default(),
-                            );
-                        }
-                        let values = cells
-                            .first()
-                            .map(|cell| cell.values.as_slice())
-                            .unwrap_or_default();
-                        let extras = row_extras(
-                            query::NoteRun::get(&row.response().ctx).as_ref(),
-                            id,
-                            cells.first().map_or("", |cell| cell.text.as_str()),
-                            values,
-                        );
-                        row.response().context_menu(|ui| {
-                            file_activity::reconstruct_menu(ui, id, values);
-                            match filter_id {
-                                Some(filter_id) => {
-                                    query::table_row_menu_with(ui, filter_id, values, extras)
-                                }
-                                None => query::row_menu_plain(
-                                    ui,
-                                    egui::Id::new((id, "row-menu")),
-                                    values,
-                                    extras,
-                                ),
-                            }
-                        });
+    let mut builder = FitBuilder::new(ui)
+        .id_salt(("triage-062", id))
+        .striped(true)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        .vscroll(true)
+        .max_scroll_height(max_height)
+        .min_scrolled_height(0.0)
+        .sense(egui::Sense::click());
+    for col in cols {
+        builder = builder.column(col);
+    }
+    builder
+        .header(fit_table::header_height(font), |mut header| {
+            for (column, title) in headers.iter().enumerate() {
+                header.col(|ui| {
+                    fit_table::aligned(ui, fit_table::numeric_align(numeric_column(title)), |ui| {
+                        sorting::header(ui, id, column, title)
                     });
                 });
-        },
-    );
+            }
+        })
+        .body(|body| {
+            body.rows(row_height, rows.len(), |mut row| {
+                let cells = &rows[order
+                    .as_ref()
+                    .map_or(row.index(), |order| order[row.index()])];
+                let key = evidence_key(cells);
+                let row_selected = selected.as_ref() == Some(&key);
+                row.set_selected(row_selected);
+                let branch = branches.map(|branches| &branches[row.index()]);
+                for (column, cell) in cells.iter().enumerate() {
+                    row.col(|ui| {
+                        if column == 0 {
+                            fit_table::row_mark(ui, mark_of(row_selected, cell));
+                        }
+                        let indent = branch.filter(|_| column == 0).map(|branch| {
+                            let reach = ui.spacing().item_spacing.y * 0.5;
+                            let lines = ui.max_rect().expand2(egui::vec2(0.0, reach));
+                            branch.paint(ui.painter(), lines, branch_char);
+                            branch.width(branch_char)
+                        });
+                        let mut text = RichText::new(display_cell(&cell.text)).color(cell.color());
+                        if cell.mono {
+                            text = text.monospace();
+                        }
+                        let label = egui::Label::new(text)
+                            .truncate()
+                            .selectable(false)
+                            .sense(egui::Sense::hover());
+                        let draw = |ui: &mut egui::Ui| match indent {
+                            Some(width) => {
+                                let mut rect = ui.max_rect();
+                                rect.min.x += width;
+                                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                                    hover_errno(ui.add(label), &cell.text);
+                                });
+                            }
+                            None => {
+                                hover_errno(ui.add(label), &cell.text);
+                            }
+                        };
+                        // The count of suspicious observations is a chip at the
+                        // right of the process cell; the label takes the rest.
+                        let suspect = (column == 0 && id == "triage-process")
+                            .then(|| files::number(&cell.values, "process.suspicious"))
+                            .flatten()
+                            .filter(|count| *count > 0);
+                        if let Some(count) = suspect {
+                            // The chip wears the colour of the worst tier among
+                            // the process's observations.
+                            let tone = cell
+                                .values
+                                .iter()
+                                .find_map(|(key, value)| match value {
+                                    RowValue::Text(tag) if *key == "process.worst_tier" => {
+                                        rules::Tier::from_tag(tag)
+                                    }
+                                    _ => None,
+                                })
+                                .map_or(crate::widgets::Tone::Neutral, rules::Tier::tone);
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    crate::widgets::chip(ui, count.to_string(), tone)
+                                        .on_hover_text("Suspicious observations in this process");
+                                    ui.with_layout(
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        draw,
+                                    );
+                                },
+                            );
+                        } else {
+                            fit_table::aligned_cell(
+                                ui,
+                                fit_table::numeric_align(numeric_column(headers[column])),
+                                draw,
+                            );
+                        }
+                    });
+                }
+                if row.response().clicked() {
+                    details::select(&row.response().ctx, id, headers, cells);
+                    if id == "triage-process" {
+                        // A process opens its Suspicious activity; Details keep it selected.
+                        if let Some(pid) = cells
+                            .first()
+                            .and_then(|cell| files::number(&cell.values, "process.pid"))
+                        {
+                            row.response().ctx.data_mut(|data| {
+                                data.insert_temp(egui::Id::new(process_details::PROCESS_SCOPE), pid)
+                            });
+                        }
+                    } else {
+                        details::clicked(&row.response().ctx, id);
+                    }
+                    row.response()
+                        .ctx
+                        .data_mut(|data| data.insert_temp(selected_id, key));
+                }
+                if row.response().double_clicked() {
+                    request_evidence_jump(
+                        &row.response().ctx,
+                        cells
+                            .first()
+                            .map(|cell| cell.values.as_slice())
+                            .unwrap_or_default(),
+                    );
+                }
+                let values = cells
+                    .first()
+                    .map(|cell| cell.values.as_slice())
+                    .unwrap_or_default();
+                let extras = row_extras(
+                    query::NoteRun::get(&row.response().ctx).as_ref(),
+                    id,
+                    cells.first().map_or("", |cell| cell.text.as_str()),
+                    values,
+                );
+                row.response().context_menu(|ui| {
+                    file_activity::reconstruct_menu(ui, id, values);
+                    match filter_id {
+                        Some(filter_id) => {
+                            query::table_row_menu_with(ui, filter_id, values, extras)
+                        }
+                        None => query::row_menu_plain(
+                            ui,
+                            egui::Id::new((id, "row-menu")),
+                            values,
+                            extras,
+                        ),
+                    }
+                });
+            });
+        });
 }
 
 /// Suspicious-activity rows. A click returns that invocation's `call_id`.
@@ -548,8 +524,7 @@ fn finding_table_rows(
     selected: Option<trace::InvocationKey>,
     scroll_to: Option<trace::InvocationKey>,
 ) -> Option<trace::InvocationKey> {
-    use crate::widgets::fit_table::Col;
-    use egui_extras::TableBuilder;
+    use fit_table::{Col, FitBuilder};
     if rows.is_empty() {
         ui.colored_label(theme::muted(), "Nothing recorded for this view.");
         return None;
@@ -569,7 +544,7 @@ fn finding_table_rows(
         .ctx()
         .data(|data| data.get_temp::<egui::Id>(egui::Id::new(("triage-filter-target", id))));
     let font = ui.text_style_height(&egui::TextStyle::Body).max(14.0);
-    let row_height = crate::widgets::table::row_height(font);
+    let row_height = fit_table::row_height(font);
     let max_height = ui.available_height().max(60.0);
     let last = shown.len() - 1;
     let cols: Vec<Col> = widths
@@ -583,100 +558,96 @@ fn finding_table_rows(
             }
         })
         .collect();
-    crate::widgets::fit_table::show(ui, &cols, |ui, plan| {
-        let mut builder = TableBuilder::new(ui)
-            .id_salt(("triage-062", id))
-            .striped(true)
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .vscroll(true)
-            .max_scroll_height(max_height)
-            .min_scrolled_height(0.0)
-            .sense(egui::Sense::click());
-        builder = plan.apply(builder);
-        // A row picked in the graph: scroll the table to where it sits now.
-        if let Some(shown) = scroll_to.and_then(|key| {
-            (0..rows.len())
-                .find(|at| rows[order.as_ref().map_or(*at, |order| order[*at])].key == key)
-        }) {
-            builder = builder.scroll_to_row(shown, Some(egui::Align::Center));
-        }
-        builder
-            .header(crate::widgets::table::header_height(font), |mut header| {
-                // A header sorts by the stored column it shows, so the sort the
-                // query asks for needs no translation.
-                for &column in &shown {
-                    let title = headers[column];
-                    header.col(|ui| {
-                        crate::widgets::table::aligned(
-                            ui,
-                            crate::widgets::table::numeric_align(numeric_column(title)),
-                            |ui| sorting::header(ui, id, column, title),
-                        );
-                    });
-                }
-            })
-            .body(|body| {
-                body.rows(row_height, rows.len(), |mut row| {
-                    let finding = &rows[order
-                        .as_ref()
-                        .map_or(row.index(), |order| order[row.index()])];
-                    row.set_selected(selected == Some(finding.key));
-                    for &column in &shown {
-                        let Some(cell) = finding.cells.get(column) else {
-                            row.col(|_| {});
-                            continue;
-                        };
-                        row.col(|ui| {
-                            let mut text =
-                                RichText::new(bounded_cell(&cell.text)).color(cell.color());
-                            if cell.mono {
-                                text = text.monospace();
-                            }
-                            let align = crate::widgets::table::numeric_align(numeric_column(
-                                headers.get(column).copied().unwrap_or_default(),
-                            ));
-                            crate::widgets::table::aligned_cell(ui, align, |ui| {
-                                ui.add(
-                                    egui::Label::new(text)
-                                        .truncate()
-                                        .selectable(false)
-                                        .sense(egui::Sense::hover()),
-                                );
-                            });
-                        });
-                    }
-                    if row.response().clicked() {
-                        clicked = Some(finding.key);
-                        let mut cells = finding.cells.clone();
-                        if let Some(first) = cells.first_mut() {
-                            first.values.clone_from(&finding.values);
-                        }
-                        details::select(&row.response().ctx, id, headers, &cells);
-                        details::clicked(&row.response().ctx, id);
-                    }
-                    if row.response().double_clicked() {
-                        request_evidence_jump(&row.response().ctx, &finding.values);
-                    }
-                    let extras = row_extras(
-                        query::NoteRun::get(&row.response().ctx).as_ref(),
-                        id,
-                        finding.cells.first().map_or("", |cell| cell.text.as_str()),
-                        &finding.values,
-                    );
-                    row.response().context_menu(|ui| match filter_id {
-                        Some(filter_id) => {
-                            query::table_row_menu_with(ui, filter_id, &finding.values, extras)
-                        }
-                        None => query::row_menu_plain(
-                            ui,
-                            egui::Id::new((id, "row-menu")),
-                            &finding.values,
-                            extras,
-                        ),
+    let mut builder = FitBuilder::new(ui)
+        .id_salt(("triage-062", id))
+        .striped(true)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        .vscroll(true)
+        .max_scroll_height(max_height)
+        .min_scrolled_height(0.0)
+        .sense(egui::Sense::click());
+    for col in cols {
+        builder = builder.column(col);
+    }
+    // A row picked in the graph: scroll the table to where it sits now.
+    if let Some(shown) = scroll_to.and_then(|key| {
+        (0..rows.len()).find(|at| rows[order.as_ref().map_or(*at, |order| order[*at])].key == key)
+    }) {
+        builder = builder.scroll_to_row(shown, Some(egui::Align::Center));
+    }
+    builder
+        .header(fit_table::header_height(font), |mut header| {
+            // A header sorts by the stored column it shows, so the sort the
+            // query asks for needs no translation.
+            for &column in &shown {
+                let title = headers[column];
+                header.col(|ui| {
+                    fit_table::aligned(ui, fit_table::numeric_align(numeric_column(title)), |ui| {
+                        sorting::header(ui, id, column, title)
                     });
                 });
+            }
+        })
+        .body(|body| {
+            body.rows(row_height, rows.len(), |mut row| {
+                let finding = &rows[order
+                    .as_ref()
+                    .map_or(row.index(), |order| order[row.index()])];
+                row.set_selected(selected == Some(finding.key));
+                for &column in &shown {
+                    let Some(cell) = finding.cells.get(column) else {
+                        row.col(|_| {});
+                        continue;
+                    };
+                    row.col(|ui| {
+                        let mut text = RichText::new(bounded_cell(&cell.text)).color(cell.color());
+                        if cell.mono {
+                            text = text.monospace();
+                        }
+                        let align = fit_table::numeric_align(numeric_column(
+                            headers.get(column).copied().unwrap_or_default(),
+                        ));
+                        fit_table::aligned_cell(ui, align, |ui| {
+                            ui.add(
+                                egui::Label::new(text)
+                                    .truncate()
+                                    .selectable(false)
+                                    .sense(egui::Sense::hover()),
+                            );
+                        });
+                    });
+                }
+                if row.response().clicked() {
+                    clicked = Some(finding.key);
+                    let mut cells = finding.cells.clone();
+                    if let Some(first) = cells.first_mut() {
+                        first.values.clone_from(&finding.values);
+                    }
+                    details::select(&row.response().ctx, id, headers, &cells);
+                    details::clicked(&row.response().ctx, id);
+                }
+                if row.response().double_clicked() {
+                    request_evidence_jump(&row.response().ctx, &finding.values);
+                }
+                let extras = row_extras(
+                    query::NoteRun::get(&row.response().ctx).as_ref(),
+                    id,
+                    finding.cells.first().map_or("", |cell| cell.text.as_str()),
+                    &finding.values,
+                );
+                row.response().context_menu(|ui| match filter_id {
+                    Some(filter_id) => {
+                        query::table_row_menu_with(ui, filter_id, &finding.values, extras)
+                    }
+                    None => query::row_menu_plain(
+                        ui,
+                        egui::Id::new((id, "row-menu")),
+                        &finding.values,
+                        extras,
+                    ),
+                });
             });
-    });
+        });
     clicked
 }
 

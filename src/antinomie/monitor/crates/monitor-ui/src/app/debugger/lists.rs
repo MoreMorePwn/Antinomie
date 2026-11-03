@@ -5,7 +5,7 @@ use super::*;
 use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::{
     table_sort,
-    widgets::table::{self, Cell, Mark},
+    widgets::fit_table::{self, Cell, Mark},
 };
 use antinomie_monitor_core::debug::{
     signal_policy::signal_name,
@@ -14,7 +14,7 @@ use antinomie_monitor_core::debug::{
 
 /// Height of the panes' table rows.
 fn row_height(ui: &egui::Ui) -> f32 {
-    table::row_height(egui::TextStyle::Body.resolve(ui.style()).size)
+    fit_table::row_height(egui::TextStyle::Body.resolve(ui.style()).size)
 }
 
 /// One thread's state in words: running, stopped, or stopped with the signal
@@ -56,7 +56,6 @@ pub(super) fn threads(
         }
     });
     let row_height = row_height(ui);
-    table::begin(ui);
     FitBuilder::new(ui)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .id_salt(TABLE)
@@ -77,12 +76,12 @@ pub(super) fn threads(
                 let selected = view.selected_tid == Some(thread.tid);
                 row.set_selected(selected);
                 row.col(|ui| {
-                    table::row_mark(ui, if selected { Mark::Selected } else { Mark::None });
-                    table::cell_click(ui, Cell::Mono, &thread.tid.to_string());
+                    fit_table::row_mark(ui, if selected { Mark::Selected } else { Mark::None });
+                    fit_table::cell_click(ui, Cell::Mono, &thread.tid.to_string());
                 });
                 row.col(|ui| {
                     let text = RichText::new(thread_state(thread));
-                    table::cell_rich(
+                    fit_table::cell_rich(
                         ui,
                         Cell::Text,
                         if thread.stopped {
@@ -93,7 +92,7 @@ pub(super) fn threads(
                     );
                 });
                 row.col(|ui| {
-                    table::cell_rich(
+                    fit_table::cell_rich(
                         ui,
                         Cell::Mono,
                         RichText::new(format!("{:#x}", thread.pc))
@@ -221,7 +220,6 @@ pub(super) fn breakpoints(
         }
     });
     let row_height = row_height(ui);
-    table::begin(ui);
     FitBuilder::new(ui)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .id_salt(TABLE)
@@ -236,7 +234,7 @@ pub(super) fn breakpoints(
             for (column, title) in ["On", "Address", "Kind", "At PC"].into_iter().enumerate() {
                 header.col(|ui| table_sort::header(ui, TABLE, column, title));
             }
-            header.col(|ui| table::head(ui, ""));
+            header.col(|ui| fit_table::head(ui, ""));
         })
         .body(|body| {
             body.rows(row_height, order.len(), |mut row| {
@@ -255,7 +253,7 @@ pub(super) fn breakpoints(
                     }
                 });
                 row.col(|ui| {
-                    table::cell_rich(
+                    fit_table::cell_rich(
                         ui,
                         Cell::Mono,
                         RichText::new(format!("{:#x}", entry.addr)).color(if entry.enabled {
@@ -266,7 +264,7 @@ pub(super) fn breakpoints(
                     );
                 });
                 row.col(|ui| {
-                    table::cell_rich(
+                    fit_table::cell_rich(
                         ui,
                         Cell::Text,
                         RichText::new(entry.kind.label()).color(theme::muted()),

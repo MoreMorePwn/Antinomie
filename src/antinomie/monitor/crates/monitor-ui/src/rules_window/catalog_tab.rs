@@ -6,7 +6,7 @@ use super::{
     theme, Model,
 };
 use crate::widgets::fit_table::{Col, FitBuilder};
-use crate::widgets::{self, table, Tone};
+use crate::widgets::{self, fit_table, Tone};
 use antinomie_monitor_core::ruleset;
 use eframe::egui::{self, RichText};
 use std::path::Path;
@@ -43,11 +43,10 @@ impl Model {
                 }
             });
         let mut picked = None;
-        let row_height = table::row_height(font) + ROW_PAD;
+        let row_height = fit_table::row_height(font) + ROW_PAD;
         let height = row_height * (offers.len().min(6) as f32 + 1.5) + 8.0;
         ui.scope(|ui| {
             ui.spacing_mut().item_spacing.x += CELL_PAD;
-            table::begin(ui);
             FitBuilder::new(ui)
                 .id_salt("rules_catalog")
                 .sense(egui::Sense::click())
@@ -61,7 +60,7 @@ impl Model {
                 .column(Col::fixed(130.0))
                 .max_scroll_height(height)
                 .min_scrolled_height(0.0)
-                .header(table::header_height(font), |mut header| {
+                .header(fit_table::header_height(font), |mut header| {
                     for (column, title) in ["Pack", "Version", "Rules", "Size", "License", "State"]
                         .into_iter()
                         .enumerate()
@@ -72,7 +71,7 @@ impl Model {
                                 "rules_catalog",
                                 column,
                                 title,
-                                table::numeric_align(matches!(column, 2 | 3)),
+                                fit_table::numeric_align(matches!(column, 2 | 3)),
                             )
                         });
                     }
@@ -83,31 +82,35 @@ impl Model {
                         let selected = self.catalog_pick == offer.id;
                         row.set_selected(selected);
                         row.col(|ui| {
-                            table::row_mark(
+                            fit_table::row_mark(
                                 ui,
                                 if selected {
-                                    table::Mark::Selected
+                                    fit_table::Mark::Selected
                                 } else {
-                                    table::Mark::None
+                                    fit_table::Mark::None
                                 },
                             );
-                            table::cell_click(ui, table::Cell::Text, &offer.name);
+                            fit_table::cell_click(ui, fit_table::Cell::Text, &offer.name);
                         });
                         row.col(|ui| {
-                            table::cell_click(ui, table::Cell::Mono, &offer.version);
+                            fit_table::cell_click(ui, fit_table::Cell::Mono, &offer.version);
                         });
                         row.col(|ui| {
-                            table::cell_click(ui, table::Cell::Number, &offer.rules.to_string());
-                        });
-                        row.col(|ui| {
-                            table::cell_click(
+                            fit_table::cell_click(
                                 ui,
-                                table::Cell::Number,
+                                fit_table::Cell::Number,
+                                &offer.rules.to_string(),
+                            );
+                        });
+                        row.col(|ui| {
+                            fit_table::cell_click(
+                                ui,
+                                fit_table::Cell::Number,
                                 &crate::values::short_size(offer.size),
                             );
                         });
                         row.col(|ui| {
-                            table::cell_click(ui, table::Cell::Text, &offer.license);
+                            fit_table::cell_click(ui, fit_table::Cell::Text, &offer.license);
                         });
                         row.col(|ui| {
                             let state = self.catalog_state(&catalog, offer);

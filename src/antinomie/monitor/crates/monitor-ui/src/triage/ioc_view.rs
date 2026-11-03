@@ -728,14 +728,14 @@ impl View {
             }
         });
         if let Some((text, error)) = &self.status {
-            ui.colored_label(
-                if *error {
-                    theme::error()
-                } else {
-                    theme::muted()
-                },
-                text,
-            );
+            let level = if *error {
+                crate::activity::Level::Error
+            } else {
+                crate::activity::Level::Info
+            };
+            if crate::activity::status(ui, level, text, None) {
+                self.status = None;
+            }
         }
     }
 
@@ -798,15 +798,18 @@ impl View {
             );
         }
         if self.online_on {
-            ui.colored_label(
-                theme::blue(),
+            crate::activity::info(
+                ui,
                 "Online check on: public indicators are sent to abuse.ch.",
             );
         }
         match &ioc.capture {
             Capture::Read => {}
             Capture::Off => {
-                ui.colored_label(theme::muted(), "Network capture was off for this run. Turn on Capture network in Run program to record one.");
+                crate::activity::info(
+                    ui,
+                    "Network capture was off for this run. Turn on Capture network in Run program to record one.",
+                );
             }
             Capture::Failed(error) => {
                 crate::activity::error(

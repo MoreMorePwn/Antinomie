@@ -4,12 +4,8 @@
 //! Static analysis shows it as the Regex matches tab (over Strings and FLOSS
 //! strings) and Core dumps in a window (strings and binary socket addresses);
 //! the scan runs on a worker thread.
-use crate::widgets::fit_table::{Col, FitBuilder};
-use crate::widgets::{
-    self,
-    table::{self, Cell, Mark},
-    TabItem, Tone,
-};
+use crate::widgets::fit_table::{self, Cell, Col, FitBuilder, Mark};
+use crate::widgets::{self, TabItem, Tone};
 use antinomie_monitor_core::strings_regex::{Category, Config, Match, RuleSet, Scan};
 use eframe::egui;
 use std::{
@@ -326,7 +322,6 @@ impl RegexWindow {
         let font = egui::TextStyle::Monospace.resolve(ui.style()).size;
         let rows = self.shown.rows.clone();
         let mut chosen = None;
-        table::begin(ui);
         let height = ui.available_height().max(120.0);
         FitBuilder::new(ui)
             .id_salt("regex-matches-table")
@@ -340,35 +335,35 @@ impl RegexWindow {
             .column(Col::flex(150.0).at_least(80.0).clip(true))
             .column(Col::fixed(44.0))
             .column(Col::rest(80.0).at_least(60.0).clip(true))
-            .header(table::header_height(font), |mut header| {
+            .header(fit_table::header_height(font), |mut header| {
                 for title in ["Category", "Type", "Match", "Found in", "Seen", "Inside"] {
-                    header.col(|ui| table::head(ui, title));
+                    header.col(|ui| fit_table::head(ui, title));
                 }
             })
             .body(|body| {
-                body.rows(table::row_height(font), rows.len(), |mut row| {
+                body.rows(fit_table::row_height(font), rows.len(), |mut row| {
                     let index = rows[row.index()];
                     let found = &scan.matches[index];
                     let selected = self.selected == Some(index);
                     row.set_selected(selected);
                     row.col(|ui| {
-                        table::row_mark(ui, if selected { Mark::Selected } else { Mark::None });
-                        table::cell_click(ui, Cell::Text, found.category.label());
+                        fit_table::row_mark(ui, if selected { Mark::Selected } else { Mark::None });
+                        fit_table::cell_click(ui, Cell::Text, found.category.label());
                     });
                     row.col(|ui| {
-                        table::cell_click(ui, Cell::Text, &found.kind);
+                        fit_table::cell_click(ui, Cell::Text, &found.kind);
                     });
                     row.col(|ui| {
-                        table::cell_click(ui, Cell::Mono, &found.text);
+                        fit_table::cell_click(ui, Cell::Mono, &found.text);
                     });
                     row.col(|ui| {
-                        table::cell_click(ui, Cell::Text, &place(found));
+                        fit_table::cell_click(ui, Cell::Text, &place(found));
                     });
                     row.col(|ui| {
-                        table::cell_click(ui, Cell::Number, &(found.repeats + 1).to_string());
+                        fit_table::cell_click(ui, Cell::Number, &(found.repeats + 1).to_string());
                     });
                     row.col(|ui| {
-                        table::cell_click(ui, Cell::Text, &found.via.join(" > "));
+                        fit_table::cell_click(ui, Cell::Text, &found.via.join(" > "));
                     });
                     let response = row.response();
                     response.context_menu(|ui| {

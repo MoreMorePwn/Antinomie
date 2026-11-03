@@ -409,7 +409,6 @@ pub(super) fn show(
                 ui.label("No rows of this function are in the loaded listing page.");
             }
             let height = ui.available_height().max(row_height);
-            crate::widgets::table::begin(ui);
             let mut table = FitBuilder::new(ui)
                 .id_salt(("listing", kind_salt(kind)))
                 .striped(kind != AnalysisKind::Decompilation)
@@ -876,8 +875,8 @@ fn ordered_head(ui: &mut egui::Ui, title: &str, kind: AnalysisKind) {
         }
         _ => "Decompiled source stays in line order: each function's lines follow its header.",
     };
-    crate::widgets::table::head_cell(ui, |ui| {
-        ui.add(egui::Label::new(crate::widgets::table::head_text(title)).truncate())
+    crate::widgets::fit_table::head_cell(ui, |ui| {
+        ui.add(egui::Label::new(crate::widgets::fit_table::head_text(title)).truncate())
             .on_hover_text(why)
             .on_hover_cursor(egui::CursorIcon::NotAllowed);
     });

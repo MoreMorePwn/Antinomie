@@ -4,7 +4,7 @@
 //! The comparison reads archives, so it runs on a worker thread once per
 //! window; parents and children are left out, the lineage graph shows them.
 use super::{parts, *};
-use crate::widgets::table;
+use crate::widgets::fit_table;
 use antinomie_monitor_core::samples::Similar;
 use std::collections::HashSet;
 
@@ -99,13 +99,13 @@ pub(super) fn section(ui: &mut egui::Ui, state: &State, font: f32) -> Option<Str
                     )
                     .column(crate::widgets::fit_table::Col::fixed(90.0))
                     .column(crate::widgets::fit_table::Col::fixed(180.0))
-                    .header(table::header_height(font), |mut header| {
+                    .header(fit_table::header_height(font), |mut header| {
                         for title in ["Sample", "Distance", "Shared"] {
-                            header.col(|ui| table::head(ui, title));
+                            header.col(|ui| fit_table::head(ui, title));
                         }
                     })
                     .body(|body| {
-                        body.rows(table::row_height(font) + 4.0, found.len(), |mut row| {
+                        body.rows(fit_table::row_height(font) + 4.0, found.len(), |mut row| {
                             let similar = &found[row.index()];
                             row.col(|ui| {
                                 if widgets::link(ui, &similar.name)

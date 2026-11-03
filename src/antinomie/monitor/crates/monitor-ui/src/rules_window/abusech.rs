@@ -5,7 +5,7 @@
 //! what is installed, and an update on demand.
 use super::{theme, Done, Model};
 use crate::widgets::fit_table::{Col, FitBuilder};
-use crate::widgets::{self, table, Tone};
+use crate::widgets::{self, fit_table, Tone};
 use antinomie_monitor_core::{
     api_keys::{self, ApiKey},
     ioc::feeds::now_unix,
@@ -91,11 +91,10 @@ impl Model {
             }
         });
         let font = ui.text_style_height(&egui::TextStyle::Body);
-        let height = table::row_height(font) * (states.len() as f32 + 1.5) + 8.0;
+        let height = fit_table::row_height(font) * (states.len() as f32 + 1.5) + 8.0;
         let mut picked = None;
         let mut action = None;
         ui.scope(|ui| {
-            table::begin(ui);
             FitBuilder::new(ui)
                 .id_salt("abusech_packs")
                 .sense(egui::Sense::click())
@@ -109,18 +108,18 @@ impl Model {
                 .column(Col::rest(80.0).at_least(180.0))
                 .max_scroll_height(height)
                 .min_scrolled_height(0.0)
-                .header(table::header_height(font), |mut header| {
+                .header(fit_table::header_height(font), |mut header| {
                     for title in ["Pack", "Rules", "Installed", "Checked", "State", ""] {
-                        header.col(|ui| table::head(ui, title));
+                        header.col(|ui| fit_table::head(ui, title));
                     }
                 })
                 .body(|body| {
-                    body.rows(table::row_height(font), states.len(), |mut row| {
+                    body.rows(fit_table::row_height(font), states.len(), |mut row| {
                         let state = &states[row.index()];
                         let pack = state.pack;
                         row.set_selected(self.live.pick == Some(pack.id));
                         row.col(|ui| {
-                            table::cell_click(ui, table::Cell::Text, pack.name);
+                            fit_table::cell_click(ui, fit_table::Cell::Text, pack.name);
                         });
                         row.col(|ui| {
                             let rules = state
@@ -129,7 +128,7 @@ impl Model {
                                 .map(|installed| installed.rules)
                                 .or(state.checked.as_ref().map(|checked| checked.rules));
                             let text = rules.map_or("—".to_owned(), |rules| rules.to_string());
-                            table::cell_click(ui, table::Cell::Number, &text);
+                            fit_table::cell_click(ui, fit_table::Cell::Number, &text);
                         });
                         row.col(|ui| {
                             let text = state.installed.as_ref().map_or("—".to_owned(), |i| {
@@ -139,14 +138,14 @@ impl Model {
                                     ago(now, i.fetched_unix)
                                 }
                             });
-                            table::cell_click(ui, table::Cell::Text, &text);
+                            fit_table::cell_click(ui, fit_table::Cell::Text, &text);
                         });
                         row.col(|ui| {
                             let text = state
                                 .checked
                                 .as_ref()
                                 .map_or("—".to_owned(), |checked| ago(now, checked.at_unix));
-                            table::cell_click(ui, table::Cell::Text, &text);
+                            fit_table::cell_click(ui, fit_table::Cell::Text, &text);
                         });
                         row.col(|ui| {
                             let (text, tone) = state_chip(state);

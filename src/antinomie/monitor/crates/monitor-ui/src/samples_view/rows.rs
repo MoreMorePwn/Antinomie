@@ -110,15 +110,15 @@ impl SamplesView {
     /// One line, always the same height, between the filters and the results:
     /// what is loading, the last outcome, or what the results are. The window
     /// does not change size when a search or a download starts or ends.
-    pub(super) fn status_line(&self, ui: &mut egui::Ui) {
+    pub(super) fn status_line(&mut self, ui: &mut egui::Ui) {
+        let mut cleared = false;
         ui.horizontal(|ui| {
             ui.set_min_height(ui.spacing().interact_size.y);
             if self.searching.is_some() {
                 crate::theme::spinner(ui);
                 ui.colored_label(theme::muted(), format!("Asking {}…", self.source.label()));
             } else if let Some((message, _)) = &self.status {
-                ui.add(egui::Label::new(RichText::new(message).color(theme::good())).truncate())
-                    .on_hover_text(message);
+                cleared = crate::activity::status(ui, crate::activity::Level::Info, message, None);
             } else if !self.results.is_empty() && !self.listing.is_empty() {
                 ui.add(
                     egui::Label::new(RichText::new(&self.listing).color(theme::muted())).truncate(),
@@ -126,6 +126,9 @@ impl SamplesView {
                 .on_hover_text(&self.listing);
             }
         });
+        if cleared {
+            self.status = None;
+        }
     }
 
     /// The source to search: each has its own key and its own results.

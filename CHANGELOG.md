@@ -350,6 +350,12 @@ it runs.
   dispatcher, the static analysis section worker and the sample report layout
   are divided into named steps. No behaviour changed. The module size check
   now also lists functions over 300 lines as a warning.
+- **One table implementation and one inline-notice API.** The Triage tables and
+  the list-table styles live in `widgets/fit_table.rs`; status lines that were
+  drawn by hand (IOC, Detection journal, Rules, Samples, Disk extraction) call
+  `activity::{info,warning,error,status}`, so they get the same look, dismiss
+  button and Activity row. Internal; the tables keep their columns, sorting and
+  widths.
 
 ## 0.8.1 — 2026-11-03
 

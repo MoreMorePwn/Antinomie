@@ -31,7 +31,6 @@ mod facts;
 mod fit;
 pub mod fit_table;
 mod info_panel;
-pub mod table;
 mod tabs;
 pub(crate) mod tone;
 mod window;

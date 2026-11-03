@@ -243,7 +243,7 @@ impl Viewer {
             }
         });
         if let Some(error) = &self.error {
-            notice(ui, error);
+            crate::activity::warning(ui, error);
         }
         let Some(page) = &self.page else {
             if self.job.is_none() && self.error.is_none() {
@@ -282,14 +282,14 @@ impl Viewer {
             Some(true) => {
                 ui.weak("Identical to the journal this scan read.");
             }
-            Some(false) => notice(
+            Some(false) => drop(crate::activity::warning(
                 ui,
                 "This journal differs from the one the scan read, so finding event numbers may not apply. Scan again.",
-            ),
+            )),
             None => {}
         }
         for warning in &page.warnings {
-            notice(ui, warning);
+            crate::activity::warning(ui, warning);
         }
         if !self.note.is_empty() {
             ui.weak(&self.note);
@@ -438,7 +438,6 @@ impl Viewer {
                     }
                 },
             );
-            crate::widgets::table::begin(ui);
             let mut table = FitBuilder::new(ui)
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .id_salt("journal-rows")
@@ -477,12 +476,12 @@ impl Viewer {
                         let process = process_text(&row.event);
                         let fields = field_text(&row.event);
                         line.col(|ui| {
-                            crate::widgets::table::row_mark(
+                            crate::widgets::fit_table::row_mark(
                                 ui,
                                 if row_selected {
-                                    crate::widgets::table::Mark::Selected
+                                    crate::widgets::fit_table::Mark::Selected
                                 } else {
-                                    crate::widgets::table::Mark::None
+                                    crate::widgets::fit_table::Mark::None
                                 },
                             );
                             ui.monospace(row.id.to_string());
@@ -582,10 +581,6 @@ impl Viewer {
 /// Leave the call or packet behind `event` for the app to open.
 fn jump_to_source(ctx: &egui::Context, event: &Event) {
     request_evidence_jump(ctx, &finding::evidence_values(&event.evidence));
-}
-
-fn notice(ui: &mut egui::Ui, message: &str) {
-    ui.add(egui::Label::new(RichText::new(message).color(theme::warn())).wrap());
 }
 
 /// Whether the journal covers everything, and if not, why.

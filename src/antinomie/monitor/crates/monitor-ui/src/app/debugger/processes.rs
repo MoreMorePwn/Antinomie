@@ -4,7 +4,7 @@
 use super::*;
 use crate::{
     table_sort,
-    widgets::table::{self, Cell, Mark},
+    widgets::fit_table::{self, Cell, Mark},
 };
 use antinomie_monitor_core::debug::view::{FollowMode, ForkChoice, ForkPolicy, InferiorState};
 
@@ -93,8 +93,7 @@ pub(super) fn pane(ui: &mut egui::Ui, view: &DebugView, actions: &mut Vec<PanelA
             _ => state_text(a.state).cmp(&state_text(b.state)),
         }
     });
-    let row_height = table::row_height(egui::TextStyle::Body.resolve(ui.style()).size);
-    table::begin(ui);
+    let row_height = fit_table::row_height(egui::TextStyle::Body.resolve(ui.style()).size);
     FitBuilder::new(ui)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .id_salt(TABLE)
@@ -108,7 +107,7 @@ pub(super) fn pane(ui: &mut egui::Ui, view: &DebugView, actions: &mut Vec<PanelA
             for (column, title) in ["PID", "Parent", "State"].into_iter().enumerate() {
                 header.col(|ui| table_sort::header(ui, TABLE, column, title));
             }
-            header.col(|ui| table::head(ui, ""));
+            header.col(|ui| fit_table::head(ui, ""));
         })
         .body(|body| {
             body.rows(row_height, order.len(), |mut row| {
@@ -116,7 +115,7 @@ pub(super) fn pane(ui: &mut egui::Ui, view: &DebugView, actions: &mut Vec<PanelA
                 let exited = matches!(inferior.state, InferiorState::Exited(_));
                 row.set_selected(inferior.selected);
                 row.col(|ui| {
-                    table::row_mark(
+                    fit_table::row_mark(
                         ui,
                         if inferior.selected {
                             Mark::Selected
@@ -124,11 +123,11 @@ pub(super) fn pane(ui: &mut egui::Ui, view: &DebugView, actions: &mut Vec<PanelA
                             Mark::None
                         },
                     );
-                    table::cell(ui, Cell::Mono, &inferior.pid.to_string());
+                    fit_table::cell(ui, Cell::Mono, &inferior.pid.to_string());
                 });
                 row.col(|ui| {
                     let parent = inferior.parent.map(|parent| parent.to_string());
-                    table::cell(ui, Cell::Mono, parent.as_deref().unwrap_or("–"));
+                    fit_table::cell(ui, Cell::Mono, parent.as_deref().unwrap_or("–"));
                 });
                 row.col(|ui| {
                     let text = if inferior.vfork {
@@ -137,7 +136,7 @@ pub(super) fn pane(ui: &mut egui::Ui, view: &DebugView, actions: &mut Vec<PanelA
                         state_text(inferior.state)
                     };
                     let text = RichText::new(text);
-                    table::cell_rich(
+                    fit_table::cell_rich(
                         ui,
                         Cell::Text,
                         if exited {

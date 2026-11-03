@@ -539,7 +539,6 @@ impl MemoryView {
         let mut clicked_row = None;
         let mut clicked_header = None;
         ui.scope(|ui| {
-            crate::widgets::table::begin(ui);
             let mut builder = FitBuilder::new(ui)
                 .id_salt(("memory_result", &result.run.id))
                 .striped(true)
@@ -564,7 +563,7 @@ impl MemoryView {
                 .header(row_height + 4.0, |mut header| {
                     for (index, column) in table.columns.iter().enumerate() {
                         header.col(|ui| {
-                            crate::widgets::table::head_bg(ui);
+                            crate::widgets::fit_table::head_bg(ui);
                             let arrow = match result.sort {
                                 Some(sort) if sort.column == index && sort.descending => {
                                     format!(" {}", egui_phosphor::regular::CARET_DOWN)
@@ -605,12 +604,12 @@ impl MemoryView {
                             data.values.iter().zip(&table.columns).enumerate()
                         {
                             row.col(|ui| {
-                                crate::widgets::table::row_mark(
+                                crate::widgets::fit_table::row_mark(
                                     ui,
                                     if row_selected && index == 0 {
-                                        crate::widgets::table::Mark::Selected
+                                        crate::widgets::fit_table::Mark::Selected
                                     } else {
-                                        crate::widgets::table::Mark::None
+                                        crate::widgets::fit_table::Mark::None
                                     },
                                 );
                                 if let Some(branch) = branch.filter(|_| index == 0) {

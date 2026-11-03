@@ -4,7 +4,6 @@
 //! Nothing is ever executed; the viewer, Save to host, Open with and Static
 //! Analysis all work on the extracted copy.
 use super::*;
-use crate::theme;
 use antinomie_monitor_core::disks::reader::{DiskEntry, ExtractReceipt};
 use std::{
     collections::BTreeSet,
@@ -193,51 +192,19 @@ impl DiskView {
         }
     }
 
-    /// The last extraction or save as a line: a file name in it in bold, and
-    /// a button that clears it. Failures go to the toasts instead.
+    /// The last extraction or save as a notice: a file name in it in bold,
+    /// and a button that clears it. Failures go to the toasts instead.
     pub(super) fn status_line(&mut self, ui: &mut egui::Ui) {
         crate::toasts::take_failure(ui.ctx(), &mut self.status);
         let Some((message, _)) = &self.status else {
             return;
         };
-        let font = egui::TextStyle::Body.resolve(ui.style());
-        let color = theme::good();
-        let mut job = egui::text::LayoutJob::default();
-        let name = self
-            .status_name
-            .as_deref()
-            .filter(|name| !name.is_empty())
-            .and_then(|name| message.find(name).map(|at| (at, name.len())));
-        let plain = |font: &egui::FontId| egui::text::TextFormat::simple(font.clone(), color);
-        match name {
-            Some((at, len)) => {
-                job.append(&message[..at], 0.0, plain(&font));
-                job.append(&message[at..at + len], 0.0, plain(&theme::bold_font(ui)));
-                job.append(&message[at + len..], 0.0, plain(&font));
-            }
-            None => job.append(message, 0.0, plain(&font)),
-        }
-        let mut close = false;
-        ui.horizontal_top(|ui| {
-            // The dismiss button sits at the right, as on every other message.
-            let button = ui.spacing().interact_size.y + ui.spacing().item_spacing.x;
-            ui.scope(|ui| {
-                ui.set_max_width((ui.available_width() - button).max(60.0));
-                ui.add(egui::Label::new(job).wrap());
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                close = ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new(egui_phosphor::regular::X).color(theme::muted()),
-                        )
-                        .frame(false),
-                    )
-                    .on_hover_text("Dismiss")
-                    .clicked();
-            });
-        });
-        if close {
+        if crate::activity::status(
+            ui,
+            crate::activity::Level::Info,
+            message,
+            self.status_name.as_deref(),
+        ) {
             self.status = None;
             self.status_name = None;
         }

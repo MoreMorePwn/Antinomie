@@ -56,7 +56,6 @@ pub(crate) fn guide(ctx: &egui::Context) {
             .map(|index| rows[index])
             .collect();
             use crate::widgets::fit_table::{Col, FitBuilder};
-            crate::widgets::table::begin(ui);
             // The field column fits the longest name shown; the type column
             // fits its longest kind. Anything longer is cut with a tooltip.
             let mono = egui::TextStyle::Monospace.resolve(ui.style());

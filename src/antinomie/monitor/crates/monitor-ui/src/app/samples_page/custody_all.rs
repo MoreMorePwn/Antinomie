@@ -5,7 +5,7 @@
 //! row opens its sample's Custody log tab.
 use super::custody_parts;
 use crate::widgets::fit_table::{Col, FitBuilder};
-use crate::{theme, widgets, widgets::table};
+use crate::{theme, widgets, widgets::fit_table};
 use antinomie_monitor_core::samples::{
     CustodyQuery, EntryState, GlobalRow, Library, LibraryCheck, KINDS,
 };
@@ -181,7 +181,6 @@ impl CustodyAll {
             shown.iter().map(|row| super::detail::second(row.row.at_ms)),
             400.0,
         );
-        table::begin(ui);
         FitBuilder::new(ui)
             .id_salt("custody_all")
             .striped(true)
@@ -194,13 +193,13 @@ impl CustodyAll {
             .column(Col::fixed(120.0))
             .max_scroll_height(height)
             .min_scrolled_height(0.0)
-            .header(table::header_height(font), |mut header| {
+            .header(fit_table::header_height(font), |mut header| {
                 for title in ["Time", "Sample", "Event", "By", "Detail", "Check"] {
-                    header.col(|ui| table::head(ui, title));
+                    header.col(|ui| fit_table::head(ui, title));
                 }
             })
             .body(|body| {
-                body.rows(table::row_height(font), shown.len(), |mut row| {
+                body.rows(fit_table::row_height(font), shown.len(), |mut row| {
                     let found = shown[row.index()];
                     let state = loaded
                         .check
@@ -208,9 +207,9 @@ impl CustodyAll {
                         .get(&found.sha256)
                         .map_or(EntryState::Verified, |check| check.state_of(found.row.seq));
                     row.col(|ui| {
-                        table::cell(
+                        fit_table::cell(
                             ui,
-                            table::Cell::Mono,
+                            fit_table::Cell::Mono,
                             &super::detail::second(found.row.at_ms),
                         );
                     });
@@ -220,7 +219,7 @@ impl CustodyAll {
                         } else {
                             &found.name
                         };
-                        if table::cell_click(ui, table::Cell::Text, name)
+                        if fit_table::cell_click(ui, fit_table::Cell::Text, name)
                             .on_hover_text(format!("{}\nOpen its custody log", found.sha256))
                             .clicked()
                         {
@@ -228,21 +227,21 @@ impl CustodyAll {
                         }
                     });
                     row.col(|ui| {
-                        table::cell_rich(
+                        fit_table::cell_rich(
                             ui,
-                            table::Cell::Text,
+                            fit_table::Cell::Text,
                             RichText::new(found.row.event.label()).strong(),
                         );
                     });
                     row.col(|ui| {
-                        table::cell(ui, table::Cell::Text, &found.row.by);
+                        fit_table::cell(ui, fit_table::Cell::Text, &found.row.by);
                     });
                     row.col(|ui| {
                         let mut detail = found.row.event.detail();
                         if found.row.before_chain {
                             detail.push_str(" (recorded before the custody log)");
                         }
-                        table::cell(ui, table::Cell::Text, &detail).on_hover_text(&detail);
+                        fit_table::cell(ui, fit_table::Cell::Text, &detail).on_hover_text(&detail);
                     });
                     row.col(|ui| {
                         custody_parts::check_mark(ui, state, &found.row.prev, &found.row.hash);

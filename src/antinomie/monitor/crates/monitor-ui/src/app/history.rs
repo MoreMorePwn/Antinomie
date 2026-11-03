@@ -230,7 +230,6 @@ impl MonitorApp {
             egui::vec2(ui.available_width(), height + 28.0),
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
-                crate::widgets::table::begin(ui);
                 let widths = HistoryColumns::fit(ui);
                 let mut table = FitBuilder::new(ui)
                     // A pane of another width starts its columns afresh, so the
@@ -259,15 +258,15 @@ impl MonitorApp {
                     .max_scroll_height(height)
                     .min_scrolled_height(0.0);
                 if let Some(index) = navigation { table = table.scroll_to_row(index, Some(egui::Align::Center)); }
-                table.header(crate::widgets::table::header_height(self.settings.font_size), |mut header| {
+                table.header(crate::widgets::fit_table::header_height(self.settings.font_size), |mut header| {
                         for (column, name) in ["Start time", "Executable", "Sample", "Arguments", "Tree status", "Root exit"].into_iter().enumerate() {
                             if !widths.wide && (column == 2 || column == 3) { continue; }
                             header.col(|ui| crate::table_sort::header(ui, "run_history", column, name));
                         }
-                        header.col(|ui| crate::widgets::table::head(ui, ""));
+                        header.col(|ui| crate::widgets::fit_table::head(ui, ""));
                     })
                     .body(|body| {
-                        body.rows(crate::widgets::table::list_row_height(self.settings.font_size), runs.len(), |mut row| {
+                        body.rows(crate::widgets::fit_table::list_row_height(self.settings.font_size), runs.len(), |mut row| {
                             let run = &runs[row.index()];
                             row.set_selected(self.selected_run.as_ref() == Some(&run.id));
                             row.col(|ui| { ui.add(egui::Label::new(crate::time_format::unix_ms(run.started_ms)).truncate().selectable(false).sense(egui::Sense::hover())); });

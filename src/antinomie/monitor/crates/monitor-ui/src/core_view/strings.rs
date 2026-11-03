@@ -6,8 +6,8 @@
 //! same as one with ten.
 use super::*;
 use crate::query::{FieldSpec, RowValue};
+use crate::widgets::fit_table::{self, Cell, Mark};
 use crate::widgets::fit_table::{Col, FitBuilder};
-use crate::widgets::table::{self, Cell, Mark};
 use antinomie_monitor_core::core_strings::{self, CoreString, Stopped};
 use std::sync::atomic::AtomicU64;
 
@@ -353,7 +353,6 @@ impl StringsState {
         let font = egui::TextStyle::Monospace.resolve(ui.style()).size;
         let mut chosen = None;
         let mut filter = None;
-        table::begin(ui);
         FitBuilder::new(ui)
             .id_salt(("core-strings-table", &record.dir))
             .striped(true)
@@ -365,7 +364,7 @@ impl StringsState {
             .column(Col::fixed(72.0))
             .column(Col::flex(120.0).at_least(70.0).clip(true))
             .column(Col::rest(80.0).at_least(100.0).clip(true))
-            .header(table::header_height(font), |mut header| {
+            .header(fit_table::header_height(font), |mut header| {
                 for (column, title) in ["Address", "File offset", "Encoding"]
                     .into_iter()
                     .enumerate()
@@ -379,29 +378,33 @@ impl StringsState {
                 header.col(|ui| crate::table_sort::header(ui, TABLE, 5, "Text"));
             })
             .body(|body| {
-                body.rows(table::row_height(font), rows, |mut row| {
+                body.rows(fit_table::row_height(font), rows, |mut row| {
                     let index = at(row.index());
                     let string = &extracted.strings[index];
                     let selected = self.selected == Some(index);
                     row.set_selected(selected);
                     row.col(|ui| {
-                        table::row_mark(ui, if selected { Mark::Selected } else { Mark::None });
-                        table::cell_click(ui, Cell::Mono, &format!("0x{:x}", string.address));
+                        fit_table::row_mark(ui, if selected { Mark::Selected } else { Mark::None });
+                        fit_table::cell_click(ui, Cell::Mono, &format!("0x{:x}", string.address));
                     });
                     row.col(|ui| {
-                        table::cell_click(ui, Cell::Mono, &format!("0x{:x}", string.file_offset));
+                        fit_table::cell_click(
+                            ui,
+                            Cell::Mono,
+                            &format!("0x{:x}", string.file_offset),
+                        );
                     });
                     row.col(|ui| {
-                        table::cell_click(ui, Cell::Text, string.encoding);
+                        fit_table::cell_click(ui, Cell::Text, string.encoding);
                     });
                     row.col(|ui| {
-                        table::cell_click(ui, Cell::Number, &string.byte_len.to_string());
+                        fit_table::cell_click(ui, Cell::Number, &string.byte_len.to_string());
                     });
                     row.col(|ui| {
-                        table::cell_click(ui, Cell::Text, extracted.segment(string));
+                        fit_table::cell_click(ui, Cell::Text, extracted.segment(string));
                     });
                     row.col(|ui| {
-                        table::cell_click(ui, Cell::Mono, &string.text);
+                        fit_table::cell_click(ui, Cell::Mono, &string.text);
                     });
                     let response = row.response();
                     response.context_menu(|ui| {

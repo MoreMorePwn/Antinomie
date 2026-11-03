@@ -218,7 +218,6 @@ impl ProcessPicker {
                 let height = (viewport.bottom() - 32.0 - ui.cursor().top()
                     - (font_size + 12.0) - footer).clamp(32.0, 360.0);
                 ui.scope(|ui| {
-                        crate::widgets::table::begin(ui);
                         FitBuilder::new(ui)
                             .id_salt("process_picker")
                             .sense(egui::Sense::click())
@@ -238,7 +237,7 @@ impl ProcessPicker {
                                             "process_picker",
                                             column,
                                             label,
-                                            crate::widgets::table::numeric_align(column != 1),
+                                            crate::widgets::fit_table::numeric_align(column != 1),
                                         )
                                     });
                                 }
@@ -262,9 +261,9 @@ impl ProcessPicker {
                                             let label = egui::Label::new(&text)
                                                 .selectable(false)
                                                 .truncate();
-                                            crate::widgets::table::aligned(
+                                            crate::widgets::fit_table::aligned(
                                                 ui,
-                                                crate::widgets::table::numeric_align(column != 1),
+                                                crate::widgets::fit_table::numeric_align(column != 1),
                                                 |ui| {
                                                     ui.add(label).on_hover_text(&text);
                                                 },
@@ -451,7 +450,6 @@ pub(super) fn history(
     let row_height = theme::row_height(font_size);
     let height = (ui.available_height() - row_height).max(row_height * 2.0);
     ui.scope(|ui| {
-        crate::widgets::table::begin(ui);
         let mut table = FitBuilder::new(ui)
             .id_salt("capture_history")
             .column(Col::flex(225.0).at_least(150.0).resizable(true))
@@ -478,12 +476,12 @@ pub(super) fn history(
                     let row_selected = selected == Some(capture.id.as_str());
                     row.set_selected(row_selected);
                     row.col(|ui| {
-                        crate::widgets::table::row_mark(
+                        crate::widgets::fit_table::row_mark(
                             ui,
                             if row_selected {
-                                crate::widgets::table::Mark::Selected
+                                crate::widgets::fit_table::Mark::Selected
                             } else {
-                                crate::widgets::table::Mark::None
+                                crate::widgets::fit_table::Mark::None
                             },
                         );
                         ui.add(
@@ -802,7 +800,6 @@ pub(super) fn process_tree_tinted(
     let wanted = rows.fold(160.0_f32, f32::max);
     let process_width = wanted.max(ui.available_width() - numbers - 16.0);
     ui.scope(|ui| {
-        crate::widgets::table::begin(ui);
         FitBuilder::new(ui)
             .id_salt("capture_process_tree")
             .sense(egui::Sense::click())
@@ -817,7 +814,7 @@ pub(super) fn process_tree_tinted(
             .column(Col::fixed(char_width * 12.0 + 8.0))
             .header(row_height + 4.0, |mut header| {
                 for label in ["Process", "PID", "Calls", "Exit"] {
-                    header.col(|ui| crate::widgets::table::head(ui, label));
+                    header.col(|ui| crate::widgets::fit_table::head(ui, label));
                 }
             })
             .body(|body| {
@@ -840,12 +837,12 @@ pub(super) fn process_tree_tinted(
                     };
                     row.col(|ui| {
                         wash(ui);
-                        crate::widgets::table::row_mark(
+                        crate::widgets::fit_table::row_mark(
                             ui,
                             if row_selected {
-                                crate::widgets::table::Mark::Selected
+                                crate::widgets::fit_table::Mark::Selected
                             } else {
-                                crate::widgets::table::Mark::None
+                                crate::widgets::fit_table::Mark::None
                             },
                         );
                         let reach = ui.spacing().item_spacing.y * 0.5;

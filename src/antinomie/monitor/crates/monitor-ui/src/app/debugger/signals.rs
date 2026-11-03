@@ -2,7 +2,7 @@
 //! The signal handling table (gdb's `handle`): what the panel does when the
 //! program is about to receive each signal, and the latest signals seen.
 use super::*;
-use crate::{table_sort, widgets::table as widgets_table};
+use crate::{table_sort, widgets::fit_table};
 use antinomie_monitor_core::debug::{
     signal_policy::{default_action, signal_name, SignalNote, SignalTable},
     view::Controller,
@@ -47,8 +47,7 @@ pub(super) fn rows(
             _ => (x != default_action(a)).cmp(&(y != default_action(b))),
         }
     });
-    let row_height = widgets_table::row_height(egui::TextStyle::Body.resolve(ui.style()).size);
-    widgets_table::begin(ui);
+    let row_height = fit_table::row_height(egui::TextStyle::Body.resolve(ui.style()).size);
     FitBuilder::new(ui)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .id_salt(TABLE)

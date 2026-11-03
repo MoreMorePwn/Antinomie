@@ -405,13 +405,12 @@ impl CoreView {
             });
         let font = egui::TextStyle::Monospace.resolve(ui.style()).size;
         let mut picked = None;
-        crate::widgets::table::begin(ui);
         crate::widgets::fit_table::FitBuilder::new(ui)
             .id_salt(("core-mappings-table", &record.dir))
             .striped(true)
             .sense(egui::Sense::click())
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .max_scroll_height(crate::widgets::table::row_height(font) * 7.0)
+            .max_scroll_height(crate::widgets::fit_table::row_height(font) * 7.0)
             .min_scrolled_height(0.0)
             .column(
                 crate::widgets::fit_table::Col::flex(290.0)
@@ -434,41 +433,44 @@ impl CoreView {
                     .at_least(120.0)
                     .clip(true),
             )
-            .header(crate::widgets::table::header_height(font), |mut header| {
-                header.col(|ui| crate::table_sort::header(ui, "core_mappings", 0, "Range"));
-                header.col(|ui| crate::table_sort::header(ui, "core_mappings", 1, "Perms"));
-                header.col(|ui| {
-                    crate::table_sort::header_aligned(
-                        ui,
-                        "core_mappings",
-                        2,
-                        "Size",
-                        egui::Align::Max,
-                    )
-                });
-                header.col(|ui| {
-                    crate::table_sort::header_aligned(
-                        ui,
-                        "core_mappings",
-                        3,
-                        "Captured",
-                        egui::Align::Max,
-                    )
-                });
-                header.col(|ui| crate::table_sort::header(ui, "core_mappings", 4, "File"));
-            })
+            .header(
+                crate::widgets::fit_table::header_height(font),
+                |mut header| {
+                    header.col(|ui| crate::table_sort::header(ui, "core_mappings", 0, "Range"));
+                    header.col(|ui| crate::table_sort::header(ui, "core_mappings", 1, "Perms"));
+                    header.col(|ui| {
+                        crate::table_sort::header_aligned(
+                            ui,
+                            "core_mappings",
+                            2,
+                            "Size",
+                            egui::Align::Max,
+                        )
+                    });
+                    header.col(|ui| {
+                        crate::table_sort::header_aligned(
+                            ui,
+                            "core_mappings",
+                            3,
+                            "Captured",
+                            egui::Align::Max,
+                        )
+                    });
+                    header.col(|ui| crate::table_sort::header(ui, "core_mappings", 4, "File"));
+                },
+            )
             .body(|body| {
                 body.rows(
-                    crate::widgets::table::row_height(font),
+                    crate::widgets::fit_table::row_height(font),
                     shown.len(),
                     |mut row| {
-                        use crate::widgets::table::{cell_click, Cell, Mark};
+                        use crate::widgets::fit_table::{cell_click, Cell, Mark};
                         let index = shown[order[row.index()]];
                         let mapping = &core.mappings[index];
                         let selected = self.mapping_index == index;
                         row.set_selected(selected);
                         row.col(|ui| {
-                            crate::widgets::table::row_mark(
+                            crate::widgets::fit_table::row_mark(
                                 ui,
                                 if selected { Mark::Selected } else { Mark::None },
                             );
@@ -952,7 +954,6 @@ fn notes_table(
         ui.text_style_height(&egui::TextStyle::Body).max(20.0) + ui.spacing().item_spacing.y;
     let table_height = (ui.available_height() - detail_height - header_height).max(80.0);
     let mut detail = None;
-    crate::widgets::table::begin(ui);
     FitBuilder::new(ui)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .max_scroll_height(table_height)

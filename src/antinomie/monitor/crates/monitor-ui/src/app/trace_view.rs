@@ -262,7 +262,6 @@ impl MonitorApp {
         let mut first_visible = None;
         let mut last_visible = 0;
         ui.scope(|ui| {
-            crate::widgets::table::begin(ui);
             FitBuilder::new(ui)
                 .id_salt((
                     "syscall_table",
@@ -291,7 +290,7 @@ impl MonitorApp {
                 .header(header_height, |mut header| {
                     for column in TraceColumn::ALL {
                         header.col(|ui| {
-                            crate::widgets::table::head_bg(ui);
+                            crate::widgets::fit_table::head_bg(ui);
                             let sorted = self.trace_sort.filter(|(sorted, _)| *sorted == column);
                             let mut job = egui::text::LayoutJob::default();
                             job.append(

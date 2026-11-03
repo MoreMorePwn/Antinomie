@@ -340,7 +340,6 @@ impl Board {
                 Col::rest(120.0 * scale),
                 Col::fixed(130.0 * scale),
             ];
-            crate::widgets::table::begin(ui);
             FitBuilder::new(ui)
                 .id_salt("jobs-running")
                 .striped(true)
@@ -443,7 +442,6 @@ impl Board {
             Col::rest(120.0 * scale),
             Col::fixed(60.0 * scale),
         ];
-        crate::widgets::table::begin(ui);
         FitBuilder::new(ui)
             .id_salt("jobs-finished")
             .striped(true)

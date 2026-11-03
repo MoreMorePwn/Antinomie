@@ -5,7 +5,7 @@ use super::*;
 use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::{
     query::{self, FieldSpec, RowValue},
-    widgets::table,
+    widgets::fit_table,
 };
 use antinomie_monitor_core::ioc::indicator::Jump as Evidence;
 
@@ -340,7 +340,7 @@ impl View {
             return None;
         }
         let font = ui.text_style_height(&egui::TextStyle::Body);
-        let row_height = table::row_height(font) + 6.0;
+        let row_height = fit_table::row_height(font) + 6.0;
         let mut picked = None;
         let height = ui.available_height().max(180.0);
         // The Evidence column holds its header and the "Jump ▸" button whole:
@@ -360,7 +360,6 @@ impl View {
         let evidence_width =
             measure("Evidence").max(measure("Jump ▸")) + 2.0 * ui.spacing().button_padding.x + 12.0;
         ui.scope(|ui| {
-            table::begin(ui);
             FitBuilder::new(ui)
                 .id_salt(("ioc-rows", ty.id()))
                 .sense(egui::Sense::click())
@@ -375,7 +374,7 @@ impl View {
                 .column(Col::fixed(evidence_width).at_least(evidence_width))
                 .max_scroll_height(height)
                 .min_scrolled_height(0.0)
-                .header(table::header_height(font), |mut header| {
+                .header(fit_table::header_height(font), |mut header| {
                     let first = match ty {
                         Type::Endpoint => "Endpoint",
                         Type::Domain => "Domain",
@@ -386,7 +385,7 @@ impl View {
                     for title in [
                         first, "Sources", "Process", "First", "Last", "Match", "Evidence",
                     ] {
-                        header.col(|ui| table::head(ui, title));
+                        header.col(|ui| fit_table::head(ui, title));
                     }
                 })
                 .body(|body| {
@@ -454,9 +453,9 @@ impl View {
                                     }
                                     _ => ("—".to_owned(), true),
                                 };
-                            table::cell_rich(
+                            fit_table::cell_rich(
                                 ui,
-                                table::Cell::Text,
+                                fit_table::Cell::Text,
                                 RichText::new(text).color(if muted {
                                     theme::muted()
                                 } else {
@@ -465,14 +464,18 @@ impl View {
                             );
                         });
                         row.col(|ui| {
-                            table::cell_click(
+                            fit_table::cell_click(
                                 ui,
-                                table::Cell::Mono,
+                                fit_table::Cell::Mono,
                                 &time_text(indicator.first_us),
                             );
                         });
                         row.col(|ui| {
-                            table::cell_click(ui, table::Cell::Mono, &time_text(indicator.last_us));
+                            fit_table::cell_click(
+                                ui,
+                                fit_table::Cell::Mono,
+                                &time_text(indicator.last_us),
+                            );
                         });
                         row.col(|ui| {
                             ui.horizontal(|ui| {

@@ -214,38 +214,38 @@ fn string_table(
             });
         }
         // Like the Samples list: the columns can be dragged.
-        let row_height = table::list_row_height(font);
+        let row_height = fit_table::list_row_height(font);
         builder
             .resizable(true)
             .vscroll(true)
             .max_scroll_height(row_height * VISIBLE_ROWS as f32)
             .min_scrolled_height(row_height * shown.len().min(VISIBLE_ROWS) as f32)
-            .header(table::header_height(font), |mut header| {
+            .header(fit_table::header_height(font), |mut header| {
                 for title in titles {
                     header.col(|ui| {
-                        table::head_aligned(
+                        fit_table::head_aligned(
                             ui,
                             title,
-                            table::numeric_align(matches!(*title, "Seen" | "Length")),
+                            fit_table::numeric_align(matches!(*title, "Seen" | "Length")),
                         )
                     });
                 }
             })
             .body(|body| {
-                body.rows(table::list_row_height(font), shown.len(), |mut row| {
+                body.rows(fit_table::list_row_height(font), shown.len(), |mut row| {
                     let values = cells(shown[row.index()]);
                     for (index, value) in values.iter().enumerate() {
                         row.col(|ui| {
                             let kind = if index == wide {
-                                table::Cell::Mono
+                                fit_table::Cell::Mono
                             } else if matches!(titles[index], "Seen" | "Length") {
-                                table::Cell::Number
+                                fit_table::Cell::Number
                             } else if titles[index] == "Found in" || titles[index] == "Offset" {
-                                table::Cell::Mono
+                                fit_table::Cell::Mono
                             } else {
-                                table::Cell::Text
+                                fit_table::Cell::Text
                             };
-                            let shown = table::cell_rich(
+                            let shown = fit_table::cell_rich(
                                 ui,
                                 kind,
                                 RichText::new(value).color(if index == wide {

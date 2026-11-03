@@ -4,8 +4,8 @@
 //! can be switched off; patterns of your own can be added and removed. The
 //! choices are kept in the rules folder and read by the next scan.
 use super::{theme, Model};
+use crate::widgets::fit_table::{self, Cell};
 use crate::widgets::fit_table::{Col, FitBuilder};
-use crate::widgets::table::{self, Cell};
 use antinomie_monitor_core::strings_regex::{
     builtin_patterns, Category, Config, CustomPattern, Origin, RuleSet, Scan, CUSTOM_MAX_COUNT,
     PATTERN_MAX_LEN,
@@ -250,7 +250,6 @@ impl Model {
         let patterns = builtin_patterns();
         let font = ui.text_style_height(&egui::TextStyle::Body);
         let mut toggle = None;
-        table::begin(ui);
         let height = ui.available_height().max(160.0);
         FitBuilder::new(ui)
             .id_salt("regex_builtin")
@@ -261,13 +260,13 @@ impl Model {
             .column(Col::flex(120.0).at_least(60.0).clip(true))
             .column(Col::flex(170.0).at_least(80.0).clip(true))
             .column(Col::rest(80.0).at_least(120.0).clip(true))
-            .header(table::header_height(font), |mut header| {
+            .header(fit_table::header_height(font), |mut header| {
                 for title in ["On", "Category", "Type", "Pattern"] {
-                    header.col(|ui| table::head(ui, title));
+                    header.col(|ui| fit_table::head(ui, title));
                 }
             })
             .body(|body| {
-                body.rows(table::row_height(font), patterns.len(), |mut row| {
+                body.rows(fit_table::row_height(font), patterns.len(), |mut row| {
                     let (id, category, name, regex) = patterns[row.index()];
                     let mut enabled = self.regex.config.is_enabled(id);
                     row.col(|ui| {
@@ -276,13 +275,13 @@ impl Model {
                         }
                     });
                     row.col(|ui| {
-                        table::cell(ui, Cell::Text, category.label());
+                        fit_table::cell(ui, Cell::Text, category.label());
                     });
                     row.col(|ui| {
-                        table::cell(ui, Cell::Text, name);
+                        fit_table::cell(ui, Cell::Text, name);
                     });
                     row.col(|ui| {
-                        table::cell(ui, Cell::Mono, regex).on_hover_text(regex);
+                        fit_table::cell(ui, Cell::Mono, regex).on_hover_text(regex);
                     });
                 });
             });

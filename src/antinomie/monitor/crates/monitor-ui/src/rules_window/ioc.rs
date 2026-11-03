@@ -4,7 +4,7 @@
 //! and the list of known false positives. Updates run only from buttons.
 use super::{theme, Done, Model};
 use crate::widgets::fit_table::{Col, FitBuilder};
-use crate::widgets::{self, table, Tone};
+use crate::widgets::{self, fit_table, Tone};
 use antinomie_monitor_core::{
     api_keys::{self, ApiKey},
     ioc::{self, feeds::Feed, FeedStatus, STALE_DAYS},
@@ -186,9 +186,8 @@ impl Model {
         let mut update = None;
         let busy = self.job.is_some();
         let has_key = self.ioc.key_masked.is_some();
-        let height = table::row_height(font) * (rows.len() as f32 + 1.5) + 8.0;
+        let height = fit_table::row_height(font) * (rows.len() as f32 + 1.5) + 8.0;
         ui.scope(|ui| {
-            table::begin(ui);
             FitBuilder::new(ui)
                 .id_salt("ioc_feeds")
                 .sense(egui::Sense::click())
@@ -205,7 +204,7 @@ impl Model {
                 .column(Col::rest(80.0).at_least(90.0))
                 .max_scroll_height(height)
                 .min_scrolled_height(0.0)
-                .header(table::header_height(font), |mut header| {
+                .header(fit_table::header_height(font), |mut header| {
                     for title in [
                         "On",
                         "Dataset",
@@ -217,11 +216,11 @@ impl Model {
                         "Status",
                         "",
                     ] {
-                        header.col(|ui| table::head(ui, title));
+                        header.col(|ui| fit_table::head(ui, title));
                     }
                 })
                 .body(|body| {
-                    body.rows(table::row_height(font), rows.len(), |mut row| {
+                    body.rows(fit_table::row_height(font), rows.len(), |mut row| {
                         let status = &rows[row.index()];
                         let feed = status.feed;
                         row.set_selected(self.ioc.pick == Some(feed.id));
@@ -233,46 +232,46 @@ impl Model {
                         });
                         row.col(|ui| {
                             let text = format!("{} · {}", feed.name, feed.file);
-                            table::cell_click(ui, table::Cell::Text, &text);
+                            fit_table::cell_click(ui, fit_table::Cell::Text, &text);
                         });
                         row.col(|ui| {
-                            table::cell_click(ui, table::Cell::Text, feed.used_for);
+                            fit_table::cell_click(ui, fit_table::Cell::Text, feed.used_for);
                         });
                         row.col(|ui| {
                             let text = status.meta.as_ref().map_or("—".to_owned(), |meta| {
                                 crate::values::thousands(meta.records)
                             });
-                            table::cell_click(ui, table::Cell::Number, &text);
+                            fit_table::cell_click(ui, fit_table::Cell::Number, &text);
                         });
                         row.col(|ui| {
                             let text = status.meta.as_ref().map_or("—".to_owned(), |meta| {
                                 crate::values::short_size(meta.size)
                             });
-                            table::cell_click(ui, table::Cell::Number, &text);
+                            fit_table::cell_click(ui, fit_table::Cell::Number, &text);
                         });
                         row.col(|ui| {
                             let text = status
                                 .meta
                                 .as_ref()
                                 .map_or("—".to_owned(), |meta| meta.date());
-                            table::cell_click(ui, table::Cell::Mono, &text);
+                            fit_table::cell_click(ui, fit_table::Cell::Mono, &text);
                         });
                         row.col(|ui| match &status.meta {
                             Some(meta) => {
                                 let days = meta.age_days(now);
                                 let text = format!("{days} d");
                                 if meta.stale(now) {
-                                    table::cell_rich(
+                                    fit_table::cell_rich(
                                         ui,
-                                        table::Cell::Number,
+                                        fit_table::Cell::Number,
                                         RichText::new(text).color(theme::warn()),
                                     );
                                 } else {
-                                    table::cell_click(ui, table::Cell::Number, &text);
+                                    fit_table::cell_click(ui, fit_table::Cell::Number, &text);
                                 }
                             }
                             None => {
-                                table::cell_click(ui, table::Cell::Number, "—");
+                                fit_table::cell_click(ui, fit_table::Cell::Number, "—");
                             }
                         });
                         row.col(|ui| {

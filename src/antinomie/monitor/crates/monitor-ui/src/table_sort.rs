@@ -21,7 +21,7 @@ pub(crate) fn header_aligned(
     title: &str,
     align: egui::Align,
 ) {
-    crate::widgets::table::aligned(ui, align, |ui| header(ui, table, column, title));
+    crate::widgets::fit_table::aligned(ui, align, |ui| header(ui, table, column, title));
 }
 
 /// Row indices in the order the table's header clicks chose; `0..len` while

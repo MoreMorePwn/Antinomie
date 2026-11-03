@@ -4,7 +4,7 @@
 //! not tamper-proof; the banner says so.
 use super::{parts, *};
 use crate::widgets::fit_table::{Col, FitBuilder};
-use crate::{app::samples_page::custody_parts, widgets::table};
+use crate::{app::samples_page::custody_parts, widgets::fit_table};
 
 /// What the tab asks of the window.
 pub(super) enum Outcome {
@@ -38,7 +38,6 @@ pub(super) fn show(
         &mono,
         data.events.iter().map(|event| parts::second(event.at_ms)),
     );
-    table::begin(ui);
     let mut builder = FitBuilder::new(ui)
         .id_salt("sample_custody")
         .striped(true)
@@ -55,38 +54,38 @@ pub(super) fn show(
         builder = builder.scroll_to_row(at, Some(egui::Align::Center));
     }
     builder
-        .header(table::header_height(font), |mut header| {
+        .header(fit_table::header_height(font), |mut header| {
             for title in ["#", "Time", "Event", "By", "Detail", "Check"] {
-                header.col(|ui| table::head(ui, title));
+                header.col(|ui| fit_table::head(ui, title));
             }
         })
         .body(|body| {
-            body.rows(table::row_height(font), data.events.len(), |mut row| {
+            body.rows(fit_table::row_height(font), data.events.len(), |mut row| {
                 let index = row.index();
                 let event = &data.events[index];
                 let state = data.chain.state_of(event.seq);
                 row.col(|ui| {
-                    table::cell(ui, table::Cell::Number, &event.seq.to_string());
+                    fit_table::cell(ui, fit_table::Cell::Number, &event.seq.to_string());
                 });
                 row.col(|ui| {
-                    table::cell(ui, table::Cell::Mono, &parts::second(event.at_ms));
+                    fit_table::cell(ui, fit_table::Cell::Mono, &parts::second(event.at_ms));
                 });
                 row.col(|ui| {
-                    table::cell_rich(
+                    fit_table::cell_rich(
                         ui,
-                        table::Cell::Text,
+                        fit_table::Cell::Text,
                         RichText::new(event.event.label()).strong(),
                     );
                 });
                 row.col(|ui| {
-                    table::cell(ui, table::Cell::Text, &event.by);
+                    fit_table::cell(ui, fit_table::Cell::Text, &event.by);
                 });
                 row.col(|ui| {
                     let mut detail = event.event.detail();
                     if event.before_chain {
                         detail.push_str(" (recorded before the custody log)");
                     }
-                    table::cell(ui, table::Cell::Text, &detail).on_hover_text(&detail);
+                    fit_table::cell(ui, fit_table::Cell::Text, &detail).on_hover_text(&detail);
                 });
                 row.col(|ui| {
                     custody_parts::check_mark(ui, state, &event.prev, &event.hash);

@@ -940,7 +940,6 @@ fn table(
         // Rows select on click; text selection would swallow it.
         ui.style_mut().interaction.selectable_labels = false;
         let max_height = ui.available_height().max(height);
-        crate::widgets::table::begin(ui);
         let mut table = FitBuilder::new(ui)
             .id_salt("analysis-table")
             .striped(true)

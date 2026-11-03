@@ -5,7 +5,7 @@
 //! metadata only: their rules exist locally after install.
 use super::{first_run::ENGINES, theme, Done, Model};
 use crate::widgets::fit_table::{Col, FitBuilder};
-use crate::widgets::{self, table, TabItem, Tone};
+use crate::widgets::{self, fit_table, TabItem, Tone};
 use antinomie_monitor_core::ruleset::{self, IndexedRule};
 use eframe::egui::{self, RichText};
 use std::{path::Path, sync::mpsc, thread};
@@ -247,12 +247,14 @@ impl Model {
             });
         }
         if status {
-            let color = if self.blocked.as_deref() == Some(self.status.as_str()) {
-                theme::error()
+            let level = if self.blocked.as_deref() == Some(self.status.as_str()) {
+                crate::activity::Level::Error
             } else {
-                theme::text()
+                crate::activity::Level::Info
             };
-            ui.add(egui::Label::new(RichText::new(&self.status).color(color)).wrap());
+            if crate::activity::status(ui, level, &self.status, None) {
+                self.status.clear();
+            }
         }
         if self.job.is_some() {
             let progress = self.progress_line();
@@ -381,7 +383,7 @@ impl Model {
 
     fn sets_table(&mut self, ui: &mut egui::Ui, data_dir: &Path, rows: &[SetRow]) {
         let font = ui.text_style_height(&egui::TextStyle::Body);
-        let row_height = table::row_height(font) + ROW_PAD;
+        let row_height = fit_table::row_height(font) + ROW_PAD;
         let order = crate::table_sort::order(ui.ctx(), "rules_sets", rows.len(), |column, a, b| {
             let (a, b) = (&rows[a], &rows[b]);
             match column {
@@ -401,7 +403,6 @@ impl Model {
         let height = row_height * (rows.len().min(5) as f32 + 1.5) + 8.0;
         ui.scope(|ui| {
             ui.spacing_mut().item_spacing.x += CELL_PAD;
-            table::begin(ui);
             FitBuilder::new(ui)
                 .id_salt("rules_sets")
                 .sense(egui::Sense::click())
@@ -414,8 +415,8 @@ impl Model {
                 .column(Col::flex(150.0).at_least(90.0))
                 .max_scroll_height(height)
                 .min_scrolled_height(0.0)
-                .header(table::header_height(font), |mut header| {
-                    header.col(|ui| table::head(ui, "On"));
+                .header(fit_table::header_height(font), |mut header| {
+                    header.col(|ui| fit_table::head(ui, "On"));
                     for (column, title) in
                         ["Pack", "Version", "Kind", "State"].into_iter().enumerate()
                     {
@@ -430,12 +431,12 @@ impl Model {
                         let is_selected = selected == set.id;
                         row.set_selected(is_selected);
                         row.col(|ui| {
-                            table::row_mark(
+                            fit_table::row_mark(
                                 ui,
                                 if is_selected {
-                                    table::Mark::Selected
+                                    fit_table::Mark::Selected
                                 } else {
-                                    table::Mark::None
+                                    fit_table::Mark::None
                                 },
                             );
                             let mut on = set.enabled;
@@ -444,15 +445,15 @@ impl Model {
                             }
                         });
                         row.col(|ui| {
-                            table::cell_click(ui, table::Cell::Text, &set.name);
+                            fit_table::cell_click(ui, fit_table::Cell::Text, &set.name);
                         });
                         row.col(|ui| {
-                            table::cell_click(ui, table::Cell::Mono, &set.version);
+                            fit_table::cell_click(ui, fit_table::Cell::Mono, &set.version);
                         });
                         row.col(|ui| {
-                            table::cell_click(
+                            fit_table::cell_click(
                                 ui,
-                                table::Cell::Text,
+                                fit_table::Cell::Text,
                                 if set.group { "Custom" } else { "Pack" },
                             );
                         });
@@ -812,7 +813,7 @@ impl Model {
         toggle: &mut Option<(String, bool)>,
     ) {
         let font = ui.text_style_height(&egui::TextStyle::Body);
-        let row_height = table::row_height(font) + ROW_PAD;
+        let row_height = fit_table::row_height(font) + ROW_PAD;
         // The table fits the width it is given: no horizontal scroll area,
         // whose content width fed the Rule column's width back to it every
         // frame (item 21: the table shrank and grew by a few points). Long
@@ -821,7 +822,6 @@ impl Model {
             let width = ui.available_width();
             ui.set_max_width(width);
             ui.spacing_mut().item_spacing.x += CELL_PAD;
-            table::begin(ui);
             FitBuilder::new(ui)
                 .id_salt("rules_list")
                 .sense(egui::Sense::click())
@@ -834,8 +834,8 @@ impl Model {
                 .column(Col::flex(100.0).at_least(40.0).resizable(true).clip(true))
                 .max_scroll_height(height)
                 .min_scrolled_height(0.0)
-                .header(table::header_height(font), |mut header| {
-                    header.col(|ui| table::head(ui, "On"));
+                .header(fit_table::header_height(font), |mut header| {
+                    header.col(|ui| fit_table::head(ui, "On"));
                     for (column, title) in ["Rule", "Severity", "State", "File"]
                         .into_iter()
                         .enumerate()
@@ -853,12 +853,12 @@ impl Model {
                         let selected = self.detail == Some(index);
                         row.set_selected(selected);
                         row.col(|ui| {
-                            table::row_mark(
+                            fit_table::row_mark(
                                 ui,
                                 if selected {
-                                    table::Mark::Selected
+                                    fit_table::Mark::Selected
                                 } else {
-                                    table::Mark::None
+                                    fit_table::Mark::None
                                 },
                             );
                             let mut on = state == "enabled";
@@ -870,7 +870,7 @@ impl Model {
                             }
                         });
                         row.col(|ui| {
-                            table::cell_click(ui, table::Cell::Mono, &rule.name)
+                            fit_table::cell_click(ui, fit_table::Cell::Mono, &rule.name)
                                 .on_hover_text(&rule.name);
                         });
                         row.col(|ui| {
@@ -879,10 +879,10 @@ impl Model {
                             }
                         });
                         row.col(|ui| {
-                            table::cell_click(ui, table::Cell::Text, state);
+                            fit_table::cell_click(ui, fit_table::Cell::Text, state);
                         });
                         row.col(|ui| {
-                            table::cell_click(ui, table::Cell::Text, &rule.file)
+                            fit_table::cell_click(ui, fit_table::Cell::Text, &rule.file)
                                 .on_hover_text(&rule.file);
                         });
                         if row.response().clicked() {

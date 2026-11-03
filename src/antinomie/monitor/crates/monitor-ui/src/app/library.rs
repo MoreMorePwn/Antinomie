@@ -3,7 +3,7 @@
 //! lists them; each opens as a page, a tab of the main area.
 use super::*;
 use crate::{
-    widgets::{self, table, Tone},
+    widgets::{self, fit_table, Tone},
     workspace::LibraryPage,
 };
 
@@ -219,15 +219,14 @@ impl MonitorApp {
                 }
             });
         let selected = self.selected_base.clone();
-        let height = (ui.available_height() - table::row_height(font) * 2.0).max(80.0);
+        let height = (ui.available_height() - fit_table::row_height(font) * 2.0).max(80.0);
         // The table gets its own box, so its column rules stop at its last
         // row and never run through the hints below.
         let box_size = egui::vec2(
             ui.available_width(),
-            height + table::header_height(font) + 4.0,
+            height + fit_table::header_height(font) + 4.0,
         );
         ui.allocate_ui_with_layout(box_size, egui::Layout::top_down(egui::Align::Min), |ui| {
-            table::begin(ui);
             crate::widgets::fit_table::FitBuilder::new(ui)
                 .id_salt("library_bases")
                 .sense(egui::Sense::click())
@@ -242,7 +241,7 @@ impl MonitorApp {
                 .column(Col::flex(130.0).at_least(90.0).resizable(true).clip(true))
                 .max_scroll_height(height)
                 .min_scrolled_height(0.0)
-                .header(table::header_height(font), |mut header| {
+                .header(fit_table::header_height(font), |mut header| {
                     for (column, title) in ["Base", "Status", "Size", "VMs", "Guest"]
                         .into_iter()
                         .enumerate()
@@ -253,26 +252,26 @@ impl MonitorApp {
                                 "library_bases",
                                 column,
                                 title,
-                                table::numeric_align(matches!(column, 2 | 3)),
+                                fit_table::numeric_align(matches!(column, 2 | 3)),
                             )
                         });
                     }
                 })
                 .body(|body| {
-                    body.rows(table::row_height(font), rows.len(), |mut row| {
+                    body.rows(fit_table::row_height(font), rows.len(), |mut row| {
                         let base = &rows[order[row.index()]];
                         let is_selected = selected.as_deref() == Some(base.id.as_str());
                         row.set_selected(is_selected);
                         row.col(|ui| {
-                            table::row_mark(
+                            fit_table::row_mark(
                                 ui,
                                 if is_selected {
-                                    table::Mark::Selected
+                                    fit_table::Mark::Selected
                                 } else {
-                                    table::Mark::None
+                                    fit_table::Mark::None
                                 },
                             );
-                            table::cell_click(ui, table::Cell::Text, &base.name)
+                            fit_table::cell_click(ui, fit_table::Cell::Text, &base.name)
                                 .on_hover_text(format!("{}\n{}", base.name, base.details));
                         });
                         row.col(|ui| {
@@ -284,17 +283,21 @@ impl MonitorApp {
                             widgets::chip(ui, text, tone).on_hover_text(&base.details);
                         });
                         row.col(|ui| {
-                            table::cell_click(
+                            fit_table::cell_click(
                                 ui,
-                                table::Cell::Number,
+                                fit_table::Cell::Number,
                                 &crate::values::short_size(base.size),
                             );
                         });
                         row.col(|ui| {
-                            table::cell_click(ui, table::Cell::Number, &base.vms.to_string());
+                            fit_table::cell_click(
+                                ui,
+                                fit_table::Cell::Number,
+                                &base.vms.to_string(),
+                            );
                         });
                         row.col(|ui| {
-                            table::cell_click(ui, table::Cell::Text, &base.guest);
+                            fit_table::cell_click(ui, fit_table::Cell::Text, &base.guest);
                         });
                         let response = row.response();
                         if response.clicked() || response.secondary_clicked() {

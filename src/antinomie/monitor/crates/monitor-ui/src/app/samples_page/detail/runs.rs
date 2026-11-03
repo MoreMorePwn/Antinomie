@@ -6,8 +6,8 @@
 //! what analysis was enabled, and how it was launched and what it ran in.
 use super::{parts, summary::vm_name, *};
 use crate::app::captures::{self, ProcessSelection};
+use crate::widgets::fit_table;
 use crate::widgets::fit_table::{Col, FitBuilder};
-use crate::widgets::table;
 use antinomie_monitor_core::capture_processes::CaptureProcess;
 use std::sync::mpsc;
 
@@ -358,7 +358,6 @@ impl MonitorApp {
             egui::vec2(ui.available_width(), height + 28.0),
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
-                table::begin(ui);
                 FitBuilder::new(ui)
                     .id_salt("sample_runs")
                     .sense(egui::Sense::click())
@@ -374,7 +373,7 @@ impl MonitorApp {
                     .column(Col::fixed(72.0))
                     .max_scroll_height(height)
                     .min_scrolled_height(0.0)
-                    .header(table::header_height(font), |mut header| {
+                    .header(fit_table::header_height(font), |mut header| {
                         for (column, name) in [
                             "Start time",
                             "Executable",
@@ -390,10 +389,10 @@ impl MonitorApp {
                                 crate::table_sort::header(ui, "sample_runs", column, name)
                             });
                         }
-                        header.col(|ui| table::head(ui, ""));
+                        header.col(|ui| fit_table::head(ui, ""));
                     })
                     .body(|body| {
-                        body.rows(table::list_row_height(font), shown.len(), |mut row| {
+                        body.rows(fit_table::list_row_height(font), shown.len(), |mut row| {
                             let entry = shown[order[row.index()]];
                             let run = &entry.run;
                             row.set_selected(state.selected.as_deref() == Some(run.id.as_str()));

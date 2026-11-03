@@ -259,7 +259,6 @@ impl Journal {
             });
             return;
         }
-        crate::widgets::table::begin(ui);
         // The level column grows with the text size (60 at 16); the time
         // column fits a monospace date and time plus the cell margin.
         let scale = ui.text_style_height(&egui::TextStyle::Body) / 16.0;
@@ -444,7 +443,7 @@ pub(crate) fn notice(
     level: Level,
     message: impl std::fmt::Display,
 ) -> egui::Response {
-    notice_impl(ui, level, message, false, None)
+    notice_impl(ui, level, message, Look::default()).0
 }
 
 pub(crate) fn compact(
@@ -452,7 +451,16 @@ pub(crate) fn compact(
     level: Level,
     message: impl std::fmt::Display,
 ) -> egui::Response {
-    notice_impl(ui, level, message, true, None)
+    notice_impl(
+        ui,
+        level,
+        message,
+        Look {
+            compact: true,
+            ..Look::default()
+        },
+    )
+    .0
 }
 
 pub(crate) fn warning_details(
@@ -460,22 +468,82 @@ pub(crate) fn warning_details(
     summary: String,
     details: String,
 ) -> egui::Response {
-    notice_impl(ui, Level::Warn, summary, true, Some(details))
+    notice_impl(
+        ui,
+        Level::Warn,
+        summary,
+        Look {
+            compact: true,
+            details: Some(details),
+            ..Look::default()
+        },
+    )
+    .0
 }
 
+/// A notice for a message the view keeps itself (the last outcome of an
+/// action, a status under a form): one line cut to the width, the same look
+/// and Activity row as [`info`], [`warning`] and [`error`], with `name`, when
+/// the message holds it, in bold. The dismiss button is not remembered here:
+/// it returns true and the view clears its message, so the same message
+/// shown again later is shown again.
+pub(crate) fn status(
+    ui: &mut egui::Ui,
+    level: Level,
+    message: impl std::fmt::Display,
+    name: Option<&str>,
+) -> bool {
+    notice_impl(
+        ui,
+        level,
+        message,
+        Look {
+            compact: true,
+            owned: true,
+            bold: name.map(str::to_owned),
+            ..Look::default()
+        },
+    )
+    .1
+}
+
+/// How a notice is drawn.
+#[derive(Default)]
+struct Look {
+    /// One line, cut to the width (else wrapped).
+    compact: bool,
+    /// The hover text, when it is not the message.
+    details: Option<String>,
+    /// The view owns the message: a dismiss is reported, not remembered.
+    owned: bool,
+    /// A part of the message set in bold.
+    bold: Option<String>,
+}
+
+/// Draws the notice; the second value is whether its dismiss button was
+/// clicked.
 fn notice_impl(
     ui: &mut egui::Ui,
     level: Level,
     message: impl std::fmt::Display,
-    compact: bool,
-    details: Option<String>,
-) -> egui::Response {
+    shape: Look,
+) -> (egui::Response, bool) {
+    let Look {
+        compact,
+        details,
+        owned,
+        bold,
+    } = shape;
     let message = bounded(message.to_string());
     let details = details.map(bounded).unwrap_or_else(|| message.clone());
     let (id, dismissed) = register(ui.ctx(), level, details.clone());
-    if dismissed {
-        return ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover());
+    if dismissed && !owned {
+        return (
+            ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover()),
+            false,
+        );
     }
+    let mut closed = false;
     let output = ui.push_id(ui.next_auto_id().with(id), |ui| {
         ui.horizontal_top(|ui| {
             let natural_width = ui.fonts(|fonts| {
@@ -497,7 +565,10 @@ fn notice_impl(
                     egui::vec2(width, 0.0),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        let label = egui::Label::new(RichText::new(&message).color(level.color()));
+                        let label = match bold_job(ui, level, &message, bold.as_deref()) {
+                            Some(job) => egui::Label::new(job),
+                            None => egui::Label::new(RichText::new(&message).color(level.color())),
+                        };
                         ui.add(if compact {
                             label.truncate()
                         } else {
@@ -511,17 +582,42 @@ fn notice_impl(
                 .on_hover_text("Dismiss this notice; details remain in Activity")
                 .clicked()
             {
-                ui.ctx().data_mut(|data| {
-                    data.get_temp_mut_or_default::<NoticeHub>(egui::Id::new(HUB))
-                        .dismissed
-                        .insert(id)
-                });
+                closed = true;
+                if !owned {
+                    ui.ctx().data_mut(|data| {
+                        data.get_temp_mut_or_default::<NoticeHub>(egui::Id::new(HUB))
+                            .dismissed
+                            .insert(id)
+                    });
+                }
             }
             response
         })
         .inner
     });
-    output.inner
+    (output.inner, closed)
+}
+
+/// The message as a layout job with `name` in bold, when it holds it.
+fn bold_job(
+    ui: &egui::Ui,
+    level: Level,
+    message: &str,
+    name: Option<&str>,
+) -> Option<egui::text::LayoutJob> {
+    let name = name.filter(|name| !name.is_empty())?;
+    let at = message.find(name)?;
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let plain = |font: &egui::FontId| egui::text::TextFormat::simple(font.clone(), level.color());
+    let mut job = egui::text::LayoutJob::default();
+    job.append(&message[..at], 0.0, plain(&font));
+    job.append(
+        &message[at..at + name.len()],
+        0.0,
+        plain(&theme::bold_font(ui)),
+    );
+    job.append(&message[at + name.len()..], 0.0, plain(&font));
+    Some(job)
 }
 
 fn dismiss_button(ui: &mut egui::Ui) -> egui::Response {

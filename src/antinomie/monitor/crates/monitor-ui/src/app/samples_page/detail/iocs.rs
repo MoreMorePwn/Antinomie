@@ -5,8 +5,8 @@
 //! shared fit table; the selected row is shown in the shared Details pane
 //! (`iocs_details`), and the export lives in `iocs_export`.
 use super::{parts, *};
+use crate::widgets::fit_table;
 use crate::widgets::fit_table::{Col, FitBuilder};
-use crate::widgets::table;
 use antinomie_monitor_core::samples::{SampleIoc, IOC_KINDS};
 use antinomie_monitor_core::{
     api_keys::{self, ApiKey},
@@ -406,7 +406,7 @@ impl MonitorApp {
     ) {
         let listed = data.iocs.listed.len();
         let font = ui.text_style_height(&egui::TextStyle::Body);
-        let row_height = table::row_height(font) + 6.0;
+        let row_height = fit_table::row_height(font) + 6.0;
         let height = table_height;
         let mut picked = None;
         let defanged = state.defang;
@@ -427,7 +427,7 @@ impl MonitorApp {
                 .column(Col::rest(80.0).at_least(120.0).clip(true))
                 .max_scroll_height(height)
                 .min_scrolled_height(0.0)
-                .header(table::header_height(font), |mut header| {
+                .header(fit_table::header_height(font), |mut header| {
                     for title in [
                         "Kind",
                         "Indicator",
@@ -438,7 +438,7 @@ impl MonitorApp {
                         "Process",
                         "Detections",
                     ] {
-                        header.col(|ui| table::head(ui, title));
+                        header.col(|ui| fit_table::head(ui, title));
                     }
                 })
                 .body(|body| {
@@ -447,7 +447,7 @@ impl MonitorApp {
                         let key = key_of(row);
                         line.set_selected(selected.as_ref() == Some(&key));
                         line.col(|ui| {
-                            table::cell_click(ui, table::Cell::Text, singular(&row.ty));
+                            fit_table::cell_click(ui, fit_table::Cell::Text, singular(&row.ty));
                         });
                         line.col(|ui| {
                             let value = if row.ty == "file" && row.value.len() > 40 {
@@ -493,16 +493,29 @@ impl MonitorApp {
                                 .map(|run| parts::run_name(*run))
                                 .collect::<Vec<_>>()
                                 .join(", ");
-                            table::cell_click(ui, table::Cell::Text, &text).on_hover_text(all);
+                            fit_table::cell_click(ui, fit_table::Cell::Text, &text)
+                                .on_hover_text(all);
                         });
                         line.col(|ui| {
-                            table::cell_click(ui, table::Cell::Text, &row.observed().join(", "));
+                            fit_table::cell_click(
+                                ui,
+                                fit_table::Cell::Text,
+                                &row.observed().join(", "),
+                            );
                         });
                         line.col(|ui| {
-                            table::cell_click(ui, table::Cell::Mono, &time_text(row.first_us()));
+                            fit_table::cell_click(
+                                ui,
+                                fit_table::Cell::Mono,
+                                &time_text(row.first_us()),
+                            );
                         });
                         line.col(|ui| {
-                            table::cell_click(ui, table::Cell::Mono, &time_text(row.last_us()));
+                            fit_table::cell_click(
+                                ui,
+                                fit_table::Cell::Mono,
+                                &time_text(row.last_us()),
+                            );
                         });
                         line.col(|ui| {
                             let processes = row.processes();
@@ -511,7 +524,7 @@ impl MonitorApp {
                             } else {
                                 processes.join(", ")
                             };
-                            table::cell_click(ui, table::Cell::Text, &text);
+                            fit_table::cell_click(ui, fit_table::Cell::Text, &text);
                         });
                         line.col(|ui| {
                             let hits = antinomie_monitor_core::samples::ioc_hit_texts(row);

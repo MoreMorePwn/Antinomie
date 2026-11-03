@@ -5,7 +5,7 @@
 use super::{picker::TagPicker, *};
 use crate::{
     sample_tags,
-    widgets::{self, table, Tone},
+    widgets::{self, fit_table, Tone},
 };
 use antinomie_monitor_core::samples::TagKind;
 
@@ -218,20 +218,19 @@ impl MonitorApp {
             })
             .map(|(index, _)| index)
             .collect();
+        let mut cleared = false;
         ui.horizontal(|ui| {
             ui.weak(format!("{} of {}", shown.len(), page.rows.len()));
             if let Some((message, failed)) = &page.notice {
-                ui.colored_label(
-                    if *failed {
-                        theme::error()
-                    } else {
-                        theme::good()
-                    },
-                    message,
-                );
+                let level = if *failed {
+                    crate::activity::Level::Error
+                } else {
+                    crate::activity::Level::Info
+                };
+                cleared = crate::activity::status(ui, level, message, None);
             }
             if let Some(error) = &page.error {
-                ui.colored_label(theme::error(), error);
+                crate::activity::error(ui, error);
             }
         });
         ui.add_space(2.0);
@@ -280,7 +279,6 @@ impl MonitorApp {
         ui.scope(|ui| {
         // Not selectable: a click on the text of any cell reaches the row.
         ui.style_mut().interaction.selectable_labels = false;
-        table::begin(ui);
         FitBuilder::new(ui)
             .id_salt("library_samples")
             .sense(egui::Sense::click())
@@ -295,7 +293,7 @@ impl MonitorApp {
             .column(Col::fixed(104.0))
             .max_scroll_height(height)
             .min_scrolled_height(0.0)
-            .header(table::header_height(font), |mut header| {
+            .header(fit_table::header_height(font), |mut header| {
                 for (column, title) in [
                     "Name",
                     "Description",
@@ -314,14 +312,14 @@ impl MonitorApp {
                             "library_samples",
                             column,
                             title,
-                            table::numeric_align(matches!(column, 3 | 4)),
+                            fit_table::numeric_align(matches!(column, 3 | 4)),
                         )
                     });
                 }
             })
             .body(|body| {
                 body.rows(
-                    table::list_row_height(font),
+                    fit_table::list_row_height(font),
                     shown.len(),
                     |mut table_row| {
                         let row = &page.rows[shown[order[table_row.index()]]];
@@ -330,19 +328,19 @@ impl MonitorApp {
                         table_row.set_selected(selected);
                         let problem = page.problems.get(sha256);
                         table_row.col(|ui| {
-                            table::row_mark(
+                            fit_table::row_mark(
                                 ui,
                                 if problem.is_some() || !row.archived || !row.custody_ok {
-                                    table::Mark::Failed
+                                    fit_table::Mark::Failed
                                 } else if selected {
-                                    table::Mark::Selected
+                                    fit_table::Mark::Selected
                                 } else {
-                                    table::Mark::None
+                                    fit_table::Mark::None
                                 },
                             );
-                            table::cell_rich(
+                            fit_table::cell_rich(
                                 ui,
-                                table::Cell::Text,
+                                fit_table::Cell::Text,
                                 RichText::new(&row.record.name).strong(),
                             );
                             if let Some(problem) = problem {
@@ -373,7 +371,7 @@ impl MonitorApp {
                         });
                         table_row.col(|ui| sample_tags::short(ui, &row.tags));
                         table_row.col(|ui| {
-                            table::cell(ui, table::Cell::Number, &row.runs.count.to_string());
+                            fit_table::cell(ui, fit_table::Cell::Number, &row.runs.count.to_string());
                         });
                         table_row.col(|ui| {
                             let count = |n: usize| {
@@ -383,9 +381,9 @@ impl MonitorApp {
                                     n.to_string()
                                 }
                             };
-                            table::cell(
+                            fit_table::cell(
                                 ui,
-                                table::Cell::Number,
+                                fit_table::Cell::Number,
                                 &format!("{} / {}", count(row.parents), count(row.children)),
                             )
                             .on_hover_text(format!(
@@ -395,7 +393,7 @@ impl MonitorApp {
                         });
                         table_row.col(|ui| match &row.runs.latest {
                             Some(run) => {
-                                table::cell(ui, table::Cell::Mono, &started(run.started_ms))
+                                fit_table::cell(ui, fit_table::Cell::Mono, &started(run.started_ms))
                                     .on_hover_text(crate::time_format::unix_ms(run.started_ms));
                                 widgets::chip(
                                     ui,
@@ -413,7 +411,7 @@ impl MonitorApp {
                             }
                         });
                         table_row.col(|ui| {
-                            table::cell(ui, table::Cell::Mono, &sha256[..SHORT_HASH])
+                            fit_table::cell(ui, fit_table::Cell::Mono, &sha256[..SHORT_HASH])
                                 .on_hover_text(sha256);
                         });
                         let response = table_row.response();
@@ -472,6 +470,9 @@ impl MonitorApp {
                 );
             });
         });
+        if cleared {
+            self.samples_page.notice = None;
+        }
         match action {
             Some(Action::Select(sha256)) => self.samples_page.selected = Some(sha256),
             Some(Action::Open(sha256)) => {

@@ -182,7 +182,6 @@ impl NetworkView {
         }
         let ordered = &cached.rows;
         ui.scope(|ui| {
-            crate::widgets::table::begin(ui);
             FitBuilder::new(ui)
                 .id_salt(("network_packets", self.display_page_start))
                 .sense(egui::Sense::click())
@@ -210,7 +209,7 @@ impl NetworkView {
                 .column(Col::fixed(chars(6.0)))
                 .column(Col::rest(80.0).at_least(chars(12.0)).clip(true))
                 .header(
-                    crate::widgets::table::header_height(font_size),
+                    crate::widgets::fit_table::header_height(font_size),
                     |mut header| {
                         for (column, label) in [
                             "No.",
@@ -232,7 +231,7 @@ impl NetworkView {
                 )
                 .body(|body| {
                     body.rows(
-                        crate::widgets::table::row_height(font_size),
+                        crate::widgets::fit_table::row_height(font_size),
                         list.rows.len(),
                         |mut row| {
                             let index = ordered[row.index()];
@@ -250,16 +249,16 @@ impl NetworkView {
                                 row.col(|ui| {
                                     if column == 0 {
                                         let mark = if selected {
-                                            crate::widgets::table::Mark::Selected
+                                            crate::widgets::fit_table::Mark::Selected
                                         } else if packet
                                             .tcp_flags
                                             .is_some_and(|flags| flags & network::TCP_RST != 0)
                                         {
-                                            crate::widgets::table::Mark::Failed
+                                            crate::widgets::fit_table::Mark::Failed
                                         } else {
-                                            crate::widgets::table::Mark::None
+                                            crate::widgets::fit_table::Mark::None
                                         };
-                                        crate::widgets::table::row_mark(ui, mark);
+                                        crate::widgets::fit_table::row_mark(ui, mark);
                                     }
                                     // Paint the cell and half of each gap so a
                                     // tinted row reads as one band.

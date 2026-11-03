@@ -8,7 +8,7 @@ use self::strings::{counted, strings};
 use super::{parts, *};
 use crate::{
     sample_tags,
-    widgets::{self, table, Tone},
+    widgets::{self, fit_table, Tone},
 };
 use antinomie_monitor_core::{
     samples::{StringRow, TagKind},
@@ -377,13 +377,13 @@ fn recent_runs(ui: &mut egui::Ui, data: &Data, go: &mut Option<Go>, font: f32) {
                 .column(crate::widgets::fit_table::Col::fixed(140.0))
                 .column(crate::widgets::fit_table::Col::fixed(100.0))
                 .column(crate::widgets::fit_table::Col::rest(80.0).at_least(100.0))
-                .header(table::header_height(font), |mut header| {
+                .header(fit_table::header_height(font), |mut header| {
                     for title in ["Run", "Start", "VM", "Suspicion", "Outcome"] {
-                        header.col(|ui| table::head(ui, title));
+                        header.col(|ui| fit_table::head(ui, title));
                     }
                 })
                 .body(|body| {
-                    body.rows(table::row_height(font) + 4.0, shown.len(), |mut row| {
+                    body.rows(fit_table::row_height(font) + 4.0, shown.len(), |mut row| {
                         let entry = &shown[row.index()];
                         let run = &entry.run;
                         let exit = outcome_words(run);
@@ -406,14 +406,14 @@ fn recent_runs(ui: &mut egui::Ui, data: &Data, go: &mut Option<Go>, font: f32) {
                             }
                         });
                         row.col(|ui| {
-                            table::cell_click(
+                            fit_table::cell_click(
                                 ui,
-                                table::Cell::Mono,
+                                fit_table::Cell::Mono,
                                 &parts::minute(run.started_ms),
                             );
                         });
                         row.col(|ui| {
-                            table::cell_click(ui, table::Cell::Text, &vm_name(run));
+                            fit_table::cell_click(ui, fit_table::Cell::Text, &vm_name(run));
                         });
                         row.col(|ui| super::triage_parts::run_suspicion(ui, entry));
                         row.col(|ui| {
@@ -1111,37 +1111,37 @@ fn aliases(ui: &mut egui::Ui, data: &Data, font: f32) {
                         .clip(true),
                 )
                 .column(crate::widgets::fit_table::Col::fixed(seen).clip(true))
-                .header(table::header_height(font), |mut header| {
+                .header(fit_table::header_height(font), |mut header| {
                     for title in ["Name", "Path or source", "Where"] {
-                        header.col(|ui| table::head(ui, title));
+                        header.col(|ui| fit_table::head(ui, title));
                     }
                 })
                 .body(|body| {
                     body.rows(
-                        table::row_height(font) + 6.0,
+                        fit_table::row_height(font) + 6.0,
                         data.aliases.len(),
                         |mut row| {
                             let alias = &data.aliases[row.index()];
                             row.col(|ui| {
-                                let shown = table::cell_rich(
+                                let shown = fit_table::cell_rich(
                                     ui,
-                                    table::Cell::Mono,
+                                    fit_table::Cell::Mono,
                                     RichText::new(&alias.name).strong(),
                                 );
                                 shown.on_hover_text(&alias.name);
                             });
                             row.col(|ui| {
-                                let shown = table::cell_rich(
+                                let shown = fit_table::cell_rich(
                                     ui,
-                                    table::Cell::Mono,
+                                    fit_table::Cell::Mono,
                                     RichText::new(&alias.path).color(theme::text()),
                                 );
                                 shown.on_hover_text(&alias.path);
                             });
                             row.col(|ui| {
-                                table::cell_rich(
+                                fit_table::cell_rich(
                                     ui,
-                                    table::Cell::Text,
+                                    fit_table::Cell::Text,
                                     RichText::new(&alias.seen).color(theme::text()),
                                 );
                             });

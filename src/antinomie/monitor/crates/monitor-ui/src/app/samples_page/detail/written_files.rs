@@ -6,7 +6,7 @@
 //! Triage, where they are saved. A deleted file is exported as it was just
 //! before the delete, checked against the guest's hash taken then.
 use super::{parts, *};
-use crate::widgets::table;
+use crate::widgets::fit_table;
 use antinomie_monitor_core::run_digest::WrittenFile;
 
 /// The width the three buttons of a row need on one line.
@@ -170,17 +170,17 @@ pub(in crate::app::samples_page) fn section(
                 .column(crate::widgets::fit_table::Col::fixed(size))
                 .column(crate::widgets::fit_table::Col::fixed(hash))
                 .column(crate::widgets::fit_table::Col::fixed(actions))
-                .header(table::header_height(font), |mut header| {
+                .header(fit_table::header_height(font), |mut header| {
                     for title in ["File", "Run", "State", "Size", "SHA-256", ""] {
-                        header.col(|ui| table::head(ui, title));
+                        header.col(|ui| fit_table::head(ui, title));
                     }
                 })
                 .body(|body| {
-                    body.rows(table::row_height(font) + 6.0, page.len(), |mut row| {
+                    body.rows(fit_table::row_height(font) + 6.0, page.len(), |mut row| {
                         let item = page[row.index()];
                         let file = item.file;
                         row.col(|ui| {
-                            table::cell(ui, table::Cell::Mono, &file.path)
+                            fit_table::cell(ui, fit_table::Cell::Mono, &file.path)
                                 .on_hover_text(&file.path);
                         });
                         row.col(|ui| {
@@ -197,7 +197,7 @@ pub(in crate::app::samples_page) fn section(
                             );
                         });
                         row.col(|ui| {
-                            table::cell(ui, table::Cell::Mono, &short_hash(&file.sha256))
+                            fit_table::cell(ui, fit_table::Cell::Mono, &short_hash(&file.sha256))
                                 .on_hover_text(if file.sha256.is_empty() {
                                     if file.hash_note.is_empty() {
                                         "The guest took no hash of this file"

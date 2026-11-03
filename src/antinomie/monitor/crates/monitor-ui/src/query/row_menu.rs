@@ -6,7 +6,7 @@
 //!
 //! The clicked cell is found from where the pointer pressed: the header
 //! cells of the frame say which column lies under that x, and the cell
-//! helpers of `widgets::table` remember the text of a cell that was
+//! helpers of `widgets::fit_table` remember the text of a cell that was
 //! right-clicked. The column's title then names the row field: by the cell's
 //! own text when a field holds it, else by the title's likeness to the
 //! field's name. A cell that no field matches still copies and notes.

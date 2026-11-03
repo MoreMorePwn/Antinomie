@@ -97,7 +97,7 @@ fn compare(a: &Atom, b: &Atom, descending: bool) -> std::cmp::Ordering {
 
 pub(crate) fn header(ui: &mut egui::Ui, table: &str, column: usize, title: &str) {
     crate::query::note_head(ui, title);
-    crate::widgets::table::head_bg(ui);
+    crate::widgets::fit_table::head_bg(ui);
     let id = egui::Id::new(("triage-sort", table));
     let current = ui.ctx().data(|data| data.get_temp::<Spec>(id));
     let arrow = current
