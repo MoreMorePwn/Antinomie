@@ -398,7 +398,7 @@ impl MonitorApp {
                 }
             }
             Some(Err(error)) => {
-                ui.colored_label(theme::warn(), format!("Could not ask DB-IP: {error}"));
+                crate::activity::warning(ui, format!("Could not ask DB-IP: {error}"));
             }
             None => {}
         }
