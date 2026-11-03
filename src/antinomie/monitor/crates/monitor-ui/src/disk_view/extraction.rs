@@ -199,12 +199,7 @@ impl DiskView {
         let Some((message, _)) = &self.status else {
             return;
         };
-        if crate::activity::status(
-            ui,
-            crate::activity::Level::Info,
-            message,
-            self.status_name.as_deref(),
-        ) {
+        if crate::activity::success(ui, message, self.status_name.as_deref()) {
             self.status = None;
             self.status_name = None;
         }

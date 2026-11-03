@@ -117,8 +117,13 @@ impl SamplesView {
             if self.searching.is_some() {
                 crate::theme::spinner(ui);
                 ui.colored_label(theme::muted(), format!("Asking {}…", self.source.label()));
-            } else if let Some((message, _)) = &self.status {
-                cleared = crate::activity::status(ui, crate::activity::Level::Info, message, None);
+            } else if let Some((message, failed)) = &self.status {
+                cleared = match failed {
+                    true => {
+                        crate::activity::status(ui, crate::activity::Level::Error, message, None)
+                    }
+                    false => crate::activity::success(ui, message, None),
+                };
             } else if !self.results.is_empty() && !self.listing.is_empty() {
                 ui.add(
                     egui::Label::new(RichText::new(&self.listing).color(theme::muted())).truncate(),

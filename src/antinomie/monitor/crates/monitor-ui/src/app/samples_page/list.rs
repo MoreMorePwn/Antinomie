@@ -32,7 +32,7 @@ impl Row {
 pub(in crate::app::samples_page) fn started(ms: Option<u64>) -> String {
     ms.and_then(|ms| chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms as i64))
         .map(|time| {
-            time.with_timezone(&chrono::Local)
+            crate::time_format::zoned(time)
                 .format("%Y-%m-%d %H:%M")
                 .to_string()
         })
@@ -74,12 +74,11 @@ impl MonitorApp {
         ui.horizontal(|ui| {
             ui.weak(format!("{} of {}", shown.len(), page.rows.len()));
             if let Some((message, failed)) = &page.notice {
-                let level = if *failed {
-                    crate::activity::Level::Error
+                cleared = if *failed {
+                    crate::activity::status(ui, crate::activity::Level::Error, message, None)
                 } else {
-                    crate::activity::Level::Info
+                    crate::activity::success(ui, message, None)
                 };
-                cleared = crate::activity::status(ui, level, message, None);
             }
             if let Some(error) = &page.error {
                 crate::activity::error(ui, error);

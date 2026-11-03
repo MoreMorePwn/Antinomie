@@ -288,14 +288,18 @@ impl Journal {
                 body.rows(26.0, visible.len(), |mut row| {
                     let entry = visible[row.index()];
                     let time = chrono::DateTime::from_timestamp_millis(entry.unix_ms)
-                        .map(|time| time.with_timezone(&chrono::Local));
+                        .map(crate::time_format::zoned);
                     row.col(|ui| {
                         ui.monospace(time.map_or_else(
                             || "—".into(),
                             |time| time.format("%Y-%m-%d %H:%M:%S").to_string(),
                         ))
-                        .on_hover_text(crate::time_format::local_seconds(
-                            u64::try_from(entry.unix_ms / 1000).unwrap_or_default(),
+                        .on_hover_text(format!(
+                            "{}\n{}",
+                            crate::time_format::local_seconds(
+                                u64::try_from(entry.unix_ms / 1000).unwrap_or_default(),
+                            ),
+                            crate::time_format::zone_note()
                         ));
                     });
                     row.col(|ui| {
@@ -507,9 +511,34 @@ pub(crate) fn status(
     .1
 }
 
+/// [`status`] for the outcome of an action that worked ("Saved", "Installed",
+/// "Sent into the VM"): the same notice and Info row, in the theme's success
+/// green. The dismiss button is reported the same way.
+pub(crate) fn success(
+    ui: &mut egui::Ui,
+    message: impl std::fmt::Display,
+    name: Option<&str>,
+) -> bool {
+    notice_impl(
+        ui,
+        Level::Info,
+        message,
+        Look {
+            compact: true,
+            owned: true,
+            success: true,
+            bold: name.map(str::to_owned),
+            ..Look::default()
+        },
+    )
+    .1
+}
+
 /// How a notice is drawn.
 #[derive(Default)]
 struct Look {
+    /// The text in the success green instead of the level's colour.
+    success: bool,
     /// One line, cut to the width (else wrapped).
     compact: bool,
     /// The hover text, when it is not the message.
@@ -533,7 +562,13 @@ fn notice_impl(
         details,
         owned,
         bold,
+        success,
     } = shape;
+    let color = if success {
+        theme::good()
+    } else {
+        level.color()
+    };
     let message = bounded(message.to_string());
     let details = details.map(bounded).unwrap_or_else(|| message.clone());
     let (id, dismissed) = register(ui.ctx(), level, details.clone());
@@ -551,7 +586,7 @@ fn notice_impl(
                     .layout_no_wrap(
                         message.clone(),
                         egui::TextStyle::Body.resolve(ui.style()),
-                        level.color(),
+                        color,
                     )
                     .size()
                     .x
@@ -565,9 +600,9 @@ fn notice_impl(
                     egui::vec2(width, 0.0),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        let label = match bold_job(ui, level, &message, bold.as_deref()) {
+                        let label = match bold_job(ui, color, &message, bold.as_deref()) {
                             Some(job) => egui::Label::new(job),
-                            None => egui::Label::new(RichText::new(&message).color(level.color())),
+                            None => egui::Label::new(RichText::new(&message).color(color)),
                         };
                         ui.add(if compact {
                             label.truncate()
@@ -601,14 +636,14 @@ fn notice_impl(
 /// The message as a layout job with `name` in bold, when it holds it.
 fn bold_job(
     ui: &egui::Ui,
-    level: Level,
+    color: egui::Color32,
     message: &str,
     name: Option<&str>,
 ) -> Option<egui::text::LayoutJob> {
     let name = name.filter(|name| !name.is_empty())?;
     let at = message.find(name)?;
     let font = egui::TextStyle::Body.resolve(ui.style());
-    let plain = |font: &egui::FontId| egui::text::TextFormat::simple(font.clone(), level.color());
+    let plain = |font: &egui::FontId| egui::text::TextFormat::simple(font.clone(), color);
     let mut job = egui::text::LayoutJob::default();
     job.append(&message[..at], 0.0, plain(&font));
     job.append(
