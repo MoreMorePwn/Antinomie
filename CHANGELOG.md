@@ -313,6 +313,16 @@ it runs.
   and the terminal's ANSI colours and a few meter and overlay colours moved into
   the theme.
 
+- **One size format and one time format everywhere.** Sizes shown in Disks, the
+  IOC dataset downloads, process-core limits, the sample report, retention
+  notes, Summary, the base library and the VM dialog all use the same binary
+  units and rounding as the rest of the app (`1.9 GiB`, `812.0 MiB`, `0 bytes`).
+  The IOC download progress said `386 of 450 MB` for what are MiB and now says
+  `386.0 MiB of 450.0 MiB`; the Summary figures `8.00 GiB` now read `8.0 GiB`; the
+  sample report's size reads `1234 bytes (1.2 KiB)`. Internal: the duplicate
+  size formatters are gone, and the run clock, uptime, age, duration, local
+  time of day, UTC date and `now_ms` helpers live in `time_format.rs`.
+
 ### Build and CI
 
 - **Large source files are split and clippy passes on every crate.** Internal: files
