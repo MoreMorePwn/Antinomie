@@ -322,7 +322,10 @@ impl MonitorApp {
                 self.select_process(selection);
             }
             self.trace_archive_pager(ui);
-            let filter_width = ui.available_width().max(180.0);
+            // egui 0.36 reports the whole row as available inside a wrapped
+            // layout, so the room left is measured from the cursor.
+            let left = ui.max_rect().right() - ui.cursor().left() - ui.spacing().item_spacing.x;
+            let filter_width = left.max(180.0).min(ui.available_width());
             crate::query::filter_edit(
                 ui,
                 &mut self.filter,
@@ -476,7 +479,9 @@ impl MonitorApp {
             .max_height(chip_height * 2.0 + if roomy { 8.0 } else { 5.0 })
             .auto_shrink([false, true])
             .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
+                // The row height of a wrapped layout is read when it starts
+                // (egui 0.36), so the chip spacing is set on a scope around it.
+                ui.scope(|ui| {
                     ui.spacing_mut().item_spacing = if roomy {
                         egui::vec2(8.0, 6.0)
                     } else {
@@ -488,68 +493,71 @@ impl MonitorApp {
                         egui::vec2(7.0, 1.0)
                     };
                     ui.spacing_mut().interact_size.y = chip_height;
-                    let all_shown = hidden.is_empty();
-                    let all = egui::Button::new(RichText::new("All").small().color(if all_shown {
-                        theme::palette().primary_text
-                    } else {
-                        theme::text()
-                    }))
-                    .fill(if all_shown {
-                        theme::primary()
-                    } else {
-                        theme::panel()
-                    })
-                    .stroke(egui::Stroke::new(1.0_f32, theme::line()))
-                    .corner_radius(8.0);
-                    if ui
-                        .add(all)
-                        .on_hover_text(if all_shown {
-                            "Hide every category"
-                        } else {
-                            "Show every category"
-                        })
-                        .clicked()
-                    {
-                        if all_shown {
-                            *hidden = SyscallGroup::ALL.to_vec();
-                        } else {
-                            hidden.clear();
-                        }
-                    }
-                    for group in SyscallGroup::ALL {
-                        let shown = !hidden.contains(&group);
-                        let swatch = theme::syscall_tint(group).unwrap_or(theme::raised());
-                        let count = counts.get(&group).copied().unwrap_or(0);
-                        let text = RichText::new(format!("{} {count}", group.label()))
-                            .small()
-                            .color(if shown { theme::text() } else { theme::muted() });
-                        let text = if shown { text } else { text.strikethrough() };
-                        let border = if theme::is_light() {
-                            swatch.gamma_multiply(0.8)
-                        } else {
-                            swatch.gamma_multiply(1.6)
-                        };
-                        let button = egui::Button::new(text)
-                            .fill(if shown { swatch } else { theme::panel() })
-                            .stroke(egui::Stroke::new(1.0_f32, border))
+                    ui.horizontal_wrapped(|ui| {
+                        let all_shown = hidden.is_empty();
+                        let all =
+                            egui::Button::new(RichText::new("All").small().color(if all_shown {
+                                theme::palette().primary_text
+                            } else {
+                                theme::text()
+                            }))
+                            .fill(if all_shown {
+                                theme::primary()
+                            } else {
+                                theme::panel()
+                            })
+                            .stroke(egui::Stroke::new(1.0_f32, theme::line()))
                             .corner_radius(8.0);
                         if ui
-                            .add(button)
-                            .on_hover_text(if shown {
-                                "Click to hide these syscalls"
+                            .add(all)
+                            .on_hover_text(if all_shown {
+                                "Hide every category"
                             } else {
-                                "Click to show these syscalls"
+                                "Show every category"
                             })
                             .clicked()
                         {
-                            if shown {
-                                hidden.push(group);
+                            if all_shown {
+                                *hidden = SyscallGroup::ALL.to_vec();
                             } else {
-                                hidden.retain(|other| *other != group);
+                                hidden.clear();
                             }
                         }
-                    }
-                })
+                        for group in SyscallGroup::ALL {
+                            let shown = !hidden.contains(&group);
+                            let swatch = theme::syscall_tint(group).unwrap_or(theme::raised());
+                            let count = counts.get(&group).copied().unwrap_or(0);
+                            let text = RichText::new(format!("{} {count}", group.label()))
+                                .small()
+                                .color(if shown { theme::text() } else { theme::muted() });
+                            let text = if shown { text } else { text.strikethrough() };
+                            let border = if theme::is_light() {
+                                swatch.gamma_multiply(0.8)
+                            } else {
+                                swatch.gamma_multiply(1.6)
+                            };
+                            let button = egui::Button::new(text)
+                                .fill(if shown { swatch } else { theme::panel() })
+                                .stroke(egui::Stroke::new(1.0_f32, border))
+                                .corner_radius(8.0);
+                            if ui
+                                .add(button)
+                                .on_hover_text(if shown {
+                                    "Click to hide these syscalls"
+                                } else {
+                                    "Click to show these syscalls"
+                                })
+                                .clicked()
+                            {
+                                if shown {
+                                    hidden.push(group);
+                                } else {
+                                    hidden.retain(|other| *other != group);
+                                }
+                            }
+                        }
+                    })
+                });
             });
         if self.settings.hidden_trace_categories.len() == SyscallGroup::ALL.len() {
             ui.colored_label(
