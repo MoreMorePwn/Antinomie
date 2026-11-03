@@ -4,6 +4,19 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
+## 0.8.3 — 2026-11-04
+
+### Host
+
+- **A third click on a column title turns the sort off.** Every sortable table (Triage, Run History, Samples, Network packets, rules, Syscall Trace and the rest) now cycles ascending, descending, off: the third click goes back to the recorded order and drops the arrow. Trace was the one table that only flipped between the two.
+- **The sidebar folds to a rail of icons.** Ctrl+B, View > Fold or open the sidebar, the command palette or the chevron at the top of the sidebar (the same chevron opens it again) fold Virtual machines, Base images, Detection rules, Analysis tools, Samples and Explorer to one icon each, with tooltips that carry the names and counts. The VM icon shows the state dot of the running or selected VM and opens a list to choose a VM or add one; the other icons open their pages; Explorer opens the sidebar. The choice is saved with the settings.
+- **Details, Activity and Jobs can fold to their tab strip.** Click the shown tab, press Ctrl+\`, use View > Fold or open Details, Activity and Jobs or the palette, or drag one of the tabs to the bottom edge of the window: no tab is selected and there is no body. Click a tab again, or drag the separator up, to open it at the height it had; View > Details, Activity, Jobs and the Jobs chip open it too. A selection that fills Details does not open a folded pane; the Details tab gets a dot. The folded state and the height are saved.
+- **Preparing run evidence is centred in its panel**, both ways, in Triage > Summary.
+- **Column dividers are one pixel wide while hovered or dragged**, with the same drag area as before.
+- **The Explorer title no longer shows a count.**
+- **The note that a read-only file has no guest hash is an info icon** beside Hash this state in a file's history; hover it for the sentence.
+- **Type clipboard is in the run terminal's header** as well as in the VM menu (Ctrl+Shift+Y and the palette entry stay); it is not in the main toolbar.
+
 ## 0.8.2 — 2026-11-03
 
 Antinomie 0.8.2 is a host-only release on the 0.8 line; it runs the same
