@@ -16,6 +16,8 @@ it runs.
 - **The Explorer title no longer shows a count.**
 - **The note that a read-only file has no guest hash is an info icon** beside Hash this state in a file's history; hover it for the sentence.
 - **Type clipboard is in the run terminal's header** as well as in the VM menu (Ctrl+Shift+Y and the palette entry stay); it is not in the main toolbar.
+- **File Reconstruction shows the bytes as hex, text or UTF-16LE.** Beside Hex and Text diff, the view switches to the bytes as UTF-8 (an invalid byte shown as `\xNN`) or as UTF-16LE. Bytes with no value stay marked in every view (`??` never seen, `##` not captured, `~~` shared mapping), and the choice is remembered for the session.
+- **A complete reconstruction is hashed as a normal state.** When no byte is unknown and there is no gap, the Hash check computes SHA-256, MD5 and SHA-1 by itself (each with Copy) and compares the SHA-256 with the guest's hash. When there are unknown bytes or gaps, Hash this state is disabled and says why, for example "2 gaps, 140 unknown bytes: a hash would not match the real file".
 - **A changed custody entry stays in the table.** When an entry's stored text was edited so it no longer read as an event, the Custody log (and the global custody view and the report) skipped its row, so the numbers went 1, 3, 4. The entry is now listed as "Unreadable entry" with the stored text, marked changed, and the banner, the row, the HTML export, the JSON export (`status.problem`) and the report say what the verifier compared (field, expected hash, found hash).
 
 ## 0.8.2 — 2026-11-03

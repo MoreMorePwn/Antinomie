@@ -5,7 +5,10 @@
 //! became known, the hash check against what the guest took, and a save with
 //! a mask of the bytes nobody saw.
 mod before_deletion;
+mod hash_state;
+mod text_mode;
 pub(in crate::triage) use before_deletion::DATA_DIR;
+use text_mode::View;
 
 use super::{Activity, FileActivity};
 use crate::theme;
@@ -104,7 +107,7 @@ impl<T: Send + 'static> Pending<T> {
 /// The hash of the reconstruction at a point in the story.
 struct Hashed {
     position: usize,
-    result: Result<String, Incomplete>,
+    result: Result<model::Digests, Incomplete>,
 }
 
 /// The file's bytes before the run: from the starting disk, empty for a file
@@ -129,7 +132,8 @@ pub(super) struct Open {
     key: (String, u64),
     map: Reconstruction,
     selected: Option<u64>,
-    text_view: bool,
+    view: View,
+    view_loaded: bool,
     /// Rows of the byte map already read, for the position they were read at.
     cache: HashMap<u64, Vec<Cell>>,
     cache_at: usize,
@@ -157,7 +161,8 @@ impl Open {
             key: (file.path.clone(), file.first_ns),
             map,
             selected: None,
-            text_view: false,
+            view: View::Hex,
+            view_loaded: false,
             cache: HashMap::new(),
             cache_at: 0,
             hashing: None,
@@ -180,9 +185,10 @@ impl Open {
     pub(super) fn prepare(&mut self, text_view: bool) {
         self.hashed = Some(Hashed {
             position: self.map.position(),
-            result: self.map.sha256(),
+            result: self.map.digests(),
         });
-        self.text_view = text_view;
+        self.view = if text_view { View::Diff } else { View::Hex };
+        self.view_loaded = true;
     }
 
     /// The size the map spans, for the tests.
@@ -207,9 +213,17 @@ impl Open {
         clock: Option<antinomie_monitor_core::HostClockAnchor>,
         directory: Option<&Path>,
     ) -> bool {
+        if !self.view_loaded {
+            self.view_loaded = true;
+            if let Some(view) = text_mode::remembered(ctx) {
+                self.view = view;
+            }
+        }
         if let Some(done) = self.hashing.as_ref().and_then(Pending::done) {
             self.hashing = None;
-            self.hashed = Some(done);
+            if done.position == self.map.position() {
+                self.hashed = Some(done);
+            }
         }
         if let Some(done) = self.saving.as_ref().and_then(Pending::done) {
             self.saving = None;
@@ -264,10 +278,10 @@ impl Open {
             .show(ui, |ui| self.side(ui, file, clock, directory));
         egui::CentralPanel::default().show(ui, |ui| {
             self.legend(ui);
-            if self.text_view {
-                self.text(ui);
-            } else {
-                self.bytes(ui, clock);
+            match self.view {
+                View::Diff => self.text(ui),
+                View::Hex => self.bytes(ui, clock),
+                View::Utf8 | View::Utf16 => self.text_rows(ui, clock),
             }
         });
     }
@@ -450,19 +464,7 @@ impl Open {
                             if response.clicked() {
                                 self.selected = Some(at);
                             }
-                            response.on_hover_ui(|ui| {
-                                ui.label(format!("0x{at:x} · {}", cell.state.label()));
-                                if cell.learned != START {
-                                    let step = &self.map.steps()[cell.learned];
-                                    ui.weak(format!(
-                                        "learned at {} (call {})",
-                                        crate::time_format::guest_ns(clock, Some(step.time_ns)),
-                                        cell.learned + 1
-                                    ));
-                                } else if cell.state != State::Unknown {
-                                    ui.weak("known from the start of the run");
-                                }
-                            });
+                            response.on_hover_ui(|ui| self.hover(ui, at, cell, clock));
                         }
                         let ascii: String = cells
                             .iter()
@@ -548,11 +550,20 @@ impl Open {
             .id_salt("file-reconstruction-side-scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.text_view, false, "Bytes");
-                    ui.selectable_value(&mut self.text_view, true, "Text diff")
+                let before = self.view;
+                ui.horizontal_wrapped(|ui| {
+                    ui.selectable_value(&mut self.view, View::Hex, "Hex")
+                        .on_hover_text("Sixteen bytes a row as hex and as characters");
+                    ui.selectable_value(&mut self.view, View::Utf8, "Text")
+                        .on_hover_text("The bytes as UTF-8; an invalid byte shows as \\xNN. ?? ## ~~ mark bytes with no value");
+                    ui.selectable_value(&mut self.view, View::Utf16, "UTF-16LE")
+                        .on_hover_text("Two bytes a character; a pair with an unknown byte shows as ?? ## ~~");
+                    ui.selectable_value(&mut self.view, View::Diff, "Text diff")
                         .on_hover_text("Lines changed since the start of the run, for text files whose every byte is known");
                 });
+                if self.view != before {
+                    text_mode::remember(ui.ctx(), self.view);
+                }
                 heading(ui, "Byte history");
                 self.history(ui, clock);
                 heading(ui, "Hash check");
@@ -599,127 +610,6 @@ impl Open {
         if let Some(last) = history.iter().rfind(|entry| entry.event != Event::Cut) {
             if last.event == Event::Read {
                 ui.weak("A read shows the file as it was then; a process outside the trace could have changed it later.");
-            }
-        }
-    }
-
-    fn hash(
-        &mut self,
-        ui: &mut egui::Ui,
-        file: &FileActivity,
-        clock: Option<antinomie_monitor_core::HostClockAnchor>,
-    ) {
-        let mut guest: Vec<(String, String)> = file
-            .hashes
-            .iter()
-            .filter_map(|note| {
-                Some((
-                    note.sha256.clone()?,
-                    format!(
-                        "{} at {}",
-                        note.moment,
-                        crate::time_format::guest_ns(clock, Some(note.time))
-                    ),
-                ))
-            })
-            .collect();
-        if let Some(hex) = file
-            .contents
-            .hash
-            .as_ref()
-            .and_then(|hash| hash.sha256_hex())
-        {
-            if !guest.iter().any(|(known, _)| *known == hex) {
-                guest.push((hex, "the guest's hash".into()));
-            }
-        }
-        if guest.is_empty() && file.changed() {
-            ui.weak(
-                "No hash: still open at run end (the guest hashes a file when its last writer closes it).",
-            );
-        }
-        for (hex, moment) in &guest {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(format!("{moment}\n{hex}"))
-                        .monospace()
-                        .small(),
-                )
-                .wrap(),
-            );
-        }
-        ui.horizontal(|ui| {
-            let busy = self.hashing.is_some();
-            if ui
-                .add_enabled(!busy, egui::Button::new("Hash this state"))
-                .on_hover_text("SHA-256 of the file as reconstructed at the chosen call, when every byte is known")
-                .clicked()
-            {
-                let (ctx, map) = (ui.ctx().clone(), self.map.clone());
-                let position = map.position();
-                self.hashing = Some(Pending::spawn(&ctx, move || Hashed {
-                    position,
-                    result: map.sha256(),
-                }));
-            }
-            let last = file.hashes.iter().rev().find(|note| note.sha256.is_some());
-            if let Some(note) = last {
-                if ui
-                    .button("Go to the last hash")
-                    .on_hover_text("Show the file as it stood when the guest took its last hash")
-                    .clicked()
-                {
-                    let position = self.map.steps_until(note.time);
-                    self.goto(position);
-                }
-            }
-            if guest.is_empty() && !file.changed() {
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(egui_phosphor::regular::INFO).color(theme::muted()),
-                    )
-                    .sense(egui::Sense::hover()),
-                )
-                .on_hover_text(
-                    "No hash: only read, and the guest hashes only programs, written files and deleted files.",
-                );
-            }
-        });
-        if self.hashing.is_some() {
-            ui.weak("Hashing…");
-        }
-        if let Some(hashed) = &self.hashed {
-            match &hashed.result {
-                Ok(hex) => {
-                    ui.add(egui::Label::new(RichText::new(hex).monospace().small()).wrap());
-                    match guest.iter().find(|(known, _)| known == hex) {
-                        Some((_, moment)) => {
-                            widgets::chip(ui, "matches the guest's hash", Tone::Good);
-                            ui.weak(format!("Same as the hash taken {moment}: the reconstruction is byte-exact."));
-                        }
-                        None if guest.is_empty() => {
-                            ui.weak("There is no guest hash to compare with.");
-                        }
-                        None => {
-                            widgets::chip(ui, "differs from the guest's hash", Tone::Warn);
-                            ui.weak("Step to the call just before a hash was taken, or use Go to the last hash.");
-                        }
-                    }
-                }
-                Err(Incomplete::SizeUnknown) => {
-                    ui.weak("No hash: the file's size is not known.");
-                }
-                Err(Incomplete::Missing(count)) => {
-                    ui.weak(format!("No hash: {count} bytes have no value (?? ## ~~)."));
-                }
-                Err(Incomplete::Unreadable) => {
-                    ui.weak(
-                        "No hash: some bytes could not be read back (the starting disk is gone).",
-                    );
-                }
-            }
-            if hashed.position != self.map.position() {
-                ui.weak("(for an earlier position)");
             }
         }
     }

@@ -345,6 +345,14 @@ impl Counts {
     }
 }
 
+/// The hashes of a complete reconstruction, as lowercase hex.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Digests {
+    pub sha256: String,
+    pub md5: String,
+    pub sha1: String,
+}
+
 /// What a save produced.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Saved {
@@ -865,6 +873,12 @@ impl Reconstruction {
 
     /// The SHA-256 of the file as reconstructed, when every byte has a value.
     pub fn sha256(&self) -> Result<String, Incomplete> {
+        self.digests().map(|digests| digests.sha256)
+    }
+
+    /// SHA-256, MD5 and SHA-1 of the file as reconstructed, when every byte
+    /// has a value.
+    pub fn digests(&self) -> Result<Digests, Incomplete> {
         if self.size.is_none() {
             return Err(Incomplete::SizeUnknown);
         }
@@ -872,29 +886,54 @@ impl Reconstruction {
         if counts.missing() > 0 {
             return Err(Incomplete::Missing(counts.missing()));
         }
-        struct Digester(Sha256);
+        struct Digester(Sha256, md5::Md5, sha1::Sha1);
         impl Write for Digester {
             fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
                 self.0.update(bytes);
+                self.1.update(bytes);
+                self.2.update(bytes);
                 Ok(bytes.len())
             }
             fn flush(&mut self) -> io::Result<()> {
                 Ok(())
             }
         }
-        let mut digest = Digester(Sha256::new());
+        let mut digest = Digester(Sha256::new(), md5::Md5::new(), sha1::Sha1::new());
         let saved = self
             .save(&mut digest, None)
             .map_err(|_| Incomplete::Unreadable)?;
         if saved.unreadable > 0 {
             return Err(Incomplete::Unreadable);
         }
-        Ok(digest
-            .0
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect())
+        let hex =
+            |bytes: &[u8]| -> String { bytes.iter().map(|byte| format!("{byte:02x}")).collect() };
+        Ok(Digests {
+            sha256: hex(&digest.0.finalize()),
+            md5: hex(&digest.1.finalize()),
+            sha1: hex(&digest.2.finalize()),
+        })
+    }
+
+    /// How many separate stretches have no known value because the run
+    /// changed them without a capture (or through a shared mapping), and
+    /// how many bytes were never seen at all.
+    pub fn gaps(&self) -> (u64, u64) {
+        let mut stretches = 0;
+        let mut previous_end = None;
+        let mut unknown = 0;
+        for (start, len, state) in self.spans() {
+            match state {
+                State::Unknown => unknown += len,
+                State::NotCaptured(_) | State::Mapping => {
+                    if previous_end != Some(start) {
+                        stretches += 1;
+                    }
+                    previous_end = Some(start + len);
+                }
+                _ => {}
+            }
+        }
+        (stretches, unknown)
     }
 
     /// The number of steps at or before `time_ns`: the story as it stood at
