@@ -4,7 +4,7 @@
 //! paragraphs, fact lists, tables and notes, in the same order for both. A
 //! [`Report`] becomes a [`Document`] here, with indicators defanged on
 //! request and long tables cut to [`DOCUMENT_ROWS`].
-use super::{DOCUMENT_ROWS, Indicator, IndicatorKind, NamedTable, Report, Table, defang, iso};
+use super::{DOCUMENT_ROWS, Indicator, IndicatorKind, NamedTable, Report, Table, defang};
 
 /// One drawn element.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -140,17 +140,14 @@ impl Builder {
     /// The overview: when, what ran, and the notes of the report.
     fn overview_section(&mut self, report: &Report) {
         let mut head = vec![
-            (
-                "Generated".to_owned(),
-                format!("{} UTC", super::utc(report.generated_ms)),
-            ),
+            ("Generated".to_owned(), super::shown(report.generated_ms)),
             ("Application".to_owned(), report.app.clone()),
             ("Run".to_owned(), report.run.run_id.clone()),
             ("Boot".to_owned(), report.run.boot_id.clone()),
             ("VM".to_owned(), report.run.vm_id.clone()),
         ];
         if let Some(started) = report.run.started_ms {
-            head.push(("Run started".into(), format!("{} UTC", super::utc(started))));
+            head.push(("Run started".into(), super::shown(started)));
         }
         head.push((
             "Run state".into(),
@@ -549,17 +546,13 @@ pub fn document(report: &Report, defang: bool) -> Document {
     Document {
         title: format!("Antinomie Triage report: {name}"),
         subtitle: format!(
-            "Run {} - generated {} UTC",
+            "Run {} - generated {}",
             report.run.run_id,
-            iso_short(report)
+            super::shown(report.generated_ms)
         ),
         defanged: defang,
         sections: b.sections,
     }
-}
-
-fn iso_short(report: &Report) -> String {
-    iso(report.generated_ms)[..19].replace('T', " ")
 }
 
 /// A rule's author, or `unknown` when the rule names none (a rule's licence

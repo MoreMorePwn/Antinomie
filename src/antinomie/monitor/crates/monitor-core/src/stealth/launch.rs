@@ -409,6 +409,13 @@ pub(crate) fn apply(
     let mut rtc = Vec::new();
     if profile.rtc_localtime {
         rtc.push("base=localtime");
+    } else {
+        // QEMU's capture filter stamps packets with `mktime` of the guest
+        // clock's date fields. With a UTC clock that is only a Unix time when
+        // the zone is UTC; in the host zone every pcap lands its offset away
+        // from the wall clock (7 h early at UTC+7). A local-time clock needs
+        // the host zone as it is.
+        command.env("TZ", "UTC");
     }
     if profile.rtc_clock == RtcClock::Vm {
         rtc.push("clock=vm");

@@ -1,14 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Host wall-clock presentation shared by histories and triage.
 use antinomie_monitor_core::HostClockAnchor;
-use chrono::{DateTime, FixedOffset, Local, Utc};
+use chrono::{DateTime, FixedOffset, Utc};
+
+/// A UTC instant in the zone the app shows times in (Settings > Appearance,
+/// else the host's).
+pub(crate) fn zoned(time: DateTime<Utc>) -> DateTime<FixedOffset> {
+    let offset = crate::tzone::offset_at(time.timestamp());
+    time.with_timezone(
+        &FixedOffset::east_opt(offset).unwrap_or_else(|| FixedOffset::east_opt(0).unwrap()),
+    )
+}
 
 pub(crate) fn unix_us(value: u64) -> String {
     i64::try_from(value)
         .ok()
         .and_then(DateTime::<Utc>::from_timestamp_micros)
         .map(|time| {
-            let time = time.with_timezone(&Local);
+            let time = zoned(time);
             format!(
                 "{} (UTC{})",
                 time.format("%Y-%m-%d %H:%M:%S%.3f"),
@@ -31,7 +40,7 @@ fn compact_zone(offset: i32) -> String {
 /// Whole seconds in the host zone, the offset compact: `2026-10-19 14:05:12
 /// (UTC+7)`, `(UTC+5:30)`, `(UTC+0)`.
 pub(crate) fn local_seconds(seconds: u64) -> String {
-    local_seconds_at(seconds, |time| time.with_timezone(&Local).fixed_offset())
+    local_seconds_at(seconds, zoned)
 }
 
 /// [`local_seconds`] with the zone chosen by `zone`, so tests can fix it.
@@ -105,7 +114,7 @@ pub(crate) fn time_of_day(seconds: u64) -> String {
     i64::try_from(seconds)
         .ok()
         .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
-        .map(|time| time.with_timezone(&Local).format("%H:%M:%S").to_string())
+        .map(|time| zoned(time).format("%H:%M:%S").to_string())
         .unwrap_or_else(|| "—".into())
 }
 
@@ -134,13 +143,9 @@ pub(crate) fn short_time_us(value: u64) -> String {
         .ok()
         .and_then(DateTime::<Utc>::from_timestamp_micros)
         .map(|time| {
-            time.with_timezone(&Local)
-                .format("%H:%M:%S%.3f")
-                .to_string()
-                + &format!(
-                    " (UTC{})",
-                    compact_zone(time.with_timezone(&Local).offset().local_minus_utc())
-                )
+            let time = zoned(time);
+            time.format("%H:%M:%S%.3f").to_string()
+                + &format!(" (UTC{})", compact_zone(time.offset().local_minus_utc()))
         })
         .unwrap_or_else(|| "Unavailable".into())
 }
@@ -159,13 +164,22 @@ pub(crate) fn axis_time(value: u64, step_ns: f64) -> String {
     i64::try_from(value)
         .ok()
         .and_then(DateTime::<Utc>::from_timestamp_micros)
-        .map(|time| time.with_timezone(&Local).format(format).to_string())
+        .map(|time| zoned(time).format(format).to_string())
         .unwrap_or_else(|| "Unavailable".into())
 }
 
-/// The host zone as the axis names it: `UTC+07:00`.
+/// The zone as the axis names it: `UTC+07:00`.
 pub(crate) fn zone_label() -> String {
-    format!("UTC{}", Local::now().format("%:z"))
+    format!("UTC{}", zoned(Utc::now()).format("%:z"))
+}
+
+/// What a time column says about itself: `Times in Asia/Jakarta (UTC+07:00)`.
+pub(crate) fn zone_note() -> String {
+    format!(
+        "Times in {} ({})",
+        crate::tzone::active().name(),
+        zone_label()
+    )
 }
 
 pub(crate) fn guest_ns(anchor: Option<HostClockAnchor>, value: Option<u64>) -> String {

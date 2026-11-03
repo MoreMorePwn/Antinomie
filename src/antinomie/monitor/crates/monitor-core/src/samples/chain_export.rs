@@ -87,8 +87,8 @@ pub struct Exported {
     pub verified: bool,
 }
 
-fn utc(ms: u64) -> String {
-    crate::date::date_time_text((ms / 1000) as i64)
+fn shown(ms: u64) -> String {
+    crate::date::display_date_time_text((ms / 1000) as i64)
 }
 
 fn escape(text: &str) -> String {
@@ -252,7 +252,7 @@ fn render_html(value: &Value, check: &ChainCheck) -> Result<String, String> {
             "<tr class=\"{state}\"><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>\
              <td>{state}</td><td class=\"mono\" title=\"previous {}\">{}</td></tr>\n",
             entry.seq,
-            utc(entry.at_ms),
+            shown(entry.at_ms),
             escape(&label),
             escape(&entry.by),
             escape(&detail),
@@ -288,7 +288,7 @@ text-align:left;vertical-align:top}}.mono{{font-family:ui-monospace,monospace}}\
 tr.unverified{{color:#8a5a00}}</style></head><body>\n\
 <h1>Custody record: {}</h1>\n<p class=\"mono\">SHA-256 {}</p>\n{banner}\n\
 <p><i>{}</i></p>\n\
-<table><thead><tr><th>#</th><th>Time (UTC)</th><th>Event</th><th>By</th><th>Detail</th>\
+<table><thead><tr><th>#</th><th>Time</th><th>Event</th><th>By</th><th>Detail</th>\
 <th>Check</th><th>Hash</th></tr></thead><tbody>\n{rows}</tbody></table>\n\
 <p>The complete record is embedded below. Save it as a .json file, or give this page to \
 <code>verify-custody.py</code>, to check it without Antinomie. Exported {} by {}.</p>\n\
@@ -297,7 +297,7 @@ tr.unverified{{color:#8a5a00}}</style></head><body>\n\
         escape(sample["name"].as_str().unwrap_or("")),
         escape(sample["sha256"].as_str().unwrap_or("")),
         escape(NOTICE),
-        utc(value["exported_ms"].as_u64().unwrap_or(0)),
+        shown(value["exported_ms"].as_u64().unwrap_or(0)),
         escape(value["app"].as_str().unwrap_or("Antinomie")),
     ))
 }

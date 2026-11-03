@@ -309,6 +309,7 @@ impl MonitorApp {
     fn appearance_page(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         form_grid("settings_appearance", ui).show(ui, |ui| {
             self.appearance_rows(ui, ctx);
+            self.time_zone_row(ui);
             ui.label("Trace colors");
             ui.checkbox(
                 &mut self.settings.trace_colors,
@@ -317,6 +318,54 @@ impl MonitorApp {
             .on_hover_text("Tint each syscall by its category, like Wireshark's coloring rules");
             ui.end_row();
         });
+    }
+
+    /// The time zone the app shows times in: the host's, found by itself, or
+    /// one chosen here. Stored data stays UTC.
+    fn time_zone_row(&mut self, ui: &mut egui::Ui) {
+        ui.label("Time zone").on_hover_text(
+            "Every time shown in the app and written into a report follows this zone. Recordings keep UTC.",
+        );
+        let automatic = crate::tzone::Zone::detect();
+        let label = |choice: &str| match choice {
+            crate::tzone::AUTOMATIC => format!("Automatic ({})", automatic.name()),
+            other => other.replace('_', " "),
+        };
+        let mut chosen = self.settings.time_zone.clone();
+        let filter_id = ui.id().with("time-zone-filter");
+        ui.vertical(|ui| {
+            egui::ComboBox::from_id_salt("settings_time_zone")
+                .selected_text(label(&chosen))
+                .width(260.0)
+                .show_ui(ui, |ui| {
+                    let mut filter: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
+                    ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Filter zones"));
+                    ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
+                    let needle = filter.to_lowercase().replace(' ', "_");
+                    egui::ScrollArea::vertical()
+                        .max_height(320.0)
+                        .show(ui, |ui| {
+                            let mut offer =
+                                vec![crate::tzone::AUTOMATIC.to_owned(), "UTC".to_owned()];
+                            offer.extend(crate::tzone::choices());
+                            for name in offer {
+                                if !needle.is_empty()
+                                    && !name.to_lowercase().contains(&needle)
+                                    && !label(&name).to_lowercase().contains(&needle)
+                                {
+                                    continue;
+                                }
+                                ui.selectable_value(&mut chosen, name.clone(), label(&name));
+                            }
+                        });
+                });
+            ui.weak(crate::time_format::zone_note());
+        });
+        if chosen != self.settings.time_zone {
+            self.settings.time_zone = chosen;
+            crate::tzone::choose(&self.settings.time_zone);
+        }
+        ui.end_row();
     }
 
     /// The rows of Settings > Appearance that Getting started shows too:

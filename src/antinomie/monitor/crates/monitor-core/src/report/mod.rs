@@ -483,6 +483,13 @@ pub fn utc(ms: u64) -> String {
     crate::date::date_time_text((ms / 1000) as i64)
 }
 
+/// `YYYY-MM-DD HH:MM:SS (UTC+7)` in the zone the app shows times in: the
+/// time a person reads in a report. Stored and machine-read times stay UTC
+/// ([`utc`], [`iso`]).
+pub fn shown(ms: u64) -> String {
+    crate::date::display_date_time_text((ms / 1000) as i64)
+}
+
 /// `YYYY-MM-DDTHH:MM:SS.mmmZ` for ms since the epoch.
 pub fn iso(ms: u64) -> String {
     let text = utc(ms);

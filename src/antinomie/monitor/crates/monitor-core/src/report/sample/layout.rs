@@ -5,7 +5,7 @@
 //! paragraphs, fact lists, tables and notes. Indicators are defanged on
 //! request; tables are cut at [`DOCUMENT_ROWS`] with a note.
 use super::super::layout::{Block, DocTable, Document, Section};
-use super::super::{DOCUMENT_ROWS, IndicatorKind, defang, iso, utc};
+use super::super::{DOCUMENT_ROWS, IndicatorKind, defang};
 use super::*;
 
 /// The assessment in words.
@@ -72,7 +72,7 @@ fn table(columns: &[&str], rows: Vec<Vec<String>>, empty: &str, blocks: &mut Vec
 
 fn time(ms: Option<u64>) -> String {
     ms.filter(|ms| *ms > 0)
-        .map_or(String::new(), |ms| format!("{} UTC", utc(ms)))
+        .map_or(String::new(), |ms| crate::report::shown(ms))
 }
 
 fn runs_text(runs: &[usize]) -> String {
@@ -128,7 +128,7 @@ fn overview_section(b: &mut Builder, report: &SampleReport) {
     let mut head = vec![
         (
             "Generated".to_owned(),
-            format!("{} UTC", utc(report.generated_ms)),
+            crate::report::shown(report.generated_ms),
         ),
         ("Application".into(), report.app.clone()),
         ("Sample".into(), b.free(&sample.name)),
@@ -698,9 +698,9 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
     Document {
         title: format!("Antinomie Sample report: {name}"),
         subtitle: format!(
-            "Sample {} - generated {} UTC",
+            "Sample {} - generated {}",
             sample.sha256.get(..16).unwrap_or(&sample.sha256),
-            iso(report.generated_ms)[..19].replace('T', " ")
+            crate::report::shown(report.generated_ms)
         ),
         defanged: defang,
         sections: b.sections,

@@ -8,6 +8,42 @@
 
 const SECONDS_PER_DAY: i64 = 86_400;
 
+/// The zone the app displays times in, set by the UI (Settings > Appearance):
+/// seconds east of UTC at a Unix second. Stored data stays UTC; only the
+/// human-readable text of a report or export uses this.
+static DISPLAY_OFFSET: std::sync::RwLock<fn(i64) -> i32> = std::sync::RwLock::new(|_| 0);
+
+pub fn set_display_offset(offset: fn(i64) -> i32) {
+    *DISPLAY_OFFSET.write().unwrap_or_else(|e| e.into_inner()) = offset;
+}
+
+fn display_offset(seconds: i64) -> i32 {
+    (*DISPLAY_OFFSET.read().unwrap_or_else(|e| e.into_inner()))(seconds)
+}
+
+/// A zone offset in seconds as `UTC+7`, `UTC+5:30`, `UTC-3`, `UTC` for zero.
+pub fn zone_text(offset: i32) -> String {
+    if offset == 0 {
+        return "UTC".into();
+    }
+    let (sign, minutes) = (if offset < 0 { '-' } else { '+' }, offset.abs() / 60);
+    if minutes % 60 == 0 {
+        format!("UTC{sign}{}", minutes / 60)
+    } else {
+        format!("UTC{sign}{}:{:02}", minutes / 60, minutes % 60)
+    }
+}
+
+/// `YYYY-MM-DD HH:MM:SS (UTC+7)` of Unix seconds in the display zone.
+pub fn display_date_time_text(seconds: i64) -> String {
+    let offset = display_offset(seconds);
+    format!(
+        "{} ({})",
+        date_time_text(seconds + i64::from(offset)),
+        zone_text(offset)
+    )
+}
+
 /// Year, month (1..=12) and day (1..=31) of a day count since 1970-01-01.
 pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;

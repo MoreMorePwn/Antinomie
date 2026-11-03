@@ -464,7 +464,11 @@ impl MonitorApp {
                         "base catalog updated: {count} base{}",
                         if count == 1 { "" } else { "s" }
                     );
-                    feedback.updated = Some(chrono::Local::now().format("%H:%M").to_string());
+                    feedback.updated = Some(
+                        crate::time_format::zoned(chrono::Utc::now())
+                            .format("%H:%M")
+                            .to_string(),
+                    );
                 }
             }
         }

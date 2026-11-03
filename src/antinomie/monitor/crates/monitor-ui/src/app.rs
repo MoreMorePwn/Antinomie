@@ -149,6 +149,9 @@ struct Settings {
     settings_version: u32,
     /// Tint syscall trace rows by syscall group.
     trace_colors: bool,
+    /// The zone times are shown in (Settings > Appearance): empty follows
+    /// the host, else an IANA name such as `Asia/Jakarta` or `UTC`.
+    time_zone: String,
     /// Maximum calls in a saved syscall page; constrained to the archive API.
     #[serde(deserialize_with = "trace_paging::deserialize_page_size")]
     trace_page_size: usize,
@@ -291,6 +294,7 @@ impl Default for Settings {
             font_size: theme::DEFAULT_TEXT_SIZE,
             settings_version: SETTINGS_VERSION,
             trace_colors: true,
+            time_zone: String::new(),
             trace_page_size: 100,
             hidden_trace_categories: Vec::new(),
             theme: None,
