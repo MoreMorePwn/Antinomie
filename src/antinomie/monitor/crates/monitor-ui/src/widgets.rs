@@ -12,13 +12,14 @@
 //!   list, or [`tab_row`] with [`tab`] when each tab needs a badge, a tooltip
 //!   or a disabled state. Exclusive options that are not sections (Graph /
 //!   Tree, Table / Text) use [`segmented`].
-//! - Tables (`egui_extras::TableBuilder`): call [`table::begin`] before the
-//!   builder, draw header cells with [`table::head`] (or [`table::head_cell`]
-//!   around custom header content such as a sort button), draw monospace
-//!   data with [`table::cell`] and the [`table::Cell`] kinds, and mark rows
-//!   with [`table::row_mark`] in the first cell. Row height comes from
-//!   [`table::row_height`] and the header from [`table::header_height`].
-//!   Zebra, hover and selection fills come from the active theme's visuals.
+//! - Tables ([`fit_table::FitBuilder`], the `egui_extras::TableBuilder` fitted
+//!   to its box): draw header cells with [`fit_table::head`] (or
+//!   [`fit_table::head_cell`] around custom header content such as a sort
+//!   button), draw monospace data with [`fit_table::cell`] and the
+//!   [`fit_table::Cell`] kinds, and mark rows with [`fit_table::row_mark`] in
+//!   the first cell. Row height comes from [`fit_table::row_height`] and the
+//!   header from [`fit_table::header_height`]. Zebra, hover and selection
+//!   fills come from the active theme's visuals.
 //! - Grouped facts on a page: [`card`]; a jump to another view: [`link`].
 //! - A run-based window with nothing to show: [`info_panel`].
 //! - Status words: [`chip`] with a [`Tone`]; filter-bar switches: [`toggle_chip`].
