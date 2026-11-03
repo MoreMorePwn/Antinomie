@@ -136,78 +136,78 @@ impl Builder {
     }
 }
 
-/// The document for `report`. `defang` rewrites indicators for reading.
-pub fn document(report: &Report, defang: bool) -> Document {
-    let mut b = Builder {
-        defang,
-        sections: Vec::new(),
-    };
-    let mut head = vec![
-        (
-            "Generated".to_owned(),
-            format!("{} UTC", super::utc(report.generated_ms)),
-        ),
-        ("Application".to_owned(), report.app.clone()),
-        ("Run".to_owned(), report.run.run_id.clone()),
-        ("Boot".to_owned(), report.run.boot_id.clone()),
-        ("VM".to_owned(), report.run.vm_id.clone()),
-    ];
-    if let Some(started) = report.run.started_ms {
-        head.push(("Run started".into(), format!("{} UTC", super::utc(started))));
-    }
-    head.push((
-        "Run state".into(),
-        if report.run.finished {
-            "finished"
-        } else {
-            "still running when read"
+impl Builder {
+    /// The overview: when, what ran, and the notes of the report.
+    fn overview_section(&mut self, report: &Report) {
+        let mut head = vec![
+            (
+                "Generated".to_owned(),
+                format!("{} UTC", super::utc(report.generated_ms)),
+            ),
+            ("Application".to_owned(), report.app.clone()),
+            ("Run".to_owned(), report.run.run_id.clone()),
+            ("Boot".to_owned(), report.run.boot_id.clone()),
+            ("VM".to_owned(), report.run.vm_id.clone()),
+        ];
+        if let Some(started) = report.run.started_ms {
+            head.push(("Run started".into(), format!("{} UTC", super::utc(started))));
         }
-        .into(),
-    ));
-    if let Some(sample) = &report.sample {
-        head.push(("Sample".into(), sample.name.clone()));
-        head.push(("Sample SHA-256".into(), sample.sha256.clone()));
-        if sample.size.is_some() {
-            head.push((
-                "Sample size".into(),
-                sample
-                    .size
-                    .map_or(String::new(), crate::byte_size::file_size),
-            ));
-        }
-    }
-    head.retain(|(_, value)| !value.is_empty());
-    let mut blocks = vec![Block::Facts(head)];
-    if defang {
-        blocks.push(Block::Note(
-            "Indicators in this document are defanged (hxxp, [.]) so they cannot be opened by \
-             accident. The JSON, MISP and STIX exports carry the raw values."
-                .into(),
+        head.push((
+            "Run state".into(),
+            if report.run.finished {
+                "finished"
+            } else {
+                "still running when read"
+            }
+            .into(),
         ));
-    }
-    for note in &report.notes {
-        blocks.push(Block::Note(b.free(note)));
-    }
-    b.section("overview", "Run overview", blocks);
-
-    if let Some(summary) = &report.summary {
-        let mut blocks = vec![Block::Paragraph(b.free(&summary.statement))];
-        let mut facts = vec![(
-            "Highest tier".to_owned(),
-            summary.highest_tier.to_uppercase(),
-        )];
-        if !summary.families.is_empty() {
-            facts.push((
-                "Family named by".into(),
-                if summary.family_sources.is_empty() {
-                    summary.families.join(", ")
-                } else {
-                    summary.family_sources.join("; ")
-                },
+        if let Some(sample) = &report.sample {
+            head.push(("Sample".into(), sample.name.clone()));
+            head.push(("Sample SHA-256".into(), sample.sha256.clone()));
+            if sample.size.is_some() {
+                head.push((
+                    "Sample size".into(),
+                    sample
+                        .size
+                        .map_or(String::new(), crate::byte_size::file_size),
+                ));
+            }
+        }
+        head.retain(|(_, value)| !value.is_empty());
+        let mut blocks = vec![Block::Facts(head)];
+        if self.defang {
+            blocks.push(Block::Note(
+                "Indicators in this document are defanged (hxxp, [.]) so they cannot be opened by \
+             accident. The JSON, MISP and STIX exports carry the raw values."
+                    .into(),
             ));
         }
-        let c = &summary.counts;
-        facts.push((
+        for note in &report.notes {
+            blocks.push(Block::Note(self.free(note)));
+        }
+        self.section("overview", "Run overview", blocks);
+    }
+
+    /// The summary section: the statement, the counts and the key behaviours.
+    fn summary_section(&mut self, report: &Report) {
+        if let Some(summary) = &report.summary {
+            let mut blocks = vec![Block::Paragraph(self.free(&summary.statement))];
+            let mut facts = vec![(
+                "Highest tier".to_owned(),
+                summary.highest_tier.to_uppercase(),
+            )];
+            if !summary.families.is_empty() {
+                facts.push((
+                    "Family named by".into(),
+                    if summary.family_sources.is_empty() {
+                        summary.families.join(", ")
+                    } else {
+                        summary.family_sources.join("; ")
+                    },
+                ));
+            }
+            let c = &summary.counts;
+            facts.push((
             "Observed".into(),
             format!(
                 "{} processes, {} findings, {} indicators ({} matched a dataset), {} ATT&CK techniques, \
@@ -223,116 +223,298 @@ pub fn document(report: &Report, defang: bool) -> Document {
                 c.domains
             ),
         ));
-        blocks.push(Block::Facts(facts));
-        if !summary.key_behaviours.is_empty() {
-            blocks.push(Block::Sub("Key behaviours".into()));
-            blocks.push(Block::Table(DocTable {
-                columns: ["Tier", "Category", "Rule", "Count"]
-                    .map(String::from)
-                    .to_vec(),
-                rows: summary
-                    .key_behaviours
-                    .iter()
-                    .map(|behaviour| {
-                        vec![
-                            behaviour.tier.to_uppercase(),
-                            behaviour.category.clone(),
-                            behaviour.rule.clone(),
-                            behaviour.count.to_string(),
-                        ]
-                    })
-                    .collect(),
-            }));
+            blocks.push(Block::Facts(facts));
+            if !summary.key_behaviours.is_empty() {
+                blocks.push(Block::Sub("Key behaviours".into()));
+                blocks.push(Block::Table(DocTable {
+                    columns: ["Tier", "Category", "Rule", "Count"]
+                        .map(String::from)
+                        .to_vec(),
+                    rows: summary
+                        .key_behaviours
+                        .iter()
+                        .map(|behaviour| {
+                            vec![
+                                behaviour.tier.to_uppercase(),
+                                behaviour.category.clone(),
+                                behaviour.rule.clone(),
+                                behaviour.count.to_string(),
+                            ]
+                        })
+                        .collect(),
+                }));
+            }
+            self.section("summary", "Summary", blocks);
         }
-        b.section("summary", "Summary", blocks);
     }
 
-    if let Some(all) = &report.indicators {
-        let indicators: Vec<&Indicator> = all.iter().filter(|i| i.base_noise.is_empty()).collect();
-        let noisy = all.len() - indicators.len();
-        let mut blocks = Vec::new();
-        if indicators.is_empty() {
-            blocks.push(Block::Note("The run produced no indicators.".into()));
-        } else {
-            blocks.push(Block::Table(DocTable {
-                columns: [
-                    "Type",
-                    "Indicator",
-                    "Verdict",
-                    "Dataset",
-                    "Family",
-                    "Process",
-                    "First seen",
-                    "Count",
-                ]
-                .map(String::from)
-                .to_vec(),
-                rows: indicators
-                    .iter()
-                    .take(DOCUMENT_ROWS)
-                    .map(|indicator| {
-                        let kind = IndicatorKind::from_id(&indicator.kind);
-                        let shown = if indicator.path.is_empty() {
-                            indicator.value.clone()
-                        } else {
-                            format!("{} {}", indicator.value, indicator.path)
-                        };
-                        vec![
-                            indicator.kind.clone(),
-                            b.value(kind, &shown),
-                            indicator.verdict.clone(),
-                            indicator.dataset.clone(),
-                            indicator.family.clone(),
-                            b.free(&indicator.process),
-                            indicator.first_seen.clone(),
-                            indicator.count.clone(),
-                        ]
-                    })
-                    .collect(),
-            }));
-            if indicators.len() > DOCUMENT_ROWS {
+    /// The indicators of compromise table.
+    fn indicators_section(&mut self, report: &Report) {
+        if let Some(all) = &report.indicators {
+            let indicators: Vec<&Indicator> =
+                all.iter().filter(|i| i.base_noise.is_empty()).collect();
+            let noisy = all.len() - indicators.len();
+            let mut blocks = Vec::new();
+            if indicators.is_empty() {
+                blocks.push(Block::Note("The run produced no indicators.".into()));
+            } else {
+                blocks.push(Block::Table(DocTable {
+                    columns: [
+                        "Type",
+                        "Indicator",
+                        "Verdict",
+                        "Dataset",
+                        "Family",
+                        "Process",
+                        "First seen",
+                        "Count",
+                    ]
+                    .map(String::from)
+                    .to_vec(),
+                    rows: indicators
+                        .iter()
+                        .take(DOCUMENT_ROWS)
+                        .map(|indicator| {
+                            let kind = IndicatorKind::from_id(&indicator.kind);
+                            let shown = if indicator.path.is_empty() {
+                                indicator.value.clone()
+                            } else {
+                                format!("{} {}", indicator.value, indicator.path)
+                            };
+                            vec![
+                                indicator.kind.clone(),
+                                self.value(kind, &shown),
+                                indicator.verdict.clone(),
+                                indicator.dataset.clone(),
+                                indicator.family.clone(),
+                                self.free(&indicator.process),
+                                indicator.first_seen.clone(),
+                                indicator.count.clone(),
+                            ]
+                        })
+                        .collect(),
+                }));
+                if indicators.len() > DOCUMENT_ROWS {
+                    blocks.push(Block::Note(format!(
+                        "{} more indicators are in the JSON, MISP and STIX exports.",
+                        indicators.len() - DOCUMENT_ROWS
+                    )));
+                }
+            }
+            if noisy > 0 {
                 blocks.push(Block::Note(format!(
-                    "{} more indicators are in the JSON, MISP and STIX exports.",
-                    indicators.len() - DOCUMENT_ROWS
+                    "{noisy} more are the base image's own traffic (clock sync, DHCP, package \
+                 indexes), not the sample's. They are in the JSON export under base_noise."
                 )));
             }
+            self.section("indicators", "Indicators of compromise", blocks);
         }
-        if noisy > 0 {
-            blocks.push(Block::Note(format!(
-                "{noisy} more are the base image's own traffic (clock sync, DHCP, package \
-                 indexes), not the sample's. They are in the JSON export under base_noise."
-            )));
-        }
-        b.section("indicators", "Indicators of compromise", blocks);
     }
 
-    if let Some(attack) = &report.attack {
-        let blocks = if attack.is_empty() {
-            vec![Block::Note(
-                "No rule of the run cites an ATT&CK technique.".into(),
-            )]
-        } else {
-            vec![Block::Table(DocTable {
-                columns: ["Technique", "Name", "Tactic", "Count", "Rules"]
+    /// The ATT&CK techniques table.
+    fn attack_section(&mut self, report: &Report) {
+        if let Some(attack) = &report.attack {
+            let blocks = if attack.is_empty() {
+                vec![Block::Note(
+                    "No rule of the run cites an ATT&CK technique.".into(),
+                )]
+            } else {
+                vec![Block::Table(DocTable {
+                    columns: ["Technique", "Name", "Tactic", "Count", "Rules"]
+                        .map(String::from)
+                        .to_vec(),
+                    rows: attack
+                        .iter()
+                        .map(|technique| {
+                            vec![
+                                technique.id.clone(),
+                                technique.name.clone(),
+                                super::tactic_cell(&technique.id),
+                                technique.count.to_string(),
+                                technique.rules.join(", "),
+                            ]
+                        })
+                        .collect(),
+                })]
+            };
+            self.section("attack", "ATT&CK techniques", blocks);
+        }
+    }
+
+    /// The files the run changed and how far each was reconstructed.
+    fn file_activity_section(&mut self, report: &Report) {
+        if let Some(records) = &report.file_activity {
+            let blocks = if records.is_empty() {
+                vec![Block::Note("No file of the run was changed.".into())]
+            } else {
+                let mut blocks = vec![Block::Table(DocTable {
+                    columns: [
+                        "Path",
+                        "State",
+                        "Size",
+                        "Guest SHA-256",
+                        "Reconstruction",
+                        "Written",
+                        "Not captured",
+                        "In bundle",
+                    ]
                     .map(String::from)
                     .to_vec(),
-                rows: attack
-                    .iter()
-                    .map(|technique| {
-                        vec![
-                            technique.id.clone(),
-                            technique.name.clone(),
-                            super::tactic_cell(&technique.id),
-                            technique.count.to_string(),
-                            technique.rules.join(", "),
-                        ]
-                    })
-                    .collect(),
-            })]
-        };
-        b.section("attack", "ATT&CK techniques", blocks);
+                    rows: records
+                        .iter()
+                        .take(DOCUMENT_ROWS)
+                        .map(|record| {
+                            let mut state = Vec::new();
+                            if record.created {
+                                state.push("created");
+                            }
+                            if record.changed {
+                                state.push("changed");
+                            }
+                            if record.deleted {
+                                state.push("deleted");
+                            }
+                            vec![
+                                record.path.clone(),
+                                state.join(", "),
+                                record.final_size.map_or(String::new(), |s| s.to_string()),
+                                record.guest_sha256.clone(),
+                                record.reconstruction.clone(),
+                                record.bytes_written.to_string(),
+                                (record.bytes_not_captured + record.bytes_unknown).to_string(),
+                                record.bundle_entry.clone(),
+                            ]
+                        })
+                        .collect(),
+                })];
+                if records.len() > DOCUMENT_ROWS {
+                    blocks.push(Block::Note(format!(
+                        "{} more files are in the JSON export.",
+                        records.len() - DOCUMENT_ROWS
+                    )));
+                }
+                blocks
+            };
+            self.section("file-activity", "File activity and reconstruction", blocks);
+        }
     }
 
+    /// The detection engines' matches.
+    fn detections_section(&mut self, report: &Report) {
+        if let Some(detections) = &report.detections {
+            let blocks = if detections.is_empty() {
+                vec![Block::Note(
+                    "No detection engine has a complete report for this run, or none matched."
+                        .into(),
+                )]
+            } else {
+                vec![Block::Table(DocTable {
+                    columns: [
+                        "Engine", "Rule", "Title", "Severity", "ATT&CK", "Count", "Author",
+                        "License", "Source",
+                    ]
+                    .map(String::from)
+                    .to_vec(),
+                    rows: detections
+                        .iter()
+                        .map(|hit| {
+                            vec![
+                                hit.engine.clone(),
+                                hit.rule_id.clone(),
+                                hit.title.clone(),
+                                hit.severity.clone(),
+                                hit.mitre.join(", "),
+                                hit.count.to_string(),
+                                or_unknown(&hit.author),
+                                hit.license.clone(),
+                                source_text(hit),
+                            ]
+                        })
+                        .collect(),
+                })]
+            };
+            self.section("detections", "Detection engines", blocks);
+        }
+    }
+
+    /// The evidence files of the run folder.
+    fn evidence_section(&mut self, report: &Report) {
+        if let Some(evidence) = &report.evidence {
+            let blocks = if evidence.is_empty() {
+                vec![Block::Note(
+                    "The run folder holds no evidence files.".into(),
+                )]
+            } else {
+                vec![Block::Table(DocTable {
+                    columns: ["Kind", "Path", "Size", "SHA-256"]
+                        .map(String::from)
+                        .to_vec(),
+                    rows: evidence
+                        .iter()
+                        .map(|item| {
+                            vec![
+                                item.kind.clone(),
+                                item.path.clone(),
+                                item.size.to_string(),
+                                if item.sha256.is_empty() {
+                                    "not hashed (large)".into()
+                                } else {
+                                    item.sha256.clone()
+                                },
+                            ]
+                        })
+                        .collect(),
+                })]
+            };
+            self.section("evidence", "Evidence references", blocks);
+        }
+    }
+
+    /// The custody log's head and whether its chain verified.
+    fn custody_section(&mut self, report: &Report) {
+        if let Some(custody) = &report.custody {
+            let mut facts = vec![
+                ("Sample SHA-256".to_owned(), custody.sample_sha256.clone()),
+                ("Entries".into(), custody.entries.to_string()),
+                ("Head hash".into(), custody.head.clone()),
+                (
+                    "Chain".into(),
+                    if custody.verified {
+                        "verified when exported".into()
+                    } else {
+                        format!("not verified: {}", custody.problem)
+                    },
+                ),
+            ];
+            if !custody.library_head.is_empty() {
+                facts.push(("Library index head".into(), custody.library_head.clone()));
+            }
+            self.section(
+                "custody",
+                "Custody log",
+                vec![
+                Block::Facts(facts),
+                Block::Note(
+                    "Tamper-evident, not tamper-proof. Keep the head hash somewhere else to rule \
+                     out a rewritten chain."
+                        .into(),
+                ),
+            ],
+            );
+        }
+    }
+}
+
+/// The document for `report`. `defang` rewrites indicators for reading.
+pub fn document(report: &Report, defang: bool) -> Document {
+    let mut b = Builder {
+        defang,
+        sections: Vec::new(),
+    };
+    b.overview_section(report);
+    b.summary_section(report);
+    b.indicators_section(report);
+    b.attack_section(report);
     if let Some(table) = &report.processes {
         let mut blocks = Vec::new();
         b.table_blocks(table, &mut blocks);
@@ -348,157 +530,15 @@ pub fn document(report: &Report, defang: bool) -> Document {
         b.named(&files.tabs, &mut blocks);
         b.section("files", "Files", blocks);
     }
-    if let Some(records) = &report.file_activity {
-        let blocks = if records.is_empty() {
-            vec![Block::Note("No file of the run was changed.".into())]
-        } else {
-            let mut blocks = vec![Block::Table(DocTable {
-                columns: [
-                    "Path",
-                    "State",
-                    "Size",
-                    "Guest SHA-256",
-                    "Reconstruction",
-                    "Written",
-                    "Not captured",
-                    "In bundle",
-                ]
-                .map(String::from)
-                .to_vec(),
-                rows: records
-                    .iter()
-                    .take(DOCUMENT_ROWS)
-                    .map(|record| {
-                        let mut state = Vec::new();
-                        if record.created {
-                            state.push("created");
-                        }
-                        if record.changed {
-                            state.push("changed");
-                        }
-                        if record.deleted {
-                            state.push("deleted");
-                        }
-                        vec![
-                            record.path.clone(),
-                            state.join(", "),
-                            record.final_size.map_or(String::new(), |s| s.to_string()),
-                            record.guest_sha256.clone(),
-                            record.reconstruction.clone(),
-                            record.bytes_written.to_string(),
-                            (record.bytes_not_captured + record.bytes_unknown).to_string(),
-                            record.bundle_entry.clone(),
-                        ]
-                    })
-                    .collect(),
-            })];
-            if records.len() > DOCUMENT_ROWS {
-                blocks.push(Block::Note(format!(
-                    "{} more files are in the JSON export.",
-                    records.len() - DOCUMENT_ROWS
-                )));
-            }
-            blocks
-        };
-        b.section("file-activity", "File activity and reconstruction", blocks);
-    }
+    b.file_activity_section(report);
     if let Some(tabs) = &report.network {
         let mut blocks = Vec::new();
         b.named(tabs, &mut blocks);
         b.section("network", "Network", blocks);
     }
-    if let Some(detections) = &report.detections {
-        let blocks = if detections.is_empty() {
-            vec![Block::Note(
-                "No detection engine has a complete report for this run, or none matched.".into(),
-            )]
-        } else {
-            vec![Block::Table(DocTable {
-                columns: [
-                    "Engine", "Rule", "Title", "Severity", "ATT&CK", "Count", "Author", "License",
-                    "Source",
-                ]
-                .map(String::from)
-                .to_vec(),
-                rows: detections
-                    .iter()
-                    .map(|hit| {
-                        vec![
-                            hit.engine.clone(),
-                            hit.rule_id.clone(),
-                            hit.title.clone(),
-                            hit.severity.clone(),
-                            hit.mitre.join(", "),
-                            hit.count.to_string(),
-                            or_unknown(&hit.author),
-                            hit.license.clone(),
-                            source_text(hit),
-                        ]
-                    })
-                    .collect(),
-            })]
-        };
-        b.section("detections", "Detection engines", blocks);
-    }
-    if let Some(evidence) = &report.evidence {
-        let blocks = if evidence.is_empty() {
-            vec![Block::Note(
-                "The run folder holds no evidence files.".into(),
-            )]
-        } else {
-            vec![Block::Table(DocTable {
-                columns: ["Kind", "Path", "Size", "SHA-256"]
-                    .map(String::from)
-                    .to_vec(),
-                rows: evidence
-                    .iter()
-                    .map(|item| {
-                        vec![
-                            item.kind.clone(),
-                            item.path.clone(),
-                            item.size.to_string(),
-                            if item.sha256.is_empty() {
-                                "not hashed (large)".into()
-                            } else {
-                                item.sha256.clone()
-                            },
-                        ]
-                    })
-                    .collect(),
-            })]
-        };
-        b.section("evidence", "Evidence references", blocks);
-    }
-    if let Some(custody) = &report.custody {
-        let mut facts = vec![
-            ("Sample SHA-256".to_owned(), custody.sample_sha256.clone()),
-            ("Entries".into(), custody.entries.to_string()),
-            ("Head hash".into(), custody.head.clone()),
-            (
-                "Chain".into(),
-                if custody.verified {
-                    "verified when exported".into()
-                } else {
-                    format!("not verified: {}", custody.problem)
-                },
-            ),
-        ];
-        if !custody.library_head.is_empty() {
-            facts.push(("Library index head".into(), custody.library_head.clone()));
-        }
-        b.section(
-            "custody",
-            "Custody log",
-            vec![
-                Block::Facts(facts),
-                Block::Note(
-                    "Tamper-evident, not tamper-proof. Keep the head hash somewhere else to rule \
-                     out a rewritten chain."
-                        .into(),
-                ),
-            ],
-        );
-    }
+    b.detections_section(report);
+    b.evidence_section(report);
+    b.custody_section(report);
 
     let name = report
         .sample

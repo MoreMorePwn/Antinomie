@@ -367,6 +367,115 @@ fn scan_core(
     Ok(())
 }
 
+/// The memory and core inputs this run has but the scan options left out.
+fn note_unscanned(report: &mut Report, request: &Request, artifacts: Option<&crate::RunArtifacts>) {
+    if let Some(artifacts) = artifacts {
+        // What this run has but the scan options left out.
+        if !request.settings.scan_memory {
+            for (kind, path) in [
+                (InputKind::CoreDump, artifacts.core_dump.clone()),
+                (
+                    InputKind::MemoryDump,
+                    artifacts
+                        .memory_dump
+                        .as_ref()
+                        .map(|dir| dir.join("memory.elf")),
+                ),
+            ] {
+                if let Some(path) = path {
+                    report.input(
+                        ScannedInput::new(kind, path)
+                            .sized()
+                            .skipped("memory scanning is off"),
+                    );
+                }
+            }
+        }
+        if !request.settings.scan_recovered
+            && let Some(directory) = &artifacts.memory_dump
+        {
+            report.input(
+                ScannedInput::new(InputKind::RecoveredFile, directory.join("files"))
+                    .skipped("recovered-file scanning is off"),
+            );
+        }
+    }
+}
+
+/// The recovered files of a memory dump folder, found within the entry, depth and time budget.
+fn recovered_files(
+    memory_dump: Option<&PathBuf>,
+    deadline: Instant,
+    report: &mut Report,
+) -> Result<Vec<PathBuf>, String> {
+    let mut pending = memory_dump
+        .cloned()
+        .into_iter()
+        .map(|directory| (directory, false, 0))
+        .collect::<Vec<_>>();
+    let mut visited = 0;
+    let mut files = Vec::new();
+    while let Some((path, in_files, depth)) = pending.pop() {
+        visited += 1;
+        if visited > 8192 || depth > 8 || Instant::now() >= deadline {
+            report.state = State::Partial;
+            report
+                .warnings
+                .push("Recovered-file traversal reached its entry/depth/time budget".into());
+            break;
+        }
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                if report.warnings.len() < 64 {
+                    report.warnings.push(error.to_string());
+                }
+                continue;
+            }
+        };
+        if metadata.is_dir() {
+            for entry in fs::read_dir(&path).map_err(|error| error.to_string())? {
+                let entry = entry.map_err(|error| error.to_string())?;
+                if pending.len() >= 8192 {
+                    report.state = State::Partial;
+                    break;
+                }
+                let selected = in_files || entry.file_name() == "files";
+                pending.push((entry.path(), selected, depth + 1));
+            }
+        } else if metadata.is_file() && in_files {
+            files.push(path);
+        }
+    }
+    Ok(files)
+}
+
+/// The inputs skipped because the run recorded no memory dump or core file.
+fn note_no_artifacts(report: &mut Report, request: &Request) {
+    report
+        .warnings
+        .push("No owned memory/core artifacts recorded".into());
+    for (on, kind, name) in [
+        (
+            request.settings.scan_memory,
+            InputKind::MemoryDump,
+            "memory",
+        ),
+        (
+            request.settings.scan_recovered,
+            InputKind::RecoveredFile,
+            "files",
+        ),
+    ] {
+        if on {
+            report.input(
+                ScannedInput::new(kind, request.directory.join(name))
+                    .skipped("no memory dump or core file for this run"),
+            );
+        }
+    }
+}
+
 pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     let request = &staged.request;
     let mut report = Report::empty(Engine::Yara, request.identity.clone());
@@ -469,37 +578,7 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     } else {
         super::runner::owned_artifacts(request).ok().flatten()
     };
-    if let Some(artifacts) = &artifacts {
-        // What this run has but the scan options left out.
-        if !request.settings.scan_memory {
-            for (kind, path) in [
-                (InputKind::CoreDump, artifacts.core_dump.clone()),
-                (
-                    InputKind::MemoryDump,
-                    artifacts
-                        .memory_dump
-                        .as_ref()
-                        .map(|dir| dir.join("memory.elf")),
-                ),
-            ] {
-                if let Some(path) = path {
-                    report.input(
-                        ScannedInput::new(kind, path)
-                            .sized()
-                            .skipped("memory scanning is off"),
-                    );
-                }
-            }
-        }
-        if !request.settings.scan_recovered
-            && let Some(directory) = &artifacts.memory_dump
-        {
-            report.input(
-                ScannedInput::new(InputKind::RecoveredFile, directory.join("files"))
-                    .skipped("recovered-file scanning is off"),
-            );
-        }
-    }
+    note_unscanned(&mut report, request, artifacts.as_ref());
     if scanning {
         if let Some(artifacts) = artifacts {
             if request.settings.scan_memory {
@@ -559,46 +638,7 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                 report.warnings.push("Memory rules run on captured contiguous blocks up to 64 MiB. Missing pages are excluded; matches spanning blocks and whole-file conditions are not complete memory coverage.".into());
             }
             if request.settings.scan_recovered {
-                let mut pending = artifacts
-                    .memory_dump
-                    .clone()
-                    .into_iter()
-                    .map(|directory| (directory, false, 0))
-                    .collect::<Vec<_>>();
-                let mut visited = 0;
-                let mut files = Vec::new();
-                while let Some((path, in_files, depth)) = pending.pop() {
-                    visited += 1;
-                    if visited > 8192 || depth > 8 || Instant::now() >= deadline {
-                        report.state = State::Partial;
-                        report.warnings.push(
-                            "Recovered-file traversal reached its entry/depth/time budget".into(),
-                        );
-                        break;
-                    }
-                    let metadata = match fs::symlink_metadata(&path) {
-                        Ok(metadata) => metadata,
-                        Err(error) => {
-                            if report.warnings.len() < 64 {
-                                report.warnings.push(error.to_string());
-                            }
-                            continue;
-                        }
-                    };
-                    if metadata.is_dir() {
-                        for entry in fs::read_dir(&path).map_err(|error| error.to_string())? {
-                            let entry = entry.map_err(|error| error.to_string())?;
-                            if pending.len() >= 8192 {
-                                report.state = State::Partial;
-                                break;
-                            }
-                            let selected = in_files || entry.file_name() == "files";
-                            pending.push((entry.path(), selected, depth + 1));
-                        }
-                    } else if metadata.is_file() && in_files {
-                        files.push(path);
-                    }
-                }
+                let files = recovered_files(artifacts.memory_dump.as_ref(), deadline, &mut report)?;
                 let file_total = files.len() as u64;
                 if files.is_empty()
                     && let Some(directory) = &artifacts.memory_dump
@@ -641,28 +681,7 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
                 }
             }
         } else {
-            report
-                .warnings
-                .push("No owned memory/core artifacts recorded".into());
-            for (on, kind, name) in [
-                (
-                    request.settings.scan_memory,
-                    InputKind::MemoryDump,
-                    "memory",
-                ),
-                (
-                    request.settings.scan_recovered,
-                    InputKind::RecoveredFile,
-                    "files",
-                ),
-            ] {
-                if on {
-                    report.input(
-                        ScannedInput::new(kind, request.directory.join(name))
-                            .skipped("no memory dump or core file for this run"),
-                    );
-                }
-            }
+            note_no_artifacts(&mut report, request);
         }
     }
     if report.scanned_objects == 0 {
