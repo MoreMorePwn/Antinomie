@@ -226,7 +226,7 @@ mod tests {
             text.contains("2,094 rules loaded · 7 not loadable"),
             "{text}"
         );
-        assert!(text.contains("Rules not loaded"), "{text}");
+        assert!(text.contains("Show the 7 rules not loaded"), "{text}");
         assert!(text.contains("match counts are complete"), "{text}");
         assert!(
             !text.contains("reason text"),
