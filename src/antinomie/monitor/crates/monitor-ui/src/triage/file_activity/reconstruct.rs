@@ -633,12 +633,10 @@ impl Open {
                 guest.push((hex, "the guest's hash".into()));
             }
         }
-        if guest.is_empty() {
-            ui.weak(if file.changed() {
-                "No hash: still open at run end (the guest hashes a file when its last writer closes it)."
-            } else {
-                "No hash: only read, and the guest hashes only programs, written files and deleted files."
-            });
+        if guest.is_empty() && file.changed() {
+            ui.weak(
+                "No hash: still open at run end (the guest hashes a file when its last writer closes it).",
+            );
         }
         for (hex, moment) in &guest {
             ui.add(
@@ -674,6 +672,17 @@ impl Open {
                     let position = self.map.steps_until(note.time);
                     self.goto(position);
                 }
+            }
+            if guest.is_empty() && !file.changed() {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(egui_phosphor::regular::INFO).color(theme::muted()),
+                    )
+                    .sense(egui::Sense::hover()),
+                )
+                .on_hover_text(
+                    "No hash: only read, and the guest hashes only programs, written files and deleted files.",
+                );
             }
         });
         if self.hashing.is_some() {
