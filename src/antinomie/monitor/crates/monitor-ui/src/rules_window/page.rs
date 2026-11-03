@@ -628,7 +628,7 @@ impl Model {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.import_path)
                         .desired_width(crate::theme::plain_edit_width(
-                            ui.available_width().min(280.0),
+                            crate::theme::row_room(ui).min(280.0),
                         ))
                         .hint_text(crate::theme::placeholder(ui, "File or folder")),
                 );

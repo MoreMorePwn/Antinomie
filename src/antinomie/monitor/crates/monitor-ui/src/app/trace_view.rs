@@ -324,7 +324,7 @@ impl MonitorApp {
             self.trace_archive_pager(ui);
             // egui 0.36 reports the whole row as available inside a wrapped
             // layout, so the room left is measured from the cursor.
-            let left = ui.max_rect().right() - ui.cursor().left() - ui.spacing().item_spacing.x;
+            let left = theme::row_room(ui) - ui.spacing().item_spacing.x;
             let filter_width = left.max(180.0).min(ui.available_width());
             crate::query::filter_edit(
                 ui,

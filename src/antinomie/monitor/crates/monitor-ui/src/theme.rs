@@ -319,6 +319,13 @@ pub fn mono(size: f32) -> FontId {
 /// cramped.
 pub const TEXT_EDIT_MARGIN: egui::Margin = egui::Margin::symmetric(8, 5);
 
+/// The room left on the current row of a `horizontal_wrapped` layout. egui
+/// 0.36 reports the whole row from `available_width()` there, so a widget
+/// sized from it would not fit beside the ones already on the row and wrapped.
+pub fn row_room(ui: &egui::Ui) -> f32 {
+    (ui.max_rect().right() - ui.cursor().left()).max(0.0)
+}
+
 /// The width to ask of a text field that has [`TEXT_EDIT_MARGIN`] for `inner`
 /// points of text: egui 0.36 counts the margins in a field's width, where 0.31
 /// added them to it.
@@ -762,6 +769,32 @@ mod tests {
     fn contrast(a: Color32, b: Color32) -> f32 {
         let (a, b) = (luminance(a), luminance(b));
         (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// The room a wrapped row has left is what the row's widgets have not
+    /// taken; `available_width()` reports the whole row there (egui 0.36).
+    #[test]
+    fn a_wrapped_row_measures_its_room_from_the_cursor() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        let mut seen = None;
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 200.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_sized([200.0, 20.0], egui::Label::new("taken"));
+                    seen = Some((row_room(ui), ui.available_width()));
+                });
+            },
+        );
+        let (room, whole) = seen.unwrap();
+        assert!(room < whole - 150.0, "{room} of {whole}");
     }
 
     /// A neutral chip's text reads on its own tint over every surface.
