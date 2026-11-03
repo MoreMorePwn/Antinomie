@@ -19,6 +19,11 @@ pub const SHOW_JOBS: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::J);
 pub const TYPE_CLIPBOARD: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::CTRL.plus(Modifiers::SHIFT), Key::Y);
+/// Fold the sidebar to its icon rail, or open it again.
+pub const TOGGLE_SIDEBAR: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::B);
+/// Fold the Details, Activity and Jobs pane to its tab strip, or open it again.
+pub const TOGGLE_BOTTOM_PANE: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND, Key::Backtick);
 pub const SETTINGS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
 pub const QUIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
 

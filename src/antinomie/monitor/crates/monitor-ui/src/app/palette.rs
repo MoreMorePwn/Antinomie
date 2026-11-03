@@ -254,7 +254,7 @@ impl MonitorApp {
         }
         match &item.target {
             Target::Action(action) => self.run_action(ctx, action.clone()),
-            Target::Tab(panel) => self.focus_panel = Some(panel.clone()),
+            Target::Tab(panel) => self.show_panel_asked(panel.clone()),
             Target::Machine(id) => self.select_vm(id.clone()),
             Target::Run(id) => {
                 if let Some(run) = self.run(id).cloned() {

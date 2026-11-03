@@ -4,7 +4,7 @@ use super::*;
 
 impl MonitorApp {
     /// The sidebar row of one VM: its state, base, size and latest run.
-    fn vm_row(&self, ui: &mut egui::Ui, vm: &VmConfig, now: u64) -> egui::Response {
+    pub(super) fn vm_row(&self, ui: &mut egui::Ui, vm: &VmConfig, now: u64) -> egui::Response {
         let active = self.snapshot.active_vm.as_ref() == Some(&vm.id);
         let (word, color) = if active {
             vm_state_word(&self.snapshot.state)
@@ -137,7 +137,7 @@ impl MonitorApp {
     }
 
     /// The VMs being created or copied that are not saved yet.
-    fn pending_vm_rows(&self) -> Vec<&antinomie_monitor_core::VmWork> {
+    pub(super) fn pending_vm_rows(&self) -> Vec<&antinomie_monitor_core::VmWork> {
         self.snapshot
             .vm_work
             .iter()
@@ -146,7 +146,7 @@ impl MonitorApp {
     }
 
     /// A VM that is still being made: marked Creating with the step it is in.
-    fn pending_vm_row(ui: &mut egui::Ui, work: &antinomie_monitor_core::VmWork) {
+    pub(super) fn pending_vm_row(ui: &mut egui::Ui, work: &antinomie_monitor_core::VmWork) {
         let copy = work.copy_of.is_some();
         let word = if copy { "Copying…" } else { "Creating…" };
         let elapsed = crate::time_format::duration_ms(
@@ -183,6 +183,10 @@ impl MonitorApp {
     pub(super) fn sidebar(&mut self, root: &mut egui::Ui) {
         let ctx = &root.ctx().clone();
         self.note_last_runs();
+        if self.settings.sidebar_rail {
+            self.sidebar_rail(root);
+            return;
+        }
         let now = unix_seconds();
         let mut selected_vm = None;
         let mut action: Option<(VmConfig, VmAction)> = None;
@@ -214,6 +218,7 @@ impl MonitorApp {
             )
             .show(root, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
+                self.sidebar_fold_button(ui);
                 let stopped = self.snapshot.active_vm.is_none();
                 if section_header(
                     ui,
@@ -425,7 +430,7 @@ impl MonitorApp {
                 ui.add_space(3.0);
             });
         if open_jobs {
-            self.focus_panel = Some(Panel::Jobs);
+            self.show_panel_asked(Panel::Jobs);
         }
         // The toast stack sits above the bar.
         crate::toasts::set_floor(ctx, bar.response.rect.top());

@@ -175,7 +175,10 @@ impl WorkspaceLayout {
         }
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         ui.ctx().request_repaint();
-        let target = self.drop_target(panel, pointer + origin.to_vec2());
+        let folds = self.drops_to_bottom_edge(panel, pointer + origin.to_vec2());
+        let target = self
+            .drop_target(panel, pointer + origin.to_vec2())
+            .filter(|_| !folds);
         let layer = egui::LayerId::new(
             egui::Order::Tooltip,
             egui::Id::new(("workspace-drag-preview", ui.ctx().viewport_id())),
@@ -204,6 +207,7 @@ impl WorkspaceLayout {
             Some(DropAction::Split(egui_dock::Split::Right)) => "Dock right",
             Some(DropAction::Split(egui_dock::Split::Above)) => "Dock above",
             Some(DropAction::Split(egui_dock::Split::Below)) => "Dock below",
+            None if folds => "Fold to the tab strip",
             None => "Detach window",
         };
         if let Some(target) =

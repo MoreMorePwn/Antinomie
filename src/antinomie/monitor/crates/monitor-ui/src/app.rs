@@ -41,6 +41,7 @@ mod session;
 mod settings_window;
 mod shortcut_list;
 mod sidebar;
+mod sidebar_rail;
 mod start_error;
 mod stealth;
 mod trace_paging;
@@ -196,6 +197,8 @@ struct Settings {
     /// The Library section (it held the base list before 0.7.0).
     #[serde(alias = "bases_collapsed")]
     library_collapsed: bool,
+    /// The sidebar is folded to a rail of icons (Ctrl+B).
+    sidebar_rail: bool,
     /// Sidebar host-file explorer; no guest paths or upload intent are persisted.
     explorer_collapsed: bool,
     explorer_root: Option<PathBuf>,
@@ -313,6 +316,7 @@ impl Default for Settings {
             show_fps: false,
             vms_collapsed: false,
             library_collapsed: false,
+            sidebar_rail: false,
             explorer_collapsed: false,
             explorer_root: None,
             getting_started: Default::default(),

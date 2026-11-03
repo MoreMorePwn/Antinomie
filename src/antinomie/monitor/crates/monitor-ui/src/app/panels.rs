@@ -3,6 +3,17 @@
 use super::*;
 
 impl MonitorApp {
+    /// Show `panel` because the person asked (a menu, a shortcut, the palette,
+    /// the Jobs chip): a folded Details, Activity and Jobs pane opens for it.
+    /// A panel the app shows by itself (a selection filling Details) only
+    /// sets `focus_panel`, and a folded pane stays folded.
+    pub(super) fn show_panel_asked(&mut self, panel: Panel) {
+        if crate::workspace::WorkspaceLayout::is_bottom_panel(&panel) {
+            self.layout.unfold_bottom();
+        }
+        self.focus_panel = Some(panel);
+    }
+
     pub(super) fn draw(&mut self, root: &mut egui::Ui) {
         let ctx = &root.ctx().clone();
         crate::title_bar::show(root, "Antinomie");

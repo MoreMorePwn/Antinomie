@@ -27,6 +27,8 @@ impl MonitorApp {
             Action::UploadFile,
             Action::AttachDebugger,
             Action::TypeClipboard,
+            Action::ToggleSidebar,
+            Action::ToggleBottomPane,
             Action::Settings,
             Action::Quit,
         ] {
@@ -125,6 +127,8 @@ impl MonitorApp {
                             self.menu_item(ui, Action::Go(view), None);
                         }
                         ui.separator();
+                        self.menu_item(ui, Action::ToggleSidebar, None);
+                        self.menu_item(ui, Action::ToggleBottomPane, None);
                         self.menu_item(ui, Action::ResetLayout, None);
                     });
                     ui.menu_button("Tools", |ui| {

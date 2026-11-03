@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! A single dock tree rendered by moving each surface into its native viewport.
+#[path = "workspace_bottom.rs"]
+mod workspace_bottom;
 #[path = "workspace_details.rs"]
 mod workspace_details;
 #[path = "workspace_drag.rs"]
@@ -145,6 +147,26 @@ pub(crate) struct WorkspaceLayout {
     /// The Samples page has a run to show in Details, so it keeps them open.
     #[serde(skip)]
     samples_details: bool,
+    /// Details, Activity and Jobs are folded to their tab strip.
+    #[serde(default)]
+    bottom_folded: bool,
+    /// The work area's share of the height while that pane is open, kept for
+    /// when it opens again.
+    #[serde(default)]
+    bottom_open_fraction: Option<f32>,
+    /// The split as it was set for the folded pane (a different value means
+    /// the person dragged the separator).
+    #[serde(skip)]
+    bottom_set: Option<f32>,
+    /// The tab the pane showed when the frame began.
+    #[serde(skip)]
+    bottom_active: Option<Panel>,
+    /// A selection filled Details while the pane was folded.
+    #[serde(skip)]
+    bottom_badge: bool,
+    /// The y (screen points) from which a released tab folds the pane.
+    #[serde(skip)]
+    bottom_edge: f32,
 }
 
 impl Default for WorkspaceLayout {
@@ -177,6 +199,12 @@ impl Default for WorkspaceLayout {
             cancel_drag: false,
             details_fraction: None,
             samples_details: false,
+            bottom_folded: false,
+            bottom_open_fraction: None,
+            bottom_set: None,
+            bottom_active: None,
+            bottom_badge: false,
+            bottom_edge: 0.0,
         }
     }
 }
@@ -503,6 +531,10 @@ impl WorkspaceLayout {
     /// is theirs until the tab is left.
     fn fold_details_for_tab(&mut self) {
         use egui_dock::Node;
+        // A pane the person folded is at its tab strip already.
+        if self.bottom_folded {
+            return;
+        }
         let shows = self.folding_tab_shows();
         let Node::Vertical(egui_dock::SplitNode { fraction, .. }) =
             &mut self.dock.main_surface_mut()[NodeIndex::root()]
@@ -532,6 +564,7 @@ impl WorkspaceLayout {
     }
 
     pub(crate) fn focus(&mut self, panel: Panel) {
+        self.note_bottom_focus(&panel);
         if let Some(TabPath { surface, node, tab }) = self.dock.find_tab(&panel) {
             let _ = self.dock.set_active_tab(TabPath::new(surface, node, tab));
             self.dock
@@ -715,6 +748,11 @@ impl WorkspaceLayout {
             .ctx()
             .input(|input| input.viewport().inner_rect.map(|rect| rect.min))
             .unwrap_or_default();
+        if surface.is_main() {
+            let bar = theme::dock_style(ui.style()).tab_bar.height;
+            self.apply_bottom(local.main_surface_mut(), ui.max_rect().height(), bar);
+            self.bottom_edge = origin.y + ui.max_rect().bottom() - 4.0;
+        }
         let empty_target = ui.max_rect().translate(origin.to_vec2());
         let mut viewer = Viewer {
             app,
@@ -725,6 +763,10 @@ impl WorkspaceLayout {
         };
         let fits = workspace_tabs::fit(ui, &mut viewer, &mut local, surface);
         let mut dock_style = theme::dock_style(ui.style());
+        if viewer.layout.bottom_folded() {
+            // The separator may sit at the tab strip, not 175 points up.
+            dock_style.separator.extra = 0.0;
+        }
         // The add button's slot stays free at the right end of every bar for
         // the tab list button; the button itself is never drawn by the dock.
         let bar_fill = dock_style.tab_bar.bg_fill;
@@ -818,6 +860,12 @@ impl WorkspaceLayout {
         let Some(location) = self.dock.find_tab(panel) else {
             return;
         };
+        if self.drops_to_bottom_edge(panel, position) {
+            // Let go at the bottom edge of the window: the pane folds.
+            self.focus(panel.clone());
+            self.fold_bottom();
+            return;
+        }
         if let Some(target) = self.drop_target(panel, position) {
             use workspace_drag::DropAction;
             match target.action {

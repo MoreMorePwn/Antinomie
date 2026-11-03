@@ -39,6 +39,10 @@ pub(super) enum Action {
     /// Show a view in the work area (the View menu).
     Go(Panel),
     ResetLayout,
+    /// Fold the sidebar to its icon rail, or open it again.
+    ToggleSidebar,
+    /// Fold the Details, Activity and Jobs pane to its tab strip, or open it again.
+    ToggleBottomPane,
     Settings,
     AnalysisTools,
     DetectionRules,
@@ -102,7 +106,7 @@ const DOCUMENTATION_URL: &str = "https://antinomie.moremorepwn.blog/docs/";
 impl Action {
     /// Every action the palette offers, in the order of the menus. Views are
     /// not here: the palette lists the open tabs instead.
-    pub(super) const PALETTE: [Self; 43] = [
+    pub(super) const PALETTE: [Self; 45] = [
         Self::NewVm,
         Self::ImportBase,
         Self::DownloadBase,
@@ -130,6 +134,8 @@ impl Action {
         Self::DumpMemory,
         Self::DumpCore,
         Self::ResetLayout,
+        Self::ToggleSidebar,
+        Self::ToggleBottomPane,
         Self::Settings,
         Self::AnalysisTools,
         Self::DetectionRules,
@@ -293,7 +299,9 @@ impl Action {
             | Self::KillRun
             | Self::DumpMemory
             | Self::DumpCore => "Run",
-            Self::Go(_) | Self::ResetLayout => "View",
+            Self::Go(_) | Self::ResetLayout | Self::ToggleSidebar | Self::ToggleBottomPane => {
+                "View"
+            }
             Self::SettingsTo(_) => "Settings",
             Self::BaseImages | Self::SamplesPage | Self::AddSampleFile => "Library",
             Self::RulesEngine(..) => "Rules",
@@ -338,6 +346,8 @@ impl Action {
             Self::Settings => keys::SETTINGS,
             Self::Quit => keys::QUIT,
             Self::Palette => keys::PALETTE,
+            Self::ToggleSidebar => keys::TOGGLE_SIDEBAR,
+            Self::ToggleBottomPane => keys::TOGGLE_BOTTOM_PANE,
             Self::Go(Panel::Activity) => keys::SHOW_ACTIVITY,
             Self::Go(Panel::Jobs) => keys::SHOW_JOBS,
             _ => return None,
@@ -380,6 +390,8 @@ impl Action {
             Self::DumpCore => "Dump core…".into(),
             Self::Go(panel) => panel.title().into(),
             Self::ResetLayout => "Reset layout".into(),
+            Self::ToggleSidebar => "Fold or open the sidebar".into(),
+            Self::ToggleBottomPane => "Fold or open Details, Activity and Jobs".into(),
             Self::Settings => "Settings…".into(),
             Self::AnalysisTools => "Analysis tools".into(),
             Self::DetectionRules => "Detection rules".into(),
@@ -636,6 +648,8 @@ impl MonitorApp {
             | Action::DownloadBase
             | Action::BuildBase
             | Action::ResetLayout
+            | Action::ToggleSidebar
+            | Action::ToggleBottomPane
             | Action::Settings
             | Action::AnalysisTools
             | Action::DetectionRules
@@ -741,8 +755,10 @@ impl MonitorApp {
                 self.focus_panel = Some(Panel::Memory);
             }
             Action::DumpCore => self.open_core_picker(),
-            Action::Go(panel) => self.focus_panel = Some(panel),
+            Action::Go(panel) => self.show_panel_asked(panel),
             Action::ResetLayout => self.layout = WorkspaceLayout::default(),
+            Action::ToggleSidebar => self.toggle_sidebar(),
+            Action::ToggleBottomPane => self.layout.toggle_bottom(),
             Action::Settings => self.settings_open = true,
             Action::AnalysisTools => self.open_library(LibraryPage::Tools),
             Action::DetectionRules => self.open_library(LibraryPage::Rules),

@@ -15,7 +15,9 @@ pub(super) struct Viewer<'a> {
 impl Viewer<'_> {
     /// A tab's title; `tight` swaps in the short name and less padding.
     pub(super) fn title_for(&mut self, tab: &Panel, tight: bool) -> egui::WidgetText {
-        if *tab == Panel::Activity {
+        if self.layout.bottom_news(tab) {
+            theme::tab_title(&format!("{} \u{2022}", self.app.panel_title(tab))).into()
+        } else if *tab == Panel::Activity {
             self.app.activity_title()
         } else if *tab == Panel::Jobs {
             self.app.jobs_title()
@@ -37,7 +39,19 @@ impl TabViewer for Viewer<'_> {
         egui::Id::new(format!("{tab:?}"))
     }
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Panel) {
+        // A folded pane has no body, only its tab strip.
+        if self.layout.bottom_folded() && WorkspaceLayout::is_bottom_panel(tab) {
+            return;
+        }
         self.app.show_panel(ui, tab);
+    }
+    fn tab_style_override(
+        &self,
+        tab: &Panel,
+        global: &egui_dock::TabStyle,
+    ) -> Option<egui_dock::TabStyle> {
+        (self.layout.bottom_folded() && WorkspaceLayout::is_bottom_panel(tab))
+            .then(|| workspace_bottom::unselected(global))
     }
     fn scroll_bars(&self, _: &Panel) -> [bool; 2] {
         [false, false]
@@ -77,6 +91,7 @@ impl TabViewer for Viewer<'_> {
         }
         if response.clicked() {
             self.app.details_follow.chose(tab);
+            self.layout.bottom_tab_clicked(tab);
         }
         if self.layout.drag.is_none() {
             response
