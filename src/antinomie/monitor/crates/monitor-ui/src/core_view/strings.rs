@@ -566,7 +566,7 @@ impl StringsState {
 /// "libc.so.6" for a mapping of a file; "[anonymous rw-]" for one without.
 fn segment_name(core: &CoreDump, mapping: &CoreMapping) -> String {
     let name = mapping_name(core, mapping);
-    if name == "unknown" {
+    if name == super::names::ANONYMOUS {
         return format!("[anonymous {}]", mapping.permissions());
     }
     if name.ends_with(" file extents)") {

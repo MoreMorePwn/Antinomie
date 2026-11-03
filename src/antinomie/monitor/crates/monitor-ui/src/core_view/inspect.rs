@@ -232,8 +232,14 @@ impl CoreView {
         ui.horizontal_wrapped(|ui| {
             self.thread_picker(ui, record);
             ui.weak(format!(
-                "TID {} · parent PID {} · current signal {}",
-                thread.tid, thread.parent_pid, thread.signal
+                "TID {} · parent PID {} · {}",
+                thread.tid,
+                thread.parent_pid,
+                if thread.signal == 0 {
+                    signal_text(0)
+                } else {
+                    format!("current {}", signal_text(thread.signal))
+                }
             ));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Copy all").clicked() {
@@ -343,7 +349,7 @@ impl CoreView {
                     ui.selectable_value(
                         &mut self.thread_index,
                         index,
-                        format!("TID {} · signal {}", thread.tid, thread.signal),
+                        format!("TID {} · {}", thread.tid, signal_text(thread.signal)),
                     );
                 }
             });
@@ -389,18 +395,20 @@ impl CoreView {
             self.window_offset = 0;
         }
         let choices = mapping_choices(&record.core);
+        let labels = mapping_labels(&record.core);
         let core = &record.core;
         let order =
-            crate::table_sort::order(ui.ctx(), "core_mappings", shown.len(), |column, a, b| {
-                let (a, b) = (&core.mappings[shown[a]], &core.mappings[shown[b]]);
+            crate::table_sort::order(ui.ctx(), "core_mappings", shown.len(), |column, ia, ib| {
+                let (a, b) = (&core.mappings[shown[ia]], &core.mappings[shown[ib]]);
                 match column {
                     0 => a.start.cmp(&b.start),
                     1 => a.permissions().cmp(&b.permissions()),
                     2 => a.memory_size.cmp(&b.memory_size),
                     3 => a.available_size.cmp(&b.available_size),
-                    _ => mapping_name(core, a)
+                    _ => labels[shown[ia]]
+                        .name
                         .to_lowercase()
-                        .cmp(&mapping_name(core, b).to_lowercase()),
+                        .cmp(&labels[shown[ib]].name.to_lowercase()),
                 }
             });
         let font = egui::TextStyle::Monospace.resolve(ui.style()).size;
@@ -490,8 +498,8 @@ impl CoreView {
                             cell_click(ui, Cell::Number, &mapping.available_size.to_string());
                         });
                         row.col(|ui| {
-                            cell_click(ui, Cell::Text, &mapping_name(core, mapping))
-                                .on_hover_text(&choices[index].0);
+                            cell_click(ui, Cell::Text, &labels[index].name)
+                                .on_hover_text(&choices[index].1);
                         });
                         let response = row.response();
                         response.context_menu(|ui| {
@@ -686,61 +694,34 @@ pub(super) fn function_filter_row(
     ]
 }
 
-pub(super) fn mapping_name(core: &CoreDump, mapping: &CoreMapping) -> String {
-    let mut paths = Vec::new();
-    for file in &core.files {
-        let path = file.path.trim();
-        if path.is_empty() {
-            continue;
-        }
-        if file.start < mapping.end()
-            && mapping.start < file.end
-            && !paths.iter().any(|existing| existing == path)
-        {
-            paths.push(path.to_owned());
-        }
-    }
-    match paths.as_slice() {
-        [] => "unknown".into(),
-        [one] => one.clone(),
-        [first, rest @ ..] => format!("{first} (+{} file extents)", rest.len()),
-    }
-}
-
 pub(super) fn mapping_choices(core: &CoreDump) -> Vec<(String, String)> {
-    let names: Vec<String> = core
-        .mappings
-        .iter()
-        .map(|mapping| mapping_name(core, mapping))
-        .collect();
     core.mappings
         .iter()
-        .zip(names)
-        .map(|(mapping, name)| {
-            let permissions = mapping.permissions();
-            let shown = if name == "unknown" || name.starts_with("unknown ") {
-                "unknown".to_owned()
-            } else if name.ends_with(" file extents)") {
-                name.clone()
+        .zip(mapping_labels(core))
+        .map(|(mapping, label)| {
+            let shown = if label.is_unnamed() || label.is_special() {
+                label.name.clone()
+            } else if label.name.ends_with(" file extents)") {
+                label.name.clone()
             } else {
-                Path::new(&name)
+                Path::new(&label.name)
                     .file_name()
                     .and_then(|name| name.to_str())
-                    .unwrap_or(&name)
+                    .unwrap_or(&label.name)
                     .to_owned()
             };
-            let label = format!(
-                "mmap {:x}-{:x} {permissions} [{shown}]",
+            let label_text = format!(
+                "mmap {:x}-{:x} {} [{shown}]",
                 mapping.start,
-                mapping.end()
+                mapping.end(),
+                mapping.permissions()
             );
-            let label = ellipsize(&label, 96);
-            let tip = if shown == "unknown" {
-                format!("{name}\nNo NT_FILE name overlaps this mapping.")
+            let tip = if label.is_unnamed() || label.is_special() {
+                format!("{}\n{}", label.name, label.how)
             } else {
-                name
+                label.how
             };
-            (label, tip)
+            (ellipsize(&label_text, 96), tip)
         })
         .collect()
 }

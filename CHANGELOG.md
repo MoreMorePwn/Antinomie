@@ -8,6 +8,7 @@ it runs.
 
 ### Host
 
+- **Core mappings are named the way `/proc/PID/maps` names them, and a core taken at exit says so.** A mapping with no file used to read "unknown", which looked like a bad core. The Memory mappings list, the mapping picker, the Content view and the Strings segment now show `[stack]` (holds the saved stack pointer, or the program path from the auxv), `[vdso]` (the auxv AT_SYSINFO_EHDR address), `[vvar]` (the mapping that ends where the vDSO starts), `[heap]` (the first writable anonymous mapping after the program's data, where brk starts) or `anonymous`; the tooltip says how each name was inferred. A core captured at a normal exit shows "Captured at exit (no signal)" instead of "signal 0".
 - **Device profile texts say what they are.** The Cloud VPS preset line reads "Reports a cloud provider's instance identity (independent imitation)" and the metadata line on a Routed cloud VM says the fake metadata, with canary credentials, is served inside the VM only. The README's Trademarks section and `docs/security.md` say the same: names are used only to say what a profile imitates, no affiliation, no logos, firmware, provider software or real credentials, and no provider is expected to accept the canaries.
 - **A Content window for memory dumps and process cores.** The Memory tab has
   a Content tab beside Volatility 3 and MemNixFS, and Core dumps has a Content tab

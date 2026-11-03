@@ -27,6 +27,7 @@ mod disassembly;
 mod inspect;
 mod list;
 mod list_rows;
+mod names;
 mod sizes;
 mod strings;
 
@@ -35,6 +36,7 @@ use self::{
     decompile::*,
     inspect::*,
     list_rows::{ListOutcome, RowContext},
+    names::{mapping_labels, mapping_name, signal_text},
     sizes::manual_status,
 };
 
