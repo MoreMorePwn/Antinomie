@@ -91,31 +91,7 @@ impl MonitorApp {
             self.empty_trace(ui);
             return;
         }
-        ui.horizontal_wrapped(|ui| {
-            theme::section(ui, "Syscalls");
-            self.show_trace_run_selector(ui);
-            if let Some(capture) = self.selected_capture_summary() {
-                ui.add(egui::Label::new(captures::scope(&capture.scope)).truncate())
-                    .on_hover_text(&capture.id);
-            }
-            let selection = self
-                .capture_process_list()
-                .filter(|list| !list.is_empty())
-                .and_then(|processes| captures::process_menu(ui, processes, self.selected_process));
-            if let Some(selection) = selection {
-                self.select_process(selection);
-            }
-            self.trace_archive_pager(ui);
-            let filter_width = ui.available_width().max(180.0);
-            crate::query::filter_edit(
-                ui,
-                &mut self.filter,
-                "syscall == openat",
-                filter_width,
-                crate::query::FilterScope::Syscall,
-            )
-            .on_hover_text(crate::query::HELP);
-        });
+        self.trace_toolbar(ui);
         if let Some(run) = self.selected_vm_run() {
             crate::run_recording::show(ui, run);
         }
@@ -131,67 +107,7 @@ impl MonitorApp {
         } else {
             crate::query::compile_note(&self.applied_filter)
         };
-        let all = self.invocations();
-        self.trace_categories(ui, &all);
-        let archived = self.trace_archive_directory().is_some();
-        if archived
-            && self.trace_evidence.is_none()
-            && self.archive_hidden_categories != self.settings.hidden_trace_categories
-        {
-            self.refresh_archive_matches(&filter);
-        }
-        let total = all.len();
-        let hidden = self.settings.hidden_trace_categories.clone();
-        let invocations: Vec<_> = all
-            .into_iter()
-            .filter(|invocation| {
-                let Some(event) = trace::representative(invocation) else {
-                    return false;
-                };
-                if !archived
-                    && SyscallGroup::of(&event.syscall_name)
-                        .is_some_and(|group| hidden.contains(&group))
-                {
-                    return false;
-                }
-                archived || filter.keep(invocation)
-            })
-            .collect();
-        let mut invocations = invocations;
-        if let Some((column, descending)) = self.trace_sort {
-            sort_invocations(&mut invocations, column, descending);
-            if archived {
-                ui.colored_label(
-                    theme::muted(),
-                    if self.trace_windowed() {
-                        "Sort applies to the loaded window"
-                    } else {
-                        "Sort applies to this page"
-                    },
-                );
-            }
-        }
-        if invocations.len() != total {
-            ui.colored_label(
-                theme::muted(),
-                format!("Showing {} of {total} calls", invocations.len()),
-            );
-        }
-        // A saved recording says so only once its count is in: until then
-        // the pager is still counting.
-        if invocations.is_empty()
-            && !self.archive_pending
-            && (!archived || self.archive_total == Some(0))
-        {
-            theme::empty_state(
-                ui,
-                if total == 0 {
-                    "No syscalls in this trace yet"
-                } else {
-                    "No syscall matches the filter or the shown categories"
-                },
-            );
-        }
+        let (invocations, archived) = self.shown_invocations(ui, &filter);
         let font = self.settings.font_size;
         // The run a note about an entry is filed under: its VM and id, and the
         // sample it started (a run of a program that is not in the library
@@ -290,45 +206,13 @@ impl MonitorApp {
                 .header(header_height, |mut header| {
                     for column in TraceColumn::ALL {
                         header.col(|ui| {
-                            crate::widgets::fit_table::head_bg(ui);
-                            let sorted = self.trace_sort.filter(|(sorted, _)| *sorted == column);
-                            let mut job = egui::text::LayoutJob::default();
-                            job.append(
-                                column.title(),
-                                0.0,
-                                egui::TextFormat::simple(body_font.clone(), palette.muted),
-                            );
-                            if let Some((_, descending)) = sorted {
-                                job.append(
-                                    if descending {
-                                        egui_phosphor::regular::CARET_DOWN
-                                    } else {
-                                        egui_phosphor::regular::CARET_UP
-                                    },
-                                    font * 0.3,
-                                    egui::TextFormat::simple(body_font.clone(), palette.accent),
-                                );
-                            }
-                            let response = ui
-                                .add(
-                                    egui::Label::new(job)
-                                        .truncate()
-                                        .selectable(false)
-                                        .sense(egui::Sense::click()),
-                                )
-                                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .on_hover_text(format!(
-                                    "{}\nClick to sort by {}",
-                                    column.description(),
-                                    column.title()
-                                ));
-                            if response.clicked() {
-                                // A new column sorts ascending; the same column flips.
-                                self.trace_sort = Some((
-                                    column,
-                                    sorted.is_some_and(|(_, descending)| !descending),
-                                ));
-                            }
+                            Self::trace_header_cell(
+                                &mut self.trace_sort,
+                                ui,
+                                column,
+                                font,
+                                &body_font,
+                            )
                         });
                     }
                 })
@@ -373,64 +257,20 @@ impl MonitorApp {
                         let cells = trace::cells(invocation);
                         for (column, (parts, hover)) in cells.into_iter().enumerate() {
                             row.col(|ui| {
-                                // Paint the cell and half of each gap so a tinted
-                                // row reads as one band, as in Wireshark.
-                                let cell = ui.max_rect().expand2(egui::vec2(
-                                    ui.spacing().item_spacing.x / 2.0,
-                                    ui.spacing().item_spacing.y / 2.0,
-                                ));
-                                if let Some(fill) = fill {
-                                    ui.painter().rect_filled(cell, 0.0, fill);
-                                }
-                                if hovered {
-                                    ui.painter().rect_filled(cell, 0.0, theme::hover_wash());
-                                }
-                                if selected {
-                                    let stroke = egui::Stroke::new(1.0_f32, palette.accent);
-                                    ui.painter().hline(cell.x_range(), cell.top() + 0.5, stroke);
-                                    ui.painter()
-                                        .hline(cell.x_range(), cell.bottom() - 0.5, stroke);
-                                }
-                                if column == 0 && (failed || selected) {
-                                    let mut bar = ui.max_rect().expand2(egui::vec2(
-                                        0.0,
-                                        ui.spacing().item_spacing.y / 2.0,
-                                    ));
-                                    bar.set_width(3.0);
-                                    ui.painter().rect_filled(
-                                        bar,
-                                        0.0,
-                                        if failed {
-                                            palette.error
-                                        } else {
-                                            palette.accent
-                                        },
-                                    );
-                                }
-                                let font = if matches!(column, 4 | 6) {
-                                    body_font.clone()
-                                } else {
-                                    mono.clone()
-                                };
-                                let mut job = egui::text::LayoutJob::default();
-                                for (text, tone) in parts {
-                                    job.append(
-                                        &text,
-                                        0.0,
-                                        egui::TextFormat::simple(font.clone(), tone.color()),
-                                    );
-                                }
-                                if column == 0 {
-                                    // Clear of the failure and selection bar.
-                                    ui.add_space(3.0);
-                                }
-                                ui.add(
-                                    egui::Label::new(job)
-                                        .truncate()
-                                        .selectable(false)
-                                        .sense(egui::Sense::hover()),
-                                )
-                                .on_hover_text(hover);
+                                trace_cell(
+                                    ui,
+                                    column,
+                                    parts,
+                                    hover,
+                                    &CellStyle {
+                                        fill,
+                                        hovered,
+                                        selected,
+                                        failed,
+                                        body_font: &body_font,
+                                        mono: &mono,
+                                    },
+                                );
                             });
                         }
                         let response = row.response();
@@ -462,6 +302,152 @@ impl MonitorApp {
             {
                 self.request_trace_window(start);
             }
+        }
+    }
+
+    /// The row above the trace: the run, the capture and process pickers, the pager and the filter.
+    fn trace_toolbar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            theme::section(ui, "Syscalls");
+            self.show_trace_run_selector(ui);
+            if let Some(capture) = self.selected_capture_summary() {
+                ui.add(egui::Label::new(captures::scope(&capture.scope)).truncate())
+                    .on_hover_text(&capture.id);
+            }
+            let selection = self
+                .capture_process_list()
+                .filter(|list| !list.is_empty())
+                .and_then(|processes| captures::process_menu(ui, processes, self.selected_process));
+            if let Some(selection) = selection {
+                self.select_process(selection);
+            }
+            self.trace_archive_pager(ui);
+            let filter_width = ui.available_width().max(180.0);
+            crate::query::filter_edit(
+                ui,
+                &mut self.filter,
+                "syscall == openat",
+                filter_width,
+                crate::query::FilterScope::Syscall,
+            )
+            .on_hover_text(crate::query::HELP);
+        });
+    }
+
+    /// The calls the categories and the filter keep, sorted, with the notes about what is hidden.
+    fn shown_invocations(
+        &mut self,
+        ui: &mut egui::Ui,
+        filter: &crate::query::Compiled,
+    ) -> (Vec<InvocationSummary>, bool) {
+        let all = self.invocations();
+        self.trace_categories(ui, &all);
+        let archived = self.trace_archive_directory().is_some();
+        if archived
+            && self.trace_evidence.is_none()
+            && self.archive_hidden_categories != self.settings.hidden_trace_categories
+        {
+            self.refresh_archive_matches(&filter);
+        }
+        let total = all.len();
+        let hidden = self.settings.hidden_trace_categories.clone();
+        let invocations: Vec<_> = all
+            .into_iter()
+            .filter(|invocation| {
+                let Some(event) = trace::representative(invocation) else {
+                    return false;
+                };
+                if !archived
+                    && SyscallGroup::of(&event.syscall_name)
+                        .is_some_and(|group| hidden.contains(&group))
+                {
+                    return false;
+                }
+                archived || filter.keep(invocation)
+            })
+            .collect();
+        let mut invocations = invocations;
+        if let Some((column, descending)) = self.trace_sort {
+            sort_invocations(&mut invocations, column, descending);
+            if archived {
+                ui.colored_label(
+                    theme::muted(),
+                    if self.trace_windowed() {
+                        "Sort applies to the loaded window"
+                    } else {
+                        "Sort applies to this page"
+                    },
+                );
+            }
+        }
+        if invocations.len() != total {
+            ui.colored_label(
+                theme::muted(),
+                format!("Showing {} of {total} calls", invocations.len()),
+            );
+        }
+        // A saved recording says so only once its count is in: until then
+        // the pager is still counting.
+        if invocations.is_empty()
+            && !self.archive_pending
+            && (!archived || self.archive_total == Some(0))
+        {
+            theme::empty_state(
+                ui,
+                if total == 0 {
+                    "No syscalls in this trace yet"
+                } else {
+                    "No syscall matches the filter or the shown categories"
+                },
+            );
+        }
+        (invocations, archived)
+    }
+
+    /// The title of a column of the syscall table, which sorts it when clicked.
+    fn trace_header_cell(
+        trace_sort: &mut Option<(TraceColumn, bool)>,
+        ui: &mut egui::Ui,
+        column: TraceColumn,
+        font: f32,
+        body_font: &egui::FontId,
+    ) {
+        let palette = *theme::palette();
+        crate::widgets::fit_table::head_bg(ui);
+        let sorted = (*trace_sort).filter(|(sorted, _)| *sorted == column);
+        let mut job = egui::text::LayoutJob::default();
+        job.append(
+            column.title(),
+            0.0,
+            egui::TextFormat::simple(body_font.clone(), palette.muted),
+        );
+        if let Some((_, descending)) = sorted {
+            job.append(
+                if descending {
+                    egui_phosphor::regular::CARET_DOWN
+                } else {
+                    egui_phosphor::regular::CARET_UP
+                },
+                font * 0.3,
+                egui::TextFormat::simple(body_font.clone(), palette.accent),
+            );
+        }
+        let response = ui
+            .add(
+                egui::Label::new(job)
+                    .truncate()
+                    .selectable(false)
+                    .sense(egui::Sense::click()),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(format!(
+                "{}\nClick to sort by {}",
+                column.description(),
+                column.title()
+            ));
+        if response.clicked() {
+            // A new column sorts ascending; the same column flips.
+            *trace_sort = Some((column, sorted.is_some_and(|(_, descending)| !descending)));
         }
     }
 
@@ -978,6 +964,92 @@ pub(super) fn sort_invocations(
         let order = if descending { order.reverse() } else { order };
         order.then_with(|| time(a).cmp(&time(b)))
     });
+}
+
+/// How a cell of the syscall table is painted besides its text.
+struct CellStyle<'a> {
+    fill: Option<egui::Color32>,
+    hovered: bool,
+    selected: bool,
+    failed: bool,
+    body_font: &'a egui::FontId,
+    mono: &'a egui::FontId,
+}
+
+/// One cell of a call's row: the band behind it, the failure bar and the text.
+fn trace_cell(
+    ui: &mut egui::Ui,
+    column: usize,
+    parts: Vec<(String, crate::trace::Tone)>,
+    hover: String,
+    style: &CellStyle<'_>,
+) {
+    let CellStyle {
+        fill,
+        hovered,
+        selected,
+        failed,
+        body_font,
+        mono,
+    } = *style;
+    let palette = *theme::palette();
+    // Paint the cell and half of each gap so a tinted
+    // row reads as one band, as in Wireshark.
+    let cell = ui.max_rect().expand2(egui::vec2(
+        ui.spacing().item_spacing.x / 2.0,
+        ui.spacing().item_spacing.y / 2.0,
+    ));
+    if let Some(fill) = fill {
+        ui.painter().rect_filled(cell, 0.0, fill);
+    }
+    if hovered {
+        ui.painter().rect_filled(cell, 0.0, theme::hover_wash());
+    }
+    if selected {
+        let stroke = egui::Stroke::new(1.0_f32, palette.accent);
+        ui.painter().hline(cell.x_range(), cell.top() + 0.5, stroke);
+        ui.painter()
+            .hline(cell.x_range(), cell.bottom() - 0.5, stroke);
+    }
+    if column == 0 && (failed || selected) {
+        let mut bar = ui
+            .max_rect()
+            .expand2(egui::vec2(0.0, ui.spacing().item_spacing.y / 2.0));
+        bar.set_width(3.0);
+        ui.painter().rect_filled(
+            bar,
+            0.0,
+            if failed {
+                palette.error
+            } else {
+                palette.accent
+            },
+        );
+    }
+    let font = if matches!(column, 4 | 6) {
+        body_font.clone()
+    } else {
+        mono.clone()
+    };
+    let mut job = egui::text::LayoutJob::default();
+    for (text, tone) in parts {
+        job.append(
+            &text,
+            0.0,
+            egui::TextFormat::simple(font.clone(), tone.color()),
+        );
+    }
+    if column == 0 {
+        // Clear of the failure and selection bar.
+        ui.add_space(3.0);
+    }
+    ui.add(
+        egui::Label::new(job)
+            .truncate()
+            .selectable(false)
+            .sense(egui::Sense::hover()),
+    )
+    .on_hover_text(hover);
 }
 
 /// The menu of a Syscall Trace row: copy its parts, and "Add note…" about this
