@@ -2,6 +2,8 @@
 //! Library > Analysis tools: the optional static-analysis tools, whether the
 //! system has them, and installing Antinomie's own copy when it does not.
 use crate::theme;
+use crate::widgets::{chip, Tone};
+use antinomie_monitor_core::geoip::{self, Origin, Status};
 use antinomie_monitor_core::{
     analysis_tools::{self, ToolInstall, ToolStatus},
     Command,
@@ -107,6 +109,65 @@ pub(crate) fn show(
                 });
         });
     command
+}
+
+fn origin_text(origin: Origin) -> &'static str {
+    match origin {
+        Origin::System => "TShark's own folder",
+        Origin::Managed => "Antinomie's DB-IP Lite copy",
+        Origin::Folder => "your folder",
+    }
+}
+
+/// The databases TShark has, as chips and paths, and the Warning when
+/// Country or Organization would stay empty.
+pub(crate) fn geoip_status(ui: &mut egui::Ui, status: Option<&Status>) {
+    let Some(status) = status else {
+        theme::loading_weak(ui, "Looking for databases…");
+        return;
+    };
+    for (label, found) in [
+        ("Country / city", status.has_location()),
+        ("Organization (AS)", status.has_asn()),
+    ] {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(label).strong().color(theme::heading()));
+            if found {
+                chip(ui, "Database found".to_owned(), Tone::Good);
+            } else {
+                chip(ui, "No database".to_owned(), Tone::Accent);
+            }
+        });
+    }
+    for database in &status.databases {
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!(
+                    "{} · {} · {}",
+                    database.name,
+                    origin_text(database.origin),
+                    database.path.display()
+                ))
+                .small()
+                .monospace()
+                .color(theme::muted()),
+            )
+            .wrap(),
+        );
+    }
+    if let Some(warning) = status.warning() {
+        ui.add_space(4.0);
+        ui.add(egui::Label::new(RichText::new(warning).color(theme::warn())).wrap());
+    }
+}
+
+/// The attribution DB-IP's licence asks for, with its link.
+pub(crate) fn geoip_attribution(ui: &mut egui::Ui) {
+    ui.horizontal_wrapped(|ui| {
+        ui.hyperlink_to(geoip::ATTRIBUTION, geoip::ATTRIBUTION_URL);
+        ui.weak("· DB-IP Lite databases, ");
+        ui.hyperlink_to(geoip::LICENCE, geoip::LICENCE_URL);
+    });
 }
 
 /// One managed tool: its name, whether the system has it, the version

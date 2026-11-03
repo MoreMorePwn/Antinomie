@@ -357,7 +357,7 @@ fn geoip_database(ui: &mut egui::Ui, routes: &RoutePrograms<'_>, outcome: &mut O
     ui.separator();
     theme::section(ui, "IP geolocation database (optional)");
     ui.weak("TShark reads MaxMind-format (.mmdb) databases to fill Country and Organization.");
-    crate::app::geoip_status(ui, routes.geoip);
+    crate::tools_page::geoip_status(ui, routes.geoip);
     ui.add_space(4.0);
     if ui
         .button("Open Network lookup settings")

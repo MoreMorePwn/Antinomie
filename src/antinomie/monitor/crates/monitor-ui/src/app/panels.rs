@@ -38,7 +38,7 @@ impl MonitorApp {
                 tools: route_tools,
                 install: install.as_ref(),
                 enabled: !self.closing,
-                geoip: self.geoip.status(),
+                geoip: self.routes.geoip.status(),
             },
         );
         if outcome.recheck {

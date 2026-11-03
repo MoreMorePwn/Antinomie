@@ -4,15 +4,12 @@
 //! warns when it has nothing, installs the DB-IP Lite copy (the managed
 //! `geoip` tool, so Cancel and resume work as for every download), takes a
 //! newer month on request, and accepts a folder of GeoLite2 files.
-use super::widgets::{icon, text_field};
-use super::*;
-use crate::{
-    tools_page,
-    widgets::{chip, Tone},
-};
+use super::super::widgets::{icon, text_field};
+use super::super::*;
+use crate::tools_page;
 use antinomie_monitor_core::{
     analysis_tools::{ToolInstall, ToolStatus},
-    geoip::{self, Latest, Origin, Status},
+    geoip::{self, Latest, Status},
 };
 use eframe::egui::RichText;
 use std::path::{Path, PathBuf};
@@ -54,6 +51,10 @@ pub(crate) struct GeoipState {
     update: Option<Update>,
     update_error: Option<String>,
     asked_once: bool,
+    /// Settings > Network lookup: a folder of MaxMind-format databases,
+    /// saved in the data folder (`geoip/folder`) like the route settings.
+    pub(super) folder: Option<PathBuf>,
+    folder_loaded: bool,
 }
 
 impl GeoipState {
@@ -62,16 +63,33 @@ impl GeoipState {
         self.status.as_ref()
     }
 
+    /// Choose or clear the folder, and save the choice.
+    pub(crate) fn set_folder(&mut self, data_dir: &Path, folder: Option<PathBuf>) {
+        let file = data_dir.join("geoip").join("folder");
+        match &folder {
+            Some(path) => {
+                let _ = std::fs::create_dir_all(data_dir.join("geoip"));
+                let _ = std::fs::write(&file, path.to_string_lossy().as_bytes());
+            }
+            None => {
+                let _ = std::fs::remove_file(&file);
+            }
+        }
+        self.folder = folder;
+        self.folder_loaded = true;
+    }
+
     /// Every frame: collect finished work and look again when the installed
     /// databases or the chosen folder changed. The path list TShark is started
     /// with is written here, so the first scan already uses it.
-    pub(crate) fn sync(
-        &mut self,
-        ctx: &egui::Context,
-        data_dir: &Path,
-        folder: Option<&Path>,
-        installed: Option<String>,
-    ) {
+    pub(crate) fn sync(&mut self, ctx: &egui::Context, data_dir: &Path, installed: Option<String>) {
+        if !self.folder_loaded {
+            self.folder_loaded = true;
+            self.folder = std::fs::read_to_string(data_dir.join("geoip").join("folder"))
+                .ok()
+                .map(|text| PathBuf::from(text.trim()))
+                .filter(|path| !path.as_os_str().is_empty());
+        }
         if let Some(receiver) = &self.looking {
             match receiver.try_recv() {
                 Ok(status) => {
@@ -93,21 +111,18 @@ impl GeoipState {
             }
         }
         self.poll_update();
-        let key = (installed, folder.map(Path::to_path_buf));
+        let folder = self.folder.clone();
+        let key = (installed, folder.clone());
         if self.looking.is_some()
             || (self.seen.as_ref() == Some(&key) && self.seen_generation == self.generation)
         {
             return;
         }
-        geoip::configure(data_dir, folder);
+        geoip::configure(data_dir, folder.as_deref());
         self.seen = Some(key);
         self.seen_generation = self.generation;
         let (sender, receiver) = mpsc::sync_channel(1);
-        let (data_dir, folder, wake) = (
-            data_dir.to_path_buf(),
-            folder.map(Path::to_path_buf),
-            ctx.clone(),
-        );
+        let (data_dir, folder, wake) = (data_dir.to_path_buf(), folder, ctx.clone());
         if std::thread::Builder::new()
             .name("antinomie-geoip-detect".into())
             .spawn(move || {
@@ -213,84 +228,22 @@ impl GeoipState {
     }
 }
 
-fn origin_text(origin: Origin) -> &'static str {
-    match origin {
-        Origin::System => "TShark's own folder",
-        Origin::Managed => "Antinomie's DB-IP Lite copy",
-        Origin::Folder => "your folder",
-    }
-}
-
-/// The databases TShark has, as chips and paths, and the Warning when
-/// Country or Organization would stay empty.
-pub(crate) fn status_lines(ui: &mut egui::Ui, status: Option<&Status>) {
-    let Some(status) = status else {
-        crate::theme::loading_weak(ui, "Looking for databases…");
-        return;
-    };
-    for (label, found) in [
-        ("Country / city", status.has_location()),
-        ("Organization (AS)", status.has_asn()),
-    ] {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(label).strong().color(theme::heading()));
-            if found {
-                chip(ui, "Database found".to_owned(), Tone::Good);
-            } else {
-                chip(ui, "No database".to_owned(), Tone::Accent);
-            }
-        });
-    }
-    for database in &status.databases {
-        ui.add(
-            egui::Label::new(
-                RichText::new(format!(
-                    "{} · {} · {}",
-                    database.name,
-                    origin_text(database.origin),
-                    database.path.display()
-                ))
-                .small()
-                .monospace()
-                .color(theme::muted()),
-            )
-            .wrap(),
-        );
-    }
-    if let Some(warning) = status.warning() {
-        ui.add_space(4.0);
-        ui.add(egui::Label::new(RichText::new(warning).color(theme::warn())).wrap());
-    }
-}
-
-/// The attribution DB-IP's licence asks for, with its link.
-pub(crate) fn attribution(ui: &mut egui::Ui) {
-    ui.horizontal_wrapped(|ui| {
-        ui.hyperlink_to(geoip::ATTRIBUTION, geoip::ATTRIBUTION_URL);
-        ui.weak("· DB-IP Lite databases, ");
-        ui.hyperlink_to(geoip::LICENCE, geoip::LICENCE_URL);
-    });
-}
-
 impl MonitorApp {
     /// Every frame (see [`GeoipState::sync`]).
-    pub(super) fn geoip_sync(&mut self, ctx: &egui::Context) {
+    pub(in crate::app) fn geoip_sync(&mut self, ctx: &egui::Context) {
         let installed = self
             .snapshot
             .analysis_tools
             .iter()
             .find(|tool| tool.id == geoip::TOOL_ID)
             .and_then(|tool| tool.installed.clone());
-        self.geoip.sync(
-            ctx,
-            &self.options.data_dir,
-            self.settings.geoip_folder.as_deref(),
-            installed,
-        );
+        self.routes
+            .geoip
+            .sync(ctx, &self.options.data_dir, installed);
     }
 
     /// The Network lookup page's database section.
-    pub(super) fn geoip_section(&mut self, ui: &mut egui::Ui) {
+    pub(in crate::app) fn geoip_section(&mut self, ui: &mut egui::Ui) {
         theme::section(ui, "IP geolocation database (TShark)");
         ui.add(
             egui::Label::new(
@@ -301,7 +254,7 @@ impl MonitorApp {
             .wrap(),
         );
         ui.add_space(4.0);
-        status_lines(ui, self.geoip.status());
+        tools_page::geoip_status(ui, self.routes.geoip.status());
         ui.add_space(6.0);
         let tool = self
             .snapshot
@@ -310,6 +263,7 @@ impl MonitorApp {
             .find(|tool| tool.id == geoip::TOOL_ID)
             .cloned();
         let managed = self
+            .routes
             .geoip
             .status()
             .and_then(|status| status.managed.clone());
@@ -340,7 +294,7 @@ impl MonitorApp {
         ui.add_space(6.0);
         self.folder_row(ui);
         ui.add_space(6.0);
-        attribution(ui);
+        tools_page::geoip_attribution(ui);
     }
 
     fn managed_row(
@@ -366,7 +320,7 @@ impl MonitorApp {
                 .is_some_and(|i| !i.finished);
             if ui
                 .add_enabled(
-                    !busy && self.geoip.update.is_none(),
+                    !busy && self.routes.geoip.update.is_none(),
                     egui::Button::new("Remove"),
                 )
                 .on_hover_text("Delete Antinomie's copy")
@@ -385,9 +339,9 @@ impl MonitorApp {
         let curl = self.options.curl.clone();
         let ctx = ui.ctx().clone();
         // Once per session, when downloads are allowed and a copy exists.
-        if outbound && managed.is_some() && !self.geoip.asked_once {
-            self.geoip.asked_once = true;
-            self.geoip.start_check(&ctx, &curl);
+        if outbound && managed.is_some() && !self.routes.geoip.asked_once {
+            self.routes.geoip.asked_once = true;
+            self.routes.geoip.start_check(&ctx, &curl);
         }
         ui.horizontal_wrapped(|ui| {
             ui.label(
@@ -395,7 +349,7 @@ impl MonitorApp {
                     .strong()
                     .color(theme::heading()),
             );
-            let idle = self.geoip.checking.is_none() && self.geoip.update.is_none();
+            let idle = self.routes.geoip.checking.is_none() && self.routes.geoip.update.is_none();
             if ui
                 .add_enabled(
                     outbound && idle,
@@ -407,9 +361,9 @@ impl MonitorApp {
                 )
                 .clicked()
             {
-                self.geoip.start_check(&ctx, &curl);
+                self.routes.geoip.start_check(&ctx, &curl);
             }
-            if self.geoip.checking.is_some() {
+            if self.routes.geoip.checking.is_some() {
                 ui.spinner();
             }
         });
@@ -419,12 +373,12 @@ impl MonitorApp {
                 "Checking for a newer month needs Settings > Detection > Allow outbound catalog and rule downloads.",
             );
         }
-        match self.geoip.latest.clone() {
+        match self.routes.geoip.latest.clone() {
             Some(Ok(latest)) => {
                 let installed = managed.map(|m| m.month.as_str());
                 if installed.is_some_and(|month| month >= latest.month.as_str()) {
                     ui.weak(format!("Up to date: {} is the newest month.", latest.month));
-                } else if self.geoip.update.is_none() {
+                } else if self.routes.geoip.update.is_none() {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(format!("DB-IP published {}.", latest.month));
                         if ui
@@ -438,7 +392,7 @@ impl MonitorApp {
                             .clicked()
                         {
                             let data_dir = self.options.data_dir.clone();
-                            self.geoip.start_update(&ctx, &curl, &data_dir, latest.month);
+                            self.routes.geoip.start_update(&ctx, &curl, &data_dir, latest.month);
                         }
                     });
                 }
@@ -448,7 +402,7 @@ impl MonitorApp {
             }
             None => {}
         }
-        if let Some(update) = &self.geoip.update {
+        if let Some(update) = &self.routes.geoip.update {
             if !update.note.is_empty() {
                 crate::activity::info(ui, update.note.clone());
             }
@@ -474,7 +428,7 @@ impl MonitorApp {
                     .store(true, std::sync::atomic::Ordering::Relaxed);
             }
         }
-        if let Some(error) = &self.geoip.update_error {
+        if let Some(error) = &self.routes.geoip.update_error {
             crate::activity::outcome(ui, error);
         }
     }
@@ -486,8 +440,9 @@ impl MonitorApp {
                 .color(theme::heading()),
         );
         let mut text = self
-            .settings
-            .geoip_folder
+            .routes
+            .geoip
+            .folder
             .as_deref()
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default();
@@ -508,8 +463,8 @@ impl MonitorApp {
                 )
                 .changed()
             {
-                self.settings.geoip_folder =
-                    (!text.trim().is_empty()).then(|| crate::folders::user_path(&text));
+                let chosen = (!text.trim().is_empty()).then(|| crate::folders::user_path(&text));
+                self.routes.geoip.set_folder(&self.options.data_dir, chosen);
             }
             if icon(
                 ui,
@@ -528,9 +483,9 @@ impl MonitorApp {
                 ui,
                 egui_phosphor::regular::X,
                 "Stop using this folder",
-                self.settings.geoip_folder.is_some(),
+                self.routes.geoip.folder.is_some(),
             ) {
-                self.settings.geoip_folder = None;
+                self.routes.geoip.set_folder(&self.options.data_dir, None);
             }
         });
         hint_line(

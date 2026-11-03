@@ -758,6 +758,9 @@ pub(super) fn scan_pcap_query_observed(
             observe(RowKind::Session, &row, destination, destination_port)?;
         }
     }
+    if use_geoip && identity.file_size <= geoip_fill::SMALL_CAPTURE {
+        geoip_fill::fill(inventory, cancel)?;
+    }
     if request.address_lookup != AddressLookup::Tshark {
         network::enrich_public(inventory, cancel, &mut index.network_warning)?;
     }
@@ -782,7 +785,7 @@ pub(super) fn scan_pcap_query_observed(
 
 /// "AS150895 EZ TECHNOLOGY COMPANY LIMITED": the organization of the AS
 /// database with the AS number it came with.
-fn organization_with_asn(organization: &str, asn: &str) -> String {
+pub(super) fn organization_with_asn(organization: &str, asn: &str) -> String {
     match (asn.is_empty(), organization.is_empty()) {
         (false, false) => format!("AS{asn} {organization}"),
         (false, true) => format!("AS{asn}"),

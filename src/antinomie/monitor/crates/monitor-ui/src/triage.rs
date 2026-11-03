@@ -53,6 +53,7 @@ pub(crate) const DEFAULT_REBUILD_RUN_MIB: u32 = files::DEFAULT_RUN_MIB;
 mod files;
 mod finding_bar;
 mod findings;
+mod geoip_fill;
 mod graph;
 pub(crate) use graph::Spacing as GraphSpacing;
 pub(crate) const GRAPH_WINDOW_SIZE: [f32; 2] = graph::DEFAULT_SIZE;

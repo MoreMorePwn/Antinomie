@@ -4,6 +4,8 @@
 //! are saved in the data folder, owner-only because they can hold a proxy
 //! password, and read by the backend when a run starts. Nothing here is
 //! written to the settings file that eframe keeps.
+mod geoip_settings;
+
 use super::dialogs::form_grid;
 use super::*;
 use crate::{
@@ -60,6 +62,8 @@ pub(super) struct RouteSettings {
     tested: Option<Tested>,
     /// The blocked-ports field as typed, while it is being edited.
     ports_text: Option<String>,
+    /// Settings > Network lookup (IP geolocation databases for TShark).
+    pub(super) geoip: geoip_settings::GeoipState,
 }
 
 impl RouteSettings {
@@ -77,6 +81,7 @@ impl RouteSettings {
             testing: None,
             tested: None,
             ports_text: None,
+            geoip: Default::default(),
         }
     }
 
@@ -93,6 +98,7 @@ impl RouteSettings {
             testing: None,
             tested: None,
             ports_text: None,
+            geoip: Default::default(),
         }
     }
 

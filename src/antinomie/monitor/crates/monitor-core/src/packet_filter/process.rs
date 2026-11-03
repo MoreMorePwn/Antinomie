@@ -166,6 +166,20 @@ pub(super) fn run_process<T: Send + 'static>(
     for (host, inner) in &mounts {
         bounded.arg("--ro-bind").arg(host).arg(inner);
     }
+    // MaxMind databases: each folder read-only under /tmp, named in the
+    // `maxmind_db_paths` file of the private configuration folder (the
+    // WIRESHARK_CONFIG_DIR set below). Nothing of the person's own is read.
+    let databases = crate::geoip::dirs_of(&command);
+    let mut listed = String::new();
+    for (index, host) in databases.iter().enumerate() {
+        let inner = format!("/tmp/geoip-{index}");
+        bounded.arg("--ro-bind").arg(host).arg(&inner);
+        listed.push_str(&format!("\"{inner}\"\n"));
+    }
+    if !listed.is_empty() {
+        fs::write(profile.path.join("maxmind_db_paths"), listed)
+            .map_err(|e| format!("packet sandbox GeoIP paths: {e}"))?;
+    }
     bounded.args(["--remount-ro", "/", "--setenv", "PATH", "/usr/bin:/bin"]);
     bounded.args(["--setenv", "LC_ALL", "C"]);
     for key in [
@@ -178,15 +192,23 @@ pub(super) fn run_process<T: Send + 'static>(
         bounded.arg("--setenv").arg(key).arg(&profile.path);
     }
     for (name, value) in command.get_envs() {
+        if name == crate::geoip::DIRS_ENV {
+            continue;
+        }
         if let Some(value) = value {
             bounded.arg("--setenv").arg(name).arg(value);
         }
     }
     let launch = crate::sandbox_process::prepare(&mut bounded)?;
-    bounded
-        .arg("--")
-        .arg(command.get_program())
-        .args(&arguments);
+    bounded.arg("--");
+    if !databases.is_empty() {
+        // bwrap closes descriptor 0 once it has written its info; a TShark
+        // started that way hands the closed number to the pipe it makes for
+        // its `mmdbresolve` helper, which then never answers. Give it
+        // /dev/null as standard input.
+        bounded.args(["/bin/sh", "-c", "exec \"$0\" \"$@\" </dev/null"]);
+    }
+    bounded.arg(command.get_program()).args(&arguments);
     if let Some(directory) = command.get_current_dir() {
         bounded.current_dir(directory);
     } else {

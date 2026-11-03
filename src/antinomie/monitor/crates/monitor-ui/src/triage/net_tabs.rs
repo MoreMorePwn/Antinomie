@@ -215,7 +215,7 @@ impl TriageView {
             }
             if self.new_tab == NewTab::Endpoints && antinomie_monitor_core::geoip::attribution_due()
             {
-                crate::app::geoip_attribution(ui);
+                crate::tools_page::geoip_attribution(ui);
             }
             if ui
                 .small_button("Open IOC")

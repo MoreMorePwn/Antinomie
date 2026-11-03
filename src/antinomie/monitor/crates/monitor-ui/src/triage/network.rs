@@ -297,6 +297,9 @@ impl Inventory {
                 self.capture.clone(),
             )
         });
+        // TShark's resolver may not have answered for the first frames of a
+        // destination; a later frame fills what the first lacked.
+        self.fill_missing(ip, country, organization);
     }
     pub fn host(
         &mut self,
@@ -760,7 +763,7 @@ impl Inventory {
         tables
     }
 
-    fn incomplete(&self) -> Vec<String> {
+    pub(super) fn incomplete(&self) -> Vec<String> {
         self.ips
             .iter()
             .filter_map(|(ip, (_, country, organization, _))| {
@@ -772,7 +775,7 @@ impl Inventory {
             })
             .collect()
     }
-    fn fill_missing(&mut self, ip: &str, country: &str, organization: &str) {
+    pub(super) fn fill_missing(&mut self, ip: &str, country: &str, organization: &str) {
         if let Some((_, stored_country, stored_organization, _)) = self.ips.get_mut(ip) {
             if stored_country.is_empty() && !country.is_empty() {
                 *stored_country = country.to_owned();
@@ -988,7 +991,7 @@ fn available(value: &str) -> &str {
 
 /// Loopback, link-local, and private ranges are local to the guest or host.
 /// Carrier-grade NAT and public addresses keep their recorded lookup result.
-fn local_address(ip: &str) -> bool {
+pub(super) fn local_address(ip: &str) -> bool {
     match ip.parse::<std::net::IpAddr>() {
         Ok(std::net::IpAddr::V4(address)) => {
             address.is_private()

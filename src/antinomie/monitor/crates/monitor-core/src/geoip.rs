@@ -7,10 +7,12 @@
 //! ignored, so a computer with only those gets empty country and organization
 //! columns. This module finds out whether TShark has a usable database,
 //! points it at Antinomie's managed DB-IP Lite copy or a folder the person
-//! chose, and does so for Antinomie's own TShark runs only: the path list is
-//! a `maxmind_db_paths` file in a private configuration folder under the data
-//! directory, handed over as `WIRESHARK_CONFIG_DIR`. The person's own Wireshark
-//! configuration is never read or written.
+//! chose, and does so for Antinomie's own TShark runs only. Those run in a
+//! bubblewrap sandbox with no access to the data folder, so the database
+//! folders are mounted read-only into it and a `maxmind_db_paths` file naming
+//! them is written to the run's private configuration folder (see
+//! `packet_filter::process`). The person's own Wireshark configuration is
+//! never read or written.
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -146,12 +148,20 @@ pub fn database_type(path: &Path) -> Option<String> {
         .windows(key.len())
         .position(|window| window == key)?
         + key.len();
-    // A short string: control byte 0b010xxxxx with its length.
+    // A string: control byte 0b010xxxxx; sizes of 29 and more continue in the
+    // next bytes ("DBIP-ASN-Lite (compat=GeoLite2-ASN)" is one).
     let control = *metadata.get(at)?;
     (control & 0xe0 == 0x40).then_some(())?;
-    let length = usize::from(control & 0x1f);
-    (length < 29).then_some(())?;
-    let text = metadata.get(at + 1..at + 1 + length)?;
+    let (length, skip) = match control & 0x1f {
+        29 => (29 + usize::from(*metadata.get(at + 1)?), 2),
+        30 => (
+            285 + usize::from(*metadata.get(at + 1)?) * 256 + usize::from(*metadata.get(at + 2)?),
+            3,
+        ),
+        short @ 0..=28 => (usize::from(short), 1),
+        _ => return None,
+    };
+    let text = metadata.get(at + skip..at + skip + length)?;
     String::from_utf8(text.to_vec()).ok()
 }
 
@@ -240,11 +250,6 @@ pub fn managed_dir(data_dir: &Path) -> PathBuf {
     crate::analysis_tools::tools_dir(data_dir).join(TOOL_ID)
 }
 
-/// The private configuration folder handed to TShark as `WIRESHARK_CONFIG_DIR`.
-fn config_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("geoip").join("wireshark")
-}
-
 /// The managed copy's month and whether it is the pinned one.
 pub fn managed_info(data_dir: &Path) -> Option<Managed> {
     let text = fs::read(managed_dir(data_dir).join("tool.json")).ok()?;
@@ -283,38 +288,27 @@ pub fn detect(data_dir: &Path, folder: Option<&Path>) -> Status {
     status
 }
 
-/// The private configuration folder, when Antinomie has databases of its own
-/// to hand TShark; set by [`configure`].
-static CONFIG: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// The database folders to hand to Antinomie's TShark runs, set by [`configure`].
+static DIRS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
-/// Write the path list for Antinomie's TShark runs: the managed copy when it
-/// is installed and the chosen folder. With neither, TShark runs unchanged.
+/// The environment variable that carries the folders from [`apply`] to the
+/// sandbox launcher, which strips it before the run starts.
+pub(crate) const DIRS_ENV: &str = "ANTINOMIE_GEOIP_DIRS";
+
+/// Choose the folders Antinomie's TShark runs read besides TShark's own: the
+/// managed copy when it is installed and the chosen folder.
 pub fn configure(data_dir: &Path, folder: Option<&Path>) {
     let managed = managed_info(data_dir).is_some();
     MANAGED_IN_USE.store(managed, std::sync::atomic::Ordering::Relaxed);
-    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut dirs: Vec<PathBuf> = Vec::new();
     if managed {
-        paths.push(managed_dir(data_dir));
+        dirs.push(managed_dir(data_dir));
     }
     if let Some(folder) = folder.filter(|folder| folder.is_dir()) {
-        paths.push(folder.to_path_buf());
+        dirs.push(folder.to_path_buf());
     }
-    let chosen = if paths.is_empty() {
-        None
-    } else {
-        let dir = config_dir(data_dir);
-        let text = paths
-            .iter()
-            .map(|path| format!("\"{}\"\n", path.display().to_string().replace('"', "")))
-            .collect::<String>();
-        let target = dir.join("maxmind_db_paths");
-        let ready = fs::create_dir_all(&dir).is_ok()
-            && (fs::read_to_string(&target).is_ok_and(|old| old == text)
-                || fs::write(&target, text).is_ok());
-        ready.then_some(dir)
-    };
-    if let Ok(mut current) = CONFIG.lock() {
-        *current = chosen;
+    if let Ok(mut current) = DIRS.lock() {
+        *current = dirs;
     }
 }
 
@@ -326,11 +320,30 @@ pub fn attribution_due() -> bool {
 
 static MANAGED_IN_USE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Make a TShark run use the databases [`configure`] arranged.
+/// Whether Antinomie's TShark runs can find a database: a managed or chosen
+/// folder, or a complete one in TShark's own folders.
+pub fn configured() -> bool {
+    DIRS.lock().is_ok_and(|dirs| !dirs.is_empty()) || system_databases().is_some()
+}
+
+/// Make a TShark run read the folders [`configure`] chose.
 pub fn apply(command: &mut Command) {
-    if let Some(dir) = CONFIG.lock().ok().and_then(|current| current.clone()) {
-        command.env("WIRESHARK_CONFIG_DIR", dir);
+    let dirs = DIRS.lock().map(|dirs| dirs.clone()).unwrap_or_default();
+    if let Ok(joined) = std::env::join_paths(&dirs)
+        && !dirs.is_empty()
+    {
+        command.env(DIRS_ENV, joined);
     }
+}
+
+/// The folders [`apply`] put on `command`, for the sandbox launcher.
+pub(crate) fn dirs_of(command: &Command) -> Vec<PathBuf> {
+    command
+        .get_envs()
+        .find(|(name, _)| *name == DIRS_ENV)
+        .and_then(|(_, value)| value)
+        .map(|value| std::env::split_paths(value).collect())
+        .unwrap_or_default()
 }
 
 /// Decompress `source` (gzip) into `target`, stopping at `limit` octets.
