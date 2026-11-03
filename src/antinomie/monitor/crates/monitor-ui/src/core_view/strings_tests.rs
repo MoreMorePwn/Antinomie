@@ -150,6 +150,9 @@ fn strings_show_their_virtual_address_file_offset_and_mapping_name() {
     let unnamed = {
         let mut core = record.core.clone();
         core.files.clear();
+        // The fixture's saved stack pointer sits in this mapping.
+        assert_eq!(segment_name(&core, &core.mappings[0]), "[stack]");
+        core.threads.clear();
         segment_name(&core, &core.mappings[0])
     };
     assert_eq!(unnamed, "[anonymous r-x]");

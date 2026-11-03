@@ -1113,12 +1113,21 @@ fn mapping_choices_use_recovered_names_and_mark_unknown_duplicates() {
     assert!(choices[0].1.contains("/synthetic/sample"));
     let mut unnamed = core.clone();
     unnamed.files.clear();
+    // The saved stack pointer of the fixture sits in this mapping, so without
+    // a file name it is the stack; take the thread away for a plain anonymous one.
     assert!(
-        mapping_choices(&unnamed)[0].0.contains("r-x [anonymous]"),
+        mapping_choices(&unnamed)[0].0.contains("r-x [stack]"),
         "{}",
         mapping_choices(&unnamed)[0].0
     );
-    assert!(mapping_choices(&unnamed)[0].1.contains("NT_FILE name"));
+    let mut anonymous = unnamed.clone();
+    anonymous.threads.clear();
+    assert!(
+        mapping_choices(&anonymous)[0].0.contains("r-x [anonymous]"),
+        "{}",
+        mapping_choices(&anonymous)[0].0
+    );
+    assert!(mapping_choices(&anonymous)[0].1.contains("NT_FILE name"));
     let mut duplicated = core.clone();
     duplicated.mappings.push(CoreMapping {
         start: 0x500000,
