@@ -348,8 +348,14 @@ it runs.
 
 - **Long functions split.** The guest command transport, the backend command
   dispatcher, the static analysis section worker and the sample report layout
-  are divided into named steps. No behaviour changed. The module size check
-  now also lists functions over 300 lines as a warning.
+  are divided into named steps. The backend worker loop, the report document
+  layout, the YARA scan, the Triage archive and capture scans, the file index,
+  and the large screens (dialogs, panels, run history, the sample list, the
+  syscall trace and its inspector, network packets, the core, memory and
+  static analysis views, the New VM dialog, the jobs list) are split the same
+  way, into one function per phase, section or row. No behaviour changed. The
+  module size check now also lists functions over 300 lines as a warning; the
+  one left is the syscall rule table.
 - **One table implementation and one inline-notice API.** The Triage tables and
   the list-table styles live in `widgets/fit_table.rs`; status lines that were
   drawn by hand (IOC, Detection journal, Rules, Samples, Disk extraction) call
