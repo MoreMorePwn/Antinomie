@@ -26,10 +26,17 @@ mod details;
 mod disassembly;
 mod inspect;
 mod list;
+mod list_rows;
 mod sizes;
 mod strings;
 
-use self::{catalog::*, decompile::*, inspect::*, sizes::manual_status};
+use self::{
+    catalog::*,
+    decompile::*,
+    inspect::*,
+    list_rows::{ListOutcome, RowContext},
+    sizes::manual_status,
+};
 
 const PAGE_SIZE: usize = 16 * 1024;
 const WINDOW_SIZE: u64 = 16 * 1024 * 1024;
