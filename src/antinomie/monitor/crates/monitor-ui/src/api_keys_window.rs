@@ -235,11 +235,14 @@ impl ApiKeysWindow {
             ui.add(
                 egui::TextEdit::singleline(draft)
                     .password(true)
-                    .hint_text(theme::hint_text(if state.masked.is_some() {
-                        "paste a new key to replace it"
-                    } else {
-                        "paste your key"
-                    }))
+                    .hint_text(crate::theme::placeholder(
+                        ui,
+                        if state.masked.is_some() {
+                            "paste a new key to replace it"
+                        } else {
+                            "paste your key"
+                        },
+                    ))
                     .margin(theme::TEXT_EDIT_MARGIN)
                     .desired_width(crate::theme::edit_width(340.0)),
             );

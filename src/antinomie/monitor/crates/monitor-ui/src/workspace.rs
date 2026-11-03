@@ -1717,7 +1717,7 @@ mod tests {
         layout.drop_panel(&Panel::Trace, SurfaceIndex::main(), egui::pos2(30.0, 20.0));
         assert_eq!(
             leaf_tabs(&layout, node),
-            [Panel::Details, Panel::Activity, Panel::Trace]
+            [Panel::Details, Panel::Activity, Panel::Jobs, Panel::Trace]
         );
         assert_eq!(layout.dock.main_surface().len(), count);
     }
@@ -2015,6 +2015,12 @@ mod tests {
             *active = TabIndex(3);
         }
         let bottom = NodeIndex::root().right();
+        // A layout saved by 0.5.x - 0.7.x has no Jobs tab beside Activity.
+        if let egui_dock::Node::Leaf(egui_dock::LeafNode { tabs, .. }) =
+            &mut layout.dock.main_surface_mut()[bottom]
+        {
+            *tabs = vec![Panel::Details, Panel::Activity];
+        }
         layout
             .dock
             .set_active_tab(TabPath::new(SurfaceIndex::main(), bottom, TabIndex(1)))
@@ -2057,6 +2063,12 @@ mod tests {
                     Panel::Triage,
                     Panel::StaticAnalysis,
                 ];
+            }
+            // As saved before the Jobs tab: only Details and Activity below.
+            if let egui_dock::Node::Leaf(egui_dock::LeafNode { tabs, .. }) =
+                &mut layout.dock.main_surface_mut()[NodeIndex::root().right()]
+            {
+                *tabs = vec![Panel::Details, Panel::Activity];
             }
             match case {
                 0 => {
@@ -2142,7 +2154,7 @@ mod tests {
         assert_eq!(tabs[active.0], Panel::Summary);
         assert_eq!(
             leaf_tabs(&layout, NodeIndex::root().right()),
-            [Panel::Details, Panel::Activity]
+            [Panel::Details, Panel::Activity, Panel::Jobs]
         );
     }
 
@@ -2285,7 +2297,7 @@ mod tests {
         );
         assert_eq!(
             leaf_tabs(&layout, bottom),
-            [Panel::Details, Panel::Activity]
+            [Panel::Details, Panel::Activity, Panel::Jobs]
         );
 
         // Every panel missing rebuilds the default arrangement, not one bar.
@@ -2314,7 +2326,10 @@ mod tests {
                 Panel::StaticAnalysis
             ]
         );
-        assert_eq!(leaf_tabs(&empty, bottom), [Panel::Details, Panel::Activity]);
+        assert_eq!(
+            leaf_tabs(&empty, bottom),
+            [Panel::Details, Panel::Activity, Panel::Jobs]
+        );
     }
 
     #[test]
@@ -2346,7 +2361,7 @@ mod tests {
         );
         assert_eq!(
             leaf_tabs(&restored, NodeIndex::root().right()),
-            [Panel::Details, Panel::Activity]
+            [Panel::Details, Panel::Activity, Panel::Jobs]
         );
     }
 
@@ -2473,7 +2488,7 @@ mod tests {
             .dock
             .add_window(vec![Panel::Trace, Panel::Terminal("past".into())]);
         layout.validate();
-        assert_eq!(layout.dock.iter_all_tabs().count(), 11);
+        assert_eq!(layout.dock.iter_all_tabs().count(), 12);
         assert_eq!(
             layout
                 .dock
@@ -2510,7 +2525,7 @@ mod tests {
             retained
         );
         assert_eq!(restored.geometry.get(&retained.0), Some(&rectangle));
-        assert_eq!(restored.dock.iter_all_tabs().count(), 11);
+        assert_eq!(restored.dock.iter_all_tabs().count(), 12);
 
         let ended = restored
             .dock

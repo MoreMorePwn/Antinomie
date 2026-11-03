@@ -121,7 +121,7 @@ pub(in crate::app::samples_page) fn section(
             ui.label(RichText::new("Filter").color(theme::muted()));
             ui.add(
                 egui::TextEdit::singleline(&mut filter)
-                    .hint_text(theme::hint_text("path or state"))
+                    .hint_text(crate::theme::placeholder(ui, "path or state"))
                     .desired_width(crate::theme::plain_edit_width(220.0)),
             );
         });

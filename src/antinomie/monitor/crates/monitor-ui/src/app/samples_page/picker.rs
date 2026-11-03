@@ -87,7 +87,8 @@ impl TagPicker {
         Self::heading(ui, "ATT&CK technique");
         ui.add(
             egui::TextEdit::singleline(&mut self.technique_query)
-                .hint_text(theme::hint_text(
+                .hint_text(crate::theme::placeholder(
+                    ui,
                     "Search by ID or name, for example T1053 or cron",
                 ))
                 .desired_width(ui.available_width()),
@@ -140,7 +141,7 @@ impl TagPicker {
         ui.horizontal(|ui| {
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.custom_name)
-                    .hint_text(theme::hint_text("New tag name"))
+                    .hint_text(crate::theme::placeholder(ui, "New tag name"))
                     .desired_width(crate::theme::plain_edit_width(160.0)),
             );
             for (index, name) in TAG_COLORS.iter().enumerate() {

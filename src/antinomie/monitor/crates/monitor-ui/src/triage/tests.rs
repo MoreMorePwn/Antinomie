@@ -1744,7 +1744,7 @@ fn bpf_program_finding_skips_maps_and_requires_socket_level() {
     denied.entry.as_mut().unwrap().args = Some([5, 0, 0, 0, 0, 0]);
     assert_eq!(
         page_notes(&[denied])[0].lifecycle.as_deref(),
-        Some("load failed (-13)")
+        Some("load failed (EACCES)")
     );
     let mut pending = call(1, 321, "bpf", 4);
     pending.exit = None;
@@ -2045,10 +2045,16 @@ fn a_long_content_cell_shows_a_bounded_hover_and_keeps_the_full_value() {
         .1;
     let mut output = first;
     for frame in 0..40 {
+        // A pointer reports a move once; egui 0.36 restarts the tooltip delay
+        // on every repeated move event.
         output = draw(
-            vec![egui::Event::PointerMoved(
-                cell_rect.left_center() + egui::vec2(30.0, 0.0),
-            )],
+            if frame == 0 {
+                vec![egui::Event::PointerMoved(
+                    cell_rect.left_center() + egui::vec2(30.0, 0.0),
+                )]
+            } else {
+                Vec::new()
+            },
             0.1 + f64::from(frame) * 0.05,
         );
     }

@@ -122,11 +122,13 @@ fn activity_tab_has_separate_warning_and_error_colors() {
         panic!("rich activity title")
     };
     assert!(job.text.contains("Activity"));
+    // egui 0.36 merges the plain space into the title's section, so the
+    // chips are sections 1 and 3 (they were 2 and 4).
     let chip = |index: usize| &job.sections[index].format;
-    assert_eq!(chip(2).color, theme::warn());
-    assert_eq!(chip(2).background, theme::palette().warn_bg);
-    assert_eq!(chip(4).color, theme::error());
-    assert_eq!(chip(4).background, theme::palette().error_bg);
+    assert_eq!(chip(1).color, theme::warn());
+    assert_eq!(chip(1).background, theme::palette().warn_bg);
+    assert_eq!(chip(3).color, theme::error());
+    assert_eq!(chip(3).background, theme::palette().error_bg);
 }
 
 fn frame(

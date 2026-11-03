@@ -12,7 +12,10 @@ pub(crate) fn guide(ctx: &egui::Context) {
     if !open {
         return;
     }
+    // egui 0.36 derives a window's id from its title differently; naming it
+    // keeps the id (and the remembered position) the guide had.
     crate::widgets::window("Filter guide")
+        .id(egui::Id::new("Filter guide"))
         .open(&mut open)
         .resizable(true)
         .default_size([640.0, 540.0])
@@ -23,7 +26,7 @@ pub(crate) fn guide(ctx: &egui::Context) {
             let mut query = ui.ctx().data(|data| data.get_temp::<String>(query_id).unwrap_or_default());
             ui.add(
                 egui::TextEdit::singleline(&mut query)
-                    .hint_text(crate::theme::hint_text("Search fields, operators, schema argument names, syscall names"))
+                    .hint_text(crate::theme::placeholder(ui, "Search fields, operators, schema argument names, syscall names"))
                     .desired_width(f32::INFINITY),
             );
             let needle = query.to_lowercase();

@@ -94,11 +94,14 @@ impl DiskView {
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.find.query)
                     .desired_width(crate::theme::plain_edit_width(220.0))
-                    .hint_text(crate::theme::hint_text(if self.find.mode.is_content() {
-                        "text inside files (2–256 bytes)"
-                    } else {
-                        "name, path or *.glob"
-                    })),
+                    .hint_text(crate::theme::placeholder(
+                        ui,
+                        if self.find.mode.is_content() {
+                            "text inside files (2–256 bytes)"
+                        } else {
+                            "name, path or *.glob"
+                        },
+                    )),
             );
             egui::ComboBox::from_id_salt("disk_find_mode")
                 .selected_text(self.find.mode.label())

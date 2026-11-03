@@ -256,7 +256,9 @@ fn getting_started_size(ctx: &egui::Context) -> egui::Vec2 {
             .sum()
     });
     let screen = ctx.content_rect();
-    let width = (widths + 24.0)
+    // egui 0.36 counts the window's margins in a fixed size.
+    let margins = ctx.global_style().spacing.window_margin.sum().x;
+    let width = (widths + 24.0 + margins)
         .max(640.0)
         .min((screen.width() - 80.0).max(320.0));
     let height = 560.0_f32.min((screen.height() - 120.0).max(260.0));

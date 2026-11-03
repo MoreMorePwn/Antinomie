@@ -331,6 +331,29 @@ fn strings_regex_adds_patterns_with_grey_hints_and_a_full_width_expression() {
     for clipped in &output.shapes {
         hints(&clipped.shape, clipped.clip_rect, &mut found);
     }
+    // egui 0.36 paints a field's hint through the panel's clip, not one of its
+    // own, so the field is the smallest painted rectangle around the hint.
+    fn frames(shape: &egui::epaint::Shape, out: &mut Vec<egui::Rect>) {
+        match shape {
+            egui::epaint::Shape::Rect(rect) => out.push(rect.rect),
+            egui::epaint::Shape::Vec(shapes) => shapes.iter().for_each(|s| frames(s, out)),
+            _ => {}
+        }
+    }
+    let mut rectangles = Vec::new();
+    for clipped in &output.shapes {
+        frames(&clipped.shape, &mut rectangles);
+    }
+    for entry in &mut found {
+        let hint = entry.3;
+        if let Some(field) = rectangles
+            .iter()
+            .filter(|rect| rect.expand(1.0).contains_rect(hint))
+            .min_by(|a, b| a.area().total_cmp(&b.area()))
+        {
+            entry.2 = *field;
+        }
+    }
     for start in ["Name, e.g.", "Regular expression, such as"] {
         let (text, color, clip, rect) = found
             .iter()

@@ -92,7 +92,7 @@ impl MonitorApp {
                             text_field(&mut self.import_directory)
                                 .desired_width(crate::theme::edit_width(path_width))
                                 .font(egui::TextStyle::Monospace)
-                                .hint_text(theme::hint_text("Bundle directory")),
+                                .hint_text(crate::theme::placeholder(ui, "Bundle directory")),
                         );
                         if icon(
                             ui,

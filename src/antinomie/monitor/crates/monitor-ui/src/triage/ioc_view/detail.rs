@@ -238,7 +238,7 @@ impl View {
             if verdict.outcome == Outcome::Matched {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.reason)
-                        .hint_text(theme::hint_text("Why is this harmless? (optional)"))
+                        .hint_text(crate::theme::placeholder(ui, "Why is this harmless? (optional)"))
                         .desired_width(ui.available_width()),
                 );
             }

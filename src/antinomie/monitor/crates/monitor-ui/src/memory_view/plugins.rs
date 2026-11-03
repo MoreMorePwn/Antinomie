@@ -808,7 +808,7 @@ fn plugin_choices(
     let mut chosen = None;
     ui.add(
         egui::TextEdit::singleline(filter.search)
-            .hint_text(crate::theme::hint_text("Search plugins"))
+            .hint_text(crate::theme::placeholder(ui, "Search plugins"))
             .desired_width(f32::INFINITY),
     )
     .request_focus();
@@ -994,7 +994,7 @@ fn plugin_options(ui: &mut egui::Ui, current: &PluginInfo, values: &mut Vec<(Str
                     };
                     ui.add(
                         egui::TextEdit::singleline(value)
-                            .hint_text(crate::theme::hint_text(hint))
+                            .hint_text(crate::theme::placeholder(ui, hint))
                             .font(egui::TextStyle::Monospace)
                             .margin(theme::TEXT_EDIT_MARGIN)
                             .desired_width(crate::theme::edit_width(

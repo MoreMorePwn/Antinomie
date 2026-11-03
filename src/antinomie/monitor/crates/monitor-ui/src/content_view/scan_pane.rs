@@ -241,7 +241,10 @@ impl ScanPane {
                 Kind::Regex => {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.pattern)
-                            .hint_text("pattern, e.g. https?://[a-z0-9./-]+")
+                            .hint_text(crate::theme::placeholder(
+                                ui,
+                                "pattern, e.g. https?://[a-z0-9./-]+",
+                            ))
                             .desired_width(crate::theme::plain_edit_width(280.0))
                             .id(egui::Id::new((salt, "content-pattern"))),
                     );

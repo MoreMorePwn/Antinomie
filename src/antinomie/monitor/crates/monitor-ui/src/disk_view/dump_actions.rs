@@ -415,7 +415,7 @@ impl DiskView {
                     ui.label("Image file");
                     ui.add(
                         egui::TextEdit::singleline(&mut import.path)
-                            .hint_text(theme::hint_text("/path/to/root.ext4"))
+                            .hint_text(crate::theme::placeholder(ui, "/path/to/root.ext4"))
                             .font(egui::TextStyle::Monospace)
                             .margin(theme::TEXT_EDIT_MARGIN)
                             .desired_width(crate::theme::edit_width(320.0)),

@@ -1290,8 +1290,10 @@ mod tests {
         let font = TextStyle::Monospace.resolve(&ctx.global_style());
         let cell = ctx
             .fonts_mut(|fonts| egui::vec2(fonts.glyph_width(&font, 'M'), fonts.row_height(&font)));
-        let (rows, cols) = terminal.size();
-        let track_x = f32::from(cols) * cell.x + BAR / 2.0;
+        let (rows, _) = terminal.size();
+        // The bar sits at the pane's right edge; the glyph metrics of egui 0.36
+        // leave up to a cell of slack between the last column and it.
+        let track_x = pane.x - BAR / 2.0;
         let top = egui::pos2(track_x, 1.0);
         let bottom = egui::pos2(track_x, f32::from(rows) * cell.y - 1.0);
         let press = |at| {

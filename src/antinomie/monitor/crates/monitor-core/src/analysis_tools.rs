@@ -1249,11 +1249,14 @@ mod tests {
                 );
                 assert!(download.size > 0);
             }
-            // Volatility, MemNixFS, Sigma and GEF only run from Antinomie's own
-            // pinned install.
+            // Volatility, MemNixFS, Sigma, GEF and the geolocation database
+            // only run from Antinomie's own pinned install.
             assert_eq!(
                 system_candidates(package.id).is_empty(),
-                matches!(package.id, "volatility3" | "memnixfs" | "sigma" | "gef")
+                matches!(
+                    package.id,
+                    "volatility3" | "memnixfs" | "sigma" | "gef" | "geoip"
+                )
             );
         }
         // Magika is the official release binary of exactly the listed version,

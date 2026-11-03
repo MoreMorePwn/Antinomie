@@ -266,7 +266,7 @@ impl Editor {
                 ui.add_space(6.0);
                 ui.add(
                     egui::TextEdit::multiline(&mut self.text)
-                        .hint_text(theme::hint_text("What this shows"))
+                        .hint_text(crate::theme::placeholder(ui, "What this shows"))
                         .desired_rows(5)
                         .desired_width(f32::INFINITY)
                         .char_limit(MAX_NOTE),

@@ -255,7 +255,7 @@ impl Viewer {
                 }
                 let field = ui.add(
                     egui::TextEdit::singleline(&mut self.go_to)
-                        .hint_text(crate::theme::hint_text("Offset, e.g. 0x1f00"))
+                        .hint_text(crate::theme::placeholder(ui, "Offset, e.g. 0x1f00"))
                         .desired_width(crate::theme::plain_edit_width(150.0)),
                 );
                 let entered =

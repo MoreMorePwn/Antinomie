@@ -91,7 +91,7 @@ impl NetworkView {
                         let width = ui.available_width().max(100.0);
                         ui.add(
                             egui::TextEdit::singleline(&mut self.filter)
-                                .hint_text(theme::hint_text(QUICK_SEARCH_HINT))
+                                .hint_text(crate::theme::placeholder(ui, QUICK_SEARCH_HINT))
                                 .margin(theme::TEXT_EDIT_MARGIN)
                                 .desired_width(crate::theme::edit_width(width)),
                         )
@@ -129,7 +129,8 @@ impl NetworkView {
                                 ui.add_enabled(
                                     false,
                                     egui::TextEdit::singleline(&mut self.display_filter)
-                                        .hint_text(theme::hint_text(
+                                        .hint_text(crate::theme::placeholder(
+                                            ui,
                                             "filter e.g. tcp.port == 443 (needs tshark)",
                                         ))
                                         .margin(theme::TEXT_EDIT_MARGIN)

@@ -434,7 +434,7 @@ impl Model {
                         ui.add(
                             egui::TextEdit::singleline(&mut detection.sigma_python)
                                 .desired_width(ui.available_width())
-                                .hint_text(crate::theme::hint_text("Empty: Antinomie's Sigma tool")),
+                                .hint_text(crate::theme::placeholder(ui, "Empty: Antinomie's Sigma tool")),
                         );
                     }
                     _ => {}

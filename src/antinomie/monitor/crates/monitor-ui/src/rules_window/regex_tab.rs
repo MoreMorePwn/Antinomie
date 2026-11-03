@@ -171,7 +171,8 @@ impl Model {
                     .clicked();
                 ui.add(
                     egui::TextEdit::singleline(pattern)
-                        .hint_text(theme::hint_text(
+                        .hint_text(crate::theme::placeholder(
+                            ui,
                             "Regular expression, such as evil[0-9]+\\.example\\.com",
                         ))
                         .char_limit(PATTERN_MAX_LEN)
@@ -197,7 +198,7 @@ impl Model {
                 NAME_WIDTH.max(hint_width + 2.0 * f32::from(theme::TEXT_EDIT_MARGIN.left));
             ui.add(
                 egui::TextEdit::singleline(&mut self.regex.name)
-                    .hint_text(theme::hint_text(NAME_HINT))
+                    .hint_text(crate::theme::placeholder(ui, NAME_HINT))
                     .char_limit(80)
                     .desired_width(crate::theme::plain_edit_width(
                         name_width.min((ui.available_width() - 120.0).max(120.0)),
@@ -226,7 +227,10 @@ impl Model {
             ui.label("Try on");
             ui.add(
                 egui::TextEdit::singleline(&mut self.regex.sample)
-                    .hint_text(theme::hint_text("Paste a string to see what matches"))
+                    .hint_text(crate::theme::placeholder(
+                        ui,
+                        "Paste a string to see what matches",
+                    ))
                     .desired_width(ui.available_width()),
             );
         });

@@ -219,7 +219,10 @@ impl MonitorApp {
         ui.horizontal_wrapped(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.samples_page.query)
-                    .hint_text(theme::hint_text("Name, description, tag or SHA-256 prefix"))
+                    .hint_text(crate::theme::placeholder(
+                        ui,
+                        "Name, description, tag or SHA-256 prefix",
+                    ))
                     .desired_width(crate::theme::plain_edit_width(380.0)),
             );
             let count = self.samples_page.tag_filter.len();

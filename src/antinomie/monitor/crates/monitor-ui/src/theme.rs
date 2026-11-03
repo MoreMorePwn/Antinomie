@@ -94,6 +94,18 @@ pub fn muted() -> Color32 {
 pub fn hint_text(text: impl Into<String>) -> egui::RichText {
     egui::RichText::new(text).color(hint())
 }
+/// The placeholder of an empty input, in the hint colour. egui 0.36 paints a
+/// text edit's hint in the visuals' weak colour whatever colour a `RichText`
+/// gives it, but leaves a laid-out job alone, so the hint is one.
+pub fn placeholder(ui: &egui::Ui, text: impl Into<String>) -> egui::WidgetText {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    egui::WidgetText::LayoutJob(std::sync::Arc::new(egui::text::LayoutJob::simple(
+        text.into(),
+        font,
+        hint(),
+        f32::INFINITY,
+    )))
+}
 /// Placeholder (hint) text color of an empty input.
 pub fn hint() -> Color32 {
     palette().hint
@@ -1029,7 +1041,8 @@ mod tests {
     }
 
     /// The theme paints plain text in the text color, so a placeholder given
-    /// as a plain string would read white: each one is `theme::hint_text`.
+    /// as a plain string would read white, and egui 0.36 repaints a `RichText`
+    /// hint in its own weak colour: each one is `theme::placeholder`.
     #[test]
     fn every_placeholder_is_drawn_in_the_hint_color() {
         fn walk(dir: &std::path::Path, bad: &mut Vec<String>) {
@@ -1041,8 +1054,8 @@ mod tests {
                     let text = std::fs::read_to_string(&path).unwrap();
                     for (at, _) in text.match_indices(".hint_text(") {
                         let rest = text[at + ".hint_text(".len()..].trim_start();
-                        if !(rest.starts_with("theme::hint_text(")
-                            || rest.starts_with("crate::theme::hint_text("))
+                        if !(rest.starts_with("theme::placeholder(")
+                            || rest.starts_with("crate::theme::placeholder("))
                         {
                             let line = text[..at].matches('\n').count() + 1;
                             bad.push(format!("{}:{line}", path.display()));

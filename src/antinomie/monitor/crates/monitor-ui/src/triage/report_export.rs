@@ -367,7 +367,7 @@ impl TriageView {
                             edited |= ui
                                 .add(
                                     egui::TextEdit::singleline(&mut choices.folder)
-                                        .hint_text(crate::theme::hint_text("<recording>/report"))
+                                        .hint_text(crate::theme::placeholder(ui, "<recording>/report"))
                                         .desired_width(f32::INFINITY),
                                 )
                                 .changed();

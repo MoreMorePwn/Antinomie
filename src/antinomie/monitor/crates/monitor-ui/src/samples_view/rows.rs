@@ -297,7 +297,7 @@ impl SamplesView {
                 let edit = ui.add_sized(
                     egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
                     egui::TextEdit::singleline(&mut self.text)
-                        .hint_text(crate::theme::hint_text(format!(
+                        .hint_text(crate::theme::placeholder(ui, format!(
                             "{}  {}",
                             egui_phosphor::regular::MAGNIFYING_GLASS,
                             match self.source {
@@ -335,13 +335,13 @@ impl SamplesView {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.range_start)
                         .desired_width(crate::theme::plain_edit_width(120.0))
-                        .hint_text(crate::theme::hint_text("YYYY-MM-DD")),
+                        .hint_text(crate::theme::placeholder(ui, "YYYY-MM-DD")),
                 );
                 ui.label("through");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.range_end)
                         .desired_width(crate::theme::plain_edit_width(120.0))
-                        .hint_text(crate::theme::hint_text("YYYY-MM-DD")),
+                        .hint_text(crate::theme::placeholder(ui, "YYYY-MM-DD")),
                 );
                 ui.checkbox(&mut self.offline, "Offline");
                 if ui

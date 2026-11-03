@@ -165,7 +165,7 @@ mod tests {
     fn sizes_read_in_mib() {
         assert_eq!(crate::values::short_size(64 << 20), "64.0 MiB");
         assert_eq!(crate::values::short_size(134_660_096), "128.4 MiB");
-        assert_eq!(crate::values::short_size(100), "100 B");
+        assert_eq!(crate::values::short_size(100), "100 bytes");
     }
 
     #[test]

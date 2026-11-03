@@ -193,6 +193,8 @@ fn opening_it_reads_the_host_again_and_does_not_open_the_dependencies_window() {
     assert!(app.dependencies.checking());
     settle(&mut app);
     assert!(!app.dependencies.open, "a quiet recheck never opens it");
+    // The window starts at Appearance (0.8.2); the base is the next step.
+    app.getting_started.step = Step::Base;
     let text = shown(&mut app, &ctx);
     assert!(
         text.iter().any(|label| label.contains("is installed")),

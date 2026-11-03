@@ -319,7 +319,7 @@ impl MonitorApp {
             );
             ui.add(
                 egui::TextEdit::singleline(&mut state.search)
-                    .hint_text(theme::hint_text("Search value, path, process"))
+                    .hint_text(crate::theme::placeholder(ui, "Search value, path, process"))
                     .desired_width(crate::theme::plain_edit_width(220.0)),
             );
             for (label, flag, tip) in [

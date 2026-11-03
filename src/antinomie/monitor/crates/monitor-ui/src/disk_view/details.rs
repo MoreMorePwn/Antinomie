@@ -345,15 +345,7 @@ impl DiskView {
                 row(ui, "Name", display_name(&entry.name));
                 row(ui, "Type", entry.kind.label());
                 if matches!(entry.kind, DiskEntryKind::File | DiskEntryKind::Symlink) {
-                    row(
-                        ui,
-                        "Size",
-                        format!(
-                            "{} bytes ({})",
-                            entry.size,
-                            crate::values::short_size(entry.size)
-                        ),
-                    );
+                    row(ui, "Size", crate::values::file_size(entry.size));
                 }
                 if let Some(target) = &entry.link_target {
                     row(ui, "Points to", display_name(target));

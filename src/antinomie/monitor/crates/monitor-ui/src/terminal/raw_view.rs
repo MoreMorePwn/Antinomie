@@ -130,7 +130,7 @@ impl Terminal {
         let state = &mut self.raw_view;
         let field = ui.add(
             egui::TextEdit::singleline(&mut state.find)
-                .hint_text(theme::hint_text("Find"))
+                .hint_text(crate::theme::placeholder(ui, "Find"))
                 .desired_width(crate::theme::plain_edit_width(140.0)),
         );
         self.refresh_matches();

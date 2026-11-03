@@ -637,7 +637,7 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                 ui.add(
                     egui::TextEdit::singleline(&mut profile.mac)
                         .desired_width(crate::theme::plain_edit_width(150.0))
-                        .hint_text(crate::theme::hint_text("52:54:00:12:34:56")),
+                        .hint_text(crate::theme::placeholder(ui, "52:54:00:12:34:56")),
                 );
                 if ui
                     .button("Random")
@@ -672,7 +672,7 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                 ui.add(
                     egui::TextEdit::singleline(&mut profile.identity.nic_subsystem)
                         .desired_width(crate::theme::plain_edit_width(150.0))
-                        .hint_text(crate::theme::hint_text("8086:0000")),
+                        .hint_text(crate::theme::placeholder(ui, "8086:0000")),
                 )
                 .on_hover_text("A board's own card carries its maker's PCI subsystem IDs");
                 ui.end_row();
@@ -682,7 +682,7 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                 ui.add(
                     egui::TextEdit::singleline(&mut profile.nat.network)
                         .desired_width(crate::theme::plain_edit_width(150.0))
-                        .hint_text(crate::theme::hint_text("10.0.2.0/24")),
+                        .hint_text(crate::theme::placeholder(ui, "10.0.2.0/24")),
                 );
                 if ui
                     .button("Home")

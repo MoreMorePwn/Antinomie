@@ -152,7 +152,7 @@ pub(super) fn breakpoints(
                 .desired_width(crate::theme::plain_edit_width(
                     (ui.available_width() - 70.0).clamp(60.0, 240.0),
                 ))
-                .hint_text(theme::hint_text("address e.g. 0x401136")),
+                .hint_text(crate::theme::placeholder(ui, "address e.g. 0x401136")),
         );
         let entered =
             response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));

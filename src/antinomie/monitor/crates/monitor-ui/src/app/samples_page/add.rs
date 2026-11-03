@@ -194,7 +194,10 @@ impl AddDialog {
                             let edit = ui.add_enabled(
                                 !busy,
                                 egui::TextEdit::singleline(&mut self.path)
-                                    .hint_text(theme::hint_text("Path on this computer"))
+                                    .hint_text(crate::theme::placeholder(
+                                        ui,
+                                        "Path on this computer",
+                                    ))
                                     .font(egui::TextStyle::Monospace)
                                     .desired_width(crate::theme::plain_edit_width(360.0)),
                             );

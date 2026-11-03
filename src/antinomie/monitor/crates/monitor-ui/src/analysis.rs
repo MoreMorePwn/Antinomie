@@ -279,7 +279,7 @@ fn fields(
                 ui.add(
                     edit.margin(crate::theme::TEXT_EDIT_MARGIN)
                         .font(egui::TextStyle::Monospace)
-                        .hint_text(crate::theme::hint_text(hint))
+                        .hint_text(crate::theme::placeholder(ui, hint))
                         .desired_width(f32::INFINITY),
                 )
                 .labelled_by(label_response.id);
@@ -327,6 +327,9 @@ fn identity_fields(ui: &mut egui::Ui, request: &mut ExecRequest) {
         let room = ui.max_rect().right() - ui.next_widget_position().x;
         if room < pair + ui.spacing().item_spacing.x {
             ui.end_row();
+            // egui 0.36 starts the next row at height 0 (0.31 kept the last
+            // row's), so the UID label would sit above its field's middle.
+            ui.set_row_height(ui.spacing().interact_size.y);
         }
         let mut width = 3.0 * ui.spacing().item_spacing.x;
         width += ui

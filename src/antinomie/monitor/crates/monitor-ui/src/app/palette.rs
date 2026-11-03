@@ -335,7 +335,8 @@ impl MonitorApp {
                 let edit = ui.add(
                     egui::TextEdit::singleline(&mut state.query)
                         .id(egui::Id::new("command_palette_query"))
-                        .hint_text(theme::hint_text(
+                        .hint_text(crate::theme::placeholder(
+                            ui,
                             "Type a command, tab, machine, run or sample",
                         ))
                         .margin(theme::TEXT_EDIT_MARGIN)

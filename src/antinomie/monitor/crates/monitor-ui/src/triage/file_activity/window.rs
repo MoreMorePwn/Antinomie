@@ -451,7 +451,7 @@ impl Window {
     fn filters(&mut self, ui: &mut egui::Ui) {
         ui.add(
             egui::TextEdit::singleline(&mut self.filter)
-                .hint_text(theme::hint_text("Filter by path"))
+                .hint_text(crate::theme::placeholder(ui, "Filter by path"))
                 .desired_width(f32::INFINITY),
         );
         ui.horizontal_wrapped(|ui| {

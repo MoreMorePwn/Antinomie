@@ -195,7 +195,7 @@ impl ExportDialog {
                             ui.label("Key file");
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.key)
-                                    .hint_text(theme::hint_text("Your own key, not an app key"))
+                                    .hint_text(crate::theme::placeholder(ui, "Your own key, not an app key"))
                                     .desired_width(crate::theme::plain_edit_width(380.0)),
                             );
                         });

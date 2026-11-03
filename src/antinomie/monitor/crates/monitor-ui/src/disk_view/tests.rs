@@ -647,7 +647,7 @@ fn size_mode_and_ids_are_fixed_width_fields_so_the_rows_line_up() {
     let texts = scene.settle(&mut view, &ctx);
     // The ids are padded to the widest uid: the colons line up. (The test
     // text drops the padding at either end of a label.)
-    assert!(has(&texts, "64 B  -rwxr-xr-x     0:0"), "{texts:?}");
+    assert!(has(&texts, "64 bytes  -rwxr-xr-x     0:0"), "{texts:?}");
     assert!(has(&texts, "drwxrwxrwx  1000:100"), "{texts:?}");
 }
 
@@ -680,7 +680,7 @@ fn the_extraction_message_bolds_the_name_and_can_be_closed() {
         "{texts:?}"
     );
     // The close button clears the message.
-    scene.click_details(&mut view, &ctx, egui_phosphor::regular::X);
+    scene.click_details(&mut view, &ctx, "×");
     assert!(view.status.is_none() && view.status_name.is_none());
     let _ = std::fs::remove_dir_all(host.parent().unwrap());
 }
@@ -867,7 +867,7 @@ fn selecting_a_file_fills_the_details() {
     for expected in [
         "/busybox",
         "File",
-        "64 bytes (64 B)",
+        "64 bytes",
         "0755  -rwxr-xr-x",
         "0:0",
         "Guest file; never executed on the host.",
@@ -1027,7 +1027,7 @@ fn a_file_over_the_extraction_limit_needs_a_confirmation() {
     assert!(
         texts
             .iter()
-            .any(|text| text.contains("300 MiB, over the 256 MiB extraction limit")),
+            .any(|text| text.contains("300.0 MiB, over the 256.0 MiB extraction limit")),
         "{texts:?}"
     );
     scene.click_details(&mut view, &ctx, "Extract anyway");

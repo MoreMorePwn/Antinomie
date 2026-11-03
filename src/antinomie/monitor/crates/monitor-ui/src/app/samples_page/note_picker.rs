@@ -654,7 +654,7 @@ impl Picker {
                     );
                     ui.add(
                         egui::TextEdit::singleline(&mut self.search)
-                            .hint_text(theme::hint_text(hint))
+                            .hint_text(crate::theme::placeholder(ui, hint))
                             .frame(egui::Frame::NONE)
                             .desired_width(f32::INFINITY),
                     )

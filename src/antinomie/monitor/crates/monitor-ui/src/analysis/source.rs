@@ -46,11 +46,11 @@ pub(crate) struct SourceOutcome {
 pub(crate) const ARGUMENT_PLACEHOLDER: &str =
     "One argument per line\n--config\n/tmp/sample.conf\n-v";
 
-fn text<'a>(value: &'a mut String, hint: &str) -> egui::TextEdit<'a> {
+fn text<'a>(ui: &egui::Ui, value: &'a mut String, hint: &str) -> egui::TextEdit<'a> {
     egui::TextEdit::singleline(value)
         .margin(theme::TEXT_EDIT_MARGIN)
         .font(egui::TextStyle::Monospace)
-        .hint_text(theme::hint_text(hint))
+        .hint_text(crate::theme::placeholder(ui, hint))
 }
 
 /// A hint line in the field column, under the field it explains.
@@ -89,7 +89,7 @@ pub(crate) fn rows(
     match *choice {
         LaunchSource::Guest => {
             let label = ui.label("Executable");
-            ui.add(text(executable, "/path/in/guest").desired_width(f32::INFINITY))
+            ui.add(text(ui, executable, "/path/in/guest").desired_width(f32::INFINITY))
                 .labelled_by(label.id);
             ui.end_row();
         }
@@ -98,7 +98,7 @@ pub(crate) fn rows(
             if ui
                 .add_enabled(
                     !upload.busy,
-                    text(upload.host_file, "Choose or enter a file path")
+                    text(ui, upload.host_file, "Choose or enter a file path")
                         .desired_width(f32::INFINITY),
                 )
                 .labelled_by(label.id)
@@ -126,7 +126,7 @@ pub(crate) fn rows(
             let label = ui.label("Guest path");
             ui.add_enabled(
                 !upload.busy,
-                text(upload.destination, "/tmp/sample").desired_width(f32::INFINITY),
+                text(ui, upload.destination, "/tmp/sample").desired_width(f32::INFINITY),
             )
             .labelled_by(label.id);
             ui.end_row();

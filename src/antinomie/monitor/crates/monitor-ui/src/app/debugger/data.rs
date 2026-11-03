@@ -157,7 +157,7 @@ fn memory(
                 .desired_width(crate::theme::plain_edit_width(
                     (ui.available_width() - 70.0).clamp(60.0, 260.0),
                 ))
-                .hint_text(theme::hint_text("address e.g. 0x7ffd0000")),
+                .hint_text(crate::theme::placeholder(ui, "address e.g. 0x7ffd0000")),
         );
         let entered =
             response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));

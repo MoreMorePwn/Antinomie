@@ -138,7 +138,7 @@ fn filter_edit_iter<'a>(
         }
     }
     let mut output = egui::TextEdit::singleline(text)
-        .hint_text(crate::theme::hint_text(format!("filter e.g. {hint}")))
+        .hint_text(crate::theme::placeholder(ui, format!("filter e.g. {hint}")))
         .desired_width(width)
         .margin(crate::theme::TEXT_EDIT_MARGIN)
         .show(ui);

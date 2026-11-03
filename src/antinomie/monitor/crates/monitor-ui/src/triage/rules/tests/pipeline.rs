@@ -14,7 +14,7 @@ fn a_failed_call_is_one_tier_down_and_says_so() {
     assert!(list(row[0], "finding.why")
         .iter()
         .any(|line| line.contains("failed")));
-    assert_eq!(row[0].cells[11].text, "failed (-13)");
+    assert_eq!(row[0].cells[11].text, "failed (EACCES)");
 }
 
 #[test]

@@ -401,7 +401,11 @@ pub(crate) fn texts(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
         match shape {
             egui::Shape::Text(text) => {
                 let rect = text.visual_bounding_rect();
-                if clip.contains_rect(rect) {
+                // The glyph quads of egui 0.36 reach one pixel past the ink
+                // (anti-aliasing), and egui_extras 0.36 clips a table cell
+                // exactly at its rectangle, where 0.31 allowed a margin of
+                // three points; a text is clipped when more than that is out.
+                if clip.expand(1.0).contains_rect(rect) {
                     // Dock tab names carry padding spaces.
                     texts.push((text.galley.text().trim().to_owned(), rect));
                 }

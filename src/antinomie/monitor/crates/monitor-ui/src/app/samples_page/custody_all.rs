@@ -141,7 +141,10 @@ impl CustodyAll {
         ui.horizontal_wrapped(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.query)
-                    .hint_text(theme::hint_text("Sample, SHA-256, actor or detail"))
+                    .hint_text(crate::theme::placeholder(
+                        ui,
+                        "Sample, SHA-256, actor or detail",
+                    ))
                     .desired_width(crate::theme::plain_edit_width(300.0)),
             );
             for (key, label) in KINDS {

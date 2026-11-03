@@ -1527,7 +1527,7 @@ mod tests {
             .1;
         let health = texts.iter().find(|(text, _)| text == "Health").unwrap().1;
         assert!(configuration.bottom() < health.top());
-        for expected in ["6 vCPU", "host", "3 GiB", "24 GiB disk"] {
+        for expected in ["6 vCPU", "host", "3.0 GiB", "24 GiB disk"] {
             assert!(
                 texts.iter().any(|(text, _)| text == expected),
                 "missing {expected}"
@@ -1623,8 +1623,8 @@ mod tests {
                         .collect();
                     assert_eq!(
                         cards.len(),
-                        10,
-                        "five resource cards, capture storage and four configuration cards must remain visible"
+                        11,
+                        "five resource cards, capture storage, four configuration cards and the Snapshots box must remain visible"
                     );
                     cards.sort_by(|a, b| {
                         a.top()
