@@ -21,11 +21,6 @@ pub(crate) struct RouteProgram {
     pub path: Option<std::path::PathBuf>,
 }
 
-/// The rounded size alone, for a button.
-fn short_size(bytes: u64) -> String {
-    antinomie_monitor_core::byte_size::short_size(bytes)
-}
-
 /// Draw the page; returns a command to send.
 pub(crate) fn show(
     ui: &mut egui::Ui,
@@ -231,7 +226,7 @@ pub(crate) fn tool_row(
                             RichText::new(format!(
                                 "Install {} · {}",
                                 tool.version.split(' ').next().unwrap_or(&tool.version),
-                                short_size(tool.size)
+                                crate::values::short_size(tool.size)
                             ))
                             .color(theme::palette().primary_text),
                         )
@@ -275,8 +270,8 @@ pub(crate) fn tool_row(
                 egui::ProgressBar::new(fraction).text(match install.stage.as_str() {
                     "download" => format!(
                         "Downloading {} of {}",
-                        short_size(install.received),
-                        short_size(install.total)
+                        crate::values::short_size(install.received),
+                        crate::values::short_size(install.total)
                     ),
                     "verify" => "Checking SHA-256".into(),
                     "unpack" => "Unpacking".into(),

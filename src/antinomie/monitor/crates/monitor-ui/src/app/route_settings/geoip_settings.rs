@@ -414,8 +414,8 @@ impl MonitorApp {
             let text = match update.stage.as_str() {
                 "download" => format!(
                     "Downloading {} of about {}",
-                    antinomie_monitor_core::byte_size::short_size(update.received),
-                    antinomie_monitor_core::byte_size::short_size(update.total)
+                    crate::values::short_size(update.received),
+                    crate::values::short_size(update.total)
                 ),
                 "verify" => "Recording SHA-256".to_owned(),
                 "unpack" => "Unpacking".to_owned(),
