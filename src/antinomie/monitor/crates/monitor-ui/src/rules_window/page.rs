@@ -181,7 +181,9 @@ impl Model {
             Tab::Installed
         };
         self.select_none();
-        self.ioc.stale = true;
+        if engine == super::ioc::TAB {
+            self.show_ioc();
+        }
     }
 
     /// Forget the selected pack or group and the rules listed for it.
