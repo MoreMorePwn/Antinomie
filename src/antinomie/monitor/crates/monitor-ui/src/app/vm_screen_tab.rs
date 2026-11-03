@@ -52,7 +52,7 @@ impl MonitorApp {
         if let Some(crate::vm_screen::Request::TypeClipboard) =
             self.vm_screen.show(ui, shots.as_deref(), can_type)
         {
-            self.request_clipboard(&ui.ctx().clone());
+            self.run_action(ui.ctx(), Action::TypeClipboard);
         }
     }
 }
