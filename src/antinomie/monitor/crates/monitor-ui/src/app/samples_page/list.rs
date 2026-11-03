@@ -127,6 +127,9 @@ impl MonitorApp {
                 }
             });
         let action = self.library_table(ui, &shown, &order, font);
+        if cleared {
+            self.samples_page.notice = None;
+        }
         match action {
             Some(Action::Select(sha256)) => self.samples_page.selected = Some(sha256),
             Some(Action::Open(sha256)) => {
@@ -323,10 +326,6 @@ impl MonitorApp {
         ui.scope(|ui| {
             // Not selectable: a click on the text of any cell reaches the row.
             ui.style_mut().interaction.selectable_labels = false;
-        if cleared {
-            self.samples_page.notice = None;
-        }
-            
             FitBuilder::new(ui)
                 .id_salt("library_samples")
                 .sense(egui::Sense::click())
