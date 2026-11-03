@@ -699,9 +699,10 @@ pub(super) fn mapping_choices(core: &CoreDump) -> Vec<(String, String)> {
         .iter()
         .zip(mapping_labels(core))
         .map(|(mapping, label)| {
-            let shown = if label.is_unnamed() || label.is_special() {
-                label.name.clone()
-            } else if label.name.ends_with(" file extents)") {
+            let shown = if label.is_unnamed()
+                || label.is_special()
+                || label.name.ends_with(" file extents)")
+            {
                 label.name.clone()
             } else {
                 Path::new(&label.name)
@@ -710,8 +711,13 @@ pub(super) fn mapping_choices(core: &CoreDump) -> Vec<(String, String)> {
                     .unwrap_or(&label.name)
                     .to_owned()
             };
+            let shown = if label.is_special() {
+                shown
+            } else {
+                format!("[{shown}]")
+            };
             let label_text = format!(
-                "mmap {:x}-{:x} {} [{shown}]",
+                "mmap {:x}-{:x} {} {shown}",
                 mapping.start,
                 mapping.end(),
                 mapping.permissions()

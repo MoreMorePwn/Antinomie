@@ -9,6 +9,7 @@ const AT_PHDR: u64 = 3;
 const AT_ENTRY: u64 = 9;
 const AT_EXECFN: u64 = 31;
 const AT_SYSINFO_EHDR: u64 = 33;
+const VSYSCALL_PAGE: u64 = 0xffff_ffff_ff60_0000;
 
 pub(super) const ANONYMOUS: &str = "anonymous";
 
@@ -83,7 +84,7 @@ fn stack_index(core: &CoreDump) -> Option<(usize, &'static str)> {
     })
 }
 
-fn heap_index(core: &CoreDump, taken: &[Option<&'static str>]) -> Option<usize> {
+fn heap_index(core: &CoreDump, taken: &[Option<&'static str>]) -> Option<(usize, &'static str)> {
     // The executable is the file behind the program headers (or entry point).
     let anchor = auxv(core, AT_PHDR)
         .or_else(|| auxv(core, AT_ENTRY))
@@ -108,13 +109,44 @@ fn heap_index(core: &CoreDump, taken: &[Option<&'static str>]) -> Option<usize> 
         }
         candidates.push(index);
     }
-    match candidates.as_slice() {
+    // A first anonymous extent that starts right at the program's end is its
+    // .bss; the heap is the next one, or the lone one only as a last resort.
+    let adjacent = |index: usize| core.mappings[index].start == program_end;
+    let after = match candidates.as_slice() {
         [] => None,
+        [only] if adjacent(*only) => None,
         [only] => Some(*only),
-        // The first anonymous extent right after the program is its .bss.
-        [first, second, ..] if core.mappings[*first].start == program_end => Some(*second),
+        [first, second, ..] if adjacent(*first) => Some(*second),
         [first, ..] => Some(*first),
+    };
+    if let Some(index) = after {
+        return Some((index, "follows the program data (brk)"));
     }
+    // A program the kernel placed in the mmap area (static PIE) has its brk
+    // heap below it: the lowest writable anonymous mapping.
+    let program_start = core
+        .files
+        .iter()
+        .filter(|file| file.path.trim() == program)
+        .map(|file| file.start)
+        .min()?;
+    core.mappings
+        .iter()
+        .position(|m| {
+            m.end() <= program_start && !is_file_backed(core, m) && writable(m) && m.flags & 4 != 0
+        })
+        .filter(|index| taken[*index].is_none())
+        .map(|index| {
+            (
+                index,
+                "is the lowest writable anonymous mapping, below the program (brk)",
+            )
+        })
+        .or_else(|| {
+            candidates
+                .first()
+                .map(|index| (*index, "follows the program data (brk)"))
+        })
 }
 
 /// The label of every mapping, indexed like `CoreDump::mappings`.
@@ -165,14 +197,22 @@ pub(super) fn mapping_labels(core: &CoreDump) -> Vec<MappingLabel> {
             }
         }
     }
-    if let Some(index) = heap_index(core, &special) {
+    // The fixed legacy vsyscall page of x86-64.
+    if let Some(index) = core
+        .mappings
+        .iter()
+        .position(|m| m.start == VSYSCALL_PAGE && !is_file_backed(core, m))
+    {
         mark(
             &mut special,
             &mut names,
             index,
-            "[heap]",
-            "follows the program data (brk)",
+            "[vsyscall]",
+            "sits at the fixed x86-64 vsyscall address 0xffffffffff600000",
         );
+    }
+    if let Some((index, how)) = heap_index(core, &special) {
+        mark(&mut special, &mut names, index, "[heap]", how);
     }
     core.mappings
         .iter()

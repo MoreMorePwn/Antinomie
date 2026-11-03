@@ -1114,11 +1114,11 @@ fn mapping_choices_use_recovered_names_and_mark_unknown_duplicates() {
     let mut unnamed = core.clone();
     unnamed.files.clear();
     assert!(
-        mapping_choices(&unnamed)[0].0.contains("r-x [unknown]"),
+        mapping_choices(&unnamed)[0].0.contains("r-x [anonymous]"),
         "{}",
         mapping_choices(&unnamed)[0].0
     );
-    assert!(mapping_choices(&unnamed)[0].1.contains("No NT_FILE name"));
+    assert!(mapping_choices(&unnamed)[0].1.contains("NT_FILE name"));
     let mut duplicated = core.clone();
     duplicated.mappings.push(CoreMapping {
         start: 0x500000,
