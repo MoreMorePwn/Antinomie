@@ -440,9 +440,9 @@ pub(super) fn content(
                 (list.to_vec(), details.to_vec())
             };
             let Some(scan) = &view.scan else {
-                presentation::frame().show(ui, |ui| {
-                    presentation::heading_busy(ui, "Preparing run evidence", "", true);
-                });
+                // Centred in the panel, both ways.
+                let title = theme::section_title(ui, "Preparing run evidence");
+                theme::loading_centered(ui, title);
                 return;
             };
             presentation::heading(ui, "Detection evidence", "");

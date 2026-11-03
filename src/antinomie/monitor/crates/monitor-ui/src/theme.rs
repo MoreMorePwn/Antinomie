@@ -434,6 +434,31 @@ pub fn loading(ui: &mut egui::Ui, text: impl Into<egui::RichText>) -> egui::Resp
     .response
 }
 
+/// `loading` for a panel with nothing else to show: the spinner and the text
+/// sit in the middle of the space left, on both axes.
+pub fn loading_centered(ui: &mut egui::Ui, text: impl Into<egui::RichText>) -> egui::Response {
+    let area = ui.available_rect_before_wrap();
+    let galley = egui::WidgetText::from(text.into()).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        TextStyle::Body,
+    );
+    let spinner = ui.text_style_height(&TextStyle::Body);
+    let size = egui::vec2(
+        spinner + ui.spacing().item_spacing.x + galley.size().x,
+        spinner.max(galley.size().y),
+    );
+    let rect = egui::Rect::from_center_size(area.center(), size);
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+        ui.horizontal(|ui| {
+            self::spinner(ui);
+            ui.label(galley);
+        });
+    });
+    ui.allocate_rect(area, egui::Sense::hover())
+}
+
 /// `loading` in the weak text color, like `Ui::weak`.
 pub fn loading_weak(ui: &mut egui::Ui, text: impl Into<egui::RichText>) -> egui::Response {
     let color = ui.visuals().weak_text_color();
