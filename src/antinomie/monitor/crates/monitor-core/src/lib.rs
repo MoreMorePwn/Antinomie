@@ -92,6 +92,7 @@ pub mod typed_fields;
 mod uefi_disk;
 pub mod update_check;
 mod vm;
+pub mod vnc;
 pub mod writer;
 mod zip_safe;
 
