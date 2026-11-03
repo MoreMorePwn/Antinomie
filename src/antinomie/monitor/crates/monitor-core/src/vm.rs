@@ -616,11 +616,13 @@ impl VmProcess {
         )?;
         // The in-app screen: VNC on a unix socket next to the QMP socket (a
         // private folder), never TCP. The display backend itself is `none`.
+        // lock-key-sync=off: the app sends the key (with Shift held), not a
+        // keysym's case, so QEMU must not fix Caps Lock to match a keysym.
         let screen_socket = (!options.headless && vm.launch.screen == crate::api::VmScreen::InApp)
             .then(|| qmp_path.with_file_name("vnc.sock"));
         if let Some(socket) = &screen_socket {
             cmd.arg("-vnc").arg(format!(
-                "unix:{},lossy=off",
+                "unix:{},lossy=off,lock-key-sync=off",
                 qemu_path(socket)?
             ));
         }
