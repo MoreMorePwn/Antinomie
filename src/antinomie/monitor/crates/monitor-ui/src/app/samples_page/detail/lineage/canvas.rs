@@ -311,67 +311,7 @@ pub(super) fn show(
         Pos2::new(rect.right() - MINIMAP.x - 8.0, rect.top() + 8.0),
         MINIMAP,
     );
-    // A press that began in the minimap moves the view, not the graph.
-    let press = ui.input(|input| input.pointer.press_origin());
-    let on_minimap = press.is_some_and(|at| minimap.contains(at));
-    if on_minimap {
-        if let Some(pointer) = response.interact_pointer_pos().filter(|_| {
-            response.dragged() || response.clicked() || response.is_pointer_button_down_on()
-        }) {
-            let scale = (MINIMAP.x / layout.bounds.width().max(1.0))
-                .min(MINIMAP.y / layout.bounds.height().max(1.0));
-            let world = layout.bounds.min + (pointer - minimap.min) / scale;
-            view.offset = viewport / 2.0 - world.to_vec2() * view.zoom;
-            view.moved = true;
-        }
-    } else if response.dragged() {
-        view.offset += response.drag_delta();
-        view.moved = true;
-    }
-    if response.hovered() {
-        let (scroll, pinch, pointer) = ui.input(|input| {
-            (
-                input.raw_scroll_delta.y,
-                input.zoom_delta(),
-                input.pointer.hover_pos(),
-            )
-        });
-        let pivot = pointer.map_or(viewport / 2.0, |at| at - origin);
-        if scroll != 0.0 {
-            view.zoom_about(pivot, (scroll * 0.0015).exp());
-        }
-        if pinch != 1.0 {
-            view.zoom_about(pivot, pinch);
-        }
-    }
-    if response.clicked() {
-        response.request_focus();
-    }
-    if response.has_focus() {
-        let step = 40.0;
-        let (dx, dy, zoom, fit) = ui.input(|input| {
-            let axis = |plus: egui::Key, minus: egui::Key| {
-                f32::from(input.key_pressed(plus)) - f32::from(input.key_pressed(minus))
-            };
-            (
-                axis(egui::Key::ArrowLeft, egui::Key::ArrowRight) * step,
-                axis(egui::Key::ArrowUp, egui::Key::ArrowDown) * step,
-                axis(egui::Key::Plus, egui::Key::Minus)
-                    + axis(egui::Key::Equals, egui::Key::Minus) * 0.0,
-                input.key_pressed(egui::Key::Num0),
-            )
-        });
-        if dx != 0.0 || dy != 0.0 {
-            view.offset += egui::vec2(dx, dy);
-            view.moved = true;
-        }
-        if zoom != 0.0 {
-            view.zoom_about(viewport / 2.0, if zoom > 0.0 { 1.2 } else { 1.0 / 1.2 });
-        }
-        if fit {
-            view.fit(viewport, layout.bounds);
-        }
-    }
+    navigate(ui, &response, rect, minimap, layout, view);
     let to_screen = |rect: Rect| view.rect_to_screen(origin, rect);
     let scale = view.zoom;
     let mut hits = Hit::default();
@@ -387,50 +327,7 @@ pub(super) fn show(
     // Edges first, under the nodes; their labels are placed once all are
     // known (so none covers a node or another label) and drawn over the nodes.
     let font = egui::FontId::proportional((14.0 * scale).clamp(9.0, 20.0));
-    struct Pending<'a> {
-        edge: &'a LineageEdge,
-        galley: std::sync::Arc<egui::Galley>,
-        color: Color32,
-        route: [Pos2; 4],
-    }
-    let mut pending: Vec<Pending<'_>> = Vec::new();
-    for (index, edge) in graph.edges.iter().enumerate() {
-        let Some(Some(world_route)) = layout.routes.get(index) else {
-            continue;
-        };
-        let points = world_route.map(|point| view.screen_point(origin, point));
-        let chosen = selected_edge.is_some_and(|(a, b)| *a == edge.from && *b == edge.to);
-        let color = if chosen { palette.accent } else { palette.line };
-        painter.add(Shape::CubicBezier(
-            egui::epaint::CubicBezierShape::from_points_stroke(
-                points,
-                false,
-                Color32::TRANSPARENT,
-                stroke(if chosen { 2.0 } else { 1.3 }, color),
-            ),
-        ));
-        // The arrow head at the child's end.
-        let end = points[3];
-        let back = (points[3] - points[2]).normalized();
-        let side = egui::vec2(-back.y, back.x);
-        let tip = 7.0 * scale.clamp(0.6, 1.4);
-        painter.add(Shape::convex_polygon(
-            vec![
-                end,
-                end - back * tip + side * tip * 0.45,
-                end - back * tip - side * tip * 0.45,
-            ],
-            color,
-            Stroke::NONE,
-        ));
-        let text = antinomie_monitor_core::samples::runs_label(&edge.runs);
-        pending.push(Pending {
-            edge,
-            galley: painter.layout_no_wrap(text, font.clone(), palette.text),
-            color,
-            route: points,
-        });
-    }
+    let pending = draw_edges(&painter, graph, layout, view, origin, selected_edge, &font);
     let mut node_rects: Vec<(Rect, &LineageNode)> = Vec::new();
     for node in &graph.nodes {
         let Some(world) = layout.at.get(&node.id) else {
@@ -557,6 +454,204 @@ pub(super) fn show(
     // The labels: kind shapes then the runs, on the edge where nothing is in
     // the way. Placement works on screen rectangles (the label's size follows
     // the zoom), against the nodes drawn.
+    let labels = draw_labels(&painter, pending, &node_rects, &font);
+    // What an edge label stands for, as a tooltip: the counts per kind.
+    if response.hovered() {
+        if let Some(at) = ui
+            .input(|input| input.pointer.hover_pos())
+            .filter(|at| !in_minimap(*at))
+        {
+            if let Some((_, edge)) = labels.iter().rev().find(|(pill, _)| pill.contains(at)) {
+                egui::show_tooltip_at_pointer(
+                    ui.ctx(),
+                    ui.layer_id(),
+                    egui::Id::new(("lineage_edge", &edge.from, &edge.to)),
+                    |ui| {
+                        ui.label(super::edge_summary(edge));
+                    },
+                );
+            }
+        }
+    }
+    // Right-click: the node under the pointer gets its menu.
+    if response.secondary_clicked() {
+        *context = response
+            .interact_pointer_pos()
+            .filter(|at| !in_minimap(*at))
+            .and_then(|at| {
+                node_rects
+                    .iter()
+                    .rev()
+                    .find(|(box_, _)| box_.contains(at))
+                    .map(|(_, node)| node.id.clone())
+            });
+    }
+    response.context_menu(|ui| {
+        match context
+            .as_ref()
+            .and_then(|id| graph.nodes.iter().find(|node| node.id == *id))
+        {
+            Some(node) => menu(ui, node),
+            None => ui.close_menu(),
+        }
+    });
+    resolve_clicks(
+        &mut hits,
+        click,
+        double,
+        minimap,
+        &labels,
+        &node_rects,
+        sample,
+    );
+    minimap_draw(&painter, minimap, graph, layout, view, viewport, sample);
+    zoom_bar(ui, rect, view, viewport, layout, sample);
+    hits
+}
+
+/// Pan, zoom and the keys of the graph; a press in the minimap moves the view to that spot.
+fn navigate(
+    ui: &mut egui::Ui,
+    response: &egui::Response,
+    rect: Rect,
+    minimap: Rect,
+    layout: &Layout,
+    view: &mut View,
+) {
+    let viewport = rect.size();
+    let origin = rect.min;
+    // A press that began in the minimap moves the view, not the graph.
+    let press = ui.input(|input| input.pointer.press_origin());
+    let on_minimap = press.is_some_and(|at| minimap.contains(at));
+    if on_minimap {
+        if let Some(pointer) = response.interact_pointer_pos().filter(|_| {
+            response.dragged() || response.clicked() || response.is_pointer_button_down_on()
+        }) {
+            let scale = (MINIMAP.x / layout.bounds.width().max(1.0))
+                .min(MINIMAP.y / layout.bounds.height().max(1.0));
+            let world = layout.bounds.min + (pointer - minimap.min) / scale;
+            view.offset = viewport / 2.0 - world.to_vec2() * view.zoom;
+            view.moved = true;
+        }
+    } else if response.dragged() {
+        view.offset += response.drag_delta();
+        view.moved = true;
+    }
+    if response.hovered() {
+        let (scroll, pinch, pointer) = ui.input(|input| {
+            (
+                input.raw_scroll_delta.y,
+                input.zoom_delta(),
+                input.pointer.hover_pos(),
+            )
+        });
+        let pivot = pointer.map_or(viewport / 2.0, |at| at - origin);
+        if scroll != 0.0 {
+            view.zoom_about(pivot, (scroll * 0.0015).exp());
+        }
+        if pinch != 1.0 {
+            view.zoom_about(pivot, pinch);
+        }
+    }
+    if response.clicked() {
+        response.request_focus();
+    }
+    if response.has_focus() {
+        let step = 40.0;
+        let (dx, dy, zoom, fit) = ui.input(|input| {
+            let axis = |plus: egui::Key, minus: egui::Key| {
+                f32::from(input.key_pressed(plus)) - f32::from(input.key_pressed(minus))
+            };
+            (
+                axis(egui::Key::ArrowLeft, egui::Key::ArrowRight) * step,
+                axis(egui::Key::ArrowUp, egui::Key::ArrowDown) * step,
+                axis(egui::Key::Plus, egui::Key::Minus)
+                    + axis(egui::Key::Equals, egui::Key::Minus) * 0.0,
+                input.key_pressed(egui::Key::Num0),
+            )
+        });
+        if dx != 0.0 || dy != 0.0 {
+            view.offset += egui::vec2(dx, dy);
+            view.moved = true;
+        }
+        if zoom != 0.0 {
+            view.zoom_about(viewport / 2.0, if zoom > 0.0 { 1.2 } else { 1.0 / 1.2 });
+        }
+        if fit {
+            view.fit(viewport, layout.bounds);
+        }
+    }
+}
+
+/// An edge whose label is placed once all the nodes are known.
+struct Pending<'a> {
+    edge: &'a LineageEdge,
+    galley: std::sync::Arc<egui::Galley>,
+    color: Color32,
+    route: [Pos2; 4],
+}
+
+/// The edges, under the nodes, and their labels still to place.
+fn draw_edges<'a>(
+    painter: &egui::Painter,
+    graph: &'a LineageGraph,
+    layout: &Layout,
+    view: &View,
+    origin: Pos2,
+    selected_edge: Option<&(String, String)>,
+    font: &egui::FontId,
+) -> Vec<Pending<'a>> {
+    let palette = theme::palette();
+    let scale = view.zoom;
+    let mut pending: Vec<Pending<'_>> = Vec::new();
+    for (index, edge) in graph.edges.iter().enumerate() {
+        let Some(Some(world_route)) = layout.routes.get(index) else {
+            continue;
+        };
+        let points = world_route.map(|point| view.screen_point(origin, point));
+        let chosen = selected_edge.is_some_and(|(a, b)| *a == edge.from && *b == edge.to);
+        let color = if chosen { palette.accent } else { palette.line };
+        painter.add(Shape::CubicBezier(
+            egui::epaint::CubicBezierShape::from_points_stroke(
+                points,
+                false,
+                Color32::TRANSPARENT,
+                stroke(if chosen { 2.0 } else { 1.3 }, color),
+            ),
+        ));
+        // The arrow head at the child's end.
+        let end = points[3];
+        let back = (points[3] - points[2]).normalized();
+        let side = egui::vec2(-back.y, back.x);
+        let tip = 7.0 * scale.clamp(0.6, 1.4);
+        painter.add(Shape::convex_polygon(
+            vec![
+                end,
+                end - back * tip + side * tip * 0.45,
+                end - back * tip - side * tip * 0.45,
+            ],
+            color,
+            Stroke::NONE,
+        ));
+        let text = antinomie_monitor_core::samples::runs_label(&edge.runs);
+        pending.push(Pending {
+            edge,
+            galley: painter.layout_no_wrap(text, font.clone(), palette.text),
+            color,
+            route: points,
+        });
+    }
+    pending
+}
+
+/// The labels of the edges: placed where no node is in the way, and drawn.
+fn draw_labels<'a>(
+    painter: &egui::Painter,
+    pending: Vec<Pending<'a>>,
+    node_rects: &[(Rect, &LineageNode)],
+    font: &egui::FontId,
+) -> Vec<(Rect, &'a LineageEdge)> {
+    let palette = theme::palette();
     let obstacles: Vec<Rect> = node_rects.iter().map(|(box_, _)| *box_).collect();
     let sized: Vec<([Pos2; 4], Vec2)> = pending
         .iter()
@@ -600,46 +695,20 @@ pub(super) fn show(
         );
         labels.push((pill, item.edge));
     }
-    // What an edge label stands for, as a tooltip: the counts per kind.
-    if response.hovered() {
-        if let Some(at) = ui
-            .input(|input| input.pointer.hover_pos())
-            .filter(|at| !in_minimap(*at))
-        {
-            if let Some((_, edge)) = labels.iter().rev().find(|(pill, _)| pill.contains(at)) {
-                egui::show_tooltip_at_pointer(
-                    ui.ctx(),
-                    ui.layer_id(),
-                    egui::Id::new(("lineage_edge", &edge.from, &edge.to)),
-                    |ui| {
-                        ui.label(super::edge_summary(edge));
-                    },
-                );
-            }
-        }
-    }
-    // Right-click: the node under the pointer gets its menu.
-    if response.secondary_clicked() {
-        *context = response
-            .interact_pointer_pos()
-            .filter(|at| !in_minimap(*at))
-            .and_then(|at| {
-                node_rects
-                    .iter()
-                    .rev()
-                    .find(|(box_, _)| box_.contains(at))
-                    .map(|(_, node)| node.id.clone())
-            });
-    }
-    response.context_menu(|ui| {
-        match context
-            .as_ref()
-            .and_then(|id| graph.nodes.iter().find(|node| node.id == *id))
-        {
-            Some(node) => menu(ui, node),
-            None => ui.close_menu(),
-        }
-    });
+    labels
+}
+
+/// What a click or a double click chose: a badge, a label or a node.
+fn resolve_clicks(
+    hits: &mut Hit,
+    click: Option<Pos2>,
+    double: Option<Pos2>,
+    minimap: Rect,
+    labels: &[(Rect, &LineageEdge)],
+    node_rects: &[(Rect, &LineageNode)],
+    sample: &str,
+) {
+    let in_minimap = |at: Pos2| minimap.contains(at);
     // Clicks: a badge wins, then a label, then a node.
     if hits.badge.is_none() {
         if let Some(at) = click.filter(|at| !in_minimap(*at)) {
@@ -663,9 +732,6 @@ pub(super) fn show(
             }
         }
     }
-    minimap_draw(&painter, minimap, graph, layout, view, viewport, sample);
-    zoom_bar(ui, rect, view, viewport, layout, sample);
-    hits
 }
 
 fn minimap_draw(
