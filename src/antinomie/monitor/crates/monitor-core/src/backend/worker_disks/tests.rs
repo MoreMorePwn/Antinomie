@@ -225,6 +225,7 @@ fn blank_worker(root: PathBuf) -> Worker {
         host_analysis: Default::default(),
         debug: super::super::debug_service::DebugService::new().0,
         wake: None,
+        boot_wait_state: Default::default(),
     }
 }
 
