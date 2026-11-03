@@ -62,7 +62,10 @@ impl TabViewer for Viewer<'_> {
     fn is_closeable(&self, tab: &Panel) -> bool {
         matches!(
             tab,
-            Panel::Terminal(_) | Panel::AnalysisSection { .. } | Panel::Library(_) | Panel::VmScreen
+            Panel::Terminal(_)
+                | Panel::AnalysisSection { .. }
+                | Panel::Library(_)
+                | Panel::VmScreen
         )
     }
     fn on_close(&mut self, tab: &mut Panel) -> egui_dock::tab_viewer::OnCloseResponse {

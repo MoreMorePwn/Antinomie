@@ -459,7 +459,9 @@ impl WorkspaceLayout {
         let asked = app.take_vm_screen_request();
         match (socket.is_some(), open) {
             (true, None) => {
-                if asked || (app.vm_screen.is_new_boot(socket.as_deref()) && !app.vm_screen_closed()) {
+                if asked
+                    || (app.vm_screen.is_new_boot(socket.as_deref()) && !app.vm_screen_closed())
+                {
                     self.place_after_static(Panel::VmScreen);
                     self.focus(Panel::VmScreen);
                 }
@@ -472,6 +474,7 @@ impl WorkspaceLayout {
         }
         let open = self.dock.find_tab(&Panel::VmScreen).is_some();
         app.vm_screen.sync(ctx, socket.as_deref(), open);
+        self.fold_details_for_tab();
     }
 
     /// Keep the Debugger tab in step with the session: a new session opens

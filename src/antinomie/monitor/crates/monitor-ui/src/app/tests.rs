@@ -150,6 +150,8 @@ pub(crate) fn app() -> MonitorApp {
         capture_tab: false,
         process_picker: captures::ProcessPicker::default(),
         debugger: super::debugger::DebuggerPanel::default(),
+        vm_screen: Default::default(),
+        vm_screen_request: false,
         pending_observer: None,
         pending_core: None,
         pending_network: None,

@@ -50,7 +50,10 @@ impl VmScreenView {
         self.client = wanted.map(|path| {
             let ctx = ctx.clone();
             let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || ctx.request_repaint());
-            (path.to_path_buf(), ScreenClient::start(path.to_path_buf(), wake))
+            (
+                path.to_path_buf(),
+                ScreenClient::start(path.to_path_buf(), wake),
+            )
         });
     }
 
@@ -152,7 +155,11 @@ impl VmScreenView {
             self.cursor = None;
             return None;
         };
-        if self.cursor.as_ref().is_none_or(|(known, _)| *known != generation) {
+        if self
+            .cursor
+            .as_ref()
+            .is_none_or(|(known, _)| *known != generation)
+        {
             let image =
                 egui::ColorImage::from_rgba_unmultiplied([shape.width, shape.height], &shape.rgba);
             let texture = ctx.load_texture("vm-screen-cursor", image, TextureOptions::NEAREST);
@@ -247,7 +254,10 @@ impl VmScreenView {
             let png = antinomie_monitor_core::vnc::encode_png(w, h, &rgba)?;
             let dir = shots.join("screenshots");
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            let name = format!("vm-screen-{}.png", chrono::Local::now().format("%Y%m%d-%H%M%S"));
+            let name = format!(
+                "vm-screen-{}.png",
+                chrono::Local::now().format("%Y%m%d-%H%M%S")
+            );
             let path = dir.join(name);
             std::fs::write(&path, png).map_err(|e| e.to_string())?;
             Ok::<_, String>(path)
@@ -258,11 +268,7 @@ impl VmScreenView {
                 Level::Info,
                 format!("Screenshot saved: {}", path.display()),
             ),
-            Err(error) => toasts::notify(
-                ctx,
-                Level::Error,
-                format!("Screenshot failed: {error}"),
-            ),
+            Err(error) => toasts::notify(ctx, Level::Error, format!("Screenshot failed: {error}")),
         }
     }
 
@@ -317,7 +323,13 @@ impl VmScreenView {
     }
 
     /// Keyboard and pointer of the screen, for the guest.
-    fn input(&mut self, ui: &mut egui::Ui, response: &egui::Response, image: Rect, fb: (usize, usize)) {
+    fn input(
+        &mut self,
+        ui: &mut egui::Ui,
+        response: &egui::Response,
+        image: Rect,
+        fb: (usize, usize),
+    ) {
         let ctx = ui.ctx().clone();
         if response.clicked() || response.drag_started() {
             response.request_focus();
@@ -365,7 +377,8 @@ impl VmScreenView {
                     modifiers,
                     ..
                 } => {
-                    let Some(code) = physical_key.and_then(keys::of).or_else(|| keys::of(key)) else {
+                    let Some(code) = physical_key.and_then(keys::of).or_else(|| keys::of(key))
+                    else {
                         continue;
                     };
                     if pressed {

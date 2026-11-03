@@ -67,7 +67,7 @@ impl Fb {
         Self {
             w,
             h,
-            rgba: vec![0, 0, 0, 255].repeat(w * h),
+            rgba: [0, 0, 0, 255].repeat(w * h),
         }
     }
     pub(crate) fn set(&mut self, x: usize, y: usize, rgb: [u8; 3]) {
@@ -266,7 +266,8 @@ impl ScreenClient {
     /// The whole screen as it is now (RGBA), for a screenshot.
     pub fn frame(&self) -> Option<(usize, usize, Vec<u8>)> {
         let state = self.shared.state();
-        (state.have_frame && state.fb.w > 0).then(|| (state.fb.w, state.fb.h, state.fb.rgba.clone()))
+        (state.have_frame && state.fb.w > 0)
+            .then(|| (state.fb.w, state.fb.h, state.fb.rgba.clone()))
     }
 
     /// A key: `scancode` is the PC (set 1) scancode, with 0x80 added for the
@@ -342,7 +343,11 @@ fn worker_loop(shared: &Arc<Shared>, socket: &Path) {
                     break;
                 }
                 let result = session(shared, stream);
-                shared.writer.lock().unwrap_or_else(|e| e.into_inner()).take();
+                shared
+                    .writer
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take();
                 let mut state = shared.state();
                 state.status = ScreenStatus::Disconnected(match result {
                     Err(error) => error,
@@ -388,7 +393,9 @@ fn handshake(stream: &mut UnixStream) -> Result<(usize, usize, String), String> 
     if !version.starts_with(b"RFB 003.") {
         return Err("not an RFB server".into());
     }
-    stream.write_all(b"RFB 003.008\n").map_err(|e| e.to_string())?;
+    stream
+        .write_all(b"RFB 003.008\n")
+        .map_err(|e| e.to_string())?;
     let count = read_u8(stream)?;
     if count == 0 {
         let len = read_u32(stream)? as usize;
@@ -646,7 +653,7 @@ pub fn encode_png(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<u8>, S
     let mut raw = Vec::with_capacity(height * (width * 3 + 1));
     for row in rgba.chunks_exact(width * 4) {
         raw.push(0);
-        for px in row.chunks_exact(4) {
+        for px in row.as_chunks::<4>().0.iter() {
             raw.extend_from_slice(&px[..3]);
         }
     }

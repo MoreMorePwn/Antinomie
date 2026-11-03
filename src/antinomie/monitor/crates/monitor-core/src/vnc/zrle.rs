@@ -62,7 +62,10 @@ struct Bytes<'a> {
 
 impl Bytes<'_> {
     fn take(&mut self, n: usize) -> Result<&[u8], String> {
-        let end = self.pos.checked_add(n).filter(|end| *end <= self.data.len());
+        let end = self
+            .pos
+            .checked_add(n)
+            .filter(|end| *end <= self.data.len());
         let end = end.ok_or("ZRLE data ends inside a tile")?;
         let slice = &self.data[self.pos..end];
         self.pos = end;
