@@ -35,9 +35,10 @@ mod catalog;
 mod dumps;
 mod memnixfs;
 mod plugins;
+mod result_page;
 mod results;
 
-use self::{dumps::*, memnixfs::Engine, plugins::*, results::*};
+use self::{dumps::*, memnixfs::Engine, plugins::*, result_page::running_job, results::*};
 
 /// Rows of one result loaded for display.
 const RESULT_PAGE_LEN: usize = 1024;
