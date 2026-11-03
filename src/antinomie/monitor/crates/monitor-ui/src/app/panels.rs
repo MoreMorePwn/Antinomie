@@ -304,8 +304,10 @@ impl MonitorApp {
                     .get(id)
                     .is_some_and(|terminal| run_in_live_session(&self.snapshot, &terminal.run));
                 let mut commands = Vec::new();
+                let mut type_clipboard = false;
+                let clipboard_ready = self.clipboard_enabled();
                 if let Some(terminal) = self.terminals.get_mut(id) {
-                    terminal_header(ui, terminal);
+                    type_clipboard |= terminal_header(ui, terminal, clipboard_ready);
                     terminal.last_paint = Some(Instant::now());
                     let interactive = live && terminal.interactive() && !self.closing;
                     let (data, resize) = if live {
@@ -331,6 +333,9 @@ impl MonitorApp {
                 }
                 for command in commands {
                     self.send(command);
+                }
+                if type_clipboard {
+                    self.run_action(ui.ctx(), Action::TypeClipboard);
                 }
             }
         }
@@ -649,7 +654,10 @@ impl MonitorApp {
 }
 
 /// Compact process chrome, separated from the terminal grid and its selection.
-fn terminal_header(ui: &mut egui::Ui, terminal: &mut RunTerminal) {
+/// The header above a run's terminal; true when its "Type clipboard" button
+/// was clicked (`clipboard_ready`: the VM can take typed text now).
+fn terminal_header(ui: &mut egui::Ui, terminal: &mut RunTerminal, clipboard_ready: bool) -> bool {
+    let mut type_clipboard = false;
     egui::Frame::NONE
         .fill(theme::raised())
         .inner_margin(egui::Margin::symmetric(8, 5))
@@ -673,11 +681,27 @@ fn terminal_header(ui: &mut egui::Ui, terminal: &mut RunTerminal) {
                 ui.label(egui::RichText::new(egui_phosphor::regular::INFO)
                     .color(theme::muted()))
                     .on_hover_text("Drag to select text. Double-click selects a word. Copy with Ctrl+Shift+C, Ctrl+Insert, or right-click. Ctrl+C interrupts when nothing is selected. Paste with Ctrl+Shift+V or Ctrl+V. Shift+PageUp/PageDown scrolls output. Raw shows escape codes as text; Copy then gives that text.");
+                ui.separator();
+                type_clipboard = ui
+                    .add_enabled(
+                        clipboard_ready,
+                        egui::Button::new(format!(
+                            "{} Type clipboard",
+                            egui_phosphor::regular::KEYBOARD
+                        )),
+                    )
+                    .on_hover_text(
+                        "Type the host clipboard into the VM's focused input (Ctrl+Shift+Y). \
+                         Uses a US keyboard layout; Caps Lock should be off. Maximum 4 KiB.",
+                    )
+                    .on_disabled_hover_text("Needs a running VM that is not busy")
+                    .clicked();
             });
             if let Some(error) = terminal.snapshot_error.as_ref().or(terminal.replay_error.as_ref()) {
                 crate::activity::error(ui, error);
             }
         });
+    type_clipboard
 }
 
 #[cfg(test)]
