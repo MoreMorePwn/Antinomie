@@ -192,7 +192,7 @@ impl Viewer {
         egui::Window::new(self.title())
             .id(egui::Id::new("sample_viewer"))
             .open(&mut open)
-            .default_size([780.0, 540.0])
+            .default_size(egui::vec2(780.0, 540.0) + crate::widgets::frame_extra(ctx))
             .resizable(true)
             .collapsible(false)
             .show(ctx, |ui| match (ready, failed) {
@@ -256,7 +256,7 @@ impl Viewer {
                 let field = ui.add(
                     egui::TextEdit::singleline(&mut self.go_to)
                         .hint_text(crate::theme::hint_text("Offset, e.g. 0x1f00"))
-                        .desired_width(150.0),
+                        .desired_width(crate::theme::plain_edit_width(150.0)),
                 );
                 let entered =
                     field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));

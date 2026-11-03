@@ -320,7 +320,7 @@ impl ContentView {
             ui.separator();
             let go = egui::TextEdit::singleline(&mut self.goto)
                 .hint_text(format!("{} (hex)", source.address_name))
-                .desired_width(150.0)
+                .desired_width(crate::theme::plain_edit_width(150.0))
                 .id(egui::Id::new((self.salt, "content-goto")));
             let entered = ui.add(go);
             let pressed = entered.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));

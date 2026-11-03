@@ -329,8 +329,8 @@ impl MonitorApp {
             .resizable(false)
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 64.0))
-            .min_width(width)
-            .max_width(width)
+            .min_width(width + crate::widgets::frame_extra(ctx).x)
+            .max_width(width + crate::widgets::frame_extra(ctx).x)
             .show(ctx, |ui| {
                 let edit = ui.add(
                     egui::TextEdit::singleline(&mut state.query)

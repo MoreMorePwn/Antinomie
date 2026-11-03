@@ -149,7 +149,9 @@ pub(super) fn breakpoints(
         let response = ui.add_enabled(
             editable,
             egui::TextEdit::singleline(&mut panel.breakpoint_input)
-                .desired_width((ui.available_width() - 70.0).clamp(60.0, 240.0))
+                .desired_width(crate::theme::plain_edit_width(
+                    (ui.available_width() - 70.0).clamp(60.0, 240.0),
+                ))
                 .hint_text(theme::hint_text("address e.g. 0x401136")),
         );
         let entered =

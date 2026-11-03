@@ -154,7 +154,9 @@ fn memory(
         let response = ui.add_enabled(
             editable,
             egui::TextEdit::singleline(&mut panel.memory_input)
-                .desired_width((ui.available_width() - 70.0).clamp(60.0, 260.0))
+                .desired_width(crate::theme::plain_edit_width(
+                    (ui.available_width() - 70.0).clamp(60.0, 260.0),
+                ))
                 .hint_text(theme::hint_text("address e.g. 0x7ffd0000")),
         );
         let entered =

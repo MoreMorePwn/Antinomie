@@ -162,10 +162,7 @@ impl MonitorApp {
             archive_hidden_categories: Vec::new(),
             inspector: Inspector::default(),
             data_windows: crate::data_view::DataWindows::default(),
-            layout: WorkspaceLayout::restore(
-                cc.storage
-                    .and_then(|storage| eframe::get_value(storage, "workspace_layout")),
-            ),
+            layout: WorkspaceLayout::restore(crate::workspace::load_layout(cc.storage)),
             focus_panel: None,
             shortcut_ui: Default::default(),
             activity: crate::activity::Journal::restore(cc.storage),

@@ -208,7 +208,7 @@ impl MonitorApp {
             .open(&mut open)
             .order(egui::Order::Foreground)
             .collapsible(false)
-            .default_size(egui::vec2(640.0, 520.0))
+            .default_size(egui::vec2(640.0, 520.0) + crate::widgets::frame_extra(ctx))
             .show(ctx, |ui| {
                 ui.label(OWNERSHIP_RULE);
                 ui.add_space(6.0);

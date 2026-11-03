@@ -83,7 +83,7 @@ impl MonitorApp {
                         text_field(&mut self.source)
                             .font(egui::TextStyle::Monospace)
                             .hint_text(crate::theme::hint_text("Choose or enter a file path"))
-                            .desired_width(400.0),
+                            .desired_width(crate::theme::edit_width(400.0)),
                     )
                     .changed()
                 {
@@ -94,7 +94,7 @@ impl MonitorApp {
                 ui.add(
                     text_field(&mut self.destination)
                         .font(egui::TextStyle::Monospace)
-                        .desired_width(400.0),
+                        .desired_width(crate::theme::edit_width(400.0)),
                 );
                 ui.end_row();
                 ui.label("Options");

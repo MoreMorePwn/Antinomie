@@ -209,7 +209,7 @@ impl ScanPane {
         egui::Window::new(self.title())
             .id(egui::Id::new((salt, "content-scan", self.title())))
             .open(&mut open)
-            .default_size([560.0, 440.0])
+            .default_size(egui::vec2(560.0, 440.0) + crate::widgets::frame_extra(ctx))
             .resizable(true)
             .show(ctx, |ui| {
                 chosen = self.body(ui, salt, source);
@@ -242,7 +242,7 @@ impl ScanPane {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.pattern)
                             .hint_text("pattern, e.g. https?://[a-z0-9./-]+")
-                            .desired_width(280.0)
+                            .desired_width(crate::theme::plain_edit_width(280.0))
                             .id(egui::Id::new((salt, "content-pattern"))),
                     );
                     ui.checkbox(&mut self.case_insensitive, "Ignore case")

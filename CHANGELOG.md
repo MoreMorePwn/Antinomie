@@ -328,6 +328,18 @@ it runs.
 
 ### Build and CI
 
+- **The UI toolkit moves from egui 0.31 to 0.36.** `eframe` and `egui_extras` 0.36,
+  `egui_dock` 0.21.1 and `egui-phosphor` 0.14 (egui 0.37 is out, but `egui_dock` does
+  not support it yet). The app draws its panels into the window's root `Ui`, the
+  dock, popups, tooltips, menus and viewports use the new egui APIs, and text now
+  renders with font hinting and the new kerning. The look is kept: round slider
+  handles, the 1/12 s animations, the 5 pt window-edge grab strip, no scroll-edge
+  fade, and the widths and sizes of text fields and windows. A dock layout saved by
+  0.8.1 is converted when it is read, so tabs, splits and detached windows survive
+  the upgrade; settings are unchanged. Dragging a table or list with the mouse no
+  longer scrolls it (egui keeps that for touch screens); the wheel and the bars still
+  do. One duplicate version each of `base64` and `synstructure` leaves the tree.
+
 - **Large source files are split and clippy passes on every crate.** Internal: files
   at or over the module size limit (storage, the Detection tab, the VM dialog, the
   Samples window, the workspace dock and a dozen near it) move pieces into their own

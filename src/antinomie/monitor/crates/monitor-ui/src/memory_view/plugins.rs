@@ -997,11 +997,13 @@ fn plugin_options(ui: &mut egui::Ui, current: &PluginInfo, values: &mut Vec<(Str
                             .hint_text(crate::theme::hint_text(hint))
                             .font(egui::TextStyle::Monospace)
                             .margin(theme::TEXT_EDIT_MARGIN)
-                            .desired_width(if option.kind == OptionKind::Int {
-                                90.0
-                            } else {
-                                170.0
-                            }),
+                            .desired_width(crate::theme::edit_width(
+                                if option.kind == OptionKind::Int {
+                                    90.0
+                                } else {
+                                    170.0
+                                },
+                            )),
                     )
                     .on_hover_text(help);
                 }

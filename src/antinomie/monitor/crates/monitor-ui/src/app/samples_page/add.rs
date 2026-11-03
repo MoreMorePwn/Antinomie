@@ -196,7 +196,7 @@ impl AddDialog {
                                 egui::TextEdit::singleline(&mut self.path)
                                     .hint_text(theme::hint_text("Path on this computer"))
                                     .font(egui::TextStyle::Monospace)
-                                    .desired_width(360.0),
+                                    .desired_width(crate::theme::plain_edit_width(360.0)),
                             );
                             // A path set by Choose file is read at once; a typed one
                             // when the field is left, not after its first letters.
@@ -283,7 +283,8 @@ impl AddDialog {
                         if ui
                             .add_enabled(
                                 !busy,
-                                egui::TextEdit::singleline(&mut self.name).desired_width(300.0),
+                                egui::TextEdit::singleline(&mut self.name)
+                                    .desired_width(crate::theme::plain_edit_width(300.0)),
                             )
                             .changed()
                         {
@@ -295,7 +296,7 @@ impl AddDialog {
                             !busy,
                             egui::TextEdit::multiline(&mut self.description)
                                 .desired_rows(2)
-                                .desired_width(300.0),
+                                .desired_width(crate::theme::plain_edit_width(300.0)),
                         );
                         ui.end_row();
                         ui.label(RichText::new("Tags").color(theme::muted()));

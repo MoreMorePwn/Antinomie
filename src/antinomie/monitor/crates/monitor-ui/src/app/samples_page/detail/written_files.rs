@@ -122,7 +122,7 @@ pub(in crate::app::samples_page) fn section(
             ui.add(
                 egui::TextEdit::singleline(&mut filter)
                     .hint_text(theme::hint_text("path or state"))
-                    .desired_width(220.0),
+                    .desired_width(crate::theme::plain_edit_width(220.0)),
             );
         });
         let needle = filter.trim().to_lowercase();

@@ -304,7 +304,7 @@ pub(super) fn preset_row(
 
 fn text_row(ui: &mut egui::Ui, label: &str, value: &mut String) {
     ui.label(label);
-    ui.add(egui::TextEdit::singleline(value).desired_width(260.0));
+    ui.add(egui::TextEdit::singleline(value).desired_width(crate::theme::plain_edit_width(260.0)));
     ui.end_row();
 }
 
@@ -341,7 +341,7 @@ fn oem_strings(ui: &mut egui::Ui, identity: &mut MachineIdentity) {
         .add(
             egui::TextEdit::multiline(&mut text)
                 .desired_rows(3)
-                .desired_width(260.0),
+                .desired_width(crate::theme::plain_edit_width(260.0)),
         )
         .on_hover_text("SMBIOS type 11, one string per line; PC firmware fills it, QEMU does not")
         .changed()
@@ -636,7 +636,7 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
             ui.horizontal(|ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut profile.mac)
-                        .desired_width(150.0)
+                        .desired_width(crate::theme::plain_edit_width(150.0))
                         .hint_text(crate::theme::hint_text("52:54:00:12:34:56")),
                 );
                 if ui
@@ -671,7 +671,7 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
                 ui.label("Card subsystem");
                 ui.add(
                     egui::TextEdit::singleline(&mut profile.identity.nic_subsystem)
-                        .desired_width(150.0)
+                        .desired_width(crate::theme::plain_edit_width(150.0))
                         .hint_text(crate::theme::hint_text("8086:0000")),
                 )
                 .on_hover_text("A board's own card carries its maker's PCI subsystem IDs");
@@ -681,7 +681,7 @@ fn network(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
             ui.horizontal(|ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut profile.nat.network)
-                        .desired_width(150.0)
+                        .desired_width(crate::theme::plain_edit_width(150.0))
                         .hint_text(crate::theme::hint_text("10.0.2.0/24")),
                 );
                 if ui

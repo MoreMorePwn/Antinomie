@@ -45,7 +45,7 @@ pub use info_panel::{info_panel, InfoPanel};
 pub use tabs::{segmented, tab, tab_row, tabs, TabItem};
 pub use tone::{chip, chip_wide, chip_width, fg_or_muted, toggle_chip, toggle_chip_with, Tone};
 pub(crate) use wheel::raw_delta;
-pub use window::{columns, fixed_width_body, footer, footer_split, window};
+pub use window::{columns, fixed_width_body, footer, footer_split, frame_extra, window};
 pub use written::{short_name, written_files};
 
 #[cfg(test)]

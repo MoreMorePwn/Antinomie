@@ -43,7 +43,7 @@ impl MemoryView {
                                     .hint_text(crate::theme::hint_text("/path/to/memory.raw"))
                                     .font(egui::TextStyle::Monospace)
                                     .margin(theme::TEXT_EDIT_MARGIN)
-                                    .desired_width(320.0),
+                                    .desired_width(crate::theme::edit_width(320.0)),
                             );
                             if ui
                                 .add_enabled(import.picker.is_none(), egui::Button::new("Browse…"))

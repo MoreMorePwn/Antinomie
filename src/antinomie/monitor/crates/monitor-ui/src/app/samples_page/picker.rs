@@ -141,7 +141,7 @@ impl TagPicker {
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.custom_name)
                     .hint_text(theme::hint_text("New tag name"))
-                    .desired_width(160.0),
+                    .desired_width(crate::theme::plain_edit_width(160.0)),
             );
             for (index, name) in TAG_COLORS.iter().enumerate() {
                 let color = sample_tags::palette_color(name);

@@ -241,7 +241,7 @@ impl ApiKeysWindow {
                         "paste your key"
                     }))
                     .margin(theme::TEXT_EDIT_MARGIN)
-                    .desired_width(340.0),
+                    .desired_width(crate::theme::edit_width(340.0)),
             );
             let has_draft = !draft.trim().is_empty();
             if ui

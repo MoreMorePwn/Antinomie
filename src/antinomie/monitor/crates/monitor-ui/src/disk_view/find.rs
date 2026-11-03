@@ -93,7 +93,7 @@ impl DiskView {
             ui.label("Find:");
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.find.query)
-                    .desired_width(220.0)
+                    .desired_width(crate::theme::plain_edit_width(220.0))
                     .hint_text(crate::theme::hint_text(if self.find.mode.is_content() {
                         "text inside files (2–256 bytes)"
                     } else {

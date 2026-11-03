@@ -199,7 +199,9 @@ impl Model {
                 egui::TextEdit::singleline(&mut self.regex.name)
                     .hint_text(theme::hint_text(NAME_HINT))
                     .char_limit(80)
-                    .desired_width(name_width.min((ui.available_width() - 120.0).max(120.0))),
+                    .desired_width(crate::theme::plain_edit_width(
+                        name_width.min((ui.available_width() - 120.0).max(120.0)),
+                    )),
             );
             egui::ComboBox::from_id_salt("regex-new-category")
                 .selected_text(self.regex.category.label())

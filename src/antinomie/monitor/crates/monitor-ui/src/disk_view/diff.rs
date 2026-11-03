@@ -581,7 +581,7 @@ impl DiskView {
             changed_filter |= ui
                 .add(
                     egui::TextEdit::singleline(&mut diff.filter.text)
-                        .desired_width(200.0)
+                        .desired_width(crate::theme::plain_edit_width(200.0))
                         .hint_text(crate::theme::hint_text("path contains")),
                 )
                 .changed();

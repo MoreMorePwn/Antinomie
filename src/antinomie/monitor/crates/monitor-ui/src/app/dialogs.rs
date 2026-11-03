@@ -90,7 +90,7 @@ impl MonitorApp {
                             - theme::TEXT_EDIT_MARGIN.sum().x).clamp(24.0, 560.0);
                         ui.add(
                             text_field(&mut self.import_directory)
-                                .desired_width(path_width)
+                                .desired_width(crate::theme::edit_width(path_width))
                                 .font(egui::TextStyle::Monospace)
                                 .hint_text(theme::hint_text("Bundle directory")),
                         );
@@ -282,7 +282,7 @@ impl MonitorApp {
                 .show(ctx, |ui| {
                     form_grid("name_action_form", ui).show(ui, |ui| {
                         ui.label(if *duplicate { "New name" } else { "Name" });
-                        let edit = ui.add(text_field(name).desired_width(300.0));
+                        let edit = ui.add(text_field(name).desired_width(crate::theme::edit_width(300.0)));
                         if edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
                             save = true;
                         }
@@ -665,7 +665,7 @@ pub(super) fn password_input(ui: &mut egui::Ui, text: &mut String, salt: &str) {
         .password(true)
         .margin(theme::TEXT_EDIT_MARGIN)
         .char_limit(128)
-        .desired_width(280.0)
+        .desired_width(crate::theme::edit_width(280.0))
         .show(ui);
     // Do not let reopening the form restore a prior secret through undo.
     output.state.clear_undoer();
@@ -690,7 +690,7 @@ pub(super) fn directory_input(
             .add(
                 text_field(&mut text)
                     .font(egui::TextStyle::Monospace)
-                    .desired_width(235.0),
+                    .desired_width(crate::theme::edit_width(235.0)),
             )
             .on_hover_text(text.clone())
             .changed()

@@ -624,7 +624,10 @@ impl CoreView {
         ui.label("Mapping offset (hex)");
         ui.horizontal_wrapped(|ui| {
             let input_width = ui.available_width().min(160.0);
-            ui.add(egui::TextEdit::singleline(&mut self.jump).desired_width(input_width));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.jump)
+                    .desired_width(crate::theme::plain_edit_width(input_width)),
+            );
             if ui.button("Jump").clicked() {
                 match parse_address(&self.jump) {
                     Ok(offset) if offset < mapping.memory_size => {

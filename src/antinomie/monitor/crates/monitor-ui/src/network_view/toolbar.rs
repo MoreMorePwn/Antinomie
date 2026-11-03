@@ -93,7 +93,7 @@ impl NetworkView {
                             egui::TextEdit::singleline(&mut self.filter)
                                 .hint_text(theme::hint_text(QUICK_SEARCH_HINT))
                                 .margin(theme::TEXT_EDIT_MARGIN)
-                                .desired_width(width),
+                                .desired_width(crate::theme::edit_width(width)),
                         )
                         .on_hover_text(QUICK_SEARCH_HELP);
                         ui.end_row();
@@ -133,7 +133,7 @@ impl NetworkView {
                                             "filter e.g. tcp.port == 443 (needs tshark)",
                                         ))
                                         .margin(theme::TEXT_EDIT_MARGIN)
-                                        .desired_width(width),
+                                        .desired_width(crate::theme::edit_width(width)),
                                 );
                             }
                         }

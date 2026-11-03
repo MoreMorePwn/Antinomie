@@ -238,8 +238,8 @@ impl Open {
         let shown = egui::Window::new("File reconstruction")
             .id(egui::Id::new("file-reconstruction-window"))
             .open(&mut open)
-            .default_size([1020.0, 720.0])
-            .min_width(520.0)
+            .default_size(egui::vec2(1020.0, 720.0) + crate::widgets::frame_extra(ctx))
+            .min_width(520.0 + crate::widgets::frame_extra(ctx).x)
             .resizable(true)
             .show(ctx, |ui| self.body(ui, activity, file, clock, directory));
         self.hovered = shown.is_some_and(|shown| shown.response.contains_pointer());

@@ -455,7 +455,7 @@ impl MonitorApp {
             if ui
                 .add(
                     text_field(&mut text)
-                        .desired_width(width)
+                        .desired_width(crate::theme::edit_width(width))
                         .font(egui::TextStyle::Monospace)
                         .hint_text(theme::hint_text(
                             "Folder with GeoLite2-Country.mmdb and GeoLite2-ASN.mmdb",

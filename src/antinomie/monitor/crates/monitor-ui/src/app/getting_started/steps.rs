@@ -211,7 +211,7 @@ impl MonitorApp {
             );
             ui.end_row();
             ui.label("Name");
-            ui.add(text_field(&mut draft.name).desired_width(280.0));
+            ui.add(text_field(&mut draft.name).desired_width(crate::theme::edit_width(280.0)));
             ui.end_row();
             ui.label("CPU count");
             ui.add(egui::DragValue::new(&mut draft.cpus).range(1..=64));
@@ -244,7 +244,7 @@ impl MonitorApp {
                 ui.add(
                     text_field(&mut self.credentials.username)
                         .char_limit(32)
-                        .desired_width(280.0),
+                        .desired_width(crate::theme::edit_width(280.0)),
                 );
                 ui.end_row();
                 ui.label("Password");

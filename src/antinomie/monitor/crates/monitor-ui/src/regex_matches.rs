@@ -173,7 +173,7 @@ impl RegexWindow {
         egui::Window::new(format!("Regex matches · {}", self.title))
             .id(egui::Id::new(("regex-matches", salt)))
             .open(&mut open)
-            .default_size([900.0, 520.0])
+            .default_size(egui::vec2(900.0, 520.0) + crate::widgets::frame_extra(ctx))
             .resizable(true)
             .show(ctx, |ui| self.body(ui));
         if !open {

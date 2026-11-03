@@ -196,7 +196,7 @@ impl MonitorApp {
                 app.draft.disk_gib = app.draft.disk_gib.max(min_disk);
             }
             ui.label("Name");
-            ui.add(text_field(&mut app.draft.name).desired_width(280.0));
+            ui.add(text_field(&mut app.draft.name).desired_width(crate::theme::edit_width(280.0)));
             ui.end_row();
             ui.label("CPU count");
             ui.add(egui::DragValue::new(&mut app.draft.cpus).range(1..=64))
@@ -330,7 +330,7 @@ impl MonitorApp {
                 ui.add(
                     text_field(&mut app.credentials.username)
                         .char_limit(32)
-                        .desired_width(280.0),
+                        .desired_width(crate::theme::edit_width(280.0)),
                 );
                 ui.end_row();
                 ui.label("Password");

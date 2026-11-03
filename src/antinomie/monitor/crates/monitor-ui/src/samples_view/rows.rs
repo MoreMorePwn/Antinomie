@@ -329,13 +329,13 @@ impl SamplesView {
                 ui.label("From");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.range_start)
-                        .desired_width(120.0)
+                        .desired_width(crate::theme::plain_edit_width(120.0))
                         .hint_text(crate::theme::hint_text("YYYY-MM-DD")),
                 );
                 ui.label("through");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.range_end)
-                        .desired_width(120.0)
+                        .desired_width(crate::theme::plain_edit_width(120.0))
                         .hint_text(crate::theme::hint_text("YYYY-MM-DD")),
                 );
                 ui.checkbox(&mut self.offline, "Offline");

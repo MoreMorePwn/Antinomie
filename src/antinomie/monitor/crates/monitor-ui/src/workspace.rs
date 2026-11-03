@@ -4,6 +4,8 @@
 mod workspace_details;
 #[path = "workspace_drag.rs"]
 mod workspace_drag;
+#[path = "workspace_migrate.rs"]
+mod workspace_migrate;
 #[path = "workspace_tabs.rs"]
 mod workspace_tabs;
 #[path = "workspace_viewer.rs"]
@@ -18,6 +20,7 @@ use egui_dock::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 pub(crate) use workspace_details::{DetailsFollow, DetailsOf};
+pub(crate) use workspace_migrate::load as load_layout;
 use workspace_viewer::Viewer;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

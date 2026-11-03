@@ -534,7 +534,10 @@ impl BuildWizard {
     fn hostname(&mut self, ui: &mut egui::Ui) -> bool {
         ui.label("Hostname of the guest (one word: a-z, 0-9 and '-').");
         let options = self.options();
-        ui.add(egui::TextEdit::singleline(&mut options.hostname).desired_width(260.0));
+        ui.add(
+            egui::TextEdit::singleline(&mut options.hostname)
+                .desired_width(crate::theme::plain_edit_width(260.0)),
+        );
         match build::valid_hostname(&options.hostname) {
             Ok(()) => true,
             Err(error) => {
@@ -582,12 +585,15 @@ impl BuildWizard {
     fn mirror(&mut self, ui: &mut egui::Ui) -> bool {
         let options = self.options();
         ui.label("Debian archive mirror");
-        ui.add(egui::TextEdit::singleline(&mut options.mirror).desired_width(420.0));
+        ui.add(
+            egui::TextEdit::singleline(&mut options.mirror)
+                .desired_width(crate::theme::plain_edit_width(420.0)),
+        );
         ui.add_space(4.0);
         ui.label("HTTP proxy (leave empty for none)");
         ui.add(
             egui::TextEdit::singleline(&mut options.proxy)
-                .desired_width(420.0)
+                .desired_width(crate::theme::plain_edit_width(420.0))
                 .hint_text(theme::hint_text("http://user:password@host:port/")),
         )
         .on_hover_text("The proxy is used while building and is not kept in the image.");
@@ -610,7 +616,7 @@ impl BuildWizard {
             ui.label("Base name");
             ui.add(
                 egui::TextEdit::singleline(&mut self.options[self.profile].name)
-                    .desired_width(320.0)
+                    .desired_width(crate::theme::plain_edit_width(320.0))
                     .hint_text(crate::theme::hint_text(&automatic)),
             )
             .on_hover_text("Shown in the base list; leave empty for the automatic name.");
@@ -875,7 +881,9 @@ fn pick_list<'a>(
     });
     ui.horizontal(|ui| {
         ui.label("Search");
-        ui.add(egui::TextEdit::singleline(search).desired_width(240.0));
+        ui.add(
+            egui::TextEdit::singleline(search).desired_width(crate::theme::plain_edit_width(240.0)),
+        );
     });
     let needle = search.to_lowercase();
     egui::ScrollArea::vertical()

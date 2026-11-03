@@ -330,7 +330,7 @@ impl Viewer {
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.search)
                     .hint_text(crate::theme::hint_text("Search category, field or value"))
-                    .desired_width(260.0),
+                    .desired_width(crate::theme::plain_edit_width(260.0)),
             );
             let entered =
                 edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));

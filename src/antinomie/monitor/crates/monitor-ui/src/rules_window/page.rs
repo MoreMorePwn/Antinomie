@@ -596,17 +596,19 @@ impl Model {
             ui.horizontal_wrapped(|ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.group_name)
-                        .desired_width(140.0)
+                        .desired_width(crate::theme::plain_edit_width(140.0))
                         .hint_text(theme::hint_text("Group name")),
                 );
                 ui.add(
                     egui::TextEdit::singleline(&mut self.tags_text)
-                        .desired_width(140.0)
+                        .desired_width(crate::theme::plain_edit_width(140.0))
                         .hint_text(theme::hint_text("Tags, comma separated")),
                 );
                 ui.add(
                     egui::TextEdit::singleline(&mut self.import_path)
-                        .desired_width(ui.available_width().min(280.0))
+                        .desired_width(crate::theme::plain_edit_width(
+                            ui.available_width().min(280.0),
+                        ))
                         .hint_text(theme::hint_text("File or folder")),
                 );
                 if ui.button("Import").clicked() {
@@ -738,7 +740,7 @@ impl Model {
             ui.label(RichText::new("Rules").strong().color(theme::heading()));
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
-                    .desired_width(260.0)
+                    .desired_width(crate::theme::plain_edit_width(260.0))
                     .hint_text(theme::hint_text("filter e.g. credential")),
             );
             if response.changed() || self.applied != self.filter {

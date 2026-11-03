@@ -23,6 +23,7 @@ pub fn window<'open>(title: impl Into<String>) -> Dialog<'open> {
         fixed: false,
         max_width: None,
         max_height: None,
+        sizes: Sizes::default(),
     }
 }
 
@@ -39,6 +40,20 @@ pub struct Dialog<'open> {
     fixed: bool,
     max_width: Option<f32>,
     max_height: Option<f32>,
+    /// The sizes asked for. egui 0.36 counts a window's frame (margins and
+    /// stroke) in them, where 0.31 sized the contents; the frame is added in
+    /// [`Dialog::show`] so a window keeps the size its caller meant.
+    sizes: Sizes,
+}
+
+#[derive(Default)]
+struct Sizes {
+    default: Option<egui::Vec2>,
+    default_width: Option<f32>,
+    default_height: Option<f32>,
+    min: Option<egui::Vec2>,
+    min_width: Option<f32>,
+    fixed: Option<egui::Vec2>,
 }
 
 macro_rules! forward {
@@ -68,17 +83,37 @@ impl<'open> Dialog<'open> {
         /// Kept for call-site compatibility: the mockup's windows never collapse.
         collapsible(collapsible: bool);
         movable(movable: bool);
-        default_width(width: f32);
-        default_height(height: f32);
-        default_size(size: impl Into<egui::Vec2>);
-        min_size(size: impl Into<egui::Vec2>);
-        min_width(width: f32);
+    }
+
+    pub fn default_width(mut self, width: f32) -> Self {
+        self.sizes.default_width = Some(width);
+        self
+    }
+
+    pub fn default_height(mut self, height: f32) -> Self {
+        self.sizes.default_height = Some(height);
+        self
+    }
+
+    pub fn default_size(mut self, size: impl Into<egui::Vec2>) -> Self {
+        self.sizes.default = Some(size.into());
+        self
+    }
+
+    pub fn min_size(mut self, size: impl Into<egui::Vec2>) -> Self {
+        self.sizes.min = Some(size.into());
+        self
+    }
+
+    pub fn min_width(mut self, width: f32) -> Self {
+        self.sizes.min_width = Some(width);
+        self
     }
 
     /// A window of exactly this size (never capped to the window area).
     pub fn fixed_size(mut self, size: impl Into<egui::Vec2>) -> Self {
         self.fixed = true;
-        self.window = self.window.fixed_size(size);
+        self.sizes.fixed = Some(size.into());
         self
     }
 
@@ -147,19 +182,42 @@ impl<'open> Dialog<'open> {
             fixed,
             max_width,
             max_height,
+            sizes,
         } = self;
+        let frame = frame_extra(ctx);
+        let mut window = window;
+        if let Some(size) = sizes.default {
+            window = window.default_size(size + frame);
+        }
+        if let Some(width) = sizes.default_width {
+            window = window.default_width(width + frame.x);
+        }
+        if let Some(height) = sizes.default_height {
+            window = window.default_height(height + frame.y);
+        }
+        if let Some(size) = sizes.min {
+            window = window.min_size(size + frame);
+        }
+        if let Some(width) = sizes.min_width {
+            window = window.min_width(width + frame.x);
+        }
+        if let Some(size) = sizes.fixed {
+            window = window.fixed_size(size + frame);
+        }
         let closable = open.is_some();
         let mut close = false;
         let area = crate::title_bar::content_rect(ctx);
         let mut window = if fixed {
             window
         } else {
-            window.max_size(egui::vec2(
-                max_width.unwrap_or(f32::INFINITY).min(area.width() - 24.0),
-                max_height
-                    .unwrap_or(f32::INFINITY)
-                    .min(area.height() - 24.0),
-            ))
+            window.max_size(
+                egui::vec2(
+                    max_width.unwrap_or(f32::INFINITY).min(area.width() - 24.0),
+                    max_height
+                        .unwrap_or(f32::INFINITY)
+                        .min(area.height() - 24.0),
+                ) + frame,
+            )
         };
         // A window that opens centred stays centred while the app window
         // grows to its final size (the first frames of a start run in a
@@ -277,6 +335,15 @@ impl<'open> Dialog<'open> {
 }
 
 const CLOSE_SIZE: f32 = 22.0;
+
+/// What a window's frame (margins and stroke) adds to the size of its
+/// contents: egui 0.36 counts it in the sizes asked of a window, where 0.31
+/// sized the contents.
+pub fn frame_extra(ctx: &egui::Context) -> egui::Vec2 {
+    egui::Frame::window(&ctx.global_style())
+        .total_margin()
+        .sum()
+}
 
 /// A soft rule and a row of `buttons` (main action first, left to right).
 pub fn footer(ui: &mut egui::Ui, buttons: impl FnOnce(&mut egui::Ui)) {

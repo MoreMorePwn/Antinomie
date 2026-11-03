@@ -219,7 +219,7 @@ fn filter_form(
                         .join(", ")
                 });
                 if ui
-                    .add(text_field(shown).desired_width(260.0))
+                    .add(text_field(shown).desired_width(crate::theme::edit_width(260.0)))
                     .on_hover_text("Outbound TCP ports that are refused, separated by commas. Default: mail (25, 26, 465, 587, 2525).")
                     .changed()
                 {
@@ -409,7 +409,7 @@ impl MonitorApp {
             if draft.tor.mode == TorMode::Own {
                 ui.label("Tor program");
                 ui.vertical(|ui| {
-                    ui.add(text_field(&mut draft.tor.program).desired_width(260.0))
+                    ui.add(text_field(&mut draft.tor.program).desired_width(crate::theme::edit_width(260.0)))
                         .on_hover_text(
                             "Path to a tor program; empty uses PATH, then the copy installed below.",
                         );
@@ -422,7 +422,7 @@ impl MonitorApp {
             } else {
                 ui.label("SOCKS address");
                 ui.vertical(|ui| {
-                    ui.add(text_field(&mut draft.tor.socks).desired_width(260.0))
+                    ui.add(text_field(&mut draft.tor.socks).desired_width(crate::theme::edit_width(260.0)))
                         .on_hover_text(
                             "Where your Tor listens (a tor service uses 127.0.0.1:9050). Antinomie \
                              does not start it; names are resolved by Tor.",
@@ -431,7 +431,7 @@ impl MonitorApp {
                 ui.end_row();
             }
             ui.label("Check target");
-            ui.add(text_field(&mut draft.tor.probe).desired_width(260.0))
+            ui.add(text_field(&mut draft.tor.probe).desired_width(crate::theme::edit_width(260.0)))
                 .on_hover_text("host:port connected through Tor before a run; empty checks only that Tor answers.");
             ui.end_row();
         });
@@ -449,7 +449,7 @@ impl MonitorApp {
         form_grid("settings_routes_vpn", ui).show(ui, |ui| {
             ui.label("WireGuard proxy program");
             ui.vertical(|ui| {
-                ui.add(text_field(&mut draft.vpn.wireproxy).desired_width(260.0))
+                ui.add(text_field(&mut draft.vpn.wireproxy).desired_width(crate::theme::edit_width(260.0)))
                     .on_hover_text(
                         "Path to the wireproxy program; empty uses PATH, then the copy installed below.",
                     );
@@ -457,7 +457,7 @@ impl MonitorApp {
             ui.end_row();
             ui.label("Configuration file");
             ui.vertical(|ui| {
-                ui.add(text_field(&mut draft.vpn.config).desired_width(260.0))
+                ui.add(text_field(&mut draft.vpn.config).desired_width(crate::theme::edit_width(260.0)))
                     .on_hover_text(
                         "A wireproxy configuration with your WireGuard peer and a [Socks5] section. \
                          Antinomie starts wireproxy for each run and stops it afterwards. \
@@ -467,7 +467,7 @@ impl MonitorApp {
             });
             ui.end_row();
             ui.label("Check target");
-            ui.add(text_field(&mut draft.vpn.probe).desired_width(260.0))
+            ui.add(text_field(&mut draft.vpn.probe).desired_width(crate::theme::edit_width(260.0)))
                 .on_hover_text(
                     "host:port connected through the tunnel before a run; empty skips it.",
                 );
@@ -490,13 +490,13 @@ impl MonitorApp {
         );
         form_grid("settings_routes_socks", ui).show(ui, |ui| {
             ui.label("Host");
-            ui.add(text_field(&mut draft.socks5.host).desired_width(260.0));
+            ui.add(text_field(&mut draft.socks5.host).desired_width(crate::theme::edit_width(260.0)));
             ui.end_row();
             ui.label("Port");
             ui.add(egui::DragValue::new(&mut draft.socks5.port).range(1..=65535));
             ui.end_row();
             ui.label("User name");
-            ui.add(text_field(&mut draft.socks5.username).desired_width(260.0));
+            ui.add(text_field(&mut draft.socks5.username).desired_width(crate::theme::edit_width(260.0)));
             ui.end_row();
             ui.label("Password").on_hover_text(
                 "Saved in the data folder, readable by you only. Never logged, shown in run \
@@ -507,7 +507,7 @@ impl MonitorApp {
             });
             ui.end_row();
             ui.label("Check target");
-            ui.add(text_field(&mut draft.socks5.probe).desired_width(260.0))
+            ui.add(text_field(&mut draft.socks5.probe).desired_width(crate::theme::edit_width(260.0)))
                 .on_hover_text("host:port connected through the proxy before a run; empty checks only the proxy login.");
             ui.end_row();
         });
@@ -536,7 +536,7 @@ impl MonitorApp {
             ui.end_row();
             if draft.inetsim.mode == InetSimMode::External {
                 ui.label("INetSim host");
-                ui.add(text_field(&mut draft.inetsim.host).desired_width(260.0));
+                ui.add(text_field(&mut draft.inetsim.host).desired_width(crate::theme::edit_width(260.0)));
                 ui.end_row();
                 ui.label("Port offset");
                 ui.vertical(|ui| {
@@ -549,7 +549,7 @@ impl MonitorApp {
                 ui.end_row();
             }
             ui.label("DNS answers");
-            ui.add(text_field(&mut draft.inetsim.sinkhole).desired_width(160.0))
+            ui.add(text_field(&mut draft.inetsim.sinkhole).desired_width(crate::theme::edit_width(160.0)))
                 .on_hover_text("Every name resolves to this address. It is never connected to.");
             ui.end_row();
             ui.label("Program");

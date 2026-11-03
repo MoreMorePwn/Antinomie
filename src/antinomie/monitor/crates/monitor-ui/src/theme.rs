@@ -307,6 +307,18 @@ pub fn mono(size: f32) -> FontId {
 /// cramped.
 pub const TEXT_EDIT_MARGIN: egui::Margin = egui::Margin::symmetric(8, 5);
 
+/// The width to ask of a text field that has [`TEXT_EDIT_MARGIN`] for `inner`
+/// points of text: egui 0.36 counts the margins in a field's width, where 0.31
+/// added them to it.
+pub fn edit_width(inner: f32) -> f32 {
+    inner + TEXT_EDIT_MARGIN.sum().x
+}
+
+/// [`edit_width`] for a field with egui's default margin.
+pub fn plain_edit_width(inner: f32) -> f32 {
+    inner + egui::Margin::symmetric(4, 2).sum().x
+}
+
 /// A section heading in the heading color, with room above it when it
 /// follows something in a column.
 pub fn section(ui: &mut egui::Ui, title: &str) -> egui::Response {
@@ -577,6 +589,13 @@ pub fn apply_theme(ctx: &egui::Context, theme: Theme) {
     // window edge that point is cut off, so widgets keep their size.
     style.visuals.widgets.hovered.expansion = 0.0;
     style.visuals.widgets.active.expansion = 0.0;
+    // egui 0.36 moved some defaults of the 0.31 look; the app keeps the old
+    // ones: round slider handles, the 1/12 s animations, a 5 point grab strip
+    // on a window's edge, and scroll areas without an edge fade.
+    style.visuals.handle_shape = egui::style::HandleShape::Circle;
+    style.animation_time = 1.0 / 12.0;
+    style.interaction.resize_grab_radius_side = 5.0;
+    style.spacing.scroll.fade.strength = 0.0;
     density(&mut style);
     let size = style
         .text_styles
