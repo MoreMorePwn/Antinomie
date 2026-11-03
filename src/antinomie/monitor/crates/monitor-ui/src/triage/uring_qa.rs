@@ -77,37 +77,8 @@ fn has(scan: &ArchiveScan, tab: FileTab, needles: &[&str]) {
     }
 }
 
-#[test]
-#[ignore = "requires ANTINOMIE_URING_RUNS from `uring-check record`"]
-fn recorded_uring_triage() {
-    let runs = std::env::var("ANTINOMIE_URING_RUNS").expect("ANTINOMIE_URING_RUNS");
-    let mut scans = std::collections::BTreeMap::new();
-    for entry in runs.split(';').filter(|entry| !entry.is_empty()) {
-        let (label, directory) = entry.split_once('=').expect("label=directory");
-        scans.insert(label.to_owned(), scan(Path::new(directory)));
-    }
-    let get = |label: &str| scans.get(label).unwrap_or_else(|| panic!("no run {label}"));
-    let mut checked = 0;
-    // A recording of a base from before the file identity records: the
-    // requests are still read, and names are all there is.
-    if let Some(legacy) = scans.get("legacy-async-io") {
-        has(legacy, FileTab::Written, &["(io_uring)", "async.dat"]);
-        has(
-            legacy,
-            FileTab::Read,
-            &["By descriptor (io_uring)", "async.dat"],
-        );
-        checked += 1;
-    }
-    if !scans.contains_key("files") {
-        assert!(checked > 0, "no runs to check");
-        let missed = MISSED.lock().unwrap();
-        assert!(missed.is_empty(), "{}", missed.join("\n\n"));
-        return;
-    }
-
-    // io_uring file operations: each request is read as the call it stands for.
-    let uring = get("files");
+/// io_uring file operations: each request is read as the call it stands for.
+fn check_files(uring: &ArchiveScan) {
     has(
         uring,
         FileTab::Opened,
@@ -172,10 +143,11 @@ fn recorded_uring_triage() {
             miss(format!("{step:?} missing from {story:#?}"));
         }
     }
+}
 
-    // OPENAT, vectors, registered buffers, a registered file and an open
-    // straight into the registered table.
-    let registered = get("regfiles");
+/// OPENAT, vectors, registered buffers, a registered file and an open
+/// straight into the registered table.
+fn check_regfiles(registered: &ArchiveScan) {
     has(
         registered,
         FileTab::Opened,
@@ -233,9 +205,10 @@ fn recorded_uring_triage() {
     for name in ["/tmp/uring-reg.a", "/tmp/uring-reg.d"] {
         has(registered, FileTab::Deleted, &["unlinkat (io_uring)", name]);
     }
+}
 
-    // The same story with plain system calls, and a name reused by a new file.
-    let plain = get("syncfiles");
+/// The same story with plain system calls, and a name reused by a new file.
+fn check_syncfiles(plain: &ArchiveScan) {
     let changed = rows(plain, FileTab::Changed);
     let first: Vec<_> = changed
         .iter()
@@ -278,9 +251,10 @@ fn recorded_uring_triage() {
     for row in &second {
         println!("ROW Changed (syncfiles, reused name): {row}");
     }
+}
 
-    // AIO.
-    let aio = get("aio");
+/// AIO.
+fn check_aio(aio: &ArchiveScan) {
     has(
         aio,
         FileTab::Written,
@@ -305,10 +279,11 @@ fn recorded_uring_triage() {
             "aio vector one",
         ],
     );
+}
 
-    // An SQPOLL ring: its kernel thread submitted the requests, which the
-    // guest attributes to the ring's creator with no call of its own.
-    let sqpoll = get("sqfiles");
+/// An SQPOLL ring: its kernel thread submitted the requests, which the
+/// guest attributes to the ring's creator with no call of its own.
+fn check_sqfiles(sqpoll: &ArchiveScan) {
     has(
         sqpoll,
         FileTab::Written,
@@ -319,9 +294,10 @@ fn recorded_uring_triage() {
         FileTab::Deleted,
         &["unlinkat (io_uring)", "/tmp/uring-sq.b"],
     );
+}
 
-    // Sync, attribute, splice and directory requests, and a plain rmdir.
-    let more = get("morefiles");
+/// Sync, attribute, splice and directory requests, and a plain rmdir.
+fn check_morefiles(more: &ArchiveScan) {
     has(
         more,
         FileTab::Attributes,
@@ -368,23 +344,64 @@ fn recorded_uring_triage() {
             ));
         }
     }
+}
 
-    // A script shows the interpreter its #! line named.
-    let script = get("script");
+/// A script shows the interpreter its #! line named.
+fn check_script(script: &ArchiveScan) {
     has(
         script,
         FileTab::Executed,
         &["script run through /bin/sh", "/tmp/uring-script.sh"],
     );
+}
 
-    // The workload module: its linked write/read pairs on async.dat.
-    let workload = get("async-io");
+/// The workload module: its linked write/read pairs on async.dat.
+fn check_async_io(workload: &ArchiveScan) {
     has(workload, FileTab::Written, &["(io_uring)", "async.dat"]);
     has(
         workload,
         FileTab::Read,
         &["By descriptor (io_uring)", "async.dat"],
     );
+}
+
+#[test]
+#[ignore = "requires ANTINOMIE_URING_RUNS from `uring-check record`"]
+fn recorded_uring_triage() {
+    let runs = std::env::var("ANTINOMIE_URING_RUNS").expect("ANTINOMIE_URING_RUNS");
+    let mut scans = std::collections::BTreeMap::new();
+    for entry in runs.split(';').filter(|entry| !entry.is_empty()) {
+        let (label, directory) = entry.split_once('=').expect("label=directory");
+        scans.insert(label.to_owned(), scan(Path::new(directory)));
+    }
+    let get = |label: &str| scans.get(label).unwrap_or_else(|| panic!("no run {label}"));
+    let mut checked = 0;
+    // A recording of a base from before the file identity records: the
+    // requests are still read, and names are all there is.
+    if let Some(legacy) = scans.get("legacy-async-io") {
+        has(legacy, FileTab::Written, &["(io_uring)", "async.dat"]);
+        has(
+            legacy,
+            FileTab::Read,
+            &["By descriptor (io_uring)", "async.dat"],
+        );
+        checked += 1;
+    }
+    if !scans.contains_key("files") {
+        assert!(checked > 0, "no runs to check");
+        let missed = MISSED.lock().unwrap();
+        assert!(missed.is_empty(), "{}", missed.join("\n\n"));
+        return;
+    }
+
+    check_files(get("files"));
+    check_regfiles(get("regfiles"));
+    check_syncfiles(get("syncfiles"));
+    check_aio(get("aio"));
+    check_sqfiles(get("sqfiles"));
+    check_morefiles(get("morefiles"));
+    check_script(get("script"));
+    check_async_io(get("async-io"));
     let missed = MISSED.lock().unwrap();
     assert!(missed.is_empty(), "{}", missed.join("\n\n"));
 }
