@@ -131,6 +131,10 @@ pub(super) struct SamplesPage {
     tag_filter: BTreeSet<Tag>,
     roots_only: bool,
     selected: Option<String>,
+    /// What the VMs and their runs looked like when the library was last
+    /// asked to read again: a change in it reads the list and the open sample
+    /// again, so neither keeps what a read made before the VMs were known.
+    runs_key: u64,
     /// Archives that did not verify, by SHA-256, with why.
     problems: BTreeMap<String, String>,
     verifying: Option<Receiver<Verified>>,
@@ -190,6 +194,28 @@ impl SamplesPage {
     pub(super) fn refresh(&mut self) {
         self.stale = true;
         self.refresh_detail();
+    }
+
+    /// Read again when the VMs or their runs changed since the last frame.
+    /// The list and a sample's window both read runs from the recordings of
+    /// the VMs the app lists: a read that began before the app knew its VMs
+    /// (after a restart) or before a run ended has none of them.
+    fn follow_runs(&mut self, snapshot: &Snapshot) {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for vm in &snapshot.vms {
+            vm.id.hash(&mut hasher);
+        }
+        for run in &snapshot.runs {
+            run.id.hash(&mut hasher);
+            run.vm_id.hash(&mut hasher);
+            run.state.is_live().hash(&mut hasher);
+        }
+        let key = hasher.finish();
+        if key != self.runs_key {
+            self.runs_key = key;
+            self.refresh();
+        }
     }
 
     pub(super) fn count(&self) -> usize {
@@ -498,6 +524,7 @@ impl MonitorApp {
         let ctx = ui.ctx().clone();
         self.poll_analyze();
         self.samples_page.poll();
+        self.samples_page.follow_runs(&self.snapshot);
         if !self.samples_page.loaded && self.samples_page.loading.is_none()
             || self.samples_page.stale
         {
