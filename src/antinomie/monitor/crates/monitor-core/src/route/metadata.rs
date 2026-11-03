@@ -2,15 +2,15 @@
 //! The fake cloud metadata service of a cloud VPS profile. A real instance
 //! asks its provider's link-local metadata address (169.254.169.254,
 //! Tencent's 169.254.0.23, Alibaba's 100.100.100.200) for its identity and
-//! credentials; an instance with no answer there is a sandbox. The gateway
+//! credentials, and malware that probes for it may take no answer for a sandbox. The gateway
 //! answers that address itself, on every route, from a thread per connection
 //! over an in-process socket pair: nothing listens on the host and nothing
 //! leaves it.
 //!
 //! The answers are the provider's layout with the instance id, region and
 //! host name of the profile, and credentials that are canaries: fake values,
-//! new for each run, that no cloud accepts. The service logs every request
-//! and looks for the run's canary values in what the guest sends out by TCP
+//! new for each run, that no provider ever issued and none is expected to
+//! accept. The service logs every request and looks for the run's canary values in what the guest sends out by TCP
 //! afterwards (a plain-text request, not TLS); both end up in
 //! `cloud-metadata.json` in the run's folder, which Triage reads as findings
 //! (T1552.005, unsecured credentials: cloud instance metadata API).

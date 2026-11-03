@@ -171,8 +171,8 @@ VM list and the Summary's **Device profile** card carry a **Device profile fallb
 badge; and each start warns in **Activity** and adds the same lines as notes to
 every run of that boot, shown under the run's header.
 
-The realistic presets (desktop, laptop, server) copy one real, popular machine,
-picked at random when the VM is created and kept for its life, never per boot.
+The realistic presets (desktop, laptop, server) report the identity strings of one
+real, popular machine model, picked at random when the VM is created and kept for its life, never per boot.
 The pick is weighted by how common the model is, and limited to machines the
 host CPU's generation was sold in. The BIOS release, the unit (product, SKU, board), the disk
 model and the memory part come from what real units of that model report, so two
@@ -181,7 +181,8 @@ VMs of the same model differ, as two such machines do. The catalog's
 many public reports of the model exist. A run's details show the
 machine its guest looked like. RAM size and disk size stay the VM's own settings.
 The model catalog is in `src/antinomie/monitor/crates/monitor-core/src/stealth/catalog/`;
-the names belong to their owners (see the README).
+the names belong to their owners and imply no affiliation or endorsement (see
+[Trademarks](../README.md#trademarks)).
 
 On Debian Minimal the network card sits where the profile's machine has its
 built-in LAN, so the interface has that machine's name: `enp0s31f6` for the

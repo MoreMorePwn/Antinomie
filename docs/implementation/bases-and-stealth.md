@@ -341,7 +341,9 @@ provider's type 0 (with the "system is a virtual machine" bit, which a PC's
 firmware never sets), 1, 2, 3, processor and one RAM-sized DIMM, and takes the
 provider's MAC prefix and DHCP network. `giveaways()` lists what remains
 (the base's display, Red Hat PCI subsystem IDs, DNS servers inside the DHCP
-network, no agent processes). `catalog/SOURCES-cloud.md` cites the values.
+network, no agent processes). `catalog/SOURCES-cloud.md` cites the values. The profile is an independent
+imitation of the strings a provider's instance reports; it carries no provider
+software, logo or credential and implies no affiliation (README, Trademarks).
 
 **i440FX.** `vm.rs` passes the profile's machine type. The guest transport maps
 guest RAM through `RamLayout::q35`, which equals i440FX's layout only below

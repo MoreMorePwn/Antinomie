@@ -126,7 +126,8 @@ any route. A route that cannot start stops the run; Antinomie never falls back
 to another route. Details are in the
 [user guide](usage.md#network-routes).
 
-**Cloud VPS profiles** add a fake cloud metadata service to a Routed VM. With a
+**Cloud VPS profiles** add a fake cloud metadata service to a Routed VM, for
+the analysis VM only. With a
 Cloud VPS device profile (Tencent CVM, Alibaba ECS, DigitalOcean Droplet,
 Vultr VC2) the gateway answers the provider's metadata address on TCP port 80
 (169.254.169.254; Tencent's 169.254.0.23, Alibaba's 100.100.100.200) on every
@@ -135,10 +136,13 @@ it. A thread in the host app answers over an in-process socket pair: nothing
 listens on the host, nothing leaves it, and no real metadata service is asked.
 The other providers' metadata addresses go unanswered. The credentials it hands
 out (a Tencent CAM or Alibaba RAM role, or a token in DigitalOcean's and Vultr's
-user data) are canaries: random values the gateway makes anew for each run. No
-real cloud credentials are involved. The values have the provider's own form
-and length and no marker, so a sample cannot tell them from real ones by
-looking; they are listed in the run's report, and no provider accepts them.
+user data) are canaries: random values the gateway makes anew for each run, on
+your computer. No real cloud credentials are involved, and the provider never
+issued them, so none is expected to accept them. The values have the provider's
+form and length and no marker, so a sample cannot tell them from real ones by
+looking (and a secret scanner may flag them if you publish a report); they are
+listed in the run's report. The service is an independent simulation, not
+affiliated with or endorsed by any provider.
 The gateway looks for the run's
 canary values in plain-text TCP the guest sends to any other address (TLS hides
 them). At the end of the run, `cloud-metadata.json` in the run's folder records

@@ -46,7 +46,7 @@ pub(in crate::app) fn launch_advice(ui: &mut egui::Ui, vm: &mut VmConfig) {
     } else {
         ui.label(
             egui::RichText::new(
-                "Simulated cloud metadata is available locally; each run chooses its route.",
+                "Fake cloud metadata with canary credentials is served inside the VM only; each run chooses its route.",
             )
             .small()
             .color(theme::muted()),

@@ -8,6 +8,15 @@ it runs.
 
 ### Host
 
+- **Device profile texts say what they are.** The Cloud VPS preset line reads "Reports a cloud provider's instance identity (independent imitation)" and the metadata line on a Routed cloud VM says the fake metadata, with canary credentials, is served inside the VM only. The README's Trademarks section and `docs/security.md` say the same: names are used only to say what a profile imitates, no affiliation, no logos, firmware, provider software or real credentials, and no provider is expected to accept the canaries.
+- **A Content window for memory dumps and process cores.** The Memory tab has
+  a Content tab beside Volatility 3 and MemNixFS, and Core dumps has a Content tab
+  per mapping. Both show the bytes as a hex dump or as raw text, read one page at a
+  time so a multi-gigabyte dump is never loaded, with go-to-offset, paging and
+  selection with copy. On-demand Strings and Regex sub-windows search the dump (or
+  the mapping shown) only when you press Search, with progress and Cancel, list
+  their hits a page at a time in a table, show in the Jobs window with progress and Stop, and jump the view to a hit. Limits and cancels are
+  shown as Info notes. A core shows virtual addresses, with file offsets on hover.
 - **Record arrays are visible in the Syscall Trace without digging.** The Info column summarizes a decoded array instead of printing its flat struct text: `fd=3 dirent=8+ entries: "group", "hostname", "passwd", ... +2 more`, `ufds=3 fds: 3 POLLIN -> POLLIN, 4 POLLOUT`, `SCM_RIGHTS fds 7, 8`, `N instructions: ...` (`+` after a count means the preview holds more than was decoded; a call that captured nothing keeps its old text). Hovering the Info cell lists every decoded record. In Details the array's records are open under its row in the Arguments tree (each opens to its fields), the right pane opens on the array itself (also for an array nested in an argument, such as a message's control data), and Decode all captured, Copy all as JSON and Save as JSON are as before. The trace filter matches the new text and the decoded fields; exports keep the structured records.
 - **Success lines on the Rules page and the Triage IOC tab are green, and Triage Network flags old shifted captures.** A finished job's result in the Rule manager and the IOC status line use the success green like the other notices (progress and cancels stay muted, failures red). Triage Network shows one Info line on a run recorded before the capture-time fix whose first packet is a whole zone offset (a multiple of 15 min, under 15 h) away from the run's start; old recordings are not changed.
 - **Network capture times are no longer hours off.** QEMU stamps a capture with `mktime` of the guest clock's date, so outside a UTC host zone every pcap was shifted by the zone's offset (7 h early at UTC+7: Triage Network, the sample IOCs tab and the Network list showed DNS queries hours before the syscalls). The VM now starts with `TZ=UTC` when its clock is UTC (a local-time clock keeps the host zone), so new captures carry the true time. Captures recorded before this keep their old stamps.
@@ -627,14 +636,6 @@ Details follow.
   VM dialog (default still Realistic desktop) with a one-line description,
   the base's fallback warning and Details… for the full window, instead of
   one checkbox.
-- **A Content window for memory dumps and process cores.** The Memory tab has
-  a Content tab beside Volatility 3 and MemNixFS, and Core dumps has a Content tab
-  per mapping. Both show the bytes as a hex dump or as raw text, read one page at a
-  time so a multi-gigabyte dump is never loaded, with go-to-offset, paging and
-  selection with copy. On-demand Strings and Regex sub-windows search the dump (or
-  the mapping shown) only when you press Search, with progress and Cancel, list
-  their hits a page at a time in a table, show in the Jobs window with progress and Stop, and jump the view to a hit. Limits and cancels are
-  shown as Info notes. A core shows virtual addresses, with file offsets on hover.
 
 ## 0.8.0 — 2026-11-02
 
