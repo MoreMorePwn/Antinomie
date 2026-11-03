@@ -486,12 +486,25 @@ fn launch_options(ui: &mut egui::Ui, launch: &mut VmLaunchOptions, kvm_problem: 
             }
         });
     ui.end_row();
-    ui.label("Window");
-    ui.checkbox(&mut launch.fullscreen, "Fullscreen");
+    ui.label("VM screen");
+    egui::ComboBox::from_id_salt("vm_screen")
+        .selected_text(launch.screen.label())
+        .width(260.0)
+        .show_ui(ui, |ui| {
+            for &screen in VmScreen::ALL {
+                ui.selectable_value(&mut launch.screen, screen, screen.label());
+            }
+        });
     ui.end_row();
-    ui.label("");
-    ui.checkbox(&mut launch.fit_to_window, "Fit to window");
-    ui.end_row();
+    // Fullscreen and Fit to window are options of QEMU's own window.
+    if launch.screen == VmScreen::QemuWindow {
+        ui.label("Window");
+        ui.checkbox(&mut launch.fullscreen, "Fullscreen");
+        ui.end_row();
+        ui.label("");
+        ui.checkbox(&mut launch.fit_to_window, "Fit to window");
+        ui.end_row();
+    }
     ui.label("Acceleration");
     egui::ComboBox::from_id_salt("vm_acceleration")
         .selected_text(launch.acceleration.label())

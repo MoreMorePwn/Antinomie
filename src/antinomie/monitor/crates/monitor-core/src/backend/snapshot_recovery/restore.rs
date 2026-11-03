@@ -213,6 +213,9 @@ impl Worker {
                 self.snapshot.capture_dir = Some(session.capture.directory.clone());
                 self.snapshot.serial_log = Some(session.process.runtime_dir.join("serial.log"));
                 self.snapshot
+                    .vm_screen
+                    .clone_from(&session.process.screen_socket);
+                self.snapshot
                     .stealth_fallbacks
                     .clone_from(&session.process.stealth_fallbacks);
                 session.update_runs(&mut self.snapshot);

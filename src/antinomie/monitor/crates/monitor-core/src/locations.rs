@@ -488,6 +488,7 @@ mod tests {
                 fit_to_window: true,
                 acceleration: VmAcceleration::Tcg,
                 cpu_model: VmCpuModel::Max,
+                ..Default::default()
             },
             ..VmConfig::default()
         };

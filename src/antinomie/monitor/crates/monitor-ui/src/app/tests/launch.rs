@@ -137,6 +137,7 @@ fn launch_controls_edit_create_and_save_owned_configurations() {
             fit_to_window: true,
             acceleration: VmAcceleration::Tcg,
             cpu_model: VmCpuModel::Max,
+            ..Default::default()
         }
     );
     assert_eq!(created.disk_root, Some(PathBuf::from("/disks")));

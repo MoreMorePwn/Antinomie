@@ -164,6 +164,9 @@ fn storage(ui: &mut egui::Ui, vm: &VmConfig, snapshot: &Snapshot) {
                 .unwrap_or_else(|| "Default base".into())
         });
     let mut display = vm.launch.resolution.label().to_owned();
+    if vm.launch.screen == antinomie_monitor_core::VmScreen::QemuWindow {
+        display.push_str(" · QEMU window");
+    }
     if vm.launch.fullscreen {
         display.push_str(" · Fullscreen");
     }

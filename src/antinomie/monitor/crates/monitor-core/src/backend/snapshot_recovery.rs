@@ -886,6 +886,7 @@ impl Worker {
             Ok(fresh) => fresh,
             Err(error) => {
                 self.snapshot.active_vm = None;
+                self.snapshot.vm_screen = None;
                 self.snapshot.state = VmState::Stopped;
                 return Err(error);
             }

@@ -352,10 +352,10 @@ pub fn check(options: &BackendOptions) -> Report {
         checks.push(Check {
             dependency: Gtk,
             name: "QEMU GTK display",
-            purpose: "Open VM display windows",
+            purpose: "Open VM display windows (only for a VM set to the QEMU window screen)",
             problem: gtk_problem(&options.qemu),
             hint: "On Debian/Ubuntu: sudo apt install qemu-system-gui",
-            optional: false,
+            optional: true,
             wrong_version: false,
         });
     }
@@ -401,7 +401,7 @@ fn gtk_problem(qemu: &Path) -> Option<String> {
 /// Required checks for a launch, respecting headless and explicit TCG mode.
 pub fn vm_requirements(options: &BackendOptions, launch: &VmLaunchOptions) -> Vec<Dependency> {
     let mut required = vec![Dependency::Qemu, Dependency::QemuImg];
-    if !options.headless {
+    if !options.headless && launch.screen == crate::api::VmScreen::QemuWindow {
         required.push(Dependency::Gtk);
     }
     // Only an explicit KVM choice needs it: Default falls back to TCG, and so
@@ -423,6 +423,7 @@ pub(crate) fn require_vm(options: &BackendOptions, launch: &VmLaunchOptions) -> 
     }
     require_tool(&options.qemu_img, "qemu-utils")?;
     if !options.headless
+        && launch.screen == crate::api::VmScreen::QemuWindow
         && let Some(problem) = gtk_problem(&options.qemu)
     {
         return Err(format!(

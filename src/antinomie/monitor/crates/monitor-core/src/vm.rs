@@ -146,7 +146,10 @@ fn qemu_path(path: &Path) -> Result<String, String> {
         .replace(',', ",,"))
 }
 fn initial_size(options: &BackendOptions, launch: &VmLaunchOptions) -> Option<(u16, u16)> {
-    (!options.headless && !launch.fullscreen && launch.fit_to_window)
+    (!options.headless
+        && launch.screen == crate::api::VmScreen::QemuWindow
+        && !launch.fullscreen
+        && launch.fit_to_window)
         .then(|| launch.resolution.dimensions())
         .flatten()
 }
@@ -213,8 +216,11 @@ fn apply_launch_settings(
         command.args(["-vga", "virtio"]);
     }
     command.arg("-append").arg(append);
-    let mut display = if options.headless { "none" } else { "gtk" }.to_owned();
-    if !options.headless {
+    // The VNC display of the in-app screen is added by the launch, which
+    // knows its socket; the guest sees the same devices in every mode.
+    let window = !options.headless && launch.screen == crate::api::VmScreen::QemuWindow;
+    let mut display = if window { "gtk" } else { "none" }.to_owned();
+    if window {
         if launch.fullscreen {
             display.push_str(",full-screen=on");
         }
@@ -227,6 +233,8 @@ fn apply_launch_settings(
             display.push_str(",show-menubar=off,show-tabs=off");
             command.env("GDK_BACKEND", "x11");
         }
+    }
+    if !options.headless {
         // An absolute pointer keeps the GTK display from grabbing and
         // recentering the host cursor. The guest kernel already binds
         // CONFIG_VIRTIO_INPUT, so no additional controller is required; the
@@ -248,6 +256,9 @@ pub(crate) struct VmProcess {
     pub ram_layout: RamLayout,
     pub machine: Machine,
     pub qmp_path: PathBuf,
+    /// The private unix socket of QEMU's VNC display, when the VM's screen
+    /// shows in the app.
+    pub screen_socket: Option<PathBuf>,
     /// The route gateway of a Routed VM; it ends with the process.
     pub gateway: Option<crate::route::Gateway>,
     /// Folder holding the gateway's socket when it is not in `runtime_dir`
@@ -603,6 +614,16 @@ impl VmProcess {
         apply_launch_settings(
             &mut cmd, options, &vm.launch, &accel, &stealth, vm.cpus, &boot, bootstrap,
         )?;
+        // The in-app screen: VNC on a unix socket next to the QMP socket (a
+        // private folder), never TCP. The display backend itself is `none`.
+        let screen_socket = (!options.headless && vm.launch.screen == crate::api::VmScreen::InApp)
+            .then(|| qmp_path.with_file_name("vnc.sock"));
+        if let Some(socket) = &screen_socket {
+            cmd.arg("-vnc").arg(format!(
+                "unix:{},lossy=off",
+                qemu_path(socket)?
+            ));
+        }
         crate::stealth::apply(&mut cmd, &stealth, &runtime_dir, vm.ram_mib, vm.cpus)?;
         crate::stealth::firmware_args(
             &mut cmd,
@@ -640,6 +661,7 @@ impl VmProcess {
             ram_layout: layout,
             machine,
             qmp_path,
+            screen_socket,
             gateway,
             net_dir,
             stealth_fallbacks: fallbacks,
@@ -890,7 +912,7 @@ impl VmProcess {
         } else {
             None
         };
-        let mut value = serde_json::json!({"launch_policy":2,"host_identity":host_identity,"qemu":String::from_utf8_lossy(&output.stdout),"machine":machine.identity(vm.stealth.machine.qemu()),"cpus":vm.cpus,"ram_mib":vm.ram_mib,"nat":vm.nat,"launch":vm.launch,"transport":vm.transport,"acceleration":acceleration,"force_tcg":options.force_tcg,"headless":options.headless,"bootstrap_gpa":options.bootstrap_gpa,"bundle_identity":bundle.base_identity,"kernel_append":bundle.kernel_append,"kernel_version":bundle.kernel_version});
+        let mut value = serde_json::json!({"launch_policy":2,"host_identity":host_identity,"qemu":String::from_utf8_lossy(&output.stdout),"machine":machine.identity(vm.stealth.machine.qemu()),"cpus":vm.cpus,"ram_mib":vm.ram_mib,"nat":vm.nat,"launch":vm.launch.identity(),"transport":vm.transport,"acceleration":acceleration,"force_tcg":options.force_tcg,"headless":options.headless,"bootstrap_gpa":options.bootstrap_gpa,"bundle_identity":bundle.base_identity,"kernel_append":bundle.kernel_append,"kernel_version":bundle.kernel_version});
         // Keep pre-isolation checkpoints compatible for unchanged network setups.
         if let Some(key) = network_identity_key(vm) {
             value[key] = serde_json::Value::Bool(true);
@@ -925,6 +947,9 @@ impl Drop for VmProcess {
             let _ = std::fs::remove_file(&self.ram_path);
         }
         let _ = std::fs::remove_file(&self.qmp_path);
+        if let Some(socket) = &self.screen_socket {
+            let _ = std::fs::remove_file(socket);
+        }
         if self.qmp_path.parent() != Some(self.runtime_dir.as_path())
             && let Some(parent) = self.qmp_path.parent()
         {
@@ -1085,6 +1110,7 @@ mod tests {
                 ram_layout: RamLayout::q35(64 * 1024 * 1024),
                 machine: Machine::Pc,
                 qmp_path,
+                screen_socket: None,
                 gateway: None,
                 net_dir: None,
                 stealth_fallbacks: Vec::new(),
@@ -1607,6 +1633,7 @@ FlatView #1
             ram_layout: RamLayout::q35(0),
             machine: Machine::Pc,
             qmp_path: "/nonexistent/qmp".into(),
+            screen_socket: None,
             gateway: None,
             net_dir: None,
             stealth_fallbacks: Vec::new(),
@@ -1630,6 +1657,7 @@ FlatView #1
             ram_layout: RamLayout::q35(0),
             machine: Machine::Pc,
             qmp_path: "/nonexistent/qmp".into(),
+            screen_socket: None,
             gateway: None,
             net_dir: None,
             stealth_fallbacks: Vec::new(),

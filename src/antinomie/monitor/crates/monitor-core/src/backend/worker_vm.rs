@@ -118,6 +118,7 @@ impl Worker {
                 fallback_warning: process.accel.fallback_warning(&vm.name),
             });
             self.snapshot.serial_log = Some(process.runtime_dir.join("serial.log"));
+            self.snapshot.vm_screen.clone_from(&process.screen_socket);
             self.snapshot
                 .stealth_fallbacks
                 .clone_from(&process.stealth_fallbacks);
@@ -260,6 +261,7 @@ impl Worker {
                 crate::snapshots::run_layer::ended(id);
                 crate::snapshots::run_layer::mark_due(id);
                 self.snapshot.active_vm = None;
+                self.snapshot.vm_screen = None;
                 self.snapshot.accelerator = None;
                 self.snapshot.start_note = None;
                 self.snapshot.state = VmState::Failed;
@@ -324,6 +326,7 @@ impl Worker {
         self.reconnect = (0, None);
         let Some(mut session) = self.session.take() else {
             self.snapshot.active_vm = None;
+            self.snapshot.vm_screen = None;
             self.snapshot.accelerator = None;
             self.snapshot.state = VmState::Stopped;
             return Ok(());
@@ -503,6 +506,7 @@ impl Worker {
         crate::snapshots::run_layer::ended(&session.vm.id);
         crate::snapshots::run_layer::mark_due(&session.vm.id);
         self.snapshot.active_vm = None;
+        self.snapshot.vm_screen = None;
         self.snapshot.accelerator = None;
         self.snapshot.state = VmState::Stopped;
         self.stopping.store(false, Ordering::Relaxed);

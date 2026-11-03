@@ -209,6 +209,30 @@ impl VmAcceleration {
     }
 }
 
+/// Where a VM's screen shows: a tab of the app (QEMU's VNC display on a
+/// private unix socket), or QEMU's own window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VmScreen {
+    #[default]
+    InApp,
+    QemuWindow,
+}
+impl VmScreen {
+    pub const ALL: &'static [Self] = &[Self::InApp, Self::QemuWindow];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::InApp => "In the app (VNC)",
+            Self::QemuWindow => "QEMU window",
+        }
+    }
+
+    pub(crate) fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// Bounded QEMU CPU models; Default leaves QEMU's model selection unchanged.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -245,8 +269,21 @@ pub struct VmLaunchOptions {
     pub acceleration: VmAcceleration,
     #[serde(default)]
     pub cpu_model: VmCpuModel,
+    /// Where the VM's screen shows. Not part of the VM's checkpoint identity:
+    /// the guest sees the same devices either way.
+    #[serde(default, skip_serializing_if = "VmScreen::is_default")]
+    pub screen: VmScreen,
 }
 impl VmLaunchOptions {
+    /// The options as the checkpoint identity sees them: the screen is how the
+    /// host shows the VM, not part of the machine.
+    pub(crate) fn identity(&self) -> Self {
+        Self {
+            screen: VmScreen::default(),
+            ..self.clone()
+        }
+    }
+
     /// Reject CPU models incompatible with the explicit accelerator preference.
     pub fn validate(&self) -> Result<(), String> {
         if self.cpu_model == VmCpuModel::Host && self.acceleration == VmAcceleration::Tcg {
@@ -2438,6 +2475,9 @@ pub struct Snapshot {
     pub process_cores: Vec<ProcessCoreCapture>,
     /// Host measurements for the active QEMU process, refreshed once a second.
     pub vm_resources: Option<VmResources>,
+    /// The private VNC socket of the running VM's screen, while the VM is set
+    /// to show its screen in the app; the app's VM screen tab connects to it.
+    pub vm_screen: Option<std::path::PathBuf>,
     pub vm_snapshot_trees: std::collections::BTreeMap<String, VmSnapshotTree>,
     pub vm_snapshot_progress: Option<VmSnapshotProgress>,
     /// A base's UEFI disk being laid out.
@@ -3166,6 +3206,7 @@ mod tests {
                                 cpu_model,
                                 fullscreen,
                                 fit_to_window,
+                                ..Default::default()
                             },
                             ..VmConfig::default()
                         };

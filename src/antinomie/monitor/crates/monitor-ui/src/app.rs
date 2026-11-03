@@ -72,7 +72,7 @@ use antinomie_monitor_core::{
     BackendOptions, BaseSummary, CaptureState, CaptureSummary, Command, DisplayResolution,
     ExecRequest, GuestCredentials, InvocationSummary, Notification, ProcessCorePhase,
     ProcessCoreRequest, RevisionStatus, RunState, RunSummary, Snapshot, TerminalRecord,
-    TransportSettings, VmAcceleration, VmConfig, VmCpuModel, VmLaunchOptions, VmState,
+    TransportSettings, VmAcceleration, VmConfig, VmCpuModel, VmLaunchOptions, VmScreen, VmState,
     APP_REVISION, APP_VERSION,
 };
 pub(crate) use bases::selected_base;
