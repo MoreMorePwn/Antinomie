@@ -7,7 +7,8 @@ use eframe::egui;
 use std::cmp::Ordering;
 
 /// A sortable header cell. A first click sorts ascending, the next one
-/// descending; right-click offers the recorded order.
+/// descending, the third one is off again (the recorded order); right-click
+/// offers the recorded order too.
 pub(crate) fn header(ui: &mut egui::Ui, table: &str, column: usize, title: &str) {
     sort_header(ui, table, column, title);
 }
@@ -163,6 +164,9 @@ mod tests {
         let drawn = click(&ctx, table, "Name");
         assert!(drawn.contains("Name ▼"), "{drawn}");
         assert_eq!(by(&ctx), vec![0, 2, 1]);
+        let drawn = click(&ctx, table, "Name");
+        assert!(!drawn.contains('▲') && !drawn.contains('▼'), "{drawn}");
+        assert_eq!(by(&ctx), vec![0, 1, 2], "the third click is off");
         // Another column starts ascending again; the first loses its arrow.
         let drawn = click(&ctx, table, "Size");
         assert!(

@@ -112,13 +112,28 @@ pub(crate) fn header(ui: &mut egui::Ui, table: &str, column: usize, title: &str)
         .frame(false),
     );
     if response.clicked() {
-        let next = Spec {
-            column,
-            descending: current.is_some_and(|sort| sort.column == column && !sort.descending),
+        // Ascending, then descending, then off: the recorded order again.
+        let request = match current.filter(|sort| sort.column == column) {
+            Some(sort) if sort.descending => None,
+            Some(_) => Some(Spec {
+                column,
+                descending: true,
+            }),
+            None => Some(Spec {
+                column,
+                descending: false,
+            }),
         };
         ui.ctx().data_mut(|data| {
-            data.insert_temp(id, next);
-            data.insert_temp(egui::Id::new(("triage-sort-request", table)), Some(next));
+            match request {
+                Some(next) => {
+                    data.insert_temp(id, next);
+                }
+                None => {
+                    data.remove::<Spec>(id);
+                }
+            }
+            data.insert_temp(egui::Id::new(("triage-sort-request", table)), request);
         });
     }
     response.context_menu(|ui| {

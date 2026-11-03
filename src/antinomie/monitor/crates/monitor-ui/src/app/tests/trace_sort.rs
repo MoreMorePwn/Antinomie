@@ -93,4 +93,6 @@ fn clicking_a_trace_header_sorts_and_shows_the_direction() {
         header(&mut app).0,
         format!("TID{}", egui_phosphor::regular::CARET_DOWN)
     );
+    click(&mut app);
+    assert_eq!(app.trace_sort, None, "the third click is off");
 }

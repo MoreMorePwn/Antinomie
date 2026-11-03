@@ -457,8 +457,13 @@ impl MonitorApp {
                 column.title()
             ));
         if response.clicked() {
-            // A new column sorts ascending; the same column flips.
-            *trace_sort = Some((column, sorted.is_some_and(|(_, descending)| !descending)));
+            // A new column sorts ascending, the same column flips, and a
+            // third click is off: the recorded order again.
+            *trace_sort = match sorted {
+                Some((_, true)) => None,
+                Some((_, false)) => Some((column, true)),
+                None => Some((column, false)),
+            };
         }
     }
 
