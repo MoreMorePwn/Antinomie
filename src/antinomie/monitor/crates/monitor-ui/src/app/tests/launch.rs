@@ -12,7 +12,7 @@ fn long_health_messages_do_not_overlap_figures_and_keep_full_hover_text() {
             let ctx = egui::Context::default();
             theme::install(&ctx);
             theme::text_size(&ctx, font_size);
-            ctx.style_mut(|style| {
+            ctx.global_style_mut(|style| {
                 style.interaction.tooltip_delay = 0.0;
                 style.interaction.tooltip_grace_time = 0.0;
             });

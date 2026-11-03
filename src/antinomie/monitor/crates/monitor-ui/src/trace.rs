@@ -197,10 +197,10 @@ impl Inspector {
         }
         self.observations.allow_reads(can_read);
         let width = ui.available_width();
-        egui::SidePanel::left("argument_tree")
-            .default_width((width * 0.5).clamp(220.0, 640.0))
-            .min_width(160.0)
-            .max_width((width - 200.0).max(160.0))
+        egui::Panel::left("argument_tree")
+            .default_size((width * 0.5).clamp(220.0, 640.0))
+            .min_size(160.0)
+            .max_size((width - 200.0).max(160.0))
             .resizable(true)
             .frame(egui::Frame::NONE.inner_margin(egui::Margin {
                 left: 2,
@@ -208,7 +208,7 @@ impl Inspector {
                 top: 4,
                 bottom: 4,
             }))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 egui::ScrollArea::both()
                     .id_salt("argument_tree_scroll")
                     .auto_shrink([false, false])
@@ -222,7 +222,7 @@ impl Inspector {
                 top: 4,
                 bottom: 4,
             }))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 egui::ScrollArea::both()
                     .id_salt("value_inspector")
                     .auto_shrink([false, false])
@@ -769,7 +769,7 @@ impl Inspector {
     /// covers are highlighted in both columns.
     fn hex_dump(&mut self, ui: &mut egui::Ui) {
         let font = egui::TextStyle::Monospace.resolve(ui.style());
-        let char_width = ui.fonts(|fonts| fonts.glyph_width(&font, '0'));
+        let char_width = ui.fonts_mut(|fonts| fonts.glyph_width(&font, '0'));
         let height = font.size + if theme::is_compact() { 5.0 } else { 9.0 };
         let per_line = if ui.available_width() >= char_width * 78.0 {
             16

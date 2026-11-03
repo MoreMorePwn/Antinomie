@@ -924,8 +924,8 @@ fn thread_context_and_mapping_controls_render_at_narrow_large_font() {
             .iter()
             .any(|(text, _)| text.contains("4096 / 67108864 octets captured")));
         assert!(content.iter().any(|(text, _)| text.contains("90 90")));
-        let font_id = egui::TextStyle::Monospace.resolve(&ctx.style());
-        let row_height = ctx.fonts(|fonts| fonts.row_height(&font_id));
+        let font_id = egui::TextStyle::Monospace.resolve(&ctx.global_style());
+        let row_height = ctx.fonts_mut(|fonts| fonts.row_height(&font_id));
         for (text, rect) in content
             .iter()
             .filter(|(text, _)| text.starts_with("000000000040") && text.contains("90 90"))
@@ -961,8 +961,8 @@ fn long_disassembly_lines_scroll_horizontally_without_wrapping_at_large_font() {
             "{label} stays reachable: {rect:?}"
         );
     }
-    let font_id = egui::TextStyle::Monospace.resolve(&ctx.style());
-    let row_height = ctx.fonts(|fonts| fonts.row_height(&font_id));
+    let font_id = egui::TextStyle::Monospace.resolve(&ctx.global_style());
+    let row_height = ctx.fonts_mut(|fonts| fonts.row_height(&font_id));
     let instruction_rows: Vec<_> = content
         .iter()
         .filter(|(text, _)| text.starts_with("0x000000000040000"))
@@ -1007,8 +1007,8 @@ fn long_decompiled_lines_scroll_horizontally_at_large_font() {
         .iter()
         .find(|(text, _)| text == line)
         .expect("retained decompiled line is rendered");
-    let font_id = egui::TextStyle::Monospace.resolve(&ctx.style());
-    let row_height = ctx.fonts(|fonts| fonts.row_height(&font_id));
+    let font_id = egui::TextStyle::Monospace.resolve(&ctx.global_style());
+    let row_height = ctx.fonts_mut(|fonts| fonts.row_height(&font_id));
     assert!(
         rect.height() <= row_height + 0.5,
         "decompiled line stays one visual row: {rect:?}"

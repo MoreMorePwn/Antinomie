@@ -264,7 +264,7 @@ impl Journal {
         let scale = ui.text_style_height(&egui::TextStyle::Body) / 16.0;
         let time_width = {
             let font = egui::TextStyle::Monospace.resolve(ui.style());
-            ui.fonts(|fonts| {
+            ui.fonts_mut(|fonts| {
                 fonts
                     .layout_no_wrap("0000-00-00 00:00:00".into(), font, egui::Color32::WHITE)
                     .size()
@@ -546,7 +546,7 @@ fn notice_impl(
     let mut closed = false;
     let output = ui.push_id(ui.next_auto_id().with(id), |ui| {
         ui.horizontal_top(|ui| {
-            let natural_width = ui.fonts(|fonts| {
+            let natural_width = ui.fonts_mut(|fonts| {
                 fonts
                     .layout_no_wrap(
                         message.clone(),

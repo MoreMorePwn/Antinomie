@@ -318,7 +318,7 @@ pub(super) fn techniques(ui: &mut egui::Ui, data: &Data) -> Option<usize> {
                                 rollup.triaged
                             ))
                             .color(theme::text());
-                            let count_width = ui.fonts(|fonts| {
+                            let count_width = ui.fonts_mut(|fonts| {
                                 fonts
                                     .layout_no_wrap(
                                         count.text().to_owned(),
@@ -471,7 +471,7 @@ fn tripped_in(runs: &[usize]) -> String {
 /// survives re-rendering (it is kept under `id`).
 fn disclosure(
     ui: &mut egui::Ui,
-    id: impl std::hash::Hash,
+    id: impl std::hash::Hash + std::fmt::Debug,
     header: impl FnOnce(&mut egui::Ui),
     body: impl FnOnce(&mut egui::Ui),
 ) -> egui::Response {

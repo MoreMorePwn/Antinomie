@@ -362,7 +362,7 @@ pub(crate) fn menu(
                 .find(|field| field.0 == *name && !matches!(field.1, RowValue::Missing))
         })
     });
-    ui.set_max_width(ctx.screen_rect().width().min(420.0));
+    ui.set_max_width(ctx.content_rect().width().min(420.0));
     match field {
         Some((name, value)) if matches!(draft, Draft::None) => {
             let shown = value_text(value).unwrap_or_else(|| "(none)".into());
@@ -413,7 +413,7 @@ pub(crate) fn menu(
         .clicked()
     {
         ctx.copy_text(cell.unwrap_or_default());
-        ui.close_menu();
+        ui.close();
     }
     if ui.button("Copy row").clicked() {
         let text = extras.row_text.clone().unwrap_or_else(|| {
@@ -423,7 +423,7 @@ pub(crate) fn menu(
                 .join("\n")
         });
         ctx.copy_text(text);
-        ui.close_menu();
+        ui.close();
     }
     if let Some((sample, note)) = extras.note {
         ui.separator();

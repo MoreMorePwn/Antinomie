@@ -71,7 +71,7 @@ impl MonitorApp {
                 .collapsible(false)
                 .resizable(false)
                 .default_width(620.0)
-                .max_width((ctx.screen_rect().width() - 50.0).max(300.0))
+                .max_width((ctx.content_rect().width() - 50.0).max(300.0))
                 .show(ctx, |ui| {
                     dialog_section(ui, "Base folder");
                     ui.label(
@@ -364,7 +364,7 @@ impl MonitorApp {
                 .resizable(true)
                 .default_width(660.0)
                 .default_height(0.0)
-                .max_width((ctx.screen_rect().width() - 50.0).max(300.0))
+                .max_width((ctx.content_rect().width() - 50.0).max(300.0))
                 .max_height((crate::title_bar::content_rect(ctx).height() - 90.0).max(200.0))
                 .show(ctx, |ui| {
                     scroll_dialog(ui, ctx, |ui| {
@@ -450,7 +450,7 @@ impl MonitorApp {
                 .collapsible(false)
                 .resizable(false)
                 .pivot(egui::Align2::CENTER_CENTER)
-                .default_pos(ctx.screen_rect().center())
+                .default_pos(ctx.content_rect().center())
                 .show(ctx, |ui| {
                     ui.set_width(400.0);
                     ui.horizontal(|ui| {
@@ -647,7 +647,8 @@ impl MonitorApp {
     /// keyboard (a terminal).
     pub(super) fn escape(&mut self, ctx: &egui::Context) {
         if !ctx.input(|input| input.key_pressed(egui::Key::Escape))
-            || ctx.memory(|memory| memory.any_popup_open() || memory.focused().is_some())
+            || egui::Popup::is_any_open(ctx)
+            || ctx.memory(|memory| memory.focused().is_some())
         {
             return;
         }
@@ -720,7 +721,7 @@ pub(super) fn dialog_section(ui: &mut egui::Ui, title: &str) {
 /// Width of a dialog's label column: the longest label ("Recording
 /// parent", "Confirm password") at the current text size.
 pub(super) fn form_label_width(ctx: &egui::Context) -> f32 {
-    ctx.style()
+    ctx.global_style()
         .text_styles
         .get(&egui::TextStyle::Body)
         .map_or(16.0, |font| font.size)

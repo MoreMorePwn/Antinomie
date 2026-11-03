@@ -765,21 +765,21 @@ impl DiskView {
         self.action = None;
         self.sync(ui.ctx(), &cx);
         self.measure_when_needed(&cx);
-        egui::SidePanel::left("disk_entries")
+        egui::Panel::left("disk_entries")
             .resizable(true)
-            .default_width(230.0)
-            .width_range(170.0..=480.0)
+            .default_size(230.0)
+            .size_range(170.0..=480.0)
             .frame(egui::Frame::new().inner_margin(egui::Margin {
                 right: 8,
                 ..Default::default()
             }))
-            .show_inside(ui, |ui| self.entries(ui, &cx));
+            .show(ui, |ui| self.entries(ui, &cx));
         egui::CentralPanel::default()
             .frame(egui::Frame::new().inner_margin(egui::Margin {
                 left: 10,
                 ..Default::default()
             }))
-            .show_inside(ui, |ui| self.main_pane(ui, &mut cx));
+            .show(ui, |ui| self.main_pane(ui, &mut cx));
         self.import_window(ui.ctx(), &cx);
         self.action.take()
     }

@@ -154,7 +154,7 @@ impl Performance {
             egui::Id::new("fps-counter"),
         ));
         let color = if live { theme::text() } else { theme::muted() };
-        let font = egui::TextStyle::Monospace.resolve(&ctx.style());
+        let font = egui::TextStyle::Monospace.resolve(&ctx.global_style());
         let galley =
             painter.layout_no_wrap(label, egui::FontId::monospace(font.size * 0.85), color);
         let padding = egui::vec2(6.0, 2.0);
@@ -164,13 +164,13 @@ impl Performance {
             egui::Rect::from_min_size(
                 egui::pos2(
                     buttons_left - 8.0 - size.x,
-                    ctx.screen_rect().top() + (caption - size.y) / 2.0,
+                    ctx.content_rect().top() + (caption - size.y) / 2.0,
                 ),
                 size,
             )
         } else {
             egui::Align2::RIGHT_TOP
-                .align_size_within_rect(size, ctx.screen_rect().shrink2(egui::vec2(8.0, 4.0)))
+                .align_size_within_rect(size, ctx.content_rect().shrink2(egui::vec2(8.0, 4.0)))
         };
         painter.rect_filled(rect, 4.0, theme::raised());
         painter.rect_stroke(

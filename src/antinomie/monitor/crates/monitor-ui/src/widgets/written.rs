@@ -63,7 +63,7 @@ pub fn written_files(ui: &mut egui::Ui, id: &str, files: &[(String, PathBuf)], r
     let label_width = files
         .iter()
         .map(|(label, _)| {
-            ui.fonts(|fonts| {
+            ui.fonts_mut(|fonts| {
                 fonts
                     .layout_no_wrap(
                         format!("{label}:"),

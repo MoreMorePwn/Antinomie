@@ -191,13 +191,12 @@ fn show(
     // The panes never take more than 60% of what is left, so the listing
     // stays in view whatever is open; the height dragged to is kept.
     let room = ui.available_height();
-    let mut bottom =
-        egui::TopBottomPanel::bottom(egui::Id::new(("debugger-panes", !open.is_empty())))
-            .resizable(!open.is_empty())
-            .frame(egui::Frame::new());
+    let mut bottom = egui::Panel::bottom(egui::Id::new(("debugger-panes", !open.is_empty())))
+        .resizable(!open.is_empty())
+        .frame(egui::Frame::new());
     if !open.is_empty() {
         bottom = bottom
-            .default_height(
+            .default_size(
                 (room
                     * if prefs.pane_open(panes::Pane::Console) {
                         0.55
@@ -206,9 +205,9 @@ fn show(
                     })
                 .clamp(150.0, 420.0),
             )
-            .height_range(120.0..=(room * 0.6).max(150.0));
+            .size_range(120.0..=(room * 0.6).max(150.0));
     }
-    bottom.show_inside(ui, |ui| {
+    bottom.show(ui, |ui| {
         if let Some(clicked) = panes::strip(ui, prefs, Some(view), panel.console.running()) {
             prefs.toggle_pane(clicked);
         }
@@ -226,7 +225,7 @@ fn show(
     });
     egui::CentralPanel::default()
         .frame(egui::Frame::new())
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             use egui_extras::{Size, StripBuilder};
             let reg_width = ui.text_style_height(&egui::TextStyle::Monospace) * 0.62 * 25.0 + 12.0;
             StripBuilder::new(ui)

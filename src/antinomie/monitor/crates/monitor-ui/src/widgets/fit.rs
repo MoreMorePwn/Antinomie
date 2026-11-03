@@ -7,7 +7,7 @@ use eframe::egui::{self, FontId};
 /// ellipsis, as long as `width` allows (`font` is the font it is drawn in).
 pub fn fit_middle(ui: &egui::Ui, text: &str, font: &FontId, width: f32) -> String {
     let measure = |candidate: &str| {
-        ui.fonts(|fonts| {
+        ui.fonts_mut(|fonts| {
             fonts
                 .layout_no_wrap(candidate.to_owned(), font.clone(), egui::Color32::WHITE)
                 .size()

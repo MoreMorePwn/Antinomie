@@ -216,7 +216,7 @@ pub(in crate::app::samples_page) fn section(
                                     .clicked()
                                 {
                                     act = Some(Act::History(item.number, file.path.clone()));
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                                 let deleted = file.state == "deleted";
                                 if ui
@@ -238,7 +238,7 @@ pub(in crate::app::samples_page) fn section(
                                     .clicked()
                                 {
                                     act = Some(Act::Export(item.number, file.path.clone()));
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                                 if ui
                                     .add_enabled(
@@ -249,7 +249,7 @@ pub(in crate::app::samples_page) fn section(
                                     .clicked()
                                 {
                                     ui.ctx().copy_text(file.sha256.clone());
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                             };
                             if roomy {

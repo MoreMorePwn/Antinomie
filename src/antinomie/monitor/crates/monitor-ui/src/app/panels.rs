@@ -3,8 +3,9 @@
 use super::*;
 
 impl MonitorApp {
-    pub(super) fn draw(&mut self, ctx: &egui::Context) {
-        crate::title_bar::show(ctx, "Antinomie");
+    pub(super) fn draw(&mut self, root: &mut egui::Ui) {
+        let ctx = &root.ctx().clone();
+        crate::title_bar::show(root, "Antinomie");
         if self.activity_notices_due {
             self.collect_notices(ctx);
             self.activity_notices_due = false;
@@ -59,17 +60,17 @@ impl MonitorApp {
         }
         self.updates
             .show(ctx, &self.options.curl, &mut self.settings.outbound_catalog);
-        self.menus(ctx);
-        self.toolbar(ctx);
-        self.dump_pause_banner(ctx);
-        self.health(ctx);
-        self.sidebar(ctx);
+        self.menus(root);
+        self.toolbar(root);
+        self.dump_pause_banner(root);
+        self.health(root);
+        self.sidebar(root);
         let mut layout = std::mem::take(&mut self.layout);
         if let Some(panel) = self.focus_panel.take() {
             layout.focus(panel);
         }
         layout.set_samples_details(self.samples_page.wants_details());
-        layout.show(self, ctx);
+        layout.show(self, root);
         self.layout = layout;
         self.dialogs(ctx);
         self.data_windows.show(ctx);

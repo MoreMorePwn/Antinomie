@@ -84,7 +84,7 @@ pub(super) fn render(
 ) -> Vec<(String, egui::Rect, egui::Rect)> {
     let mut detection = antinomie_monitor_core::analysis::detection::Settings::default();
     let tools = ruleset::ToolConfig::default();
-    ctx.style_mut(|style| style.animation_time = 0.0);
+    ctx.global_style_mut(|style| style.animation_time = 0.0);
     let output = ctx.run(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),

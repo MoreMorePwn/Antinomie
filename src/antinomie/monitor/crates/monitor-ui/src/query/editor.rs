@@ -157,7 +157,7 @@ fn filter_edit_iter<'a>(
     let cursor_chars = caret.unwrap_or_else(|| {
         output
             .cursor_range
-            .map(|range| range.primary.ccursor.index)
+            .map(|range| usize::from(range.primary.index))
             .unwrap_or(text.chars().count())
     });
     let cursor = byte_index(text, cursor_chars);
@@ -168,8 +168,8 @@ fn filter_edit_iter<'a>(
     }
     let items = if output.response.has_focus() && !dismiss {
         let selection = output.cursor_range.and_then(|range| {
-            let first = byte_index(text, range.primary.ccursor.index);
-            let second = byte_index(text, range.secondary.ccursor.index);
+            let first = byte_index(text, usize::from(range.primary.index));
+            let second = byte_index(text, usize::from(range.secondary.index));
             (first != second).then_some((first.min(second), first.max(second)))
         });
         completions_field_iter(
@@ -185,14 +185,9 @@ fn filter_edit_iter<'a>(
     };
     let popup_id = id.with("popup");
     if items.is_empty() {
-        ui.memory_mut(|memory| {
-            if memory.is_popup_open(popup_id) {
-                memory.close_popup();
-            }
-        });
+        egui::Popup::close_id(ui.ctx(), popup_id);
         ui.data_mut(|data| data.remove_temp::<Option<usize>>(id.with("scrolled")));
     } else {
-        ui.memory_mut(|memory| memory.open_popup(popup_id));
         let shown = items.clone();
         let mut picked = None;
         // Keep the highlighted entry in view only when it moves (arrow keys
@@ -200,14 +195,14 @@ fn filter_edit_iter<'a>(
         let scrolled_id = id.with("scrolled");
         let scrolled = ui.data(|data| data.get_temp::<Option<usize>>(scrolled_id));
         let follow = changed || scrolled != Some(Some(selected));
-        egui::popup::popup_below_widget(
-            ui,
-            popup_id,
-            &output.response,
-            egui::PopupCloseBehavior::IgnoreClicks,
-            |ui| {
+        egui::Popup::from_response(&output.response)
+            .id(popup_id)
+            .open(true)
+            .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
+            .layout(egui::Layout::top_down_justified(egui::Align::Min))
+            .show(|ui| {
                 let popup_width = width
-                    .min(ui.ctx().screen_rect().width() - 24.0)
+                    .min(ui.ctx().content_rect().width() - 24.0)
                     .clamp(80.0, 560.0);
                 ui.set_min_width(popup_width);
                 ui.set_max_width(popup_width);
@@ -230,8 +225,7 @@ fn filter_edit_iter<'a>(
                 ui.data_mut(|data| data.insert_temp(id.with("offset"), scroll.state.offset.y));
                 #[cfg(not(test))]
                 let _ = scroll;
-            },
-        );
+            });
         ui.data_mut(|data| data.insert_temp(scrolled_id, Some(selected)));
         if let Some(item) = picked {
             let byte = apply_completion(text, &item);
@@ -262,18 +256,18 @@ fn filter_edit_iter<'a>(
             ui.menu_button("Recent filters", |ui| {
                 crate::widgets::bounded_menu(ui, |ui| {
                     for entry in &history {
-                        if ui.add(egui::Button::new(entry).truncate()).on_hover_text(entry).clicked() { *text = entry.clone(); menu_changed = true; ui.close_menu(); }
+                        if ui.add(egui::Button::new(entry).truncate()).on_hover_text(entry).clicked() { *text = entry.clone(); menu_changed = true; ui.close(); }
                     }
                 });
             });
         }
-        if ui.button("Clear filter").clicked() { text.clear(); menu_changed = true; ui.close_menu(); }
+        if ui.button("Clear filter").clicked() { text.clear(); menu_changed = true; ui.close(); }
         if ui.button("Filter fields and examples").clicked() {
             ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("filter-guide-packet"), packet));
             let rows: Vec<_> = fields.clone().map(|field| (field.name.to_owned(), field.kind.to_owned(), field.detail.to_owned())).collect();
             ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new("filter-guide-fields"), std::sync::Arc::new(rows)));
             open_guide(ui.ctx());
-            ui.close_menu();
+            ui.close();
         }
         if ui.button("Copy field registry as JSON").clicked() {
             let rows: Vec<_> = fields.clone().map(|field| serde_json::json!({"name": field.name, "type": field.kind, "meaning": field.detail})).collect();
@@ -281,13 +275,13 @@ fn filter_edit_iter<'a>(
                 Ok(json) => ui.ctx().copy_text(json),
                 Err(error) => { crate::activity::error(ui, error.to_string()); }
             }
-            ui.close_menu();
+            ui.close();
         }
     });
     if menu_changed {
         output.response.mark_changed();
     }
-    output.response
+    output.response.response
 }
 
 /// Call immediately after this UI's filter editor, once its filter has been

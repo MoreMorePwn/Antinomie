@@ -127,7 +127,7 @@ pub(crate) fn header(ui: &mut egui::Ui, table: &str, column: usize, title: &str)
                 data.remove::<Spec>(id);
                 data.insert_temp(egui::Id::new(("triage-sort-request", table)), None::<Spec>);
             });
-            ui.close_menu();
+            ui.close();
         }
     });
 }

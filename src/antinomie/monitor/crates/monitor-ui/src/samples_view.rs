@@ -728,7 +728,7 @@ impl SamplesView {
             .clone();
         let mut action = None;
         let mut open = true;
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let largest = egui::vec2(1240.0, 900.0).min(screen.size() - egui::vec2(96.0, 160.0));
         crate::widgets::window("Malware samples")
             .id(egui::Id::new(WINDOW_ID))

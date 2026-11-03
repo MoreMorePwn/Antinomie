@@ -292,7 +292,7 @@ impl Terminal {
                 .clicked()
             {
                 copied |= self.copy_raw(ui);
-                ui.close_menu();
+                ui.close();
             }
             if ui.button("Select all output").clicked() {
                 let evicted = self.raw.evicted();
@@ -308,7 +308,7 @@ impl Terminal {
                     },
                 });
                 response.request_focus();
-                ui.close_menu();
+                ui.close();
             }
             if ui
                 .add_enabled(
@@ -318,7 +318,7 @@ impl Terminal {
                 .clicked()
             {
                 self.raw_view.selection = None;
-                ui.close_menu();
+                ui.close();
             }
         });
         copied

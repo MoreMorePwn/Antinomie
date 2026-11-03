@@ -347,11 +347,11 @@ impl MonitorApp {
     fn base_menu(&self, ui: &mut egui::Ui, id: &str, action: &mut Option<(String, BaseAction)>) {
         if ui.button("New VM from this base…").clicked() {
             *action = Some((id.to_owned(), BaseAction::NewVm));
-            ui.close_menu();
+            ui.close();
         }
         if ui.button("Open directory").clicked() {
             *action = Some((id.to_owned(), BaseAction::OpenDirectory));
-            ui.close_menu();
+            ui.close();
         }
         ui.separator();
         if ui
@@ -362,7 +362,7 @@ impl MonitorApp {
             .clicked()
         {
             *action = Some((id.to_owned(), BaseAction::Delete));
-            ui.close_menu();
+            ui.close();
         }
     }
 

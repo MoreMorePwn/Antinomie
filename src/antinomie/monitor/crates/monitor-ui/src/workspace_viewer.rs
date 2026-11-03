@@ -45,24 +45,26 @@ impl TabViewer for Viewer<'_> {
     fn allowed_in_windows(&self, _: &mut Panel) -> bool {
         false
     }
-    fn closeable(&mut self, tab: &mut Panel) -> bool {
+    fn is_closeable(&self, tab: &Panel) -> bool {
         matches!(
             tab,
             Panel::Terminal(_) | Panel::AnalysisSection { .. } | Panel::Library(_)
         )
     }
-    fn on_close(&mut self, tab: &mut Panel) -> bool {
+    fn on_close(&mut self, tab: &mut Panel) -> egui_dock::tab_viewer::OnCloseResponse {
         if let Panel::Terminal(id) = tab {
             self.app.close_terminal_view(id);
         }
-        true
+        egui_dock::tab_viewer::OnCloseResponse::Close
     }
     fn on_tab_button(&mut self, tab: &mut Panel, response: &egui::Response) {
         let origin = response
             .ctx
             .input(|input| input.viewport().inner_rect.map(|rect| rect.min))
             .unwrap_or_default();
-        let visible = response.interact_rect.intersect(response.ctx.screen_rect());
+        let visible = response
+            .interact_rect
+            .intersect(response.ctx.content_rect());
         if visible.is_positive() {
             self.layout.tab_targets.push((
                 tab.clone(),
@@ -93,7 +95,7 @@ impl TabViewer for Viewer<'_> {
                 ));
         }
     }
-    fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Panel, _: SurfaceIndex, _: NodeIndex) {
+    fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Panel, _: egui_dock::NodePath) {
         if !self.surface.is_main()
             && ui
                 .button("Dock")
@@ -101,11 +103,11 @@ impl TabViewer for Viewer<'_> {
                 .clicked()
         {
             self.layout.dock_back = Some(tab.clone());
-            ui.close_menu();
+            ui.close();
         }
         if ui.button("Detach").clicked() {
             self.layout.detach = Some(tab.clone());
-            ui.close_menu();
+            ui.close();
         }
     }
 }

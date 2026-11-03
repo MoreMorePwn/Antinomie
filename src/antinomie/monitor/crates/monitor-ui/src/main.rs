@@ -105,7 +105,7 @@ mod graphics_option_tests {
     /// the main window's update that stops every window.
     #[test]
     fn buffer_swaps_never_wait_for_the_compositor() {
-        assert!(!native_options().vsync);
+        assert!(!native_options().glow_options.vsync);
     }
 
     #[test]
@@ -233,7 +233,10 @@ fn native_options() -> eframe::NativeOptions {
         // not showing (idle, covered or minimized on WSLg's Wayland): the swap
         // of that one window then never returns and every window stops
         // answering. Without vsync a swap never waits.
-        vsync: ui_performance::VSYNC,
+        glow_options: eframe::egui_glow::GlowConfiguration {
+            vsync: ui_performance::VSYNC,
+            ..Default::default()
+        },
         ..Default::default()
     }
 }

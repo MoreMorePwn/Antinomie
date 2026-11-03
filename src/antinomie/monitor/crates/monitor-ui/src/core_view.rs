@@ -526,15 +526,15 @@ impl CoreView {
         let mut action = None;
         self.list_toolbar(ui);
         if !self.hide_list {
-            egui::SidePanel::left("core_dump_list")
+            egui::Panel::left("core_dump_list")
                 .resizable(true)
-                .default_width(240.0)
-                .width_range(180.0..=480.0)
+                .default_size(240.0)
+                .size_range(180.0..=480.0)
                 .frame(egui::Frame::new().inner_margin(egui::Margin {
                     right: 8,
                     ..Default::default()
                 }))
-                .show_inside(ui, |ui| {
+                .show(ui, |ui| {
                     action = self.dump_list(
                         ui,
                         controls.unavailable,
@@ -549,7 +549,7 @@ impl CoreView {
                 right: 8,
                 ..Default::default()
             }))
-            .show_inside(ui, |ui| self.analysis(ui));
+            .show(ui, |ui| self.analysis(ui));
         self.import_dialog(ui.ctx());
         action
     }

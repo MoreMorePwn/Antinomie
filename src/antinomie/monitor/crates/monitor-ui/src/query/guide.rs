@@ -61,7 +61,7 @@ pub(crate) fn guide(ctx: &egui::Context) {
             let mono = egui::TextStyle::Monospace.resolve(ui.style());
             let body = egui::TextStyle::Body.resolve(ui.style());
             let widest = |font: &egui::FontId, texts: Vec<&str>| {
-                ui.fonts(|fonts| {
+                ui.fonts_mut(|fonts| {
                     texts
                         .into_iter()
                         .map(|text| {

@@ -19,7 +19,7 @@ const MAX_DRAGGED: f32 = 4000.0;
 pub(crate) fn show<R>(
     ui: &mut egui::Ui,
     id: &'static str,
-    selection: impl Hash,
+    selection: impl Hash + std::fmt::Debug,
     add: impl FnOnce(&mut egui::Ui, f32) -> R,
 ) -> R {
     let viewport = ui.available_height();

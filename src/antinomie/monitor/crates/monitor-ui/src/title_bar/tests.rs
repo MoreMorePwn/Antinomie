@@ -220,7 +220,7 @@ fn native_custom_title_bar_controls() {
                 eprintln!(
                     "native press {:?}; screen {:?}; viewport {:?}",
                     ctx.input(|i| i.pointer.hover_pos()),
-                    ctx.screen_rect(),
+                    ctx.content_rect(),
                     ctx.input(|i| (i.viewport().maximized, i.viewport().inner_rect))
                 );
             }

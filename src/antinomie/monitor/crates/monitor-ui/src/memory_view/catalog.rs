@@ -30,7 +30,7 @@ impl MemoryView {
             .resizable(false)
             .open(&mut open)
             .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.screen_rect().center())
+            .default_pos(ctx.content_rect().center())
             .show(ctx, |ui| {
                 egui::Grid::new("memory_import_grid")
                     .num_columns(2)
@@ -191,7 +191,7 @@ impl MemoryView {
             .collapsible(false)
             .resizable(true)
             .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.screen_rect().center())
+            .default_pos(ctx.content_rect().center())
             .default_width(680.0)
             .default_height(560.0)
             .open(&mut open)

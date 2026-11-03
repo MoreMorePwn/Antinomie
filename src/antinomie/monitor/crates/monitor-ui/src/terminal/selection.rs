@@ -314,7 +314,7 @@ impl Terminal {
                 .clicked()
             {
                 copied |= self.copy_selection(ui, history);
-                ui.close_menu();
+                ui.close();
             }
             if ui.button("Select all output").clicked() {
                 self.selection = Some(Selection {
@@ -325,7 +325,7 @@ impl Terminal {
                     },
                 });
                 response.request_focus();
-                ui.close_menu();
+                ui.close();
             }
             if ui
                 .add_enabled(
@@ -335,7 +335,7 @@ impl Terminal {
                 .clicked()
             {
                 self.selection = None;
-                ui.close_menu();
+                ui.close();
             }
         });
         copied

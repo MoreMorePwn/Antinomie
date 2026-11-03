@@ -65,7 +65,7 @@ pub fn detail_block<R>(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui) -> R)
 /// grows to the items, but never past most of the screen: a longer list
 /// scrolls inside the menu, and a long item is cut at a readable width.
 pub fn bounded_menu<R>(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let screen = ui.ctx().screen_rect();
+    let screen = ui.ctx().content_rect();
     ui.set_max_width((screen.width() * 0.6).clamp(240.0, 480.0));
     egui::ScrollArea::vertical()
         .max_height((screen.height() * 0.7).max(160.0))

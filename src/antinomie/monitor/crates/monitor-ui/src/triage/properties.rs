@@ -441,7 +441,7 @@ impl View {
                                     response.context_menu(|ui| {
                                         if ui.button("Copy value").clicked() {
                                             ui.ctx().copy_text(value.clone());
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                         if let Some(result) = result {
                                             if ui.button("Copy properties as JSON").clicked() {
@@ -450,7 +450,7 @@ impl View {
                                                 {
                                                     ui.ctx().copy_text(json);
                                                 }
-                                                ui.close_menu();
+                                                ui.close();
                                             }
                                         }
                                         if let Some(directory) = input

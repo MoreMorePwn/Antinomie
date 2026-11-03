@@ -529,15 +529,15 @@ impl MemoryView {
         let mut action = None;
         self.list_toolbar(ui);
         if !self.hide_list {
-            egui::SidePanel::left("memory_dumps")
+            egui::Panel::left("memory_dumps")
                 .resizable(true)
-                .default_width(240.0)
-                .width_range(180.0..=480.0)
+                .default_size(240.0)
+                .size_range(180.0..=480.0)
                 .frame(egui::Frame::new().inner_margin(egui::Margin {
                     right: 8,
                     ..Default::default()
                 }))
-                .show_inside(ui, |ui| {
+                .show(ui, |ui| {
                     action = self.dump_list(ui, &cx);
                 });
         }
@@ -546,7 +546,7 @@ impl MemoryView {
                 left: 10,
                 ..Default::default()
             }))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 if let Some(next) = self.analysis(ui, &cx) {
                     action = Some(next);
                 }

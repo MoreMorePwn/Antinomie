@@ -86,7 +86,7 @@ pub(crate) fn menu(ui: &mut egui::Ui, directory: &Path) {
     }
     if ui.button("Open result directory").clicked() {
         reveal(ui.ctx(), directory);
-        ui.close_menu();
+        ui.close();
     }
 }
 fn open_editor(ui: &mut egui::Ui, directory: &Path, field: Field) {
@@ -107,7 +107,7 @@ fn open_editor(ui: &mut egui::Ui, directory: &Path, field: Field) {
         }
         Err(error) => data.error = Some(error),
     }
-    ui.close_menu();
+    ui.close();
 }
 fn merge_annotation(stored: &Annotation, field: Field, draft: &str) -> Annotation {
     match field {

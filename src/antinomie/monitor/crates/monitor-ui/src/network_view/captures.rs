@@ -265,7 +265,7 @@ impl NetworkView {
             if let Some(parent) = capture.file.parent() {
                 crate::evidence::reveal(ui.ctx(), parent);
             }
-            ui.close_menu();
+            ui.close();
         }
         ui.separator();
         match vm_id {

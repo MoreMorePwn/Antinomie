@@ -187,8 +187,8 @@ impl Terminal {
     /// PTY size to report when a live terminal must change.
     fn prepare(&mut self, ui: &egui::Ui, resize_parser: bool) -> Option<Prepared> {
         let font = TextStyle::Monospace.resolve(ui.style());
-        let cell =
-            ui.fonts(|fonts| egui::vec2(fonts.glyph_width(&font, 'M'), fonts.row_height(&font)));
+        let cell = ui
+            .fonts_mut(|fonts| egui::vec2(fonts.glyph_width(&font, 'M'), fonts.row_height(&font)));
         let available = ui.available_size();
         let fit = fit_grid(available, cell)?;
         // Coming back to a hidden terminal paints the bytes already drained
@@ -229,7 +229,7 @@ impl Terminal {
         max_column: u16,
     ) {
         if ui.rect_contains_pointer(rect) {
-            let delta = ui.input(|state| state.raw_scroll_delta);
+            let delta = crate::widgets::raw_delta(ui);
             if delta != egui::Vec2::ZERO {
                 self.wheel += egui::vec2(delta.x / cell.x, delta.y / cell.y);
                 let lines = self.wheel.y.trunc();
@@ -908,7 +908,7 @@ mod tests {
             (20.0, egui::vec2(540.0, 150.0)),
             (16.0, egui::vec2(540.0, 64.0)),
         ] {
-            ctx.style_mut(|style| {
+            ctx.global_style_mut(|style| {
                 style
                     .text_styles
                     .insert(TextStyle::Monospace, egui::FontId::monospace(font_size));
@@ -926,7 +926,7 @@ mod tests {
                         .frame(egui::Frame::NONE)
                         .show(ctx, |ui| {
                             let font = TextStyle::Monospace.resolve(ui.style());
-                            cell = ui.fonts(|fonts| {
+                            cell = ui.fonts_mut(|fonts| {
                                 egui::vec2(fonts.glyph_width(&font, 'M'), fonts.row_height(&font))
                             });
                             let focus = ui.next_auto_id();
@@ -1286,9 +1286,9 @@ mod tests {
         assert_eq!(terminal.history(), SCROLLBACK);
         // Establish the new scrollbar's hit area before pressing it.
         frame(&ctx, &mut terminal, pane, Vec::new(), true);
-        let font = TextStyle::Monospace.resolve(&ctx.style());
-        let cell =
-            ctx.fonts(|fonts| egui::vec2(fonts.glyph_width(&font, 'M'), fonts.row_height(&font)));
+        let font = TextStyle::Monospace.resolve(&ctx.global_style());
+        let cell = ctx
+            .fonts_mut(|fonts| egui::vec2(fonts.glyph_width(&font, 'M'), fonts.row_height(&font)));
         let (rows, cols) = terminal.size();
         let track_x = f32::from(cols) * cell.x + BAR / 2.0;
         let top = egui::pos2(track_x, 1.0);

@@ -410,11 +410,11 @@ impl StringsState {
                     response.context_menu(|ui| {
                         if ui.button("Copy string").clicked() {
                             ui.ctx().copy_text(string.text.clone());
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Copy address").clicked() {
                             ui.ctx().copy_text(format!("0x{:x}", string.address));
-                            ui.close_menu();
+                            ui.close();
                         }
                         ui.separator();
                         let mut text = self.query.clone();

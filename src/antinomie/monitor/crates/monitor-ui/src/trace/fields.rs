@@ -312,7 +312,7 @@ pub(super) fn field_menu(response: &egui::Response, field: &FieldSummary) -> boo
             .clicked()
         {
             open = true;
-            ui.close_menu();
+            ui.close();
         }
         ui.separator();
         let mut items = vec![

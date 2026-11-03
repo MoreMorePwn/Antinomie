@@ -6,15 +6,15 @@ impl CoreView {
     pub(super) fn disassembly(&mut self, ui: &mut egui::Ui, record: &CoreRecord) {
         let view = self.listing_view();
         let mut filtered_without_selection = false;
-        egui::SidePanel::left("core_function_list")
+        egui::Panel::left("core_function_list")
             .resizable(true)
-            .default_width(220.0)
-            .width_range(160.0..=420.0)
+            .default_size(220.0)
+            .size_range(160.0..=420.0)
             .frame(egui::Frame::new().inner_margin(egui::Margin {
                 right: 8,
                 ..Default::default()
             }))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 let filter = crate::query::table_filter(
                     ui,
                     ("core-function-filter", &record.dir),
@@ -99,7 +99,7 @@ impl CoreView {
                         ..Default::default()
                     }),
             )
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 if filtered_without_selection {
                     ui.label("Select a function matching the filter to inspect its code.");
                     return;

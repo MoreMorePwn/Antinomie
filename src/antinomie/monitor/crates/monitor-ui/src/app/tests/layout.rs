@@ -10,7 +10,7 @@ fn loss_counter_labels_and_values_have_their_own_definition_tooltips() {
     app.snapshot.health.storage_dropped_packets = 17;
     let ctx = egui::Context::default();
     theme::install(&ctx);
-    ctx.style_mut(|style| {
+    ctx.global_style_mut(|style| {
         style.interaction.tooltip_delay = 0.0;
         style.interaction.tooltip_grace_time = 0.0;
     });

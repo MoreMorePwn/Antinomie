@@ -2252,8 +2252,8 @@ fn native_disks_fixture() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             let mut action = None;
-            egui::SidePanel::right("qa_details")
-                .default_width(420.0)
+            egui::Panel::right("qa_details")
+                .default_size(420.0)
                 .show(ctx, |ui| action = self.view.details(ui));
             egui::CentralPanel::default().show(ctx, |ui| {
                 let scene = &mut self.scene;

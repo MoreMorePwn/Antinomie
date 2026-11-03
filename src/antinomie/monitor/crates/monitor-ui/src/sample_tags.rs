@@ -145,7 +145,7 @@ pub(crate) fn tag_in(ui: &mut egui::Ui, tag: &Tag, context: Option<Tactic>) -> e
 pub(crate) fn width_of_in(ui: &egui::Ui, tag: &Tag, context: Option<Tactic>) -> f32 {
     let mut job = tag_job(ui, tag, context);
     job.wrap.max_width = f32::INFINITY;
-    ui.fonts(|fonts| fonts.layout_job(job)).size().x + 16.0
+    ui.fonts_mut(|fonts| fonts.layout_job(job)).size().x + 16.0
 }
 
 /// The tags the list shows: verdicts and categories, with the techniques and

@@ -200,7 +200,7 @@ pub(crate) fn show(
                             } else {
                                 node.name.as_str()
                             };
-                            let response = ui.add(egui::SelectableLabel::new(
+                            let response = ui.add(egui::Button::selectable(
                                 selected.as_deref() == Some(node.id.as_str()),
                                 name,
                             ));
@@ -250,7 +250,9 @@ fn current_chip(ui: &mut egui::Ui) {
 fn finish(ui: &mut egui::Ui, key: egui::Id, selected: Option<String>, action: Option<Action>) {
     ui.ctx().data_mut(|data| {
         match selected {
-            Some(id) => data.insert_temp(key, id),
+            Some(id) => {
+                data.insert_temp(key, id);
+            }
             None => data.remove::<String>(key),
         }
         if let Some(action) = action {

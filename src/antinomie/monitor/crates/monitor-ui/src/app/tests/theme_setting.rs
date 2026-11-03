@@ -45,7 +45,10 @@ fn choosing_a_theme_in_settings_restyles_the_app_and_is_kept() {
         click_label(&mut app, &ctx, SIZE, label);
         assert_eq!(app.settings.active_theme(), expected, "{label}");
         assert_eq!(theme::theme(), expected);
-        assert_eq!(ctx.style().visuals.panel_fill, expected.palette().panel);
+        assert_eq!(
+            ctx.global_style().visuals.panel_fill,
+            expected.palette().panel
+        );
         let saved = serde_json::to_string(&app.settings).unwrap();
         let loaded: Settings = serde_json::from_str(&saved).unwrap();
         assert_eq!(loaded.active_theme(), expected);

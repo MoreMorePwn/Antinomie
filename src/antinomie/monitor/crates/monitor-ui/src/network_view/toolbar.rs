@@ -518,7 +518,7 @@ pub(super) fn display_clause_menu(ui: &mut egui::Ui, clause: &str, filter: &mut 
                 || clause.clone(),
                 |join| format!("({filter}) {join} ({clause})"),
             );
-            ui.close_menu();
+            ui.close();
         }
     }
 }

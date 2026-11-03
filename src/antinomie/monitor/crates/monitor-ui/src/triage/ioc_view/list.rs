@@ -269,11 +269,11 @@ impl View {
                 ui.label("The rows listed, with dataset dates and verdicts");
                 if ui.button("CSV").clicked() {
                     export = Some(false);
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("JSON").clicked() {
                     export = Some(true);
-                    ui.close_menu();
+                    ui.close();
                 }
             });
         });
@@ -346,7 +346,7 @@ impl View {
         // The Evidence column holds its header and the "Jump ▸" button whole:
         // a fixed 70 px squeezed both at larger text sizes.
         let measure = |text: &str| {
-            ui.fonts(|fonts| {
+            ui.fonts_mut(|fonts| {
                 fonts
                     .layout_no_wrap(
                         text.to_owned(),

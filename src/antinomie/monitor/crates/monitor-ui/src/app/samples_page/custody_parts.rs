@@ -112,11 +112,11 @@ pub(super) fn check_mark(
     response.context_menu(|ui| {
         if ui.button("Copy entry hash").clicked() {
             ui.ctx().copy_text(hash.to_owned());
-            ui.close_menu();
+            ui.close();
         }
         if ui.button("Copy previous hash").clicked() {
             ui.ctx().copy_text(prev.to_owned());
-            ui.close_menu();
+            ui.close();
         }
     });
     response

@@ -101,7 +101,7 @@ impl ProcessPicker {
         }) {
             self.selected = None;
         }
-        let viewport = ctx.screen_rect();
+        let viewport = ctx.content_rect();
         let width = 600.0_f32.min((viewport.width() - 64.0).max(200.0));
         let core = self.purpose == ProcessPurpose::Core;
         let debug = self.purpose == ProcessPurpose::Debug;
@@ -781,7 +781,7 @@ pub(super) fn process_tree_tinted(
         }
     });
     let mono = theme::mono(font_size - 1.0);
-    let char_width = ui.fonts(|fonts| fonts.glyph_width(&mono, '0'));
+    let char_width = ui.fonts_mut(|fonts| fonts.glyph_width(&mono, '0'));
     let row_height = theme::row_height(font_size);
     // The number columns have fixed widths; the process column is as wide as
     // its longest row, or the panel if that is wider, and the tree scrolls

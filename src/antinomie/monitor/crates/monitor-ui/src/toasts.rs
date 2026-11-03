@@ -593,7 +593,7 @@ pub(crate) fn show(ctx: &egui::Context) -> Vec<Action> {
     if items.is_empty() {
         return Vec::new();
     }
-    let screen = ctx.screen_rect();
+    let screen = ctx.content_rect();
     let id = egui::Id::new(STACK);
     let width = WIDTH.min(screen.width() - 2.0 * MARGIN).max(200.0);
     let size = ctx

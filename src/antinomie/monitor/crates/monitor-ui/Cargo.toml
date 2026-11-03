@@ -11,10 +11,10 @@ path = "src/main.rs"
 
 [dependencies]
 antinomie-monitor-core = { path = "../monitor-core" }
-eframe = { version = "0.31", default-features = false, features = ["glow", "x11", "wayland", "default_fonts", "persistence"] }
-egui_extras = "0.31"
-egui_dock = { version = "=0.16.0", features = ["serde"] }
-egui-phosphor = "0.9"
+eframe = { version = "0.36", default-features = false, features = ["glow", "x11", "wayland", "default_fonts", "persistence"] }
+egui_extras = "0.36"
+egui_dock = { version = "=0.21.1", features = ["serde"] }
+egui-phosphor = "0.14"
 vt100 = "0.16"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

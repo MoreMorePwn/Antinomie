@@ -317,11 +317,11 @@ impl MemoryView {
                             if let Err(error) = open_directory(&dump.dir) {
                                 self.status = Some((error, true));
                             }
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Copy path").clicked() {
                             ui.ctx().copy_text(dump.path().display().to_string());
-                            ui.close_menu();
+                            ui.close();
                         }
                         ui.separator();
                         let label = if dump.imported {
@@ -334,7 +334,7 @@ impl MemoryView {
                             .clicked()
                         {
                             delete = Some(dump.id.clone());
-                            ui.close_menu();
+                            ui.close();
                         }
                     });
                 }
@@ -368,7 +368,7 @@ impl MemoryView {
             .resizable(false)
             .open(&mut open)
             .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.screen_rect().center())
+            .default_pos(ctx.content_rect().center())
             .show(ctx, |ui| {
                 ui.label(format!("{} — {}", dump_title(&dump), dump_detail(&dump)));
                 let runs = dump.runs().len();

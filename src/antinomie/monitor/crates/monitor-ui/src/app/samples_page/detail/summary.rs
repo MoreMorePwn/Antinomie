@@ -442,7 +442,7 @@ fn recent_runs(ui: &mut egui::Ui, data: &Data, go: &mut Option<Go>, font: f32) {
                                 .clicked()
                             {
                                 menu = Some(entry.number);
-                                ui.close_menu();
+                                ui.close();
                             }
                             if entry.folder {
                                 crate::evidence::menu(ui, &run.directory);
@@ -542,7 +542,7 @@ fn static_analysis(ui: &mut egui::Ui, data: &Data, scanned: Option<&Scanned>, go
             200.0,
         ) + 6.0;
         let chip_width = state_width(ui);
-        let button_width = ui.fonts(|fonts| {
+        let button_width = ui.fonts_mut(|fonts| {
             fonts
                 .layout_no_wrap("Open".into(), strong.clone(), egui::Color32::PLACEHOLDER)
                 .size()

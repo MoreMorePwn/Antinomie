@@ -56,7 +56,7 @@ const NAV_WIDTH: f32 = 150.0;
 /// Width of the page list: the longest page name and the room round it.
 fn nav_width(ui: &egui::Ui) -> f32 {
     let font = egui::TextStyle::Body.resolve(ui.style());
-    let widest = ui.fonts(|fonts| {
+    let widest = ui.fonts_mut(|fonts| {
         SettingsPage::ALL
             .iter()
             .map(|page| {
@@ -186,7 +186,7 @@ impl MonitorApp {
         let mut open = true;
         let mut save = false;
         let mut close = false;
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let width = 820.0_f32.min((screen.width() - 50.0).max(320.0));
         // The page area scrolls; the title and the footer stay visible on a
         // short screen.

@@ -274,7 +274,7 @@ impl TriageView {
         }
         let rich = RichText::new(text).small().color(theme::muted());
         if let Some(room) = room {
-            let width = ui.fonts(|fonts| {
+            let width = ui.fonts_mut(|fonts| {
                 fonts
                     .layout_no_wrap(
                         rich.text().to_owned(),
@@ -302,7 +302,7 @@ impl TriageView {
                     .clicked()
                 {
                     self.refresh_now(input);
-                    ui.close_menu();
+                    ui.close();
                 }
                 ui.horizontal(|ui| {
                     ui.label("Every");

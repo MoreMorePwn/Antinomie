@@ -121,7 +121,7 @@ impl CoreView {
             .context_menu(|ui| {
                 if ui.button("Copy core path").clicked() {
                     ui.ctx().copy_text(source_path);
-                    ui.close_menu();
+                    ui.close();
                 }
             });
         if !record.core.warnings.is_empty() {
@@ -523,10 +523,10 @@ impl CoreView {
         };
         let wide = ui.available_width() >= 880.0;
         if wide {
-            egui::SidePanel::right("core-mapping-info")
+            egui::Panel::right("core-mapping-info")
                 .resizable(true)
-                .default_width(280.0)
-                .width_range(220.0..=460.0)
+                .default_size(280.0)
+                .size_range(220.0..=460.0)
                 .show_separator_line(true)
                 .frame(egui::Frame::new().inner_margin(egui::Margin {
                     left: 12,
@@ -534,7 +534,7 @@ impl CoreView {
                     top: 4,
                     bottom: 4,
                 }))
-                .show_inside(ui, |ui| self.mapping_panel(ui, mapping));
+                .show(ui, |ui| self.mapping_panel(ui, mapping));
         } else {
             egui::CollapsingHeader::new("Mapping details")
                 .default_open(true)
@@ -1028,7 +1028,7 @@ fn notes_table(
                             note.source,
                             note.availability
                         ));
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
             });

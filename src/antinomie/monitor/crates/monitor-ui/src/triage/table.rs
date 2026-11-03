@@ -65,7 +65,7 @@ pub(super) fn column_widths<'a>(
                 "Observation" => (260.0, 340.0),
                 _ => (100.0, 320.0),
             };
-            let heading = ui.fonts(|fonts| {
+            let heading = ui.fonts_mut(|fonts| {
                 fonts
                     .layout_no_wrap(
                         (*header).to_owned(),
@@ -86,7 +86,7 @@ pub(super) fn column_widths<'a>(
                     } else {
                         egui::TextStyle::Body.resolve(ui.style())
                     };
-                    ui.fonts(|fonts| {
+                    ui.fonts_mut(|fonts| {
                         fonts
                             .layout_no_wrap(
                                 cell.text.chars().take(256).collect(),

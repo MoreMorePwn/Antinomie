@@ -303,7 +303,7 @@ impl TriageView {
         let mut start = false;
         let mut cancel_run = false;
         let running = matches!(self.report.state, State::Running { .. });
-        let tall = (ctx.screen_rect().height() * 0.7).min(760.0);
+        let tall = (ctx.content_rect().height() * 0.7).min(760.0);
         crate::widgets::window("Export report")
             .id(egui::Id::new("triage-report-dialog"))
             .open(&mut open)

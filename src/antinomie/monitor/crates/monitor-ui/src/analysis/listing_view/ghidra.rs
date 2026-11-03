@@ -243,7 +243,7 @@ pub(super) fn instruction_cells(
                         .clicked()
                     {
                         *jump = Some(xref.address);
-                        ui.close_menu();
+                        ui.close();
                     }
                 }
             },

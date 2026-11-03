@@ -173,7 +173,7 @@ pub(crate) fn prefixes(depths: &[usize]) -> Vec<Prefix> {
 
 /// Width of a character of the monospace `font`.
 pub(crate) fn char_width(ui: &egui::Ui, font: &FontId) -> f32 {
-    ui.fonts(|fonts| fonts.glyph_width(font, '0'))
+    ui.fonts_mut(|fonts| fonts.glyph_width(font, '0'))
 }
 
 /// A caret that opens and closes a collapsible branch; true when open.

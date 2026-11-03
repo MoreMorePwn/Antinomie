@@ -238,9 +238,9 @@ impl MonitorApp {
 /// The locked inner size of the window: the six step tabs on one row at
 /// the current text size (measured), and a height that fits the screen.
 fn getting_started_size(ctx: &egui::Context) -> egui::Vec2 {
-    let style = ctx.style();
+    let style = ctx.global_style();
     let font = egui::TextStyle::Button.resolve(&style);
-    let widths: f32 = ctx.fonts(|fonts| {
+    let widths: f32 = ctx.fonts_mut(|fonts| {
         Step::ALL
             .iter()
             .map(|step| {
@@ -255,7 +255,7 @@ fn getting_started_size(ctx: &egui::Context) -> egui::Vec2 {
             })
             .sum()
     });
-    let screen = ctx.screen_rect();
+    let screen = ctx.content_rect();
     let width = (widths + 24.0)
         .max(640.0)
         .min((screen.width() - 80.0).max(320.0));

@@ -120,7 +120,7 @@ pub(crate) fn show(
                         let response = ui
                             .add_enabled(
                                 enabled,
-                                egui::SelectableLabel::new(
+                                egui::Button::selectable(
                                     u64::from(*budget) == entry.size,
                                     &entry.label,
                                 ),

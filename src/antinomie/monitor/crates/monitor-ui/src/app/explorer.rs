@@ -42,7 +42,7 @@ impl MonitorApp {
                         response.context_menu(|ui| {
                             if ui.button("Open Directory").clicked() {
                                 open = true;
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
                     });

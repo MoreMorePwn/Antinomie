@@ -385,8 +385,8 @@ mod tests {
                         ..Default::default()
                     },
                     |ctx| {
-                        egui::SidePanel::right("shared-details")
-                            .exact_width(400.0)
+                        egui::Panel::right("shared-details")
+                            .exact_size(400.0)
                             .show(ctx, |ui| {
                                 view.details(ui);
                             });
@@ -462,8 +462,8 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::SidePanel::right("shared-details")
-                        .exact_width(400.0)
+                    egui::Panel::right("shared-details")
+                        .exact_size(400.0)
                         .show(ctx, |ui| {
                             view.details(ui);
                         });

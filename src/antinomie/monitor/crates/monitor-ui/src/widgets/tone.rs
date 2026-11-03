@@ -110,7 +110,7 @@ pub fn pill(
     job: egui::text::LayoutJob,
     min_width: f32,
 ) -> egui::Response {
-    let natural = ui.fonts(|fonts| fonts.layout_job(single_line(job.clone(), f32::INFINITY)));
+    let natural = ui.fonts_mut(|fonts| fonts.layout_job(single_line(job.clone(), f32::INFINITY)));
     let width = |text: f32| (text + 2.0 * look.pad).max(min_width);
     let layout = *ui.layout();
     if layout.is_horizontal()
@@ -122,7 +122,7 @@ pub fn pill(
     }
     let room = ui.available_width() - 2.0 * look.pad;
     let galley = if natural.size().x > room && room > 0.0 {
-        ui.fonts(|fonts| fonts.layout_job(single_line(job, room)))
+        ui.fonts_mut(|fonts| fonts.layout_job(single_line(job, room)))
     } else {
         natural
     };
@@ -197,7 +197,7 @@ pub fn chip_width(ui: &egui::Ui, words: &[&str]) -> f32 {
     let widest = words
         .iter()
         .map(|word| {
-            ui.fonts(|fonts| {
+            ui.fonts_mut(|fonts| {
                 fonts
                     .layout_no_wrap((*word).to_owned(), font.clone(), Color32::PLACEHOLDER)
                     .size()

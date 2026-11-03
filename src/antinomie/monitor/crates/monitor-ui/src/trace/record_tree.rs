@@ -332,7 +332,7 @@ fn draw(ui: &mut egui::Ui, state: &mut State, shown: &Shown<'_>, full: &mut Opti
                         label.context_menu(|ui| {
                             if ui.button("Copy value").clicked() {
                                 ui.ctx().copy_text(value.clone());
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
                         ui.end_row();
@@ -347,11 +347,11 @@ fn draw(ui: &mut egui::Ui, state: &mut State, shown: &Shown<'_>, full: &mut Opti
             if ui.button("Copy row as JSON").clicked() {
                 ui.ctx().copy_text(record_json(index, &record));
                 state.status = Some(format!("Copied record {index} as JSON."));
-                ui.close_menu();
+                ui.close();
             }
             if ui.button("Copy summary").clicked() {
                 ui.ctx().copy_text(record.summary.clone());
-                ui.close_menu();
+                ui.close();
             }
         });
     }

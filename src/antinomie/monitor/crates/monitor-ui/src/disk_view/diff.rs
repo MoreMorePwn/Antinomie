@@ -443,7 +443,7 @@ impl DiskView {
             });
         });
         if let Some(against) = chosen {
-            ui.close_menu();
+            ui.close();
             self.start_compare(ui.ctx(), cx, against);
         }
     }

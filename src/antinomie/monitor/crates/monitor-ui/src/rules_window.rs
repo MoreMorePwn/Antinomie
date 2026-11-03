@@ -185,7 +185,6 @@ impl Model {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .animated(false)
-            .drag_to_scroll(false)
             .id_salt("rule-manager-body")
             .show(ui, |ui| {
                 self.contents(ui, data_dir, outbound, detection);
@@ -595,7 +594,7 @@ mod tests {
     ) -> (egui::FullOutput, Option<RulesAction>) {
         let mut action = None;
         let mut detection = antinomie_monitor_core::analysis::detection::Settings::default();
-        ctx.style_mut(|style| {
+        ctx.global_style_mut(|style| {
             style.animation_time = 0.0;
         });
         let output = ctx.run(

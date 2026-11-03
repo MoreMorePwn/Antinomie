@@ -416,7 +416,7 @@ pub(super) fn pick_row(
             break_anywhere: true,
             overflow_character: Some('…'),
         };
-        let galley = ui.fonts(|fonts| fonts.layout_job(job));
+        let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
         ui.painter().galley(
             egui::pos2(left, centre.y - galley.size().y / 2.0),
             galley,
@@ -655,7 +655,7 @@ impl Picker {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.search)
                             .hint_text(theme::hint_text(hint))
-                            .frame(false)
+                            .frame(egui::Frame::NONE)
                             .desired_width(f32::INFINITY),
                     )
                 })
@@ -714,7 +714,7 @@ impl Picker {
                 }
             });
         }
-        let height = 320.0_f32.min(ui.ctx().screen_rect().height() * 0.45);
+        let height = 320.0_f32.min(ui.ctx().content_rect().height() * 0.45);
         egui::ScrollArea::vertical()
             .id_salt("note_picker_rows")
             .max_height(height)

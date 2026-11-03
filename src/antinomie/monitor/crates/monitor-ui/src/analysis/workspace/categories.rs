@@ -35,7 +35,7 @@ pub(super) fn categories(
             "{} rows",
             antinomie_monitor_core::analysis::detection::group_digits(widest)
         );
-        ui.fonts(|fonts| {
+        ui.fonts_mut(|fonts| {
             fonts
                 .layout_no_wrap(text, font, egui::Color32::PLACEHOLDER)
                 .size()
@@ -47,7 +47,7 @@ pub(super) fn categories(
     // ellipsis (the full title is one hover away) instead of squeezing them.
     let name_width = {
         let font = egui::TextStyle::Button.resolve(ui.style());
-        let longest = ui.fonts(|fonts| {
+        let longest = ui.fonts_mut(|fonts| {
             ALL_KINDS
                 .iter()
                 .map(|kind| {

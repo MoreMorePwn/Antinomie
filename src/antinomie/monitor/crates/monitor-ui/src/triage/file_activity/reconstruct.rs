@@ -74,7 +74,7 @@ pub(in crate::triage) fn menu(
         {
             ui.ctx()
                 .data_mut(|data| data.insert_temp(egui::Id::new(REQUEST), path));
-            ui.close_menu();
+            ui.close();
         }
     }
 }
@@ -257,12 +257,12 @@ impl Open {
         self.header(ui, file, activity.kernel_revision);
         self.controls(ui, activity, file, clock);
         ui.separator();
-        egui::SidePanel::right("file-reconstruction-side")
+        egui::Panel::right("file-reconstruction-side")
             .resizable(true)
-            .default_width(300.0)
-            .width_range(220.0..=520.0)
-            .show_inside(ui, |ui| self.side(ui, file, clock, directory));
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+            .default_size(300.0)
+            .size_range(220.0..=520.0)
+            .show(ui, |ui| self.side(ui, file, clock, directory));
+        egui::CentralPanel::default().show(ui, |ui| {
             self.legend(ui);
             if self.text_view {
                 self.text(ui);

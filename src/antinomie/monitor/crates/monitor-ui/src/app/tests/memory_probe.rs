@@ -60,12 +60,12 @@ fn idle_frames_do_not_grow() {
     report(
         "idle_frames",
         "galleys_in_cache",
-        ctx.fonts(|fonts| fonts.num_galleys_in_cache()),
+        ctx.fonts_mut(|fonts| fonts.num_galleys_in_cache()),
     );
     report(
         "idle_frames",
         "font_atlas_px",
-        format!("{:?}", ctx.fonts(|fonts| fonts.font_image_size())),
+        format!("{:?}", ctx.fonts_mut(|fonts| fonts.font_image_size())),
     );
 }
 

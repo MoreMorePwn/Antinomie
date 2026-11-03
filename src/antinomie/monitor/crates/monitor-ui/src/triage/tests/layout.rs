@@ -773,8 +773,8 @@ fn the_details_of_an_evasion_row_list_each_check_the_answer_and_why_it_has_its_t
                 ..Default::default()
             },
             |ctx| {
-                egui::SidePanel::right("shared-details")
-                    .exact_width(560.0)
+                egui::Panel::right("shared-details")
+                    .exact_size(560.0)
                     .show(ctx, |ui| {
                         view.details(ui);
                     });

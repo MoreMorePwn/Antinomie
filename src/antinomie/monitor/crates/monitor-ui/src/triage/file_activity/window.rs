@@ -250,17 +250,17 @@ impl Window {
         let shown = self.shown(activity);
         // Beside each other when there is room, else the list above the history.
         if ui.available_width() >= STACK_BELOW {
-            egui::SidePanel::left("file-activity-list")
+            egui::Panel::left("file-activity-list")
                 .resizable(true)
-                .default_width(310.0)
-                .show_inside(ui, |ui| self.list(ui, activity, &shown, clock));
+                .default_size(310.0)
+                .show(ui, |ui| self.list(ui, activity, &shown, clock));
         } else {
-            egui::TopBottomPanel::top("file-activity-list")
+            egui::Panel::top("file-activity-list")
                 .resizable(true)
-                .default_height(230.0)
-                .show_inside(ui, |ui| self.list(ui, activity, &shown, clock));
+                .default_size(230.0)
+                .show(ui, |ui| self.list(ui, activity, &shown, clock));
         }
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             match self.selected_file(activity) {
                 Some(file) => self.history(ui, activity, file, clock),
                 None => {
@@ -1079,7 +1079,7 @@ pub(super) fn run_text(run: &ByteRun, original_size: Option<u64>) -> String {
 /// file name of a long path stays in view.
 fn fit_tail(ui: &egui::Ui, text: &str, font: egui::FontId, width: f32) -> String {
     let fits = |candidate: &str| {
-        ui.fonts(|fonts| {
+        ui.fonts_mut(|fonts| {
             fonts
                 .layout_no_wrap(candidate.to_owned(), font.clone(), egui::Color32::WHITE)
                 .size()

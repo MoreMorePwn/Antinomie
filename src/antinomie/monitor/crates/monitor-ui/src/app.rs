@@ -635,7 +635,8 @@ impl eframe::App for MonitorApp {
         theme::panel().to_normalized_gamma_f32()
     }
 
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = &root.ctx().clone();
         let mut frame_started = Instant::now();
         let pause = crate::ui_performance::throttle_sleep(
             self.last_frame_start,
@@ -648,7 +649,7 @@ impl eframe::App for MonitorApp {
             frame_started = Instant::now();
         }
         self.last_frame_start = Some(frame_started);
-        if self.start_error_screen(ctx) {
+        if self.start_error_screen(root) {
             return;
         }
         crate::regex_matches::remember_data_dir(&self.options.data_dir);
@@ -765,7 +766,7 @@ impl eframe::App for MonitorApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
-        self.draw(ctx);
+        self.draw(root);
         ctx.request_repaint_after(crate::ui_performance::repaint_delay(
             self.snapshot.active_vm.is_some() || self.closing || self.folder_picker.pending(),
         ));

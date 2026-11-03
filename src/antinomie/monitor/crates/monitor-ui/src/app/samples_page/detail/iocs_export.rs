@@ -59,7 +59,7 @@ impl MonitorApp {
                 for (label, id, _, _) in FORMATS {
                     if ui.button(label).clicked() {
                         *go = Some(Go::Export(id));
-                        ui.close_menu();
+                        ui.close();
                     }
                 }
             });

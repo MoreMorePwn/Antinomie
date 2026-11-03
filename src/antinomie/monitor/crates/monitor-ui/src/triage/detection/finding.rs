@@ -269,7 +269,7 @@ pub(super) fn evidence_list(
     ui: &mut egui::Ui,
     engine: Engine,
     finding: &Finding,
-    salt: impl std::hash::Hash,
+    salt: impl std::hash::Hash + std::fmt::Debug,
     max_height: f32,
 ) -> Option<Pick> {
     let mut selected = None;

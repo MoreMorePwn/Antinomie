@@ -264,7 +264,7 @@ impl CoreView {
                     && ui.button("Cancel capture and resume").clicked()
                 {
                     *action = Some(CoreAction::Cancel(core.id.clone()));
-                    ui.close_menu();
+                    ui.close();
                 }
                 let capturing = (core.phase != ProcessCorePhase::Finished
                     && Some(core.boot_id.as_str()) == boot_id)

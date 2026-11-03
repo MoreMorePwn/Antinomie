@@ -58,7 +58,7 @@ fn widths(ui: &egui::Ui, viewer: &mut Viewer<'_>, tabs: &mut [Panel], tight: boo
         .map(|tab| {
             let title: WidgetText = viewer.title_for(tab, tight);
             let text = title.into_galley(ui, None, f32::INFINITY, TextStyle::Button);
-            let close = if viewer.closeable(tab) {
+            let close = if viewer.is_closeable(tab) {
                 CLOSE_SLOT
             } else {
                 0.0
@@ -82,9 +82,9 @@ pub(super) fn fit(
         .iter()
         .enumerate()
         .filter_map(|(index, node)| match node {
-            egui_dock::Node::Leaf {
+            egui_dock::Node::Leaf(egui_dock::LeafNode {
                 rect, tabs, active, ..
-            } if rect.width() > 1.0 && tabs.len() > 1 => {
+            }) if rect.width() > 1.0 && tabs.len() > 1 => {
                 Some((index, rect.width(), tabs.clone(), active.0))
             }
             _ => None,
@@ -111,7 +111,7 @@ pub(super) fn fit(
                 ui.data_mut(|data| data.insert_temp(id, (key.2, key.3, key.4)));
                 let start: f32 = sizes.iter().take(active).sum();
                 let end = start + sizes.get(active).copied().unwrap_or(0.0);
-                if let Some(egui_dock::Node::Leaf { scroll, .. }) =
+                if let Some(egui_dock::Node::Leaf(egui_dock::LeafNode { scroll, .. })) =
                     local.main_surface_mut().iter_mut().nth(index)
                 {
                     if start < -*scroll {
@@ -141,13 +141,13 @@ pub(super) fn list_button(
     bar_fill: egui::Color32,
 ) -> Option<usize> {
     let (rect, viewport, titles, active) = match &local.main_surface()[node] {
-        egui_dock::Node::Leaf {
+        egui_dock::Node::Leaf(egui_dock::LeafNode {
             rect,
             viewport,
             tabs,
             active,
             ..
-        } => (*rect, *viewport, tabs.clone(), active.0),
+        }) => (*rect, *viewport, tabs.clone(), active.0),
         _ => return None,
     };
     let slot = Rect::from_min_max(
@@ -176,15 +176,15 @@ pub(super) fn list_button(
     );
     let popup = id.with("popup");
     if response.clicked() {
-        ui.memory_mut(|memory| memory.toggle_popup(popup));
+        egui::Popup::toggle_id(ui.ctx(), popup);
     }
     let mut picked = None;
-    egui::popup_below_widget(
-        ui,
-        popup,
-        &response,
-        egui::PopupCloseBehavior::CloseOnClick,
-        |ui| {
+    egui::Popup::from_response(&response)
+        .id(popup)
+        .open(egui::Popup::is_id_open(ui.ctx(), popup))
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
+        .layout(egui::Layout::top_down_justified(egui::Align::Min))
+        .show(|ui| {
             ui.set_min_width(160.0);
             for (index, tab) in titles.iter().enumerate() {
                 let name = viewer.app.panel_title(tab);
@@ -192,7 +192,6 @@ pub(super) fn list_button(
                     picked = Some(index);
                 }
             }
-        },
-    );
+        });
     picked
 }

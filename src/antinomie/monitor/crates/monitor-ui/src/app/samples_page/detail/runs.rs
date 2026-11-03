@@ -464,7 +464,7 @@ impl MonitorApp {
                                     .clicked()
                                 {
                                     *go = Some(Go::Triage(run.id.clone()));
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                                 if entry.folder {
                                     crate::evidence::menu(ui, &run.directory);
@@ -754,7 +754,7 @@ impl MonitorApp {
             });
         if response.clicked() {
             *go = Some(Go::Delete(entry.run.id.clone()));
-            ui.close_menu();
+            ui.close();
         }
     }
 }

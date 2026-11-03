@@ -417,7 +417,7 @@ fn dividers(
         response.context_menu(|ui| {
             if ui.button("Fit columns").clicked() {
                 reset = true;
-                ui.close_menu();
+                ui.close();
             }
         });
     }
@@ -481,7 +481,7 @@ impl<'a> FitBuilder<'a> {
         self
     }
 
-    pub fn id_salt(mut self, salt: impl std::hash::Hash) -> Self {
+    pub fn id_salt(mut self, salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
         self.id_salt = Some(egui::Id::new(salt));
         self
     }
@@ -632,7 +632,7 @@ impl FitTable<'_> {
 /// characters on each side), whole when it fits.
 pub fn middle(ui: &Ui, text: &str, font: &egui::FontId, width: f32) -> String {
     let measure = |candidate: &str| {
-        ui.fonts(|fonts| {
+        ui.fonts_mut(|fonts| {
             fonts
                 .layout_no_wrap(candidate.to_owned(), font.clone(), egui::Color32::WHITE)
                 .size()

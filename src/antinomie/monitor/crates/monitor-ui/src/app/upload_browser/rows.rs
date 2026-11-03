@@ -141,7 +141,7 @@ pub(super) fn show(browser: &mut Browser, ui: &mut egui::Ui, view: View) -> Opti
                                 } else {
                                     ui.add_enabled(
                                         available,
-                                        egui::SelectableLabel::new(
+                                        egui::Button::selectable(
                                             browser.selected.as_ref() == Some(&entry.path),
                                             name.as_ref(),
                                         ),
@@ -166,7 +166,7 @@ pub(super) fn show(browser: &mut Browser, ui: &mut egui::Ui, view: View) -> Opti
                                                 .clicked()
                                         {
                                             selected = Some(Action::SendRun(entry.path.clone()));
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                         if !entry.directory
                                             && entry.regular
@@ -174,7 +174,7 @@ pub(super) fn show(browser: &mut Browser, ui: &mut egui::Ui, view: View) -> Opti
                                         {
                                             selected =
                                                 Some(Action::AddToSamples(entry.path.clone()));
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                         if ui.button("Open Directory").clicked() {
                                             let directory = if entry.directory {
@@ -187,7 +187,7 @@ pub(super) fn show(browser: &mut Browser, ui: &mut egui::Ui, view: View) -> Opti
                                                     directory.to_owned(),
                                                 ));
                                             }
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                     });
                                 }

@@ -37,7 +37,7 @@ impl MonitorApp {
     }
 
     /// A banner under the toolbar for as long as the guest is paused.
-    pub(super) fn dump_pause_banner(&self, ctx: &egui::Context) {
+    pub(super) fn dump_pause_banner(&self, root: &mut egui::Ui) {
         let Some(dump) = &self.snapshot.memory_dump else {
             return;
         };
@@ -47,9 +47,9 @@ impl MonitorApp {
             (dump.completed as f32 / dump.total as f32).clamp(0.0, 1.0)
         };
         let text = dump.status_text();
-        egui::TopBottomPanel::top("memory-dump-banner")
+        egui::Panel::top("memory-dump-banner")
             .frame(theme::frame(theme::raised()))
-            .show(ctx, |ui| {
+            .show(root, |ui| {
                 ui.horizontal(|ui| {
                     crate::theme::spinner(ui);
                     ui.colored_label(theme::neutral_accent(), text);

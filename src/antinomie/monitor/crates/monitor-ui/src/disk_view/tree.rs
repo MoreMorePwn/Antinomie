@@ -526,7 +526,7 @@ fn entry_row(
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                ui.add_enabled(enabled, egui::SelectableLabel::new(selected, text.as_str()))
+                ui.add_enabled(enabled, egui::Button::selectable(selected, text.as_str()))
             },
         )
         .inner;
@@ -555,7 +555,7 @@ fn entry_row(
         egui::pos2(columns.meta_x, ui.cursor().top()),
         egui::vec2(columns.meta_width, height),
     );
-    ui.allocate_new_ui(
+    ui.scope_builder(
         egui::UiBuilder::new()
             .max_rect(meta)
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
@@ -580,7 +580,7 @@ fn entry_row(
         let mut choose = |ui: &mut egui::Ui, label: &str, enabled: bool, choice: Choice| {
             if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
                 events.push(Event::Menu(path.to_owned(), entry.clone(), choice));
-                ui.close_menu();
+                ui.close();
             }
         };
         let file = matches!(entry.kind, DiskEntryKind::File | DiskEntryKind::Symlink);
@@ -590,7 +590,7 @@ fn entry_row(
                 .clicked()
             {
                 *toggle = Some(path.to_owned());
-                ui.close_menu();
+                ui.close();
             }
         } else {
             choose(ui, "Extract to view", file, Choice::ExtractToView);

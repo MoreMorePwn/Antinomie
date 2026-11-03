@@ -30,14 +30,15 @@ pub(super) fn start_backend(
 impl MonitorApp {
     /// Draw the blocking error screen when the backend failed to start.
     /// Returns whether it was drawn (the normal UI is then skipped).
-    pub(super) fn start_error_screen(&mut self, ctx: &egui::Context) -> bool {
+    pub(super) fn start_error_screen(&mut self, root: &mut egui::Ui) -> bool {
+        let ctx = &root.ctx().clone();
         let Some(error) = self.start_error.clone() else {
             return false;
         };
         let mut retry = false;
         let mut quit = false;
-        crate::title_bar::show(ctx, "Antinomie");
-        egui::CentralPanel::default().show(ctx, |ui| {
+        crate::title_bar::show(root, "Antinomie");
+        egui::CentralPanel::default().show(root, |ui| {
             ui.vertical_centered(|ui| {
                 ui.set_max_width(720.0);
                 ui.add_space(48.0);

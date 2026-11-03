@@ -463,9 +463,10 @@ impl View {
             }
         }
         match chosen {
-            Some(Route::Open(target)) => ui
-                .ctx()
-                .data_mut(|data| data.insert_temp(egui::Id::new(OPEN_INPUT), target)),
+            Some(Route::Open(target)) => {
+                ui.ctx()
+                    .data_mut(|data| data.insert_temp(egui::Id::new(OPEN_INPUT), target));
+            }
             Some(Route::Journal(scanned)) => self.journal.open(ui.ctx(), scanned, None),
             None => {}
         }

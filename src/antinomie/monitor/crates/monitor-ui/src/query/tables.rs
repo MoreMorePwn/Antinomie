@@ -132,7 +132,7 @@ pub(crate) fn applied_table(
     ui: &mut egui::Ui,
     filter: &str,
     fields: &[FieldSpec<'_>],
-    id: impl std::hash::Hash,
+    id: impl std::hash::Hash + std::fmt::Debug,
 ) -> Compiled {
     let id = ui.id().with(("applied-table-filter", id));
     let compiled = compile_table(filter, fields);
@@ -161,14 +161,14 @@ pub(crate) fn applied_table(
 /// A full-width table filter with local draft/last-applied state.
 /// Empty the filter of the table called `id`, so a row a note's chip opens is
 /// not hidden by it.
-pub(crate) fn clear_table_filter(ui: &egui::Ui, id: impl std::hash::Hash) {
+pub(crate) fn clear_table_filter(ui: &egui::Ui, id: impl std::hash::Hash + std::fmt::Debug) {
     let id = ui.id().with(("table-filter", id));
     ui.data_mut(|data| data.insert_temp(id, String::new()));
 }
 
 pub(crate) fn table_filter(
     ui: &mut egui::Ui,
-    id: impl std::hash::Hash,
+    id: impl std::hash::Hash + std::fmt::Debug,
     hint: &str,
     fields: &[FieldSpec<'_>],
     known_values: &[String],
@@ -245,7 +245,7 @@ pub(crate) fn value_menu(ui: &mut egui::Ui, field: &str, value: &RowValue, filte
             } else {
                 clause
             };
-            ui.close_menu();
+            ui.close();
         }
     }
 }

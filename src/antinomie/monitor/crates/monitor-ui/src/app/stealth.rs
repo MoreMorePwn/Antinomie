@@ -33,7 +33,7 @@ fn choice<T: Copy + PartialEq>(
                 let reason = unavailable(option);
                 let response = ui.add_enabled(
                     reason.is_none(),
-                    egui::SelectableLabel::new(*value == option, label(option)),
+                    egui::Button::selectable(*value == option, label(option)),
                 );
                 if let Some(reason) = reason {
                     response.on_disabled_hover_text(reason);
@@ -837,12 +837,12 @@ pub(super) fn window(
     crate::widgets::window("Device profile")
         .id(egui::Id::new("vm_stealth"))
         .pivot(egui::Align2::CENTER_TOP)
-        .default_pos(egui::pos2(ctx.screen_rect().center().x, 60.0))
+        .default_pos(egui::pos2(ctx.content_rect().center().x, 60.0))
         .open(open)
         .collapsible(false)
         .resizable(true)
         .default_width(520.0)
-        .max_height((ctx.screen_rect().height() - 100.0).max(200.0))
+        .max_height((ctx.content_rect().height() - 100.0).max(200.0))
         .show(ctx, |ui| {
             let before = profile.clone();
             ui.add_enabled_ui(editable, |ui| {
@@ -853,7 +853,7 @@ pub(super) fn window(
                 fit.summary(ui);
                 egui::ScrollArea::vertical()
                     .id_salt("vm_stealth_scroll")
-                    .max_height((ctx.screen_rect().height() - 330.0).max(120.0))
+                    .max_height((ctx.content_rect().height() - 330.0).max(120.0))
                     .show(ui, |ui| {
                         egui::CollapsingHeader::new("Hardware identity")
                             .default_open(true)

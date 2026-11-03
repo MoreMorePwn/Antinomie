@@ -183,7 +183,7 @@ impl Model {
         let mut second_row = false;
         ui.horizontal(|ui| {
             // Room for the whole hint at any text size.
-            let hint_width = ui.fonts(|fonts| {
+            let hint_width = ui.fonts_mut(|fonts| {
                 fonts
                     .layout_no_wrap(
                         NAME_HINT.to_owned(),

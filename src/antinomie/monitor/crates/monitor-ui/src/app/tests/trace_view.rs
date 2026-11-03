@@ -199,8 +199,8 @@ fn click_history_row(clicks: usize) -> MonitorApp {
                 ..Default::default()
             },
             |ctx| {
-                egui::TopBottomPanel::bottom("history-details")
-                    .exact_height(180.0)
+                egui::Panel::bottom("history-details")
+                    .exact_size(180.0)
                     .show(ctx, |ui| app.history_detail(ui));
                 egui::CentralPanel::default().show(ctx, |ui| app.run_history(ui));
             },
@@ -604,7 +604,7 @@ fn native_layout_keeps_controls_and_trace_panels_separate_at_all_text_sizes() {
             assert!(!texts.iter().any(|(text, _)| text == "Terminal"));
             // DejaVu Sans Mono runs wider; data text is one point smaller.
             assert_eq!(
-                ctx.style().text_styles[&egui::TextStyle::Monospace].size,
+                ctx.global_style().text_styles[&egui::TextStyle::Monospace].size,
                 font - 1.0
             );
         }

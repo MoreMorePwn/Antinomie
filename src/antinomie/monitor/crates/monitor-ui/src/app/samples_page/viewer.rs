@@ -290,8 +290,10 @@ impl Viewer {
         });
         // Ctrl+wheel over the window zooms the text too.
         if ui.rect_contains_pointer(ui.max_rect()) {
-            let (ctrl, scroll) =
-                ui.input(|input| (input.modifiers.command, input.raw_scroll_delta.y));
+            let (ctrl, scroll) = (
+                ui.input(|input| input.modifiers.command),
+                crate::widgets::raw_delta(ui).y,
+            );
             if ctrl && scroll != 0.0 {
                 self.px = (self.px + scroll.signum()).clamp(MIN_PX, MAX_PX);
             }

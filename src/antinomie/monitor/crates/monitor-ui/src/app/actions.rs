@@ -541,7 +541,7 @@ impl MonitorApp {
         if response.clicked() {
             let ctx = ui.ctx().clone();
             self.run_action(&ctx, action);
-            ui.close_menu();
+            ui.close();
         }
     }
 }

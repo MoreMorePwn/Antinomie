@@ -41,23 +41,24 @@ pub(crate) fn builder(builder: egui::ViewportBuilder) -> egui::ViewportBuilder {
 
 /// Draw the native viewport's title bar. Embedded egui windows already own a
 /// title bar and must not call this. Fullscreen deliberately hides the chrome.
-pub(crate) fn show(ctx: &egui::Context, title: &str) {
+pub(crate) fn show(ui: &mut egui::Ui, title: &str) {
+    let ctx = &ui.ctx().clone();
     let (maximized, fullscreen) = ctx.input(|i| {
         (
             i.viewport().maximized.unwrap_or(false),
             i.viewport().fullscreen.unwrap_or(false),
         )
     });
-    let height = (egui::TextStyle::Body.resolve(&ctx.style()).size + 14.0).max(34.0);
+    let height = (egui::TextStyle::Body.resolve(&ctx.global_style()).size + 14.0).max(34.0);
     let key = egui::Id::new(("native-caption-height", ctx.viewport_id()));
     ctx.data_mut(|data| data.insert_temp(key, if fullscreen { 0.0_f32 } else { height }));
     if fullscreen {
         return;
     }
-    egui::TopBottomPanel::top(egui::Id::new(("native-title-bar", ctx.viewport_id())))
-        .exact_height(height)
+    egui::Panel::top(egui::Id::new(("native-title-bar", ctx.viewport_id())))
+        .exact_size(height)
         .frame(egui::Frame::NONE.fill(theme::panel()))
-        .show(ctx, |ui| {
+        .show(ui, |ui| {
             let bar = ui.max_rect();
             let button_width = BUTTON_WIDTH.min(bar.width() / 4.0);
             let title_rect = Rect::from_min_max(
@@ -93,7 +94,7 @@ pub(crate) fn show(ctx: &egui::Context, title: &str) {
             job.wrap.max_width = text_rect.width();
             job.wrap.max_rows = 1;
             job.wrap.break_anywhere = true;
-            let galley = ui.fonts(|fonts| fonts.layout_job(job));
+            let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
             let position = egui::pos2(
                 text_rect.left(),
                 text_rect.center().y - galley.size().y / 2.0,
@@ -139,10 +140,10 @@ pub(crate) fn show(ctx: &egui::Context, title: &str) {
 pub(crate) fn caption_slot(ctx: &egui::Context) -> (f32, f32) {
     let key = egui::Id::new(("native-caption-height", ctx.viewport_id()));
     let height = ctx.data(|data| data.get_temp::<f32>(key)).unwrap_or(0.0);
-    let right = ctx.screen_rect().right();
+    let right = ctx.content_rect().right();
     (
         height,
-        right - 3.0 * BUTTON_WIDTH.min(ctx.screen_rect().width() / 4.0),
+        right - 3.0 * BUTTON_WIDTH.min(ctx.content_rect().width() / 4.0),
     )
 }
 
@@ -151,7 +152,7 @@ pub(crate) fn caption_slot(ctx: &egui::Context) -> (f32, f32) {
 pub(crate) fn content_rect(ctx: &egui::Context) -> Rect {
     let key = egui::Id::new(("native-caption-height", ctx.viewport_id()));
     let height = ctx.data(|data| data.get_temp::<f32>(key)).unwrap_or(0.0);
-    let mut rect = ctx.screen_rect();
+    let mut rect = ctx.content_rect();
     rect.min.y += height;
     rect
 }
@@ -235,7 +236,7 @@ pub(crate) fn resize(ctx: &egui::Context) {
     }) {
         return;
     }
-    let rect = ctx.screen_rect();
+    let rect = ctx.content_rect();
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new(("native-window-outline", ctx.viewport_id())),

@@ -200,12 +200,12 @@ impl SnapshotManager {
             .min_size([320.0, 260.0])
             // A margin all round: the window never touches the app's edges.
             .max_size(
-                (ctx.screen_rect().size() - egui::vec2(96.0, 140.0)).max(egui::vec2(320.0, 260.0)),
+                (ctx.content_rect().size() - egui::vec2(96.0, 140.0)).max(egui::vec2(320.0, 260.0)),
             )
             .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.screen_rect().center());
+            .default_pos(ctx.content_rect().center());
         let window = if std::mem::take(&mut self.place) {
-            window.current_pos(ctx.screen_rect().center())
+            window.current_pos(ctx.content_rect().center())
         } else {
             window
         };
@@ -289,7 +289,7 @@ impl SnapshotManager {
                 crate::theme::loading(ui, "Loading snapshots…");
                 // The graph's room: the window keeps its size (and its
                 // close button its place) when the list arrives.
-                let cap = (ui.ctx().screen_rect().height() * 0.6).max(140.0);
+                let cap = (ui.ctx().content_rect().height() * 0.6).max(140.0);
                 ui.allocate_space(egui::vec2(ui.available_width(), cap));
                 close |= footer(ui);
                 return;
@@ -313,7 +313,7 @@ impl SnapshotManager {
             let footer_height =
                 ui.spacing().interact_size.y + 2.0 * ui.spacing().item_spacing.y + 18.0;
             // Capped, so the window settles with a margin to the app's edges.
-            let cap = (ui.ctx().screen_rect().height() * 0.6).max(140.0);
+            let cap = (ui.ctx().content_rect().height() * 0.6).max(140.0);
             let height = (ui.available_height() - footer_height).clamp(140.0, cap);
             if width >= 740.0 {
                 // The two parts and the gap between them add up to the
@@ -712,10 +712,10 @@ impl SnapshotManager {
             .collapsible(false)
             .resizable(false)
             .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.screen_rect().center())
+            .default_pos(ctx.content_rect().center())
             .show(ctx, |ui| {
-                ui.set_width((ctx.screen_rect().width() - 48.0).clamp(240.0, 440.0));
-                egui::ScrollArea::vertical().max_height((ctx.screen_rect().height() - 180.0).max(100.0)).show(ui, |ui| {
+                ui.set_width((ctx.content_rect().width() - 48.0).clamp(240.0, 440.0));
+                egui::ScrollArea::vertical().max_height((ctx.content_rect().height() - 180.0).max(100.0)).show(ui, |ui| {
                     match decision {
                         Decision::Create(draft) => {
                             draft_form(ui, draft, tree);
@@ -1052,7 +1052,7 @@ pub(crate) mod tests {
     fn context() -> egui::Context {
         let ctx = egui::Context::default();
         theme::install(&ctx);
-        ctx.style_mut(|style| style.animation_time = 0.0);
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
         ctx
     }
 

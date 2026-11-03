@@ -469,7 +469,7 @@ impl DiskView {
         ui.separator();
         if ui.button("Copy path").clicked() {
             choice = Some(RowMenu::CopyPath(index));
-            ui.close_menu();
+            ui.close();
         }
         let busy = self.saving_image.is_some();
         let saveable = row.browsable() && !busy;
@@ -483,7 +483,7 @@ impl DiskView {
                 .clicked()
             {
                 choice = Some(RowMenu::Save(index, format));
-                ui.close_menu();
+                ui.close();
             }
         }
         if ui
@@ -495,7 +495,7 @@ impl DiskView {
             .clicked()
         {
             choice = Some(RowMenu::Verify(index));
-            ui.close_menu();
+            ui.close();
         }
         let blocked = self.delete_blocked_id(&dump.id);
         if crate::evidence_delete::menu_item(ui, blocked.as_deref()) {

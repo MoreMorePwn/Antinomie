@@ -268,32 +268,32 @@ fn node_menu(
         && ui.button("Open sample").clicked()
     {
         *act = Some(Act::Open(node.id.clone()));
-        ui.close_menu();
+        ui.close();
     }
     if matches!(node.kind, NodeKind::Captured | NodeKind::Lost)
         && !node.path.is_empty()
         && ui.button("Add to Samples…").clicked()
     {
         *act = Some(Act::Promote(promote_out(graph, node)));
-        ui.close_menu();
+        ui.close();
     }
     if matches!(node.kind, NodeKind::Command) && ui.button("Copy command line").clicked() {
         ui.ctx().copy_text(node.path.clone());
-        ui.close_menu();
+        ui.close();
     }
     if !node.sha256.is_empty() && ui.button("Copy SHA-256").clicked() {
         ui.ctx().copy_text(node.sha256.clone());
-        ui.close_menu();
+        ui.close();
     }
     let hidden = node.hidden_parents + node.hidden_children;
     if hidden > 0 {
         if ui.button(format!("Expand (+{hidden})")).clicked() {
             *act = Some(Act::Toggle(node.id.clone()));
-            ui.close_menu();
+            ui.close();
         }
     } else if expanded.contains(&node.id) && ui.button("Collapse").clicked() {
         *act = Some(Act::Toggle(node.id.clone()));
-        ui.close_menu();
+        ui.close();
     }
     if node.id != data.record.sha256 {
         super::notes::menu_item(ui, || {
@@ -479,7 +479,7 @@ fn canvas_height(ui: &egui::Ui, state: &State) -> f32 {
         .cached
         .as_ref()
         .map_or(canvas::HEIGHT, |cached| cached.layout.bounds.height());
-    let most = canvas::MAX_HEIGHT.min(ui.ctx().screen_rect().height() * 0.6);
+    let most = canvas::MAX_HEIGHT.min(ui.ctx().content_rect().height() * 0.6);
     wanted.min(most).max(canvas::HEIGHT)
 }
 

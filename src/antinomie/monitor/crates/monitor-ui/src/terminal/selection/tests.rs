@@ -151,8 +151,8 @@ fn mouse_selection_copies_from_live_and_read_only_terminals_without_guest_input(
         terminal.replay_resize(6, 80);
         terminal.process(b"COPY terminal output");
         focus(&ctx, &mut terminal, enabled);
-        let font = TextStyle::Monospace.resolve(&ctx.style());
-        let cell = ctx.fonts(|fonts| fonts.glyph_width(&font, 'M'));
+        let font = TextStyle::Monospace.resolve(&ctx.global_style());
+        let cell = ctx.fonts_mut(|fonts| fonts.glyph_width(&font, 'M'));
         let start = egui::pos2(0.1, 4.0);
         let end = egui::pos2(4.0 * cell, 4.0);
         draw(

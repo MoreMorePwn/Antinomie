@@ -135,7 +135,8 @@ impl TriageView {
             .with_inner_size(size)
             .with_min_inner_size(MIN_SIZE);
         let mut closed = false;
-        ctx.show_viewport_immediate(window_id(&run), builder, |ctx, class| {
+        ctx.show_viewport_immediate(window_id(&run), builder, |viewport_ui, class| {
+            let ctx = &viewport_ui.ctx().clone();
             closed = ctx.input(|input| input.viewport().close_requested());
             if closed {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -145,7 +146,7 @@ impl TriageView {
             {
                 self.graph_window.drawn += 1;
             }
-            if class == egui::ViewportClass::Embedded {
+            if class == egui::ViewportClass::EmbeddedWindow {
                 // Without separate windows the graph floats inside the main one.
                 let mut keep = true;
                 crate::widgets::window("Activity graph")
@@ -161,10 +162,10 @@ impl TriageView {
                     self.graph_window.remember([inner.width(), inner.height()]);
                 }
             }
-            crate::title_bar::show(ctx, &title);
+            crate::title_bar::show(viewport_ui, &title);
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(theme::bg()).inner_margin(8))
-                .show(ctx, |ui| self.graph_window_body(ui));
+                .show(viewport_ui, |ui| self.graph_window_body(ui));
             crate::title_bar::resize(ctx);
         });
         if closed {

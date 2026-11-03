@@ -86,7 +86,7 @@ impl NetworkView {
         let font_size = cx.font_size;
         let mono = theme::mono(font_size - 1.0);
         // Data columns fit their monospace contents; Info gets the rest.
-        let char_width = ui.fonts(|fonts| fonts.glyph_width(&mono, '0'));
+        let char_width = ui.fonts_mut(|fonts| fonts.glyph_width(&mono, '0'));
         let chars = |count: f32| count * char_width + 8.0;
         let start = self.display_index.as_ref().map_or_else(
             || self.list.packets.first().map_or(0, |p| p.time_us),
@@ -352,7 +352,7 @@ impl NetworkView {
         });
         if let Some(set) = filter_menu(ui, packet, filtering) {
             *filter = Some(set);
-            ui.close_menu();
+            ui.close();
         }
         ui.separator();
         match self.packet_note(vm_id, packet) {
@@ -446,19 +446,19 @@ impl NetworkView {
         };
         let mut hovered = None;
         // The bytes get the width of a full hex row; the tree the rest.
-        let char_width = ui.fonts(|fonts| fonts.glyph_width(&mono, '0'));
+        let char_width = ui.fonts_mut(|fonts| fonts.glyph_width(&mono, '0'));
         let hex_width = char_width * 74.0 + 28.0;
         let available = ui.available_width();
         let tshark_error = self.tshark_unavailable();
-        egui::SidePanel::left("packet_tree")
+        egui::Panel::left("packet_tree")
             .resizable(true)
-            .default_width((available - hex_width).max(available * 0.45))
-            .width_range(160.0..=(ui.available_width() - 160.0).max(161.0))
+            .default_size((available - hex_width).max(available * 0.45))
+            .size_range(160.0..=(ui.available_width() - 160.0).max(161.0))
             .frame(egui::Frame::new().inner_margin(egui::Margin {
                 right: 6,
                 ..Default::default()
             }))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 if let Some(error) = &tshark_error {
                     tshark_missing_notice(ui, error, "Protocol details need TShark.");
                     return;
@@ -510,7 +510,7 @@ impl NetworkView {
                 left: 6,
                 ..Default::default()
             }))
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 let chosen = self.detail_node.and_then(|at| {
                     let DetailState::Ready(ready) = &self.detail.as_ref()?.state else {
                         return None;

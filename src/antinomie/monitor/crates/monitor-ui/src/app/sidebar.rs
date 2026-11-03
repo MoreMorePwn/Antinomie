@@ -136,38 +136,39 @@ impl MonitorApp {
         })
     }
 
-    pub(super) fn sidebar(&mut self, ctx: &egui::Context) {
+    pub(super) fn sidebar(&mut self, root: &mut egui::Ui) {
+        let ctx = &root.ctx().clone();
         self.note_last_runs();
         let now = unix_seconds();
         let mut selected_vm = None;
         let mut action: Option<(VmConfig, VmAction)> = None;
         let mut new_vm = false;
-        egui::SidePanel::left("vms")
+        egui::Panel::left("vms")
             // Room for the VM details, but the trace keeps most of a small
             // screen.
-            .default_width(
-                (ctx.screen_rect().width() * 0.2)
+            .default_size(
+                (ctx.content_rect().width() * 0.2)
                     .clamp(200.0, 300.0)
                     // Section titles and VM rows are cut when the text is
                     // larger than the default: the width follows the text,
                     // but a screen narrower than 1100 px keeps the tab beside it
                     // wide (the debugger listing needs that room there).
-                    .max(if ctx.screen_rect().width() >= 1100.0 {
-                        (ctx.style().text_styles[&egui::TextStyle::Body].size * 14.0)
-                            .min(ctx.screen_rect().width() * 0.22)
+                    .max(if ctx.content_rect().width() >= 1100.0 {
+                        (ctx.global_style().text_styles[&egui::TextStyle::Body].size * 14.0)
+                            .min(ctx.content_rect().width() * 0.22)
                     } else {
                         0.0
                     }),
             )
-            .min_width(200.0)
-            .max_width(380.0)
+            .min_size(200.0)
+            .max_size(380.0)
             .resizable(true)
             .frame(
                 egui::Frame::new()
                     .fill(theme::panel())
                     .inner_margin(egui::Margin::same(8)),
             )
-            .show(ctx, |ui| {
+            .show(root, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 let stopped = self.snapshot.active_vm.is_none();
                 if section_header(
@@ -239,7 +240,7 @@ impl MonitorApp {
                                             .clicked()
                                         {
                                             action = Some((vm.clone(), choice));
-                                            ui.close_menu();
+                                            ui.close();
                                         }
                                     }
                                 });
@@ -290,11 +291,12 @@ impl MonitorApp {
 
     /// The status line. Losses and the app version sit on the right:
     /// `TRL x UIL y STL z CAP p/q GiB Antinomie x.y.z`.
-    pub(super) fn health(&mut self, ctx: &egui::Context) {
+    pub(super) fn health(&mut self, root: &mut egui::Ui) {
+        let ctx = &root.ctx().clone();
         let mut open_jobs = false;
-        let bar = egui::TopBottomPanel::bottom("health")
+        let bar = egui::Panel::bottom("health")
             .frame(theme::frame(theme::raised()))
-            .show(ctx, |ui| {
+            .show(root, |ui| {
                 let dropped = self.snapshot.health.dropped;
                 let attempted = self.snapshot.health.attempted;
                 let ui_dropped = self.snapshot.health.ui_dropped;

@@ -65,18 +65,18 @@ impl MemoryView {
             ui.colored_label(theme::muted(), message);
         }
         ui.add_space(4.0);
-        egui::SidePanel::left("memory_runs")
+        egui::Panel::left("memory_runs")
             .resizable(true)
-            .default_width(230.0)
-            .width_range(170.0..=420.0)
+            .default_size(230.0)
+            .size_range(170.0..=420.0)
             .frame(egui::Frame::new().inner_margin(egui::Margin {
                 right: 8,
                 ..Default::default()
             }))
-            .show_inside(ui, |ui| self.run_list(ui, cx.font_size));
+            .show(ui, |ui| self.run_list(ui, cx.font_size));
         egui::CentralPanel::default()
             .frame(egui::Frame::new())
-            .show_inside(ui, |ui| self.result_view(ui, &dump, cx.font_size));
+            .show(ui, |ui| self.result_view(ui, &dump, cx.font_size));
         action
     }
 
@@ -502,7 +502,7 @@ impl MemoryView {
                         if let Some(job) = job {
                             if ui.button("Cancel run").clicked() {
                                 job.cancel();
-                                ui.close_menu();
+                                ui.close();
                             }
                             return;
                         }
@@ -512,13 +512,13 @@ impl MemoryView {
                             .clicked()
                         {
                             rerun = Some(run.clone());
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Open its folder").clicked() {
                             if let Err(error) = open_directory(&run.dir) {
                                 self.status = Some((error, true));
                             }
-                            ui.close_menu();
+                            ui.close();
                         }
                         ui.separator();
                         if ui
@@ -526,7 +526,7 @@ impl MemoryView {
                             .clicked()
                         {
                             delete = Some(run.clone());
-                            ui.close_menu();
+                            ui.close();
                         }
                     });
                     if let Some(progress) = &progress {
@@ -624,7 +624,7 @@ impl MemoryView {
                             response.context_menu(|ui| {
                                 if ui.button("Copy value").clicked() {
                                     ui.ctx().copy_text(text.clone());
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                             });
                             ui.end_row();
@@ -920,12 +920,12 @@ fn community_menu(
             .clicked()
         {
             *catalog_open = true;
-            ui.close_menu();
+            ui.close();
         }
         if ui.button("Open community plugins folder").clicked() {
             let dir = memory::plugins_dir(data_dir);
             crate::folders::show_created_detached(dir);
-            ui.close_menu();
+            ui.close();
         }
         if ui
             .button("Reload plugin list")
@@ -933,7 +933,7 @@ fn community_menu(
             .clicked()
         {
             *reload = true;
-            ui.close_menu();
+            ui.close();
         }
     });
 }

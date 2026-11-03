@@ -554,15 +554,15 @@ impl NetworkView {
             );
         }
         if !self.hide_list {
-            egui::SidePanel::left("network_captures")
+            egui::Panel::left("network_captures")
                 .resizable(true)
-                .default_width(230.0)
-                .width_range(170.0..=480.0)
+                .default_size(230.0)
+                .size_range(170.0..=480.0)
                 .frame(egui::Frame::new().inner_margin(egui::Margin {
                     right: 8,
                     ..Default::default()
                 }))
-                .show_inside(ui, |ui| {
+                .show(ui, |ui| {
                     action = self.capture_list(ui, &cx);
                 });
         }
@@ -571,7 +571,7 @@ impl NetworkView {
                 left: 10,
                 ..Default::default()
             }))
-            .show_inside(ui, |ui| self.packets(ui, is_live, &cx));
+            .show(ui, |ui| self.packets(ui, is_live, &cx));
         action
     }
 }
@@ -606,7 +606,7 @@ pub(crate) fn capture_row(
         let mut job =
             egui::text::LayoutJob::single_section(text.to_owned(), text_format(font, color));
         job.wrap = egui::text::TextWrapping::truncate_at_width(width);
-        ui.fonts(|fonts| fonts.layout_job(job))
+        ui.fonts_mut(|fonts| fonts.layout_job(job))
     };
     let title = line(title, theme::mono(font_size - 1.0), color);
     let detail = line(detail, egui::FontId::proportional(small), theme::muted());

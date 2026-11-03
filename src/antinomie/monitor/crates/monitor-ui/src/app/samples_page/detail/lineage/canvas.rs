@@ -437,17 +437,18 @@ pub(super) fn show(
                 .input(|input| input.pointer.hover_pos())
                 .is_some_and(|at| box_.contains(at) && !minimap.contains(at))
         {
-            egui::show_tooltip_at_pointer(
-                ui.ctx(),
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
                 ui.layer_id(),
                 egui::Id::new(("lineage_node", &node.id)),
-                |ui| {
-                    ui.label(node_title(node));
-                    if !node.path.is_empty() {
-                        ui.label(RichText::new(&node.path).monospace().small());
-                    }
-                },
-            );
+                egui::PopupAnchor::Pointer,
+            )
+            .show(|ui| {
+                ui.label(node_title(node));
+                if !node.path.is_empty() {
+                    ui.label(RichText::new(&node.path).monospace().small());
+                }
+            });
         }
         node_rects.push((box_, node));
     }
@@ -462,14 +463,15 @@ pub(super) fn show(
             .filter(|at| !in_minimap(*at))
         {
             if let Some((_, edge)) = labels.iter().rev().find(|(pill, _)| pill.contains(at)) {
-                egui::show_tooltip_at_pointer(
-                    ui.ctx(),
+                egui::Tooltip::always_open(
+                    ui.ctx().clone(),
                     ui.layer_id(),
                     egui::Id::new(("lineage_edge", &edge.from, &edge.to)),
-                    |ui| {
-                        ui.label(super::edge_summary(edge));
-                    },
-                );
+                    egui::PopupAnchor::Pointer,
+                )
+                .show(|ui| {
+                    ui.label(super::edge_summary(edge));
+                });
             }
         }
     }
@@ -492,7 +494,7 @@ pub(super) fn show(
             .and_then(|id| graph.nodes.iter().find(|node| node.id == *id))
         {
             Some(node) => menu(ui, node),
-            None => ui.close_menu(),
+            None => ui.close(),
         }
     });
     resolve_clicks(
@@ -538,13 +540,9 @@ fn navigate(
         view.moved = true;
     }
     if response.hovered() {
-        let (scroll, pinch, pointer) = ui.input(|input| {
-            (
-                input.raw_scroll_delta.y,
-                input.zoom_delta(),
-                input.pointer.hover_pos(),
-            )
-        });
+        let wheel = crate::widgets::raw_delta(ui).y;
+        let (scroll, pinch, pointer) =
+            ui.input(|input| (wheel, input.zoom_delta(), input.pointer.hover_pos()));
         let pivot = pointer.map_or(viewport / 2.0, |at| at - origin);
         if scroll != 0.0 {
             view.zoom_about(pivot, (scroll * 0.0015).exp());

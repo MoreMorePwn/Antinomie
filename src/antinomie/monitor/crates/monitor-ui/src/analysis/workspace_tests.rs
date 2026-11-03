@@ -1715,7 +1715,7 @@ fn hover(
     state: &mut WorkspaceState,
     at: egui::Pos2,
 ) -> Vec<(String, egui::Rect)> {
-    ctx.style_mut(|style| {
+    ctx.global_style_mut(|style| {
         style.interaction.tooltip_delay = 0.0;
         style.interaction.tooltip_grace_time = 0.0;
     });

@@ -23,8 +23,8 @@ fn native_triage_fixture() {
     impl eframe::App for Fixture {
         fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
             self.view.show_report_dialog(ctx);
-            egui::SidePanel::right("shared-details-fixture")
-                .exact_width(self.details_width)
+            egui::Panel::right("shared-details-fixture")
+                .exact_size(self.details_width)
                 .show(ctx, |ui| {
                     ui.heading("Details");
                     self.view.details(ui);

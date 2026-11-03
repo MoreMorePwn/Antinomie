@@ -231,7 +231,7 @@ pub fn value(kind: ValueKind) -> Color32 {
 /// rows and roomier spacing, padding and margins everywhere.
 pub fn set_compact(ctx: &egui::Context, compact: bool) {
     store_compact(compact);
-    ctx.style_mut(density);
+    ctx.global_style_mut(density);
 }
 
 /// Spacing of the current density.
@@ -469,7 +469,7 @@ fn bold_family() -> FontFamily {
 /// context), the regular one.
 pub fn bold_font(ui: &egui::Ui) -> FontId {
     let mut font = TextStyle::Body.resolve(ui.style());
-    if ui.fonts(|fonts| fonts.families().contains(&bold_family())) {
+    if ui.fonts_mut(|fonts| fonts.families().contains(&bold_family())) {
         font.family = bold_family();
     }
     font
@@ -511,7 +511,7 @@ pub fn apply_theme(ctx: &egui::Context, theme: Theme) {
     store_theme(theme.index());
     let light = theme.is_light();
     let palette = palette();
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.global_style()).clone();
     style.visuals = if light {
         egui::Visuals::light()
     } else {
@@ -582,13 +582,13 @@ pub fn apply_theme(ctx: &egui::Context, theme: Theme) {
         .text_styles
         .get(&TextStyle::Body)
         .map_or(DEFAULT_TEXT_SIZE, |font| font.size);
-    ctx.set_style(style);
+    ctx.set_global_style(style);
     text_size(ctx, size);
 }
 
 pub(crate) fn text_size(ctx: &egui::Context, size: f32) {
     let size = size.clamp(12.0, 24.0);
-    ctx.style_mut(|style| {
+    ctx.global_style_mut(|style| {
         for text_style in [TextStyle::Body, TextStyle::Button] {
             style
                 .text_styles
@@ -612,7 +612,7 @@ pub(crate) fn text_size(ctx: &egui::Context, size: f32) {
 /// repeat counts): five points under the body text, never below 11, so they
 /// stay readable at every text size.
 pub fn graph_text(ctx: &egui::Context) -> f32 {
-    ctx.style()
+    ctx.global_style()
         .text_styles
         .get(&TextStyle::Body)
         .map_or(DEFAULT_TEXT_SIZE, |font| font.size - 5.0)
@@ -759,7 +759,7 @@ mod tests {
         let width = |family: FontFamily| {
             let mut width = 0.0;
             let _ = ctx.run(Default::default(), |ctx| {
-                width = ctx.fonts(|fonts| {
+                width = ctx.fonts_mut(|fonts| {
                     fonts
                         .layout_no_wrap(
                             "Getting started".into(),
@@ -784,12 +784,12 @@ mod tests {
             install(&ctx);
             apply_theme(&ctx, theme);
             let p = theme.palette();
-            let strong = ctx.style().visuals.strong_text_color();
+            let strong = ctx.global_style().visuals.strong_text_color();
             assert_eq!(strong, p.text, "{theme:?}");
             for ground in [p.bg, p.panel, p.raised, p.hover] {
                 assert!(contrast(strong, ground) >= 7.0, "{theme:?} on {ground:?}");
             }
-            let pressed = ctx.style().visuals.widgets.active.bg_fill;
+            let pressed = ctx.global_style().visuals.widgets.active.bg_fill;
             assert!(contrast(strong, pressed) >= 4.5, "{theme:?} pressed fill");
         }
     }
@@ -904,7 +904,7 @@ mod tests {
             install(&ctx);
             apply_theme(&ctx, theme_choice);
             let palette = theme_choice.palette();
-            let style = ctx.style();
+            let style = ctx.global_style();
             assert_eq!(theme(), theme_choice);
             assert_eq!(is_light(), theme_choice == Theme::Light);
             assert_eq!(style.visuals.dark_mode, theme_choice != Theme::Light);
@@ -1045,7 +1045,7 @@ mod tests {
     fn compact_native_theme_installs_readable_dark_controls() {
         let ctx = egui::Context::default();
         install(&ctx);
-        let style = ctx.style();
+        let style = ctx.global_style();
         assert!(style.visuals.dark_mode);
         assert_eq!(style.visuals.panel_fill, panel());
         assert_eq!(style.visuals.window_fill, raised());

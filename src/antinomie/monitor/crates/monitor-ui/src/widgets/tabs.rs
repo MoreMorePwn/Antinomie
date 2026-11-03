@@ -173,7 +173,7 @@ pub fn tab(ui: &mut egui::Ui, selected: bool, item: &TabItem) -> Response {
             break_anywhere: true,
             overflow_character: Some('…'),
         };
-        ui.fonts(|fonts| fonts.layout_job(job))
+        ui.fonts_mut(|fonts| fonts.layout_job(job))
     };
     let width = extra + label.size().x;
     let height = ui.spacing().interact_size.y.max(26.0) + 2.0;

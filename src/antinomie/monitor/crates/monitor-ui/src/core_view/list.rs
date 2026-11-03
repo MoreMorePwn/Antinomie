@@ -362,11 +362,11 @@ pub(super) fn core_file_menu(
     let Some(file) = file else { return };
     if ui.button("Open core file directory").clicked() {
         *action = Some((false, file.to_owned()));
-        ui.close_menu();
+        ui.close();
     }
     if ui.button("Export core…").clicked() {
         *action = Some((true, file.to_owned()));
-        ui.close_menu();
+        ui.close();
     }
 }
 
@@ -384,7 +384,7 @@ pub(super) fn core_project_menu(
             .clicked()
     {
         *action = Some(source);
-        ui.close_menu();
+        ui.close();
     }
 }
 

@@ -52,7 +52,7 @@ impl HistoryColumns {
         // minimums of the others then shrink together if they still do not fit.
         // The start time shows whole, to the second and the zone: measured with
         // the widest form it takes, so a larger text size does not cut it.
-        let start_text = ui.fonts(|fonts| {
+        let start_text = ui.fonts_mut(|fonts| {
             fonts
                 .layout_no_wrap(
                     "2026-10-31 10:43:07.514 (UTC+7)".into(),
@@ -130,7 +130,7 @@ pub(crate) fn short_run_id(run: &RunSummary) -> String {
 pub(in crate::app) fn executable_cell(ui: &mut egui::Ui, title: String, run: &RunSummary) {
     let id = short_run_id(run);
     let font = egui::TextStyle::Monospace.resolve(ui.style());
-    let id_width = ui.fonts(|fonts| {
+    let id_width = ui.fonts_mut(|fonts| {
         fonts
             .layout_no_wrap(id.clone(), font, egui::Color32::PLACEHOLDER)
             .size()

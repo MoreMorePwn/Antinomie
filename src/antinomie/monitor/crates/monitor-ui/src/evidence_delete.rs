@@ -169,7 +169,7 @@ pub(crate) fn menu_item(ui: &mut egui::Ui, blocked: Option<&str>) -> bool {
         None => button.on_hover_text("Permanently delete this item from the recording folder"),
     };
     if button.clicked() {
-        ui.close_menu();
+        ui.close();
         return true;
     }
     false

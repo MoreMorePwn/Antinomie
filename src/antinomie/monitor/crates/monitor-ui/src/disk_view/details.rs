@@ -564,7 +564,7 @@ impl DiskView {
                     .extracted
                     .iter()
                     .map(|file| {
-                        ui.fonts(|fonts| {
+                        ui.fonts_mut(|fonts| {
                             fonts
                                 .layout_no_wrap(
                                     display_name(&file.guest_path),

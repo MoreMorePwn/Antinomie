@@ -42,14 +42,14 @@ fn line_galley(
         job.append(text, 0.0, egui::TextFormat::simple(font.clone(), *color));
     }
     job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(1.0));
-    ui.fonts(|fonts| fonts.layout_job(job))
+    ui.fonts_mut(|fonts| fonts.layout_job(job))
 }
 
 pub(super) fn sidebar_row(ui: &mut egui::Ui, row: SidebarRow<'_>) -> egui::Response {
     let body = egui::TextStyle::Body.resolve(ui.style());
     let small = egui::TextStyle::Small.resolve(ui.style());
     let (body_height, small_height) =
-        ui.fonts(|fonts| (fonts.row_height(&body), fonts.row_height(&small)));
+        ui.fonts_mut(|fonts| (fonts.row_height(&body), fonts.row_height(&small)));
     let padding = egui::vec2(8.0, 5.0);
     let gap = 2.0;
     let height = padding.y * 2.0 + body_height + row.details.len() as f32 * (small_height + gap);

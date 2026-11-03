@@ -347,10 +347,10 @@ impl MemoryView {
             );
         }
         if self.show_log {
-            egui::TopBottomPanel::bottom("memory_log")
+            egui::Panel::bottom("memory_log")
                 .resizable(true)
-                .default_height(140.0)
-                .show_inside(ui, |ui| {
+                .default_size(140.0)
+                .show(ui, |ui| {
                     egui::ScrollArea::both()
                         .id_salt("memory_log_text")
                         .auto_shrink([false, false])
@@ -423,7 +423,7 @@ impl MemoryView {
                 .map(str::to_owned)
                 .collect()
         });
-        let line_height = ui.fonts(|fonts| fonts.row_height(mono)) + 2.0;
+        let line_height = ui.fonts_mut(|fonts| fonts.row_height(mono)) + 2.0;
         egui::Frame::new()
             .fill(theme::bg())
             .corner_radius(4.0)
@@ -453,7 +453,7 @@ impl MemoryView {
         let Ok(table) = &result.table else {
             return;
         };
-        let char_width = ui.fonts(|fonts| fonts.glyph_width(mono, '0'));
+        let char_width = ui.fonts_mut(|fonts| fonts.glyph_width(mono, '0'));
         let row_height = theme::row_height(font_size);
         let widths = column_widths(table, char_width);
         let total: f32 = widths.iter().sum();
@@ -562,11 +562,11 @@ impl MemoryView {
                                 response.context_menu(|ui| {
                                     if ui.button("Copy value").clicked() {
                                         ui.ctx().copy_text(text.clone());
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                     if ui.button("Copy row").clicked() {
                                         ui.ctx().copy_text(row_text(&table.columns, data));
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                     let names = column_fields(&table.columns);
                                     let mut values = result_row(&names, &table.columns, data);

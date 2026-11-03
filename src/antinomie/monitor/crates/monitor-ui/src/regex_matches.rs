@@ -374,7 +374,7 @@ impl RegexWindow {
                         ] {
                             if ui.button(label).clicked() {
                                 ui.ctx().copy_text(text);
-                                ui.close_menu();
+                                ui.close();
                             }
                         }
                     });

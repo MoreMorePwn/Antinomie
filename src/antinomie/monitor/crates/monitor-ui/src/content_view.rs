@@ -460,7 +460,7 @@ impl ContentView {
         let mode = self.mode;
         let font = egui::TextStyle::Monospace.resolve(ui.style());
         let row_height = self.pitch.unwrap_or_else(|| {
-            ui.fonts(|fonts| fonts.row_height(&font)) + ui.spacing().item_spacing.y
+            ui.fonts_mut(|fonts| fonts.row_height(&font)) + ui.spacing().item_spacing.y
         });
         let count = page.row_count(mode);
         let mut area = egui::ScrollArea::both()

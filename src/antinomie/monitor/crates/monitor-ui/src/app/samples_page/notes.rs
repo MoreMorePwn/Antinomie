@@ -49,7 +49,7 @@ pub(in crate::app) fn menu_item_for(
         };
         ui.ctx()
             .data_mut(|data| data.insert_temp(request_id(), request));
-        ui.close_menu();
+        ui.close();
     }
     clicked
 }

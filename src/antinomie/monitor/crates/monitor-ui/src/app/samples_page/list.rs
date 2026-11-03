@@ -488,11 +488,11 @@ fn sample_menu(response: &egui::Response, sha256: &str, row: &Row, action: &mut 
     response.context_menu(|ui| {
         if ui.button("Open").clicked() {
             *action = Some(Action::Open(sha256.to_owned()));
-            ui.close_menu();
+            ui.close();
         }
         if ui.button("Notes…").clicked() {
             *action = Some(Action::Notes(sha256.to_owned()));
-            ui.close_menu();
+            ui.close();
         }
         if ui.button("Edit tags…").clicked() {
             *action = Some(Action::EditTags(
@@ -500,7 +500,7 @@ fn sample_menu(response: &egui::Response, sha256: &str, row: &Row, action: &mut 
                 row.record.name.clone(),
                 row.tags.clone(),
             ));
-            ui.close_menu();
+            ui.close();
         }
         if ui.button("Edit name and description…").clicked() {
             *action = Some(Action::EditText(
@@ -508,24 +508,24 @@ fn sample_menu(response: &egui::Response, sha256: &str, row: &Row, action: &mut 
                 row.record.name.clone(),
                 row.record.description.clone(),
             ));
-            ui.close_menu();
+            ui.close();
         }
         if ui.button("Export report…").clicked() {
             *action = Some(Action::Report(sha256.to_owned(), row.record.name.clone()));
-            ui.close_menu();
+            ui.close();
         }
         if ui.button("Copy SHA-256").clicked() {
             *action = Some(Action::CopyHash(sha256.to_owned()));
-            ui.close_menu();
+            ui.close();
         }
         if ui.button("Copy name").clicked() {
             *action = Some(Action::CopyName(row.record.name.clone()));
-            ui.close_menu();
+            ui.close();
         }
         ui.separator();
         if ui.button("Remove…").clicked() {
             *action = Some(Action::Remove(sha256.to_owned()));
-            ui.close_menu();
+            ui.close();
         }
     });
 }

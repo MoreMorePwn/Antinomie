@@ -17,7 +17,7 @@ pub(super) fn export_controls(
         for (label, format) in [("Plain text (.txt)", AnalysisExportFormat::Text), ("Structured results (.json)", AnalysisExportFormat::Json)] {
             if ui.button(label).clicked() {
                 action = Some(ReportAction::Export { report_id: report.id.clone(), kind, format });
-                ui.close_menu();
+                ui.close();
             }
         }
         if kind.is_none() || kind == Some(AnalysisKind::Decompilation) {
@@ -25,12 +25,12 @@ pub(super) fn export_controls(
             if ui.add_enabled(retained, egui::Button::new("Native Ghidra project (.gpr + .rep)"))
                 .on_disabled_hover_text("A native project is available after a successful Ghidra analysis with project retention. Older and radare2 reports export as text.").clicked() {
                 action = Some(ReportAction::Export { report_id: report.id.clone(), kind: Some(AnalysisKind::Decompilation), format: AnalysisExportFormat::GhidraProject });
-                ui.close_menu();
+                ui.close();
             }
             if ui.add_enabled(retained, egui::Button::new("Open in Ghidra"))
                 .on_disabled_hover_text("No native Ghidra project retained for this report").clicked() {
                 action = Some(ReportAction::OpenGhidra { report_id: report.id.clone() });
-                ui.close_menu();
+                ui.close();
             }
         }
     })

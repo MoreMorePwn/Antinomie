@@ -165,7 +165,8 @@ impl UpdateWindow {
     /// Escape closes the window when it is the topmost one.
     fn escape(&self, ctx: &egui::Context) -> bool {
         if !ctx.input(|input| input.key_pressed(egui::Key::Escape))
-            || ctx.memory(|memory| memory.any_popup_open() || memory.focused().is_some())
+            || egui::Popup::is_any_open(ctx)
+            || ctx.memory(|memory| memory.focused().is_some())
         {
             return false;
         }

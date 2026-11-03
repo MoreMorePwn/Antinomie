@@ -12,8 +12,8 @@ use crate::{app::MonitorApp, theme};
 use antinomie_monitor_core::AnalysisKind;
 use eframe::egui::{self, Rect};
 use egui_dock::{
-    DockArea, DockState, NodeIndex, Surface, SurfaceIndex, TabDestination, TabIndex, TabInsert,
-    TabViewer,
+    DockArea, DockState, NodeIndex, NodePath, Surface, SurfaceIndex, TabDestination, TabIndex,
+    TabInsert, TabPath, TabViewer,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -148,7 +148,11 @@ impl Default for WorkspaceLayout {
     fn default() -> Self {
         // Summary opens first, immediately to the left of Run History.
         let mut dock = DockState::new(Panel::MAIN.to_vec());
-        dock.set_active_tab((SurfaceIndex::main(), NodeIndex::root(), TabIndex(0)));
+        let _ = dock.set_active_tab(TabPath::new(
+            SurfaceIndex::main(),
+            NodeIndex::root(),
+            TabIndex(0),
+        ));
         // The work area gets most of the height; details sit below.
         dock.main_surface_mut().split_below(
             NodeIndex::root(),
@@ -187,14 +191,16 @@ impl WorkspaceLayout {
             // Keep the user's splits and native windows from 0.5.0. Place the
             // new tab beside Run History in whichever surface owns it.
             if layout.dock.find_tab(&Panel::Summary).is_none() {
-                if let Some((surface, node, tab)) = layout.dock.find_tab(&Panel::RunHistory) {
+                if let Some(TabPath { surface, node, tab }) =
+                    layout.dock.find_tab(&Panel::RunHistory)
+                {
                     layout.dock[surface][node].insert_tab(tab, Panel::Summary);
                 } else {
                     layout.return_home(Panel::Summary);
                 }
             }
             if layout.version < 5 && layout.dock.find_tab(&Panel::Triage).is_none() {
-                if let Some((surface, node, tab)) = layout.dock.find_tab(&Panel::Trace) {
+                if let Some(TabPath { surface, node, tab }) = layout.dock.find_tab(&Panel::Trace) {
                     layout.dock[surface][node].insert_tab(tab, Panel::Triage);
                 } else {
                     layout.return_home(Panel::Triage);
@@ -206,7 +212,7 @@ impl WorkspaceLayout {
             // Disks (0.7.0) sits right after Memory, wherever the user
             // moved Memory; the rest of the arrangement is kept.
             if layout.dock.find_tab(&Panel::Disks).is_none() {
-                if let Some((surface, node, tab)) = layout.dock.find_tab(&Panel::Memory) {
+                if let Some(TabPath { surface, node, tab }) = layout.dock.find_tab(&Panel::Memory) {
                     layout.insert_keeping_active(surface, node, TabIndex(tab.0 + 1), Panel::Disks);
                 } else {
                     layout.return_home(Panel::Disks);
@@ -227,11 +233,15 @@ impl WorkspaceLayout {
         panel: Panel,
     ) {
         let shown = match &self.dock[surface][node] {
-            egui_dock::Node::Leaf { tabs, active, .. } => tabs.get(active.0).cloned(),
+            egui_dock::Node::Leaf(egui_dock::LeafNode { tabs, active, .. }) => {
+                tabs.get(active.0).cloned()
+            }
             _ => None,
         };
         self.dock[surface][node].insert_tab(at, panel);
-        if let egui_dock::Node::Leaf { tabs, active, .. } = &mut self.dock[surface][node] {
+        if let egui_dock::Node::Leaf(egui_dock::LeafNode { tabs, active, .. }) =
+            &mut self.dock[surface][node]
+        {
             if let Some(index) = shown.and_then(|shown| tabs.iter().position(|tab| *tab == shown)) {
                 *active = TabIndex(index);
             }
@@ -294,7 +304,9 @@ impl WorkspaceLayout {
         let panel = Panel::Library(page);
         if self.dock.find_tab(&panel).is_none() {
             match self.dock.find_tab(&Panel::Summary) {
-                Some((surface, node, _)) => self.dock[surface][node].append_tab(panel.clone()),
+                Some(TabPath { surface, node, .. }) => {
+                    self.dock[surface][node].append_tab(panel.clone())
+                }
                 None => self
                     .dock
                     .main_surface_mut()
@@ -322,7 +334,9 @@ impl WorkspaceLayout {
             .iter()
             .find_map(|panel| main.find_tab(panel).map(|(node, _)| node))?;
         match &main[node] {
-            egui_dock::Node::Leaf { tabs, active, .. } => Some((tabs.clone(), active.0)),
+            egui_dock::Node::Leaf(egui_dock::LeafNode { tabs, active, .. }) => {
+                Some((tabs.clone(), active.0))
+            }
             _ => None,
         }
     }
@@ -330,7 +344,7 @@ impl WorkspaceLayout {
     /// Put `panel` first in the work area's tab bar, as dragging it there does.
     #[cfg(test)]
     pub(crate) fn move_to_front_for_test(&mut self, panel: &Panel) {
-        let Some((surface, node, tab)) = self.dock.find_tab(panel) else {
+        let Some(TabPath { surface, node, tab }) = self.dock.find_tab(panel) else {
             return;
         };
         let moved = self.dock[surface][node].remove_tab(tab);
@@ -370,8 +384,10 @@ impl WorkspaceLayout {
     /// Where the Debugger tab is: the tab before it, and whether it shows.
     #[cfg(test)]
     pub(crate) fn debugger_position(&self) -> Option<(Option<Panel>, bool)> {
-        let (surface, node, tab) = self.dock.find_tab(&Panel::Debugger)?;
-        let egui_dock::Node::Leaf { tabs, active, .. } = &self.dock[surface][node] else {
+        let TabPath { surface, node, tab } = self.dock.find_tab(&Panel::Debugger)?;
+        let egui_dock::Node::Leaf(egui_dock::LeafNode { tabs, active, .. }) =
+            &self.dock[surface][node]
+        else {
             return None;
         };
         Some((
@@ -386,7 +402,7 @@ impl WorkspaceLayout {
     /// Put the Debugger tab right after Static analysis, wherever that went.
     fn place_debugger(&mut self) {
         match self.dock.find_tab(&Panel::StaticAnalysis) {
-            Some((surface, node, tab)) => {
+            Some(TabPath { surface, node, tab }) => {
                 self.dock[surface][node].insert_tab(TabIndex(tab.0 + 1), Panel::Debugger);
             }
             None => self
@@ -404,10 +420,12 @@ impl WorkspaceLayout {
             (true, None) => {
                 self.place_debugger();
                 self.focus(Panel::Debugger);
-                if let Some((surface, node, _)) = self.dock.find_tab(&Panel::Debugger) {
+                if let Some(TabPath { surface, node, .. }) = self.dock.find_tab(&Panel::Debugger) {
                     // The tab bar does not follow the focus: scroll it to its
                     // end, where the Debugger tab is when the tabs overflow.
-                    if let egui_dock::Node::Leaf { scroll, .. } = &mut self.dock[surface][node] {
+                    if let egui_dock::Node::Leaf(egui_dock::LeafNode { scroll, .. }) =
+                        &mut self.dock[surface][node]
+                    {
                         *scroll = -2000.0;
                     }
                     if !surface.is_main() {
@@ -458,7 +476,7 @@ impl WorkspaceLayout {
             .iter_all_tabs()
             .filter_map(|(_, panel)| Some((panel, self.folded_split(panel)?)))
             .find_map(|(panel, split)| {
-                let (surface, node, tab) = self.dock.find_tab(panel)?;
+                let TabPath { surface, node, tab } = self.dock.find_tab(panel)?;
                 if !surface.is_main() {
                     return None;
                 }
@@ -472,7 +490,7 @@ impl WorkspaceLayout {
                         None => break false,
                     }
                 };
-                let shown = matches!(&self.dock[surface][node], Node::Leaf { active, .. } if *active == tab);
+                let shown = matches!(&self.dock[surface][node], Node::Leaf(egui_dock::LeafNode { active, .. }) if *active == tab);
                 (in_top && shown).then_some(split)
             })
     }
@@ -483,7 +501,8 @@ impl WorkspaceLayout {
     fn fold_details_for_tab(&mut self) {
         use egui_dock::Node;
         let shows = self.folding_tab_shows();
-        let Node::Vertical { fraction, .. } = &mut self.dock.main_surface_mut()[NodeIndex::root()]
+        let Node::Vertical(egui_dock::SplitNode { fraction, .. }) =
+            &mut self.dock.main_surface_mut()[NodeIndex::root()]
         else {
             return;
         };
@@ -510,13 +529,15 @@ impl WorkspaceLayout {
     }
 
     pub(crate) fn focus(&mut self, panel: Panel) {
-        if let Some((surface, node, tab)) = self.dock.find_tab(&panel) {
-            self.dock.set_active_tab((surface, node, tab));
-            self.dock.set_focused_node_and_surface((surface, node));
+        if let Some(TabPath { surface, node, tab }) = self.dock.find_tab(&panel) {
+            let _ = self.dock.set_active_tab(TabPath::new(surface, node, tab));
+            self.dock
+                .set_focused_node_and_surface(NodePath { surface, node });
         }
     }
 
-    pub(crate) fn show(&mut self, app: &mut MonitorApp, ctx: &egui::Context) {
+    pub(crate) fn show(&mut self, app: &mut MonitorApp, root: &mut egui::Ui) {
+        let ctx = &root.ctx().clone();
         self.targets.clear();
         self.target_headers.clear();
         self.tab_targets.clear();
@@ -542,7 +563,7 @@ impl WorkspaceLayout {
         self.follow_debugger(app, ctx);
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(theme::bg()))
-            .show(ctx, |ui| self.show_surface(app, ui, SurfaceIndex::main()));
+            .show(root, |ui| self.show_surface(app, ui, SurfaceIndex::main()));
         let surfaces: Vec<_> = (1..self.dock.surfaces_count())
             .filter(|index| self.dock.is_surface_valid(SurfaceIndex(*index)))
             .collect();
@@ -558,24 +579,25 @@ impl WorkspaceLayout {
             ctx.show_viewport_immediate(
                 egui::ViewportId::from_hash_of(("workspace", index)),
                 builder,
-                |ctx, class| {
+                |viewport_ui, class| {
+                    let ctx = &viewport_ui.ctx().clone();
                     closed = ctx.input(|input| input.viewport().close_requested());
                     if closed {
                         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                     }
-                    if class != egui::ViewportClass::Embedded {
+                    if class != egui::ViewportClass::EmbeddedWindow {
                         ctx.input(|input| self.remember_geometry(index, input.viewport()));
                     }
-                    if class == egui::ViewportClass::Embedded {
+                    if class == egui::ViewportClass::EmbeddedWindow {
                         crate::widgets::window("Workspace")
                             .id(egui::Id::new(("workspace-fallback", index)))
                             .default_size([720.0, 480.0])
                             .show(ctx, |ui| self.show_surface(app, ui, surface));
                     } else {
-                        crate::title_bar::show(ctx, &title);
+                        crate::title_bar::show(viewport_ui, &title);
                         egui::CentralPanel::default()
                             .frame(egui::Frame::NONE.fill(theme::bg()))
-                            .show(ctx, |ui| self.show_surface(app, ui, surface));
+                            .show(viewport_ui, |ui| self.show_surface(app, ui, surface));
                         crate::title_bar::resize(ctx);
                     }
                 },
@@ -617,7 +639,7 @@ impl WorkspaceLayout {
                 self.native_builders.remove(&surface.0);
             }
             self.focus(panel.clone());
-            if let Some((surface, _, _)) = self.dock.find_tab(&panel) {
+            if let Some(TabPath { surface, .. }) = self.dock.find_tab(&panel) {
                 if !surface.is_main() {
                     ctx.send_viewport_cmd_to(
                         egui::ViewportId::from_hash_of(("workspace", surface.0)),
@@ -725,8 +747,12 @@ impl WorkspaceLayout {
                 leaf.node,
                 bar_fill,
             ) {
-                local.set_active_tab((SurfaceIndex::main(), leaf.node, TabIndex(index)));
-                if let Some(egui_dock::Node::Leaf { tabs, .. }) =
+                let _ = local.set_active_tab(TabPath::new(
+                    SurfaceIndex::main(),
+                    leaf.node,
+                    TabIndex(index),
+                ));
+                if let Some(egui_dock::Node::Leaf(egui_dock::LeafNode { tabs, .. })) =
                     local.main_surface().iter().nth(leaf.node.0)
                 {
                     if let Some(tab) = tabs.get(index) {
@@ -745,7 +771,7 @@ impl WorkspaceLayout {
                         NodeIndex(index),
                         rect.translate(origin.to_vec2()),
                     ));
-                    if let egui_dock::Node::Leaf { viewport, .. } = node {
+                    if let egui_dock::Node::Leaf(egui_dock::LeafNode { viewport, .. }) = node {
                         let header =
                             Rect::from_min_max(rect.min, egui::pos2(rect.max.x, viewport.min.y));
                         self.target_headers.push((
@@ -796,34 +822,49 @@ impl WorkspaceLayout {
                 DropAction::Empty => self
                     .dock
                     .move_tab(location, TabDestination::EmptySurface(target.surface)),
-                DropAction::Append => self
-                    .dock
-                    .move_tab(location, (target.surface, target.node, TabInsert::Append)),
+                DropAction::Append => self.dock.move_tab(
+                    location,
+                    (
+                        NodePath {
+                            surface: target.surface,
+                            node: target.node,
+                        },
+                        TabInsert::Append,
+                    ),
+                ),
                 DropAction::Insert(index) => self.dock.move_tab(
                     location,
                     (
-                        target.surface,
-                        target.node,
+                        NodePath {
+                            surface: target.surface,
+                            node: target.node,
+                        },
                         TabInsert::Insert(TabIndex(index)),
                     ),
                 ),
                 DropAction::Split(split) => self.dock.move_tab(
                     location,
-                    (target.surface, target.node, TabInsert::Split(split)),
+                    (
+                        NodePath {
+                            surface: target.surface,
+                            node: target.node,
+                        },
+                        TabInsert::Split(split),
+                    ),
                 ),
             }
-        } else if !location.0.is_main() && self.dock[location.0].num_tabs() == 1 {
+        } else if !location.surface.is_main() && self.dock[location.surface].num_tabs() == 1 {
             let size = self
                 .geometry
-                .get(&location.0 .0)
+                .get(&location.surface.0)
                 .map(Rect::size)
                 .unwrap_or(egui::vec2(820.0, 520.0));
             self.geometry
-                .insert(location.0 .0, Rect::from_min_size(position, size));
-            if let Some(builder) = self.native_builders.get_mut(&location.0 .0) {
+                .insert(location.surface.0, Rect::from_min_size(position, size));
+            if let Some(builder) = self.native_builders.get_mut(&location.surface.0) {
                 builder.position = Some(position);
             }
-            if let Some(window) = self.dock.get_window_state_mut(location.0) {
+            if let Some(window) = self.dock.get_window_state_mut(location.surface) {
                 window.set_position(position);
             }
         } else {
@@ -848,7 +889,7 @@ impl WorkspaceLayout {
         let Some(location) = self.dock.find_tab(&panel) else {
             return;
         };
-        if location.0.is_main() {
+        if location.surface.is_main() {
             return;
         }
         let home: &[Panel] = if matches!(panel, Panel::Details | Panel::Activity | Panel::Jobs) {
@@ -875,13 +916,21 @@ impl WorkspaceLayout {
             let Some(target) = target else {
                 return;
             };
-            self.dock
-                .move_tab(location, (SurfaceIndex::main(), target, TabInsert::Append));
+            self.dock.move_tab(
+                location,
+                (
+                    NodePath {
+                        surface: SurfaceIndex::main(),
+                        node: target,
+                    },
+                    TabInsert::Append,
+                ),
+            );
         }
         self.focus(panel);
-        if !self.dock.is_surface_valid(location.0) {
-            self.geometry.remove(&location.0 .0);
-            self.native_builders.remove(&location.0 .0);
+        if !self.dock.is_surface_valid(location.surface) {
+            self.geometry.remove(&location.surface.0);
+            self.native_builders.remove(&location.surface.0);
         }
     }
 
@@ -946,7 +995,7 @@ impl WorkspaceLayout {
         {
             return;
         }
-        if !matches!(&tree[NodeIndex::root()], Node::Vertical { fraction, .. } if (*fraction - 0.72).abs() < f32::EPSILON)
+        if !matches!(&tree[NodeIndex::root()], Node::Vertical(egui_dock::SplitNode { fraction, .. }) if (*fraction - 0.72).abs() < f32::EPSILON)
         {
             return;
         }
@@ -961,16 +1010,18 @@ impl WorkspaceLayout {
             Panel::Triage,
             Panel::StaticAnalysis,
         ];
-        let Node::Leaf { tabs, active, .. } = &tree[top] else {
+        let Node::Leaf(egui_dock::LeafNode { tabs, active, .. }) = &tree[top] else {
             return;
         };
         if tabs.as_slice() != old
-            || !matches!(&tree[NodeIndex::root().right()], Node::Leaf { tabs, .. } if tabs.as_slice() == [Panel::Details, Panel::Activity])
+            || !matches!(&tree[NodeIndex::root().right()], Node::Leaf(egui_dock::LeafNode { tabs, .. }) if tabs.as_slice() == [Panel::Details, Panel::Activity])
         {
             return;
         }
         let selected = tabs.get(active.0).cloned();
-        if let Node::Leaf { tabs, active, .. } = &mut self.dock.main_surface_mut()[top] {
+        if let Node::Leaf(egui_dock::LeafNode { tabs, active, .. }) =
+            &mut self.dock.main_surface_mut()[top]
+        {
             *tabs = Panel::MAIN.to_vec();
             if let Some(index) =
                 selected.and_then(|panel| tabs.iter().position(|tab| *tab == panel))
@@ -1232,7 +1283,7 @@ mod tests {
             let layout = crate::app::tests::workspace(&mut app);
             let location = layout.dock.find_tab(&Panel::Network).unwrap();
             assert!(
-                location.0.is_main(),
+                location.surface.is_main(),
                 "direct drag must not require a detached window"
             );
             assert_ne!(location.1, source);
@@ -1305,7 +1356,11 @@ mod tests {
                     modifiers: egui::Modifiers::NONE,
                 }],
             );
-            let (surface, node, index) = layout.dock.find_tab(&Panel::CoreDump).unwrap();
+            let TabPath {
+                surface,
+                node,
+                tab: index,
+            } = layout.dock.find_tab(&Panel::CoreDump).unwrap();
             assert!(surface.is_main());
             assert_eq!(
                 index.0,
@@ -1420,8 +1475,13 @@ mod tests {
                 }],
             );
         }
-        let (surface, node, index) = layout.dock.find_tab(&Panel::CoreDump).unwrap();
-        let egui_dock::Node::Leaf { active, .. } = &layout.dock[surface][node] else {
+        let TabPath {
+            surface,
+            node,
+            tab: index,
+        } = layout.dock.find_tab(&Panel::CoreDump).unwrap();
+        let egui_dock::Node::Leaf(egui_dock::LeafNode { active, .. }) = &layout.dock[surface][node]
+        else {
             panic!("tab leaf");
         };
         assert_eq!(*active, index);
@@ -1802,7 +1862,7 @@ mod tests {
         let terminal = Panel::Terminal("dock-fallback".into());
         layout.dock.add_window(vec![terminal.clone()]);
         layout.dock_panel(terminal.clone());
-        let (surface, node, _) = layout.dock.find_tab(&terminal).unwrap();
+        let TabPath { surface, node, .. } = layout.dock.find_tab(&terminal).unwrap();
         assert!(surface.is_main());
         assert!(layout.dock.main_surface()[node].is_leaf());
     }
@@ -1927,7 +1987,8 @@ mod tests {
             ..Default::default()
         };
         let top = NodeIndex::root().left();
-        if let egui_dock::Node::Leaf { tabs, active, .. } = &mut layout.dock.main_surface_mut()[top]
+        if let egui_dock::Node::Leaf(egui_dock::LeafNode { tabs, active, .. }) =
+            &mut layout.dock.main_surface_mut()[top]
         {
             *tabs = vec![
                 Panel::Summary,
@@ -1944,14 +2005,17 @@ mod tests {
         let bottom = NodeIndex::root().right();
         layout
             .dock
-            .set_active_tab((SurfaceIndex::main(), bottom, TabIndex(1)));
+            .set_active_tab(TabPath::new(SurfaceIndex::main(), bottom, TabIndex(1)));
         let restored = WorkspaceLayout::restore(Some(layout));
         assert_eq!(leaf_tabs(&restored, top), Panel::MAIN);
-        let egui_dock::Node::Leaf { tabs, active, .. } = &restored.dock.main_surface()[top] else {
+        let egui_dock::Node::Leaf(egui_dock::LeafNode { tabs, active, .. }) =
+            &restored.dock.main_surface()[top]
+        else {
             panic!("top")
         };
         assert_eq!(tabs[active.0], Panel::Network);
-        let egui_dock::Node::Leaf { tabs, active, .. } = &restored.dock.main_surface()[bottom]
+        let egui_dock::Node::Leaf(egui_dock::LeafNode { tabs, active, .. }) =
+            &restored.dock.main_surface()[bottom]
         else {
             panic!("bottom")
         };
@@ -1967,7 +2031,9 @@ mod tests {
                 ..Default::default()
             };
             let top = NodeIndex::root().left();
-            if let egui_dock::Node::Leaf { tabs, .. } = &mut layout.dock.main_surface_mut()[top] {
+            if let egui_dock::Node::Leaf(egui_dock::LeafNode { tabs, .. }) =
+                &mut layout.dock.main_surface_mut()[top]
+            {
                 *tabs = vec![
                     Panel::Summary,
                     Panel::RunHistory,
@@ -1981,7 +2047,7 @@ mod tests {
             }
             match case {
                 0 => {
-                    if let egui_dock::Node::Leaf { tabs, active, .. } =
+                    if let egui_dock::Node::Leaf(egui_dock::LeafNode { tabs, active, .. }) =
                         &mut layout.dock.main_surface_mut()[top]
                     {
                         tabs.swap(0, 3);
@@ -1989,7 +2055,7 @@ mod tests {
                     }
                 }
                 1 => {
-                    if let egui_dock::Node::Vertical { fraction, .. } =
+                    if let egui_dock::Node::Vertical(egui_dock::SplitNode { fraction, .. }) =
                         &mut layout.dock.main_surface_mut()[NodeIndex::root()]
                     {
                         *fraction = 0.6;
@@ -2055,7 +2121,9 @@ mod tests {
                 Panel::StaticAnalysis
             ]
         );
-        let egui_dock::Node::Leaf { tabs, active, .. } = &layout.dock.main_surface()[top] else {
+        let egui_dock::Node::Leaf(egui_dock::LeafNode { tabs, active, .. }) =
+            &layout.dock.main_surface()[top]
+        else {
             panic!("top node must hold tabs");
         };
         assert_eq!(tabs[active.0], Panel::Summary);
@@ -2119,10 +2187,16 @@ mod tests {
         let rect = Rect::from_min_size(egui::pos2(160.0, 140.0), egui::vec2(800.0, 550.0));
         layout.geometry.insert(surface.0, rect);
         let restored = WorkspaceLayout::restore(Some(layout));
-        let (summary_surface, node, tab) = restored.dock.find_tab(&Panel::Summary).unwrap();
+        let TabPath {
+            surface: summary_surface,
+            node,
+            tab,
+        } = restored.dock.find_tab(&Panel::Summary).unwrap();
         assert_eq!(summary_surface, surface);
         assert_eq!(restored.geometry[&surface.0], rect);
-        let egui_dock::Node::Leaf { tabs, active, .. } = &restored.dock[surface][node] else {
+        let egui_dock::Node::Leaf(egui_dock::LeafNode { tabs, active, .. }) =
+            &restored.dock[surface][node]
+        else {
             panic!("history window must remain a leaf");
         };
         assert_eq!(tabs, &[Panel::Activity, Panel::Summary, Panel::RunHistory]);
@@ -2147,7 +2221,11 @@ mod tests {
                 .dock
                 .remove_tab(layout.dock.find_tab(&missing).unwrap());
             layout.validate();
-            let (surface, node, summary) = layout.dock.find_tab(&Panel::Summary).unwrap();
+            let TabPath {
+                surface,
+                node,
+                tab: summary,
+            } = layout.dock.find_tab(&Panel::Summary).unwrap();
             let (history_surface, history_node, history) =
                 layout.dock.find_tab(&Panel::RunHistory).unwrap();
             assert_eq!((surface, node), (history_surface, history_node));
@@ -2486,7 +2564,7 @@ mod tests {
         use egui_dock::Node;
         let split = |layout: &WorkspaceLayout| match &layout.dock.main_surface()[NodeIndex::root()]
         {
-            Node::Vertical { fraction, .. } => *fraction,
+            Node::Vertical(egui_dock::SplitNode { fraction, .. }) => *fraction,
             other => panic!("not split: {other:?}"),
         };
         let mut layout = WorkspaceLayout::default();
@@ -2517,7 +2595,7 @@ mod tests {
         use egui_dock::Node;
         let split = |layout: &WorkspaceLayout| match &layout.dock.main_surface()[NodeIndex::root()]
         {
-            Node::Vertical { fraction, .. } => *fraction,
+            Node::Vertical(egui_dock::SplitNode { fraction, .. }) => *fraction,
             other => panic!("not split: {other:?}"),
         };
         let mut layout = WorkspaceLayout::default();
@@ -2540,7 +2618,7 @@ mod tests {
         use egui_dock::Node;
         let split = |layout: &WorkspaceLayout| match &layout.dock.main_surface()[NodeIndex::root()]
         {
-            Node::Vertical { fraction, .. } => *fraction,
+            Node::Vertical(egui_dock::SplitNode { fraction, .. }) => *fraction,
             other => panic!("not split: {other:?}"),
         };
         let mut layout = WorkspaceLayout::default();
@@ -2575,7 +2653,8 @@ mod tests {
             .filter(|panel| **panel != Panel::Disks)
             .cloned()
             .collect();
-        if let egui_dock::Node::Leaf { tabs, active, .. } = &mut layout.dock.main_surface_mut()[top]
+        if let egui_dock::Node::Leaf(egui_dock::LeafNode { tabs, active, .. }) =
+            &mut layout.dock.main_surface_mut()[top]
         {
             *tabs = without_disks.clone();
             *active = TabIndex(5);
@@ -2584,7 +2663,9 @@ mod tests {
         assert_eq!(restored.version, LAYOUT_VERSION);
         assert_eq!(leaf_tabs(&restored, top), Panel::MAIN);
         // The tab that was showing (Memory) still shows.
-        let egui_dock::Node::Leaf { tabs, active, .. } = &restored.dock.main_surface()[top] else {
+        let egui_dock::Node::Leaf(egui_dock::LeafNode { tabs, active, .. }) =
+            &restored.dock.main_surface()[top]
+        else {
             panic!("top")
         };
         assert_eq!(tabs[active.0], Panel::Memory);
@@ -2606,7 +2687,7 @@ mod tests {
         let rectangle = Rect::from_min_size(egui::pos2(40.0, 40.0), egui::vec2(700.0, 400.0));
         let window = layout.dock.detach_tab(memory, rectangle);
         let restored = WorkspaceLayout::restore(Some(layout));
-        let (surface, node, tab) = restored.dock.find_tab(&Panel::Disks).unwrap();
+        let TabPath { surface, node, tab } = restored.dock.find_tab(&Panel::Disks).unwrap();
         assert_eq!(surface, window);
         let memory = restored.dock.find_tab(&Panel::Memory).unwrap();
         assert_eq!(

@@ -561,11 +561,11 @@ fn artifact_menu(ui: &mut egui::Ui, output: &Output, here: bool, act: &mut Optio
         .clicked()
     {
         *act = Some(Act::Open(output.number, output.kind));
-        ui.close_menu();
+        ui.close();
     }
     if ui.button("Go to run").clicked() {
         *act = Some(Act::GoToRun(output.number));
-        ui.close_menu();
+        ui.close();
     }
     if ui
         .add_enabled(here, egui::Button::new("Open folder"))
@@ -573,7 +573,7 @@ fn artifact_menu(ui: &mut egui::Ui, output: &Output, here: bool, act: &mut Optio
         .clicked()
     {
         crate::evidence::reveal(ui.ctx(), &output.path);
-        ui.close_menu();
+        ui.close();
     }
     ui.separator();
     let is_file = here && crate::stat_cache::is_file(&output.path);
@@ -587,7 +587,7 @@ fn artifact_menu(ui: &mut egui::Ui, output: &Output, here: bool, act: &mut Optio
         .clicked()
     {
         copy_sha256(ui.ctx(), output.path.clone());
-        ui.close_menu();
+        ui.close();
     }
     super::super::notes::menu_item(ui, || output.reference());
 }

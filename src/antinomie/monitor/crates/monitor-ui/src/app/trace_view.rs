@@ -127,7 +127,7 @@ impl MonitorApp {
         let table_height = (ui.available_height() - header_height).max(0.0);
         let mono = theme::mono(font - 1.0);
         let body_font = egui::FontId::proportional(font);
-        let char_width = ui.fonts(|fonts| fonts.glyph_width(&mono, '0'));
+        let char_width = ui.fonts_mut(|fonts| fonts.glyph_width(&mono, '0'));
         let chars = |count: f32| count * char_width + 14.0;
         let mut widths = [
             chars(9.0),

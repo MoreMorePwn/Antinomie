@@ -94,7 +94,7 @@ fn rows(ui: &mut egui::Ui, id: &str, rows: &[(&str, String)]) {
     let widest = rows
         .iter()
         .map(|(name, _)| {
-            ui.fonts(|fonts| {
+            ui.fonts_mut(|fonts| {
                 fonts
                     .layout_no_wrap((*name).to_owned(), font.clone(), Color32::WHITE)
                     .size()

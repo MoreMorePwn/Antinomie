@@ -316,7 +316,7 @@ impl MonitorApp {
 
     /// Draw the window; returns the entry that was clicked.
     fn palette_window(&mut self, ctx: &egui::Context, results: &[Item]) -> Option<Item> {
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let width = WIDTH.min((screen.width() - 24.0).max(280.0));
         let list_height = (screen.height() * 0.5).clamp(120.0, 420.0);
         let font = self.settings.font_size;

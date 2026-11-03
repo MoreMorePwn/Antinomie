@@ -273,7 +273,7 @@ impl View {
                             Ok(json) => ui.ctx().copy_text(json),
                             Err(error) => self.bytes = Some(Err(error.to_string())),
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                 }
             });

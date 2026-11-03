@@ -556,7 +556,7 @@ fn transport_window(
         .id(egui::Id::new("vm_transport"))
         // Beside the top of the VM dialog, not over its buttons.
         .pivot(egui::Align2::CENTER_TOP)
-        .default_pos(egui::pos2(ctx.screen_rect().center().x, 60.0))
+        .default_pos(egui::pos2(ctx.content_rect().center().x, 60.0))
         .open(open)
         .collapsible(false)
         .resizable(false)

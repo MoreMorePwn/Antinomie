@@ -67,15 +67,15 @@ pub(super) fn function_panel(
         AnalysisKind::Disassembly => "listing-functions-disassembly",
         _ => "listing-functions-decompilation",
     };
-    egui::SidePanel::left(panel_id)
+    egui::Panel::left(panel_id)
         .resizable(true)
-        .default_width(220.0)
-        .width_range(160.0..=420.0)
+        .default_size(220.0)
+        .size_range(160.0..=420.0)
         .frame(egui::Frame::new().inner_margin(egui::Margin {
             right: 8,
             ..Default::default()
         }))
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             crate::code_listing::heading(ui, names.len(), names.len());
             if ui
                 .button("Export text")
@@ -231,6 +231,6 @@ pub(super) fn row_context_menu(
     if ui.button("Copy label and value").clicked() {
         ui.ctx()
             .copy_text(format!("{}\n{}", entry.label, entry.value));
-        ui.close_menu();
+        ui.close();
     }
 }

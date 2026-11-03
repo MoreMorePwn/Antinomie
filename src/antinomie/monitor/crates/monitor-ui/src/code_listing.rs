@@ -66,7 +66,7 @@ pub(crate) fn heading(ui: &mut egui::Ui, shown: usize, total: usize) {
 /// position clicked.
 pub(crate) fn function_list<'a>(
     ui: &mut egui::Ui,
-    id: impl Hash,
+    id: impl Hash + std::fmt::Debug,
     count: usize,
     function: impl Fn(usize) -> Function<'a>,
     selected: Option<usize>,
@@ -74,7 +74,8 @@ pub(crate) fn function_list<'a>(
 ) -> Option<usize> {
     let name_font = TextStyle::Body.resolve(ui.style());
     let detail_font = TextStyle::Monospace.resolve(ui.style());
-    let height = ui.fonts(|fonts| fonts.row_height(&name_font) + fonts.row_height(&detail_font))
+    let height = ui
+        .fonts_mut(|fonts| fonts.row_height(&name_font) + fonts.row_height(&detail_font))
         + NAME_DETAIL_GAP
         + 10.0;
     let mut clicked = None;

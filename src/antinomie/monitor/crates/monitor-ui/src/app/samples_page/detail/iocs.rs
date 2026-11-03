@@ -562,11 +562,11 @@ impl MonitorApp {
     ) {
         if ui.button("Copy").clicked() {
             ui.ctx().copy_text(shown(row, defanged));
-            ui.close_menu();
+            ui.close();
         }
         if defanged && ui.button("Copy raw value").clicked() {
             ui.ctx().copy_text(row.value.clone());
-            ui.close_menu();
+            ui.close();
         }
         ui.menu_button("Open in Triage", |ui| {
             for seen in &row.sightings {
@@ -580,7 +580,7 @@ impl MonitorApp {
                     .clicked()
                 {
                     *go = Some(Go::Triage(seen.run, key_of(row)));
-                    ui.close_menu();
+                    ui.close();
                 }
             }
         });

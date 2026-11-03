@@ -36,7 +36,7 @@ impl WorkspaceLayout {
                 highlight: rect,
             });
         }
-        let own = location.0 == surface && location.1 == node;
+        let own = location.surface == surface && location.node == node;
         let header = self
             .target_headers
             .iter()
@@ -49,7 +49,12 @@ impl WorkspaceLayout {
                 if *tab_surface != surface {
                     continue;
                 }
-                let Some((_, tab_node, index)) = self.dock.find_tab(tab) else {
+                let Some(egui_dock::TabPath {
+                    node: tab_node,
+                    tab: index,
+                    ..
+                }) = self.dock.find_tab(tab)
+                else {
                     continue;
                 };
                 if tab_node != node {
@@ -63,8 +68,8 @@ impl WorkspaceLayout {
             }
             if let Some((before, x)) = slot {
                 // The docking library removes the source before inserting.
-                let index = before.saturating_sub(usize::from(own && location.2 .0 < before));
-                let action = if own && index == location.2 .0 {
+                let index = before.saturating_sub(usize::from(own && location.tab.0 < before));
+                let action = if own && index == location.tab.0 {
                     DropAction::Stay
                 } else {
                     DropAction::Insert(index)
@@ -184,7 +189,8 @@ impl WorkspaceLayout {
             Some(DropAction::Stay) => "Keep position",
             Some(DropAction::Empty | DropAction::Append) => "Join tabs",
             Some(DropAction::Insert(_)) => {
-                if self.dock.find_tab(panel).is_some_and(|(s, n, _)| {
+                if self.dock.find_tab(panel).is_some_and(|path| {
+                    let (s, n) = (path.surface, path.node);
                     target
                         .as_ref()
                         .is_some_and(|t| t.surface == s && t.node == n)
@@ -212,7 +218,7 @@ impl WorkspaceLayout {
                 egui::StrokeKind::Inside,
             );
         }
-        let bounds = ui.ctx().screen_rect().shrink(6.0);
+        let bounds = ui.ctx().content_rect().shrink(6.0);
         let width = (bounds.width() - 20.0).clamp(40.0, 220.0);
         let font = ui.style().text_styles[&egui::TextStyle::Button].clone();
         let title: String = app

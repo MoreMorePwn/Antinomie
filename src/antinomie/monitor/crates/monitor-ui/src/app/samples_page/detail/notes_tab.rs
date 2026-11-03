@@ -88,15 +88,15 @@ fn note_menu(response: &egui::Response, note: &Note, act: &mut Option<Act>) {
     response.context_menu(|ui| {
         if ui.button("Edit").clicked() {
             *act = Some(Act::Edit(note.id));
-            ui.close_menu();
+            ui.close();
         }
         if ui.button("Delete…").clicked() {
             ui.data_mut(|d| d.insert_temp(confirm_id(note), true));
-            ui.close_menu();
+            ui.close();
         }
         if ui.button("Copy text").clicked() {
             ui.ctx().copy_text(note.text.clone());
-            ui.close_menu();
+            ui.close();
         }
     });
 }

@@ -13,7 +13,7 @@ impl SamplesView {
             .resizable(false)
             .default_width(620.0)
             .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.screen_rect().center())
+            .default_pos(ctx.content_rect().center())
             .open(&mut open)
             .show(ctx, |ui| {
                 // The text scrolls on a short screen or at a large text size;

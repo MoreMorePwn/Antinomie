@@ -61,12 +61,13 @@ impl MonitorApp {
         }
     }
 
-    pub(super) fn menus(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("menus")
-            .exact_height(self.settings.font_size + 16.0)
+    pub(super) fn menus(&mut self, root: &mut egui::Ui) {
+        let ctx = &root.ctx().clone();
+        egui::Panel::top("menus")
+            .exact_size(self.settings.font_size + 16.0)
             .frame(theme::frame(theme::panel()))
-            .show(ctx, |ui| {
-                egui::menu::bar(ui, |ui| {
+            .show(root, |ui| {
+                egui::MenuBar::new().ui(ui, |ui| {
                     ui.menu_button("File", |ui| {
                         // Room between an item and its shortcut.
                         ui.set_min_width(ui.spacing().menu_width);
@@ -220,11 +221,12 @@ impl MonitorApp {
     /// others move into the "more" menu at the end of the row. The selected
     /// VM's name and state take what is left of the row and cut the name with
     /// an ellipsis (the whole text is on hover).
-    pub(super) fn toolbar(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("toolbar")
-            .exact_height(self.settings.font_size + 22.0)
+    pub(super) fn toolbar(&mut self, root: &mut egui::Ui) {
+        let ctx = &root.ctx().clone();
+        egui::Panel::top("toolbar")
+            .exact_size(self.settings.font_size + 22.0)
             .frame(theme::frame(theme::panel()))
-            .show(ctx, |ui| {
+            .show(root, |ui| {
                 let specs = self.tool_specs(ctx);
                 let shown = tool_layout(ui, &specs);
                 let hidden: Vec<usize> =
@@ -257,7 +259,7 @@ impl MonitorApp {
                                     .clicked()
                                 {
                                     chosen = Some(spec.action);
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                             }
                         })
@@ -470,7 +472,7 @@ fn tool_layout(ui: &egui::Ui, specs: &[ToolSpec]) -> Vec<usize> {
     let width_of = |spec: &ToolSpec| -> f32 {
         // As `tool_button` lays it out: the icon, 6 px, the label.
         let measure = |text: &str| {
-            ui.fonts(|fonts| {
+            ui.fonts_mut(|fonts| {
                 fonts
                     .layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::WHITE)
                     .size()

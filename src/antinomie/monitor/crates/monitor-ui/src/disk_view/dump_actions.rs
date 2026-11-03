@@ -395,7 +395,7 @@ impl DiskView {
             .resizable(false)
             .open(&mut open)
             .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.screen_rect().center())
+            .default_pos(ctx.content_rect().center())
             .show(ctx, |ui| {
                 ui.add(
                     egui::Label::new(

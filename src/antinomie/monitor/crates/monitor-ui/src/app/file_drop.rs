@@ -96,7 +96,7 @@ impl MonitorApp {
                 .raw
                 .dropped_files
                 .iter()
-                .map(|file| file.path.clone())
+                .map(|file| Some(file.path().to_path_buf()))
                 .collect::<Vec<_>>()
         });
         if dropped.is_empty() {
@@ -180,18 +180,18 @@ impl MonitorApp {
             egui::Order::Foreground,
             egui::Id::new("file_drop_overlay"),
         ));
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         painter.rect_filled(screen, 0.0, theme::bg().gamma_multiply(0.82));
         let wrap = (screen.width() - 96.0).clamp(160.0, 560.0);
         let title_galley = painter.layout(
             title,
-            egui::TextStyle::Heading.resolve(&ctx.style()),
+            egui::TextStyle::Heading.resolve(&ctx.global_style()),
             title_color,
             wrap,
         );
         let detail_galley = painter.layout(
             detail.to_owned(),
-            egui::TextStyle::Body.resolve(&ctx.style()),
+            egui::TextStyle::Body.resolve(&ctx.global_style()),
             theme::text(),
             wrap,
         );

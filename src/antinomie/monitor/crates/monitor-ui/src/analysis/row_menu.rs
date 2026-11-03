@@ -155,23 +155,23 @@ pub(super) fn menu(
     for (title, value) in cells {
         if ui.button(copy_label(title)).clicked() {
             ui.ctx().copy_text(value.clone());
-            ui.close_menu();
+            ui.close();
         }
     }
     if ui.button("Copy row").clicked() {
         let row: Vec<_> = cells.iter().map(|(_, value)| value.as_str()).collect();
         ui.ctx().copy_text(row.join("\t"));
-        ui.close_menu();
+        ui.close();
     }
     ui.separator();
     if ui.button("Show details…").clicked() {
         command = Some(RowCommand::Details(entry.clone()));
-        ui.close_menu();
+        ui.close();
     }
     if let Some(range) = records::file_range(entry, specimen_len) {
         if ui.button("Show bytes…").clicked() {
             command = Some(RowCommand::Bytes(entry.clone(), range));
-            ui.close_menu();
+            ui.close();
         }
     }
     if let Some(offset) = records::file_offset(entry, specimen_len).filter(|_| content) {
@@ -181,7 +181,7 @@ pub(super) fn menu(
             .clicked()
         {
             command = Some(RowCommand::ShowInContent(offset));
-            ui.close_menu();
+            ui.close();
         }
     }
     ui.separator();
@@ -223,7 +223,7 @@ impl RowWindows {
         idle: bool,
     ) -> Option<ReportAction> {
         let salt = (scope.0, scope.1.map(AnalysisKind::label));
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let mut action = None;
         if let Some(entry) = &self.details {
             let mut open = true;

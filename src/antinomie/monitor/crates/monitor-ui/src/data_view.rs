@@ -356,7 +356,7 @@ pub(crate) fn copy_items(ui: &mut egui::Ui, items: &[(String, String)]) {
             .clicked()
         {
             ui.ctx().copy_text(value.clone());
-            ui.close_menu();
+            ui.close();
         }
     }
 }
@@ -720,7 +720,7 @@ impl DataWindow {
                     {
                         let text = format_segments(format, &self.segments);
                         ui.ctx().copy_text(text);
-                        ui.close_menu();
+                        ui.close();
                     }
                 }
             });
