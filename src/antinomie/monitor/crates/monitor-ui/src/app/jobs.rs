@@ -58,11 +58,19 @@ impl MonitorApp {
     }
 
     fn collect_jobs(&self) -> Vec<Job> {
-        let snapshot = &self.snapshot;
         let mut jobs = Vec::new();
+        self.run_jobs(&mut jobs);
+        self.vm_jobs(&mut jobs);
+        self.dump_jobs(&mut jobs);
+        self.analysis_jobs(&mut jobs);
+        self.install_jobs(&mut jobs);
+        self.window_jobs(&mut jobs);
+        jobs
+    }
 
-        // Programs running in the guest, and runs still recording after the
-        // root exited.
+    /// Programs running in the guest, and runs still recording after the root exited.
+    fn run_jobs(&self, jobs: &mut Vec<Job>) {
+        let snapshot = &self.snapshot;
         for run in &snapshot.runs {
             let live = run.state.is_live()
                 || (run.state == RunState::Unknown && run.root_task_cookie == 0);
@@ -114,8 +122,11 @@ impl MonitorApp {
             }
             jobs.push(job);
         }
+    }
 
-        // The VM starting or stopping.
+    /// The VM starting or stopping, its snapshot, disk layout and recordings being saved.
+    fn vm_jobs(&self, jobs: &mut Vec<Job>) {
+        let snapshot = &self.snapshot;
         let active_name = snapshot
             .active_vm
             .as_deref()
@@ -165,8 +176,11 @@ impl MonitorApp {
                     .open(Panel::RunHistory),
             );
         }
+    }
 
-        // Memory dump and process cores.
+    /// Memory dump and process cores.
+    fn dump_jobs(&self, jobs: &mut Vec<Job>) {
+        let snapshot = &self.snapshot;
         if let Some(dump) = &snapshot.memory_dump {
             jobs.push(
                 Job::new("memory-dump", "Memory dump", dump.dump.vm_name.clone())
@@ -213,8 +227,11 @@ impl MonitorApp {
                     .open(Panel::CoreDump),
             );
         }
+    }
 
-        // Static analysis checks of every report still being made.
+    /// Static analysis checks of every report still being made.
+    fn analysis_jobs(&self, jobs: &mut Vec<Job>) {
+        let snapshot = &self.snapshot;
         let mut seen = BTreeSet::new();
         for report in snapshot
             .runs
@@ -266,8 +283,11 @@ impl MonitorApp {
                 .open(Panel::StaticAnalysis),
             );
         }
+    }
 
-        // Downloads, installs, builds.
+    /// Downloads, installs, builds and disk jobs.
+    fn install_jobs(&self, jobs: &mut Vec<Job>) {
+        let snapshot = &self.snapshot;
         if let Some(download) = snapshot.download.as_ref().filter(|d| !d.finished) {
             let state = if download.installing {
                 "Installing".to_owned()
@@ -343,8 +363,10 @@ impl MonitorApp {
             };
             jobs.push(job);
         }
+    }
 
-        // Work the windows own.
+    /// Work the windows own.
+    fn window_jobs(&self, jobs: &mut Vec<Job>) {
         if let Some((kind, label)) = self.evidence_jobs.running() {
             jobs.push(
                 Job::new("evidence", kind, label)
@@ -371,7 +393,6 @@ impl MonitorApp {
                     .flag(Some(cancel)),
             );
         }
-        jobs
     }
 
     /// How a job that is gone ended.
