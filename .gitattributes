@@ -6,3 +6,4 @@ src/antinomie/monitor/crates/monitor-core/assets/rules/*.yar linguist-vendored
 
 # Preserve upstream license text byte-for-byte, including its trailing blank lines.
 LICENSES/third-party/cargo-upstream/**/LICENSE* -whitespace
+scripts/full-pack/licenses/*/LICENSE* -whitespace
