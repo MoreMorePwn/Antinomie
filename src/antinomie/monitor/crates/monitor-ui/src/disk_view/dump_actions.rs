@@ -345,7 +345,7 @@ impl DiskView {
     }
 
     /// Open the Import image… dialog.
-    pub(super) fn open_import(&mut self) {
+    pub(crate) fn open_import(&mut self) {
         if self.import.is_none() {
             self.import = Some(Import {
                 path: String::new(),

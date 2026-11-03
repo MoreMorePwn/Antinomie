@@ -171,6 +171,19 @@ impl Model {
             .filter(|group| group.engine == self.engine && !group.deleted)
     }
 
+    /// Open on the engine tab `engine` ("yara", "ids", "sigma", "regex" or
+    /// "ioc"), on its Catalog list when `catalog` and the engine has one.
+    pub(crate) fn show_engine(&mut self, engine: &str, catalog: bool) {
+        self.engine = engine.into();
+        self.tab = if catalog {
+            Tab::Catalog
+        } else {
+            Tab::Installed
+        };
+        self.select_none();
+        self.ioc.stale = true;
+    }
+
     /// Forget the selected pack or group and the rules listed for it.
     fn select_none(&mut self) {
         self.pack_id.clear();

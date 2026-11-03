@@ -36,6 +36,12 @@ pub(super) struct Shown {
 }
 
 impl CoreView {
+    /// Open the Import core… window (the palette and the button).
+    pub(crate) fn open_import_window(&mut self) {
+        self.import_open = true;
+        self.status.clear();
+    }
+
     /// The title row, the capture and import buttons and the cancel buttons.
     pub(super) fn list_actions(
         &mut self,
@@ -94,8 +100,7 @@ impl CoreView {
             )
             .clicked()
         {
-            self.import_open = true;
-            self.status.clear();
+            self.open_import_window();
         }
         action
     }

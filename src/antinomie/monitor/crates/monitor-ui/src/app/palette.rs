@@ -169,13 +169,23 @@ impl MonitorApp {
                 haystack: format!("{} run {machine} {}", run.request.path, run.id),
             });
         }
-        for action in Action::PALETTE {
+        // A view whose tab was closed is still one action away.
+        let open = self.layout.all_tabs();
+        let closed = Panel::MAIN
+            .into_iter()
+            .chain([Panel::Details, Panel::Activity, Panel::Jobs])
+            .filter(|panel| !open.contains(panel));
+        let actions = Action::PALETTE
+            .into_iter()
+            .chain(closed.map(Action::Go))
+            .chain(Action::palette_pages());
+        for action in actions {
             let label = action.label(self);
             let kind = action.group().to_owned();
             items.push(Item {
                 detail: self.shortcut_text(ctx, &action).unwrap_or_default(),
                 unavailable: self.action_unavailable(&action),
-                haystack: format!("{kind} {label}"),
+                haystack: format!("{kind} {label} {}", action.keywords()),
                 label,
                 kind,
                 target: Target::Action(action),
@@ -337,7 +347,7 @@ impl MonitorApp {
                         .id(egui::Id::new("command_palette_query"))
                         .hint_text(crate::theme::placeholder(
                             ui,
-                            "Type a command, tab, machine, run or sample",
+                            "Type a command, window, page, tab, machine, run or sample",
                         ))
                         .margin(theme::TEXT_EDIT_MARGIN)
                         .desired_width(f32::INFINITY),

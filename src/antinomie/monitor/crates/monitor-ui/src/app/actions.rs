@@ -56,6 +56,29 @@ pub(super) enum Action {
     CheckUpdates,
     Palette,
     Shortcuts,
+    /// Settings, opened on one page.
+    SettingsTo(settings_window::SettingsPage),
+    /// The Base images page of the Library.
+    BaseImages,
+    /// The Samples page of the Library.
+    SamplesPage,
+    /// The Samples page with its Add file window.
+    AddSampleFile,
+    /// The Detection rules page on one engine tab ("yara", "ids", "sigma",
+    /// "regex" or "ioc"), on its Catalog list when `true`.
+    RulesEngine(&'static str, bool),
+    /// Getting started, opened on one step.
+    GettingStartedStep(crate::getting_started::Step),
+    /// The Memory tab's Import dump window.
+    ImportMemoryDump,
+    /// The Memory tab's community Plugin catalog window.
+    PluginCatalog,
+    /// The Disks tab's Import image window.
+    ImportDiskImage,
+    /// The Core dumps tab's Import core window.
+    ImportCore,
+    /// Choose the host folder the sidebar's Explorer shows.
+    ExplorerFolder,
 }
 
 const DOCUMENTATION_URL: &str = "https://antinomie.moremorepwn.blog/docs/";
@@ -109,6 +132,107 @@ impl Action {
         Self::Shortcuts,
     ];
 
+    /// The entries the palette adds to the menus' own: the windows, pages and
+    /// steps that only a button inside a page opens.
+    pub(super) fn palette_pages() -> Vec<Self> {
+        use crate::getting_started::Step;
+        let mut actions: Vec<Self> = settings_window::SettingsPage::ALL
+            .into_iter()
+            .map(Self::SettingsTo)
+            .collect();
+        actions.extend([Self::BaseImages, Self::SamplesPage, Self::AddSampleFile]);
+        for engine in ["yara", "ids", "sigma"] {
+            actions.push(Self::RulesEngine(engine, false));
+            actions.push(Self::RulesEngine(engine, true));
+        }
+        actions.extend([
+            Self::RulesEngine("regex", false),
+            Self::RulesEngine("ioc", false),
+        ]);
+        actions.extend(
+            Step::ALL
+                .into_iter()
+                .filter(|step| *step != Step::Appearance)
+                .map(Self::GettingStartedStep),
+        );
+        actions.extend([
+            Self::ImportMemoryDump,
+            Self::PluginCatalog,
+            Self::ImportDiskImage,
+            Self::ImportCore,
+            Self::ExplorerFolder,
+        ]);
+        actions
+    }
+
+    /// Other words that find the action in the palette.
+    pub(super) fn keywords(&self) -> &'static str {
+        match self {
+            Self::NewVm => "create machine virtual",
+            Self::ImportBase => "add base image file",
+            Self::DownloadBase => "add base image catalog get",
+            Self::BuildBase => "add base image create make",
+            Self::Quit => "close exit leave",
+            Self::ConfigureVm => "settings hardware cpu memory network disk",
+            Self::Snapshots => "restore checkpoint save state",
+            Self::UploadFile => "send copy file guest",
+            Self::AttachProcess => "pid running process",
+            Self::AttachDebugger => "gdb breakpoint step",
+            Self::DumpMemory => "ram volatility",
+            Self::DumpCore => "process core gcore",
+            Self::Go(Panel::Jobs) => "running finished background tasks window",
+            Self::Go(Panel::Activity) => "log messages notifications",
+            Self::Settings => "preferences options configuration",
+            Self::AnalysisTools => "install static tools library",
+            Self::DetectionRules => "yara suricata sigma ids packs library",
+            Self::MalwareSamples => "bazaar malshare download fetch",
+            Self::ApiKeys => "abuse.ch malshare token credentials",
+            Self::Dependencies => "packages requirements qemu tshark install",
+            Self::UiPerformance => "fps frame time speed profiler",
+            Self::GettingStarted | Self::GettingStartedAppearance => "welcome tour setup wizard",
+            Self::GettingStartedStep(_) => "welcome tour setup wizard step",
+            Self::About => "version licence license",
+            Self::FilterGuide => "query search syntax help",
+            Self::CheckUpdates => "upgrade new version release",
+            Self::Palette => "search find commands",
+            Self::Shortcuts => "keys keyboard hotkeys help",
+            Self::SettingsTo(page) => match page {
+                settings_window::SettingsPage::Appearance => {
+                    "theme dark light font size text zoom colour color time zone"
+                }
+                settings_window::SettingsPage::Recording => "capture save folder retention",
+                settings_window::SettingsPage::Detection => "yara ids sigma scan triage",
+                settings_window::SettingsPage::Notifications => "toast sound alert",
+                settings_window::SettingsPage::NetworkLookup => {
+                    "whois dns reverse geoip virustotal address ip outbound"
+                }
+                settings_window::SettingsPage::NetworkRoutes => {
+                    "proxy tor vpn internet gateway sinkhole"
+                }
+                settings_window::SettingsPage::AnalysisTools => "ghidra capa floss tools paths",
+                settings_window::SettingsPage::Disks => "ext4 image partition dump",
+                settings_window::SettingsPage::Advanced => "rows page limit developer",
+            },
+            Self::BaseImages => "library bases guest images",
+            Self::SamplesPage => "library malware files hashes tags",
+            Self::AddSampleFile => "samples library import hash add",
+            Self::RulesEngine("yara", _) => "rules packs library scan",
+            Self::RulesEngine("ids", _) => "suricata network rules packs library abuse.ch",
+            Self::RulesEngine("sigma", _) => "log rules packs library",
+            Self::RulesEngine("regex", _) => "strings patterns",
+            Self::RulesEngine("ioc", _) => {
+                "indicators abuse.ch urlhaus threatfox feodo download datasets"
+            }
+            Self::RulesEngine(..) => "rules",
+            Self::ImportMemoryDump => "ram volatility open analyse",
+            Self::PluginCatalog => "volatility community download memory",
+            Self::ImportDiskImage => "ext4 qcow2 raw open analyse",
+            Self::ImportCore => "process core elf open analyse",
+            Self::ExplorerFolder => "sidebar host files browse",
+            _ => "",
+        }
+    }
+
     /// The menu the action lives in.
     pub(super) fn group(&self) -> &'static str {
         match self {
@@ -137,6 +261,13 @@ impl Action {
             | Self::DumpMemory
             | Self::DumpCore => "Run",
             Self::Go(_) | Self::ResetLayout => "View",
+            Self::SettingsTo(_) => "Settings",
+            Self::BaseImages | Self::SamplesPage | Self::AddSampleFile => "Library",
+            Self::RulesEngine(..) => "Rules",
+            Self::ImportMemoryDump | Self::PluginCatalog => "Memory",
+            Self::ImportDiskImage => "Disks",
+            Self::ImportCore => "Core dumps",
+            Self::ExplorerFolder => "Explorer",
             Self::Settings
             | Self::AnalysisTools
             | Self::DetectionRules
@@ -147,6 +278,7 @@ impl Action {
             | Self::RecorderStats => "Tools",
             Self::GettingStarted
             | Self::GettingStartedAppearance
+            | Self::GettingStartedStep(_)
             | Self::About
             | Self::FilterGuide
             | Self::Documentation
@@ -228,6 +360,30 @@ impl Action {
             Self::CheckUpdates => "Check for updates…".into(),
             Self::Palette => "Command palette".into(),
             Self::Shortcuts => "Keyboard shortcuts".into(),
+            Self::SettingsTo(page) => format!("Settings: {}", page.label()),
+            Self::BaseImages => "Base images".into(),
+            Self::SamplesPage => "Samples".into(),
+            Self::AddSampleFile => "Add file to Samples…".into(),
+            Self::RulesEngine(engine, catalog) => {
+                let name = match *engine {
+                    "yara" => "YARA rules",
+                    "ids" => "IDS rules",
+                    "sigma" => "Sigma rules",
+                    "regex" => "Strings regex rules",
+                    _ => "IOC datasets and downloads",
+                };
+                if *catalog {
+                    format!("{name}: download catalog")
+                } else {
+                    name.into()
+                }
+            }
+            Self::GettingStartedStep(step) => format!("Getting started: {}", step.title()),
+            Self::ImportMemoryDump => "Import memory dump…".into(),
+            Self::PluginCatalog => "Memory plugin catalog…".into(),
+            Self::ImportDiskImage => "Import disk image…".into(),
+            Self::ImportCore => "Import process core…".into(),
+            Self::ExplorerFolder => "Choose Explorer folder…".into(),
         }
     }
 
@@ -384,6 +540,20 @@ impl MonitorApp {
             }
             Action::DumpCore => self.manual_core_unavailable().map(str::to_owned),
             Action::RecorderStats => reason(self.running(), &self.not_running_reason()),
+            Action::ImportMemoryDump
+            | Action::PluginCatalog
+            | Action::ImportDiskImage
+            | Action::ImportCore => {
+                if matches!(action, Action::PluginCatalog) {
+                    None
+                } else {
+                    reason(self.selected.is_some(), "Select a VM first.")
+                }
+            }
+            Action::ExplorerFolder => reason(
+                self.folder_picker.available(),
+                "Install Zenity to choose a folder.",
+            ),
             Action::Go(_)
             | Action::Quit
             | Action::DownloadBase
@@ -403,7 +573,13 @@ impl MonitorApp {
             | Action::Documentation
             | Action::CheckUpdates
             | Action::Palette
-            | Action::Shortcuts => None,
+            | Action::Shortcuts
+            | Action::SettingsTo(_)
+            | Action::BaseImages
+            | Action::SamplesPage
+            | Action::AddSampleFile
+            | Action::RulesEngine(..)
+            | Action::GettingStartedStep(_) => None,
         }
     }
 
@@ -515,6 +691,45 @@ impl MonitorApp {
             }
             Action::Palette => self.shortcut_ui.open_palette(),
             Action::Shortcuts => self.shortcut_ui.list_open = true,
+            Action::SettingsTo(page) => self.open_settings_page(page.label()),
+            Action::BaseImages => self.open_library(LibraryPage::BaseImages),
+            Action::SamplesPage => self.open_library(LibraryPage::Samples),
+            Action::AddSampleFile => {
+                self.open_library(LibraryPage::Samples);
+                self.samples_page.open_add(None);
+            }
+            Action::RulesEngine(engine, catalog) => {
+                self.rules_ui.show_engine(engine, catalog);
+                self.open_library(LibraryPage::Rules);
+            }
+            Action::GettingStartedStep(step) => {
+                self.open_getting_started();
+                self.getting_started.step = step;
+            }
+            Action::ImportMemoryDump => {
+                self.memory_view.open_import();
+                self.focus_panel = Some(Panel::Memory);
+            }
+            Action::PluginCatalog => {
+                self.memory_view.open_plugin_catalog();
+                self.focus_panel = Some(Panel::Memory);
+            }
+            Action::ImportDiskImage => {
+                self.disk_view.open_import();
+                self.focus_panel = Some(Panel::Disks);
+            }
+            Action::ImportCore => {
+                self.core_view.open_import_window();
+                self.focus_panel = Some(Panel::CoreDump);
+            }
+            Action::ExplorerFolder => {
+                if let Err(error) = self.folder_picker.choose(FolderTarget {
+                    generation: self.explorer_browser.generation,
+                    kind: FolderKind::ExplorerRoot,
+                }) {
+                    self.report_error(format!("Explorer folder: {error}"));
+                }
+            }
         }
     }
 

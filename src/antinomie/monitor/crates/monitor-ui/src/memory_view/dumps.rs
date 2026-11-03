@@ -3,6 +3,24 @@
 use super::*;
 
 impl MemoryView {
+    /// Open the Import dump… window (the palette and the button).
+    pub(crate) fn open_import(&mut self) {
+        if self.import.is_none() {
+            self.import = Some(Import {
+                path: String::new(),
+                os: Os::Linux,
+                base: None,
+                picker: None,
+                error: None,
+            });
+        }
+    }
+
+    /// Open the community Plugin catalog window.
+    pub(crate) fn open_plugin_catalog(&mut self) {
+        self.catalog_open = true;
+    }
+
     pub(crate) fn open_dump(&mut self, directory: &std::path::Path) {
         self.select(
             directory
@@ -169,15 +187,8 @@ impl MemoryView {
             )
             .on_disabled_hover_text("Select a VM: imported dumps are kept with its recordings")
             .clicked()
-            && self.import.is_none()
         {
-            self.import = Some(Import {
-                path: String::new(),
-                os: Os::Linux,
-                base: None,
-                picker: None,
-                error: None,
-            });
+            self.open_import();
         }
         ui.add_space(2.0);
         if let Some(id) = self.note_target.take() {
