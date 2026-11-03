@@ -388,179 +388,10 @@ impl Worker {
         self.publish();
         loop {
             if self.closing.load(Ordering::Relaxed) {
-                self.end_debug();
-                self.cancel_queued_commands();
-                // Every transfer stops now; each removes what it had fetched
-                // before the app ends (below), so quitting changes nothing.
-                if let Some(job) = self.download.as_ref() {
-                    job.cancel.cancel();
-                }
-                if let Some(job) = self.build.as_ref() {
-                    job.cancel.cancel();
-                }
-                if let Some(job) = self.tool.as_ref() {
-                    job.cancel.cancel();
-                }
-                if let Some(job) = self.refresh.as_ref() {
-                    job.cancel.cancel();
-                }
-                self.finish_evidence_deletes();
-                let result = self.stop();
-                if let Err(e) = result {
-                    self.snapshot.last_error = Some(e);
-                }
-                self.shutdown_disks();
-                if let Some(job) = self.download.take()
-                    && job.thread.join().is_err()
-                {
-                    self.snapshot.last_error = Some("download worker panicked".into());
-                }
-                let patience = Duration::from_secs(5);
-                if let Some(job) = self.tool.take() {
-                    let _ = job.done.recv_timeout(patience);
-                }
-                if let Some(job) = self.refresh.take() {
-                    let _ = job.done.recv_timeout(patience);
-                }
-                if let Some(job) = self.build.take() {
-                    let _ = job.done.recv_timeout(patience);
-                }
-                self.publish();
-                self.finish_flush();
-                if let Err(error) = storage::flush_json() {
-                    self.snapshot.last_error = Some(format!("saving status files: {error}"));
-                    self.publish();
-                }
-                crate::writer::barrier();
-                crate::samples::settle_custody();
+                self.shut_down();
                 break;
             }
-            // While telemetry is flowing, take waiting commands without
-            // sleeping so the next drain pass follows at once.
-            self.serve_debug_requests();
-            // A debugger's round trips each wait for this loop: poll it closely.
-            let mut received = if self
-                .session
-                .as_ref()
-                .is_some_and(|session| session.telemetry_busy)
-            {
-                self.receiver.try_recv().map_err(|error| match error {
-                    mpsc::TryRecvError::Empty => mpsc::RecvTimeoutError::Timeout,
-                    mpsc::TryRecvError::Disconnected => mpsc::RecvTimeoutError::Disconnected,
-                })
-            } else if self.debug.is_busy()
-                || self.session.as_ref().is_some_and(|session| {
-                    session.core_transfer_active() || session.analysis.transferring()
-                })
-            {
-                // A debugger's, a core's or a specimen's round trips each wait for this loop.
-                self.receiver.recv_timeout(Duration::from_millis(1))
-            } else {
-                self.receiver.recv_timeout(Duration::from_millis(10))
-            };
-            // Handle every queued command (up to a bound), not one per pass: a
-            // busy guest makes each pass slow and the bounded queue would fill.
-            // Repeated terminal reads of one run in a batch are answered once.
-            let mut handled = 0;
-            let mut terminal_reads =
-                std::collections::BTreeMap::<String, Result<String, String>>::new();
-            let mut disconnected = false;
-            loop {
-                match received {
-                    Ok((id, epoch, command)) => {
-                        if self.closing.load(Ordering::Acquire) {
-                            self.cancel_command(id);
-                            self.cancel_queued_commands();
-                            handled += 1;
-                            break;
-                        }
-                        // The deletion runs on its own thread, which answers the
-                        // command when it is done; only a refusal answers here.
-                        if let Command::DeleteEvidence {
-                            vm_id,
-                            item,
-                            confirmed,
-                        } = command
-                        {
-                            if let Err(message) =
-                                self.start_evidence_delete(id, &vm_id, item, confirmed)
-                            {
-                                self.snapshot.last_error = Some(message.clone());
-                                self.emit(Notification::CommandResult {
-                                    id,
-                                    success: false,
-                                    message,
-                                });
-                            }
-                            handled += 1;
-                            if handled >= 64 {
-                                break;
-                            }
-                            received = self.receiver.try_recv().map_err(|error| match error {
-                                mpsc::TryRecvError::Empty => mpsc::RecvTimeoutError::Timeout,
-                                mpsc::TryRecvError::Disconnected => {
-                                    mpsc::RecvTimeoutError::Disconnected
-                                }
-                            });
-                            continue;
-                        }
-                        let quiet = matches!(
-                            command,
-                            Command::TerminalRead { .. }
-                                | Command::TerminalResize { .. }
-                                | Command::DebugUi(_)
-                        );
-                        let terminal_read_run = match &command {
-                            Command::TerminalRead { run_id } => Some(run_id.clone()),
-                            _ => None,
-                        };
-                        let repeated = terminal_read_run
-                            .as_ref()
-                            .and_then(|run_id| terminal_reads.get(run_id).cloned());
-                        let result = if let Some(repeated) = repeated {
-                            repeated
-                        } else {
-                            let result = self.command_at_epoch(epoch, command);
-                            if let Some(run_id) = terminal_read_run {
-                                terminal_reads.insert(run_id, result.clone());
-                            }
-                            result
-                        };
-                        let success = result.is_ok();
-                        let message = result.unwrap_or_else(|e| e);
-                        if success {
-                            self.snapshot.last_error = None;
-                        } else {
-                            self.snapshot.last_error = Some(message.clone());
-                        }
-                        if quiet && success {
-                            self.release_completion_credit();
-                        } else {
-                            self.emit(Notification::CommandResult {
-                                id,
-                                success,
-                                message,
-                            });
-                        }
-                        handled += 1;
-                    }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        disconnected = true;
-                        break;
-                    }
-                    Err(mpsc::RecvTimeoutError::Timeout) => break,
-                }
-                if handled >= 64 {
-                    break;
-                }
-                received = self.receiver.try_recv().map_err(|error| match error {
-                    mpsc::TryRecvError::Empty => mpsc::RecvTimeoutError::Timeout,
-                    mpsc::TryRecvError::Disconnected => mpsc::RecvTimeoutError::Disconnected,
-                });
-            }
-            if handled > 0 {
-                self.publish();
-            }
+            let disconnected = self.handle_commands();
             if self.session.is_none() && self.debug.is_active() {
                 self.end_debug();
             }
@@ -574,190 +405,401 @@ impl Worker {
                 self.closing.store(true, Ordering::Relaxed);
                 continue;
             }
-            let mut exited = false;
-            let mut notice = None;
-            if let Some(session) = self.session.as_mut() {
-                match session.process.child.try_wait() {
-                    Ok(Some(status)) => {
-                        exited = true;
-                        if !status.success() {
-                            self.snapshot.last_error = Some(format!(
-                                "QEMU exited {status}; log {}",
-                                session.process.runtime_dir.join("qemu.log").display()
-                            ));
-                        }
-                    }
-                    // Waiting to reconnect: the transport would only fail again.
-                    Ok(None) if self.reconnect.1.is_some() => {}
-                    Ok(None) => {
-                        if let Err(e) = session.pump(&mut self.snapshot, &self.sender) {
-                            if stalled(&e) && self.reconnect.0 < RECONNECT_ATTEMPTS {
-                                self.reconnect.1 = Some(Instant::now());
-                                notice = Some(format!(
-                                    "The guest stopped answering ({e}); reconnecting telemetry…"
-                                ));
-                            } else {
-                                self.snapshot.last_error = Some(e);
-                                self.snapshot.state = VmState::Failed;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        self.snapshot.last_error = Some(e.to_string());
-                        exited = true;
-                    }
-                }
-            }
+            let exited = self.watch_session();
+            self.query_session(exited);
             if exited {
-                // The boot is over; its reconnection attempts end with it.
-                self.reconnect = (0, None);
+                self.end_exited_session();
             }
-            if !exited
-                && self.session.is_some()
-                && self.reconnect.1.is_some_and(|at| Instant::now() >= at)
-            {
-                match self.reconnect_transport() {
-                    Ok(message) => {
-                        notice = Some(format!("The guest answers again. {message}"));
-                        self.snapshot.last_error = None;
-                        self.reconnect = (0, None);
+            self.read_terminals();
+            self.poll_keyboard();
+            self.poll_background();
+        }
+    }
+
+    /// The app is closing: stop every transfer, the VM and the disks, and settle what is on disk.
+    fn shut_down(&mut self) {
+        self.end_debug();
+        self.cancel_queued_commands();
+        // Every transfer stops now; each removes what it had fetched
+        // before the app ends (below), so quitting changes nothing.
+        if let Some(job) = self.download.as_ref() {
+            job.cancel.cancel();
+        }
+        if let Some(job) = self.build.as_ref() {
+            job.cancel.cancel();
+        }
+        if let Some(job) = self.tool.as_ref() {
+            job.cancel.cancel();
+        }
+        if let Some(job) = self.refresh.as_ref() {
+            job.cancel.cancel();
+        }
+        self.finish_evidence_deletes();
+        let result = self.stop();
+        if let Err(e) = result {
+            self.snapshot.last_error = Some(e);
+        }
+        self.shutdown_disks();
+        if let Some(job) = self.download.take()
+            && job.thread.join().is_err()
+        {
+            self.snapshot.last_error = Some("download worker panicked".into());
+        }
+        let patience = Duration::from_secs(5);
+        if let Some(job) = self.tool.take() {
+            let _ = job.done.recv_timeout(patience);
+        }
+        if let Some(job) = self.refresh.take() {
+            let _ = job.done.recv_timeout(patience);
+        }
+        if let Some(job) = self.build.take() {
+            let _ = job.done.recv_timeout(patience);
+        }
+        self.publish();
+        self.finish_flush();
+        if let Err(error) = storage::flush_json() {
+            self.snapshot.last_error = Some(format!("saving status files: {error}"));
+            self.publish();
+        }
+        crate::writer::barrier();
+        crate::samples::settle_custody();
+    }
+
+    /// Serve the commands that are waiting (up to a bound); whether the sender is gone.
+    fn handle_commands(&mut self) -> bool {
+        // While telemetry is flowing, take waiting commands without
+        // sleeping so the next drain pass follows at once.
+        self.serve_debug_requests();
+        // A debugger's round trips each wait for this loop: poll it closely.
+        let mut received = if self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.telemetry_busy)
+        {
+            self.receiver.try_recv().map_err(|error| match error {
+                mpsc::TryRecvError::Empty => mpsc::RecvTimeoutError::Timeout,
+                mpsc::TryRecvError::Disconnected => mpsc::RecvTimeoutError::Disconnected,
+            })
+        } else if self.debug.is_busy()
+            || self.session.as_ref().is_some_and(|session| {
+                session.core_transfer_active() || session.analysis.transferring()
+            })
+        {
+            // A debugger's, a core's or a specimen's round trips each wait for this loop.
+            self.receiver.recv_timeout(Duration::from_millis(1))
+        } else {
+            self.receiver.recv_timeout(Duration::from_millis(10))
+        };
+        // Handle every queued command (up to a bound), not one per pass: a
+        // busy guest makes each pass slow and the bounded queue would fill.
+        // Repeated terminal reads of one run in a batch are answered once.
+        let mut handled = 0;
+        let mut terminal_reads =
+            std::collections::BTreeMap::<String, Result<String, String>>::new();
+        let mut disconnected = false;
+        loop {
+            match received {
+                Ok((id, epoch, command)) => {
+                    if self.closing.load(Ordering::Acquire) {
+                        self.cancel_command(id);
+                        self.cancel_queued_commands();
+                        handled += 1;
+                        break;
                     }
-                    Err(error) => {
-                        let attempts = self.reconnect.0 + 1;
-                        if attempts >= RECONNECT_ATTEMPTS || self.session.is_none() {
-                            self.snapshot.last_error = Some(format!(
-                                "the guest stopped answering and {attempts} reconnections \
-                                 failed: {error}"
+                    // The deletion runs on its own thread, which answers the
+                    // command when it is done; only a refusal answers here.
+                    if let Command::DeleteEvidence {
+                        vm_id,
+                        item,
+                        confirmed,
+                    } = command
+                    {
+                        if let Err(message) =
+                            self.start_evidence_delete(id, &vm_id, item, confirmed)
+                        {
+                            self.snapshot.last_error = Some(message.clone());
+                            self.emit(Notification::CommandResult {
+                                id,
+                                success: false,
+                                message,
+                            });
+                        }
+                        handled += 1;
+                        if handled >= 64 {
+                            break;
+                        }
+                        received = self.receiver.try_recv().map_err(|error| match error {
+                            mpsc::TryRecvError::Empty => mpsc::RecvTimeoutError::Timeout,
+                            mpsc::TryRecvError::Disconnected => {
+                                mpsc::RecvTimeoutError::Disconnected
+                            }
+                        });
+                        continue;
+                    }
+                    let quiet = matches!(
+                        command,
+                        Command::TerminalRead { .. }
+                            | Command::TerminalResize { .. }
+                            | Command::DebugUi(_)
+                    );
+                    let terminal_read_run = match &command {
+                        Command::TerminalRead { run_id } => Some(run_id.clone()),
+                        _ => None,
+                    };
+                    let repeated = terminal_read_run
+                        .as_ref()
+                        .and_then(|run_id| terminal_reads.get(run_id).cloned());
+                    let result = if let Some(repeated) = repeated {
+                        repeated
+                    } else {
+                        let result = self.command_at_epoch(epoch, command);
+                        if let Some(run_id) = terminal_read_run {
+                            terminal_reads.insert(run_id, result.clone());
+                        }
+                        result
+                    };
+                    let success = result.is_ok();
+                    let message = result.unwrap_or_else(|e| e);
+                    if success {
+                        self.snapshot.last_error = None;
+                    } else {
+                        self.snapshot.last_error = Some(message.clone());
+                    }
+                    if quiet && success {
+                        self.release_completion_credit();
+                    } else {
+                        self.emit(Notification::CommandResult {
+                            id,
+                            success,
+                            message,
+                        });
+                    }
+                    handled += 1;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => break,
+            }
+            if handled >= 64 {
+                break;
+            }
+            received = self.receiver.try_recv().map_err(|error| match error {
+                mpsc::TryRecvError::Empty => mpsc::RecvTimeoutError::Timeout,
+                mpsc::TryRecvError::Disconnected => mpsc::RecvTimeoutError::Disconnected,
+            });
+        }
+        if handled > 0 {
+            self.publish();
+        }
+        disconnected
+    }
+
+    /// Watch QEMU and the transport: whether the VM exited, and the reconnection of a stalled one.
+    fn watch_session(&mut self) -> bool {
+        let mut exited = false;
+        let mut notice = None;
+        if let Some(session) = self.session.as_mut() {
+            match session.process.child.try_wait() {
+                Ok(Some(status)) => {
+                    exited = true;
+                    if !status.success() {
+                        self.snapshot.last_error = Some(format!(
+                            "QEMU exited {status}; log {}",
+                            session.process.runtime_dir.join("qemu.log").display()
+                        ));
+                    }
+                }
+                // Waiting to reconnect: the transport would only fail again.
+                Ok(None) if self.reconnect.1.is_some() => {}
+                Ok(None) => {
+                    if let Err(e) = session.pump(&mut self.snapshot, &self.sender) {
+                        if stalled(&e) && self.reconnect.0 < RECONNECT_ATTEMPTS {
+                            self.reconnect.1 = Some(Instant::now());
+                            notice = Some(format!(
+                                "The guest stopped answering ({e}); reconnecting telemetry…"
                             ));
-                            self.snapshot.state = VmState::Failed;
-                            self.reconnect = (attempts, None);
                         } else {
-                            self.reconnect = (
-                                attempts,
-                                Some(Instant::now() + Duration::from_secs(1 << attempts)),
-                            );
+                            self.snapshot.last_error = Some(e);
+                            self.snapshot.state = VmState::Failed;
                         }
                     }
                 }
-                self.publish();
+                Err(e) => {
+                    self.snapshot.last_error = Some(e.to_string());
+                    exited = true;
+                }
             }
-            if let Some(message) = notice {
-                // Shown in the status line and the Activity log, like a
-                // command's result.
+        }
+        if exited {
+            // The boot is over; its reconnection attempts end with it.
+            self.reconnect = (0, None);
+        }
+        if !exited
+            && self.session.is_some()
+            && self.reconnect.1.is_some_and(|at| Instant::now() >= at)
+        {
+            match self.reconnect_transport() {
+                Ok(message) => {
+                    notice = Some(format!("The guest answers again. {message}"));
+                    self.snapshot.last_error = None;
+                    self.reconnect = (0, None);
+                }
+                Err(error) => {
+                    let attempts = self.reconnect.0 + 1;
+                    if attempts >= RECONNECT_ATTEMPTS || self.session.is_none() {
+                        self.snapshot.last_error = Some(format!(
+                            "the guest stopped answering and {attempts} reconnections \
+                             failed: {error}"
+                        ));
+                        self.snapshot.state = VmState::Failed;
+                        self.reconnect = (attempts, None);
+                    } else {
+                        self.reconnect = (
+                            attempts,
+                            Some(Instant::now() + Duration::from_secs(1 << attempts)),
+                        );
+                    }
+                }
+            }
+            self.publish();
+        }
+        if let Some(message) = notice {
+            // Shown in the status line and the Activity log, like a
+            // command's result.
+            self.emit(Notification::CommandResult {
+                id: 0,
+                success: true,
+                message,
+            });
+        }
+        exited
+    }
+
+    /// Ask a running guest for its run status, kernel facts and analysis progress.
+    fn query_session(&mut self, exited: bool) {
+        // While QEMU writes a memory dump the guest is paused: no guest
+        // requests until it runs again.
+        let paused = self.snapshot.memory_dump.is_some();
+        if let Some(session) = self.session.as_mut().filter(|_| !exited && !paused) {
+            if self.snapshot.state == VmState::Running {
+                session.poll_recorder_health(&mut self.snapshot);
+            }
+            if let Err(error) = session.query_run_status(&mut self.snapshot, &self.sender) {
+                self.snapshot.last_error = Some(error);
+            }
+            if let Err(error) = session.probe_kernel(&mut self.snapshot, &self.sender) {
+                self.snapshot.last_error = Some(format!("guest info: {error}"));
+            }
+            session.analysis_tick(&mut self.snapshot, &self.sender);
+        }
+    }
+
+    /// The VM exited by itself: seal its recording and return to the stopped state.
+    fn end_exited_session(&mut self) {
+        if let Some(mut session) = self.session.take() {
+            let steps = session.seal("unexpected-exit", &mut self.snapshot);
+            self.carry_analyses(&mut session);
+            self.submit_sealed_flush(session.boot_id.clone(), steps);
+            crate::snapshots::run_layer::ended(&session.vm.id);
+            crate::snapshots::run_layer::mark_due(&session.vm.id);
+        }
+        if let Err(e) = end_network_capture(&mut self.snapshot) {
+            self.snapshot.last_error = Some(e);
+        }
+        abandon_memory_dump(&mut self.snapshot);
+        self.snapshot.active_vm = None;
+        self.snapshot.accelerator = None;
+        self.snapshot.state = VmState::Stopped;
+        self.snapshot.vm_resources = None;
+        self.publish();
+    }
+
+    /// Read the terminal of one run that is still open, in turn.
+    fn read_terminals(&mut self) {
+        let paused = self.snapshot.memory_dump.is_some();
+        let automatic_read = self
+            .session
+            .as_mut()
+            .filter(|_| !paused)
+            .and_then(|session| {
+                let active: Vec<_> = session
+                    .runs
+                    .values()
+                    .filter(|run| !run.summary.terminal_eof)
+                    .map(|run| run.summary.id.clone())
+                    .collect();
+                if active.is_empty() {
+                    None
+                } else {
+                    let id = active[session.terminal_cursor % active.len()].clone();
+                    session.terminal_cursor = session.terminal_cursor.wrapping_add(1);
+                    Some(id)
+                }
+            });
+        if let Some(run_id) = automatic_read
+            && let Some(session) = self.session.as_mut()
+            && let Err(error) = session.read_terminal(
+                &run_id,
+                &mut self.snapshot,
+                &self.sender,
+                Duration::from_millis(100),
+            )
+        {
+            self.snapshot.last_error = Some(error);
+        }
+    }
+
+    /// Cancel or finish the keyboard typing job.
+    fn poll_keyboard(&mut self) {
+        if let Some(job) = &mut self.keyboard {
+            if self.snapshot.boot_id.as_ref() != Some(&job.boot_id)
+                || self.snapshot.state != VmState::Running
+            {
+                job.cancel();
+            }
+            if let Some(result) = job.poll() {
+                self.keyboard = None;
+                let success = result.is_ok();
+                let message = result.unwrap_or_else(|error| error);
+                if !success {
+                    self.snapshot.last_error = Some(message.clone());
+                }
                 self.emit(Notification::CommandResult {
                     id: 0,
-                    success: true,
+                    success,
                     message,
                 });
             }
-            // While QEMU writes a memory dump the guest is paused: no guest
-            // requests until it runs again.
-            let paused = self.snapshot.memory_dump.is_some();
-            if let Some(session) = self.session.as_mut().filter(|_| !exited && !paused) {
-                if self.snapshot.state == VmState::Running {
-                    session.poll_recorder_health(&mut self.snapshot);
-                }
-                if let Err(error) = session.query_run_status(&mut self.snapshot, &self.sender) {
-                    self.snapshot.last_error = Some(error);
-                }
-                if let Err(error) = session.probe_kernel(&mut self.snapshot, &self.sender) {
-                    self.snapshot.last_error = Some(format!("guest info: {error}"));
-                }
-                session.analysis_tick(&mut self.snapshot, &self.sender);
-            }
-            if exited {
-                if let Some(mut session) = self.session.take() {
-                    let steps = session.seal("unexpected-exit", &mut self.snapshot);
-                    self.carry_analyses(&mut session);
-                    self.submit_sealed_flush(session.boot_id.clone(), steps);
-                    crate::snapshots::run_layer::ended(&session.vm.id);
-                    crate::snapshots::run_layer::mark_due(&session.vm.id);
-                }
-                if let Err(e) = end_network_capture(&mut self.snapshot) {
-                    self.snapshot.last_error = Some(e);
-                }
-                abandon_memory_dump(&mut self.snapshot);
-                self.snapshot.active_vm = None;
-                self.snapshot.accelerator = None;
-                self.snapshot.state = VmState::Stopped;
-                self.snapshot.vm_resources = None;
-                self.publish();
-            }
-            let paused = self.snapshot.memory_dump.is_some();
-            let automatic_read = self
-                .session
-                .as_mut()
-                .filter(|_| !paused)
-                .and_then(|session| {
-                    let active: Vec<_> = session
-                        .runs
-                        .values()
-                        .filter(|run| !run.summary.terminal_eof)
-                        .map(|run| run.summary.id.clone())
-                        .collect();
-                    if active.is_empty() {
-                        None
-                    } else {
-                        let id = active[session.terminal_cursor % active.len()].clone();
-                        session.terminal_cursor = session.terminal_cursor.wrapping_add(1);
-                        Some(id)
-                    }
-                });
-            if let Some(run_id) = automatic_read
-                && let Some(session) = self.session.as_mut()
-                && let Err(error) = session.read_terminal(
-                    &run_id,
-                    &mut self.snapshot,
-                    &self.sender,
-                    Duration::from_millis(100),
-                )
-            {
-                self.snapshot.last_error = Some(error);
-            }
-            if let Some(job) = &mut self.keyboard {
-                if self.snapshot.boot_id.as_ref() != Some(&job.boot_id)
-                    || self.snapshot.state != VmState::Running
-                {
-                    job.cancel();
-                }
-                if let Some(result) = job.poll() {
-                    self.keyboard = None;
-                    let success = result.is_ok();
-                    let message = result.unwrap_or_else(|error| error);
-                    if !success {
-                        self.snapshot.last_error = Some(message.clone());
-                    }
-                    self.emit(Notification::CommandResult {
-                        id: 0,
-                        success,
-                        message,
-                    });
-                }
-            }
-            self.poll_remote();
-            self.poll_build();
-            self.poll_tool();
-            self.check_network_capture();
-            self.check_guest_resources();
-            self.check_resources();
-            self.check_process_cores();
-            self.check_manual_cores();
-            self.check_memory_dump();
-            self.poll_disk_job();
-            self.host_analysis_tick();
-            self.check_run_artifacts();
-            self.poll_flush();
-            self.poll_evidence_deletes();
-            if self.last_publish.elapsed() >= Duration::from_millis(250)
-                && (self.session.is_some()
-                    || self.refresh.is_some()
-                    || self.download.is_some()
-                    || self.build.is_some()
-                    || self.tool.is_some()
-                    || self.disk_job.is_some())
-            {
-                self.publish();
-            }
+        }
+    }
+
+    /// Poll the background jobs and publish the snapshot when it is due.
+    fn poll_background(&mut self) {
+        self.poll_remote();
+        self.poll_build();
+        self.poll_tool();
+        self.check_network_capture();
+        self.check_guest_resources();
+        self.check_resources();
+        self.check_process_cores();
+        self.check_manual_cores();
+        self.check_memory_dump();
+        self.poll_disk_job();
+        self.host_analysis_tick();
+        self.check_run_artifacts();
+        self.poll_flush();
+        self.poll_evidence_deletes();
+        if self.last_publish.elapsed() >= Duration::from_millis(250)
+            && (self.session.is_some()
+                || self.refresh.is_some()
+                || self.download.is_some()
+                || self.build.is_some()
+                || self.tool.is_some()
+                || self.disk_job.is_some())
+        {
+            self.publish();
         }
     }
 }
