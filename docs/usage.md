@@ -937,6 +937,57 @@ The sample **Download** window (**Tools > Download malware samples…**) keeps i
 size while it loads: the results area and the Downloaded list have fixed heights,
 the status is one line, and it scrolls inside when the screen is small.
 
+### Country and organization of addresses (GeoIP)
+
+**Tools > Settings > Network lookup** decides how the public destination
+addresses in the Network tabs get a Country and an Organization. **Address
+lookup** has three choices: **TShark GeoIP only** (the default), **dig and whois
+only**, and **TShark GeoIP, then dig and whois when unavailable**. Local addresses
+are never queried. Below it, **IP geolocation database (TShark)** is about the
+first choice: TShark fills Country and Organization only from MaxMind-format
+(`.mmdb`) databases and ignores the old `GeoIP.dat` files. Antinomie hands its
+own copy to its TShark runs only and never changes your Wireshark settings.
+
+**Database status.** While it looks, the page says "Looking for databases…". Then
+**Country / city** and **Organization (AS)** each show **Database found** or **No
+database**, followed by one line per database: its file name, where it came from
+("TShark's own folder", "Antinomie's DB-IP Lite copy" or "your folder") and its
+path. When something is missing, an amber warning says which column stays empty
+and how to fix it (install DB-IP Lite in Library > Analysis tools, or choose a
+folder in Settings > Network lookup).
+
+**Installing DB-IP Lite.** Under **DB-IP Lite (free, no account)** the page shows
+the same row as **Library > Analysis tools**, "IP geolocation (DB-IP Lite)", with
+an **Install <month> · <size>** button. The note under it reads: "Country and AS
+databases from db-ip.com, CC BY 4.0. By installing you accept that licence and the
+attribution it asks for. A cancelled download is kept and resumed when you install
+again." The button downloads the month's Country and ASN files from db-ip.com
+(checked against a hash pinned in Antinomie) and unpacks them into the data
+directory. When it is installed the row reads **DB-IP Lite  Installed by
+Antinomie (<month>)** with a **Remove** button ("Delete Antinomie's copy").
+
+**Monthly refresh.** DB-IP publishes one file per month. **Check for a newer
+month** makes two small requests to download.db-ip.com and downloads nothing; it
+is off, with a note, until **Settings > Detection > Allow outbound catalog and
+rule downloads** is on. With downloads allowed and a copy installed, the page asks
+once per session by itself. The answer is "Up to date: <month> is the newest
+month." or "DB-IP published <month>." with a **Download <month>** button. A newer
+month has no published signature, so it is fetched over HTTPS and its SHA-256 is
+recorded instead of checked against a pin (the row then says "newer month; its
+SHA-256 was recorded, not checked against a pin"). A progress bar shows
+"Downloading ... of about ...", "Recording SHA-256" and "Unpacking", with
+**Cancel**; a failed ask shows "Could not ask DB-IP: ...".
+
+**Your own GeoLite2 folder.** The text field (or the folder button, **Choose the
+folder**) names a folder with `GeoLite2-Country.mmdb` and `GeoLite2-ASN.mmdb`
+(GeoLite2 or GeoIP2, Country or City, and ASN). The files are read in place; the
+note says they need a MaxMind account to download, which Antinomie does not do. The
+**X** button (**Stop using this folder**) clears it.
+
+**Attribution.** DB-IP's licence (CC BY 4.0) asks for credit wherever the data
+appears, so the page ends with "IP geolocation by DB-IP" (linking db-ip.com) and
+"DB-IP Lite databases, CC BY 4.0" (linking the licence).
+
 ### Exported tables
 
 HTML and PDF exports never break a column title inside a word: a title wraps only
