@@ -136,6 +136,50 @@ impl MonitorApp {
         })
     }
 
+    /// The VMs being created or copied that are not saved yet.
+    fn pending_vm_rows(&self) -> Vec<&antinomie_monitor_core::VmWork> {
+        self.snapshot
+            .vm_work
+            .iter()
+            .filter(|work| !self.snapshot.vms.iter().any(|vm| vm.id == work.id))
+            .collect()
+    }
+
+    /// A VM that is still being made: marked Creating with the step it is in.
+    fn pending_vm_row(ui: &mut egui::Ui, work: &antinomie_monitor_core::VmWork) {
+        let copy = work.copy_of.is_some();
+        let word = if copy { "Copying…" } else { "Creating…" };
+        let elapsed = crate::time_format::duration_ms(
+            crate::time_format::now_ms().saturating_sub(work.started_ms),
+        );
+        let response = sidebar_row(
+            ui,
+            SidebarRow {
+                mark: (egui_phosphor::regular::CIRCLE_NOTCH, theme::warn()),
+                name: &work.name,
+                state: Some((word, theme::warn())),
+                details: vec![
+                    vec![(work.step.clone(), theme::text())],
+                    vec![(format!("{elapsed} so far; see Jobs"), theme::muted())],
+                ],
+                selected: false,
+            },
+        );
+        response.on_hover_ui(|ui| {
+            ui.label(RichText::new(&work.name).strong());
+            ui.label(match &work.copy_of {
+                Some(source) => format!("A copy of {source} is being made."),
+                None => "This VM is being created.".to_owned(),
+            });
+            ui.label(format!("Step: {}", work.step));
+            ui.weak(
+                "It becomes a normal entry when it is done; the Jobs window shows the progress.",
+            );
+        });
+        // The elapsed time moves while the row is on screen.
+        ui.ctx().request_repaint_after(Duration::from_secs(1));
+    }
+
     pub(super) fn sidebar(&mut self, root: &mut egui::Ui) {
         let ctx = &root.ctx().clone();
         self.note_last_runs();
@@ -175,7 +219,7 @@ impl MonitorApp {
                     ui,
                     SectionHeader {
                         title: "Virtual machines",
-                        count: self.snapshot.vms.len(),
+                        count: self.snapshot.vms.len() + self.pending_vm_rows().len(),
                         tooltip: "Virtual machines: click to fold",
                         action: "New VM",
                         enabled: stopped,
@@ -202,8 +246,11 @@ impl MonitorApp {
                         )
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
-                            if self.snapshot.vms.is_empty() {
+                            if self.snapshot.vms.is_empty() && self.pending_vm_rows().is_empty() {
                                 ui.label(RichText::new("No saved VMs").color(theme::muted()));
+                            }
+                            for work in self.pending_vm_rows() {
+                                Self::pending_vm_row(ui, work);
                             }
                             for vm in &self.snapshot.vms {
                                 let response = self.vm_row(ui, vm, now);

@@ -161,6 +161,17 @@ impl MonitorApp {
                     .state(progress.stage.clone()),
             );
         }
+        for work in &snapshot.vm_work {
+            let (kind, subject) = match &work.copy_of {
+                Some(source) => ("VM copy", format!("{source} as {}", work.name)),
+                None => ("VM creation", work.name.clone()),
+            };
+            jobs.push(
+                Job::new(format!("vm-work:{}", work.id), kind, subject)
+                    .started(Some(work.started_ms))
+                    .state(work.step.clone()),
+            );
+        }
         if let Some(layout) = &snapshot.base_layout {
             jobs.push(
                 Job::new("base-layout", "Base disk layout", layout.base.clone())
@@ -462,6 +473,24 @@ impl MonitorApp {
                     _ => (Outcome::Finished, "Core saved".into()),
                 },
                 None => (Outcome::Finished, String::new()),
+            };
+        }
+        if let Some(id) = key.strip_prefix("vm-work:") {
+            // Saved in the same snapshot that dropped the job, or it failed.
+            let saved = match id.strip_prefix("copy:") {
+                Some(name) => snapshot.vms.iter().any(|vm| vm.name == name),
+                None => snapshot.vms.iter().any(|vm| vm.id == id),
+            };
+            return if saved {
+                (Outcome::Finished, "The VM is ready".into())
+            } else {
+                (
+                    Outcome::Failed,
+                    snapshot
+                        .last_error
+                        .clone()
+                        .unwrap_or_else(|| "The VM was not created".into()),
+                )
             };
         }
         if let Some(id) = key.strip_prefix("plugin:") {

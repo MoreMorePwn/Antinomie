@@ -188,7 +188,11 @@ impl Worker {
                 crate::locations::boot_bundle(&self.options, source.base_identity.as_deref())?;
             storage::validate_boot_display(&source, &boot)?;
         }
+        // A copy's identity is made when it is saved; until then it is its name.
+        let id = format!("copy:{name}");
+        self.vm_step(&id, &name, Some(&source.name), "Copying the disk");
         let result = storage::duplicate_vm(&self.options, &source, name);
+        self.vm_work_end(&id);
         if result.is_err() {
             self.snapshot.vms = storage::load_vms(&self.options)?;
             self.refresh_locations()?;

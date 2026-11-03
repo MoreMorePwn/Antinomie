@@ -264,7 +264,41 @@ impl Worker {
         Ok(bundle)
     }
 
+    /// Show a VM being created or duplicated, at `step`, and publish it.
+    pub(super) fn vm_step(&mut self, id: &str, name: &str, copy_of: Option<&str>, step: &str) {
+        match self.snapshot.vm_work.iter_mut().find(|work| work.id == id) {
+            Some(work) => work.step = step.to_owned(),
+            None => self.snapshot.vm_work.push(VmWork {
+                id: id.to_owned(),
+                name: name.to_owned(),
+                copy_of: copy_of.map(str::to_owned),
+                step: step.to_owned(),
+                started_ms: unix_ms(),
+            }),
+        }
+        self.publish();
+    }
+
+    /// The work on `id` is over (the saved VM, or the error, is published with the command's result).
+    pub(super) fn vm_work_end(&mut self, id: &str) {
+        self.snapshot.vm_work.retain(|work| work.id != id);
+    }
+
     pub(super) fn create(
+        &mut self,
+        mut vm: VmConfig,
+        credentials: Option<GuestCredentials>,
+    ) -> Result<String, String> {
+        if vm.id.is_empty() {
+            vm.id = storage::vm_id(&vm.name);
+        }
+        let id = vm.id.clone();
+        let result = self.create_checked(vm, credentials);
+        self.vm_work_end(&id);
+        result
+    }
+
+    fn create_checked(
         &mut self,
         mut vm: VmConfig,
         credentials: Option<GuestCredentials>,
@@ -272,9 +306,8 @@ impl Worker {
         if self.session.is_some() || self.snapshot.active_vm.is_some() {
             return Err("stop VM before creating another VM".into());
         }
-        if vm.id.is_empty() {
-            vm.id = storage::vm_id(&vm.name);
-        }
+        let id = vm.id.clone();
+        let name = vm.name.clone();
         storage::validate_vm(&vm)?;
         vm.launch.validate_for(&self.options)?;
         if self.snapshot.vms.iter().any(|current| current.id == vm.id) {
@@ -299,6 +332,12 @@ impl Worker {
         // A UEFI profile on a base with a UEFI layout: the VM's disk is an
         // overlay of the base's UEFI disk (laid out now if this is the first).
         let bundle = if requires_credentials && crate::uefi_disk::wanted(&bundle, &vm.stealth) {
+            self.vm_step(
+                &id,
+                &name,
+                None,
+                "Laying out the base's UEFI disk (once per base)",
+            );
             self.uefi_bundle(bundle)?
         } else {
             bundle
@@ -306,10 +345,21 @@ impl Worker {
         let location = crate::locations::prepare(&self.options, &mut vm)?;
         let dir = &location.disk_directory;
         fs::create_dir(dir).map_err(|e| e.to_string())?;
-        let build = || -> Result<(), String> {
+        let build = |worker: &mut Worker, again: bool| -> Result<(), String> {
+            worker.vm_step(&id, &name, None, "Creating the disk");
             storage::private_dir(dir).map_err(|e| e.to_string())?;
-            storage::create_overlay(&self.options, dir, vm.disk_gib, &bundle)?;
+            storage::create_overlay(&worker.options, dir, vm.disk_gib, &bundle)?;
             if let Some(credentials) = credentials.clone() {
+                worker.vm_step(
+                    &id,
+                    &name,
+                    None,
+                    if again {
+                        "Setting up the guest account again (the host was busy)"
+                    } else {
+                        "Setting up the guest account (starts the guest once; slow without KVM)"
+                    },
+                );
                 let account = crate::guest_account::GuestAccount::create(
                     credentials,
                     &dir.join("disk.qcow2"),
@@ -322,15 +372,16 @@ impl Worker {
                 )?;
                 account.save(dir)?;
             }
+            worker.vm_step(&id, &name, None, "Saving the configuration");
             storage::atomic_json(&dir.join("config.json"), &vm)?;
             storage::sync_directory_parent(dir)
         };
-        let mut result = build();
+        let mut result = build(self, false);
         // A busy host can run the credential tool past its deadline: start
         // again from a fresh disk once before giving up.
         if matches!(&result, Err(error) if error.contains(crate::guest_account::TOOL_TIMEOUT)) {
             let _ = fs::remove_file(dir.join("disk.qcow2"));
-            result = build();
+            result = build(self, true);
         }
         if let Err(error) = result {
             let cleanup = fs::remove_dir_all(dir);

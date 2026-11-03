@@ -2361,6 +2361,21 @@ pub struct BaseLayoutProgress {
     pub stage: String,
 }
 
+/// A VM being created or duplicated in the background: the sidebar lists it
+/// as "Creating…" and the Jobs window shows its step until it is a saved VM.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VmWork {
+    /// The identity the VM will have; the saved VM appears under it. A copy
+    /// has none yet and is `copy:` and its name.
+    pub id: String,
+    pub name: String,
+    /// The VM this one is a copy of, for a duplicate.
+    pub copy_of: Option<String>,
+    /// What it is doing now, e.g. "Setting up the guest account".
+    pub step: String,
+    pub started_ms: u64,
+}
+
 /// A debugger attached to one guest process (see `crate::debug`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DebugSessionInfo {
@@ -2395,6 +2410,8 @@ pub struct Snapshot {
     pub vm_snapshot_progress: Option<VmSnapshotProgress>,
     /// A base's UEFI disk being laid out.
     pub base_layout: Option<BaseLayoutProgress>,
+    /// VMs being created or duplicated; each joins `vms` when it is done.
+    pub vm_work: Vec<VmWork>,
     /// The running VM's network capture, while one runs.
     pub network_capture: Option<crate::network::NetworkCapture>,
     /// The memory dump QEMU is writing, while it writes.
