@@ -158,7 +158,7 @@ impl MonitorApp {
         let mut finish = false;
         // Wide enough for every step on one row, whatever the text size, and
         // locked: the steps never wrap and the window never needs resizing.
-        let size = getting_started_size(ctx);
+        let (size, tight) = getting_started_size(ctx);
         crate::widgets::window("Getting started")
             .id(Dialog::GettingStarted.window_id())
             .open(&mut open)
@@ -179,7 +179,12 @@ impl MonitorApp {
                     )
                 });
                 let mut chosen = self.getting_started.step;
-                if tabs(ui, items, &mut chosen) {
+                let changed = if tight {
+                    crate::widgets::tight_tabs(ui, |ui| tabs(ui, items, &mut chosen))
+                } else {
+                    tabs(ui, items, &mut chosen)
+                };
+                if changed {
                     go = Some(chosen);
                 }
                 let height = (ui.available_height() - 52.0).max(120.0);
@@ -237,7 +242,7 @@ impl MonitorApp {
 
 /// The locked inner size of the window: the six step tabs on one row at
 /// the current text size (measured), and a height that fits the screen.
-fn getting_started_size(ctx: &egui::Context) -> egui::Vec2 {
+fn getting_started_size(ctx: &egui::Context) -> (egui::Vec2, bool) {
     let style = ctx.global_style();
     let font = egui::TextStyle::Button.resolve(&style);
     let widths: f32 = ctx.fonts_mut(|fonts| {
@@ -256,9 +261,16 @@ fn getting_started_size(ctx: &egui::Context) -> egui::Vec2 {
             .sum()
     });
     let screen = ctx.content_rect();
-    let width = (widths + 24.0)
-        .max(640.0)
-        .min((screen.width() - 80.0).max(320.0));
+    // The window's frame is added to this size; keep it inside the screen.
+    let cap = (screen.width() - 40.0).max(320.0);
+    // Past the screen, the tabs give up padding rather than wrap.
+    let tight = widths + 24.0 > cap;
+    let widths = if tight {
+        widths - crate::widgets::TIGHT_SAVING * Step::ALL.len() as f32
+    } else {
+        widths
+    };
+    let width = (widths + 24.0).max(640.0).min(cap);
     let height = 560.0_f32.min((screen.height() - 120.0).max(260.0));
-    egui::vec2(width, height)
+    (egui::vec2(width, height), tight)
 }

@@ -69,6 +69,22 @@ impl From<&str> for TabItem {
     }
 }
 
+fn tight_id() -> egui::Id {
+    egui::Id::new("tabs-tight")
+}
+
+/// Draw `add` with the tabs' padding cut to the least that stays readable,
+/// for a strip that must keep to one row in a window as wide as the screen.
+pub fn tight_tabs<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.data_mut(|data| data.insert_temp(tight_id(), true));
+    let out = add(ui);
+    ui.data_mut(|data| data.remove_temp::<bool>(tight_id()));
+    out
+}
+
+/// Pixels a tab's padding and icon gap lose in [`tight_tabs`].
+pub const TIGHT_SAVING: f32 = 10.0;
+
 /// A strip of tabs: `items` are (value, tab); clicking one sets `selected`.
 /// Returns whether the selection changed.
 pub fn tabs<T: Copy + PartialEq>(
@@ -153,12 +169,15 @@ pub fn tab(ui: &mut egui::Ui, selected: bool, item: &TabItem) -> Response {
     let alert_width = alert
         .as_ref()
         .map_or(0.0, |(dot, number)| dot.size().x + number.size().x);
-    let pad = 10.0;
+    let tight = ui
+        .data(|data| data.get_temp::<bool>(tight_id()))
+        .unwrap_or(false);
+    let pad = if tight { 5.0 } else { 10.0 };
     let gap = 6.0;
     let badge_pad = 5.0;
     let mut extra = pad * 2.0;
     if let Some(galley) = &icon {
-        extra += galley.size().x + 5.0;
+        extra += galley.size().x + if tight { 4.0 } else { 5.0 };
     }
     if let Some((galley, _)) = &badge {
         extra += gap + galley.size().x + badge_pad * 2.0 + alert_width;
@@ -232,7 +251,7 @@ pub fn tab(ui: &mut egui::Ui, selected: bool, item: &TabItem) -> Response {
         let mut left = rect.left() + pad;
         if let Some(galley) = icon {
             let pos = egui::pos2(left, rect.center().y - galley.size().y / 2.0);
-            left += galley.size().x + 5.0;
+            left += galley.size().x + if tight { 4.0 } else { 5.0 };
             painter.galley(pos, galley, egui::Color32::PLACEHOLDER);
         }
         let text_pos = egui::pos2(left, rect.center().y - label.size().y / 2.0);
