@@ -99,6 +99,33 @@ impl FatalSignal {
         self.oom || self.code == SI_KERNEL || (self.code > 0 && self.sender.is_none())
     }
 
+    /// A signal the kernel raised for the task's own action (a positive
+    /// `si_code`): the code's name and what it means, as "SEGV_MAPERR, an
+    /// access to unmapped memory".
+    pub fn fault(&self) -> Option<String> {
+        if self.code <= 0 || self.code == SI_KERNEL {
+            return None;
+        }
+        let (name, what) = match (self.signal, self.code) {
+            (11, 1) => ("SEGV_MAPERR", "an access to unmapped memory"),
+            (11, 2) => ("SEGV_ACCERR", "an access its mapping does not allow"),
+            (11, _) => ("SEGV", "a memory access fault"),
+            (7, 1) => ("BUS_ADRALN", "a misaligned access"),
+            (7, 2) => ("BUS_ADRERR", "an access past the end of a mapped file"),
+            (7, _) => ("BUS", "a bus error"),
+            (4, _) => ("ILL", "an illegal instruction"),
+            (8, 1) => ("FPE_INTDIV", "an integer division by zero"),
+            (8, _) => ("FPE", "an arithmetic fault"),
+            (5, 1) => ("TRAP_BRKPT", "a breakpoint instruction"),
+            (5, 2) => ("TRAP_TRACE", "a single step"),
+            (5, _) => ("TRAP", "a trap"),
+            (31, 1) => ("SYS_SECCOMP", "a system call its seccomp filter kills"),
+            (31, _) => ("SYS", "a bad system call"),
+            _ => return Some(format!("si_code {}", self.code)),
+        };
+        Some(format!("{name}, {what}"))
+    }
+
     /// `si_code` in words.
     pub fn code_name(&self) -> String {
         match self.code {
@@ -201,6 +228,16 @@ mod tests {
         ];
         let fatal = FatalSignal::from_fields(&fields).unwrap();
         assert_eq!(fatal.code, SI_TKILL);
+        assert_eq!(fatal.fault(), None);
+        let segv = FatalSignal {
+            signal: 11,
+            code: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            segv.fault().as_deref(),
+            Some("SEGV_MAPERR, an access to unmapped memory")
+        );
         assert!(!fatal.at_send);
         assert!(FatalSignal::from_fields(&[number("lifecycle.task_exit", 9)]).is_none());
         assert!(FatalSignal::from_fields(&[number("lifecycle.signal.signo", 0)]).is_none());

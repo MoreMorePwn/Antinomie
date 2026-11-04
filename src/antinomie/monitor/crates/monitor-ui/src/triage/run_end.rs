@@ -405,16 +405,14 @@ fn recorded(
             record.code_name()
         ));
     }
+    if let Some(fault) = record.fault() {
+        return Some(format!(
+            "raised by the guest kernel for the task's own action: {fault}"
+        ));
+    }
     if record.from_kernel() {
         return Some(
-            if record.code > 0 && record.code != fatal_signal::SI_KERNEL {
-                format!(
-                    "raised by the guest kernel for the task's own fault (si_code {})",
-                    record.code
-                )
-            } else {
-                "sent by the guest kernel (SI_KERNEL: a resource limit, a Stop of the run or another kernel action)".into()
-            },
+            "sent by the guest kernel (SI_KERNEL: a resource limit, a Stop of the run or another kernel action)".into(),
         );
     }
     if record.code == fatal_signal::SI_TIMER {
@@ -584,7 +582,7 @@ mod tests {
         fault.at_send = false;
         assert_eq!(
             recorded(&tree, &notes, &tree[0], &fault, 0).unwrap(),
-            "raised by the guest kernel for the task's own fault (si_code 1)"
+            "raised by the guest kernel for the task's own action: SEGV_MAPERR, an access to unmapped memory"
         );
     }
 }
