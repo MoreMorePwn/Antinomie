@@ -246,6 +246,8 @@ impl MonitorApp {
                 let mut chosen = None;
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
+                    self.sidebar_toggle_button(ui);
+                    ui.separator();
                     let mut last_group = None;
                     for (at, spec) in specs.iter().enumerate() {
                         if !shown.contains(&at) {
@@ -543,7 +545,9 @@ fn tool_layout(ui: &egui::Ui, specs: &[ToolSpec], minimal: bool) -> Vec<usize> {
     };
     let more = ui.spacing().interact_size.y + 12.0;
     let status = 150.0;
-    let budget = ui.available_width() - status - 12.0;
+    // The sidebar button and its separator at the left end.
+    let sidebar = ui.spacing().interact_size.y + 12.0;
+    let budget = ui.available_width() - status - sidebar - 12.0;
     let order: Vec<usize> = TOOL_PRIORITY
         .iter()
         .filter_map(|action| specs.iter().position(|spec| spec.action == *action))
