@@ -95,6 +95,10 @@ mod vm;
 pub mod vnc;
 pub mod writer;
 mod zip_safe;
+// The build script's git file resolution, tested on fake .git layouts.
+#[cfg(test)]
+#[path = "../build/git_head.rs"]
+mod build_git_head;
 
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
