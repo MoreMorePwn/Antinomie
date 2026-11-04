@@ -373,19 +373,17 @@ impl ScreenshotsPage {
             if response.clicked() {
                 act = Some(Act::Open(shot.path.clone()));
             }
+            ui.label(RichText::new(time_text(shot.ms)).small());
             ui.horizontal(|ui| {
-                ui.label(RichText::new(time_text(shot.ms)).small());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if icon_button(ui, egui_phosphor::regular::TRASH, "Delete…") {
-                        act = Some(Act::Delete(shot.path.clone()));
-                    }
-                    if icon_button(ui, egui_phosphor::regular::FOLDER_OPEN, "Open the folder") {
-                        act = Some(Act::Reveal(shot.path.clone()));
-                    }
-                    if icon_button(ui, egui_phosphor::regular::COPY, "Copy the path") {
-                        act = Some(Act::Copy(shot.path.clone()));
-                    }
-                });
+                if icon_button(ui, egui_phosphor::regular::COPY, "Copy the path") {
+                    act = Some(Act::Copy(shot.path.clone()));
+                }
+                if icon_button(ui, egui_phosphor::regular::FOLDER_OPEN, "Open the folder") {
+                    act = Some(Act::Reveal(shot.path.clone()));
+                }
+                if icon_button(ui, egui_phosphor::regular::TRASH, "Delete…") {
+                    act = Some(Act::Delete(shot.path.clone()));
+                }
             });
         });
         act
