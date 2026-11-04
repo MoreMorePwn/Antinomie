@@ -360,8 +360,9 @@ static void unix_stream_cases(void)
     DONE();
     int queued = -1;
     CALL("ioctl.socket_inq", ioctl, WANT_OK, server, FIONREAD, &queued);
-    want_status(2, "in", "NO_DECODER");
-    why("socket requests are not decoded: the output is an explicit gap");
+    out_buf(2, &queued, sizeof queued);
+    why("FIONREAD on a stream socket: the bytes queued for reading (int), recorded since "
+        "revision 21");
     DONE();
     memset(buffer, 0, sizeof buffer);
     got = CALL("recvfrom.peek", recvfrom, WANT_OK, server, buffer, sizeof buffer, MSG_PEEK, NULL,
