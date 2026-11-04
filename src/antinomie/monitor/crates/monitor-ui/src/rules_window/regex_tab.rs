@@ -43,7 +43,16 @@ impl RegexState {
         self.config.custom.len().to_string()
     }
 
-    fn load(&mut self, data_dir: &Path) {
+    /// Built-in patterns that are on plus the custom ones that are on.
+    pub(super) fn active_count(&self) -> usize {
+        builtin_patterns()
+            .iter()
+            .filter(|(id, ..)| self.config.is_enabled(id))
+            .count()
+            + self.config.custom.iter().filter(|p| p.enabled).count()
+    }
+
+    pub(super) fn load(&mut self, data_dir: &Path) {
         if self.loaded {
             return;
         }
@@ -224,7 +233,8 @@ impl Model {
             self.regex.add(data_dir);
         }
         ui.horizontal(|ui| {
-            ui.label("Try on");
+            ui.label("Try on")
+                .on_hover_text("Paste a string to see which patterns match it. Nothing is saved.");
             ui.add(
                 egui::TextEdit::singleline(&mut self.regex.sample)
                     .hint_text(crate::theme::placeholder(

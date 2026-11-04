@@ -441,7 +441,9 @@ impl MonitorApp {
         }
         ui.add_enabled_ui(self.snapshot.active_vm.is_none(), |ui| {
             form_grid("settings_recording", ui).show(ui, |ui| {
-                ui.label("Installed base");
+                ui.label("Default base for new VMs").on_hover_text(
+                    "The installed base a new VM starts with. Each VM keeps the base it was created with; this only sets the choice offered in New VM and Getting started.",
+                );
                 let mut base = self
                     .snapshot
                     .bases
@@ -461,7 +463,8 @@ impl MonitorApp {
                     egui::DragValue::new(&mut self.settings.quota_gib)
                         .range(1..=4096)
                         .suffix(" GiB"),
-                );
+                )
+                .on_hover_text("The most disk space the recordings may use.");
                 ui.end_row();
                 ui.label("Process cores: default budget");
                 ui.add(
@@ -478,7 +481,8 @@ impl MonitorApp {
                     egui::DragValue::new(&mut self.settings.timeout)
                         .range(1..=120)
                         .suffix(" s"),
-                );
+                )
+                .on_hover_text("How long a VM is given to shut down before it is stopped.");
                 ui.end_row();
                 if let Some(path) = &self.snapshot.capture_dir {
                     ui.label("Recording");

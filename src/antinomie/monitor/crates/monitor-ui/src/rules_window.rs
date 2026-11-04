@@ -17,6 +17,7 @@ use std::{
 
 mod abusech;
 mod catalog_tab;
+mod counts;
 pub(crate) mod first_run;
 mod ioc;
 mod page;

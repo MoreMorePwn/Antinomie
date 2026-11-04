@@ -47,15 +47,13 @@ impl Model {
         let states = ruleset::live_states(data_dir, &self.registry);
         let key = api_keys::get(data_dir, ApiKey::Abusech);
         let has_key = !key.is_empty();
-        ui.label(
-            RichText::new(
+        ui.label(RichText::new("Suricata rule packs from abuse.ch.").color(theme::text()))
+            .on_hover_text(
                 "Suricata rule packs from abuse.ch. abuse.ch rebuilds them about every five \
                  minutes, so Check for updates compares the live file with what is installed \
                  (at most once in five minutes per pack) and Update installs the newest. \
                  Nothing is fetched until you press a button.",
-            )
-            .color(theme::text()),
-        );
+            );
         self.notices(ui, outbound);
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("abuse.ch Auth-Key").color(theme::muted()))

@@ -341,3 +341,40 @@ fn the_run_form_names_the_fixed_network_of_a_vm_that_is_not_routed() {
     });
     assert_eq!(request.route, None);
 }
+
+#[test]
+fn the_recording_page_names_the_base_as_the_default_for_new_vms_with_a_tooltip() {
+    let ctx = context();
+    let mut app = app();
+    app.settings_open = true;
+    app.settings_page = SettingsPage::Recording;
+    let size = egui::vec2(1280.0, 820.0);
+    let visible = shown(&mut app, &ctx, size);
+    assert!(has(&visible, "Default base for new VMs"), "{visible:?}");
+    assert!(!has(&visible, "Installed base"), "{visible:?}");
+    assert!(!visible
+        .iter()
+        .any(|(text, _)| text.contains("Each VM keeps the base")));
+    ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+    let at = visible
+        .iter()
+        .find(|(text, _)| text == "Default base for new VMs")
+        .unwrap()
+        .1
+        .center();
+    let mut hovered = Vec::new();
+    for _ in 0..6 {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+            events: vec![egui::Event::PointerMoved(at)],
+            ..Default::default()
+        };
+        hovered = texts(&draw_input(&mut app, &ctx, input));
+    }
+    assert!(
+        hovered
+            .iter()
+            .any(|(text, _)| text.contains("Each VM keeps the base it was created with")),
+        "{hovered:?}"
+    );
+}

@@ -639,3 +639,64 @@ fn a_pack_rule_table_holds_still_frame_after_frame() {
         }
     }
 }
+
+#[test]
+fn the_header_counts_packs_groups_and_patterns_in_the_right_number() {
+    let mut f = Fixture::new("counts");
+    f.pack("fixture", "yara", "rules.yar", YARA);
+    f.group(
+        "Net",
+        "ids",
+        "net.rules",
+        "alert tcp any any -> any 80 (msg:\"First beacon\"; sid:1001; rev:1;)\n",
+    );
+    f.settle();
+    let patterns = f.model.regex.active_count();
+    let text = joined(&f.frame());
+    assert!(
+        text.contains(&format!(
+            "1 pack · 1 enabled · 1 custom group · {patterns} string patterns"
+        )),
+        "{text}"
+    );
+}
+
+#[test]
+fn long_explanations_are_a_tooltip_and_not_on_the_page() {
+    let mut f = Fixture::new("tooltips");
+    f.ctx
+        .all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+    f.settle();
+    f.click("IOC");
+    let shown = f.until("abuse.ch datasets kept on this machine.");
+    let text = joined(&shown);
+    assert!(!text.contains("They change only when you press"), "{text}");
+    f.settle();
+    let label = "abuse.ch datasets kept on this machine.";
+    let mut shown = f.frame();
+    let mut hovered = String::new();
+    for _ in 0..8 {
+        let at = shown
+            .iter()
+            .find(|(text, _, _)| text == label)
+            .unwrap()
+            .1
+            .center();
+        shown = render(
+            &f.ctx,
+            &mut f.model,
+            &f.dir,
+            SIZE,
+            vec![egui::Event::PointerMoved(at)],
+            &mut f.outbound,
+        );
+        hovered = joined(&shown);
+        if hovered.contains("They change only when") {
+            break;
+        }
+    }
+    assert!(
+        hovered.contains("They change only when you press Download or Update."),
+        "{hovered}"
+    );
+}

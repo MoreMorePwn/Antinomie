@@ -60,13 +60,11 @@ impl Model {
         if !self.ioc.loaded || self.ioc.stale {
             self.refresh_ioc(data_dir);
         }
-        ui.label(
-            RichText::new(
+        ui.label(RichText::new("abuse.ch datasets kept on this machine.").color(theme::text()))
+            .on_hover_text(
                 "abuse.ch datasets kept on this machine. Triage > IOC matches a run's indicators \
                  against them offline. They change only when you press Download or Update.",
-            )
-            .color(theme::text()),
-        );
+            );
         self.notices(ui, outbound);
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("abuse.ch Auth-Key").color(theme::muted()))
@@ -75,7 +73,11 @@ impl Model {
                 Some(masked) => ui.colored_label(theme::good(), format!("set ({masked})")),
                 None => ui.colored_label(theme::neutral_accent(), "not set"),
             };
-            if ui.button("API keys…").clicked() {
+            if ui
+                .button("API keys…")
+                .on_hover_text("Open the API keys window to set the abuse.ch Auth-Key.")
+                .clicked()
+            {
                 self.requested = Some(super::RulesAction::ApiKeys);
             }
         });
@@ -115,10 +117,19 @@ impl Model {
             {
                 self.ioc_update(data_dir, *outbound, None);
             }
-            if busy && ui.button("Cancel").clicked() {
+            if busy
+                && ui
+                    .button("Cancel")
+                    .on_hover_text("Stop the running download; nothing is changed.")
+                    .clicked()
+            {
                 self.cancel_job();
             }
-            if ui.button("Open datasets folder").clicked() {
+            if ui
+                .button("Open datasets folder")
+                .on_hover_text("Show the folder where the datasets are kept.")
+                .clicked()
+            {
                 let root = ioc::feeds::root(data_dir);
                 let _ = std::fs::create_dir_all(&root);
                 crate::folders::show_detached(root);
@@ -382,8 +393,7 @@ impl Model {
     }
 
     fn fp_section(&mut self, ui: &mut egui::Ui, data_dir: &Path) {
-        theme::section(ui, "Known false positives");
-        ui.weak(
+        theme::section(ui, "Known false positives").on_hover_text(
             "Values you marked as harmless in Triage > IOC. A match on one is shown as Known FP \
              with your reason and is not counted as Matched.",
         );

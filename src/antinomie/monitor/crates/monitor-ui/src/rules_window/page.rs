@@ -81,8 +81,14 @@ impl Model {
                 .size(ui.text_style_height(&egui::TextStyle::Heading))
                 .color(theme::heading()),
         );
-        ui.label(RichText::new("Scans never use the network.").color(theme::muted()))
-            .on_hover_text("Installed packs and custom groups are the only production rules. Scans do not download rules or upload evidence.");
+        self.regex.load(data_dir);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Scans never use the network.").color(theme::muted()))
+                .on_hover_text("Installed packs and custom groups are the only production rules. Scans do not download rules or upload evidence.");
+            ui.weak(self.counts_line()).on_hover_text(
+                "Installed packs and how many are enabled, custom groups, and the string patterns that are switched on. The tabs show the packs per engine.",
+            );
+        });
         let mut engine = ENGINES
             .iter()
             .map(|(id, _)| *id)
@@ -219,6 +225,7 @@ impl Model {
             let busy = self.job.is_some();
             if ui
                 .add_enabled(!busy, egui::Button::new("Reload local rules"))
+                .on_hover_text("Read the installed packs and groups from the rules folder again. No network.")
                 .clicked()
             {
                 self.loaded = false;
@@ -228,14 +235,24 @@ impl Model {
             }
             if ui
                 .add_enabled(!busy, egui::Button::new("Check for updates"))
+                .on_hover_text("Read the rule catalog from the network. Needs Allow downloads; scans stay offline.")
                 .clicked()
             {
                 self.refresh_catalog(data_dir, outbound);
             }
-            if busy && ui.button("Cancel").clicked() {
+            if busy
+                && ui
+                    .button("Cancel")
+                    .on_hover_text("Stop the running job; nothing is changed.")
+                    .clicked()
+            {
                 self.cancel_job();
             }
-            if ui.button("Open rules directory").clicked() {
+            if ui
+                .button("Open rules directory")
+                .on_hover_text("Show the folder where the installed rules are kept.")
+                .clicked()
+            {
                 let root = ruleset::rules_root(data_dir);
                 crate::folders::show_created_detached(root);
             }

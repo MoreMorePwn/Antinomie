@@ -54,6 +54,8 @@ versions; existing VMs keep their pinned base.
   (`sudo apt install suricata`, listed in App dependencies). Sigma scans use
   pySigma, which **Tools > Analysis tools** installs for Antinomie; it needs
   Python 3.11 or newer with venv support (`python3-venv` on Debian/Ubuntu).
+  The page shows counts under its title (installed packs, how many are enabled,
+  custom groups, string patterns); its long explanations are in tooltips.
 
 - **Tools > Detection rules > IOC** keeps abuse.ch datasets on your computer
   for matching a run's indicators offline: ThreatFox `full.csv`, the URLhaus
@@ -931,6 +933,10 @@ first step has the same **Theme** (Dark, Light or Blue), **Text size** and **Den
 both) and applies each change at once. **Next** keeps what you picked and marks the
 step Ready; **Skip this step** leaves the settings as they are. **Help > Getting
 started: Appearance** is in the palette.
+
+On **Settings > Recording**, **Default base for new VMs** is the base a new VM
+starts with; each VM keeps the base it was created with. Its explanations are
+tooltips.
 
 **Settings** has the pages Appearance, Recording, Detection rules, Notifications,
 Network lookup, Network routes, Analysis tools, Disks and Advanced. It opens
