@@ -61,6 +61,11 @@ impl MonitorApp {
                 egui_phosphor::regular::BIOHAZARD,
                 (self.samples_count() > 0).then(|| self.samples_count().to_string()),
             ),
+            (
+                LibraryPage::Screenshots,
+                egui_phosphor::regular::IMAGES,
+                self.screenshots_page.count_text(),
+            ),
         ];
         for (page, icon, meta) in rows {
             if library_row(ui, icon, page.title(), meta.as_deref())
@@ -72,6 +77,9 @@ impl MonitorApp {
                     LibraryPage::Tools => "Optional static-analysis tools: open the page",
                     LibraryPage::Samples => {
                         "Every sample across runs and VMs, with its origins and tags: open the page"
+                    }
+                    LibraryPage::Screenshots => {
+                        "Screenshots taken on the VM screen tab, newest first: open the page"
                     }
                 })
                 .clicked()
@@ -88,6 +96,7 @@ impl MonitorApp {
             LibraryPage::Rules => self.rules_page(ui),
             LibraryPage::Tools => self.analysis_tools_page(ui),
             LibraryPage::Samples => self.samples_page(ui),
+            LibraryPage::Screenshots => self.screenshots_page(ui),
         }
     }
 

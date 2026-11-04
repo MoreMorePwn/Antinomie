@@ -109,6 +109,7 @@ pub(crate) fn app() -> MonitorApp {
         vm_snapshots: crate::snapshots::SnapshotManager::default(),
         samples: crate::samples_view::SamplesView::default(),
         samples_page: samples_page::SamplesPage::default(),
+        screenshots_page: Default::default(),
         api_keys: Default::default(),
         dependencies: crate::dependencies_window::DependenciesWindow::ready_for_test(),
         updates: Default::default(),

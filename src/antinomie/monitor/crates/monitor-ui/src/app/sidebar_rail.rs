@@ -191,6 +191,11 @@ impl MonitorApp {
                         egui_phosphor::regular::BIOHAZARD,
                         format!("Samples: {samples}"),
                     ),
+                    (
+                        LibraryPage::Screenshots,
+                        egui_phosphor::regular::IMAGES,
+                        "Screenshots".to_owned(),
+                    ),
                 ] {
                     if rail_button(ui, icon, &text, None).clicked() {
                         self.open_library(page);

@@ -66,6 +66,8 @@ pub(super) enum Action {
     BaseImages,
     /// The Samples page of the Library.
     SamplesPage,
+    /// The Screenshots page of the Library.
+    ScreenshotsPage,
     /// The Samples page with its Add file window.
     AddSampleFile,
     /// The Detection rules page on one engine tab ("yara", "ids", "sigma",
@@ -162,7 +164,12 @@ impl Action {
             .into_iter()
             .map(Self::SettingsTo)
             .collect();
-        actions.extend([Self::BaseImages, Self::SamplesPage, Self::AddSampleFile]);
+        actions.extend([
+            Self::BaseImages,
+            Self::SamplesPage,
+            Self::ScreenshotsPage,
+            Self::AddSampleFile,
+        ]);
         for engine in ["yara", "ids", "sigma"] {
             actions.push(Self::RulesEngine(engine, false));
             actions.push(Self::RulesEngine(engine, true));
@@ -245,6 +252,7 @@ impl Action {
             },
             Self::BaseImages => "library bases guest images",
             Self::SamplesPage => "library malware files hashes tags",
+            Self::ScreenshotsPage => "library screenshots gallery images vm screen pictures png",
             Self::AddSampleFile => "samples library import hash add",
             Self::RulesEngine("yara", _) => "rules packs library scan",
             Self::RulesEngine("ids", _) => "suricata network rules packs library abuse.ch",
@@ -304,7 +312,9 @@ impl Action {
                 "View"
             }
             Self::SettingsTo(_) => "Settings",
-            Self::BaseImages | Self::SamplesPage | Self::AddSampleFile => "Library",
+            Self::BaseImages | Self::SamplesPage | Self::ScreenshotsPage | Self::AddSampleFile => {
+                "Library"
+            }
             Self::RulesEngine(..) => "Rules",
             Self::ImportMemoryDump | Self::PluginCatalog => "Memory",
             Self::ImportDiskImage => "Disks",
@@ -412,6 +422,7 @@ impl Action {
             Self::SettingsTo(page) => format!("Settings: {}", page.label()),
             Self::BaseImages => "Base images".into(),
             Self::SamplesPage => "Samples".into(),
+            Self::ScreenshotsPage => "Screenshots".into(),
             Self::AddSampleFile => "Add file to Samples…".into(),
             Self::RulesEngine(engine, catalog) => {
                 let name = match *engine {
@@ -670,6 +681,7 @@ impl MonitorApp {
             | Action::SettingsTo(_)
             | Action::BaseImages
             | Action::SamplesPage
+            | Action::ScreenshotsPage
             | Action::AddSampleFile
             | Action::RulesEngine(..)
             | Action::GettingStartedStep(_) => None,
@@ -793,6 +805,7 @@ impl MonitorApp {
             Action::SettingsTo(page) => self.open_settings_page(page.label()),
             Action::BaseImages => self.open_library(LibraryPage::BaseImages),
             Action::SamplesPage => self.open_library(LibraryPage::Samples),
+            Action::ScreenshotsPage => self.open_library(LibraryPage::Screenshots),
             Action::AddSampleFile => {
                 self.open_library(LibraryPage::Samples);
                 self.samples_page.open_add(None);

@@ -32,6 +32,9 @@ pub(crate) struct VmScreenView {
     last_pointer: Option<(u8, u16, u16)>,
     /// The socket of the boot the app last saw, to tell a new boot.
     seen: Option<PathBuf>,
+    /// Screenshots saved so far; the Screenshots page reads the folders again
+    /// when it grows.
+    saved: u64,
 }
 
 impl VmScreenView {
@@ -245,7 +248,11 @@ impl VmScreenView {
         request
     }
 
-    fn screenshot(&self, ctx: &egui::Context, shots: &Path) {
+    pub(crate) fn screenshots_saved(&self) -> u64 {
+        self.saved
+    }
+
+    fn screenshot(&mut self, ctx: &egui::Context, shots: &Path) {
         let Some((_, client)) = &self.client else {
             return;
         };
@@ -263,11 +270,14 @@ impl VmScreenView {
             Ok::<_, String>(path)
         })();
         match result {
-            Ok(path) => toasts::notify(
-                ctx,
-                Level::Info,
-                format!("Screenshot saved: {}", path.display()),
-            ),
+            Ok(path) => {
+                self.saved += 1;
+                toasts::notify(
+                    ctx,
+                    Level::Info,
+                    format!("Screenshot saved: {}", path.display()),
+                );
+            }
             Err(error) => toasts::notify(ctx, Level::Error, format!("Screenshot failed: {error}")),
         }
     }

@@ -128,6 +128,12 @@ impl MonitorApp {
                             self.menu_item(ui, Action::Go(view), None);
                         }
                         ui.separator();
+                        self.menu_item(
+                            ui,
+                            Action::ScreenshotsPage,
+                            Some(egui_phosphor::regular::IMAGES),
+                        );
+                        ui.separator();
                         self.menu_item(ui, Action::ToggleSidebar, None);
                         self.menu_item(ui, Action::ToggleBottomPane, None);
                         self.menu_item(ui, Action::ResetLayout, None);

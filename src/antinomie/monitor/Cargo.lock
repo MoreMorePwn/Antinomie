@@ -203,6 +203,7 @@ dependencies = [
  "egui-phosphor",
  "egui_dock",
  "egui_extras",
+ "png",
  "rusqlite",
  "rustix 1.1.5",
  "serde",

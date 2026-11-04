@@ -54,5 +54,8 @@ impl MonitorApp {
         {
             self.run_action(ui.ctx(), Action::TypeClipboard);
         }
+        // A new screenshot: the gallery reads the folders again when it is shown.
+        self.screenshots_page
+            .saved(self.vm_screen.screenshots_saved());
     }
 }

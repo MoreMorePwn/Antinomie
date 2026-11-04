@@ -87,6 +87,7 @@ impl MonitorApp {
             summary_snapshots_asked: None,
             samples: crate::samples_view::SamplesView::default(),
             samples_page: samples_page::SamplesPage::default(),
+            screenshots_page: Default::default(),
             api_keys: Default::default(),
             dependencies,
             updates: Default::default(),

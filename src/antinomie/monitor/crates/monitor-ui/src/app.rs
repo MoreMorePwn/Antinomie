@@ -37,6 +37,7 @@ mod run_labels;
 mod run_selector;
 mod run_state_text;
 mod samples_page;
+mod screenshots_page;
 mod session;
 mod settings_window;
 mod shortcut_list;
@@ -480,6 +481,7 @@ pub struct MonitorApp {
     summary_snapshots_asked: Option<(String, bool)>,
     samples: crate::samples_view::SamplesView,
     samples_page: samples_page::SamplesPage,
+    screenshots_page: screenshots_page::ScreenshotsPage,
     api_keys: crate::api_keys_window::ApiKeysWindow,
     dependencies: crate::dependencies_window::DependenciesWindow,
     updates: crate::update_window::UpdateWindow,
