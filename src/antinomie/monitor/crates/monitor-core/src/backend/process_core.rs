@@ -581,10 +581,20 @@ impl Session {
                 return Ok(());
             }
             if state >= 5 {
-                return Err(format!(
-                    "guest core unavailable or canceled (state {state}, status {})",
-                    core.status.as_ref().map_or(0, |status| status.status)
-                ));
+                // The guest's own errno has a clear reading (a refused AArch32 or
+                // ia32 program, a budget, a deadline): say it, not the raw state.
+                let status = core.status.clone().ok_or("core status missing")?;
+                return Err(match core.guest_reason(&status, &limits) {
+                    Some(reason) => {
+                        let text = reason.text.clone();
+                        core.reason.get_or_insert(reason);
+                        text
+                    }
+                    None => format!(
+                        "guest core unavailable or canceled (state {state}, status {})",
+                        status.status
+                    ),
+                });
             }
             owner.summary.core_state = RunArtifactState::InProgress;
             queue_artifacts(owner)?;

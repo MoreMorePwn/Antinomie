@@ -624,13 +624,30 @@ impl Session {
             return Ok(());
         }
         if matches!(status.state, 5 | 6) {
-            owner.finish(
-                RunArtifactState::Failed,
-                format!(
+            // The guest's errno has a clear reading (a refused AArch32 or ia32
+            // program, a budget, a deadline): say it, not the raw state.
+            let reason = guest_reason(&CoreOutcome {
+                state: status.state,
+                status: status.status,
+                expected: status.expected_size,
+                size: status.size,
+                stored: status.stored,
+                flags: status.flags,
+                budget: u64::from(owner.summary.max_size),
+                limits: self.core_limits.unwrap_or(CoreLimits::LEGACY),
+            });
+            let text = match reason {
+                Some(reason) => {
+                    let text = reason.text.clone();
+                    owner.summary.reason.get_or_insert(reason);
+                    text
+                }
+                None => format!(
                     "manual guest capture unavailable/canceled (state {}, status {})",
                     status.state, status.status
                 ),
-            );
+            };
+            owner.finish(RunArtifactState::Failed, text);
             return Ok(());
         }
         owner.summary.phase = ProcessCorePhase::Transfer;
