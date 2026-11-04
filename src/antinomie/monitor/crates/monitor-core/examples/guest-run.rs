@@ -19,6 +19,12 @@
 //!  "screenshot": "/tmp/screen.png", "screenshot_after": 20}
 //! ```
 //!
+//! `"headless": false` starts the VM with its default in-app screen (QEMU's
+//! VNC display on a private unix socket; no host display is needed), and
+//! `"screen_check": true` then reads it as the app does, after the uploads:
+//! RFB handshake and framebuffer updates until one shows a drawn pixel
+//! (within `boot_timeout`). The report's `screen` gives its size and timing.
+//!
 //! `"vm": {"nat": true}` gives the VM NAT networking.
 //! `"vm": {"isolated_network": true}` uses restricted networking without
 //! outbound forwarding and overrides NAT, as in the application.
@@ -437,6 +443,15 @@ fn run() -> Result<Value, String> {
         session.command(Command::StartNetworkCapture, 30)?;
     }
     let boot_seconds = started.elapsed().as_secs_f64();
+    let screen = if plan
+        .get("screen_check")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        Some(screen_check(&mut session, boot)?)
+    } else {
+        None
+    };
 
     let mut runs = Vec::new();
     for spec in plan
@@ -663,8 +678,57 @@ fn run() -> Result<Value, String> {
         json!({"vm_id": vm_id, "base": base, "boot_seconds": boot_seconds,
               "runs": runs, "recorder": recorder, "health": health,
               "guest_resources": guest_resources, "capture": capture,
-              "network_captures": network_captures, "screenshot": screenshot}),
+              "network_captures": network_captures, "screenshot": screenshot,
+              "screen": screen}),
     )
+}
+
+/// The in-app screen, as the app's VM screen tab reads it: the VNC client
+/// connects to the VM's private `vnc.sock`, does the RFB handshake and takes
+/// framebuffer updates until one has a pixel that is not black (the firmware
+/// or the kernel console drew it). Needs a VM started without `headless`.
+fn screen_check(session: &mut Session, seconds: u64) -> Result<Value, String> {
+    use antinomie_monitor_core::vnc::ScreenClient;
+    session
+        .settle(|snapshot| snapshot.vm_screen.is_some(), 30)
+        .map_err(|_| "the VM has no in-app screen socket (\"headless\": false?)")?;
+    let socket = session
+        .snapshot
+        .vm_screen
+        .clone()
+        .ok_or("no screen socket")?;
+    let started = Instant::now();
+    let client = ScreenClient::start(socket.clone(), std::sync::Arc::new(|| {}));
+    let deadline = started + Duration::from_secs(seconds);
+    let mut first = None;
+    loop {
+        session.pump();
+        if let Some((width, height, rgba)) = client.frame() {
+            let first_seconds = *first.get_or_insert_with(|| started.elapsed().as_secs_f64());
+            let lit = rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|pixel| pixel[..3] != [0, 0, 0])
+                .count();
+            if lit > 0 {
+                let report = json!({"socket": socket, "name": client.name(),
+                    "width": width, "height": height, "lit_pixels": lit,
+                    "first_frame_seconds": first_seconds,
+                    "lit_frame_seconds": started.elapsed().as_secs_f64()});
+                eprintln!("screen: {report}");
+                return Ok(report);
+            }
+        }
+        if Instant::now() > deadline {
+            return Err(format!(
+                "screen check: no drawn frame on {} in {seconds} s (status {:?}, first frame after {first:?} s)",
+                socket.display(),
+                client.status()
+            ));
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
 }
 
 /// Find the exact QMP endpoint of the QEMU process owning this serial log.
