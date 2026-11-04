@@ -409,8 +409,7 @@ impl ScreenshotsPage {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(&group[0].vm_name).strong());
                         ui.label(
-                            RichText::new(format!("{} screenshots", group.len()))
-                                .color(theme::muted()),
+                            RichText::new(count(group.len(), "screenshot")).color(theme::muted()),
                         );
                     });
                     let mut run: Option<&Option<String>> = None;
@@ -704,9 +703,9 @@ impl MonitorApp {
                 let vms = page.shots.iter().map(|s| &s.vm_id).collect::<HashSet<_>>();
                 ui.label(
                     RichText::new(format!(
-                        "{} screenshots in {} VMs, newest first",
-                        page.shots.len(),
-                        vms.len()
+                        "{} in {}, newest first",
+                        count(page.shots.len(), "screenshot"),
+                        count(vms.len(), "VM")
                     ))
                     .color(theme::muted()),
                 );
@@ -751,5 +750,14 @@ impl MonitorApp {
             self.screenshot_act(&ctx, act);
         }
         self.screenshot_confirm(&ctx);
+    }
+}
+
+/// "1 screenshot", "3 screenshots".
+fn count(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{n} {noun}s")
     }
 }
