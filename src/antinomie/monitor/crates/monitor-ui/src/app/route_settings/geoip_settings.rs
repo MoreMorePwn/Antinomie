@@ -247,9 +247,10 @@ impl MonitorApp {
         theme::section(ui, "IP geolocation database (TShark)");
         ui.add(
             egui::Label::new(
-                "TShark fills Country and Organization only from MaxMind-format (.mmdb) \
-                 databases; the old GeoIP.dat files are ignored. Antinomie hands its own \
-                 copy to its TShark runs only and never changes your Wireshark settings.",
+                "TShark needs .mmdb databases to fill Country and Organization. Older \
+                 GeoIP.dat files (such as /usr/share/GeoIP on Debian) do not work with \
+                 TShark 4. Antinomie hands its databases to its own TShark runs only and \
+                 never changes your Wireshark settings.",
             )
             .wrap(),
         );
@@ -491,8 +492,10 @@ impl MonitorApp {
         });
         hint_line(
             ui,
-            "A folder of MaxMind GeoLite2 or GeoIP2 .mmdb files (Country or City, and ASN), \
-             read in place. Needs a MaxMind account to download; Antinomie does not.",
+            "A folder with your own MaxMind GeoLite2 or GeoIP2 .mmdb files: a Country or City \
+             database and an ASN database. MaxMind requires a free account to download them, \
+             so Antinomie cannot fetch them for you; the DB-IP Lite install needs no account. \
+             The files are read where they are, not copied.",
         );
     }
 }

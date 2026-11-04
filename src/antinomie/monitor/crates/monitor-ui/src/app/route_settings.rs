@@ -503,7 +503,12 @@ impl MonitorApp {
                  records or exported.",
             );
             ui.vertical(|ui| {
-                super::dialogs::password_input(ui, &mut draft.socks5.password, "route_socks5_password");
+                super::dialogs::password_input_width(
+                    ui,
+                    &mut draft.socks5.password,
+                    "route_socks5_password",
+                    260.0,
+                );
             });
             ui.end_row();
             ui.label("Check target");

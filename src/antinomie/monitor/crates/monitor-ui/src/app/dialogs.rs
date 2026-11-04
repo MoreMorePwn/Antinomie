@@ -664,6 +664,17 @@ impl MonitorApp {
 }
 
 pub(super) fn password_input(ui: &mut egui::Ui, text: &mut String, salt: &str) {
+    password_input_width(ui, text, salt, 280.0);
+}
+
+/// [`password_input`] with a text area `inner` wide, for a form whose other
+/// fields are not 280 wide.
+pub(super) fn password_input_width(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    salt: &str,
+    inner: f32,
+) -> egui::Response {
     let mut output = egui::TextEdit::singleline(text)
         .id(egui::Id::new(salt))
         .password(true)

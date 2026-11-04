@@ -121,34 +121,36 @@ pub(crate) fn geoip_status(ui: &mut egui::Ui, status: Option<&Status>) {
         theme::loading_weak(ui, "Looking for databases…");
         return;
     };
-    for (label, found) in [
-        ("Country / city", status.has_location()),
-        ("Organization (AS)", status.has_asn()),
+    for (label, found, location) in [
+        ("Country / city", status.has_location(), true),
+        ("Organization (AS)", status.has_asn(), false),
     ] {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(label).strong().color(theme::heading()));
-            if found {
-                chip(ui, "Database found".to_owned(), Tone::Good);
-            } else {
-                chip(ui, "No database".to_owned(), Tone::Accent);
-            }
-        });
-    }
-    for database in &status.databases {
-        ui.add(
-            egui::Label::new(
-                RichText::new(format!(
+        let details: Vec<String> = status
+            .databases
+            .iter()
+            .filter(|database| {
+                matches!(database.kind, geoip::Kind::Country | geoip::Kind::City) == location
+            })
+            .map(|database| {
+                format!(
                     "{} · {} · {}",
                     database.name,
                     origin_text(database.origin),
                     database.path.display()
-                ))
-                .small()
-                .monospace()
-                .color(theme::muted()),
-            )
-            .wrap(),
-        );
+                )
+            })
+            .collect();
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(label).strong().color(theme::heading()));
+            let response = if found {
+                chip(ui, "Database found".to_owned(), Tone::Good)
+            } else {
+                chip(ui, "No database".to_owned(), Tone::Accent)
+            };
+            if !details.is_empty() {
+                response.on_hover_text(details.join("\n"));
+            }
+        });
     }
     if let Some(warning) = status.warning() {
         ui.add_space(4.0);

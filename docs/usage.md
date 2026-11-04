@@ -946,15 +946,16 @@ addresses in the Network tabs get a Country and an Organization. **Address
 lookup** has three choices: **TShark GeoIP only** (the default), **dig and whois
 only**, and **TShark GeoIP, then dig and whois when unavailable**. Local addresses
 are never queried. Below it, **IP geolocation database (TShark)** is about the
-first choice: TShark fills Country and Organization only from MaxMind-format
-(`.mmdb`) databases and ignores the old `GeoIP.dat` files. Antinomie hands its
-own copy to its TShark runs only and never changes your Wireshark settings.
+first choice: TShark needs `.mmdb` databases to fill Country and Organization.
+Older `GeoIP.dat` files (such as `/usr/share/GeoIP` on Debian) do not work with
+TShark 4. Antinomie hands its databases to its own TShark runs only and never
+changes your Wireshark settings.
 
 **Database status.** While it looks, the page says "Looking for databases…". Then
 **Country / city** and **Organization (AS)** each show **Database found** or **No
-database**, followed by one line per database: its file name, where it came from
-("TShark's own folder", "Antinomie's DB-IP Lite copy" or "your folder") and its
-path. When something is missing, an amber warning says which column stays empty
+database**, and nothing more. Hover the chip for one line per database: its file
+name, where it came from ("TShark's own folder", "Antinomie's DB-IP Lite copy" or
+"your folder") and its path. When something is missing, an amber warning says which column stays empty
 and how to fix it (install DB-IP Lite in Library > Analysis tools, or choose a
 folder in Settings > Network lookup).
 
@@ -982,8 +983,10 @@ SHA-256 was recorded, not checked against a pin"). A progress bar shows
 
 **Your own GeoLite2 folder.** The text field (or the folder button, **Choose the
 folder**) names a folder with `GeoLite2-Country.mmdb` and `GeoLite2-ASN.mmdb`
-(GeoLite2 or GeoIP2, Country or City, and ASN). The files are read in place; the
-note says they need a MaxMind account to download, which Antinomie does not do. The
+(GeoLite2 or GeoIP2: a Country or City database and an ASN database). MaxMind
+requires a free account to download them, so Antinomie cannot fetch them for you;
+the DB-IP Lite install needs no account. The files are read where they are, not
+copied. The
 **X** button (**Stop using this folder**) clears it.
 
 **Attribution.** DB-IP's licence (CC BY 4.0) asks for credit wherever the data

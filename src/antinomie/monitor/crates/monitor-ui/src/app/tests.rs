@@ -38,6 +38,7 @@ mod samples_list;
 mod samples_report;
 mod samples_shots;
 mod scanned_inputs;
+mod settings_lookup;
 mod settings_window;
 mod shortcuts;
 mod start_error;
