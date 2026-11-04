@@ -134,6 +134,12 @@ pub fn follow_child(context: &mut Context) -> Result<String, String> {
     Ok("follow-fork-mode child: gdb attached to the child at its fork (parent detached and still running), hit the child's breakpoint twice and saw it exit 7".into())
 }
 
+/// The parent_site stops before the fork mode's first fork: the fixture forks
+/// from round 30 on aarch64 (`FORK_FIRST_ROUND` in debug-p3-fixture.c).
+fn stops_before_forks() -> usize {
+    if on_aarch64() { 30 } else { 0 }
+}
+
 /// follow-fork-mode parent (the default): the child is detached at once, runs
 /// clean, and the parent's breakpoints keep working.
 pub fn follow_parent(context: &mut Context) -> Result<String, String> {
@@ -153,7 +159,8 @@ pub fn follow_parent(context: &mut Context) -> Result<String, String> {
     )?;
     let mut detached = 0;
     let mut parent_hits = 1;
-    for _ in 0..12 {
+    let stops = 12 + stops_before_forks();
+    for _ in 0..stops {
         let text = session.gdb.run("continue", 60)?;
         if text.contains("Detaching after fork from child process") {
             detached += 1;
@@ -171,7 +178,7 @@ pub fn follow_parent(context: &mut Context) -> Result<String, String> {
         }
     }
     if detached < 2 {
-        return Err(format!("{detached} forks seen in 12 stops"));
+        return Err(format!("{detached} forks seen in {stops} stops"));
     }
     session.gdb.run("delete\ndetach", 30)?;
     let output = session.output(context);
@@ -209,7 +216,7 @@ pub fn keep_both(context: &mut Context) -> Result<String, String> {
     // Run on to the fork: gdb follows a fork silently unless it is caught.
     session.gdb.run("catch fork", 30)?;
     let mut text = String::new();
-    for _ in 0..6 {
+    for _ in 0..6 + stops_before_forks() {
         text = session.gdb.run("continue", 60)?;
         if text.contains("forked process") {
             break;
