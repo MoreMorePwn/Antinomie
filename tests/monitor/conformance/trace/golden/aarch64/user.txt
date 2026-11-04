@@ -203,7 +203,7 @@ epoll_ctl.add_idle | epoll_ctl(epfd=9, op=EPOLL_CTL_ADD, fd=6, event=<bytes>) = 
 epoll_ctl.add_in | epoll_ctl(epfd=8, op=EPOLL_CTL_ADD, fd=4, event=<bytes>) = 0 | arg3.epoll_event:complete:<bytes>
 epoll_ctl.add_nested | epoll_ctl(epfd=8, op=EPOLL_CTL_ADD, fd=9, event=<bytes>) = 0 | arg3.epoll_event:complete:<bytes>
 epoll_ctl.add_out | epoll_ctl(epfd=8, op=EPOLL_CTL_ADD, fd=5, event=<bytes>) = 0 | arg3.epoll_event:complete:<bytes>
-epoll_ctl.bad_op | epoll_ctl(epfd=8, op=Unknown operation 0x63, fd=6, event=<addr>) = EINVAL | arg3.epoll_event:no decoder:uncaptured !3
+epoll_ctl.bad_op | epoll_ctl(epfd=8, op=Unknown operation 0x63, fd=6, event=<bytes>) = EINVAL | arg3.epoll_event:complete:<bytes>
 epoll_ctl.badf | epoll_ctl(epfd=8, op=EPOLL_CTL_ADD, fd=999, event=<bytes>) = EBADF | arg3.epoll_event:complete:<bytes>
 epoll_ctl.del | epoll_ctl(epfd=8, op=EPOLL_CTL_DEL, fd=5, event=NULL) = 0 |
 epoll_ctl.del_missing | epoll_ctl(epfd=8, op=EPOLL_CTL_DEL, fd=5, event=NULL) = ENOENT |
@@ -614,14 +614,19 @@ ioctl.fionread_file | ioctl(fd=3, cmd=FIONREAD, arg=<bytes>) = 0 | arg2.ioctl:co
 ioctl.fionread_pipe | ioctl(fd=4, cmd=FIONREAD, arg=<bytes>) = 0 | arg2.ioctl:complete
 ioctl.fionread_tty | ioctl(fd=stdin, cmd=FIONREAD, arg=<data>) = <value> | arg2.ioctl:complete
 ioctl.fioqsize_file | ioctl(fd=3, cmd=FIOQSIZE, arg=<bytes>) = 0 | arg2.ioctl:complete
+ioctl.fsgetxattr_file | ioctl(fd=3, cmd=_IOR('X', 0x1f, 28), arg=<data>) = <value> | arg2.ioctl:complete
 ioctl.getflags_file | ioctl(fd=3, cmd=FS_IOC_GETFLAGS, arg=<data>) = <value> | arg2.ioctl:complete
 ioctl.setflags_same | ioctl(fd=3, cmd=FS_IOC_SETFLAGS, arg=<data>) = <value> | arg2.ioctl:complete
+ioctl.siocgifconf | ioctl(fd=8, cmd=SIOCGIFCONF, arg=<data>) = <value> | arg2.ioctl:complete arg2.ioctl:complete arg2.ifconf.buffer:complete
+ioctl.siocgifindex_lo | ioctl(fd=8, cmd=SIOCGIFINDEX, arg=<bytes>) = 0 | arg2.ioctl:complete:<bytes> arg2.ioctl:complete
 ioctl.socket_inq | ioctl(fd=8, cmd=FIONREAD, arg=<bytes>) = 0 | arg2.ioctl:complete
 ioctl.tcgets_fault | ioctl(fd=stdin, cmd=TCGETS, arg=1) = EFAULT |
 ioctl.tcgets_stdin | ioctl(fd=stdin, cmd=TCGETS, arg=<bytes>) = 0 | arg2.ioctl:complete
 ioctl.tiocgpgrp | ioctl(fd=stdin, cmd=TIOCGPGRP, arg=<data>) = <value> | arg2.ioctl:complete
 ioctl.tiocgwinsz_stdout | ioctl(fd=stdout, cmd=TIOCGWINSZ, arg=<data>) = <value> | arg2.ioctl:complete
-ioctl.unknown_file | ioctl(fd=3, cmd=_IOR('Z', 0x7e, 4), arg=<handle>) = ENOTTY | arg2.ioctl:no decoder:uncaptured !3
+ioctl.unknown_file | ioctl(fd=3, cmd=_IOR('Z', 0x7e, 4), arg=<handle>) = ENOTTY |
+ioctl.unknown_none | ioctl(fd=3, cmd=_IO('Z', 0x7c), arg=<handle>) = ENOTTY | arg2.ioctl:no decoder:uncaptured !3
+ioctl.unknown_write | ioctl(fd=3, cmd=_IOW('Z', 0x7d, 4), arg="\x07\0\0\0") = ENOTTY | arg2.ioctl:complete:"\x07\0\0\0"
 ioprio_get.bad_which | ioprio_get(which=Unknown which 0x63, who=0) = EINVAL |
 ioprio_get.changed | ioprio_get(which=IOPRIO_WHO_PROCESS, who=0) = 16391 |
 ioprio_get.no_such_process | ioprio_get(which=IOPRIO_WHO_PROCESS, who=1073741808) = ESRCH |
@@ -1223,8 +1228,10 @@ quotactl_fd.getfmt_no_quota | quotactl_fd(fd=3, cmd=Q_GETFMT / USRQUOTA, id=0, a
 quotactl_fd.setquota_unprivileged | quotactl_fd(fd=3, cmd=Q_SETQUOTA / USRQUOTA, id=1000, addr=<bytes>) = EPERM | arg3.dqblk:complete:<bytes>
 read.badf | read(fd=999, buf=<addr>, count=8) = EBADF |
 read.end_of_file | read(fd=3, buf=<addr>, count=256) = 0 | file.position:complete
+read.eventfd | read(fd=9, buf=<bytes>, count=8) = 8 | arg1.data:complete
 read.fault_at_eof | read(fd=3, buf=0x1, count=8) = 0 | file.position:complete
 read.fault_data | read(fd=3, buf=0x1, count=8) = EFAULT |
+read.inotify_events | read(fd=10, buf=<data>, count=512) = <value> | arg1.data:complete
 read.pipe_no_position | read(fd=5, buf="NOMIE-", count=6) = 6 | arg1.data:complete
 read.text | read(fd=3, buf="ANTINOMIE-CONFORMANCE-FILE-IO-0123456789", count=256) = 40 | arg1.data:complete file.position:complete
 readahead.badf | readahead(fd=999, offset=0, count=4096) = EBADF |
