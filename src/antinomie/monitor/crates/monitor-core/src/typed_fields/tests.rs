@@ -227,13 +227,13 @@ fn capabilities_combine_both_words_and_the_header_is_named_for_capget_only() {
     assert_eq!(decode(Some(&capget), &odd).unwrap().line(), "0x7");
     let pid = field("pid_t", "arg0.pid", &(-1i32).to_le_bytes());
     assert_eq!(decode(Some(&capget), &pid).unwrap().line(), "-1");
-    // Another call's u32 or pid_t is not decoded here.
+    // Another call's u32 or pid_t is a plain number (the layout decoder).
     let other = Call {
         name: "clone3",
         args: None,
     };
-    assert!(decode(Some(&other), &pid).is_none());
-    assert!(decode(None, &version).is_none());
+    assert_eq!(decode(Some(&other), &pid).unwrap().line(), "-1");
+    assert!(decode(None, &version).is_some());
 }
 
 #[test]
@@ -500,7 +500,7 @@ fn partial_captures_and_other_layouts_are_not_guessed() {
     holed.ranges = vec![(8, 16)];
     assert!(decode(None, &holed).is_none());
     // A layout not decoded here.
-    assert!(decode(None, &field("timespec", "arg0.data", &[0; 16])).is_none());
+    assert!(decode(None, &field("iocb", "arg0.data", &[0; 16])).is_none());
     assert!(decode(None, &field("", "arg1.buf", b"abc")).is_none());
     // More captured than the preview: marked.
     let mut long = field("gid_t[]", "arg1.data", &[0; 8]);

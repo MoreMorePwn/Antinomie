@@ -16,12 +16,14 @@
 //! the walk and is reported as a [`Cut`] instead of being guessed at. Records
 //! are decoded one at a time on demand, so a huge array costs one boundary
 //! per record, not one decode per record.
-use super::{Call, Decoded, Shape, u16_at};
+use super::{Call, Decoded, Node, Shape, layout, u16_at};
+use crate::syscalls::Abi;
 use serde::{Serialize, Serializer, ser::SerializeMap};
 
 mod brief;
 mod classic;
 mod decoders;
+mod layout_rows;
 mod table;
 
 pub use brief::{Brief, brief};
@@ -42,7 +44,17 @@ pub struct Record {
 impl Record {
     fn from_decoded(decoded: &Decoded, summary: String) -> Self {
         let fields = match decoded.shape {
-            Shape::Struct => decoded.members.clone(),
+            Shape::Struct => {
+                let mut fields = Vec::new();
+                for (index, (name, value)) in decoded.members.iter().enumerate() {
+                    match decoded.children.get(&index) {
+                        // A nested structure is its members, `msg_hdr.msg_iovlen`.
+                        Some(children) => flatten(name, children, &mut fields),
+                        None => fields.push((name.clone(), value.clone())),
+                    }
+                }
+                fields
+            }
             _ => vec![("value".to_owned(), decoded.full_line())],
         };
         Self { summary, fields }
@@ -56,6 +68,21 @@ impl Record {
             .map(|(name, value)| format!("{name}={value}"))
             .collect();
         format!("{{{}}}", items.join(", "))
+    }
+}
+
+fn flatten(prefix: &str, nodes: &[Node], fields: &mut Vec<(String, String)>) {
+    for node in nodes {
+        let name = if node.name.starts_with('[') {
+            format!("{prefix}{}", node.name)
+        } else {
+            format!("{prefix}.{}", node.name)
+        };
+        if node.children.is_empty() {
+            fields.push((name, node.text.clone()));
+        } else {
+            flatten(&name, &node.children, fields);
+        }
     }
 }
 
@@ -112,6 +139,7 @@ enum Starts {
 /// for a record with the same bytes it was opened over.
 pub struct Records {
     spec: &'static Spec,
+    abi: Abi,
     call: String,
     count: usize,
     consumed: usize,
@@ -122,6 +150,7 @@ pub struct Records {
 
 /// What a record decoder is told about where the record sits.
 pub(super) struct Ctx<'a> {
+    pub abi: Abi,
     pub call: &'a str,
     /// Position among the records, and how many there are.
     pub index: usize,
@@ -136,12 +165,30 @@ impl Records {
     /// (see [`super::layout_type`]); None for a layout that is not a record
     /// array here, or no bytes.
     pub fn open(call: Option<&Call<'_>>, layout: &str, _key: &str, data: &[u8]) -> Option<Self> {
-        let spec = table::spec_named(layout)?;
+        let abi = layout::abi_of_layout(layout)?;
+        let spec = table::spec_named(super::layout_type(layout))?;
         if data.is_empty() {
             return None;
         }
+        // A 32-bit program's records are read by the compat inventory's
+        // layout, or by a fixed row only where the bytes are the same.
+        match spec.size {
+            Size::Layout(element) => {
+                layout::stride(abi, element)?;
+            }
+            _ if layout::is_compat(abi)
+                && !spec
+                    .names
+                    .iter()
+                    .any(|name| super::COMPAT_SAME.contains(name)) =>
+            {
+                return None;
+            }
+            _ => {}
+        }
         let mut records = Self {
             spec,
+            abi,
             call: call.map_or_else(String::new, |call| call.name.to_owned()),
             count: 0,
             consumed: 0,
@@ -156,6 +203,24 @@ impl Records {
     fn walk(&mut self, data: &[u8]) {
         match self.spec.size {
             Size::Fixed(size) => {
+                let whole = data.len() / size.max(1);
+                self.count = whole.min(MAX_RECORDS);
+                self.capped = whole > MAX_RECORDS;
+                self.consumed = self.count * size;
+                self.starts = Starts::Fixed(size);
+                if !self.capped && self.consumed < data.len() {
+                    self.cut = Some(Cut {
+                        index: self.count,
+                        at: self.consumed,
+                        kind: CutKind::Short {
+                            have: data.len() - self.consumed,
+                            need: Some(size),
+                        },
+                    });
+                }
+            }
+            Size::Layout(element) => {
+                let size = layout::stride(self.abi, element).unwrap_or(1);
                 let whole = data.len() / size.max(1);
                 self.count = whole.min(MAX_RECORDS);
                 self.capped = whole > MAX_RECORDS;
@@ -258,6 +323,7 @@ impl Records {
         let (start, end) = self.span(index)?;
         let bytes = data.get(start..end)?;
         let ctx = Ctx {
+            abi: self.abi,
             call: &self.call,
             index,
             total: self.count,
