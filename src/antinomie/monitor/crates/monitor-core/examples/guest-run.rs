@@ -671,21 +671,30 @@ fn run() -> Result<Value, String> {
     // run can leave in the hundreds of megabytes.
     session.command(Command::Stop, 600)?;
     session.settle(|s| s.state == VmState::Stopped, 60)?;
-    // A stopped capture's final summary (its size) is a queued write: on a
-    // busy disk the listing would still read the summary from its start.
-    antinomie_monitor_core::writer::barrier();
-    let network_captures = network_capture
-        .then(|| {
-            session
-                .snapshot
-                .vm_locations
-                .iter()
-                .find(|location| location.vm_id == vm_id)
-                .map(|location| {
-                    antinomie_monitor_core::network::list_captures(&location.recording_directory)
-                })
-        })
-        .flatten();
+    // A stopped capture's final summary (its end and size) is a queued
+    // background write: on a busy disk the folder still holds the summary
+    // from its start for a while.
+    let recordings = session
+        .snapshot
+        .vm_locations
+        .iter()
+        .find(|location| location.vm_id == vm_id)
+        .map(|location| location.recording_directory.clone());
+    let network_captures = match recordings.filter(|_| network_capture) {
+        Some(recordings) => {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            loop {
+                let captures = antinomie_monitor_core::network::list_captures(&recordings);
+                if captures.iter().all(|capture| capture.stopped_ms.is_some())
+                    || Instant::now() > deadline
+                {
+                    break Some(captures);
+                }
+                thread::sleep(Duration::from_millis(200));
+            }
+        }
+        None => None,
+    };
     session.backend.shutdown()?;
     Ok(
         json!({"vm_id": vm_id, "base": base, "boot_seconds": boot_seconds,
