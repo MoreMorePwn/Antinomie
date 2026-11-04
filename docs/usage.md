@@ -477,7 +477,25 @@ The network capture is the guest's own view on every route.
   directory entries (getdents), group lists and the ids getres*id wrote,
   `file_handle` headers, `io_uring_params`, System V messages (`mtype`,
   `mtext`), iptables table headers and LDT entries. Selecting such a field
-  lists every member. Other structs, times, integers and pointers show in hex.
+  lists every member. Every other captured layout that the member inventory
+  of the run's architecture describes is decoded from its members by one
+  layout-driven reader: times as durations (`1.5 s`; absolute times as dates),
+  `epoll_event` (12 bytes on x86-64, 16 on aarch64), `sigaction` (handler,
+  `SA_*` flags, mask as signal names), `flock`, `open_how`, `clone_args`,
+  `user_regs_struct`, `rlimit`, `stat`/`statx`/`statfs`, socket option values by
+  level and name (`on`/`off`, `SOCK_STREAM`, `ucred`), `msghdr`, wait4 status
+  (`exited 0`, `killed by SIGSEGV`), select's descriptor sets (`fd 3`), the
+  descriptor pairs of `pipe`/`socketpair`, and more, with nested structures
+  and arrays as an indented tree in Details; the hex dump of the raw bytes stays
+  below it. Arguments that are plain numbers read by name where they hold flags
+  or enumerations (inotify and fanotify masks, `access` mode, the socket
+  protocol by family, memory-policy mode, `ITIMER_*`, `fcntl` arguments by
+  command, `prctl` sub-arguments). A 32-bit (compat) program's structures are
+  read by the compat inventory (`ia32`, AArch32); where it has no layout the
+  bytes show undecoded with a "No compat layout" note, never read with 64-bit
+  offsets. Decoded fields are also in the trace JSON export (`decoded_fields`)
+  and in the `records` filter text. Integers and pointers of layouts nothing
+  decodes show in hex.
   A captured **array of records** (directory entries of `getdents`/`getdents64`,
   `cap_data`, `gid_t`, `siginfo_t`, `desc_struct`, `pollfd`, `sembuf`, the
   control messages of `sendmsg`/`recvmsg`, classic BPF filters of

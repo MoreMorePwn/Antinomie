@@ -13,6 +13,19 @@ release also record 32-bit x86 programs by their own table.
 
 ### Host
 
+- **Layout-driven trace decoding (ANT-T0294).** One decoder reads any captured
+  layout from the per-architecture member inventory (offsets and widths, so
+  `epoll_event` is 12 bytes on x86-64 and 16 on aarch64) as named fields,
+  nested structures and arrays, with flags, enumerations, signals, errors,
+  descriptors and times named: durations for `timespec`/`timeval`/`itimerspec`,
+  socket option values by level and name, `msghdr`/`mmsghdr`/`iovec`
+  arrays, `epoll_event`, `sigaction`, `user_regs_struct`, `clone_args`,
+  `open_how`, `flock`, wait4 status, select descriptor sets, pipe and
+  socketpair pairs; inotify/fanotify masks, access modes, socket protocols,
+  mempolicy modes, `ITIMER_*`, `fcntl` and `prctl` arguments read by name. It is
+  ABI-aware: compat programs read the compat inventory and show bytes with a
+  "No compat layout" note where it has none. The trace JSON export carries the
+  decoded fields.
 - **arm64 guests.** A BusyBox arm64 base (Debian 13's pinned arm64 BusyBox and
   e2fsprogs packages, the patched kernel cross-built with Debian 13's
   `aarch64-linux-gnu-gcc-14`) starts on QEMU's `virt` machine, on its device
