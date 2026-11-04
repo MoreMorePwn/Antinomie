@@ -333,8 +333,9 @@ snapshot's signed index. snapshot.debian.org is often slow, so each package
 file is tried at the Debian mirror you chose (the build wizard's mirror; a
 mirror near you from debian.org/mirror/list), then deb.debian.org, then
 snapshot at the pinned date; a 404 or a file that is not the pinned one just
-moves on, because no mirror is trusted. The dated index files (InRelease,
-Packages.xz) come from snapshot only. A failing source is retried up to five
+moves on, because no mirror is trusted. Only the dated, signed InRelease
+comes from snapshot alone; the other index files (Packages.xz and the like) are
+fetched by the SHA-256 it lists, from the mirrors first. A failing source is retried up to five
 times (5, 15, 45 and 120 s waits, resuming a partial file where the server
 allows), and the build log has a line for every retry and fallback; the build
 fails only when every source has failed, naming them. A kernel that built is
