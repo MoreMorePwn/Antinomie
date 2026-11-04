@@ -311,7 +311,7 @@ impl ProcessPicker {
                             ready,
                             egui::Button::new(
                                 RichText::new(if core {
-                                    format!("{} Dump core", egui_phosphor::regular::FILE)
+                                    format!("{} Dump core", egui_phosphor::regular::FILE_ARCHIVE)
                                 } else if debug {
                                     format!("{} Attach debugger", egui_phosphor::regular::BUG)
                                 } else {

@@ -143,7 +143,6 @@ fn toolbar_keeps_the_main_actions_and_menus_reach_the_rest() {
     assert_eq!(
         toolbar,
         [
-            "Start",
             "Stop",
             "Snapshots",
             "Kill",
@@ -157,7 +156,7 @@ fn toolbar_keeps_the_main_actions_and_menus_reach_the_rest() {
         ],
         "{shown:?}"
     );
-    // Running VM: Stop is red and Start is grayed out.
+    // Running VM: one button, Stop, in red; Start is not on the row.
     let colored = |label: &str| {
         text_color(
             &output,
@@ -169,7 +168,10 @@ fn toolbar_keeps_the_main_actions_and_menus_reach_the_rest() {
         )
     };
     assert_eq!(colored("Stop"), Some(theme::error()));
-    assert_eq!(colored("Start"), Some(theme::muted()));
+    assert!(
+        !shown.iter().any(|(text, _)| text.ends_with("Start")),
+        "{shown:?}"
+    );
     assert_eq!(colored("Run program"), Some(theme::blue()));
 
     // The actions that left the toolbar are in the menus.

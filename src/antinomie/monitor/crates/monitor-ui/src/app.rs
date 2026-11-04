@@ -168,6 +168,8 @@ struct Settings {
     light_theme: bool,
     /// Compact spacing and table rows (Comfortable when false).
     compact: bool,
+    /// Toolbar buttons show only their icons (Settings > Appearance).
+    minimal_toolbar: bool,
     /// Memory tab: look up symbol tables online for dumps without one.
     memory_online_symbols: bool,
     /// Disks tab: extraction and hash limits, tree toggles.
@@ -307,6 +309,7 @@ impl Default for Settings {
             theme: None,
             light_theme: false,
             compact: true,
+            minimal_toolbar: false,
             memory_online_symbols: true,
             disks: Default::default(),
             address_lookup: crate::triage::AddressLookup::Tshark,

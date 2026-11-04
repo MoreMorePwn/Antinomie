@@ -68,7 +68,7 @@ impl CoreView {
                 }
             });
         });
-        if ui.add_enabled(unavailable.is_none(), egui::Button::new(format!("{} Dump core", egui_phosphor::regular::FILE))
+        if ui.add_enabled(unavailable.is_none(), egui::Button::new(format!("{} Dump core", egui_phosphor::regular::FILE_ARCHIVE))
             .min_size(egui::vec2(ui.available_width(), 0.0)))
             .on_hover_text("Pause a selected process, capture its resident memory and thread context, then resume")
             .on_disabled_hover_text(unavailable.unwrap_or_default())

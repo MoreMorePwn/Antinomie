@@ -513,7 +513,7 @@ fn core_picker_captures_the_complete_identity_and_requires_supported_selected_vm
     // The foreground picker and background panel share the same action
     // name. Click the foreground button rather than the toolbar/panel.
     let output = render(&mut app, &ctx, size);
-    let label = format!("{} Dump core", egui_phosphor::regular::FILE);
+    let label = format!("{} Dump core", egui_phosphor::regular::FILE_ARCHIVE);
     let position = texts(&output)
         .iter()
         .rfind(|(text, _)| text == &label)

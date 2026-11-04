@@ -239,7 +239,8 @@ impl MonitorApp {
             .frame(theme::frame(theme::panel()))
             .show(root, |ui| {
                 let specs = self.tool_specs(ctx);
-                let shown = tool_layout(ui, &specs);
+                let minimal = self.settings.minimal_toolbar;
+                let shown = tool_layout(ui, &specs, minimal);
                 let hidden: Vec<usize> =
                     (0..specs.len()).filter(|at| !shown.contains(at)).collect();
                 let mut chosen = None;
@@ -254,7 +255,7 @@ impl MonitorApp {
                             ui.separator();
                         }
                         last_group = Some(spec.group);
-                        if tool_button(ui, spec.button()) {
+                        if tool_button(ui, spec.button(minimal)) {
                             chosen = Some(spec.action);
                         }
                     }
@@ -347,8 +348,7 @@ impl MonitorApp {
         let capturing = observer.is_some();
         use egui_phosphor::regular as icon;
         vec![
-            ToolSpec::new(ToolAction::Start, 0, icon::PLAY, "Start", shortcut("Start the selected VM", Action::StartVm), self.can_start_vm(), theme::good(), true, false),
-            ToolSpec::new(ToolAction::Stop, 0, icon::STOP, "Stop", shortcut("Shut down the running VM", Action::StopVm), self.can_stop_vm(), theme::error(), true, false),
+            self.vm_power_spec(&shortcut),
             ToolSpec::new(ToolAction::Snapshots, 1, icon::CLOCK_COUNTER_CLOCKWISE, "Snapshots", "Save, restore and branch this VM's disk and memory".into(), self.selected.is_some() && !self.closing, theme::blue(), false, false),
             ToolSpec::new(ToolAction::Kill, 2, icon::X_CIRCLE, "Kill", "Terminate the selected active run and descendants; keep the VM running. Select a live run in Run history when several are active.".into(), self.kill_target().is_some(), theme::error(), false, false),
             ToolSpec::new(ToolAction::RunProgram, 2, icon::TERMINAL_WINDOW, "Run program", shortcut("Run a program in the VM and record it", Action::RunProgram), self.running(), theme::blue(), false, self.launch_open),
@@ -365,8 +365,44 @@ impl MonitorApp {
             ),
             ToolSpec::new(ToolAction::CaptureNetwork, 3, icon::NETWORK, "Capture network", self.network_toggle_label().into(), self.network_toggle_enabled(), theme::info(), false, self.snapshot.network_capture.is_some()),
             ToolSpec::new(ToolAction::DumpMemory, 3, icon::DATABASE, "Dump memory", "Save the running VM's RAM".into(), self.running() && !self.closing && self.snapshot.memory_dump.is_none(), theme::info(), false, self.snapshot.memory_dump.is_some()),
-            ToolSpec::new(ToolAction::DumpCore, 3, icon::FILE, "Dump core", self.manual_core_unavailable().unwrap_or("Pause a selected process, capture its core, then resume").to_owned(), self.manual_core_unavailable().is_none(), theme::info(), false, false),
+            ToolSpec::new(ToolAction::DumpCore, 3, icon::FILE_ARCHIVE, "Dump core", self.manual_core_unavailable().unwrap_or("Pause a selected process, capture its core, then resume").to_owned(), self.manual_core_unavailable().is_none(), theme::info(), false, false),
         ]
+    }
+
+    /// One button for the VM's power: Start while none runs, Stop once one
+    /// runs or starts (disabled while it is already stopping).
+    fn vm_power_spec(&self, shortcut: &dyn Fn(&str, Action) -> String) -> ToolSpec {
+        use egui_phosphor::regular as icon;
+        if self.snapshot.active_vm.is_none() {
+            return ToolSpec::new(
+                ToolAction::Start,
+                0,
+                icon::PLAY,
+                "Start",
+                shortcut("Start the selected VM", Action::StartVm),
+                self.can_start_vm(),
+                theme::good(),
+                true,
+                false,
+            );
+        }
+        let stopping = matches!(self.snapshot.state, VmState::Stopping);
+        let tooltip = if stopping {
+            "The VM is shutting down".to_owned()
+        } else {
+            shortcut("Shut down the running VM", Action::StopVm)
+        };
+        ToolSpec::new(
+            ToolAction::Stop,
+            0,
+            icon::STOP,
+            "Stop",
+            tooltip,
+            self.can_stop_vm() && !stopping,
+            theme::error(),
+            true,
+            false,
+        )
     }
 
     fn run_tool(&mut self, action: ToolAction) {
@@ -408,8 +444,8 @@ pub(super) enum ToolAction {
 
 /// Which buttons stay when the row is too narrow: first in this list stays
 /// longest; the last ones move into the "more" menu first (Dump core, Dump
-/// memory, Capture network, Capture all, Snapshots, Kill, Run program, Stop,
-/// Start).
+/// memory, Capture network, Capture all, Snapshots, Kill, Run program, then
+/// Start or Stop).
 pub(super) const TOOL_PRIORITY: [ToolAction; 9] = [
     ToolAction::Start,
     ToolAction::Stop,
@@ -429,6 +465,8 @@ pub(super) struct ToolSpec {
     icon: &'static str,
     label: &'static str,
     tooltip: String,
+    /// The hover text when only the icon shows: the label, then the tooltip.
+    icon_tip: String,
     enabled: bool,
     tone: egui::Color32,
     strong: bool,
@@ -453,6 +491,7 @@ impl ToolSpec {
             group,
             icon,
             label,
+            icon_tip: format!("{label}: {tooltip}"),
             tooltip,
             enabled,
             tone,
@@ -461,11 +500,16 @@ impl ToolSpec {
         }
     }
 
-    fn button(&self) -> ToolButton<'_> {
+    fn button(&self, minimal: bool) -> ToolButton<'_> {
         ToolButton {
             icon: self.icon,
-            label: self.label,
-            tooltip: &self.tooltip,
+            label: if minimal { "" } else { self.label },
+            // Icons only: the label moves into the hover text.
+            tooltip: if minimal {
+                &self.icon_tip
+            } else {
+                &self.tooltip
+            },
             enabled: self.enabled,
             tone: self.tone,
             strong: self.strong,
@@ -477,7 +521,7 @@ impl ToolSpec {
 /// The indexes of `specs` that fit the row, by priority: the row keeps room
 /// for the status text (at least 150 px) and, when something is left out, for
 /// the "more" button.
-fn tool_layout(ui: &egui::Ui, specs: &[ToolSpec]) -> Vec<usize> {
+fn tool_layout(ui: &egui::Ui, specs: &[ToolSpec], minimal: bool) -> Vec<usize> {
     let spacing = 4.0;
     let font = egui::TextStyle::Button.resolve(ui.style());
     let width_of = |spec: &ToolSpec| -> f32 {
@@ -490,11 +534,12 @@ fn tool_layout(ui: &egui::Ui, specs: &[ToolSpec]) -> Vec<usize> {
                     .x
             })
         };
-        measure(spec.icon)
-            + 6.0
-            + measure(spec.label)
-            + ui.spacing().button_padding.x * 2.0
-            + spacing
+        let label = if minimal {
+            0.0
+        } else {
+            6.0 + measure(spec.label)
+        };
+        measure(spec.icon) + label + ui.spacing().button_padding.x * 2.0 + spacing
     };
     let more = ui.spacing().interact_size.y + 12.0;
     let status = 150.0;

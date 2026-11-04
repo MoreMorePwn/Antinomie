@@ -362,7 +362,9 @@ pub(super) fn tool_button(ui: &mut egui::Ui, button: ToolButton<'_>) -> bool {
         0.0,
         egui::TextFormat::simple(font.clone(), icon),
     );
-    job.append(button.label, 6.0, egui::TextFormat::simple(font, label));
+    if !button.label.is_empty() {
+        job.append(button.label, 6.0, egui::TextFormat::simple(font, label));
+    }
     let mut widget = egui::Button::new(job).min_size(egui::vec2(0.0, ui.spacing().interact_size.y));
     if button.active {
         // Lit while its work runs: a tint of the tone, no outline.

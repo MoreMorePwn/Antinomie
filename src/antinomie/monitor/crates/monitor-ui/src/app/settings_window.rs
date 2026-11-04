@@ -426,6 +426,13 @@ impl MonitorApp {
             }
         });
         ui.end_row();
+        ui.label("Toolbar");
+        ui.checkbox(
+            &mut self.settings.minimal_toolbar,
+            "Minimal toolbar (icons only)",
+        )
+        .on_hover_text("Show only icons on the toolbar buttons; the names are in the hover text.");
+        ui.end_row();
     }
 
     fn recording_page(&mut self, ui: &mut egui::Ui) {
