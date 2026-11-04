@@ -145,6 +145,29 @@ pub(super) fn held_text(health: &Health) -> Option<String> {
     })
 }
 
+/// How often Capture All shed telemetry this boot (dropped instead of letting
+/// the guest wait, while the host was behind) and for how long in all.
+/// `None` while it never did.
+pub(super) fn shed_text(health: &Health) -> Option<String> {
+    (health.shed_count > 0).then(|| {
+        let times = match health.shed_count {
+            1 => "once".to_owned(),
+            count => format!("{count} times"),
+        };
+        if health.shed_ns == 0 {
+            format!("{times}, still shedding")
+        } else {
+            let seconds = health.shed_ns as f64 / 1e9;
+            let ongoing = if health.shedding {
+                " (shedding now)"
+            } else {
+                ""
+            };
+            format!("{times}, {seconds:.1} s in all{ongoing}")
+        }
+    })
+}
+
 /// The telemetry read gaps of the boot: how many, the longest, and which
 /// cause took the most time. `None` while there were none.
 pub(super) fn gaps_text(health: &Health) -> Option<String> {
@@ -172,6 +195,10 @@ pub(super) fn details(ui: &mut egui::Ui, health: &Health) {
         (
             "Telemetry held back for the writer",
             held_text(health).unwrap_or_else(|| "never".into()),
+        ),
+        (
+            "Capture All shedding",
+            shed_text(health).unwrap_or_else(|| "never".into()),
         ),
         (
             "Telemetry read gaps",

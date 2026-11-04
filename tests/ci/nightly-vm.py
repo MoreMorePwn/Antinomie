@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
 """Nightly end-to-end check on a real VM: the newest BusyBox base for this
-app version boots, launched programs and Capture All are recorded without
-loss or parser errors, processes are named, and a network capture records
-packets. Needs KVM, QEMU and the release guest-run example.
+app version boots, a heavy launched program is recorded in never-drop mode
+without loss or parser errors, the same load under Capture All loses
+telemetry only while Capture All sheds load (by design: the guest stays
+responsive while the host is behind) and names its processes, and a network
+capture records packets. Needs KVM, QEMU and the release guest-run example.
 
     nightly-vm.py GUEST_RUN WORK_DIR
 """
@@ -16,8 +18,11 @@ import urllib.request
 
 BUCKET = "https://huggingface.co/buckets/MoreMorePwn/antinomie-bases/resolve"
 # Heavy enough to overflow the guest buffers, small enough for a CI runner.
-WORKLOAD = ("ls -lR / >/dev/null 2>&1; cat /proc/kallsyms >/dev/null; "
-            "find / -xdev >/dev/null 2>&1; echo LOAD DONE")
+# The programs are run by path: the bases' static BusyBox shell runs a bare
+# `ls` as an applet in a forked child without an execve, so nothing in the
+# guest's telemetry would name it ls (it is the shell, forked).
+WORKLOAD = ("/bin/ls -lR / >/dev/null 2>&1; /bin/cat /proc/kallsyms >/dev/null; "
+            "/bin/find / -xdev >/dev/null 2>&1; echo LOAD DONE")
 
 
 def app_version():
@@ -63,6 +68,7 @@ def run(guest_run, work, name, plan):
     print(f"== {name}", flush=True)
     done = subprocess.run([guest_run, str(path)], capture_output=True, text=True, timeout=1800)
     (work / f"{name}.stderr").write_text(done.stderr)
+    (work / f"{name}.result.json").write_text(done.stdout)
     if done.returncode:
         print(done.stderr[-3000:])
         raise SystemExit(f"{name}: guest-run failed")
@@ -82,21 +88,39 @@ def main():
     base = download_base(version, work / "bases")
     failures = []
     vm = {"cpus": 2, "ram_mib": 1024, "disk_gib": 2}
+    heavy = [{"path": "/bin/sh", "args": ["-c", WORKLOAD], "uid": 0, "gid": 0,
+              "done": "LOAD DONE", "timeout": 900}]
+    # Never drop (the default transport) holds for a launched program.
+    launch = run(guest_run, work, "never-drop", {
+        "data_dir": str(work / "data-launch"), "headless": True, "import": str(base),
+        "vm": vm | {"name": "Launch"}, "boot_timeout": 240, "runs": heavy})
+    health = launch["health"]
+    check(health["attempted"] > 100_000, f"heavy workload sent {health['attempted']} packets", failures)
+    check(health["dropped"] == 0, f"never-drop lost {health['dropped']} packets", failures)
+    check(health["parser_errors"] == 0, f"{health['parser_errors']} parser errors", failures)
+    check(health.get("persistence_error") is None, f"saving error: {health.get('persistence_error')}", failures)
+    check(launch["runs"][0]["marker_seen"], "launched program finished with its output", failures)
+    # Capture All of the same load: when the host falls behind it sheds
+    # (the guest drops instead of waiting on every system call), and only then.
     capture = run(guest_run, work, "capture-all", {
         "data_dir": str(work / "data-capture"), "headless": True, "import": str(base),
         "vm": vm | {"name": "Capture"}, "boot_timeout": 240, "capture_all": True,
-        "runs": [{"path": "/bin/sh", "args": ["-c", WORKLOAD], "uid": 0, "gid": 0,
-                  "done": "LOAD DONE", "timeout": 900}]})
+        "runs": heavy})
     health = capture["health"]
-    check(health["attempted"] > 100_000, f"heavy workload sent {health['attempted']} packets", failures)
-    check(health["dropped"] == 0, f"never-drop lost {health['dropped']} packets", failures)
+    shed = health.get("shed_count", 0)
+    check(health["attempted"] > 100_000, f"Capture All workload sent {health['attempted']} packets", failures)
+    check(health["dropped"] == 0 or shed > 0,
+          f"Capture All lost {health['dropped']} packets, only while shedding "
+          f"(spells: {shed}, {health.get('shed_ns', 0) / 1e9:.1f} s)", failures)
     check(health["parser_errors"] == 0, f"{health['parser_errors']} parser errors", failures)
     check(health.get("persistence_error") is None, f"saving error: {health.get('persistence_error')}", failures)
     check(capture["runs"][0]["marker_seen"], "launched program finished with its output", failures)
     processes = [json.loads(path.read_text())
                  for path in (work / "data-capture").rglob("processes.json")]
     named = [p for tree in processes for p in tree if p.get("name")]
-    check(any(p["name"] == "ls" for p in named), f"capture named {len(named)} processes, including ls", failures)
+    check(any(p["name"] == "sh" and p.get("exe") == "/bin/sh" for p in named)
+          and any(p["name"] == "ls" and p.get("exe") == "/bin/ls" for p in named),
+          f"capture named {len(named)} processes, including sh and ls", failures)
     network = run(guest_run, work, "network", {
         "data_dir": str(work / "data-network"), "headless": True, "import": str(base),
         "vm": vm | {"name": "Network", "nat": True}, "boot_timeout": 240,

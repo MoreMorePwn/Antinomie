@@ -29,14 +29,8 @@ impl Worker {
                 | Command::AttachProcess { .. }
                 | Command::CaptureAll
                 | Command::StopCapture { .. }
-        ) && !self
-            .snapshot
-            .guest_kernel
-            .as_ref()
-            .and_then(|kernel| kernel.revision)
-            .is_some_and(|revision| revision >= 11)
-        {
-            return Err("process attachment and Capture All are unavailable; running guest requires a base for Antinomie 0.2.0 or newer".into());
+        ) {
+            observer_ready(self.snapshot.guest_kernel.as_ref())?;
         }
         match command {
             Command::DebugAttach { identity } => {
@@ -428,5 +422,42 @@ impl Worker {
             },
         );
         Ok(message)
+    }
+}
+
+/// Process attachment and Capture All need a revision-11 guest; until the
+/// running kernel has identified itself (right after boot) it is too early to
+/// tell, which is not the same as an old base.
+fn observer_ready(kernel: Option<&GuestKernel>) -> Result<(), String> {
+    match kernel.map(|kernel| kernel.revision) {
+        None => Err("the guest kernel has not identified itself yet; retry in a moment".into()),
+        Some(Some(revision)) if revision >= 11 => Ok(()),
+        Some(_) => Err("process attachment and Capture All are unavailable; running guest requires a base for Antinomie 0.2.0 or newer".into()),
+    }
+}
+
+#[cfg(test)]
+mod observer_ready_tests {
+    use super::*;
+
+    #[test]
+    fn a_guest_that_has_not_identified_itself_is_not_called_old() {
+        let error = observer_ready(None).unwrap_err();
+        assert!(error.contains("not identified itself yet"), "{error}");
+        let kernel = |revision| GuestKernel {
+            revision,
+            ..GuestKernel::default()
+        };
+        assert!(
+            observer_ready(Some(&kernel(None)))
+                .unwrap_err()
+                .contains("0.2.0 or newer")
+        );
+        assert!(
+            observer_ready(Some(&kernel(Some(10))))
+                .unwrap_err()
+                .contains("0.2.0 or newer")
+        );
+        assert_eq!(observer_ready(Some(&kernel(Some(20)))), Ok(()));
     }
 }

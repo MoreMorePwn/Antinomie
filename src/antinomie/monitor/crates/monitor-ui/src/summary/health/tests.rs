@@ -232,6 +232,23 @@ fn the_writer_hold_time_is_shown_only_when_there_was_one() {
 }
 
 #[test]
+fn capture_all_shedding_is_shown_only_when_it_happened() {
+    let mut health = Health::default();
+    assert_eq!(shed_text(&health), None);
+    health.shed_count = 1;
+    health.shedding = true;
+    assert_eq!(shed_text(&health).as_deref(), Some("once, still shedding"));
+    health.shed_count = 3;
+    health.shed_ns = 2_340_000_000;
+    assert_eq!(
+        shed_text(&health).as_deref(),
+        Some("3 times, 2.3 s in all (shedding now)")
+    );
+    health.shedding = false;
+    assert_eq!(shed_text(&health).as_deref(), Some("3 times, 2.3 s in all"));
+}
+
+#[test]
 fn read_gaps_are_shown_with_their_longest_and_causes() {
     use antinomie_monitor_core::read_gaps::{GapCause, ReadGap};
     let mut health = Health::default();

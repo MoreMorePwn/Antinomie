@@ -2330,6 +2330,13 @@ pub struct Health {
     /// guest would otherwise wait on every traced syscall.
     #[serde(default)]
     pub shedding: bool,
+    /// How often this boot Capture All started shedding, and for how long in
+    /// all (spells that ended): drops while it shed are by design, any other
+    /// drop in never-drop mode is a send that waited out its whole wait.
+    #[serde(default)]
+    pub shed_count: u64,
+    #[serde(default)]
+    pub shed_ns: u64,
     /// Pauses between telemetry reads (see [`crate::read_gaps`]).
     #[serde(default)]
     pub read_gaps: crate::read_gaps::ReadGapStats,

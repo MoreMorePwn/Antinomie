@@ -330,6 +330,7 @@ impl Session {
                 since: now,
                 ..self.shed
             };
+            health.shed_count = health.shed_count.saturating_add(1);
         } else if self.shed.active
             && (!capture_all
                 || (backlog < RESUME_BACKLOG
@@ -337,6 +338,10 @@ impl Session {
         {
             self.transport.set_send_wait(configured)?;
             self.shed.active = false;
+            let spell = now.saturating_duration_since(self.shed.since).as_nanos();
+            health.shed_ns = health
+                .shed_ns
+                .saturating_add(u64::try_from(spell).unwrap_or(u64::MAX));
             self.shed.wait_share = 0.0;
         }
         health.shedding = self.shed.active;

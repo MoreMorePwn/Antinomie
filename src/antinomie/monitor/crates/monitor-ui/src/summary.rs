@@ -471,6 +471,12 @@ pub(crate) fn show(
                         "The recording writer was behind the disk, so the host took no telemetry and the guest's sends waited. Nothing was dropped by this.",
                     );
                 }
+                if let Some(shed) = health::shed_text(&snapshot.health) {
+                    crate::widgets::fact_line(ui, "Capture All shed telemetry", &shed)
+                        .on_hover_text(
+                            "While Capture All ran and the host fell behind, the guest dropped telemetry instead of waiting on every system call, so that it stayed responsive. These drops are in the transport loss count.",
+                        );
+                }
                 if snapshot.health.shedding {
                     crate::activity::warning(
                         ui,

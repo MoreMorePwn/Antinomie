@@ -131,22 +131,35 @@ impl Session {
 
     fn command(&mut self, command: Command, seconds: u64) -> Result<String, String> {
         let id = self.backend.send(command)?;
+        self.result(id, seconds).map_err(|late| {
+            late.unwrap_or_else(|| {
+                format!("command {id} deadline; state {:?}", self.snapshot.state)
+            })
+        })
+    }
+
+    /// Waits for command `id`'s result; `Err(None)` when it is not in yet.
+    fn result(&mut self, id: u64, seconds: u64) -> Result<String, Option<String>> {
         let deadline = Instant::now() + Duration::from_secs(seconds);
         loop {
             if let Some((_, success, message)) = self.pump().filter(|(reply, ..)| *reply == id) {
-                return if success { Ok(message) } else { Err(message) };
+                return if success {
+                    Ok(message)
+                } else {
+                    Err(Some(message))
+                };
             }
             if Instant::now() > deadline {
-                return Err(format!(
-                    "command {id} deadline; state {:?}",
-                    self.snapshot.state
-                ));
+                return Err(None);
             }
             thread::sleep(Duration::from_millis(10));
         }
     }
 
     /// Retries a guest command until the guest's kernel control accepts it.
+    /// A command still unanswered is waited for, not sent again: the backend
+    /// is still working on it, and a second Execute would launch the program
+    /// twice.
     fn guest_command(
         &mut self,
         make: impl Fn() -> Command,
@@ -154,7 +167,18 @@ impl Session {
     ) -> Result<String, String> {
         let deadline = Instant::now() + Duration::from_secs(seconds);
         loop {
-            match self.command(make(), 60) {
+            let id = self.backend.send(make())?;
+            let mut outcome = self.result(id, 60);
+            while outcome == Err(None) && Instant::now() < deadline {
+                eprintln!("guest command {id} still unanswered; waiting");
+                outcome = self.result(id, 60);
+            }
+            let outcome = outcome.map_err(|late| {
+                late.unwrap_or_else(|| {
+                    format!("command {id} deadline; state {:?}", self.snapshot.state)
+                })
+            });
+            match outcome {
                 Ok(message) => return Ok(message),
                 Err(error) if Instant::now() < deadline => {
                     // Let a busy command worker drain before asking again.
@@ -646,6 +670,9 @@ fn run() -> Result<Value, String> {
     // run can leave in the hundreds of megabytes.
     session.command(Command::Stop, 600)?;
     session.settle(|s| s.state == VmState::Stopped, 60)?;
+    // A stopped capture's final summary (its size) is a queued write: on a
+    // busy disk the listing would still read the summary from its start.
+    antinomie_monitor_core::writer::barrier();
     let network_captures = network_capture
         .then(|| {
             session
