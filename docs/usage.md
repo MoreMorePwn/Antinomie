@@ -155,6 +155,21 @@ The **Base images** section in the left sidebar lists installed bases. Use
   it. The firmware of an existing VM cannot be switched between BIOS and UEFI;
   create a new VM instead.
 
+Downloads during a build: the Debian bases pin the archive to one
+snapshot.debian.org date and check every package against the SHA-256 and size
+in that snapshot's signed index. snapshot.debian.org is often slow, so each
+package file is tried at the Debian mirror you chose (the build wizard's
+mirror; a mirror near you from debian.org/mirror/list), then deb.debian.org
+(and security.debian.org for the kernel packages), then snapshot at the pinned
+date; a 404 or a file that is not the pinned one just moves on, because no
+mirror is trusted. Only the signed InRelease comes from snapshot: the other
+index files (Packages.xz) are fetched by hash from the mirrors first and
+checked against it. A failing source is retried up to five times (5, 15, 45 and
+120 s waits, resuming a partial file where the server allows), and the build log
+has a line for every retry and fallback naming the file; the build fails only
+when every source has failed, naming them. A kernel that built is kept in the
+cache even if a later stage fails.
+
 Bases are read-only templates. Right-click a base to make a **New VM from this
 base** or to **Delete base**. Deleting is refused while any VM still uses it.
 

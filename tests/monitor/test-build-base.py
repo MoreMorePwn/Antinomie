@@ -281,17 +281,18 @@ exit 0
 
         class Recipe:
             @staticmethod
-            def debian_kernel_debs(cache, work, proxy=""):
-                fetched.append((cache, proxy))
+            def debian_kernel_debs(cache, work, proxy="", mirror=""):
+                fetched.append((cache, proxy, mirror))
                 return [cache / "linux-image.deb", cache / "meta.deb"]
 
         with tempfile.TemporaryDirectory() as name, \
                 unittest.mock.patch.object(base.importlib.util, "module_from_spec",
                                            return_value=Recipe), \
                 unittest.mock.patch.object(base.importlib.util, "spec_from_file_location"):
-            self.assertEqual(base.debian_image(Path("/in"), Path(name), "http://proxy"),
+            self.assertEqual(base.debian_image(Path("/in"), Path(name), "http://proxy",
+                                              mirror="http://ftp.de.debian.org/debian"),
                              Path("/in/linux-image.deb"))
-        self.assertEqual(fetched, [(Path("/in"), "http://proxy")])
+        self.assertEqual(fetched, [(Path("/in"), "http://proxy", "http://ftp.de.debian.org/debian")])
 
     def test_missing_or_wrong_tarball_is_refused_before_unpacking(self):
         with tempfile.TemporaryDirectory() as name:
@@ -447,7 +448,8 @@ exit 0
                         unittest.mock.patch.object(base, "toolchain_module", return_value=fake):
                     base.require_debian_toolchain("minimal", root / "chroot", root / "w",
                                                   root / "i", root / "cc")
-                fake.ensure.assert_called_once_with(root / "chroot", base.CONTAINER_DOCKERFILE)
+                fake.ensure.assert_called_once_with(root / "chroot", base.CONTAINER_DOCKERFILE,
+                                                 mirror="", proxy="")
                 kind, (chroot_root, mounts) = base.SANDBOX
                 self.assertEqual(chroot_root, root / "chroot/root")
                 self.assertEqual([(inside, writable) for _, inside, writable in mounts],

@@ -589,6 +589,11 @@ impl BuildWizard {
             egui::TextEdit::singleline(&mut options.mirror)
                 .desired_width(crate::theme::plain_edit_width(420.0)),
         );
+        ui.small(
+            "A Debian mirror near you, e.g. from debian.org/mirror/list. Packages are checked \
+             against the pinned snapshot, so any mirror is safe; snapshot.debian.org is used for \
+             what the mirror no longer has.",
+        );
         ui.add_space(4.0);
         ui.label("HTTP proxy (leave empty for none)");
         ui.add(

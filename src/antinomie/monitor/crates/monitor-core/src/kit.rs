@@ -359,6 +359,7 @@ mod tests {
         for required in [
             "scripts/build-base.py",
             "scripts/toolchain_chroot.py",
+            "scripts/debian_fetch.py",
             "scripts/build-monitor-kernel.sh",
             "scripts/build-monitor-image.py",
             "scripts/build-debian-image.py",

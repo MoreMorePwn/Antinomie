@@ -8,6 +8,7 @@ it runs.
 
 ### Host
 
+- **Base builds survive a slow snapshot.debian.org.** Pinned packages (the kernel packages, the initrd's programs, the toolchain chroot's packages) come from the Debian mirror you set in the build wizard (new hint text), then deb.debian.org and security.debian.org, then snapshot.debian.org at the pinned date; each file is still checked against the SHA-256 in the pinned snapshot's signed index, so a mirror is never trusted and a 404 or a wrong file just moves on to the next source. Only the signed InRelease comes from snapshot; the other index files are fetched by hash from the mirrors first and checked against it. Every source gets five tries on 5xx, 429, timeouts, resets and short bodies (waits of 5, 15, 45 and 120 s), resuming with a Range request, and the build log says each retry and fallback, naming the file. A kernel that built and passed its checks goes back into the cache from the builder VM even when a later stage fails, so a retry does not compile it again.
 - **One Start/Stop button on the toolbar.** It reads Start (green) while no VM runs and Stop (red) while one runs or starts, and is grayed while the VM is shutting down. VM > Start VM and Stop VM, the palette and the shortcuts are unchanged.
 - **Minimal toolbar (icons only).** Settings > Appearance > Toolbar: every toolbar button shows only its icon and its name moves into the hover text. Off by default.
 - **Dump core has its own icon** (a file with an archive box, as core dumps have in the notes), on the toolbar and the Dump core buttons.

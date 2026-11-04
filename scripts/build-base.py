@@ -180,7 +180,8 @@ def toolchain_problem(kernel_profile):
     return None
 
 
-def require_debian_toolchain(kernel_profile, chroot=None, work=None, inputs=None, ccache=None):
+def require_debian_toolchain(kernel_profile, chroot=None, work=None, inputs=None, ccache=None,
+                             mirror="", proxy=""):
     """A Debian base's kernel (the stock profile) must carry Debian's banner,
     which only Debian 13's compiler and linker write. Use the host's when they are Debian 13's;
     else compile in the rootless toolchain chroot `chroot` (created on first
@@ -197,7 +198,7 @@ def require_debian_toolchain(kernel_profile, chroot=None, work=None, inputs=None
             "a Debian 13 host")
     module = toolchain_module()
     stage("toolchain")
-    root = module.ensure(chroot, CONTAINER_DOCKERFILE)
+    root = module.ensure(chroot, CONTAINER_DOCKERFILE, mirror=mirror, proxy=proxy)
     mounts = [(KIT, "/kit", False), (work, "/work", True), (inputs, "/inputs", False)]
     if ccache is not None:
         ccache.mkdir(parents=True, exist_ok=True)
@@ -413,7 +414,7 @@ def build_kernel(kernel_profile, tree, work, jobs, ccache=None, debian_image=Non
     return build
 
 
-def debian_image(inputs, work, proxy=""):
+def debian_image(inputs, work, proxy="", mirror=""):
     """Debian's linux-image package of the pinned release, in inputs (where the
     Debian Minimal image takes it from too), downloaded through the archive's
     signed index when missing."""
@@ -422,7 +423,7 @@ def debian_image(inputs, work, proxy=""):
     recipe = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(recipe)
     work.mkdir(parents=True, exist_ok=True)
-    return recipe.debian_kernel_debs(inputs, work, proxy)[0]
+    return recipe.debian_kernel_debs(inputs, work, proxy, mirror)[0]
 
 
 def memory_kib():
@@ -631,7 +632,8 @@ def main():
         kernel_profile = PROFILES[profile][0]
         if kernel_profile == "stock":
             require_debian_toolchain(kernel_profile, args.toolchain_chroot, args.work,
-                                     args.inputs, args.ccache)
+                                     args.inputs, args.ccache,
+                                     values.get("mirror", ""), values.get("proxy", ""))
         kernel_space, image_space = PROFILES[profile][3]
         build = load_cached_kernel(args.kernel_cache, kernel_profile, args.work, arch)
         if build is None:
@@ -639,8 +641,9 @@ def main():
             stage("source")
             tree = prepare_source(args.inputs, args.work)
             stage("kernel")
+            proxy, mirror = values.get("proxy", ""), values.get("mirror", "")
             build = build_kernel(kernel_profile, tree, args.work, args.jobs, args.ccache,
-                                 debian_image(args.inputs, args.work, values.get("proxy", ""))
+                                 debian_image(args.inputs, args.work, proxy, mirror)
                                  if kernel_profile == "stock" else None, arch)
             stage("symbols")
             make_symbols(build, args.work)
