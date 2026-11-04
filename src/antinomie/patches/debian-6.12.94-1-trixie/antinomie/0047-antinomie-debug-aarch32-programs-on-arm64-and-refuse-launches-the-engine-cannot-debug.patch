@@ -1,0 +1,494 @@
+Description: antinomie: debug AArch32 programs on arm64, and refuse launches the engine cannot debug
+ The arm64 debug engine refused AArch32 tasks. It now debugs them with
+ their compat register sets (user_aarch32_ptrace_view: NT_PRSTATUS of r0-r15,
+ cpsr and orig_r0, NT_ARM_VFP, NT_ARM_TLS; REGS_ALL reads that table), the
+ same hardware step, and the arm64 kernel's AArch32 break instructions as
+ software breakpoints: length 4 is A32 0xe7f001f0, length 2 Thumb 0xde01.
+ arch/arm64/kernel/debug-monitors.c's try_handle_aarch32_break(), which
+ do_el0_undef() calls for them, hands the trap to the engine first; it
+ claims it only where it planted one, so a program's own break keeps its
+ SIGTRAP. Each breakpoint keeps the instruction set it was planted for. A
+ stepped SVC of either instruction set ends at the system call's exit. A
+ Thumb breakpoint inside an IT block is not refused: whether it traps when
+ the block's condition fails is the CPU's choice. DEBUG_CAPS offers
+ ANTC_DEBUG_CAP_AARCH32.
+ .
+ A debug-on-start session whose launched image the engine cannot debug (an
+ ia32 or x32 program on x86-64) used to stop it at its entry and leave the
+ host attached to a program it could not read. Its entry stop is now not
+ taken, the program runs on, and ATTACH (ADOPT) of the session, or any
+ later command of it, answers EOPNOTSUPP and retires it; it never blocks a
+ new session.
+ .
+ Contract revision 21.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-04
+
+---
+diff --git a/arch/arm64/kernel/debug-monitors.c b/arch/arm64/kernel/debug-monitors.c
+index bbe293842..05c742467 100644
+--- a/arch/arm64/kernel/debug-monitors.c
++++ b/arch/arm64/kernel/debug-monitors.c
+@@ -315,6 +315,8 @@ bool try_handle_aarch32_break(struct pt_regs *regs)
+ 
+ 	if (!bp)
+ 		return false;
++	if (ant_monitor_arm64_compat_brk(regs))
++		return true;
+ 
+ 	send_user_sigtrap(TRAP_BRKPT);
+ 	return true;
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index 9e9387fbb..f2cd6ccf6 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -82,6 +82,7 @@ static inline bool ant_monitor_syscall_step(struct pt_regs *regs)
+ }
+ #ifdef CONFIG_ARM64
+ bool ant_dbg_arm64_brk(struct pt_regs *regs, unsigned long esr);
++bool ant_dbg_arm64_compat_brk(struct pt_regs *regs);
+ bool ant_dbg_arm64_softstep(struct pt_regs *regs);
+ bool ant_dbg_arm64_syscall_step(struct pt_regs *regs);
+ /* arm64 reports a user BRK, a software step and a stepped system call's exit
+@@ -94,6 +95,13 @@ static inline bool ant_monitor_arm64_brk(struct pt_regs *regs, unsigned long esr
+ 		return ant_dbg_arm64_brk(regs, esr);
+ 	return false;
+ }
++/* An AArch32 break instruction (try_handle_aarch32_break()). */
++static inline bool ant_monitor_arm64_compat_brk(struct pt_regs *regs)
++{
++	if (static_branch_unlikely(&ant_dbg_shadow_key))
++		return ant_dbg_arm64_compat_brk(regs);
++	return false;
++}
+ static inline bool ant_monitor_arm64_softstep(struct pt_regs *regs)
+ {
+ 	if (static_branch_unlikely(&ant_dbg_shadow_key))
+@@ -256,6 +264,7 @@ static inline void ant_monitor_signal_delivered(void) {}
+ static inline bool ant_monitor_syscall_step(struct pt_regs *regs) { return false; }
+ #ifdef CONFIG_ARM64
+ static inline bool ant_monitor_arm64_brk(struct pt_regs *regs, unsigned long esr) { return false; }
++static inline bool ant_monitor_arm64_compat_brk(struct pt_regs *regs) { return false; }
+ static inline bool ant_monitor_arm64_softstep(struct pt_regs *regs) { return false; }
+ static inline bool ant_monitor_arm64_syscall_step(struct pt_regs *regs) { return false; }
+ #endif
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index 91a2f35bb..1f5b33fe8 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -32,7 +32,8 @@
+  * task-exit record names who sent the signal that ended a task
+  * (lifecycle.signal.*) and carries the kernel's line for an OOM kill
+  * (lifecycle.kernel_log); arm64 guests write ELF32 cores of AArch32 tasks
+- * (CORE_COMPAT_ELF32). */
++ * (CORE_COMPAT_ELF32) and debug them (DEBUG_CAP_AARCH32), and a debug-on-start
++ * session of an image the engine cannot debug answers EOPNOTSUPP. */
+ #define ANTC_REVISION 21
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+@@ -213,6 +214,9 @@
+  * gdb stub then lets gdb step), and a watchpoint may trigger on loads only. */
+ #define ANTC_DEBUG_CAP_SW_SINGLE_STEP 1024
+ #define ANTC_DEBUG_CAP_READ_WATCH 2048
++/* Revision 21: AArch32 tasks of an arm64 guest are debugged (compat regsets;
++ * software breakpoints of length 4, A32, and 2, Thumb). */
++#define ANTC_DEBUG_CAP_AARCH32 4096
+ /* second capability word (CAPS requested with CAPS_EXT) */
+ #define ANTC_DEBUG_CAP2_FOLLOW 1
+ #define ANTC_DEBUG_CAP2_NONSTOP 2
+diff --git a/kernel/antinomie/debug.c b/kernel/antinomie/debug.c
+index 12cf0c574..21e8aa3c9 100644
+--- a/kernel/antinomie/debug.c
++++ b/kernel/antinomie/debug.c
+@@ -135,6 +135,7 @@ struct ant_dbg_bp {
+ 	u64 addr;
+ 	u32 len;
+ 	bool inserted;
++	bool compat;	/* an AArch32 instruction set's breakpoint (len 4 A32, 2 T16) */
+ 	u8 orig[ANT_DBG_MAX_BP_LEN];
+ };
+ 
+@@ -182,6 +183,11 @@ struct ant_dbg {
+ 	u32 wait_status;
+ 	bool teardown, kill, interrupt, step_request, detaching, run_stopping, run_stop_req;
+ 	bool start_pending, shared_as, published;
++	/* The launched program's image is one the engine cannot debug (an ABI
++	 * ant_dbg_arch_task_ok() refuses): its entry stop is not taken, and the
++	 * session answers -EOPNOTSUPP to the host and is retired.
++	 */
++	bool refused;
+ 	u32 step_tid, cont_sig, cont_sig_tid;
+ 	struct ant_dbg_hw hw[ANT_DBG_MAX_HW];
+ };
+@@ -766,7 +772,7 @@ static void insert_one(struct ant_dbg_as *as, unsigned int i)
+ 	spin_lock_irq(&as->lock);
+ 	bp = *slot;
+ 	spin_unlock_irq(&as->lock);
+-	if (bp.inserted || !ant_dbg_arch_bp_insn(bp.len, insn))
++	if (bp.inserted || !ant_dbg_arch_bp_insn(bp.compat, bp.len, insn))
+ 		return;
+ 	if (mem_access(as->mm, bp.addr, bp.orig, bp.len, false) != bp.len)
+ 		return;
+@@ -792,11 +798,12 @@ static void insert_breakpoints(struct ant_dbg_as *as)
+  * JIT): then the new bytes are its own and the old ones must not come back.
+  * The read must not be shadowed, so the breakpoint is marked out first.
+  */
+-static void restore_byte(struct mm_struct *target, u64 addr, const u8 *orig, unsigned int len)
++static void restore_byte(struct mm_struct *target, u64 addr, const u8 *orig, unsigned int len,
++			 bool compat)
+ {
+ 	u8 insn[ANT_DBG_MAX_BP_LEN], now[ANT_DBG_MAX_BP_LEN];
+ 
+-	if (ant_dbg_arch_bp_insn(len, insn) == len &&
++	if (ant_dbg_arch_bp_insn(compat, len, insn) == len &&
+ 	    mem_access(target, addr, now, len, false) == len && !memcmp(now, insn, len))
+ 		mem_access(target, addr, (void *)orig, len, true);
+ }
+@@ -812,7 +819,7 @@ static void dbg_remove_bp(struct ant_dbg_as *as, unsigned int i)
+ 		hist_removed(as, bp.addr);
+ 	spin_unlock_irq(&as->lock);
+ 	if (bp.inserted)
+-		restore_byte(as->mm, bp.addr, bp.orig, bp.len);
++		restore_byte(as->mm, bp.addr, bp.orig, bp.len, bp.compat);
+ }
+ 
+ static void remove_breakpoints(struct ant_dbg_as *as)
+@@ -1346,6 +1353,13 @@ static void park_current(struct ant_dbg *s, struct ant_dbg_thread *t, u32 pendin
+ 			mmgrab(current->mm);
+ 			smp_store_release(&as->mm, current->mm);
+ 		}
++		/* Debug on start of an image the engine cannot debug: the program runs
++		 * on unstopped, and the host is told when it adopts the session.
++		 */
++		if (!ant_dbg_arch_task_ok(current)) {
++			WRITE_ONCE(s->refused, true);
++			goto out;
++		}
+ 	}
+ 	/* Whatever a step armed is undone before anyone reads the registers. */
+ 	if (READ_ONCE(t->stepping) || t->step_sys)
+@@ -2285,12 +2299,28 @@ static bool any_live_session(void)
+ {
+ 	struct ant_dbg *s;
+ 
++	/* A refused session holds nothing: its program runs undebugged. */
+ 	list_for_each_entry(s, &sessions, node)
+-		if (!session_over(s))
++		if (!session_over(s) && !READ_ONCE(s->refused))
+ 			return true;
+ 	return false;
+ }
+ 
++/* End a refused session (dbg_lock held): callbacks that never ran go, then
++ * the published reference (retire_session() tears it down).
++ */
++static void refuse_session(struct ant_dbg *s)
++{
++	struct ant_dbg_thread *t;
++
++	for_each_record(t, s)
++		if (test_bit(0, &t->queued) && task_work_cancel(t->task, &t->work)) {
++			clear_bit(0, &t->queued);
++			session_put(s);
++		}
++	retire_session(s);
++}
++
+ static struct ant_dbg *lookup(u64 id)
+ {
+ 	struct ant_dbg *s;
+@@ -2650,7 +2680,8 @@ static void unfollowed_child_bytes(struct ant_dbg *s, struct task_struct *child)
+ 				bps[count++] = as->bps[i];
+ 		spin_unlock_irq(&as->lock);
+ 		for (i = 0; i < count; i++)
+-			restore_byte(child->mm, bps[i].addr, bps[i].orig, bps[i].len);
++			restore_byte(child->mm, bps[i].addr, bps[i].orig, bps[i].len,
++				     bps[i].compat);
+ 		kfree(bps);
+ 	}
+ 	as_put(as);
+@@ -2983,6 +3014,12 @@ static int cmd_attach(const u8 *args, size_t args_len, u8 *reply, size_t capacit
+ 		bool same_nonce = old->nonce_lo == get_unaligned_le64(args + 32) &&
+ 			old->nonce_hi == get_unaligned_le64(args + 40);
+ 
++		if (READ_ONCE(old->refused)) {
++			/* The launched image cannot be debugged: say so, not attach. */
++			refuse_session(old);
++			mutex_unlock(&dbg_lock);
++			return -EOPNOTSUPP;
++		}
+ 		if (old->start_pending || (flags & ANTC_DEBUG_ATTACH_ADOPT)) {
+ 			/* Debug on start, a followed child, or a debugger that lost its
+ 			 * session across a reconnect or a restored snapshot: the host takes
+@@ -3210,8 +3247,10 @@ static int regs_access(struct ant_dbg_thread *t, bool write, u32 flags, u32 nt,
+ 		unsigned int i, count = 0;
+ 		size_t used = 16;
+ 
+-		/* The sets named by a mask over the CAPS table, in one reply. */
+-		ant_dbg_arch_caps(&caps);
++		/* The sets named by a mask over the CAPS table (an AArch32
++		 * task's own table), in one reply.
++		 */
++		ant_dbg_arch_task_regsets(t->task, &caps);
+ 		if (!nt || (caps.regset_count < 32 && nt >> caps.regset_count))
+ 			return -EINVAL;
+ 		for (i = 0; i < caps.regset_count; i++) {
+@@ -3257,7 +3296,7 @@ static void shadow_write_fix(struct ant_dbg_as *as, u64 addr, u8 *buf, unsigned
+ 		struct ant_dbg_bp *bp = &as->bps[i];
+ 		u8 insn[ANT_DBG_MAX_BP_LEN];
+ 
+-		if (!bp->inserted || ant_dbg_arch_bp_insn(bp->len, insn) != bp->len)
++		if (!bp->inserted || ant_dbg_arch_bp_insn(bp->compat, bp->len, insn) != bp->len)
+ 			continue;
+ 		for (j = 0; j < bp->len; j++) {
+ 			u64 at = bp->addr + j;
+@@ -3322,6 +3361,7 @@ static int cmd_breakpoint(u32 opcode, struct ant_dbg *s, const u8 *args, size_t
+ 	u8 insn[ANT_DBG_MAX_BP_LEN], probe[ANT_DBG_MAX_BP_LEN];
+ 	struct ant_dbg_as *as;
+ 	unsigned int i;
++	bool compat;
+ 	int error;
+ 
+ #ifdef ANT_DBG_READ_WATCH
+@@ -3337,8 +3377,13 @@ static int cmd_breakpoint(u32 opcode, struct ant_dbg *s, const u8 *args, size_t
+ 			return error;
+ 		return hw_breakpoint_cmd(s, opcode == ANTC_DEBUG_BP_SET, kind, addr, len);
+ 	}
+-	if (!len || len > ANT_DBG_MAX_BP_LEN || ant_dbg_arch_bp_insn(len, insn) != len)
++	/* The leader's ABI is the address space's: one image at a time. */
++	compat = ant_dbg_arch_compat(s->leader);
++	if (!len || len > ANT_DBG_MAX_BP_LEN || ant_dbg_arch_bp_insn(compat, len, insn) != len)
+ 		return -EOPNOTSUPP;
++	/* An A32 instruction is word aligned, a Thumb one halfword aligned. */
++	if (compat && (addr & (len - 1)))
++		return -EINVAL;
+ 	error = need_stopped(s, get_unaligned_le64(args + 32));
+ 	if (error)
+ 		return error;
+@@ -3377,7 +3422,7 @@ static int cmd_breakpoint(u32 opcode, struct ant_dbg *s, const u8 *args, size_t
+ 		return -EFAULT;
+ 	}
+ 	spin_lock_irq(&as->lock);
+-	as->bps[as->bp_count++] = (struct ant_dbg_bp){ .addr = addr, .len = len };
++	as->bps[as->bp_count++] = (struct ant_dbg_bp){ .addr = addr, .len = len, .compat = compat };
+ 	spin_unlock_irq(&as->lock);
+ 	if (nonstop(s))
+ 		insert_one(as, as->bp_count - 1);
+@@ -3772,6 +3817,14 @@ int ant_debug_command(u32 opcode, const u8 *args, size_t args_len, void *reply,
+ 		mutex_unlock(&dbg_lock);
+ 		return -ESRCH;
+ 	}
++	/* Adopted before its image turned out undebuggable: every command says so,
++	 * and a detach just ends it.
++	 */
++	if (READ_ONCE(s->refused)) {
++		refuse_session(s);
++		mutex_unlock(&dbg_lock);
++		return opcode == ANTC_DEBUG_DETACH ? 0 : -EOPNOTSUPP;
++	}
+ 	switch (opcode) {
+ 	case ANTC_DEBUG_STATUS:
+ 		error = args_len == 16 ? cmd_status(s, reply, capacity, reply_len) : -EINVAL;
+diff --git a/kernel/antinomie/debug.h b/kernel/antinomie/debug.h
+index 106eceacf..feeebf611 100644
+--- a/kernel/antinomie/debug.h
++++ b/kernel/antinomie/debug.h
+@@ -41,11 +41,21 @@ struct ant_dbg_step {
+ 
+ /* Architecture side (kernel/antinomie/debug_x86.c). */
+ void ant_dbg_arch_caps(struct ant_dbg_caps *caps);
+-/* True when the task runs the architecture's native ABI and is supported. */
++/* True when the engine can debug the task: the architecture's native ABI,
++ * and on arm64 also AArch32 (the compat ABI).
++ */
+ bool ant_dbg_arch_task_ok(struct task_struct *task);
++/* True when the task runs the compat ABI the engine debugs (AArch32). */
++bool ant_dbg_arch_compat(struct task_struct *task);
++/* The register sets of a task, as CAPS lists the native ones: an AArch32
++ * task has its own (compat NT_PRSTATUS, NT_ARM_VFP, NT_ARM_TLS).
++ */
++void ant_dbg_arch_task_regsets(struct task_struct *task, struct ant_dbg_caps *caps);
+ unsigned long ant_dbg_arch_pc(struct task_struct *task);
+-/* Bytes of the breakpoint instruction for a length, or 0 if unsupported. */
+-unsigned int ant_dbg_arch_bp_insn(unsigned int len, u8 *insn);
++/* Bytes of the breakpoint instruction for a length in the task's ABI (compat:
++ * AArch32), or 0 if unsupported.
++ */
++unsigned int ant_dbg_arch_bp_insn(bool compat, unsigned int len, u8 *insn);
+ /* Arm a stopped task to execute one user instruction. */
+ void ant_dbg_arch_step_arm(struct task_struct *task, struct ant_dbg_step *step);
+ /* A new child, not yet run, copied the arm from the thread that forked it. */
+diff --git a/kernel/antinomie/debug_arm64.c b/kernel/antinomie/debug_arm64.c
+index 0aa542919..e954987e2 100644
+--- a/kernel/antinomie/debug_arm64.c
++++ b/kernel/antinomie/debug_arm64.c
+@@ -5,7 +5,15 @@
+  * (MDSCR_EL1.SS with SPSR.SS), armed on the stopped task as ptrace arms it.
+  * Neither is visible from EL0: the step state lives in system registers and in
+  * the saved PSTATE, which the engine clears again before anything can read it.
+- * Only AArch64 programs are debugged; an AArch32 program on the same guest is not.
++ * AArch32 programs (the compat ABI) are debugged too: their registers are the
++ * compat regsets (user_aarch32_ptrace_view: NT_PRSTATUS of r0-r15, cpsr and
++ * orig_r0; NT_ARM_VFP; NT_ARM_TLS), a software breakpoint is the kernel's
++ * AArch32 break instruction (A32 0xe7f001f0, T16 0xde01; length 4 or 2 says
++ * which), which do_el0_undef() reports through try_handle_aarch32_break(), and
++ * the hardware step is the same MDSCR_EL1.SS step. A Thumb breakpoint inside an
++ * IT block is not refused (the engine does not know the ITSTATE a thread will
++ * have there): whether it traps when the block's condition fails is the CPU's
++ * CONSTRAINED UNPREDICTABLE choice, so it may be passed over.
+  *
+  * Breakpoint and watchpoint exceptions on arm64 are taken before the
+  * instruction (or its access) completes, so a thread resumed where it stopped
+@@ -38,6 +46,12 @@
+ #define ANT_DBG_BRK_IMM 0xa71
+ #define ANT_DBG_BRK (AARCH64_BREAK_MON | (ANT_DBG_BRK_IMM << 5))
+ 
++/* The AArch32 break instructions the arm64 kernel recognises
++ * (asm/debug-monitors.h); the A32 one with the AL condition.
++ */
++#define ANT_DBG_A32_BREAK (0xe0000000 | AARCH32_BREAK_ARM)
++#define ANT_DBG_T16_BREAK AARCH32_BREAK_THUMB
++
+ #define STEP_FORCED 0
+ 
+ void ant_dbg_arch_caps(struct ant_dbg_caps *caps)
+@@ -46,6 +60,10 @@ void ant_dbg_arch_caps(struct ant_dbg_caps *caps)
+ 	caps->arch = EM_AARCH64;
+ 	caps->flags = ANTC_DEBUG_CAP_SW_BREAKPOINT | ANTC_DEBUG_CAP_HW_SINGLE_STEP |
+ 		ANTC_DEBUG_CAP_READ_WATCH;
++#ifdef CONFIG_COMPAT
++	if (system_supports_32bit_el0())
++		caps->flags |= ANTC_DEBUG_CAP_AARCH32;
++#endif
+ 	caps->swbp_len_mask = BIT(3);	/* 4 bytes */
+ 	caps->hw_breakpoints = min_t(u32, hw_breakpoint_slots(TYPE_INST), ANT_DBG_MAX_HW);
+ 	caps->hw_watchpoints = min_t(u32, hw_breakpoint_slots(TYPE_DATA), ANT_DBG_MAX_HW);
+@@ -109,11 +127,30 @@ void ant_dbg_arch_resume_past_hw(struct task_struct *task)
+ 		user_enable_single_step(task);
+ }
+ 
++bool ant_dbg_arch_compat(struct task_struct *task)
++{
++	return is_compat_thread(task_thread_info(task));
++}
++
+ bool ant_dbg_arch_task_ok(struct task_struct *task)
+ {
+ 	const struct user_regset_view *view = task_user_regset_view(task);
+ 
+-	return view->e_machine == EM_AARCH64 && !is_compat_thread(task_thread_info(task));
++	if (ant_dbg_arch_compat(task))
++		return IS_ENABLED(CONFIG_COMPAT) && view->e_machine == EM_ARM;
++	return view->e_machine == EM_AARCH64;
++}
++
++void ant_dbg_arch_task_regsets(struct task_struct *task, struct ant_dbg_caps *caps)
++{
++	ant_dbg_arch_caps(caps);
++	if (!ant_dbg_arch_compat(task))
++		return;
++	/* user_aarch32_ptrace_view: r0-r15, cpsr, orig_r0; d0-d31 and fpscr; TPIDRURO. */
++	caps->regset_count = 3;
++	caps->regsets[0] = (struct ant_dbg_regset_cap){ NT_PRSTATUS, 18 * sizeof(u32), 1 };
++	caps->regsets[1] = (struct ant_dbg_regset_cap){ NT_ARM_VFP, 32 * sizeof(u64) + sizeof(u32), 1 };
++	caps->regsets[2] = (struct ant_dbg_regset_cap){ NT_ARM_TLS, sizeof(u32), 1 };
+ }
+ 
+ unsigned long ant_dbg_arch_pc(struct task_struct *task)
+@@ -132,21 +169,34 @@ unsigned long ant_dbg_arch_bp_addr(struct pt_regs *regs)
+ 	return instruction_pointer(regs);
+ }
+ 
+-unsigned int ant_dbg_arch_bp_insn(unsigned int len, u8 *insn)
++unsigned int ant_dbg_arch_bp_insn(bool compat, unsigned int len, u8 *insn)
+ {
++	if (compat && len == 2) {
++		put_unaligned_le16(ANT_DBG_T16_BREAK, insn);
++		return 2;
++	}
+ 	if (len != 4)
+ 		return 0;
+-	put_unaligned_le32(ANT_DBG_BRK, insn);
++	put_unaligned_le32(compat ? ANT_DBG_A32_BREAK : ANT_DBG_BRK, insn);
+ 	return 4;
+ }
+ 
+ unsigned int ant_dbg_arch_step_class(struct task_struct *task)
+ {
+-	__le32 code;
++	struct pt_regs *regs = task_pt_regs(task);
++	__le32 code = 0;
+ 
+-	if (access_process_vm(task, instruction_pointer(task_pt_regs(task)), &code,
+-			      sizeof(code), FOLL_FORCE) != sizeof(code))
++	if (access_process_vm(task, instruction_pointer(regs), &code,
++			      compat_thumb_mode(regs) ? 2 : sizeof(code), FOLL_FORCE) !=
++	    (compat_thumb_mode(regs) ? 2 : sizeof(code)))
+ 		return ANT_DBG_STEP_PLAIN;
++	/* AArch32: SVC is cond 1111 imm24 in A32 and 0xdfxx in T16. */
++	if (compat_thumb_mode(regs))
++		return (le32_to_cpu(code) & 0xff00) == 0xdf00 ?
++			ANT_DBG_STEP_SYSCALL : ANT_DBG_STEP_PLAIN;
++	if (compat_user_mode(regs))
++		return (le32_to_cpu(code) & 0x0f000000) == 0x0f000000 ?
++			ANT_DBG_STEP_SYSCALL : ANT_DBG_STEP_PLAIN;
+ 	/* A stepped SVC is reported at the system call's exit (syscall_trace_exit). */
+ 	return aarch64_insn_is_svc(le32_to_cpu(code)) ? ANT_DBG_STEP_SYSCALL : ANT_DBG_STEP_PLAIN;
+ }
+@@ -223,6 +273,20 @@ bool ant_dbg_arm64_brk(struct pt_regs *regs, unsigned long esr)
+ 	return consumed;
+ }
+ 
++/* try_handle_aarch32_break() from do_el0_undef(), interrupts on: an AArch32
++ * break instruction; the engine's when it planted one there.
++ */
++bool ant_dbg_arm64_compat_brk(struct pt_regs *regs)
++{
++	unsigned long flags;
++	bool consumed;
++
++	local_irq_save(flags);
++	consumed = ant_dbg_trap_breakpoint(regs, ant_dbg_arch_bp_addr(regs));
++	local_irq_restore(flags);
++	return consumed;
++}
++
+ /* do_el0_softstep(), interrupts on: the engine's step of this thread. */
+ bool ant_dbg_arm64_softstep(struct pt_regs *regs)
+ {
+diff --git a/kernel/antinomie/debug_x86.c b/kernel/antinomie/debug_x86.c
+index 8ff7b768d..5991f7fce 100644
+--- a/kernel/antinomie/debug_x86.c
++++ b/kernel/antinomie/debug_x86.c
+@@ -81,6 +81,17 @@ bool ant_dbg_arch_task_ok(struct task_struct *task)
+ 	return view->e_machine == EM_X86_64 && !test_tsk_thread_flag(task, TIF_ADDR32);
+ }
+ 
++/* ia32 and x32 programs are not debugged. */
++bool ant_dbg_arch_compat(struct task_struct *task)
++{
++	return false;
++}
++
++void ant_dbg_arch_task_regsets(struct task_struct *task, struct ant_dbg_caps *caps)
++{
++	ant_dbg_arch_caps(caps);
++}
++
+ unsigned long ant_dbg_arch_pc(struct task_struct *task)
+ {
+ 	return task_pt_regs(task)->ip;
+@@ -97,9 +108,9 @@ unsigned long ant_dbg_arch_bp_addr(struct pt_regs *regs)
+ 	return regs->ip - 1;
+ }
+ 
+-unsigned int ant_dbg_arch_bp_insn(unsigned int len, u8 *insn)
++unsigned int ant_dbg_arch_bp_insn(bool compat, unsigned int len, u8 *insn)
+ {
+-	if (len != 1)
++	if (compat || len != 1)
+ 		return 0;
+ 	insn[0] = 0xcc;
+ 	return 1;

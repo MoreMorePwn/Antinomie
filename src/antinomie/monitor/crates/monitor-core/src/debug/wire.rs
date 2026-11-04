@@ -73,6 +73,9 @@ pub const CAP_START: u32 = 256;
 pub const CAP_AUXV: u32 = 512;
 /// Revision 20: a watchpoint can trigger on loads alone (`BP_HW_READ`).
 pub const CAP_READ_WATCH: u32 = 2048;
+/// Revision 21: the guest debugs AArch32 tasks of an arm64 guest (compat
+/// regsets; software breakpoints of 4 bytes, A32, and 2, Thumb).
+pub const CAP_AARCH32: u32 = 4096;
 
 pub const CAP2_FOLLOW: u32 = 1;
 pub const CAP2_NONSTOP: u32 = 2;
@@ -158,7 +161,8 @@ pub fn parse_caps(reply: &[u8], ext: bool) -> Result<DebugCaps, String> {
         | CAP_BATCH_REGS
         | CAP_START
         | CAP_AUXV
-        | CAP_READ_WATCH;
+        | CAP_READ_WATCH
+        | CAP_AARCH32;
     let flags2 = u32_at(reply, 40)?;
     let known2 = if ext {
         CAP2_FOLLOW | CAP2_NONSTOP | CAP2_ADOPT | CAP2_THREAD_HW

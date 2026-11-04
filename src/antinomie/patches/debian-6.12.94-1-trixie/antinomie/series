@@ -78,6 +78,9 @@
 # x86-64 debugger in 0.9.0 (no contract change): an unfollowed forked child's own bytes
 0043-antinomie-give-a-forked-child-the-x86-64-debugger-does-not-follow-its-own-bytes.patch
 
-# Contract revision 21 in 0.9.0: the generic file ioctls and CET status, the fatal signal's sender
+# Contract revision 21 in 0.9.0: the generic file ioctls and CET status, the fatal signal's sender,
+# AArch32 cores and debugging on arm64, ioctl/event-read/compat capture gaps
 0044-antinomie-decode-the-ioctls-every-file-answers-alike-and-arch-prctl-s-cet-status.patch
 0045-antinomie-record-who-sent-the-signal-that-ended-a-task.patch
+0046-antinomie-write-elf32-cores-of-aarch32-programs-on-arm64.patch
+0047-antinomie-debug-aarch32-programs-on-arm64-and-refuse-launches-the-engine-cannot-debug.patch

@@ -75,7 +75,8 @@ impl CoreLimits {
             fast_read: flags & 16 != 0,
         };
         if word(0)? != 1
-            || flags & !0x1f != 0
+            // 32: revision 21's ELF32 cores of AArch32 tasks (read by no host yet).
+            || flags & !0x3f != 0
             || flags & 5 != 5
             || !(CORE_LEGACY_SIZE..=CORE_MAX_SUPPORTED).contains(&limits.max_size)
             || limits.pool_size < limits.max_size
