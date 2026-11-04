@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 /* Benign test program: the Thumb function stores through a null pointer. */
 #include <stdio.h>
 volatile int *volatile null_ptr = 0;
