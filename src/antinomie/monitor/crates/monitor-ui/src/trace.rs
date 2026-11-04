@@ -669,9 +669,13 @@ impl Inspector {
         if !record_tree::show(ui, &mut self.records, &shown) {
             if let Some(decoded) = decoded(call.as_ref(), field) {
                 ui.add_space(2.0);
-                for line in decoded.lines() {
+                // Nested structures and arrays indent under their member; the
+                // raw bytes stay in the hex dump below.
+                for line in decoded.tree_lines() {
                     ui.add(egui::Label::new(RichText::new(line).monospace()).wrap());
                 }
+            } else if let Some(note) = typed_fields::compat_gap(field) {
+                ui.add(egui::Label::new(RichText::new(note).color(theme::warn())).wrap());
             }
         }
         if let Some(mark) = field.recapture {
@@ -1300,9 +1304,9 @@ pub(super) mod tests {
             argument_preview(call.as_ref(), &[(1, &attr)]).map(|(_, text)| text),
             Some("{map_type=BPF_MAP_TYPE_HASH}".to_owned())
         );
-        // A timespec is not decoded here: its bytes, as before.
+        // A timespec is a duration (the layout decoder); its bytes stay in the hex dump.
         let time = typed("arg0.data", "timespec", object, &[0; 16]);
-        assert_eq!(preview_in(None, &time), preview(&time));
+        assert_eq!(preview_in(None, &time), "0 s");
     }
 
     #[test]

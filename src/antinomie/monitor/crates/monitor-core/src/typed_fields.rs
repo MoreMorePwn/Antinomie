@@ -13,22 +13,35 @@
 //! program passed. Members past the captured bytes are left out, and
 //! [`Decoded::more`] says when the field holds more than was decoded.
 //!
-//! Only the layouts listed in [`decode`] are decoded; any other field is left
-//! to the views' byte rendering. Reserved and padding members are not shown.
+//! The layouts listed in [`decode`] have a hand-written decoder. Any other
+//! captured layout the member inventory knows (`captured-layout-members.json`,
+//! per architecture and ABI) is decoded by [`layout`] from the inventory's
+//! member offsets and widths, with names for the members that hold flags,
+//! enumerations, signals, errors, descriptors or times. A field that no
+//! decoder covers is left to the views' byte rendering. Reserved and padding
+//! members are not shown.
 use crate::FieldSummary;
+use std::collections::BTreeMap;
 
 mod arrays;
 mod bpf;
+mod contextual;
+pub use contextual::PROTOCOLS;
 pub mod ebpf_asm;
+mod layout;
 mod records;
 mod signals;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_layout;
 
 pub use arrays::{
     About, Brief, Cut, CutKind, MAX_RECORDS, Record, Records, brief, is_array, record_json,
 };
 pub use bpf::{attach_type_name, attr_member as bpf_attr_member, map_type_name, prog_type_name};
+pub use layout::{abi_of_layout, compat_gap};
+pub use records::capability_name;
 pub use signals::signal_name;
 
 /// The call a field belongs to: the decoders that depend on another argument
@@ -66,6 +79,49 @@ pub struct Decoded {
     pub more: bool,
     /// For a [`Shape::Set`], the names are the members *not* in the set.
     pub complement: bool,
+    /// What lies inside members that are structures or arrays, by the index
+    /// of the member (or list element) in `members`: the tree under it.
+    pub children: BTreeMap<usize, Vec<Node>>,
+}
+
+/// One item of a decoded structure or array, with what it holds: the tree the
+/// Details view opens and the JSON export carries.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Node {
+    /// The member's name, or `[index]` for an array element.
+    pub name: String,
+    /// The item on one line: a value, `{a=1, b=2}`, `[1, 2]`, `1.5 s`.
+    pub text: String,
+    pub children: Vec<Node>,
+}
+
+impl Node {
+    pub fn leaf(name: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            text: text.into(),
+            children: Vec::new(),
+        }
+    }
+
+    fn json(&self) -> serde_json::Value {
+        if self.children.is_empty() {
+            return serde_json::Value::String(self.text.clone());
+        }
+        serde_json::json!({ "text": self.text, "members": nodes_json(&self.children) })
+    }
+}
+
+/// Nodes as a JSON object in order; array elements (`[0]`) become a list.
+fn nodes_json(nodes: &[Node]) -> serde_json::Value {
+    if nodes.iter().all(|node| node.name.starts_with('[')) && !nodes.is_empty() {
+        return serde_json::Value::Array(nodes.iter().map(Node::json).collect());
+    }
+    let mut map = serde_json::Map::new();
+    for node in nodes {
+        map.insert(node.name.clone(), node.json());
+    }
+    serde_json::Value::Object(map)
 }
 
 /// Records of an array a one-line form lists.
@@ -81,6 +137,7 @@ impl Decoded {
             members: Vec::new(),
             more: false,
             complement: false,
+            children: BTreeMap::new(),
         }
     }
 
@@ -92,6 +149,70 @@ impl Decoded {
 
     fn push(&mut self, name: &str, value: impl Into<String>) {
         self.members.push((name.to_owned(), value.into()));
+    }
+
+    /// The tree of the decode: one node per member, with what lies inside it.
+    pub fn nodes(&self) -> Vec<Node> {
+        self.members
+            .iter()
+            .enumerate()
+            .map(|(index, (name, text))| Node {
+                name: match self.shape {
+                    Shape::List => format!("[{index}]"),
+                    _ => name.clone(),
+                },
+                text: text.clone(),
+                children: self.children.get(&index).cloned().unwrap_or_default(),
+            })
+            .collect()
+    }
+
+    /// Whether any member holds a nested structure or array.
+    pub fn is_nested(&self) -> bool {
+        !self.children.is_empty()
+    }
+
+    /// The decode as indented lines, nested members under their parent:
+    /// `name = value`, `  child = value`. A list's elements are `[i] value`.
+    pub fn tree_lines(&self) -> Vec<String> {
+        fn walk(nodes: &[Node], depth: usize, lines: &mut Vec<String>) {
+            for node in nodes {
+                lines.push(format!(
+                    "{}{} = {}",
+                    "  ".repeat(depth),
+                    node.name,
+                    node.text
+                ));
+                walk(&node.children, depth + 1, lines);
+            }
+        }
+        if !self.is_nested() {
+            return self.lines();
+        }
+        let mut lines = Vec::new();
+        match self.shape {
+            Shape::Value | Shape::Set => {
+                lines.push(self.full_line());
+                if let Some(children) = self.children.get(&0) {
+                    walk(children, 1, &mut lines);
+                }
+            }
+            _ => walk(&self.nodes(), 0, &mut lines),
+        }
+        if self.more && self.shape != Shape::Value {
+            lines.push("... (more captured than decoded)".into());
+        }
+        lines
+    }
+
+    /// The decode as JSON: a value as its text, a structure as an object of
+    /// its members (nested ones as objects), a list as an array.
+    pub fn json(&self) -> serde_json::Value {
+        let tree = match self.shape {
+            Shape::Value | Shape::Set => serde_json::Value::String(self.full_line()),
+            Shape::Struct | Shape::List => nodes_json(&self.nodes()),
+        };
+        serde_json::json!({ "text": self.full_line(), "decoded": tree, "more": self.more })
     }
 
     /// The whole decode on one line, never cut: `{a=1, b=2}`, `[1, 2]`,
@@ -209,37 +330,115 @@ pub fn decode(call: Option<&Call<'_>>, field: &FieldSummary) -> Option<Decoded> 
     if data.is_empty() {
         return None;
     }
+    let abi = layout::abi_of_layout(&field.layout)?;
     let layout = layout_type(&field.layout);
-    let mut decoded = match layout {
-        "sigset_t" => signals::sigset(data)?,
-        "sigset_argpack" => signals::argpack(data)?,
-        "siginfo_t" => signals::siginfo(data)?,
-        "siginfo_t[]" => list(data, 128, signals::siginfo)?,
-        "sigevent" => signals::sigevent(data)?,
-        "stack_t" => signals::stack(data)?,
-        "bpf_attr" => bpf::attr(call?.args?[0], data)?,
-        "cap_data[]" => records::capabilities(data)?,
-        "uid_t" | "gid_t" => records::id(data)?,
-        "gid_t[]" | "uid_t[2]" => records::ids(data)?,
-        "u32" | "pid_t" => records::capability_header(call?, &field.key, data)?,
-        "linux_dirent[]" => records::dirents(data, false)?,
-        "linux_dirent64[]" => records::dirents(data, true)?,
-        "file_handle" => records::file_handle(data)?,
-        "io_uring_params" => records::io_uring_params(data)?,
-        "msgbuf" => records::msgbuf(data)?,
-        "ipt_replace" => records::ipt_replace(data)?,
-        "xt_counters_info" => records::counters_info(data)?,
-        "user_desc" => records::user_desc(data)?,
-        "desc_struct[]" => list(data, 8, records::descriptor)?,
-        other => {
-            let records = Records::open(call, other, &field.key, data)?;
-            records.decoded(data, ARRAY_LINE_RECORDS)
-        }
+    let compat = layout::is_compat(abi);
+    let mut decoded = match hand_written(call, field, layout, data, compat) {
+        Hand::Done(decoded) => decoded?,
+        // The generic readers: by the call's meaning (a socket option's
+        // value by its level and name), then by the inventory's members.
+        Hand::No => (!compat)
+            .then(|| contextual::decode(call, field, layout, data))
+            .flatten()
+            .or_else(|| layout::decode(abi, layout, call, argument_of(field), data))?,
     };
     // A decoder sets `more` for a record it could not finish; past that, the
     // field holds more when its capture is longer than the preview decoded.
     decoded.more |= holds_more(field, data.len());
     Some(decoded)
+}
+
+/// What a hand-written decoder made of a field.
+enum Hand {
+    /// This layout is theirs: the decode, or None when the bytes do not fit.
+    Done(Option<Decoded>),
+    /// Not a hand-written layout (here): the generic readers may have it.
+    No,
+}
+
+/// The layouts whose bytes are the same on 32-bit ABIs: the hand-written
+/// readers (64-bit offsets) are used for these and no others on a compat
+/// field.
+const COMPAT_SAME: &[&str] = &[
+    "sigset_t",
+    "cap_data[]",
+    "uid_t",
+    "gid_t",
+    "gid_t[]",
+    "uid_t[2]",
+    "u32",
+    "pid_t",
+    "pollfd[]",
+    "sembuf[]",
+    "sock_filter[]",
+    "bpf_insn[]",
+    "bpf_func_info[]",
+    "bpf_line_info[]",
+    "bpf_core_relo[]",
+    "futex_waitv[]",
+    "u32[]",
+];
+
+/// The register argument a field was captured for.
+fn argument_of(field: &FieldSummary) -> Option<usize> {
+    field.arg.map(usize::from).or_else(|| {
+        let rest = field.key.strip_prefix("arg")?;
+        let digit = *rest.as_bytes().first()?;
+        (b'0'..=b'5')
+            .contains(&digit)
+            .then(|| usize::from(digit - b'0'))
+    })
+}
+
+fn hand_written(
+    call: Option<&Call<'_>>,
+    field: &FieldSummary,
+    layout: &str,
+    data: &[u8],
+    compat: bool,
+) -> Hand {
+    if compat && !COMPAT_SAME.contains(&layout) {
+        return from_records(call, field, data);
+    }
+    let decoded = match layout {
+        "sigset_t" => signals::sigset(data),
+        "sigset_argpack" => signals::argpack(data),
+        "siginfo_t" => signals::siginfo(data),
+        "siginfo_t[]" => list(data, 128, signals::siginfo),
+        "sigevent" => signals::sigevent(data),
+        "stack_t" => signals::stack(data),
+        "bpf_attr" => call
+            .and_then(|call| call.args)
+            .and_then(|args| bpf::attr(args[0], data)),
+        "cap_data[]" => records::capabilities(data),
+        "uid_t" | "gid_t" => records::id(data),
+        "gid_t[]" | "uid_t[2]" => records::ids(data),
+        "u32" | "pid_t" => {
+            match call.and_then(|call| records::capability_header(call, &field.key, data)) {
+                Some(header) => Some(header),
+                None => return Hand::No,
+            }
+        }
+        "linux_dirent[]" => records::dirents(data, false),
+        "linux_dirent64[]" => records::dirents(data, true),
+        "file_handle" => records::file_handle(data),
+        "io_uring_params" => records::io_uring_params(data),
+        "msgbuf" => records::msgbuf(data),
+        "ipt_replace" => records::ipt_replace(data),
+        "xt_counters_info" => records::counters_info(data),
+        "user_desc" => records::user_desc(data),
+        "desc_struct[]" => list(data, 8, records::descriptor),
+        _ => return from_records(call, field, data),
+    };
+    Hand::Done(decoded)
+}
+
+/// A record array (`pollfd[]`, `iovec[]`) of the field, as its records' lines.
+fn from_records(call: Option<&Call<'_>>, field: &FieldSummary, data: &[u8]) -> Hand {
+    match Records::open(call, &field.layout, &field.key, data) {
+        Some(records) => Hand::Done(Some(records.decoded(data, ARRAY_LINE_RECORDS))),
+        None => Hand::No,
+    }
 }
 
 /// An array of fixed-size records, each decoded on one line. A trailing

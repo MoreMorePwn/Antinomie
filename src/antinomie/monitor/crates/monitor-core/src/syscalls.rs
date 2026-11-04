@@ -14,6 +14,7 @@ use std::sync::OnceLock;
 
 pub mod arch;
 mod ids;
+pub mod scalars;
 pub use arch::{Constants, DataModel, Endian};
 pub use ids::{id, untabled_id, wire_number};
 
@@ -1039,39 +1040,6 @@ fn ptrace_options(value: u64) -> String {
     }
 }
 
-/// `QCMD(subcommand, type)` as used by quotactl and quotactl_fd.
-fn quota_command(constants: &Constants, cmd: u64) -> String {
-    const SUBCOMMANDS: &[(&str, u64)] = &[
-        ("Q_SYNC", 0x80_0001),
-        ("Q_QUOTAON", 0x80_0002),
-        ("Q_QUOTAOFF", 0x80_0003),
-        ("Q_GETFMT", 0x80_0004),
-        ("Q_GETINFO", 0x80_0005),
-        ("Q_SETINFO", 0x80_0006),
-        ("Q_GETQUOTA", 0x80_0007),
-        ("Q_SETQUOTA", 0x80_0008),
-        ("Q_GETNEXTQUOTA", 0x80_0009),
-        ("Q_XQUOTAON", 0x5801),
-        ("Q_XQUOTAOFF", 0x5802),
-        ("Q_XGETQUOTA", 0x5803),
-        ("Q_XSETQLIM", 0x5804),
-        ("Q_XGETQSTAT", 0x5805),
-        ("Q_XQUOTARM", 0x5806),
-        ("Q_XQUOTASYNC", 0x5807),
-        ("Q_XGETQSTATV", 0x5808),
-        ("Q_XGETNEXTQUOTA", 0x5809),
-    ];
-    let cmd = cmd as u32;
-    let subcommand = named(constants, SUBCOMMANDS, u64::from(cmd >> 8), "subcommand");
-    let kind = match cmd & 0xff {
-        0 => "USRQUOTA".into(),
-        1 => "GRPQUOTA".into(),
-        2 => "PRJQUOTA".into(),
-        other => format!("Unknown type {other}"),
-    };
-    format!("{subcommand} / {kind}")
-}
-
 fn prctl_suboption(constants: &Constants, option: u64, value: u64) -> Option<String> {
     const PR_SET_MM: u64 = 35;
     const PR_SCHED_CORE: u64 = 62;
@@ -1143,11 +1111,12 @@ impl Table {
                 .into(),
             ),
             ("prctl", 0) => Some(named(c, PRCTL_OPTIONS, args[0] as u32 as u64, "option")),
-            ("prctl", 1) => prctl_suboption(c, args[0] as u32 as u64, args[1]),
+            ("prctl", 1) => prctl_suboption(c, args[0] as u32 as u64, args[1])
+                .or_else(|| scalars::name(self, call, index, args)),
             ("keyctl", 0) => Some(named(c, KEYCTL_COMMANDS, args[0] as u32 as u64, "command")),
             ("bpf", 0) => Some(named(c, BPF_COMMANDS, args[0] as u32 as u64, "command")),
-            ("quotactl", 0) => Some(quota_command(c, args[0])),
-            ("quotactl_fd", 1) => Some(quota_command(c, args[1])),
+            ("quotactl", 0) => Some(scalars::quota_command(c, args[0])),
+            ("quotactl_fd", 1) => Some(scalars::quota_command(c, args[1])),
             ("setsockopt" | "getsockopt", 1) => Some(
                 lookup(c, SOCKET_LEVELS, args[1] as i32)
                     .map_or_else(|| format!("Unknown level {}", args[1] as i32), Into::into),
@@ -1158,7 +1127,8 @@ impl Table {
                 args[1] as i32,
                 args[2] as i32,
             )),
-            _ => selectors::named_argument(c, call, index, args),
+            _ => selectors::named_argument(c, call, index, args)
+                .or_else(|| scalars::name(self, call, index, args)),
         }
     }
 
@@ -1177,6 +1147,14 @@ impl Table {
             ("memfd_secret", 0, "unknown") => "cloexec",
             _ => group,
         };
+        Some(self.flag_group(group, value))
+    }
+
+    /// The names of the flags a host group (`open`, `clone_flags`) sets in
+    /// `value`, with this ABI's values: what [`Table::argument_flags`] reads
+    /// for an argument of that group, for a member of a captured structure
+    /// (`open_how.flags`, `clone_args.flags`).
+    pub fn flag_group(&'static self, group: &str, value: u64) -> FlagValue {
         let mut masks = arch_rules(&self.constants, group);
         masks.sort_by_key(|&(_, mask, _)| std::cmp::Reverse(mask.count_ones()));
         let mut known = 0;
@@ -1191,10 +1169,10 @@ impl Table {
             names.push(format!("exit_signal={}", value & 0xff));
             known |= 0xff;
         }
-        Some(FlagValue {
+        FlagValue {
             names,
             unknown_bits: value & !known,
-        })
+        }
     }
 }
 

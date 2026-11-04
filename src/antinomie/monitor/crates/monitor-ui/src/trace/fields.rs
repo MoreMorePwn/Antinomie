@@ -982,7 +982,8 @@ fn array_hover(invocation: &InvocationSummary) -> String {
 }
 
 /// Every decoded record of the call's array fields (from the owned previews),
-/// one `{name=value, ...}` per line: what a filter on a directory entry name,
+/// one `{name=value, ...}` per line, and each other field decoded by its layout
+/// as `key={name=value, ...}`: what a filter on a directory entry name,
 /// a polled descriptor or a BPF instruction reads.
 pub(crate) fn records_text(invocation: &InvocationSummary) -> String {
     let call = representative(invocation)
@@ -996,10 +997,15 @@ pub(crate) fn records_text(invocation: &InvocationSummary) -> String {
     {
         let layout = typed_fields::layout_type(&field.layout);
         if !typed_fields::is_array(layout) {
+            // A structure or value decoded by its layout, `key={members}`.
+            if let Some(decoded) = decoded(call.as_ref(), field) {
+                lines.push(format!("{}={}", field.key, decoded.full_line()));
+            }
             continue;
         }
         let data = covered_preview(field);
-        if let Some(records) = typed_fields::Records::open(call.as_ref(), layout, &field.key, data)
+        if let Some(records) =
+            typed_fields::Records::open(call.as_ref(), &field.layout, &field.key, data)
         {
             for (_, record) in records.page(data, 0, typed_fields::MAX_RECORDS.min(1024)) {
                 lines.push(record.line());

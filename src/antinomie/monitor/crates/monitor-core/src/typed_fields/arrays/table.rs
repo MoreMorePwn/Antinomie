@@ -5,7 +5,7 @@
 //! none of these records differ between x86-64 and aarch64 (`desc_struct[]` is
 //! x86 only and is simply never captured elsewhere). A record that does differ
 //! gets its own row, selected by the layout's `<arch>/` source prefix.
-use super::{Ctx, decoders as d};
+use super::{Ctx, decoders as d, layout_rows as l};
 use crate::typed_fields::{Decoded, records, signals};
 
 /// The length of the record at the start of the bytes.
@@ -21,6 +21,9 @@ pub(super) enum Size {
     Fixed(usize),
     /// Read from the record's header.
     Header(fn(&[u8]) -> Length),
+    /// The size of the named layout in the ABI's member inventory (an
+    /// `epoll_event` is 12 bytes on x86-64 and 16 on aarch64).
+    Layout(&'static str),
 }
 
 pub(super) struct Spec {
@@ -164,6 +167,27 @@ static SPECS: &[Spec] = &[
         d::first_members,
     ),
     spec(
+        &["iovec[]"],
+        "iovec",
+        Size::Layout("iovec"),
+        l::iovec,
+        l::iovec_summary,
+    ),
+    spec(
+        &["epoll_event[]"],
+        "epoll_event",
+        Size::Layout("epoll_event"),
+        l::epoll_event,
+        l::epoll_summary,
+    ),
+    spec(
+        &["mmsghdr[]"],
+        "mmsghdr",
+        Size::Layout("mmsghdr"),
+        l::mmsghdr,
+        l::mmsg_summary,
+    ),
+    spec(
         &["u32[]"],
         "u32",
         Size::Fixed(4),
@@ -185,5 +209,5 @@ pub(super) fn spec_named(layout: &str) -> Option<&'static Spec> {
 
 /// Whether `layout` is a record array.
 pub fn is_array(layout: &str) -> bool {
-    spec_named(layout).is_some()
+    spec_named(crate::typed_fields::layout_type(layout)).is_some()
 }

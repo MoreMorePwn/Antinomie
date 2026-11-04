@@ -174,6 +174,8 @@ pub(crate) fn view(invocation: &InvocationSummary) -> CallView {
             "size": capture_size(field),
             "preview": shown,
             "decoded": decoded.is_some(),
+            "decoded_fields": decoded.as_ref().map(|decoded| decoded.json()),
+            "compat_gap": typed_fields::compat_gap(field),
             "status": field.status.map(status_name),
             "complete": field.complete,
             "recapture": field.recapture.map(|mark| mark.label()),
@@ -342,9 +344,9 @@ mod view_tests {
         call
     }
 
-    /// The two golden failures: what the trace shows (and the golden file
-    /// keeps) for a time or a pointer-holding struct whose bytes happen to be
-    /// printable is their bytes.
+    /// The two golden failures: a time or a pointer-holding struct whose
+    /// bytes happen to be printable is decoded by its layout, never quoted as
+    /// text.
     #[test]
     fn printable_looking_typed_data_renders_as_bytes() {
         use super::super::tests::typed;
@@ -358,7 +360,7 @@ mod view_tests {
             [0x4c_1000, 1, 0, 0x7ffe_0010, 1, 0],
             field,
         ));
-        let expected = "0a 00 00 00 00 00 00 00 28 5b 7d 0d 00 00 00 00";
+        let expected = "at 10.226319144 s";
         assert_eq!(shown.arguments[3].data.as_deref(), Some(expected));
         assert_eq!(shown.fields[0]["preview"], expected);
         let program = [0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0x2e, 0x4b, 0, 0, 0, 0, 0];
@@ -370,7 +372,7 @@ mod view_tests {
             [1, 0, 0x4c_2000, 0, 0, 0],
             field,
         ));
-        let expected = "00 00 00 00 00 00 00 00 40 2e 4b 00 00 00 00 00";
+        let expected = "{len=0, filter=0x4b2e40}";
         assert_eq!(shown.arguments[2].data.as_deref(), Some(expected));
         assert_eq!(shown.fields[0]["preview"], expected);
         assert!(!shown.info.contains('"'), "{}", shown.info);
