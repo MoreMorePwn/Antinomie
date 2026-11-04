@@ -245,6 +245,17 @@ pub struct CoreOutcome {
     pub limits: CoreLimits,
 }
 
+/// A 32-bit ARM (AArch32) program on an arm64 guest gets an ELF32 core only from
+/// a revision-21 guest (`CORE_CAPS` bit `COMPAT_ELF32`). Says so before the run
+/// when the guest's limits are known and lack it (ANT-T0293).
+pub fn aarch32_core_refusal(limits: Option<CoreLimits>) -> Option<&'static str> {
+    limits.filter(|limits| !limits.compat_elf32).map(|_| {
+        "this program is a 32-bit ARM (AArch32) program and this arm64 base (guest revision 20 or \
+         older) cannot write its core; use a base of guest revision 21 or later, or run without \
+         Core Dump on Exit"
+    })
+}
+
 /// The reason a terminal guest status gives for an incomplete core; None for a
 /// complete one. The errno is the guest's, so each reading means one thing
 /// (`ANTC_CORE_STATUS` documents the table).
@@ -452,9 +463,16 @@ mod tests {
         assert_eq!(refused.code, CoreReasonCode::Writer);
         assert!(refused.text.contains("32-bit program"), "{}", refused.text);
         assert!(refused.text.contains("revision 21"), "{}", refused.text);
+        assert!(aarch32_core_refusal(Some(limits)).is_some());
+        assert!(aarch32_core_refusal(Some(CoreLimits::LEGACY)).is_some());
+        assert!(
+            aarch32_core_refusal(None).is_none(),
+            "unknown limits are asked for later"
+        );
         // A revision-21 guest says AArch32 cores are written: the refusal is then
         // about ia32/x32 or a format.
         let current = CoreLimits::parse(&caps(384 * MIB, 0x3f)).unwrap();
+        assert!(aarch32_core_refusal(Some(current)).is_none());
         assert!(current.compat_elf32 && !limits.compat_elf32);
         let refused = guest_reason(&CoreOutcome {
             state: 5,

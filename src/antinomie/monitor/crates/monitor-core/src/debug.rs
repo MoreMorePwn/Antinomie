@@ -31,7 +31,9 @@ pub mod view;
 pub mod wire;
 
 pub use debugger::AdoptedChild;
-pub use kernel_backend::{AttachedSession, KernelDebugBackend};
+pub use kernel_backend::{
+    AttachedSession, KernelDebugBackend, NO_AARCH32_DEBUGGER, PROGRAM_NOT_DEBUGGABLE,
+};
 pub use regs::{RegKind, RegSource, RegSpec, RegisterFile, TargetDescription};
 pub use rsp_server::{DebugEndpoints, DebugServer};
 pub use target::{

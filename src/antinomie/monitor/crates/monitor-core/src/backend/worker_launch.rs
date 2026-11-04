@@ -89,6 +89,25 @@ impl Worker {
         let ack = self.register_run(&request, sent)?;
         self.report_launch(&request, ack, boot_id)
     }
+    /// The launched program is a library sample the library knows as 32-bit ARM,
+    /// on an arm64 guest (an AArch32 program there).
+    fn is_aarch32_sample(
+        snapshot: &Snapshot,
+        data_dir: &std::path::Path,
+        request: &ExecRequest,
+    ) -> bool {
+        let on_arm64 = snapshot
+            .guest_kernel
+            .as_ref()
+            .is_some_and(|kernel| kernel.arch == crate::api::GuestArch::AARCH64);
+        on_arm64
+            && request.sample.as_ref().is_some_and(|sample| {
+                crate::samples::Library::open(data_dir)
+                    .ok()
+                    .and_then(|library| library.get(&sample.sha256).ok().flatten())
+                    .is_some_and(|record| crate::samples::arch_label(&record.arch) == "ARM")
+            })
+    }
     /// Refuse a launch this guest or this boot cannot take, and name the library sample.
     fn launch_checks(&mut self, request: &mut ExecRequest) -> Result<(), String> {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
@@ -100,6 +119,14 @@ impl Worker {
                     library.identify_run(&session.vm.id, &request.path, &request.args)
                 })
                 .unwrap_or(None);
+        }
+        let aarch32 = Self::is_aarch32_sample(&self.snapshot, &self.options.data_dir, request);
+        if aarch32
+            && request.core_dump_on_exit
+            && let Some(reason) =
+                crate::core_limits::aarch32_core_refusal(self.snapshot.guest_core_limits)
+        {
+            return Err(reason.into());
         }
         if request.core_dump_on_exit
             && !self
@@ -160,6 +187,9 @@ impl Worker {
             .map_err(|error| error.to_string())?;
             if !caps.debug_on_start {
                 return Err("this base's debugger cannot stop a program at its start; rebuild the base for Antinomie 0.7.0 (Debug on start is a Phase 2 feature)".into());
+            }
+            if aarch32 && caps.arch == crate::debug::ArchTag::Aarch64 && !caps.aarch32 {
+                return Err(crate::debug::NO_AARCH32_DEBUGGER.into());
             }
         }
         if session.run_artifacts.contains_key(&0) {

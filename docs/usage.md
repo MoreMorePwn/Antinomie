@@ -399,9 +399,12 @@ later) have cores and a debugger too:
   guest does not refuse it, but whether it traps when the block's condition
   fails is architecturally unpredictable.
 - **Older bases.** A base of guest revision 20 or earlier has no AArch32 core
-  writer and debugger: Core Dump on Exit reports "needs a base of guest
-  revision 21 or later" for a 32-bit ARM program, and Debug says the guest's
-  debugger refused the program for the same reason.
+  writer and debugger. For a library sample known as 32-bit ARM, Core Dump on
+  Exit and Debug on start are refused before the program starts, naming the
+  revision 21 base they need. For any other program the guest's own refusal is
+  explained the same way: the core's failure reads "needs a base of guest
+  revision 21 or later" (not "state 5, status -95") and Debug says the guest's
+  debugger refused the program.
 
 **Device profiles.** An arm64 VM does not present a PC. With a realistic preset
 it presents an arm64 machine of the preset's kind, the same one for the VM's

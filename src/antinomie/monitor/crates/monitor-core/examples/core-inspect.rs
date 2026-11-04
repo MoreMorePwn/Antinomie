@@ -11,7 +11,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let core = CoreDump::open(&path)?;
     println!("{}", serde_json::to_string_pretty(&core)?);
     for thread in &core.threads {
-        if let Some(ip) = thread.register("rip") {
+        // x86-64's rip; a 32-bit ARM core's pc (ARM or Thumb by CPSR.T).
+        if let Some(ip) = thread.register("rip").or_else(|| {
+            (core.machine == antinomie_monitor_core::core_dump::EM_ARM)
+                .then(|| thread.register("pc"))
+                .flatten()
+        }) {
             match core.disassemble(ip, 64) {
                 Ok(code) => println!("Thread {} RIP {ip:#x}:\n{code}", thread.tid),
                 Err(error) => println!("Thread {} RIP {ip:#x}: unavailable: {error}", thread.tid),
