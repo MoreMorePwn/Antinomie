@@ -145,6 +145,36 @@ class FetchTests(unittest.TestCase):
         self.assertEqual(server.requests[1][1], "bytes=300000-")
         self.assertIn("retrying in", self.log[0])
 
+    def index_fixture(self, mirror_step):
+        path = "dists/trixie/main/binary-arm64/Packages.xz"
+        snapshot = self.serve({"/archive/debian/S/" + path: ["ok"]})
+        mirror = self.serve({f"/dists/trixie/main/binary-arm64/by-hash/SHA256/{SHA}": [mirror_step]})
+        self.addCleanup(setattr, fetch, "DEBIAN", fetch.DEBIAN)
+        fetch.DEBIAN = mirror.url
+        archive = snapshot.url + "/archive/debian/S"
+        fetch.fetch_index(archive, path, self.target, SHA, len(BODY), **self.options)
+        self.assertEqual(self.target.read_bytes(), BODY)
+        self.assertEqual(len(mirror.requests), 1)
+        self.assertEqual(len(snapshot.requests), 1)
+        return mirror
+
+    def test_index_by_hash_404_then_snapshot(self):
+        self.index_fixture(404)
+        self.assertIn("404, trying 127.0.0.1", self.log[0])
+
+    def test_index_by_hash_mismatch_then_snapshot(self):
+        self.index_fixture("wrong")
+        self.assertIn("not the pinned file, trying", self.log[0])
+
+    def test_index_urls_by_hash_first_snapshot_last(self):
+        archive = "https://snapshot.debian.org/archive/debian/S"
+        urls = fetch.index_urls(archive, "dists/trixie/main/binary-arm64/Packages.xz", "ab",
+                                "http://ftp.de.debian.org/debian")
+        self.assertEqual(urls, [
+            "http://ftp.de.debian.org/debian/dists/trixie/main/binary-arm64/by-hash/SHA256/ab",
+            "http://deb.debian.org/debian/dists/trixie/main/binary-arm64/by-hash/SHA256/ab",
+            archive + "/dists/trixie/main/binary-arm64/Packages.xz"])
+
     def test_pool_order_and_mirror_validation(self):
         archive = "https://snapshot.debian.org/archive/debian/20261020T213255Z"
         self.assertEqual(fetch.pool_urls(archive, "pool/main/b/bc/bc.deb"), [

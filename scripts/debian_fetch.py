@@ -202,16 +202,52 @@ def pool_urls(archive, filename, mirror=""):
     """URLs of a pool file, best first: the user's mirror, deb.debian.org (and
     security.debian.org), then the pinned snapshot archive (a URL of the form
     .../archive/debian[-security]/STAMP)."""
-    security = "/debian-security/" in archive + "/"
-    mirror = valid_mirror(mirror)
-    roots = []
-    if mirror:
-        roots.append(mirror[:-len("/debian")] + "/debian-security" if security
-                     and mirror.endswith("/debian") else mirror if not security else None)
-    roots += list(SECURITY) if security else [DEBIAN]
-    urls = [f"{root}/{filename}" for root in roots if root]
+    urls = [f"{root}/{filename}" for root in roots(archive, mirror)]
     urls.append(f"{archive.rstrip('/')}/{filename}")
     return list(dict.fromkeys(urls))
+
+
+def roots(archive, mirror=""):
+    """Mirror roots to try before the snapshot, best first (see pool_urls)."""
+    security = "/debian-security/" in archive + "/"
+    mirror = valid_mirror(mirror)
+    found = []
+    if mirror:
+        found.append(mirror[:-len("/debian")] + "/debian-security" if security
+                     and mirror.endswith("/debian") else mirror if not security else None)
+    found += list(SECURITY) if security else [DEBIAN]
+    return [root for root in found if root]
+
+
+def index_urls(archive, path, sha256, mirror=""):
+    """URLs of a dated index file (path: dists/SUITE/COMPONENT/DIR/NAME), best
+    first: the file by its SHA-256 under by-hash on the mirror, deb.debian.org
+    (and security.debian.org), then the snapshot's normal path. Mirrors keep
+    recent index versions under by-hash; the signed Release names the hash."""
+    directory, _, _ = path.rpartition("/")
+    urls = [f"{root}/{directory}/by-hash/SHA256/{sha256}" for root in roots(archive, mirror)]
+    urls.append(f"{archive.rstrip('/')}/{path}")
+    return list(dict.fromkeys(urls))
+
+
+def release_hashes(text):
+    """{path: (SHA256, size)} from the SHA256 list of a (verified) Release text."""
+    found, section = {}, None
+    for line in text.splitlines():
+        if not line.startswith(" "):
+            section = line.split(":", 1)[0]
+            continue
+        fields = line.split()
+        if section == "SHA256" and len(fields) == 3:
+            found[fields[2]] = (fields[0], int(fields[1]))
+    return found
+
+
+def fetch_index(archive, path, target, sha256, size, mirror="", proxy="", **options):
+    """A dated index file named by the signed Release (hash and size), from
+    by-hash on the mirrors first, else the snapshot."""
+    return fetch_first(index_urls(archive, path, sha256, mirror), target, proxy, sha256, size,
+                       **options)
 
 
 def fetch_pool(archive, filename, target, sha256, size, mirror="", proxy="", **options):
@@ -274,9 +310,24 @@ class PoolProxy:
                         fetch_pool(archive, rest, local, known[0] if known else None,
                                    known[1] if known and known[1] >= 0 else None,
                                    proxy_.mirror, proxy_.proxy, log=proxy_.log, **proxy_.options)
+                    elif "/by-hash/SHA256/" in rest:
+                        directory, _, wanted = rest.partition("/by-hash/SHA256/")
+                        urls = [f"{root}/{rest}" for root in roots(archive, proxy_.mirror)]
+                        fetch_first(urls + [f"{archive}/{rest}"], local, proxy_.proxy, wanted,
+                                    log=proxy_.log, **proxy_.options)
                     else:
-                        fetch_first([f"{archive}/{rest}"], local, proxy_.proxy, log=proxy_.log,
-                                    **proxy_.options)
+                        known = proxy_.hashes.get((parts[2], rest))
+                        if known and rest.startswith("dists/"):
+                            fetch_index(archive, rest, local, known[0], known[1], proxy_.mirror,
+                                        proxy_.proxy, log=proxy_.log, **proxy_.options)
+                        else:
+                            fetch_first([f"{archive}/{rest}"], local, proxy_.proxy,
+                                        log=proxy_.log, **proxy_.options)
+                        if rest.startswith("dists/") and rest.endswith("InRelease"):
+                            suite = rest.split("/")[1]
+                            for name, value in release_hashes(
+                                    local.read_text("utf-8", "replace")).items():
+                                proxy_.hashes[(parts[2], f"dists/{suite}/{name}")] = value
                         if ("/binary-" in rest and "Packages" in rest) or "/by-hash/" in rest:
                             try:
                                 for name, value in _index_hashes(local.read_bytes()).items():

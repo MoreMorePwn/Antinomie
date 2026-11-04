@@ -817,7 +817,8 @@ def pinned_debs(source, packages, cache, work, proxy="", what="Debian packages",
     index.mkdir(parents=True, exist_ok=True)
     try:
         entries = signed_index_entries(index, proxy, source,
-                                       {(name, version) for name, version, _ in packages})
+                                       {(name, version) for name, version, _ in packages},
+                                       mirror)
         for path, (name, version, sha) in zip(debs, packages):
             filename, size, indexed = entries[(name, version)]
             if indexed != sha:
@@ -832,7 +833,7 @@ def pinned_debs(source, packages, cache, work, proxy="", what="Debian packages",
     return debs
 
 
-def signed_index_entries(index, proxy="", source=None, wanted=None):
+def signed_index_entries(index, proxy="", source=None, wanted=None, mirror=""):
     """The wanted (package, version) pairs' index entries, from the Packages
     index of source = (archive URL, suite, architecture) whose hash its signed
     InRelease lists (both downloaded into index). Default: the kernel
@@ -847,9 +848,13 @@ def signed_index_entries(index, proxy="", source=None, wanted=None):
     release = verified_release(index / "InRelease", index)
     expected, size = release_hash(release, listing)
     listed = index / "Packages.xz"
-    fetch(f"{dists}/{listing}", listed, proxy)
-    if sha256_file(listed) != expected or listed.stat().st_size != size:
-        raise RuntimeError(f"{listing} does not match the signed Release")
+    # Only InRelease is fetched from the snapshot alone: the Packages index is
+    # named by its hash there, so a mirror's by-hash copy serves as well.
+    try:
+        _debian_fetch().fetch_index(archive, f"dists/{suite}/{listing}", listed, expected, size,
+                                    mirror, proxy)
+    except RuntimeError as error:
+        raise RuntimeError(f"{error} ({listing} must match the signed Release)") from error
     return index_entries(lzma.decompress(listed.read_bytes()).decode(), wanted, arch)
 
 
