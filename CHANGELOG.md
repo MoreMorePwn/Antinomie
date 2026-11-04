@@ -6,10 +6,11 @@ it runs.
 
 ## 0.9.0 — 2026-MM-DD
 
-Runs the bases 0.8.3 runs (contract revision 20, unchanged) and arm64 BusyBox
-and Debian 13 Minimal bases built by this release. An app older than 0.9.0
-refuses an arm64 base before it starts a VM. x86-64 bases built by this
-release also record 32-bit x86 programs by their own table.
+Runs the bases 0.8.3 runs (contract revision 20) and the bases built by this
+release (contract revision 21), arm64 BusyBox and Debian 13 Minimal among
+them. An app older than 0.9.0 refuses a revision-21 base and an arm64 base
+before it starts a VM. x86-64 bases built by this release also record 32-bit
+x86 programs by their own table.
 
 ### Host
 
@@ -84,6 +85,18 @@ release also record 32-bit x86 programs by their own table.
   provisioning boot fails the creation with its reason. On arm64 the NIC of
   such a VM sits at PCI 00:19.0 (`enp0s25`) on every profile. The x86-64
   provisioning is unchanged (a test pins it byte for byte).
+- **Who sent the fatal signal.** On a revision-21 base the task-exit record
+  names the sender of the signal that ended a task, and Triage's note on
+  killed processes says it: the process (pid, name, uid, and whether it is in
+  the recorded tree), the guest kernel, a fault, a timer, or the kernel's
+  out-of-memory killer with the line it logged. The "Inference: the signal
+  came from outside the recorded calls" text is left for tasks without a
+  record (an older base says so).
+- **Fewer schema gaps.** ioctl FIONREAD on sockets and pipes, FIONBIO,
+  FIOASYNC, FIOQSIZE, FIGETBSZ, `chattr`'s FS_IOC_GETFLAGS and
+  FS_IOC_SETFLAGS show their argument; FIOCLEX, FIONCLEX, FIFREEZE, FITHAW and
+  FICLONE no longer count as gaps; arch_prctl 0x3001 is named
+  `ARCH_CET_STATUS` (old glibc's CET query) instead of an unknown code.
 - **Tests.** `vm-regress.py --arch arm64` runs the full tier on an arm64 base
   (the cloud check expects the arm64 instance; the route and specimen probes
   are built for arm64) and checks that an old host refuses the base
@@ -112,6 +125,16 @@ release also record 32-bit x86 programs by their own table.
 - Patch 43: the x86-64 debug engine puts the program's own bytes back in a
   forked child it does not follow, as arm64's does; only
   `kernel/antinomie/debug.o` changes.
+- Patch 44 (contract revision 21): the ioctl requests `fs/ioctl.c` answers
+  for every file are decoded by their shape (an `int`, an `unsigned int`, a
+  `loff_t`, or no pointer at all), not recorded as gaps; arch_prctl
+  ARCH_CET_STATUS is a known selector.
+- Patch 45 (contract revision 21): the sender of the signal that ended a
+  thread group is kept in its leader's recorder state, taken at the send that
+  starts the group exit (`kernel/signal.c`) or at the delivery of a fatal
+  signal, marked by the OOM killer with its log line (`mm/oom_kill.c`), and
+  written into the task-exit record (`lifecycle.signal.*`,
+  `lifecycle.kernel_log`).
 
 ## 0.8.3 — 2026-MM-DD
 

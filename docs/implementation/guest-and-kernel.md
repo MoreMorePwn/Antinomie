@@ -289,7 +289,8 @@ cargo run --release --locked -j 2 -p antinomie-monitor-core --example conformanc
 * **Limits.** NOT_RESIDENT inputs (static glibc's start-up readlinkat, a forked
   child's first literal) are read again at exit since series 0053 (next
   section); what the call never reads stays NOT_RESIDENT. The ioctl argument is
-  decoded for terminal requests only.
+  decoded for terminal requests only (and, since contract revision 21, for the
+  requests `fs/ioctl.c` answers for every file; see below).
   Directory removal publishes its identity since series 0054. Rows without an entry point have
   positional argument names.
 
@@ -949,6 +950,73 @@ arm64 (threads, vforks and followed children are as before; only
 `kernel/antinomie/debug.o` changes). debug-p2's `forkbp` now fails when a
 child met the parent's breakpoint (the fixture's child exits 3 when its
 SIGTRAP handler ran).
+
+### Contract revision 21: generic ioctls, CET status and the fatal signal's sender (0.9.0)
+
+Board cards "Guest decoders for undecoded ioctls and arch_prctl" and "Record the
+sender of a fatal signal". Revision 21 adds fields and decoders only: every
+field a revision-20 guest wrote is unchanged, and a revision-20 base still runs
+on this host (it records neither). An older host refuses a revision-21 base.
+
+* **Generic file ioctls (patch 44).** The ioctl argument was decoded for
+  terminal requests on a tty only; FIONREAD on a socket or pipe, FIONBIO and
+  `chattr`'s FS_IOC_SETFLAGS were NO_DECODER gaps (about 400 in a 51,000-call
+  benign run). `ioctl_field()` now also decodes the requests
+  `fs/ioctl.c` `do_vfs_ioctl()` answers for every file, before any driver: an
+  `int` written at exit on success (FIONREAD, also for a file that is not
+  regular, whose handler writes one by convention; FIGETBSZ), an `int` read at
+  entry (FIONBIO, FIOASYNC), an `unsigned int` (FS_IOC_GETFLAGS at exit,
+  FS_IOC_SETFLAGS at entry: the request encodes a `long`, the kernel copies an
+  `unsigned int`), a `loff_t` (FIOQSIZE). FIOCLEX, FIONCLEX, FIFREEZE, FITHAW
+  ignore the argument and FICLONE's is a descriptor: no field and no gap. Any
+  other request keeps its NO_DECODER marker. The code is shared, so arm64
+  (same request numbers) decodes them too; compat (ia32, AArch32) ioctls keep
+  their address-only capture.
+* **arch_prctl ARCH_CET_STATUS (patch 44, x86-64).** 0x3001, the query of the
+  CET patches mainline did not take, which glibc 2.28 to 2.38 built with CET
+  sends at start-up, was an unknown-selector gap. Linux 6.12 answers EINVAL;
+  the recorder names it as known and would record its three `u64` (features,
+  shadow stack base and size) at `arg1.cet_status` on success. The host names
+  it `ARCH_CET_STATUS`.
+* **Who sent the fatal signal (patch 45).** The task-exit record held only the
+  wait status, so a report could not name who sent SIGKILL. The guest keeps
+  one record per thread group in the group leader's recorder state
+  (`struct ant_fatal_signal` in the LSM blob, no stock structure changes),
+  written and read under the group's siglock:
+  * at the send, when the send starts the group exit (`__send_signal_locked()`
+    after `complete_signal()`: SIGKILL, which is never queued with a siginfo,
+    and fatal signals nothing catches): `si_code`, `si_pid` and `si_uid` as the
+    kernel fills them for the target, and, when a call sent it from process
+    context (`SI_USER`, `SI_TKILL`, `SI_QUEUE`), the sending task's global
+    TGID, UID and `comm`; `SEND_SIG_PRIV` is `SI_KERNEL` with no sender;
+  * else at the delivery of a fatal signal (`get_signal()` before its `fatal`
+    label: core-dumping signals, a fatal signal a debugged or ptraced task
+    gets), from the siginfo the task dequeued;
+  * the OOM killer (`mm/oom_kill.c` `__oom_kill_process()`, after its log
+    line) marks its victim's record and keeps that line ("Out of memory:
+    Killed process ..." or "Memory cgroup out of memory: ...").
+
+  The first record of a group stays. `ant_monitor_task_exit()` adds, when the
+  task's wait status names the recorded signal, scalar fields
+  `lifecycle.signal.signo`, `.code`, `.pid`, `.uid`, `.origin` (1 send, 2
+  delivery), `.sender_pid` and `.sender_uid` with a string
+  `.sender_comm` when the sender is known, `.oom` and the string
+  `lifecycle.kernel_log` for an OOM kill, to the same event as
+  `lifecycle.task_exit` (the archive index keeps classifying the event by
+  that first field).
+* **Host.** `fatal_signal::FatalSignal` reads the record
+  (`InvocationSummary::task_exit_signal()`); the process tree keeps it beside
+  the end signal, and Triage's note on killed tasks names the sender: the
+  recorded call when it was the same sender (call and time), else the sender
+  by pid, name, uid and whether it is in the recorded tree, the kernel, a fault,
+  a timer, or the OOM killer with its line. The inference text stays for tasks
+  without a record (a revision-20 base says so).
+* **Limits.** A process that shares the OOM victim's memory but is another
+  thread group gets the same SI_KERNEL SIGKILL without the OOM mark; the kernel's
+  other kill messages (seccomp, a fault's "segfault at" line) are not copied;
+  a sender's `comm` is read without its task lock, as printk's users read it;
+  after an exec by a thread other than the leader the record stays with the
+  old leader.
 
 ### arm64 debugger (0.9.0)
 
