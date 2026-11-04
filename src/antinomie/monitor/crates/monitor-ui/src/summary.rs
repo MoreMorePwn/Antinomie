@@ -474,7 +474,7 @@ pub(crate) fn show(
                 if let Some(shed) = health::shed_text(&snapshot.health) {
                     crate::widgets::fact_line(ui, "Capture All shed telemetry", &shed)
                         .on_hover_text(
-                            "While Capture All ran and the host fell behind, the guest dropped telemetry instead of waiting on every system call, so that it stayed responsive. These drops are in the transport loss count.",
+                            "This VM lets Capture All drop telemetry when the host falls behind (Telemetry transport): the guest dropped it instead of waiting on every system call, so that it stayed responsive. These drops are in the transport loss count.",
                         );
                 }
                 if snapshot.health.shedding {
@@ -482,6 +482,9 @@ pub(crate) fn show(
                         ui,
                         "Active — telemetry is being dropped by Capture All shedding",
                     );
+                }
+                if snapshot.health.never_drop_slowing {
+                    crate::activity::info(ui, health::SLOWING_NOTE);
                 }
                 crate::run_recording::health_errors(ui, snapshot);
                 capture_health.show(ui, snapshot);

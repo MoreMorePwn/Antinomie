@@ -29,7 +29,8 @@
 //! runs and stops it after them; `"keep"` leaves it running for the VM stop
 //! to end. The report then lists the VM's network captures.
 //! `"vm": {"transport": {"ring_kib": 4096, "lossless": true, "max_wait_ms": 100,
-//! "event_table": 16384}}` sets the VM's transport settings (any subset).
+//! "event_table": 16384, "capture_all_shed": true}}` sets the VM's transport
+//! settings (any subset).
 //!
 //! A run may set `"core_dump_on_exit"`, `"memory_dump_on_exit"`, and
 //! `"capture_network"` (each boolean).

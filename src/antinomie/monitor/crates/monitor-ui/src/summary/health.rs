@@ -145,6 +145,12 @@ pub(super) fn held_text(health: &Health) -> Option<String> {
     })
 }
 
+/// Said while never-drop holds a Capture All guest back (see
+/// `Health::never_drop_slowing`).
+pub(super) const SLOWING_NOTE: &str = "Capture All: the guest is being slowed so that no \
+     telemetry is lost (Never drop). VM settings > Telemetry transport > \
+     \"Drop telemetry when the host falls behind\" trades this lag for dropped events.";
+
 /// How often Capture All shed telemetry this boot (dropped instead of letting
 /// the guest wait, while the host was behind) and for how long in all.
 /// `None` while it never did.

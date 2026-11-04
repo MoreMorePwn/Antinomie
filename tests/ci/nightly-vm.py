@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
 """Nightly end-to-end check on a real VM: the newest BusyBox base for this
-app version boots, a heavy launched program is recorded in never-drop mode
-without loss or parser errors, the same load under Capture All loses
-telemetry only while Capture All sheds load (by design: the guest stays
-responsive while the host is behind) and names its processes, and a network
-capture records packets. Needs KVM, QEMU and the release guest-run example.
+app version boots, a heavy launched program and the same load under Capture
+All are recorded in never-drop mode without loss or parser errors (the guest
+runs slower instead) and Capture All names the processes; with Capture All
+allowed to drop when the host falls behind, it loses telemetry only while it
+sheds; and a network capture records packets. Needs KVM, QEMU and the release
+guest-run example.
 
     nightly-vm.py GUEST_RUN WORK_DIR
 """
@@ -90,37 +91,40 @@ def main():
     vm = {"cpus": 2, "ram_mib": 1024, "disk_gib": 2}
     heavy = [{"path": "/bin/sh", "args": ["-c", WORKLOAD], "uid": 0, "gid": 0,
               "done": "LOAD DONE", "timeout": 900}]
-    # Never drop (the default transport) holds for a launched program.
-    launch = run(guest_run, work, "never-drop", {
-        "data_dir": str(work / "data-launch"), "headless": True, "import": str(base),
-        "vm": vm | {"name": "Launch"}, "boot_timeout": 240, "runs": heavy})
-    health = launch["health"]
-    check(health["attempted"] > 100_000, f"heavy workload sent {health['attempted']} packets", failures)
-    check(health["dropped"] == 0, f"never-drop lost {health['dropped']} packets", failures)
-    check(health["parser_errors"] == 0, f"{health['parser_errors']} parser errors", failures)
-    check(health.get("persistence_error") is None, f"saving error: {health.get('persistence_error')}", failures)
-    check(launch["runs"][0]["marker_seen"], "launched program finished with its output", failures)
-    # Capture All of the same load: when the host falls behind it sheds
-    # (the guest drops instead of waiting on every system call), and only then.
-    capture = run(guest_run, work, "capture-all", {
-        "data_dir": str(work / "data-capture"), "headless": True, "import": str(base),
-        "vm": vm | {"name": "Capture"}, "boot_timeout": 240, "capture_all": True,
-        "runs": heavy})
-    health = capture["health"]
-    shed = health.get("shed_count", 0)
-    check(health["attempted"] > 100_000, f"Capture All workload sent {health['attempted']} packets", failures)
-    check(health["dropped"] == 0 or shed > 0,
-          f"Capture All lost {health['dropped']} packets, only while shedding "
-          f"(spells: {shed}, {health.get('shed_ns', 0) / 1e9:.1f} s)", failures)
-    check(health["parser_errors"] == 0, f"{health['parser_errors']} parser errors", failures)
-    check(health.get("persistence_error") is None, f"saving error: {health.get('persistence_error')}", failures)
-    check(capture["runs"][0]["marker_seen"], "launched program finished with its output", failures)
+    # Never drop (the default transport) holds for a launched program, and
+    # under Capture All too: the guest waits for the host instead.
+    for name, capture_all in (("never-drop", False), ("capture-all", True)):
+        result = run(guest_run, work, name, {
+            "data_dir": str(work / f"data-{name}"), "headless": True, "import": str(base),
+            "vm": vm | {"name": name}, "boot_timeout": 240, "capture_all": capture_all,
+            "runs": heavy})
+        health = result["health"]
+        print(f"     the workload took {result['runs'][0]['seconds']:.1f} s", flush=True)
+        check(health["attempted"] > 100_000, f"{name}: heavy workload sent {health['attempted']} packets", failures)
+        check(health["dropped"] == 0, f"{name}: never-drop lost {health['dropped']} packets", failures)
+        check(health.get("shed_count", 0) == 0, f"{name}: shed {health.get('shed_count')} times, not allowed to", failures)
+        check(health["parser_errors"] == 0, f"{name}: {health['parser_errors']} parser errors", failures)
+        check(health.get("persistence_error") is None, f"{name}: saving error: {health.get('persistence_error')}", failures)
+        check(result["runs"][0]["marker_seen"], f"{name}: launched program finished with its output", failures)
     processes = [json.loads(path.read_text())
-                 for path in (work / "data-capture").rglob("processes.json")]
+                 for path in (work / "data-capture-all").rglob("processes.json")]
     named = [p for tree in processes for p in tree if p.get("name")]
     check(any(p["name"] == "sh" and p.get("exe") == "/bin/sh" for p in named)
           and any(p["name"] == "ls" and p.get("exe") == "/bin/ls" for p in named),
           f"capture named {len(named)} processes, including sh and ls", failures)
+    # Allowed to drop under Capture All, it does so only while it sheds load.
+    shed_run = run(guest_run, work, "capture-all-shed", {
+        "data_dir": str(work / "data-capture-all-shed"), "headless": True, "import": str(base),
+        "vm": vm | {"name": "Shed", "transport": {"capture_all_shed": True}},
+        "boot_timeout": 240, "capture_all": True, "runs": heavy})
+    health = shed_run["health"]
+    shed = health.get("shed_count", 0)
+    print(f"     the workload took {shed_run['runs'][0]['seconds']:.1f} s", flush=True)
+    check(health["dropped"] == 0 or shed > 0,
+          f"capture-all-shed: lost {health['dropped']} of {health['attempted']} packets, only while "
+          f"shedding (spells: {shed}, {health.get('shed_ns', 0) / 1e9:.1f} s)", failures)
+    check(health["parser_errors"] == 0, f"capture-all-shed: {health['parser_errors']} parser errors", failures)
+    check(shed_run["runs"][0]["marker_seen"], "capture-all-shed: launched program finished with its output", failures)
     network = run(guest_run, work, "network", {
         "data_dir": str(work / "data-network"), "headless": True, "import": str(base),
         "vm": vm | {"name": "Network", "nat": True}, "boot_timeout": 240,

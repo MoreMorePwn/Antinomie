@@ -1,8 +1,9 @@
 # End to end on a real VM, nightly and on demand: the current BusyBox base
-# from the public bucket boots under KVM; a heavy launched program must lose
-# nothing in never-drop mode and parse without errors, the same load under
-# Capture All may lose telemetry only while Capture All sheds load, and a
-# network capture must record packets. See tests/ci/nightly-vm.py.
+# from the public bucket boots under KVM; a heavy launched program and the
+# same load under Capture All must lose nothing in never-drop mode and parse
+# without errors, Capture All allowed to drop may lose telemetry only while
+# it sheds load, and a network capture must record packets. See
+# tests/ci/nightly-vm.py.
 name: Nightly VM
 
 on:

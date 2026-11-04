@@ -222,6 +222,7 @@ for Antinomie 0.3.0 and newer):
 | Guest buffer per vCPU | 256 KiB to 4 MiB of guest memory per virtual CPU (default 1 MiB); bigger buffers ride out longer bursts |
 | When buffers fill | **Never drop** (default): a system call waits until the host has room, so heavy tracing can slow the guest; its wait deadline can still cause counted drops. **Drop new telemetry**: the guest never waits (keeps its timing) and the loss is counted |
 | Longest wait per event | In Never drop mode, how long one call may wait (default 5 s) before its record is dropped after all |
+| Capture All: drop telemetry when the host falls behind | Off (default): Never drop holds under Capture All too, so a busy guest runs slower (a heavy BusyBox load about 10 times slower) and Triage > Summary says it is being slowed. On: while Capture All runs and the host falls behind, the guest drops telemetry instead of waiting, which keeps a desktop guest responsive but loses events; the Summary counts how often and how long. Drop mode ignores it |
 | Host event table | How many calls the host keeps assembling at once (default 16,384) |
 
 The VM's **Summary** shows a **Snapshots** box under **Device profile**: the VM's
