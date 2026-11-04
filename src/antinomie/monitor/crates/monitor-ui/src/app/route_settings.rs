@@ -299,9 +299,16 @@ impl MonitorApp {
             return;
         };
         let install = self.snapshot.tool_install.clone();
-        if let Some(command) =
-            crate::tools_page::tool_row(ui, &tool, install.as_ref(), !self.closing)
-        {
+        let mut chosen = self.settings.own_tools.contains(id);
+        let command = crate::tools_page::tool_row_with(
+            ui,
+            &tool,
+            install.as_ref(),
+            !self.closing,
+            Some(&mut chosen),
+        );
+        crate::tools_page::set_own(&mut self.settings.own_tools, id, chosen);
+        if let Some(command) = command {
             self.send(command);
         }
     }

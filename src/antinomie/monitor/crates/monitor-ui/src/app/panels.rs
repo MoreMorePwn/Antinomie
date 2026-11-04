@@ -30,6 +30,7 @@ impl MonitorApp {
             self.performance.show_fps(ctx);
         }
         self.shortcuts(ctx);
+        antinomie_monitor_core::analysis_tools::set_own_tools(&self.settings.own_tools);
         self.accept_dropped_file(ctx);
         let route_tools = ["tor", "wireproxy"]
             .into_iter()
@@ -51,8 +52,12 @@ impl MonitorApp {
                 install: install.as_ref(),
                 enabled: !self.closing,
                 geoip: self.routes.geoip.status(),
+                own: &self.settings.own_tools,
             },
         );
+        if let Some((id, on)) = outcome.own_tool {
+            crate::tools_page::set_own(&mut self.settings.own_tools, &id, on);
+        }
         if outcome.recheck {
             self.folder_picker.refresh(ctx);
         }

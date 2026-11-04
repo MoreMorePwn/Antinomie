@@ -6,8 +6,12 @@
 //! its upstream release, pinned by SHA-256, unpacked into `<data>/tools/<id>/`
 //! and mounted read-only into the
 //! analysis sandbox at `SANDBOX_DIR`. A tool installed on the system takes
-//! precedence, except Magika, which the Properties panel looks for here first.
+//! precedence, except Magika, which the Properties panel looks for here first, and
+//! a tool the person set to Antinomie's own copy (see `own_copy`).
 use serde::{Deserialize, Serialize};
+
+mod own_copy;
+pub use own_copy::{OWN_TOOLS_ENV, own_tools_env, prefers_own, set_own_tools};
 
 use std::{
     fs::{self, File},

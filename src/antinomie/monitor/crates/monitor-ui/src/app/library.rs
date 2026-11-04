@@ -107,6 +107,7 @@ impl MonitorApp {
             self.snapshot.tool_install.as_ref(),
             !self.closing,
             self.routes.programs(),
+            &mut self.settings.own_tools,
         ) {
             self.send(command);
         }

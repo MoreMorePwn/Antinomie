@@ -918,11 +918,26 @@ step Ready; **Skip this step** leaves the settings as they are. **Help > Getting
 started: Appearance** is in the palette.
 
 **Settings** has the pages Appearance, Recording, Detection rules, Notifications,
-Network lookup, Network routes, Analysis tools, Disks and Advanced. It opens
-centred in the window. The settings are kept between starts: text size, theme,
+Network lookup, Network routes, Analysis tools, Disks, Keyboard and Advanced. It
+opens centred in the window, wide enough that the scroll bar never lies on a text,
+with room between the settings; a page with many settings (Recording, Analysis
+tools, Advanced) is split under sub-headings. The settings are kept between starts: text size, theme,
 density and the debugger's remembered choices all survive a restart (0.8.2 fixed
 a bug where an unreadable debugger setting made every start fall back to the
-defaults). **Notifications** has **Toast for live HIGH findings** (off) and **Toast
+defaults). **Analysis tools** lists each tool with its **Time limit**: the seconds the tool
+may run before it is stopped and its check marked Timeout. The field shows the
+tool's default beside it ("Default (240 s)": capa 240, FLOSS 480, binwalk 180,
+YARA scan 60, UPX unpacking 240, Ghidra decompilation 840, Detect It Easy 120),
+and **Reset** puts the default back. A time set for one tool comes before the
+older **Time limit for every tool** below it, which still applies to the tools you
+did not set; a **Run again with twice the time** from a check's tab uses its own
+doubled time for that run. **Library > Analysis tools** and **Tools > App
+dependencies** give a tool the system has a **Use Antinomie's own copy instead**
+box: the copy Antinomie installed under its data folder then comes first (until
+it is installed the system's copy is used, and the row offers **Install**).
+**Install all missing** still skips a tool the system has, so installing the own
+copy of such a tool is always your click. The choice is saved per tool.
+**Notifications** has **Toast for live HIGH findings** (off) and **Toast
 when a run finishes** (on). A failed **Open folder** or **Open file** raises an
 error toast and an **Activity** row.
 

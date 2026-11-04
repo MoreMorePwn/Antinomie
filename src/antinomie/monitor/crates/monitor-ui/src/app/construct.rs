@@ -18,6 +18,7 @@ impl MonitorApp {
             settings.bundle = options.bundle_dir.to_string_lossy().into_owned();
         }
         settings.migrate();
+        antinomie_monitor_core::analysis_tools::set_own_tools(&settings.own_tools);
         crate::tzone::choose(&settings.time_zone);
         settings.font_size = settings.font_size.clamp(12.0, 24.0);
         theme::apply_theme(&cc.egui_ctx, settings.active_theme());

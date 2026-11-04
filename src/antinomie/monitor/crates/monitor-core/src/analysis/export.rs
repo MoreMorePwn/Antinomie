@@ -268,7 +268,7 @@ pub fn ghidra_open_exported_project(
         .iter()
         .filter_map(|p| Path::new(p).parent()?.parent().map(|p| p.join("ghidraRun")))
         .find(|p| p.is_file());
-    let prefer_managed = std::env::var("ANTINOMIE_ANALYSIS_TOOLS").as_deref() == Ok("managed");
+    let prefer_managed = crate::analysis_tools::prefers_own("ghidra");
     let launcher = if prefer_managed && managed.is_file() {
         managed.clone()
     } else {

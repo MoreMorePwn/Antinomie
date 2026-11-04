@@ -111,9 +111,11 @@ pub(super) fn decompile(section: &mut AnalysisSection, specimen: &[u8], listings
             "The file is not an ELF, PE or Mach-O file the parser can read, so there is nothing to decompile".into();
         return;
     }
-    let result = if let Some(ghidra) =
-        tools::find_tool(crate::analysis_tools::GHIDRA_SYSTEM, GHIDRA_MANAGED)
-    {
+    let result = if let Some(ghidra) = tools::find_tool(
+        "ghidra",
+        crate::analysis_tools::GHIDRA_SYSTEM,
+        GHIDRA_MANAGED,
+    ) {
         ghidra_run(section, specimen, listings, ghidra)
     } else if let Some(r2) = tools::find(crate::analysis_tools::RADARE2_SYSTEM) {
         radare2_run(section, listings, r2)
@@ -197,8 +199,11 @@ pub(super) fn disassembly_listing(section: &mut AnalysisSection, specimen: &[u8]
     if object::File::parse(specimen).is_err() {
         return;
     }
-    let Some(ghidra) = tools::find_tool(crate::analysis_tools::GHIDRA_SYSTEM, GHIDRA_MANAGED)
-    else {
+    let Some(ghidra) = tools::find_tool(
+        "ghidra",
+        crate::analysis_tools::GHIDRA_SYSTEM,
+        GHIDRA_MANAGED,
+    ) else {
         return;
     };
     let result = launch_ghidra(ghidra, true);

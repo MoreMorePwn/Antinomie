@@ -101,6 +101,12 @@ fn nav_item(ui: &mut egui::Ui, label: &str, active: bool) -> egui::Response {
     response
 }
 
+/// The flag Settings sets while it draws a page: its form grids then leave
+/// more room between rows (see `dialogs::form_grid`).
+pub(super) fn roomy_forms() -> egui::Id {
+    egui::Id::new("settings_roomy_forms")
+}
+
 /// A hint line under a control, in the muted color.
 fn hint(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add(egui::Label::new(RichText::new(text).small().color(theme::muted())).wrap())
@@ -187,7 +193,7 @@ impl MonitorApp {
         let mut save = false;
         let mut close = false;
         let screen = ctx.content_rect();
-        let width = 820.0_f32.min((screen.width() - 50.0).max(320.0));
+        let width = 900.0_f32.min((screen.width() - 50.0).max(320.0));
         // The page area scrolls; the title and the footer stay visible on a
         // short screen.
         let height = (screen.height() - 190.0).clamp(160.0, 440.0);
@@ -248,7 +254,18 @@ impl MonitorApp {
                                 .max_height(height)
                                 .max_width(content)
                                 .auto_shrink([false, false])
-                                .show(ui, |ui| self.settings_page(ui, ctx));
+                                .show(ui, |ui| {
+                                    // Room at the right, so the scroll bar never lies on
+                                    // a text; and roomier rows than in a dialog.
+                                    ui.data_mut(|data| data.insert_temp(roomy_forms(), true));
+                                    egui::Frame::NONE
+                                        .inner_margin(egui::Margin {
+                                            right: 18,
+                                            ..Default::default()
+                                        })
+                                        .show(ui, |ui| self.settings_page(ui, ctx));
+                                    ui.data_mut(|data| data.remove_temp::<bool>(roomy_forms()));
+                                });
                         },
                     );
                 });
@@ -440,6 +457,7 @@ impl MonitorApp {
             crate::activity::info(ui, "Stop the VM to change these.");
         }
         ui.add_enabled_ui(self.snapshot.active_vm.is_none(), |ui| {
+            theme::section(ui, "Base and storage");
             form_grid("settings_recording", ui).show(ui, |ui| {
                 ui.label("Installed base");
                 let mut base = self
@@ -463,6 +481,19 @@ impl MonitorApp {
                         .suffix(" GiB"),
                 );
                 ui.end_row();
+                if let Some(path) = &self.snapshot.capture_dir {
+                    ui.label("Recording");
+                    ui.add(
+                        egui::Label::new(RichText::new(path.display().to_string()).monospace())
+                            .truncate(),
+                    )
+                    .on_hover_text(path.display().to_string());
+                    ui.end_row();
+                }
+            });
+            ui.add_space(12.0);
+            theme::section(ui, "Limits and timing");
+            form_grid("settings_recording_limits", ui).show(ui, |ui| {
                 ui.label("Process cores: default budget");
                 ui.add(
                     egui::DragValue::new(&mut self.settings.core_budget_mib)
@@ -480,15 +511,6 @@ impl MonitorApp {
                         .suffix(" s"),
                 );
                 ui.end_row();
-                if let Some(path) = &self.snapshot.capture_dir {
-                    ui.label("Recording");
-                    ui.add(
-                        egui::Label::new(RichText::new(path.display().to_string()).monospace())
-                            .truncate(),
-                    )
-                    .on_hover_text(path.display().to_string());
-                    ui.end_row();
-                }
             });
         });
     }
@@ -583,15 +605,18 @@ impl MonitorApp {
                 "Static analysis uses these tools when they are installed on this system. Downloads are checked by SHA-256 and used read-only by the analysis sandbox.",
             );
         ui.add_space(6.0);
+        theme::section(ui, "Tools and their time limits");
         if self.snapshot.analysis_tools.is_empty() {
             theme::loading_weak(ui, "Reading the tool list…");
         }
-        for tool in self
+        let tools: Vec<_> = self
             .snapshot
             .analysis_tools
             .iter()
             .filter(|tool| !antinomie_monitor_core::analysis_tools::is_route_tool(&tool.id))
-        {
+            .cloned()
+            .collect();
+        for tool in &tools {
             ui.separator();
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(&tool.name).strong().color(theme::text()));
@@ -603,15 +628,22 @@ impl MonitorApp {
                 (None, None) => ("Not installed".to_owned(), Tone::Accent),
             };
             chip(ui, text, tone);
+            if let Some(timed) = antinomie_monitor_core::TimedTool::ALL
+                .into_iter()
+                .find(|timed| timed.package() == Some(tool.id.as_str()))
+            {
+                self.timeout_row(ui, timed);
+            }
         }
+        self.built_in_timeouts(ui);
         ui.add_space(8.0);
         if ui.button("Manage tools…").clicked() {
             self.open_library(crate::workspace::LibraryPage::Tools);
         }
-        ui.add_space(10.0);
-        ui.separator();
+        ui.add_space(12.0);
+        theme::section(ui, "Time and size limits");
         form_grid("settings_analysis_limits", ui).show(ui, |ui| {
-            ui.label("Time limit per tool");
+            ui.label("Time limit for every tool");
             ui.vertical(|ui| {
                 ui.add(crate::analysis::time_limit_drag(
                     &mut self.settings.analysis_time_limit_minutes,
@@ -650,8 +682,8 @@ impl MonitorApp {
             ui.end_row();
         });
 
-        ui.add_space(6.0);
-        ui.separator();
+        ui.add_space(12.0);
+        theme::section(ui, "Debugger");
         form_grid("settings_debugger_console", ui).show(ui, |ui| {
             ui.label("Debugger console");
             ui.vertical(|ui| {
@@ -727,6 +759,7 @@ impl MonitorApp {
     }
 
     fn advanced_page(&mut self, ui: &mut egui::Ui) {
+        theme::section(ui, "Display");
         form_grid("settings_advanced", ui).show(ui, |ui| {
             ui.label("FPS counter");
             ui.vertical(|ui| {
@@ -737,6 +770,10 @@ impl MonitorApp {
                     );
             });
             ui.end_row();
+        });
+        ui.add_space(12.0);
+        theme::section(ui, "Starting a VM");
+        form_grid("settings_advanced_start", ui).show(ui, |ui| {
             ui.label("VM start and guest connection timeouts");
             ui.vertical(|ui| {
                 ui.horizontal_wrapped(|ui| {
@@ -785,6 +822,10 @@ impl MonitorApp {
                 );
             });
             ui.end_row();
+        });
+        ui.add_space(12.0);
+        theme::section(ui, "Triage");
+        form_grid("settings_advanced_triage", ui).show(ui, |ui| {
             ui.label("Triage: rows per table");
             ui.vertical(|ui| {
                 ui.add(
@@ -803,6 +844,10 @@ impl MonitorApp {
                 );
             });
             ui.end_row();
+        });
+        ui.add_space(12.0);
+        theme::section(ui, "File activity");
+        form_grid("settings_advanced_files", ui).show(ui, |ui| {
             ui.label("File activity: written content kept");
             ui.vertical(|ui| {
                 ui.horizontal_wrapped(|ui| {

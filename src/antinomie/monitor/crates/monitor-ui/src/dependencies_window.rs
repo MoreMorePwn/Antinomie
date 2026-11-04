@@ -43,6 +43,8 @@ pub(crate) struct RoutePrograms<'a> {
     pub enabled: bool,
     /// What TShark can use for IP geolocation; `None` until first looked at.
     pub geoip: Option<&'a antinomie_monitor_core::geoip::Status>,
+    /// The tools set to Antinomie's own copy (Settings).
+    pub own: &'a std::collections::BTreeSet<String>,
 }
 
 /// What the window asks the app to do.
@@ -59,6 +61,8 @@ pub(crate) struct Outcome {
     pub tcg_for_vm: bool,
     /// Turn on "Use TCG when KVM is unavailable".
     pub tcg_everywhere: bool,
+    /// A tool's "Use Antinomie's own copy" box was changed.
+    pub own_tool: Option<(String, bool)>,
 }
 
 impl DependenciesWindow {
@@ -336,9 +340,18 @@ fn route_programs(ui: &mut egui::Ui, routes: &RoutePrograms<'_>, outcome: &mut O
     ui.weak("Used by the Tor and VPN routes. Each is installed here or from the routes page.");
     for tool in &routes.tools {
         ui.separator();
-        if let Some(command) = crate::tools_page::tool_row(ui, tool, routes.install, routes.enabled)
-        {
+        let mut chosen = routes.own.contains(&tool.id);
+        if let Some(command) = crate::tools_page::tool_row_with(
+            ui,
+            tool,
+            routes.install,
+            routes.enabled,
+            Some(&mut chosen),
+        ) {
             outcome.command = Some(command);
+        }
+        if chosen != routes.own.contains(&tool.id) {
+            outcome.own_tool = Some((tool.id.clone(), chosen));
         }
     }
     ui.add_space(4.0);

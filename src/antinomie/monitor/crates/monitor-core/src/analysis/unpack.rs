@@ -36,8 +36,8 @@ pub(crate) const LAYER_MAX_COUNT: usize = 3;
 pub(crate) const LAYER_MAX_SIZE: u64 = 64 * 1024 * 1024;
 /// All layers of one file, in octets.
 pub(crate) const TOTAL_MAX_SIZE: u64 = 3 * LAYER_MAX_SIZE;
-/// Wall-clock budget of the whole section, and of one run of the unpacker.
-pub(super) const BUDGET_SECONDS: u64 = 240;
+/// Wall-clock budget of one run of the unpacker (the whole section's is the UPX
+/// time in Settings > Analysis tools).
 const RUN_SECONDS: u64 = 60;
 
 /// Whether the file shows UPX's own marks, however damaged its headers are.
@@ -65,7 +65,7 @@ fn sha256(bytes: &[u8]) -> String {
 }
 
 pub(super) fn unpack(section: &mut AnalysisSection, specimen: &[u8], artifacts: &Path) {
-    let tool = tools::find_tool(crate::analysis_tools::UPX_SYSTEM, MANAGED);
+    let tool = tools::find_tool("upx", crate::analysis_tools::UPX_SYSTEM, MANAGED);
     unpack_with(section, specimen, artifacts, tool);
 }
 
@@ -77,7 +77,7 @@ fn unpack_with(
     tool: Option<&str>,
 ) {
     let started = Instant::now();
-    let budget_seconds = super::limits::seconds(BUDGET_SECONDS);
+    let budget_seconds = super::limits::seconds_for(super::limits::TimedTool::Unpack);
     let run_seconds = super::limits::seconds(RUN_SECONDS);
     // Set when the unpacker or the section's time budget ran out.
     let mut out_of_time: Option<u64> = None;
