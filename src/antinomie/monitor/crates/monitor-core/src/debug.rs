@@ -11,6 +11,7 @@
 //! [`TargetDescription`] per architecture. x86-64 is the first and only entry.
 pub mod aarch64;
 pub mod amd64;
+pub mod arm;
 pub(crate) mod debugger;
 mod inferior;
 mod kernel_backend;

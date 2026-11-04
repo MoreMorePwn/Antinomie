@@ -9,11 +9,15 @@ use super::{
 use std::fmt;
 
 /// Architecture tag carried on every debug message: the ELF `e_machine`.
+/// `Arm` is never on the wire: an arm64 guest names AArch32 tasks `Aarch64` and
+/// serves them the compat regsets, so the host tells them apart by the size of
+/// the first `NT_PRSTATUS` (`Inferior::settle`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ArchTag {
     #[default]
     X86_64,
     Aarch64,
+    Arm,
 }
 impl ArchTag {
     pub fn from_e_machine(value: u32) -> Option<Self> {
@@ -27,12 +31,14 @@ impl ArchTag {
         match self {
             Self::X86_64 => 62,
             Self::Aarch64 => 183,
+            Self::Arm => 40,
         }
     }
     pub fn name(self) -> &'static str {
         match self {
             Self::X86_64 => "x86-64",
             Self::Aarch64 => "aarch64",
+            Self::Arm => "arm",
         }
     }
     /// The register file this architecture's debuggers see.
@@ -40,20 +46,21 @@ impl ArchTag {
         match self {
             Self::X86_64 => super::amd64::description(),
             Self::Aarch64 => super::aarch64::description(),
+            Self::Arm => super::arm::description(),
         }
     }
     /// The instruction pointer's register name.
     pub fn pc_register(self) -> &'static str {
         match self {
             Self::X86_64 => "rip",
-            Self::Aarch64 => "pc",
+            Self::Aarch64 | Self::Arm => "pc",
         }
     }
     /// The stack pointer's register name.
     pub fn sp_register(self) -> &'static str {
         match self {
             Self::X86_64 => "rsp",
-            Self::Aarch64 => "sp",
+            Self::Aarch64 | Self::Arm => "sp",
         }
     }
     /// The frame pointer's register name.
@@ -61,13 +68,15 @@ impl ArchTag {
         match self {
             Self::X86_64 => "rbp",
             Self::Aarch64 => "x29",
+            Self::Arm => "r11",
         }
     }
-    /// Bytes of the software breakpoint the panel plants (`int3`, `brk`).
+    /// Bytes of the software breakpoint the panel plants (`int3`, `brk`, the
+    /// A32 trap; a Thumb thread's is 2, see `arm::THUMB_BREAKPOINT_LEN`).
     pub fn breakpoint_len(self) -> u32 {
         match self {
             Self::X86_64 => 1,
-            Self::Aarch64 => 4,
+            Self::Aarch64 | Self::Arm => 4,
         }
     }
 }
@@ -104,6 +113,10 @@ pub struct DebugCaps {
     pub auxv: bool,
     /// A watchpoint can trigger on loads alone (arm64), not only on any access.
     pub read_watch: bool,
+    /// Revision 21: AArch32 tasks of an arm64 guest can be debugged (compat
+    /// register sets, 2- and 4-byte software breakpoints). Without it the guest
+    /// refuses them (revision 20 and older bases).
+    pub aarch32: bool,
     /// Phase 3: fork and exec events with child sessions, session options, the
     /// event list (`CONFIG`, `EVENTS`).
     pub follow: bool,
@@ -459,6 +472,11 @@ pub trait DebugBackend: Send {
     fn configure(&mut self, options: SessionOptions) -> Result<SessionOptions, DebugError> {
         let _ = options;
         Err(DebugError::Unsupported("session options".into()))
+    }
+    /// The task is an AArch32 one on an arm64 guest (`ArchTag::Arm`): its register
+    /// sets and breakpoint lengths are the compat ones. Told once per image.
+    fn set_task_arch(&mut self, arch: ArchTag) {
+        let _ = arch;
     }
     /// The path of the program of the last `Exec` stop.
     fn exec_path(&mut self) -> Option<String> {

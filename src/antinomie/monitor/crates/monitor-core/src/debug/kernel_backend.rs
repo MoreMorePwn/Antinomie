@@ -4,9 +4,10 @@
 //! stop it saw, and sends that generation with every request so an operation
 //! made against a stop that has since ended is refused, never misapplied.
 use super::{
+    arm::{ARM_BREAKPOINT_LEN, THUMB_BREAKPOINT_LEN},
     target::{
         ArchTag, ChildRef, DebugBackend, DebugCaps, DebugError, DetachMode, EventBatch,
-        GuestBreakpoint, GuestLink, LinkError, RegsetBlob, ResumeAction, SessionInfo,
+        GuestBreakpoint, GuestLink, LinkError, RegsetBlob, RegsetInfo, ResumeAction, SessionInfo,
         SessionOptions, StopEvent, StopKind, TargetState, ThreadAction, ThreadInfo,
     },
     view::BreakpointKind,
@@ -39,6 +40,21 @@ fn map_link(error: LinkError) -> DebugError {
         None => DebugError::Transport(error.message),
     }
 }
+/// What a guest without the AArch32 debugger says of a program it refuses
+/// (ANT-T0293): bases of guest revision 20 and older, on arm64.
+pub const NO_AARCH32_DEBUGGER: &str = "the guest's debugger refused this program: if it is a 32-bit ARM (AArch32) program, \
+this base's guest (older than revision 21) cannot debug it - use a base of guest revision 21 or later";
+/// The same refusal on a guest that does debug AArch32 programs, or on x86-64.
+pub const PROGRAM_NOT_DEBUGGABLE: &str = "the guest's debugger cannot debug this program (an ia32 or x32 program on an x86-64 guest, \
+or a program format it has no debugger for)";
+/// The refusal for a guest's capabilities.
+pub fn refusal(caps: &DebugCaps) -> &'static str {
+    if caps.arch == ArchTag::Aarch64 && !caps.aarch32 {
+        NO_AARCH32_DEBUGGER
+    } else {
+        PROGRAM_NOT_DEBUGGABLE
+    }
+}
 fn protocol(message: String) -> DebugError {
     DebugError::Transport(message)
 }
@@ -63,6 +79,8 @@ pub struct KernelDebugBackend {
     /// Non-stop: the newest event sequence seen in STATUS, and the one fetched.
     seen_sequence: u32,
     fetched_sequence: u32,
+    /// The task is AArch32 (the compat regsets and breakpoint lengths).
+    compat: bool,
     /// The details of the stop being reported (fork, vfork and exec carry more
     /// than STATUS does), by event sequence.
     detail: Option<(u32, StopEvent, Option<String>)>,
@@ -149,7 +167,13 @@ impl KernelDebugBackend {
         .map_err(DebugError::Invalid)?;
         let reply = link
             .request(wire::ATTACH, &request)
-            .map_err(map_link)
+            .map_err(|error| {
+                if error.errno == Some(EOPNOTSUPP) {
+                    DebugError::Unsupported(refusal(&caps).into())
+                } else {
+                    map_link(error)
+                }
+            })
             .and_then(|reply| wire::parse_attach(&reply).map_err(protocol))?;
         if reply.arch != caps.arch {
             return Err(protocol("guest architecture changed during attach".into()));
@@ -175,7 +199,25 @@ impl KernelDebugBackend {
             options: SessionOptions::default(),
             seen_sequence: 0,
             fetched_sequence: 0,
+            compat: false,
             detail: None,
+        }
+    }
+
+    /// The register sets of this session's task: the guest's table, or for an
+    /// AArch32 task the three-entry compat one (`user_aarch32_ptrace_view`).
+    fn regset_table(&self) -> Vec<RegsetInfo> {
+        if self.compat {
+            [(1, 72), (0x400, 260), (0x401, 4)]
+                .into_iter()
+                .map(|(nt_type, max_size)| RegsetInfo {
+                    nt_type,
+                    max_size,
+                    writable: true,
+                })
+                .collect()
+        } else {
+            self.caps.regsets.clone()
         }
     }
 
@@ -241,6 +283,10 @@ impl KernelDebugBackend {
     /// The length of a breakpoint on one instruction: the panel asks with
     /// length 1, which is the architecture's own (`int3`, or a 4-byte `brk`).
     fn instruction_len(&self, len: u32) -> u32 {
+        // An AArch32 task's breakpoint: 4 bytes (A32) or 2 (Thumb), as asked.
+        if self.compat && len == 1 {
+            return ARM_BREAKPOINT_LEN;
+        }
         if len == 1 {
             self.caps.arch.breakpoint_len()
         } else {
@@ -273,6 +319,18 @@ impl KernelDebugBackend {
             Err(DebugError::Unsupported(format!(
                 "{kind:?} of {len} bytes in the debug registers"
             )))
+        }
+    }
+
+    /// A register read the guest refuses with EOPNOTSUPP is an AArch32 task on
+    /// a guest without the engine for it (its `ATTACH` adopted the session of a
+    /// launch before the exec): say so.
+    fn explain(&self, error: DebugError) -> DebugError {
+        match error {
+            DebugError::Unsupported(_) if !self.compat => {
+                DebugError::Unsupported(refusal(&self.caps).into())
+            }
+            other => other,
         }
     }
 
@@ -369,27 +427,25 @@ impl DebugBackend for KernelDebugBackend {
     }
 
     fn read_regset(&mut self, tid: u32, nt_type: u32) -> Result<RegsetBlob, DebugError> {
-        if self.caps.regset(nt_type).is_none() {
+        if !self.regset_table().iter().any(|set| set.nt_type == nt_type) {
             return Err(DebugError::Unsupported(format!(
                 "register set {nt_type} is not offered by the guest"
             )));
         }
-        let reply = self.call(
-            wire::REGS_READ,
-            &wire::regs_read_request(self.session, tid, nt_type, self.generation()),
-        )?;
+        let reply = self
+            .call(
+                wire::REGS_READ,
+                &wire::regs_read_request(self.session, tid, nt_type, self.generation()),
+            )
+            .map_err(|error| self.explain(error))?;
         wire::parse_regs(&reply, nt_type).map_err(protocol)
     }
 
     fn read_regsets(&mut self, tid: u32, nt_types: &[u32]) -> Result<Vec<RegsetBlob>, DebugError> {
         let mut mask = 0u32;
+        let sets = self.regset_table();
         for nt_type in nt_types {
-            match self
-                .caps
-                .regsets
-                .iter()
-                .position(|set| set.nt_type == *nt_type)
-            {
+            match sets.iter().position(|set| set.nt_type == *nt_type) {
                 Some(index) if index < 32 => mask |= 1 << index,
                 _ => {
                     return Err(DebugError::Unsupported(format!(
@@ -399,9 +455,7 @@ impl DebugBackend for KernelDebugBackend {
             }
         }
         // The guest answers in table order: ask in that order, then arrange.
-        let table: Vec<u32> = self
-            .caps
-            .regsets
+        let table: Vec<u32> = sets
             .iter()
             .map(|set| set.nt_type)
             .enumerate()
@@ -414,10 +468,12 @@ impl DebugBackend for KernelDebugBackend {
                 .map(|nt_type| self.read_regset(tid, *nt_type))
                 .collect();
         }
-        let reply = self.call(
-            wire::REGS_READ,
-            &wire::regs_read_many_request(self.session, tid, mask, self.generation()),
-        )?;
+        let reply = self
+            .call(
+                wire::REGS_READ,
+                &wire::regs_read_many_request(self.session, tid, mask, self.generation()),
+            )
+            .map_err(|error| self.explain(error))?;
         let mut blobs = wire::parse_regs_many(&reply, &table).map_err(protocol)?;
         Ok(nt_types
             .iter()
@@ -432,9 +488,9 @@ impl DebugBackend for KernelDebugBackend {
 
     fn write_regset(&mut self, tid: u32, blob: &RegsetBlob) -> Result<(), DebugError> {
         if !self
-            .caps
-            .regset(blob.nt_type)
-            .is_some_and(|set| set.writable)
+            .regset_table()
+            .iter()
+            .any(|set| set.nt_type == blob.nt_type && set.writable)
         {
             return Err(DebugError::Unsupported(format!(
                 "register set {} is read-only",
@@ -486,7 +542,12 @@ impl DebugBackend for KernelDebugBackend {
 
     fn set_breakpoint(&mut self, addr: u64, len: u32) -> Result<(), DebugError> {
         let len = self.instruction_len(len);
-        if !self.caps.supports_breakpoint_len(len) {
+        let supported = if self.compat {
+            self.caps.aarch32 && matches!(len, ARM_BREAKPOINT_LEN | THUMB_BREAKPOINT_LEN)
+        } else {
+            self.caps.supports_breakpoint_len(len)
+        };
+        if !supported {
             return Err(DebugError::Unsupported(format!(
                 "{len}-byte software breakpoints"
             )));
@@ -620,6 +681,10 @@ impl DebugBackend for KernelDebugBackend {
             self.generation = 0;
         }
         Ok(now)
+    }
+
+    fn set_task_arch(&mut self, arch: ArchTag) {
+        self.compat = arch == ArchTag::Arm && self.caps.aarch32;
     }
 
     fn exec_path(&mut self) -> Option<String> {

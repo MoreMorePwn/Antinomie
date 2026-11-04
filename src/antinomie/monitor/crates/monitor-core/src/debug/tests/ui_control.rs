@@ -76,6 +76,7 @@ fn caps() -> DebugCaps {
         debug_on_start: false,
         auxv: false,
         read_watch: false,
+        aarch32: false,
         follow: false,
         nonstop: false,
         adopt: false,
@@ -522,7 +523,7 @@ fn the_panel_and_a_client_share_one_breakpoint_table() {
     let pid = rig.target.current;
     let inferior = rig.target.get(pid).unwrap();
     inferior
-        .with_registry(|registry, backend| registry.panel_breakpoint(backend, CODE + 8, true))
+        .with_registry(|registry, backend| registry.panel_breakpoint(backend, CODE + 8, 1, true))
         .unwrap();
     // The client sets and removes the same address: the guest's stays.
     assert!(
@@ -548,13 +549,13 @@ fn the_panel_and_a_client_share_one_breakpoint_table() {
     // Releasing the panel's interest clears the guest's.
     let inferior = rig.target.get(pid).unwrap();
     inferior
-        .with_registry(|r, b| r.panel_breakpoint(b, CODE + 8, false))
+        .with_registry(|r, b| r.panel_breakpoint(b, CODE + 8, 1, false))
         .unwrap();
     assert!(rig.engine.lock().unwrap().breakpoints.is_empty());
     // A client cannot remove one it never set.
     let inferior = rig.target.get(pid).unwrap();
     inferior
-        .with_registry(|r, b| r.panel_breakpoint(b, CODE + 20, true))
+        .with_registry(|r, b| r.panel_breakpoint(b, CODE + 20, 1, true))
         .unwrap();
     assert!(
         !inferior

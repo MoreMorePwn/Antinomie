@@ -147,6 +147,9 @@ pub(super) struct PanelControl {
     pub(super) following: Option<bool>,
     /// The last time the process list was refreshed for a gdb-controlled view.
     pub(super) observed: Option<Instant>,
+    /// The selected thread of an AArch32 task is in Thumb state (CPSR.T) at this
+    /// stop: its breakpoints are 2-byte traps, not 4-byte ones.
+    pub(super) thumb: bool,
 }
 
 impl PanelControl {
@@ -184,6 +187,7 @@ impl PanelControl {
             prompt: None,
             following: None,
             observed: None,
+            thumb: false,
         };
         (control, PanelHandle(shared))
     }
@@ -496,7 +500,18 @@ impl PanelControl {
                 Err(error) => self.fail(error)?,
             }
         }
-        let description = self.caps.arch.description();
+        // An AArch32 task of an arm64 guest has the compat register sets: the
+        // first read at a stop tells (`Inferior::settle`), and the panel's view
+        // follows (register names, instruction set, breakpoint length).
+        let (description, arch) = {
+            let inferior = self.inferior(debugger)?;
+            inferior.settle(tid);
+            (inferior.description(), inferior.arch())
+        };
+        if self.view.caps.arch != arch {
+            self.view.caps.arch = arch;
+            self.publish();
+        }
         let mut file = RegisterFile::new();
         let mut registers = Ok(());
         if let Some(nt_type) = description.regsets.first() {
@@ -551,7 +566,12 @@ impl PanelControl {
             .iter()
             .find(|entry| entry.kind == RegKind::CodePointer)
             .map(|entry| entry.value);
-        let sp = snapshot.get(self.caps.arch.sp_register());
+        let sp = snapshot.get(arch.sp_register());
+        self.thumb = arch == super::target::ArchTag::Arm
+            && file
+                .get(super::arm::NT_PRSTATUS)
+                .and_then(super::arm::thumb_state)
+                .unwrap_or(false);
         self.view.registers = Some(snapshot);
         self.publish();
 
@@ -974,11 +994,19 @@ impl PanelControl {
         kind: BreakpointKind,
         on: bool,
     ) -> Result<(), DebugError> {
+        let thumb = self.thumb;
         let Some(inferior) = debugger.get(self.selected) else {
             return Err(DebugError::Gone);
         };
+        // A breakpoint's length: the architecture's own (1), or for AArch32 the
+        // state of the stopped thread: Thumb 2 bytes, ARM 4.
+        let len = match (inferior.arch(), thumb) {
+            (super::target::ArchTag::Arm, true) => super::arm::THUMB_BREAKPOINT_LEN,
+            (super::target::ArchTag::Arm, false) => super::arm::ARM_BREAKPOINT_LEN,
+            _ => 1,
+        };
         inferior.with_registry(|registry, backend| match kind {
-            BreakpointKind::Software => registry.panel_breakpoint(backend, addr, on),
+            BreakpointKind::Software => registry.panel_breakpoint(backend, addr, len, on),
             BreakpointKind::Hardware => registry.panel_hardware(backend, kind, addr, 1, on),
             BreakpointKind::Watch(WatchAccess::Write) => {
                 registry.panel_hardware(backend, kind, addr, WATCH_SIZE, on)

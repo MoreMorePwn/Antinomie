@@ -26,9 +26,23 @@ pub(super) fn show(
                 antinomie_monitor_core::debug::ArchTag::Aarch64 => {
                     "Every aarch64 instruction is one 4-byte word."
                 }
+                antinomie_monitor_core::debug::ArchTag::Arm => {
+                    "32-bit ARM: the instruction set (ARM words or Thumb halfwords) follows the \
+                     CPSR T bit at this stop. Instructions before the current one in Thumb \
+                     are a best guess. A breakpoint set here is a Thumb trap in Thumb state, \
+                     an ARM trap in ARM state; one inside an IT block may not trigger when \
+                     the block's condition fails."
+                }
             },
         );
         if let Some(pc) = view.registers.as_ref().and_then(|registers| registers.pc()) {
+            if view.caps.arch == antinomie_monitor_core::debug::ArchTag::Arm {
+                ui.label(
+                    RichText::new(if view.thumb() { "Thumb" } else { "ARM" })
+                        .monospace()
+                        .color(theme::value(theme::ValueKind::Flags)),
+                );
+            }
             ui.label(
                 RichText::new(format!("{} {pc:#x}", view.caps.arch.pc_register()))
                     .monospace()
