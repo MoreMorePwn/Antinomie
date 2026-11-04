@@ -101,6 +101,7 @@ class FetchTests(unittest.TestCase):
         self.assertEqual(len(server.requests), 3)
         self.assertEqual(len(self.waits), 2)
         self.assertTrue(5 <= self.waits[0] <= 6 and 15 <= self.waits[1] <= 18)
+        self.assertTrue(self.log[0].startswith("file.deb: 127.0.0.1:"), self.log[0])
         self.assertIn("answered 503; retrying in", self.log[0])
         self.assertIn("(attempt 2 of 5)", self.log[0])
         self.assertIn("(attempt 3 of 5)", self.log[1])
@@ -113,7 +114,16 @@ class FetchTests(unittest.TestCase):
         self.assertEqual(used, snapshot.url + "/f")
         self.assertEqual(len(mirror.requests), 1)      # 404 is not retried
         self.assertEqual(self.waits, [])
+        self.assertTrue(self.log[0].startswith("file.deb: 127.0.0.1:"), self.log[0])
         self.assertIn("404, trying 127.0.0.1", self.log[0])
+        self.assertEqual(self.log[1], "file.deb: from " + fetch.host(snapshot.url))
+        self.assertEqual(len(self.log), 2)
+
+    def test_first_source_serves_without_a_line(self):
+        server = self.serve({"/f": ["ok"]})
+        fetch.fetch_first([server.url + "/f"], self.target, sha256=SHA, size=len(BODY),
+                          **self.options)
+        self.assertEqual(self.log, [])
 
     def test_sha256_mismatch_on_the_mirror_then_snapshot_good(self):
         mirror, snapshot = self.serve({"/f": ["wrong"]}), self.serve({"/f": ["ok"]})
