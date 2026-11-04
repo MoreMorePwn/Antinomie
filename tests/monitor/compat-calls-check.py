@@ -33,7 +33,6 @@ COMMON = [
     ("writev", 1, "arg1.iov", 8, ""),
     ("writev", 1, "arg1.iov[0].data", 6, "compat".encode().hex()),
     ("readv", 2, "arg1.iov[0].data", 6, "compat".encode().hex()),
-    ("poll", 1, "arg0.pollfds", 8, ""),
     ("_newselect", 2, "arg1.fdset", 4, ""),
     ("getdents", 2, "arg1.dirents", None, ""),
     ("wait4", 2, "arg1.status", 4, "00050000"),
@@ -83,6 +82,10 @@ COMMON = [
 STAT64 = {"ia32": 96, "arm": 104}
 STAT64_CALLS = [("stat64", "arg1.statbuf"), ("lstat64", "arg1.statbuf"),
                 ("fstat64", "arg1.statbuf"), ("fstatat64", "arg2.statbuf")]
+# poll: ia32's pollfd is x86-64's, so its native twin captures it (key
+# arg0.pollfd); AArch32's goes through the compat rules (arg0.pollfds).
+POLL = {"ia32": ("poll", 1, "arg0.pollfd", 8, "03000000"),
+        "arm": ("poll", 1, "arg0.pollfds", 8, "03000000")}
 CALLS = {name for name, *_ in COMMON} | {name for name, _ in STAT64_CALLS}
 
 
@@ -107,7 +110,8 @@ def parse(text):
 def check(events, abi):
     """Problems, one line each; empty when the recording is right."""
     problems = []
-    expected = list(COMMON) + [(call, 2, key, STAT64[abi], "") for call, key in STAT64_CALLS]
+    expected = list(COMMON) + [POLL[abi]] + [(call, 2, key, STAT64[abi], "")
+                                            for call, key in STAT64_CALLS]
     for call, phase, key, size, prefix in expected:
         found = [event["fields"].get(key) for event in events
                  if event["call"] == call and event["phase"] == phase]
