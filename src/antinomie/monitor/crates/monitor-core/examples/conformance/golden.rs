@@ -127,6 +127,126 @@ fn data(preview: &str, volatile: &Volatile) -> String {
     }
 }
 
+/// Decoded members whose value changes on every run: inode numbers and file
+/// times, clock readings, the machine's uptime, load and free memory, a
+/// process's CPU time, the kernel's release and the host name. They are kept
+/// by name and lose their value (`st_mtime=<value>`).
+fn is_volatile_member(name: &str) -> bool {
+    const NAMES: &[&str] = &[
+        "st_ino",
+        "stx_ino",
+        "stx_mnt_id",
+        "stx_dev_major",
+        "stx_dev_minor",
+        "tms_utime",
+        "tms_stime",
+        "tms_cutime",
+        "tms_cstime",
+        "uptime",
+        "loads",
+        "freeram",
+        "sharedram",
+        "bufferram",
+        "freeswap",
+        "freehigh",
+        "procs",
+        "nodename",
+        "release",
+        "version",
+        "domainname",
+        "f_bfree",
+        "f_bavail",
+        "f_blocks",
+        "f_files",
+        "f_ffree",
+        "f_fsid",
+        "maxerror",
+        "esterror",
+    ];
+    NAMES.contains(&name)
+        || name.starts_with("ru_")
+        || ["st_atime", "st_mtime", "st_ctime"]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+        || (name.starts_with("stx_") && name.contains("time"))
+}
+
+/// `text` with the value of every volatile member (see
+/// [`is_volatile_member`]) replaced by `<value>`. A value runs to the next
+/// `,` or `}` outside brackets and quotes.
+fn hide_volatile_members(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    while at < chars.len() {
+        let c = chars[at];
+        let starts_name = c.is_ascii_alphabetic() || c == '_';
+        let after_boundary =
+            at == 0 || !(chars[at - 1].is_ascii_alphanumeric() || chars[at - 1] == '_');
+        if starts_name && after_boundary {
+            let end = (at..chars.len())
+                .find(|&i| !(chars[i].is_ascii_alphanumeric() || chars[i] == '_'))
+                .unwrap_or(chars.len());
+            let name: String = chars[at..end].iter().collect();
+            if chars.get(end) == Some(&'=') && is_volatile_member(&name) {
+                out.push_str(&name);
+                out.push_str("=<value>");
+                let (mut depth, mut quoted, mut escaped) = (0i32, false, false);
+                let mut i = end + 1;
+                while i < chars.len() {
+                    let c = chars[i];
+                    if quoted {
+                        if escaped {
+                            escaped = false;
+                        } else if c == '\\' {
+                            escaped = true;
+                        } else if c == '"' {
+                            quoted = false;
+                        }
+                    } else {
+                        match c {
+                            '"' => quoted = true,
+                            '{' | '[' | '(' => depth += 1,
+                            '}' | ']' | ')' if depth == 0 => break,
+                            '}' | ']' | ')' => depth -= 1,
+                            ',' if depth == 0 => break,
+                            _ => {}
+                        }
+                    }
+                    i += 1;
+                }
+                at = i;
+                continue;
+            }
+            out.push_str(&name);
+            at = end;
+            continue;
+        }
+        out.push(c);
+        at += 1;
+    }
+    out
+}
+
+/// Outputs of a call that read a clock or a timer: their value differs on
+/// every run, whatever its layout (`clock_gettime`'s `tp`).
+fn reads_clock(call: &str, argument: &str) -> bool {
+    matches!(
+        (call, argument),
+        ("clock_gettime", "tp")
+            | ("gettimeofday", "tv")
+            | ("getitimer", "value")
+            | ("timer_gettime", "setting")
+            | ("timerfd_gettime", "otmr")
+            | ("time", "tloc")
+    )
+}
+
+/// Calls whose result is a time or a tick count.
+fn returns_clock(call: &str) -> bool {
+    matches!(call, "time" | "times")
+}
+
 /// A field the view decoded by its layout (`{si_signo=SIGCHLD, si_pid=120}`,
 /// `[SIGINT SIGTERM]`, a version name) is kept, with the values in it that a
 /// rerun changes normalised one at a time: addresses, kernel handles, and the
@@ -134,6 +254,8 @@ fn data(preview: &str, volatile: &Volatile) -> String {
 /// `sigev_notify_thread_id`) or of a whole value that is one (`pidish`).
 /// Quoted text inside (a name) is kept, the work directory replaced.
 fn decoded(text: &str, volatile: &Volatile, pidish: bool) -> String {
+    let hidden = hide_volatile_members(text);
+    let text = hidden.as_str();
     let names_process =
         |name: &str| name.ends_with("pid") || name.ends_with("tid") || name.ends_with("thread_id");
     let mut out = String::with_capacity(text.len());
@@ -213,6 +335,7 @@ fn line(
         .map(|argument| {
             let shown = match &argument.data {
                 Some(_) if volatile => "<data>".to_owned(),
+                Some(_) if reads_clock(&view.name, &argument.name) => "<time>".to_owned(),
                 Some(preview) if argument.decoded => decoded(preview, ids, false),
                 Some(preview) => data(preview, ids),
                 // In a case the fixture marks volatile, large numbers are
@@ -240,7 +363,7 @@ fn line(
         })
         .collect();
     let result = view.result.as_deref().map_or("-".to_owned(), |text| {
-        if volatile && !text.starts_with('E') {
+        if (volatile || returns_clock(&view.name)) && !text.starts_with('E') {
             "<value>".into()
         } else {
             normal(
@@ -628,5 +751,66 @@ mod tests {
             "\"/proc/<pid>/ns\""
         );
         assert_eq!(super::normal("\"a1234\"", &ids, false), "\"a1234\"");
+    }
+
+    #[test]
+    fn run_dependent_decoded_members_and_clock_readings_are_hidden() {
+        let ids = super::Volatile {
+            ids: Default::default(),
+            work_dir: None,
+            root_device: None,
+            work_device: None,
+        };
+        assert_eq!(
+            super::decoded(
+                "{st_dev=7, st_ino=131234, st_mode=S_IFREG|0644, st_size=12, \
+                 st_atime=1700000000, st_atime_nsec=5, st_mtime=1700000001}",
+                &ids,
+                false
+            ),
+            "{st_dev=7, st_ino=<value>, st_mode=S_IFREG|0644, st_size=12, \
+             st_atime=<value>, st_atime_nsec=<value>, st_mtime=<value>}"
+        );
+        // A nested time group (statx) and a list (sysinfo's loads) go whole.
+        assert_eq!(
+            super::decoded(
+                "{stx_mode=S_IFDIR|0755, stx_mtime=1700000000 s (19675 d 22 h), stx_ino=9, \
+                 stx_size=4096}",
+                &ids,
+                false
+            ),
+            "{stx_mode=S_IFDIR|0755, stx_mtime=<value>, stx_ino=<value>, stx_size=4096}"
+        );
+        assert_eq!(
+            super::decoded(
+                "{uptime=812, loads=[1, 2, 3], totalram=1000, procs=40}",
+                &ids,
+                false
+            ),
+            "{uptime=<value>, loads=<value>, totalram=1000, procs=<value>}"
+        );
+        assert_eq!(
+            super::decoded(
+                "{sysname=\"Linux\", nodename=\"a, b\", release=\"6.12.94\", machine=\"x86_64\"}",
+                &ids,
+                false
+            ),
+            "{sysname=\"Linux\", nodename=<value>, release=<value>, machine=\"x86_64\"}"
+        );
+        assert_eq!(
+            super::decoded("{ru_utime=1 s, ru_maxrss=2048}", &ids, false),
+            "{ru_utime=<value>, ru_maxrss=<value>}"
+        );
+        // Names that merely contain a volatile one are kept.
+        assert_eq!(
+            super::decoded("{my_release=3, tick_rate=4}", &ids, false),
+            "{my_release=3, tick_rate=4}"
+        );
+        // Clock readings by call and argument; results of time() and times().
+        assert!(super::reads_clock("clock_gettime", "tp"));
+        assert!(super::reads_clock("gettimeofday", "tv"));
+        assert!(!super::reads_clock("clock_gettime", "which_clock"));
+        assert!(!super::reads_clock("nanosleep", "rqtp"));
+        assert!(super::returns_clock("times") && !super::returns_clock("getpid"));
     }
 }
