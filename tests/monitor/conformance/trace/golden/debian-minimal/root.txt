@@ -6,8 +6,8 @@ bpf.map_delete_array | bpf(cmd=BPF_MAP_DELETE_ELEM, attr={map_fd=3, key=<addr>, 
 bpf.map_get_next_key | bpf(cmd=BPF_MAP_GET_NEXT_KEY, attr="\x02\0\0\0", size=32) = 0 | arg1.attr:complete:{map_fd=3, key=<addr>, next_key=<addr>} arg1.attr.key:complete:"\x01\0\0\0" arg1.attr.next_key:complete
 bpf.map_lookup | bpf(cmd=BPF_MAP_LOOKUP_ELEM, attr="ANTIMAP1", size=32) = 0 | arg1.attr:complete:{map_fd=3, key=<addr>, value=<addr>, flags=0x0} arg1.attr.key:complete:"\x01\0\0\0" arg1.attr.value:complete
 bpf.map_update | bpf(cmd=BPF_MAP_UPDATE_ELEM, attr={map_fd=3, key=<addr>, value=<addr>, flags=0x0}, size=32) = 0 | arg1.attr:complete:{map_fd=3, key=<addr>, value=<addr>, flags=0x0} arg1.attr.key:complete:"\x01\0\0\0" arg1.attr.value:complete:"ANTIMAP1"
-bpf.prog_load_rejected | bpf(cmd=BPF_PROG_LOAD, attr="0: R1=ctx() R10=fp0\n0: (95) exit\nR0 !read_ok\npro"..., size=40) = EACCES | arg1.attr:complete:{prog_type=BPF_PROG_TYPE_SOCKET_FILTER, insn_cnt=1, insns=<addr>, license=<addr>, log_level=1, log_size=4096, log_buf=<addr>} arg1.attr.insns:complete:<bytes> arg1.attr.license:complete:"GPL" arg1.attr.log_buf:complete
-bpf.prog_load_root | bpf(cmd=BPF_PROG_LOAD, attr="processed 2 insns (limit 1000000) max_states_per"..., size=40) = 4 | arg1.attr:complete:{prog_type=BPF_PROG_TYPE_SOCKET_FILTER, insn_cnt=2, insns=<addr>, license=<addr>, log_level=1, log_size=4096, log_buf=<addr>} arg1.attr.insns:complete:<bytes> arg1.attr.license:complete:"GPL" arg1.attr.log_buf:complete
+bpf.prog_load_rejected | bpf(cmd=BPF_PROG_LOAD, attr="0: R1=ctx() R10=fp0\n0: (95) exit\nR0 !read_ok\npro"..., size=40) = EACCES | arg1.attr:complete:{prog_type=BPF_PROG_TYPE_SOCKET_FILTER, insn_cnt=1, insns=<addr>, license=<addr>, log_level=1, log_size=4096, log_buf=<addr>} arg1.attr.insns:complete:[exit] arg1.attr.license:complete:"GPL" arg1.attr.log_buf:complete
+bpf.prog_load_root | bpf(cmd=BPF_PROG_LOAD, attr="processed 2 insns (limit 1000000) max_states_per"..., size=40) = 4 | arg1.attr:complete:{prog_type=BPF_PROG_TYPE_SOCKET_FILTER, insn_cnt=2, insns=<addr>, license=<addr>, log_level=1, log_size=4096, log_buf=<addr>} arg1.attr.insns:complete:[mov64 r0, 0, exit] arg1.attr.license:complete:"GPL" arg1.attr.log_buf:complete
 capset.bad_version | capset(header=_LINUX_CAPABILITY_VERSION_3, data=<addr>) = EINVAL | arg0.version:complete:<addr> arg0.required_version:complete
 capset.drop_sys_boot | capset(header=_LINUX_CAPABILITY_VERSION_3, data={effective=all but CAP_SYS_BOOT, permitted=all but CAP_SYS_BOOT, inheritable=0}) = 0 | arg0.version:complete:_LINUX_CAPABILITY_VERSION_3 arg0.pid:complete:0 arg1.capabilities:complete:{effective=all but CAP_SYS_BOOT, permitted=all but CAP_SYS_BOOT, inheritable=0}
 chroot.missing_root | chroot(filename="root-missing") = ENOENT | arg0.path:complete:"root-missing"
@@ -34,6 +34,9 @@ fsopen.tmpfs | fsopen(fs_name="tmpfs", flags=CLOEXEC) = 3 | arg0.path:complete:"
 fspick.mount_root | fspick(dfd=AT_FDCWD, path="root-fsmnt", flags=FSPICK_CLOEXEC) = 5 | arg1.path:complete:"root-fsmnt"
 fspick.not_mount_root | fspick(dfd=AT_FDCWD, path=".", flags=0x0) = EINVAL | arg1.path:complete:"."
 init_module.garbage_image | init_module(umod="ANTINOMIE-CONFORMANCE-hovcjqxelszgnubipwdkryfmta"..., len=128, uargs="") = ENOEXEC | arg0.data:complete:"ANTINOMIE-CONFORMANCE-hovcjqxelszgnubipwdkryfmta"... arg2.path:complete:""
+ioctl.getflags_root | ioctl(fd=3, cmd=FS_IOC_GETFLAGS, arg=<data>) = <value> | arg2.ioctl:complete
+ioctl.setflags_clear | ioctl(fd=3, cmd=FS_IOC_SETFLAGS, arg=<data>) = <value> | arg2.ioctl:complete
+ioctl.setflags_immutable | ioctl(fd=3, cmd=FS_IOC_SETFLAGS, arg=<data>) = <value> | arg2.ioctl:complete
 ioperm.off_root | ioperm(from=128, num=1, on=0) = 0 |
 ioperm.on_root | ioperm(from=128, num=1, on=1) = 0 |
 iopl.lower_root | iopl(level=0) = 0 |

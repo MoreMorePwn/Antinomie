@@ -38,6 +38,7 @@ afs_syscall.not_implemented | afs_syscall(first=0, second=0, third=0, fourth=0, 
 alarm.cancel | alarm(seconds=0) = <value> |
 alarm.restore | alarm(seconds=240) = <value> |
 alarm.set | alarm(seconds=30) = <value> |
+arch_prctl.cet_status | arch_prctl(option=ARCH_CET_STATUS, arg2=<handle>) = EINVAL |
 arch_prctl.get_cpuid | arch_prctl(option=ARCH_GET_CPUID, arg2=0) = 1 |
 arch_prctl.get_cpuid_child | arch_prctl(option=ARCH_GET_CPUID, arg2=0) = 1 |
 arch_prctl.get_fs | arch_prctl(option=ARCH_GET_FS, arg2=<data>) = <value> | arg1.arch_value:complete
@@ -68,7 +69,7 @@ bind.unix_path_in_use | bind(fd=6, umyaddr=unix:net-stream, addrlen=13) = EADDRI
 bpf.attr_fault | bpf(cmd=BPF_MAP_CREATE, attr=0x1, size=16) = EFAULT | arg1.attr:copy fault:uncaptured !3
 bpf.map_create_unprivileged | bpf(cmd=BPF_MAP_CREATE, attr={map_type=BPF_MAP_TYPE_ARRAY, key_size=4, value_size=8, max_entries=4, map_flags=0x0, inner_map_fd=0, numa_node=0, map_name="ant_array", map_ifindex=0, btf_fd=0, btf_key_type_id=0, btf_value_type_id=0, btf_vmlinux_value_type_id=0, map_extra..., size=72) = EPERM | arg1.attr:complete:{map_type=BPF_MAP_TYPE_ARRAY, key_size=4, value_size=8, max_entries=4, map_flags=0x0, inner_map_fd=0, numa_node=0, map_name="ant_array", map_ifindex=0, btf_fd=0, btf_key_type_id=0, btf_value_type_id=0, btf_vmlinux_value_type_id=0, map_extra...
 bpf.obj_get_missing | bpf(cmd=BPF_OBJ_GET, attr={pathname=<addr>, bpf_fd=0, file_flags=0x0}, size=16) = ENOENT | arg1.attr:complete:{pathname=<addr>, bpf_fd=0, file_flags=0x0} arg1.attr.pathname:complete:"<work>/sys-bpf-missing"
-bpf.prog_load_unprivileged | bpf(cmd=BPF_PROG_LOAD, attr={prog_type=BPF_PROG_TYPE_SOCKET_FILTER, insn_cnt=2, insns=<addr>, license=<addr>, log_level=0, log_size=0, log_buf=NULL}, size=40) = EPERM | arg1.attr:complete:{prog_type=BPF_PROG_TYPE_SOCKET_FILTER, insn_cnt=2, insns=<addr>, license=<addr>, log_level=0, log_size=0, log_buf=NULL} arg1.attr.insns:complete:<bytes> arg1.attr.license:complete:"GPL"
+bpf.prog_load_unprivileged | bpf(cmd=BPF_PROG_LOAD, attr={prog_type=BPF_PROG_TYPE_SOCKET_FILTER, insn_cnt=2, insns=<addr>, license=<addr>, log_level=0, log_size=0, log_buf=NULL}, size=40) = EPERM | arg1.attr:complete:{prog_type=BPF_PROG_TYPE_SOCKET_FILTER, insn_cnt=2, insns=<addr>, license=<addr>, log_level=0, log_size=0, log_buf=NULL} arg1.attr.insns:complete:[mov64 r0, 0, exit] arg1.attr.license:complete:"GPL"
 bpf.size_too_big | bpf(cmd=BPF_MAP_CREATE, attr=<addr>, size=8192) = E2BIG | arg1.attr:invalid extent:uncaptured !3
 bpf.unknown | bpf(cmd=Unknown command 0x7fff, attr=<bytes>, size=16) = EINVAL | arg1.attr:complete:<bytes> bpf.unknown_selector:no decoder:uncaptured !3
 brk.below_start | brk(brk=0x1) = <value> |
@@ -237,7 +238,7 @@ epoll_ctl.add_idle | epoll_ctl(epfd=9, op=EPOLL_CTL_ADD, fd=6, event=<bytes>) = 
 epoll_ctl.add_in | epoll_ctl(epfd=8, op=EPOLL_CTL_ADD, fd=4, event=<bytes>) = 0 | arg3.epoll_event:complete:<bytes>
 epoll_ctl.add_nested | epoll_ctl(epfd=8, op=EPOLL_CTL_ADD, fd=9, event=<bytes>) = 0 | arg3.epoll_event:complete:<bytes>
 epoll_ctl.add_out | epoll_ctl(epfd=8, op=EPOLL_CTL_ADD, fd=5, event=<bytes>) = 0 | arg3.epoll_event:complete:<bytes>
-epoll_ctl.bad_op | epoll_ctl(epfd=8, op=Unknown operation 0x63, fd=6, event=<addr>) = EINVAL | arg3.epoll_event:no decoder:uncaptured !3
+epoll_ctl.bad_op | epoll_ctl(epfd=8, op=Unknown operation 0x63, fd=6, event=<bytes>) = EINVAL | arg3.epoll_event:complete:<bytes>
 epoll_ctl.badf | epoll_ctl(epfd=8, op=EPOLL_CTL_ADD, fd=999, event=<bytes>) = EBADF | arg3.epoll_event:complete:<bytes>
 epoll_ctl.del | epoll_ctl(epfd=8, op=EPOLL_CTL_DEL, fd=5, event=NULL) = 0 |
 epoll_ctl.del_missing | epoll_ctl(epfd=8, op=EPOLL_CTL_DEL, fd=5, event=NULL) = ENOENT |
@@ -410,21 +411,21 @@ futex.wake_none | futex(uaddr=<bytes>, op=FUTEX_WAKE, val=1, utime=NULL, uaddr2=
 futex.wake_op_add | futex(uaddr=<bytes>, op=FUTEX_WAKE_OP|FUTEX_PRIVATE_FLAG, val=1, utime=0x1, uaddr2=<bytes>, val3=268439552) = 0 | arg0.futex.observed:complete:<bytes> arg4.futex.observed:complete:<bytes> arg0.futex.observed:complete arg4.futex.observed:complete
 futex.wake_private_all | futex(uaddr=<bytes>, op=FUTEX_WAKE|FUTEX_PRIVATE_FLAG, val=2147483647, utime=NULL, uaddr2=NULL, val3=0) = 0 | arg0.futex.observed:complete:<bytes>
 futex.wake_requeued | futex(uaddr=<bytes>, op=FUTEX_WAKE|FUTEX_PRIVATE_FLAG, val=1, utime=NULL, uaddr2=NULL, val3=0) = 1 | arg0.futex.observed:complete:<bytes>
-futex_requeue.bad_flags | futex_requeue(waiters=<bytes>, flags=0x1, nr_wake=1, nr_requeue=1) = EINVAL | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:complete:<bytes> arg0.waiters.1.futex.observed:complete:<bytes>
-futex_requeue.mismatch | futex_requeue(waiters=<bytes>, flags=0x0, nr_wake=1, nr_requeue=1) = EAGAIN | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:complete:<bytes> arg0.waiters.1.futex.observed:complete:<bytes>
-futex_requeue.none | futex_requeue(waiters=<bytes>, flags=0x0, nr_wake=1, nr_requeue=1) = 0 | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:complete:<bytes> arg0.waiters.1.futex.observed:complete:<bytes>
+futex_requeue.bad_flags | futex_requeue(waiters=[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE), <addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], flags=0x1, nr_wake=1, nr_requeue=1) = EINVAL | arg0.waiters:complete:[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE), <addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:complete:<bytes> arg0.waiters.1.futex.observed:complete:<bytes>
+futex_requeue.mismatch | futex_requeue(waiters=[<addr> == 7 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE), <addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], flags=0x0, nr_wake=1, nr_requeue=1) = EAGAIN | arg0.waiters:complete:[<addr> == 7 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE), <addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:complete:<bytes> arg0.waiters.1.futex.observed:complete:<bytes>
+futex_requeue.none | futex_requeue(waiters=[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE), <addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], flags=0x0, nr_wake=1, nr_requeue=1) = 0 | arg0.waiters:complete:[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE), <addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:complete:<bytes> arg0.waiters.1.futex.observed:complete:<bytes>
 futex_wait.mismatch | futex_wait(uaddr=<bytes>, val=1, mask=4294967295, flags=FUTEX2_SIZE_U32|FUTEX2_PRIVATE, timespec=<bytes>, clockid=1) = EAGAIN | arg0.futex.observed:complete:<bytes> arg4.timeout:complete:<bytes>
 futex_wait.timeout | futex_wait(uaddr=<bytes>, val=0, mask=4294967295, flags=FUTEX2_SIZE_U32|FUTEX2_PRIVATE, timespec=<bytes>, clockid=1) = ETIMEDOUT | arg0.futex.observed:complete:<bytes> arg4.timeout:complete:<bytes>
 futex_wait.unknown_flag | futex_wait(uaddr=<bytes>, val=0, mask=4294967295, flags=FUTEX2_SIZE_U32|FUTEX2_PRIVATE|0x40, timespec=NULL, clockid=0) = EINVAL | arg0.futex.observed:complete:<bytes>
 futex_wait.value_too_wide | futex_wait(uaddr=<bytes>, val=<handle>, mask=4294967295, flags=FUTEX2_SIZE_U32|FUTEX2_PRIVATE, timespec=NULL, clockid=0) = EINVAL | arg0.futex.observed:complete:<bytes>
 futex_wait.woken | futex_wait(uaddr=<bytes>, val=0, mask=4294967295, flags=FUTEX2_SIZE_U32|FUTEX2_PRIVATE, timespec=<bytes>, clockid=1) = 0 | arg0.futex.observed:complete:<bytes> arg4.timeout:complete:<bytes>
-futex_waitv.bad_clock | futex_waitv(waiters=<bytes>, nr_futexes=1, flags=0x0, timeout=<bytes>, clockid=2) = EINVAL | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:complete:<bytes> arg3.timeout:complete:<bytes>
-futex_waitv.bad_flags | futex_waitv(waiters=<bytes>, nr_futexes=1, flags=0x1, timeout=NULL, clockid=0) = EINVAL | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:complete:<bytes>
-futex_waitv.mismatch | futex_waitv(waiters=<bytes>, nr_futexes=1, flags=0x0, timeout=<bytes>, clockid=1) = EAGAIN | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:complete:<bytes> arg3.timeout:complete:<bytes>
-futex_waitv.realtime_timeout | futex_waitv(waiters=<bytes>, nr_futexes=1, flags=0x0, timeout=<bytes>, clockid=0) = ETIMEDOUT | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:complete:<bytes> arg3.timeout:complete:<bytes>
-futex_waitv.reserved_set | futex_waitv(waiters=<bytes>, nr_futexes=1, flags=0x0, timeout=NULL, clockid=0) = EINVAL | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:invalid extent:uncaptured !3
-futex_waitv.timeout | futex_waitv(waiters=<bytes>, nr_futexes=2, flags=0x0, timeout=<bytes>, clockid=1) = ETIMEDOUT | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:complete:<bytes> arg0.waiters.1.futex.observed:complete:<bytes> arg3.timeout:complete:<bytes>
-futex_waitv.unknown_waiter_flag | futex_waitv(waiters=<bytes>, nr_futexes=1, flags=0x0, timeout=NULL, clockid=0) = EINVAL | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:no decoder:uncaptured !3
+futex_waitv.bad_clock | futex_waitv(waiters=[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], nr_futexes=1, flags=0x0, timeout=<bytes>, clockid=2) = EINVAL | arg0.waiters:complete:[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:complete:<bytes> arg3.timeout:complete:<bytes>
+futex_waitv.bad_flags | futex_waitv(waiters=[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], nr_futexes=1, flags=0x1, timeout=NULL, clockid=0) = EINVAL | arg0.waiters:complete:[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:complete:<bytes>
+futex_waitv.mismatch | futex_waitv(waiters=[<addr> == 1 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], nr_futexes=1, flags=0x0, timeout=<bytes>, clockid=1) = EAGAIN | arg0.waiters:complete:[<addr> == 1 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:complete:<bytes> arg3.timeout:complete:<bytes>
+futex_waitv.realtime_timeout | futex_waitv(waiters=[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], nr_futexes=1, flags=0x0, timeout=<bytes>, clockid=0) = ETIMEDOUT | arg0.waiters:complete:[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:complete:<bytes> arg3.timeout:complete:<bytes>
+futex_waitv.reserved_set | futex_waitv(waiters=[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], nr_futexes=1, flags=0x0, timeout=NULL, clockid=0) = EINVAL | arg0.waiters:complete:[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:invalid extent:uncaptured !3
+futex_waitv.timeout | futex_waitv(waiters=[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE), <addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], nr_futexes=2, flags=0x0, timeout=<bytes>, clockid=1) = ETIMEDOUT | arg0.waiters:complete:[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE), <addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:complete:<bytes> arg0.waiters.1.futex.observed:complete:<bytes> arg3.timeout:complete:<bytes>
+futex_waitv.unknown_waiter_flag | futex_waitv(waiters=[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE|0x40)], nr_futexes=1, flags=0x0, timeout=NULL, clockid=0) = EINVAL | arg0.waiters:complete:[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE|0x40)] arg0.waiters.0.futex.observed:no decoder:uncaptured !3
 futex_waitv.zero_count | futex_waitv(waiters=<addr>, nr_futexes=0, flags=0x0, timeout=NULL, clockid=0) = EINVAL | arg0.waiters:invalid extent:uncaptured !3
 futex_wake.none | futex_wake(uaddr=<bytes>, mask=4294967295, nr=1, flags=FUTEX2_SIZE_U32|FUTEX2_PRIVATE) = 0 | arg0.futex.observed:complete:<bytes>
 futex_wake.shared | futex_wake(uaddr=<bytes>, mask=3, nr=2147483647, flags=FUTEX2_SIZE_U32) = 0 | arg0.futex.observed:complete:<bytes>
@@ -661,24 +662,33 @@ io_uring_setup.cqsize_below_sq | io_uring_setup(entries=8, p={sq_entries=0, cq_e
 io_uring_setup.default | io_uring_setup(entries=16, p={sq_entries=16, cq_entries=32, flags=0, sq_thread_cpu=0, sq_thread_idle=0, features=IORING_FEAT_SINGLE_MMAP|IORING_FEAT_NODROP|IORING_FEAT_SUBMIT_STABLE|IORING_FEAT_RW_CUR_POS|IORING_FEAT_CUR_PERSONALITY|IORING_FEAT_FAST_POLL|IORING_FEAT_PO...) = 3 | arg1.params:complete:{sq_entries=0, cq_entries=0, flags=0, sq_thread_cpu=0, sq_thread_idle=0, features=0, wq_fd=0, sq_off={head=0, tail=0, ring_mask=0, ring_entries=0, flags=0, dropped=0, array=0, user_addr=NULL}, cq_off={head=0, tail=0, ring_mask=0, ring_entri... arg1.params:complete
 io_uring_setup.fault | io_uring_setup(entries=4, p=0x1) = EFAULT | arg1.params:copy fault:uncaptured !3
 io_uring_setup.zero_entries | io_uring_setup(entries=0, p={sq_entries=0, cq_entries=0, flags=0, sq_thread_cpu=0, sq_thread_idle=0, features=0, wq_fd=0, sq_off={head=0, tail=0, ring_mask=0, ring_entries=0, flags=0, dropped=0, array=0, user_addr=NULL}, cq_off={head=0, tail=0, ring_mask=0, ring_entri...) = EINVAL | arg1.params:complete:{sq_entries=0, cq_entries=0, flags=0, sq_thread_cpu=0, sq_thread_idle=0, features=0, wq_fd=0, sq_off={head=0, tail=0, ring_mask=0, ring_entries=0, flags=0, dropped=0, array=0, user_addr=NULL}, cq_off={head=0, tail=0, ring_mask=0, ring_entri...
-ioctl.badf | ioctl(fd=999, cmd=FIONREAD, arg=<handle>) = EBADF | arg2.ioctl:no decoder:uncaptured !3
-ioctl.ficlone_unsupported | ioctl(fd=9, cmd=FICLONE, arg=3) = EOPNOTSUPP | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fioasync_off | ioctl(fd=4, cmd=FIOASYNC, arg=<handle>) = 0 | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fioasync_on | ioctl(fd=4, cmd=FIOASYNC, arg=<handle>) = 0 | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fioclex | ioctl(fd=4, cmd=FIOCLEX, arg=0) = 0 | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fionbio_off | ioctl(fd=4, cmd=FIONBIO, arg=<handle>) = 0 | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fionbio_on | ioctl(fd=4, cmd=FIONBIO, arg=<handle>) = 0 | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fionclex | ioctl(fd=4, cmd=FIONCLEX, arg=0) = 0 | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fionread_fault | ioctl(fd=4, cmd=FIONREAD, arg=1) = EFAULT | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fionread_file | ioctl(fd=3, cmd=FIONREAD, arg=<handle>) = 0 | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fionread_pipe | ioctl(fd=4, cmd=FIONREAD, arg=<handle>) = 0 | arg2.ioctl:no decoder:uncaptured !3
+ioctl.badf | ioctl(fd=999, cmd=FIONREAD, arg=<handle>) = EBADF |
+ioctl.ficlone_unsupported | ioctl(fd=9, cmd=FICLONE, arg=3) = EOPNOTSUPP |
+ioctl.figetbsz_file | ioctl(fd=3, cmd=FIGETBSZ, arg=<data>) = <value> | arg2.ioctl:complete
+ioctl.fioasync_off | ioctl(fd=4, cmd=FIOASYNC, arg=<bytes>) = 0 | arg2.ioctl:complete:<bytes>
+ioctl.fioasync_on | ioctl(fd=4, cmd=FIOASYNC, arg=<bytes>) = 0 | arg2.ioctl:complete:<bytes>
+ioctl.fioclex | ioctl(fd=4, cmd=FIOCLEX, arg=0) = 0 |
+ioctl.fionbio_off | ioctl(fd=4, cmd=FIONBIO, arg=<bytes>) = 0 | arg2.ioctl:complete:<bytes>
+ioctl.fionbio_on | ioctl(fd=4, cmd=FIONBIO, arg=<bytes>) = 0 | arg2.ioctl:complete:<bytes>
+ioctl.fionclex | ioctl(fd=4, cmd=FIONCLEX, arg=0) = 0 |
+ioctl.fionread_fault | ioctl(fd=4, cmd=FIONREAD, arg=1) = EFAULT |
+ioctl.fionread_file | ioctl(fd=3, cmd=FIONREAD, arg=<bytes>) = 0 | arg2.ioctl:complete
+ioctl.fionread_pipe | ioctl(fd=4, cmd=FIONREAD, arg=<bytes>) = 0 | arg2.ioctl:complete
 ioctl.fionread_tty | ioctl(fd=stdin, cmd=FIONREAD, arg=<data>) = <value> | arg2.ioctl:complete
-ioctl.socket_inq | ioctl(fd=8, cmd=FIONREAD, arg=<handle>) = 0 | arg2.ioctl:no decoder:uncaptured !3
+ioctl.fioqsize_file | ioctl(fd=3, cmd=FIOQSIZE, arg=<bytes>) = 0 | arg2.ioctl:complete
+ioctl.fsgetxattr_file | ioctl(fd=3, cmd=_IOR('X', 0x1f, 28), arg=<data>) = <value> | arg2.ioctl:complete
+ioctl.getflags_file | ioctl(fd=3, cmd=FS_IOC_GETFLAGS, arg=<data>) = <value> | arg2.ioctl:complete
+ioctl.setflags_same | ioctl(fd=3, cmd=FS_IOC_SETFLAGS, arg=<data>) = <value> | arg2.ioctl:complete
+ioctl.siocgifconf | ioctl(fd=8, cmd=SIOCGIFCONF, arg=<data>) = <value> | arg2.ioctl:complete arg2.ioctl:complete arg2.ifconf.buffer:complete
+ioctl.siocgifindex_lo | ioctl(fd=8, cmd=SIOCGIFINDEX, arg=<bytes>) = 0 | arg2.ioctl:complete:<bytes> arg2.ioctl:complete
+ioctl.socket_inq | ioctl(fd=8, cmd=FIONREAD, arg=<bytes>) = 0 | arg2.ioctl:complete
 ioctl.tcgets_fault | ioctl(fd=stdin, cmd=TCGETS, arg=1) = EFAULT |
 ioctl.tcgets_stdin | ioctl(fd=stdin, cmd=TCGETS, arg=<bytes>) = 0 | arg2.ioctl:complete
 ioctl.tiocgpgrp | ioctl(fd=stdin, cmd=TIOCGPGRP, arg=<data>) = <value> | arg2.ioctl:complete
 ioctl.tiocgwinsz_stdout | ioctl(fd=stdout, cmd=TIOCGWINSZ, arg=<data>) = <value> | arg2.ioctl:complete
-ioctl.unknown_file | ioctl(fd=3, cmd=_IOR('Z', 0x7e, 4), arg=<handle>) = ENOTTY | arg2.ioctl:no decoder:uncaptured !3
+ioctl.unknown_file | ioctl(fd=3, cmd=_IOR('Z', 0x7e, 4), arg=<handle>) = ENOTTY |
+ioctl.unknown_none | ioctl(fd=3, cmd=_IO('Z', 0x7c), arg=<handle>) = ENOTTY | arg2.ioctl:no decoder:uncaptured !3
+ioctl.unknown_write | ioctl(fd=3, cmd=_IOW('Z', 0x7d, 4), arg="\x07\0\0\0") = ENOTTY | arg2.ioctl:complete:"\x07\0\0\0"
 ioperm.bad_range | ioperm(from=65535, num=16, on=0) = EINVAL |
 ioperm.off | ioperm(from=128, num=1, on=0) = 0 |
 ioperm.on_unprivileged | ioperm(from=128, num=1, on=1) = EPERM |
@@ -705,7 +715,7 @@ kcmp.vm_self | kcmp(pid1=<pid>, pid2=<pid>, type=KCMP_VM, idx1=0, idx2=0) = <val
 kexec_file_load.unprivileged | kexec_file_load(kernel_fd=-1, initrd_fd=-1, cmdline_len=4, cmdline_ptr="ant\0", flags=0x0) = EPERM | arg3.data:complete:"ant\0"
 kexec_load.too_many_segments | kexec_load(entry=0, nr_segments=17, segments=<addr>, flags=KEXEC_ARCH_DEFAULT) = EPERM | arg2.segments:invalid extent:uncaptured !3
 kexec_load.unload_unprivileged | kexec_load(entry=0, nr_segments=0, segments=NULL, flags=KEXEC_ARCH_DEFAULT) = EPERM | arg2.segments:complete:uncaptured
-kexec_load.unprivileged | kexec_load(entry=16777216, nr_segments=1, segments=<bytes>, flags=KEXEC_ARCH_DEFAULT) = EPERM | arg2.segments:complete:<bytes> arg2.segments[0].buf:complete:"ANTINOMIE-KEXEC"
+kexec_load.unprivileged | kexec_load(entry=16777216, nr_segments=1, segments=[15 bytes to <addr> (4096 bytes of memory)], flags=KEXEC_ARCH_DEFAULT) = EPERM | arg2.segments:complete:[15 bytes to <addr> (4096 bytes of memory)] arg2.segments[0].buf:complete:"ANTINOMIE-KEXEC"
 keyctl.assume_authority_negative | keyctl(cmd=KEYCTL_ASSUME_AUTHORITY, arg2=<handle>, arg3=0, arg4=0, arg5=0) = EINVAL |
 keyctl.capabilities | keyctl(cmd=KEYCTL_CAPABILITIES, arg2="\xef\x03", arg3=16, arg4=0, arg5=0) = 2 | arg1.buffer:complete
 keyctl.chown_noop | keyctl(cmd=KEYCTL_CHOWN, arg2=<value>, arg3=<handle>, arg4=<handle>, arg5=0) = <value> |
@@ -821,7 +831,7 @@ lsm_get_self_attr.bad_flags | lsm_get_self_attr(attr=100, ctx=<addr>, size=<byte
 lsm_get_self_attr.current | lsm_get_self_attr(attr=100, ctx=<data>, size=<data>, flags=0x0) = <value> | lsm.capacity:complete lsm.returned_size:complete lsm.output:complete
 lsm_get_self_attr.single_selinux | lsm_get_self_attr(attr=100, ctx=<data>, size=<data>, flags=LSM_FLAG_SINGLE) = EOPNOTSUPP | lsm.capacity:complete arg1.lsm_selector:complete
 lsm_get_self_attr.undefined_attr | lsm_get_self_attr(attr=0, ctx=<addr>, size=<bytes>, flags=0x0) = EINVAL | lsm.capacity:complete:<bytes>
-lsm_list_modules.all | lsm_list_modules(ids=<bytes>, size=<bytes>, flags=0x0) = 10 | lsm.capacity:complete:<bytes> lsm.returned_size:complete lsm.output:complete
+lsm_list_modules.all | lsm_list_modules(ids=[108, 100, 110, 105, 104, 103, 109, 113, 111, 112], size=<bytes>, flags=0x0) = 10 | lsm.capacity:complete:<bytes> lsm.returned_size:complete lsm.output:complete
 lsm_list_modules.bad_flags | lsm_list_modules(ids=<addr>, size=<bytes>, flags=0x1) = EINVAL | lsm.capacity:complete:<bytes>
 lsm_list_modules.bad_size_pointer | lsm_list_modules(ids=<addr>, size=0x1, flags=0x0) = EFAULT | lsm.capacity:copy fault:uncaptured !3
 lsm_list_modules.too_small | lsm_list_modules(ids=<addr>, size=<bytes>, flags=0x0) = E2BIG | lsm.capacity:complete:<bytes> lsm.returned_size:complete
@@ -1178,21 +1188,21 @@ pkey_free.negative | pkey_free(pkey=-1) = EINVAL |
 pkey_free.unallocated | pkey_free(pkey=15) = EINVAL |
 pkey_mprotect.no_key | pkey_mprotect(start=<addr>, len=4096, prot=PROT_READ, pkey=-1) = <value> |
 pkey_mprotect.unallocated | pkey_mprotect(start=<addr>, len=4096, prot=PROT_READ, pkey=15) = EINVAL |
-poll.eventfd | poll(ufds=<bytes>, nfds=2, timeout=0) = 1 | arg0.pollfd:complete:<bytes> arg0.pollfd:complete
+poll.eventfd | poll(ufds=[fd 9 revents POLLIN, fd 10 waits for POLLIN], nfds=2, timeout=0) = 1 | arg0.pollfd:complete:[fd 9 waits for POLLIN, fd 10 waits for POLLIN] arg0.pollfd:complete
 poll.fault | poll(ufds=0x1, nfds=1, timeout=0) = EFAULT | arg0.pollfd:copy fault:uncaptured !3
-poll.inotify_event | poll(ufds=<bytes>, nfds=1, timeout=1000) = 1 | arg0.pollfd:complete:<bytes> arg0.pollfd:complete
-poll.not_ready | poll(ufds=<bytes>, nfds=1, timeout=0) = 0 | arg0.pollfd:complete:<bytes> arg0.pollfd:complete
+poll.inotify_event | poll(ufds=[fd 10 revents POLLIN], nfds=1, timeout=1000) = 1 | arg0.pollfd:complete:[fd 10 waits for POLLIN] arg0.pollfd:complete
+poll.not_ready | poll(ufds=[fd 6 waits for POLLIN], nfds=1, timeout=0) = 0 | arg0.pollfd:complete:[fd 6 waits for POLLIN] arg0.pollfd:complete
 poll.null_empty | poll(ufds=NULL, nfds=0, timeout=0) = 0 | arg0.pollfd:null pointer:uncaptured arg0.pollfd:null pointer
-poll.nval | poll(ufds=<bytes>, nfds=1, timeout=0) = 1 | arg0.pollfd:complete:<bytes> arg0.pollfd:complete
-poll.pidfd_exit | poll(ufds=<bytes>, nfds=1, timeout=2000) = 1 | arg0.pollfd:complete:<bytes> arg0.pollfd:complete
-poll.ready | poll(ufds=<bytes>, nfds=3, timeout=0) = 2 | arg0.pollfd:complete:<bytes> arg0.pollfd:complete
-poll.timeout | poll(ufds=<bytes>, nfds=1, timeout=20) = 0 | arg0.pollfd:complete:<bytes> arg0.pollfd:complete
+poll.nval | poll(ufds=[fd 999 revents POLLNVAL], nfds=1, timeout=0) = 1 | arg0.pollfd:complete:[fd 999 waits for POLLIN] arg0.pollfd:complete
+poll.pidfd_exit | poll(ufds=[fd 9 revents POLLIN], nfds=1, timeout=2000) = 1 | arg0.pollfd:complete:[fd 9 waits for POLLIN] arg0.pollfd:complete
+poll.ready | poll(ufds=[fd 4 revents POLLIN, fd 5 revents POLLOUT, fd -1 waits for POLLIN], nfds=3, timeout=0) = 2 | arg0.pollfd:complete:[fd 4 waits for POLLIN, fd 5 waits for POLLOUT, fd -1 waits for POLLIN] arg0.pollfd:complete
+poll.timeout | poll(ufds=[fd 6 waits for POLLIN], nfds=1, timeout=20) = 0 | arg0.pollfd:complete:[fd 6 waits for POLLIN] arg0.pollfd:complete
 poll.too_many | poll(ufds=<addr>, nfds=1025, timeout=0) = EINVAL | arg0.pollfd:invalid extent:uncaptured !3
-ppoll.bad_sigsetsize | ppoll(ufds=<bytes>, nfds=1, tsp=<bytes>, sigmask=<addr>, sigsetsize=4) = EINVAL | arg0.pollfd:complete:<bytes> arg2.timeout:complete:<bytes> signal.mask:invalid extent:uncaptured !3
-ppoll.null_timeout | ppoll(ufds=<bytes>, nfds=1, tsp=NULL, sigmask=NULL, sigsetsize=0) = 1 | arg0.pollfd:complete:<bytes> arg2.timeout:null pointer:uncaptured arg0.pollfd:complete arg2.timeout.observed:null pointer
-ppoll.timeout | ppoll(ufds=<bytes>, nfds=1, tsp=<bytes>, sigmask=NULL, sigsetsize=8) = 0 | arg0.pollfd:complete:<bytes> arg2.timeout:complete:<bytes> arg0.pollfd:complete arg2.timeout.observed:complete
-ppoll.timeout_fault | ppoll(ufds=<bytes>, nfds=1, tsp=0x1, sigmask=NULL, sigsetsize=8) = EFAULT | arg0.pollfd:complete:<bytes> arg2.timeout:copy fault:uncaptured !3
-ppoll.zero_timeout_mask | ppoll(ufds=<bytes>, nfds=3, tsp=<bytes>, sigmask=[SIGUSR2], sigsetsize=8) = 2 | arg0.pollfd:complete:<bytes> arg2.timeout:complete:<bytes> signal.mask:complete:[SIGUSR2] arg0.pollfd:complete arg2.timeout.observed:complete
+ppoll.bad_sigsetsize | ppoll(ufds=[fd 4 waits for POLLIN], nfds=1, tsp=<bytes>, sigmask=<addr>, sigsetsize=4) = EINVAL | arg0.pollfd:complete:[fd 4 waits for POLLIN] arg2.timeout:complete:<bytes> signal.mask:invalid extent:uncaptured !3
+ppoll.null_timeout | ppoll(ufds=[fd 4 revents POLLIN], nfds=1, tsp=NULL, sigmask=NULL, sigsetsize=0) = 1 | arg0.pollfd:complete:[fd 4 waits for POLLIN] arg2.timeout:null pointer:uncaptured arg0.pollfd:complete arg2.timeout.observed:null pointer
+ppoll.timeout | ppoll(ufds=[fd 6 waits for POLLIN], nfds=1, tsp=<bytes>, sigmask=NULL, sigsetsize=8) = 0 | arg0.pollfd:complete:[fd 6 waits for POLLIN] arg2.timeout:complete:<bytes> arg0.pollfd:complete arg2.timeout.observed:complete
+ppoll.timeout_fault | ppoll(ufds=[fd 4 waits for POLLIN], nfds=1, tsp=0x1, sigmask=NULL, sigsetsize=8) = EFAULT | arg0.pollfd:complete:[fd 4 waits for POLLIN] arg2.timeout:copy fault:uncaptured !3
+ppoll.zero_timeout_mask | ppoll(ufds=[fd 4 revents POLLIN, fd 5 revents POLLOUT, fd -1 waits for POLLIN], nfds=3, tsp=<bytes>, sigmask=[SIGUSR2], sigsetsize=8) = 2 | arg0.pollfd:complete:[fd 4 waits for POLLIN, fd 5 waits for POLLOUT, fd -1 waits for POLLIN] arg2.timeout:complete:<bytes> signal.mask:complete:[SIGUSR2] arg0.pollfd:complete arg2.timeout.observed:complete
 prctl.capbset_read | prctl(option=PR_CAPBSET_READ, arg2=0, arg3=0, arg4=0, arg5=0) = 1 |
 prctl.capbset_read_bad | prctl(option=PR_CAPBSET_READ, arg2=999, arg3=0, arg4=0, arg5=0) = EINVAL |
 prctl.get_dumpable | prctl(option=PR_GET_DUMPABLE, arg2=0, arg3=0, arg4=0, arg5=0) = 1 |
@@ -1212,10 +1222,10 @@ prctl.set_dumpable_bad | prctl(option=PR_SET_DUMPABLE, arg2=2, arg3=0, arg4=0, a
 prctl.set_dumpable_off | prctl(option=PR_SET_DUMPABLE, arg2=0, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_dumpable_same | prctl(option=PR_SET_DUMPABLE, arg2=1, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_name | prctl(option=PR_SET_NAME, arg2="ant-process", arg3=0, arg4=0, arg5=0) = 0 | arg1.name:complete:"ant-process"
-prctl.set_name_long | prctl(option=PR_SET_NAME, arg2=5281003, arg3=0, arg4=0, arg5=0) = 0 | arg1.name:invalid extent:uncaptured !3
+prctl.set_name_long | prctl(option=PR_SET_NAME, arg2=5281236, arg3=0, arg4=0, arg5=0) = 0 | arg1.name:invalid extent:uncaptured !3
 prctl.set_no_new_privs | prctl(option=PR_SET_NO_NEW_PRIVS, arg2=1, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_no_new_privs_bad_args | prctl(option=PR_SET_NO_NEW_PRIVS, arg2=1, arg3=1, arg4=0, arg5=0) = EINVAL |
-prctl.set_seccomp_filter | prctl(option=PR_SET_SECCOMP, arg2=2, arg3=<bytes>, arg4=0, arg5=0) = 0 | arg2.program:complete:<bytes> arg2.program.filter:complete:<bytes>
+prctl.set_seccomp_filter | prctl(option=PR_SET_SECCOMP, arg2=2, arg3=<bytes>, arg4=0, arg5=0) = 0 | arg2.program:complete:<bytes> arg2.program.filter:complete:[ret #<addr> ; SECCOMP_RET_ALLOW]
 prctl.set_timerslack | prctl(option=PR_SET_TIMERSLACK, arg2=100000, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.unknown_option | prctl(option=Unknown option 0x7fffffff, arg2=0, arg3=0, arg4=0, arg5=0) = EINVAL | prctl.unknown_selector:no decoder:uncaptured !3
 pread64.mmap_edit_final | pread64(fd=3, buf="ANTINOMIE-CONFORMANCE-kryfmtahovcjqxelszgnubipwd"..., count=12388, pos=0) = 12388 | arg1.data:complete file.position:complete
@@ -1336,8 +1346,10 @@ quotactl_fd.getfmt_no_quota | quotactl_fd(fd=3, cmd=Q_GETFMT / USRQUOTA, id=0, a
 quotactl_fd.setquota_unprivileged | quotactl_fd(fd=3, cmd=Q_SETQUOTA / USRQUOTA, id=1000, addr=<bytes>) = EPERM | arg3.dqblk:complete:<bytes>
 read.badf | read(fd=999, buf=<addr>, count=8) = EBADF |
 read.end_of_file | read(fd=3, buf=<addr>, count=256) = 0 | file.position:complete
+read.eventfd | read(fd=9, buf=<bytes>, count=8) = 8 | arg1.data:complete
 read.fault_at_eof | read(fd=3, buf=0x1, count=8) = 0 | file.position:complete
 read.fault_data | read(fd=3, buf=0x1, count=8) = EFAULT |
+read.inotify_events | read(fd=10, buf=<data>, count=512) = <value> | arg1.data:complete
 read.pipe_no_position | read(fd=5, buf="NOMIE-", count=6) = 6 | arg1.data:complete
 read.text | read(fd=3, buf="ANTINOMIE-CONFORMANCE-FILE-IO-0123456789", count=256) = 40 | arg1.data:complete file.position:complete
 readahead.badf | readahead(fd=999, offset=0, count=4096) = EBADF |
@@ -1511,10 +1523,10 @@ sched_yield.self | sched_yield() = 0 |
 seccomp.action_avail | seccomp(op=SECCOMP_GET_ACTION_AVAIL, flags=0x0, uargs=<bytes>) = 0 | arg2.action:complete:<bytes>
 seccomp.action_avail_bad_flags | seccomp(op=SECCOMP_GET_ACTION_AVAIL, flags=SECCOMP_FILTER_FLAG_TSYNC, uargs=<bytes>) = EINVAL | arg2.action:complete:<bytes>
 seccomp.action_unavailable | seccomp(op=SECCOMP_GET_ACTION_AVAIL, flags=0x0, uargs=<bytes>) = EOPNOTSUPP | arg2.action:complete:<bytes>
-seccomp.filter_allow_all | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=0x0, uargs=<bytes>) = 0 | arg2.program:complete:<bytes> arg2.program.filter:complete:<bytes>
-seccomp.filter_bad_flags | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=<addr>, uargs=<bytes>) = EINVAL | arg2.program:complete:<bytes> arg2.program.filter:complete:<bytes>
+seccomp.filter_allow_all | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=0x0, uargs=<bytes>) = 0 | arg2.program:complete:<bytes> arg2.program.filter:complete:[ret #<addr> ; SECCOMP_RET_ALLOW]
+seccomp.filter_bad_flags | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=<addr>, uargs=<bytes>) = EINVAL | arg2.program:complete:<bytes> arg2.program.filter:complete:[ret #<addr> ; SECCOMP_RET_ALLOW]
 seccomp.filter_empty | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=0x0, uargs=<bytes>) = EINVAL | arg2.program:complete:<bytes> arg2.program.filter:invalid extent:uncaptured !3
-seccomp.filter_without_no_new_privs | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=0x0, uargs=<bytes>) = EACCES | arg2.program:complete:<bytes> arg2.program.filter:complete:<bytes>
+seccomp.filter_without_no_new_privs | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=0x0, uargs=<bytes>) = EACCES | arg2.program:complete:<bytes> arg2.program.filter:complete:[ret #<addr> ; SECCOMP_RET_ALLOW]
 seccomp.notif_sizes | seccomp(op=SECCOMP_GET_NOTIF_SIZES, flags=0x0, uargs=<bytes>) = 0 | arg2.sizes:complete
 seccomp.strict_bad_flags | seccomp(op=SECCOMP_SET_MODE_STRICT, flags=SECCOMP_FILTER_FLAG_TSYNC, uargs=NULL) = EINVAL |
 seccomp.unknown_op | seccomp(op=Unknown operation 0x63, flags=0x0, uargs=<addr>) = EINVAL | seccomp.unknown_selector:no decoder:uncaptured !3
@@ -1552,19 +1564,19 @@ semget.named_exists | semget(key=<value>, nsems=1, semflg=IPC_CREAT|IPC_EXCL|S_I
 semget.named_open | semget(key=<value>, nsems=0, semflg=0x0) = <value> |
 semget.private | semget(key=0, nsems=3, semflg=IPC_CREAT|S_IRUSR|S_IWUSR) = <value> |
 semget.too_many_semaphores | semget(key=0, nsems=100000, semflg=IPC_CREAT|S_IRUSR|S_IWUSR) = EINVAL |
-semop.bad_id | semop(semid=-1, sops=<bytes>, nsops=1) = EINVAL | arg1.semops:complete:<bytes>
-semop.bad_index | semop(semid=0, sops=<bytes>, nsops=1) = EFBIG | arg1.semops:complete:<bytes>
-semop.decrement | semop(semid=0, sops=<bytes>, nsops=1) = 0 | arg1.semops:complete:<bytes>
+semop.bad_id | semop(semid=-1, sops=[semaphore 0: take 1], nsops=1) = EINVAL | arg1.semops:complete:[semaphore 0: take 1]
+semop.bad_index | semop(semid=0, sops=[semaphore 7: add 1], nsops=1) = EFBIG | arg1.semops:complete:[semaphore 7: add 1]
+semop.decrement | semop(semid=0, sops=[semaphore 0: take 1], nsops=1) = 0 | arg1.semops:complete:[semaphore 0: take 1]
 semop.fault | semop(semid=0, sops=0x1, nsops=1) = EFAULT | arg1.semops:copy fault:uncaptured !3
 semop.too_many_ops | semop(semid=0, sops=<addr>, nsops=600) = E2BIG | arg1.semops:invalid extent:uncaptured !3
-semop.two_ops_undo | semop(semid=0, sops=<bytes>, nsops=2) = 0 | arg1.semops:complete:<bytes>
-semop.would_block | semop(semid=0, sops=<bytes>, nsops=1) = EAGAIN | arg1.semops:complete:<bytes>
+semop.two_ops_undo | semop(semid=0, sops=[semaphore 1: add 1 SEM_UNDO, semaphore 2: take 1 IPC_NOWAIT], nsops=2) = 0 | arg1.semops:complete:[semaphore 1: add 1 SEM_UNDO, semaphore 2: take 1 IPC_NOWAIT]
+semop.would_block | semop(semid=0, sops=[semaphore 0: take 1 IPC_NOWAIT], nsops=1) = EAGAIN | arg1.semops:complete:[semaphore 0: take 1 IPC_NOWAIT]
 semop.zero_ops | semop(semid=0, sops=<addr>, nsops=0) = EINVAL | arg1.semops:invalid extent:uncaptured !3
-semtimedop.bad_timeout | semtimedop(semid=0, sops=<bytes>, nsops=1, timeout=<bytes>) = EINVAL | arg1.semops:complete:<bytes> arg3.timeout:complete:<bytes>
-semtimedop.immediate | semtimedop(semid=0, sops=<bytes>, nsops=1, timeout=<bytes>) = 0 | arg1.semops:complete:<bytes> arg3.timeout:complete:<bytes>
-semtimedop.null_timeout | semtimedop(semid=0, sops=<bytes>, nsops=1, timeout=NULL) = 0 | arg1.semops:complete:<bytes>
+semtimedop.bad_timeout | semtimedop(semid=0, sops=[semaphore 0: take 1], nsops=1, timeout=<bytes>) = EINVAL | arg1.semops:complete:[semaphore 0: take 1] arg3.timeout:complete:<bytes>
+semtimedop.immediate | semtimedop(semid=0, sops=[semaphore 1: take 1], nsops=1, timeout=<bytes>) = 0 | arg1.semops:complete:[semaphore 1: take 1] arg3.timeout:complete:<bytes>
+semtimedop.null_timeout | semtimedop(semid=0, sops=[semaphore 0: wait for zero], nsops=1, timeout=NULL) = 0 | arg1.semops:complete:[semaphore 0: wait for zero]
 semtimedop.removed_while_waiting | semtimedop(semid=0, sops=<data>, nsops=1, timeout=<data>) = EIDRM | arg1.semops:complete arg3.timeout:complete
-semtimedop.times_out | semtimedop(semid=0, sops=<bytes>, nsops=1, timeout=<bytes>) = EAGAIN | arg1.semops:complete:<bytes> arg3.timeout:complete:<bytes>
+semtimedop.times_out | semtimedop(semid=0, sops=[semaphore 0: take 1], nsops=1, timeout=<bytes>) = EAGAIN | arg1.semops:complete:[semaphore 0: take 1] arg3.timeout:complete:<bytes>
 sendfile.badf | sendfile(out_fd=999, in_fd=3, offset=NULL, count=4) = EBADF | arg2.data:null pointer:uncaptured
 sendfile.file_to_file | sendfile(out_fd=4, in_fd=3, offset=<bytes>, count=8) = 8 | arg2.data:complete:<bytes> arg2.data:complete file.copy:complete
 sendfile.null_offset | sendfile(out_fd=4, in_fd=3, offset=NULL, count=4) = 0 | arg2.data:null pointer:uncaptured arg2.data:null pointer
@@ -1575,11 +1587,11 @@ sendmmsg.fault | sendmmsg(fd=5, msg=0x1, vlen=1, flags=0x0) = EFAULT | arg1.mmsg
 sendmmsg.udp_names | sendmmsg(fd=6, msg=<data>, vlen=2, flags=0x0) = <value> | arg1.mmsg.0.header:complete arg1.mmsg.0.iov:complete arg1.mmsg.0.iov[0].data:complete arg1.mmsg.0.name:complete arg1.mmsg.1.header:complete arg1.mmsg.1.iov:complete arg1.mmsg.1.iov[0].data:complete arg1.mmsg.1.name:complete arg1.mmsg.0.header:complete arg1.mmsg.1.header:complete
 sendmmsg.unix_two | sendmmsg(fd=5, msg=10 captured objects, vlen=2, flags=0x0) = 2 | arg1.mmsg.0.header:complete:<bytes> arg1.mmsg.0.iov:complete:<bytes> arg1.mmsg.0.iov[0].data:complete:"MMSG-A0-" arg1.mmsg.0.iov[1].data:complete:"first" arg1.mmsg.1.header:complete:<bytes> arg1.mmsg.1.iov:complete:<bytes> arg1.mmsg.1.iov[0].data:complete:"MMSG-B0-" arg1.mmsg.1.iov[1].data:complete:"second!" arg1.mmsg.0.header:complete arg1.mmsg.1.header:complete
 sendmmsg.zero_vlen | sendmmsg(fd=5, msg=<addr>, vlen=0, flags=0x0) = 0 |
-sendmsg.bad_rights | sendmsg(fd=7, msg=<bytes>, flags=0x0) = EBADF | arg1.msghdr:complete:<bytes> arg1.msghdr.iov:complete:<bytes> arg1.msghdr.iov[0].data:complete:"RIGHTS-" arg1.msghdr.name:null pointer:uncaptured arg1.msghdr.control:complete:<bytes>
+sendmsg.bad_rights | sendmsg(fd=7, msg=<bytes>, flags=0x0) = EBADF | arg1.msghdr:complete:<bytes> arg1.msghdr.iov:complete:<bytes> arg1.msghdr.iov[0].data:complete:"RIGHTS-" arg1.msghdr.name:null pointer:uncaptured arg1.msghdr.control:complete:[SCM_RIGHTS fds [999]]
 sendmsg.fault | sendmsg(fd=7, msg=0x1, flags=0x0) = EFAULT | arg1.msghdr:copy fault:uncaptured !3
 sendmsg.not_connected | sendmsg(fd=6, msg=<bytes>, flags=MSG_NOSIGNAL) = ENOTCONN | arg1.msghdr:complete:<bytes> arg1.msghdr.iov:complete:<bytes> arg1.msghdr.iov[0].data:complete:"RIGHTS-" arg1.msghdr.name:null pointer:uncaptured arg1.msghdr.control:null pointer:uncaptured
 sendmsg.scm_credentials | sendmsg(fd=6, msg=<data>, flags=0x0) = <value> | arg1.msghdr:complete arg1.msghdr.iov:complete arg1.msghdr.iov[0].data:complete arg1.msghdr.iov[1].data:complete arg1.msghdr.name:complete arg1.msghdr.control:complete
-sendmsg.scm_rights | sendmsg(fd=7, msg=<bytes>, flags=0x0) = 13 | arg1.msghdr:complete:<bytes> arg1.msghdr.iov:complete:<bytes> arg1.msghdr.iov[0].data:complete:"RIGHTS-" arg1.msghdr.iov[1].data:complete:"ONE-" arg1.msghdr.iov[2].data:complete:"FD" arg1.msghdr.name:null pointer:uncaptured arg1.msghdr.control:complete:<bytes>
+sendmsg.scm_rights | sendmsg(fd=7, msg=<bytes>, flags=0x0) = 13 | arg1.msghdr:complete:<bytes> arg1.msghdr.iov:complete:<bytes> arg1.msghdr.iov[0].data:complete:"RIGHTS-" arg1.msghdr.iov[1].data:complete:"ONE-" arg1.msghdr.iov[2].data:complete:"FD" arg1.msghdr.name:null pointer:uncaptured arg1.msghdr.control:complete:[SCM_RIGHTS fds [4]]
 sendmsg.too_many_iov | sendmsg(fd=7, msg=<bytes>, flags=0x0) = EMSGSIZE | arg1.msghdr:complete:<bytes> arg1.msghdr.iov:invalid extent:uncaptured arg1.msghdr.name:null pointer:uncaptured arg1.msghdr.control:null pointer:uncaptured !3
 sendto.address_too_long | sendto(fd=6, buff="DGRAM-ONE", len=9, flags=0x0, addr=<addr>, addr_len=200) = EINVAL | arg1.data:complete:"DGRAM-ONE" arg4.address:invalid extent:uncaptured !3
 sendto.buffer_fault | sendto(fd=6, buff=0x1, len=8, flags=0x0, addr=unix:<work>/net-dgram, addr_len=40) = EFAULT | arg1.data:copy fault:uncaptured arg4.address:complete:unix:<work>/net-dgram !3
