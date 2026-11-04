@@ -276,11 +276,12 @@ impl MonitorApp {
         if !self.shortcut_ui.palette.open {
             return;
         }
+        let palette_key = self.shortcut_of(&Action::Palette);
         let (close, down, up, page_down, page_up, enter) = ctx.input_mut(|input| {
             let none = egui::Modifiers::NONE;
             (
                 input.consume_key(none, egui::Key::Escape)
-                    || input.consume_shortcut(&keys::PALETTE),
+                    || palette_key.is_some_and(|shortcut| input.consume_shortcut(&shortcut)),
                 input.consume_key(none, egui::Key::ArrowDown),
                 input.consume_key(none, egui::Key::ArrowUp),
                 input.consume_key(none, egui::Key::PageDown),

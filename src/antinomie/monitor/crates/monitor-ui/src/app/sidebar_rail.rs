@@ -67,10 +67,7 @@ impl MonitorApp {
                 )
                 .frame(false),
             )
-            .on_hover_text(format!(
-                "{tooltip} ({})",
-                ui.ctx().format_shortcut(&keys::TOGGLE_SIDEBAR)
-            ))
+            .on_hover_text(self.with_shortcut(ui.ctx(), tooltip, &Action::ToggleSidebar))
             .clicked();
         if clicked {
             self.toggle_sidebar();

@@ -865,7 +865,20 @@ library samples; **Enter** runs the highlighted entry through the same code as t
 menu, **Esc** (or Ctrl+K again) closes it, and an action that cannot run now stays
 in the list with the reason ("Start the selected VM first."). A menu item, its
 shortcut and its palette entry share one action list, so they cannot disagree.
-**Help > Keyboard shortcuts** (or **?**) lists every shortcut by area.
+**Help > Keyboard shortcuts** (or **?**) lists every shortcut by area, with a
+**Change shortcuts…** button that opens **Settings > Keyboard**.
+
+**Settings > Keyboard** has one row for every action (each menu item, each view and
+each page or window the palette opens, about 90 rows, under the menu they belong
+to), with a **Find** field. Click a row's key, then press the new one (**Esc**
+cancels). A shortcut must hold **Ctrl** or **Alt** (a lone letter would type), may
+not take **Ctrl+1** to **Ctrl+9** (the tabs) or the copy, paste and undo keys, and
+a key another action already has asks first: **Move it to ...** takes it from the
+other action, **Keep it where it is** leaves both. **Clear** leaves the action
+without a shortcut, **Reset** (per row) and **Reset all** bring the defaults back.
+The choice is saved with the settings (an older settings file just has the
+defaults), and the menus, tooltips, the palette and the Keyboard shortcuts window
+show what is in force.
 
 The rule for who owns the keyboard: a global shortcut never takes a key from a
 text field or the terminal (**Ctrl+K** stays with them too: it deletes to the end
@@ -877,7 +890,7 @@ button, table or graph does not block the shortcuts.
 | Ctrl+K | Command palette |
 | ? | Keyboard shortcuts |
 | Ctrl+N | New VM |
-| F5, Shift+F5 | Start VM, Stop VM |
+| Ctrl+Shift+S, Ctrl+Shift+X | Start VM, Stop VM |
 | Ctrl+R | Run program |
 | Ctrl+U | Upload file |
 | Ctrl+D | Attach debugger (the process picker); with the picker open, attach the selected process |
@@ -885,8 +898,26 @@ button, table or graph does not block the shortcuts.
 | Ctrl+Comma (the app shows it so) | Settings |
 | Ctrl+Q | Exit |
 | Ctrl+1 to Ctrl+9 | Show the 1st to 9th tab of the work area, in the order the tab bar shows them (they follow a tab you dragged) |
-| Ctrl+Shift+A, Ctrl+Shift+J | Show Activity, show Jobs (the lower bar) |
+| Ctrl+J | Fold or open the lower bar (Details, Activity and Jobs) |
+| Ctrl+Shift+D, Ctrl+Shift+A, Ctrl+Shift+J | Show Details, Activity, Jobs (the lower bar) |
 | Esc | Close the window on top (not while a field has the keyboard) |
+
+**Defaults for a 60 % keyboard.** Every default is a Ctrl or Ctrl+Shift chord on a
+letter, the comma or a digit, which a 60 % board has without a Fn layer. Three
+changed in 0.8.3 because they needed keys such a board puts behind Fn or in an awkward
+place:
+
+| Action | Before | Now |
+|---|---|---|
+| Start VM | F5 | Ctrl+Shift+S |
+| Stop VM | Shift+F5 | Ctrl+Shift+X |
+| Fold or open Details, Activity and Jobs | Ctrl+\` | Ctrl+J |
+| Show Details | none | Ctrl+Shift+D |
+
+Ctrl+N, Ctrl+R, Ctrl+U, Ctrl+D, Ctrl+K, Ctrl+B, Ctrl+Q, Ctrl+Comma,
+Ctrl+Shift+Y, Ctrl+Shift+A and Ctrl+Shift+J, and Ctrl+1 to Ctrl+9, were already of
+that kind and stay. The area keys below (arrows, Home, End, PgUp, PgDn) belong to
+the graph, table and terminal that has the focus and are not global shortcuts.
 
 The graph, table, filter and terminal keys (arrows, `F`, `T`, Ctrl+Space, Shift+PgUp
 and the rest) are listed by area in the Keyboard shortcuts window; the Triage

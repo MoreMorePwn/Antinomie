@@ -14,44 +14,44 @@ impl MonitorApp {
         if self.vm_snapshots.decision_open() || crate::typing::typing(ctx) {
             return;
         }
+        // A shortcut being recorded in Settings > Keyboard is not a command.
+        if self.shortcut_ui.recording.is_some() {
+            return;
+        }
         let pressed = |shortcut: egui::KeyboardShortcut| {
             ctx.input_mut(|input| input.consume_shortcut(&shortcut))
         };
-        // Shift+F5 first: F5 alone would also match it.
-        let mut asked = Vec::new();
-        for action in [
-            Action::StopVm,
-            Action::StartVm,
-            Action::NewVm,
-            Action::RunProgram,
-            Action::UploadFile,
-            Action::AttachDebugger,
-            Action::TypeClipboard,
-            Action::ToggleSidebar,
-            Action::ToggleBottomPane,
-            Action::Settings,
-            Action::Quit,
-        ] {
-            if action.shortcut().is_some_and(pressed) {
-                asked.push(action);
-            }
-        }
         // The new shortcuts do not reach behind a confirmation.
         let modal = self.confirm.is_some();
-        if !modal {
-            if pressed(keys::PALETTE) {
-                asked.push(Action::Palette);
+        let mut asked = Vec::new();
+        // The shortcuts with more modifiers come first: Ctrl+Shift+S must not
+        // be taken for Ctrl+S.
+        for (action, shortcut) in self.bound_actions() {
+            let behind_confirmation = !matches!(
+                action,
+                Action::StopVm
+                    | Action::StartVm
+                    | Action::NewVm
+                    | Action::RunProgram
+                    | Action::UploadFile
+                    | Action::AttachDebugger
+                    | Action::TypeClipboard
+                    | Action::ToggleSidebar
+                    | Action::ToggleBottomPane
+                    | Action::Settings
+                    | Action::Quit
+            );
+            if (modal && behind_confirmation) || !pressed(shortcut) {
+                continue;
             }
+            asked.push(action);
+        }
+        if !modal {
             if let Some(position) = (0..keys::TAB_KEYS.len())
                 .find(|position| keys::tab_shortcut(*position).is_some_and(pressed))
             {
                 if let Some(panel) = self.layout.work_tabs().get(position) {
                     asked.push(Action::Go(panel.clone()));
-                }
-            }
-            for panel in [Panel::Activity, Panel::Jobs] {
-                if Action::Go(panel.clone()).shortcut().is_some_and(pressed) {
-                    asked.push(Action::Go(panel));
                 }
             }
             if crate::typing::question_mark_pressed(ctx) {
@@ -208,7 +208,8 @@ impl MonitorApp {
                         let text = format!(
                             "{} Search  {}",
                             egui_phosphor::regular::MAGNIFYING_GLASS,
-                            ctx.format_shortcut(&keys::PALETTE)
+                            self.shortcut_text(ctx, &Action::Palette)
+                                .unwrap_or_default()
                         );
                         if ui
                             .add(egui::Button::new(text).frame(false))

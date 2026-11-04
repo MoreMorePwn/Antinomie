@@ -6,6 +6,7 @@
 mod actions;
 mod analysis_windows;
 mod bases;
+mod bindings;
 mod capture;
 mod captures;
 mod clipboard;
@@ -42,6 +43,7 @@ mod session;
 mod settings_timeouts;
 mod settings_window;
 mod shortcut_list;
+mod shortcut_settings;
 mod sidebar;
 mod sidebar_rail;
 mod start_error;
@@ -132,6 +134,9 @@ struct Settings {
     /// Tools the system has but whose copy Antinomie installed is used
     /// (Library > Analysis tools, Tools > App dependencies).
     own_tools: std::collections::BTreeSet<String>,
+    /// Keyboard shortcuts changed in Settings > Keyboard: the action's name
+    /// and the shortcut's text ("Ctrl+Shift+A"), empty for no shortcut.
+    shortcuts: std::collections::BTreeMap<String, String>,
     /// Triage Changed files: most MiB of one file's bytes rebuilt.
     rebuild_file_mib: u32,
     /// Triage Changed files: most MiB rebuilt over all files of a run.
@@ -293,6 +298,7 @@ impl Default for Settings {
             analysis_time_limit_minutes: 0,
             analysis_limits: antinomie_monitor_core::AnalysisLimits::default(),
             own_tools: Default::default(),
+            shortcuts: Default::default(),
             rebuild_file_mib: crate::triage::DEFAULT_REBUILD_FILE_MIB,
             rebuild_run_mib: crate::triage::DEFAULT_REBUILD_RUN_MIB,
             triage_page_rows: crate::triage::STORED_ROWS as u32,

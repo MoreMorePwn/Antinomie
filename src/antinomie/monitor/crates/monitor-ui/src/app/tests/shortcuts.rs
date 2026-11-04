@@ -229,7 +229,13 @@ fn text_fields_and_the_terminal_keep_their_keys() {
     ] {
         held_key(&mut app, &ctx, field, key, ctrl_mods);
     }
-    held_key(&mut app, &ctx, field, egui::Key::F5, egui::Modifiers::SHIFT);
+    held_key(
+        &mut app,
+        &ctx,
+        field,
+        egui::Key::S,
+        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+    );
     // `?` is a letter to a text field.
     held(
         &mut app,
@@ -344,7 +350,7 @@ fn menus_show_the_shortcuts() {
         ("Run", vec!["Ctrl+R", "Ctrl+U", "Ctrl+D"]),
         ("View", vec!["Ctrl+1", "Ctrl+3", "Ctrl+9"]),
         ("File", vec!["Ctrl+N", "Ctrl+Q"]),
-        ("VM", vec!["F5", "Shift+F5"]),
+        ("VM", vec!["Ctrl+Shift+S", "Ctrl+Shift+X"]),
     ] {
         click_label(&mut app, &ctx, SIZE, menu);
         let shown: Vec<String> = texts(&render(&mut app, &ctx, SIZE))
@@ -588,7 +594,7 @@ fn every_shortcut_is_listed_and_none_is_bound_twice() {
     let mut seen: Vec<egui::KeyboardShortcut> = Vec::new();
     let mut bound: Vec<(String, egui::KeyboardShortcut)> = Action::PALETTE
         .iter()
-        .filter_map(|action| action.shortcut().map(|s| (action.label(&app), s)))
+        .filter_map(|action| action.default_shortcut().map(|s| (action.label(&app), s)))
         .collect();
     for position in 0..9 {
         bound.push((
@@ -606,8 +612,7 @@ fn every_shortcut_is_listed_and_none_is_bound_twice() {
     }
     // The terminal passes Ctrl+letters to the guest and text fields edit with
     // them; the application's Ctrl shortcuts all wait while those have the
-    // keyboard (text_fields_and_the_terminal_keep_their_keys). F5 is unmodified
-    // on purpose: nothing else uses it.
+    // keyboard (text_fields_and_the_terminal_keep_their_keys).
     let rows = app.shortcut_rows(&ctx);
     for (name, shortcut) in &bound {
         // The tab keys are one row, "Ctrl+1 to Ctrl+9".

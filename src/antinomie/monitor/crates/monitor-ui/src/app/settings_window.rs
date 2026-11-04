@@ -18,11 +18,12 @@ pub(super) enum SettingsPage {
     NetworkRoutes,
     AnalysisTools,
     Disks,
+    Keyboard,
     Advanced,
 }
 
 impl SettingsPage {
-    pub(super) const ALL: [SettingsPage; 9] = [
+    pub(super) const ALL: [SettingsPage; 10] = [
         SettingsPage::Appearance,
         SettingsPage::Recording,
         SettingsPage::Detection,
@@ -31,6 +32,7 @@ impl SettingsPage {
         SettingsPage::NetworkRoutes,
         SettingsPage::AnalysisTools,
         SettingsPage::Disks,
+        SettingsPage::Keyboard,
         SettingsPage::Advanced,
     ];
 
@@ -44,6 +46,7 @@ impl SettingsPage {
             SettingsPage::NetworkRoutes => "Network routes",
             SettingsPage::AnalysisTools => "Analysis tools",
             SettingsPage::Disks => "Disks",
+            SettingsPage::Keyboard => "Keyboard",
             SettingsPage::Advanced => "Advanced",
         }
     }
@@ -319,6 +322,7 @@ impl MonitorApp {
             SettingsPage::NetworkRoutes => self.routes_page(ui),
             SettingsPage::AnalysisTools => self.tools_page(ui),
             SettingsPage::Disks => self.disks_page(ui),
+            SettingsPage::Keyboard => self.keyboard_page(ui, ctx),
             SettingsPage::Advanced => self.advanced_page(ui),
         }
     }

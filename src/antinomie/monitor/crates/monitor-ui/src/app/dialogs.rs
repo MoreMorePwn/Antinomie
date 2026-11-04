@@ -653,6 +653,8 @@ impl MonitorApp {
         if !ctx.input(|input| input.key_pressed(egui::Key::Escape))
             || egui::Popup::is_any_open(ctx)
             || ctx.memory(|memory| memory.focused().is_some())
+            // Settings > Keyboard is waiting for a key: Esc cancels that.
+            || self.shortcut_ui.recording.is_some()
         {
             return;
         }
