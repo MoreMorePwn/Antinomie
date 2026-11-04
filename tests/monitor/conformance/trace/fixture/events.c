@@ -26,6 +26,7 @@
 #include <sys/eventfd.h>
 #include <sys/fanotify.h>
 #include <sys/inotify.h>
+#include <linux/fs.h>
 #include <sys/ioctl.h>
 #include <sys/resource.h>
 #include <sys/select.h>
@@ -871,43 +872,71 @@ static void ioctl_cases(void)
         "group is recorded at exit (pid_t)");
     DONE();
 
-    // Generic requests on a pipe and a regular file: recorded as gaps.
+    // The requests fs/ioctl.c answers for every file (revision 21): their
+    // argument has one shape whatever the file is.
     CALL("ioctl.fionread_pipe", ioctl, WANT_OK, rp[0], FIONREAD, &avail);
-    want_status(2, "in", "NO_DECODER");
-    why("only terminal requests are decoded; the pipe's FIONREAD output is an explicit gap");
+    out_buf(2, &avail, sizeof avail);
+    why("FIONREAD on a pipe: the pipe's own handler writes the queued byte count (int)");
     DONE();
     CALL("ioctl.fionbio_on", ioctl, WANT_OK, rp[0], FIONBIO, &on);
-    want_status(2, "in", "NO_DECODER");
+    in_buf(2, &on, sizeof on);
+    why("FIONBIO reads an int at entry (do_vfs_ioctl, any file)");
     DONE();
     CALL("ioctl.fionbio_off", ioctl, WANT_OK, rp[0], FIONBIO, &off);
-    want_status(2, "in", "NO_DECODER");
+    in_buf(2, &off, sizeof off);
     DONE();
     CALL("ioctl.fioclex", ioctl, WANT_OK, rp[0], FIOCLEX, 0);
-    want_status(2, "in", "NO_DECODER");
-    why("the argument is unused (0): still a gap, not a NULL pointer");
+    why("the argument is unused: no field, and no gap");
     DONE();
     CALL("ioctl.fionclex", ioctl, WANT_OK, rp[0], FIONCLEX, 0);
-    want_status(2, "in", "NO_DECODER");
     DONE();
     CALL("ioctl.fioasync_on", ioctl, WANT_OK, rp[0], FIOASYNC, &on);
-    want_status(2, "in", "NO_DECODER");
+    in_buf(2, &on, sizeof on);
     why("no owner is set, so no SIGIO is ever sent; switched off again below");
     DONE();
     CALL("ioctl.fioasync_off", ioctl, WANT_OK, rp[0], FIOASYNC, &off);
-    want_status(2, "in", "NO_DECODER");
+    in_buf(2, &off, sizeof off);
     DONE();
+    avail = -1;
     CALL("ioctl.fionread_file", ioctl, WANT_OK, regular, FIONREAD, &avail);
-    want_status(2, "in", "NO_DECODER");
+    out_buf(2, &avail, sizeof avail);
+    why("a regular file: its size less the file position (int), from do_vfs_ioctl");
     DONE();
+    long long qsize = -1;
+    CALL("ioctl.fioqsize_file", ioctl, WANT_OK, regular, FIOQSIZE, &qsize);
+    out_buf(2, &qsize, sizeof qsize);
+    why("the bytes the file uses (loff_t)");
+    DONE();
+    int block = -1;
+    long block_result = CALL("ioctl.figetbsz_file", ioctl, WANT_ANY, regular, FIGETBSZ, &block);
+    if (block_result == 0)
+        out_buf(2, &block, sizeof block);
+    volatile_case();
+    why("the file system's block size (int); EINVAL where it has none");
+    DONE();
+    unsigned int attr = 0;
+    long attr_result = CALL("ioctl.getflags_file", ioctl, WANT_ANY, regular, FS_IOC_GETFLAGS, &attr);
+    if (attr_result == 0)
+        out_buf(2, &attr, sizeof attr);
+    volatile_case();
+    why("lsattr: the request encodes a long, the kernel copies an unsigned int; ENOTTY on a "
+        "file system without file attributes");
+    DONE();
+    if (attr_result == 0) {
+        CALL("ioctl.setflags_same", ioctl, WANT_OK, regular, FS_IOC_SETFLAGS, &attr);
+        in_buf(2, &attr, sizeof attr);
+        volatile_case();
+        why("chattr with the flags the file has: the owner may, nothing changes");
+        DONE();
+    }
     CALL("ioctl.unknown_file", ioctl, ENOTTY, regular, _IOR('Z', 0x7e, int), &avail);
     want_status(2, "in", "NO_DECODER");
     why("no driver knows the request: ENOTTY, and the argument is recorded as a gap");
     DONE();
     CALL("ioctl.badf", ioctl, EBADF, 999, FIONREAD, &avail);
-    want_status(2, "in", "NO_DECODER");
+    why("FIONREAD's int is recorded only on success");
     DONE();
     CALL("ioctl.fionread_fault", ioctl, EFAULT, rp[0], FIONREAD, 1);
-    want_status(2, "in", "NO_DECODER");
     DONE();
 }
 

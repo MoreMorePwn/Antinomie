@@ -60,6 +60,8 @@ const ARCH_PRCTL: Table = &[
     ("ARCH_MAP_VDSO_X32", 0x2001),
     ("ARCH_MAP_VDSO_32", 0x2002),
     ("ARCH_MAP_VDSO_64", 0x2003),
+    // The CET patches mainline did not take; glibc 2.28 to 2.38 asks with it.
+    ("ARCH_CET_STATUS", 0x3001),
     ("ARCH_GET_UNTAG_MASK", 0x4001),
     ("ARCH_ENABLE_TAGGED_ADDR", 0x4002),
     ("ARCH_GET_MAX_TAG_BITS", 0x4003),
@@ -621,6 +623,7 @@ mod tests {
     fn commands_and_operations_read_by_name() {
         assert_eq!(name(72, 1, 1030), "F_DUPFD_CLOEXEC");
         assert_eq!(name(158, 0, 0x1003), "ARCH_GET_FS");
+        assert_eq!(name(158, 0, 0x3001), "ARCH_CET_STATUS");
         assert_eq!(name(8, 2, 2), "SEEK_END");
         assert_eq!(name(233, 1, 3), "EPOLL_CTL_MOD");
         assert_eq!(name(41, 0, 10), "AF_INET6");

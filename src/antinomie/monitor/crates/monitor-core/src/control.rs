@@ -40,8 +40,13 @@ pub(crate) const RESOURCES_SIZE: usize = 96;
 /// (`ANT_SPECIMEN_MAX`). This is the one place the number is written:
 /// [`REVISION`] follows it until a later revision is added.
 pub(crate) const LARGE_SPECIMEN_REVISION: u32 = 19;
+/// The first revision whose task-exit records name the sender of the signal
+/// that ended a task (`lifecycle.signal.*`, `lifecycle.kernel_log`) and whose
+/// recorder decodes the generic file ioctls and arch_prctl ARCH_CET_STATUS.
+/// An older guest records neither; the host needs no request to tell them apart.
+pub(crate) const FATAL_SIGNAL_REVISION: u32 = 21;
 /// Guest contract revision this host implements (`ANTC_REVISION`).
-pub const REVISION: u32 = ARCH_INFO_REVISION;
+pub const REVISION: u32 = FATAL_SIGNAL_REVISION;
 pub(crate) const PROCESS_LIST: u32 = 0x1050;
 pub(crate) const CAPTURE_ATTACH: u32 = 0x1051;
 pub(crate) const CAPTURE_ALL: u32 = 0x1052;

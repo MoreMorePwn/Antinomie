@@ -107,7 +107,7 @@
       "syscall": "ioctl",
       "kind": "no_decoder",
       "what": "arg2.ioctl",
-      "reason": "The recorder decodes the ioctl argument only for terminal requests on a tty (TCGETS, TCSETS*, TCGETS2, TCSETS2*, TIOCGWINSZ, TIOCSWINSZ, TIOCGPGRP, TIOCSPGRP, TIOCGSID, FIONREAD); for any other request or file it records an explicit NO_DECODER marker. Request-specific layouts are not part of the capture schema."
+      "reason": "The recorder decodes the ioctl argument of terminal requests on a tty (TCGETS, TCSETS*, TCGETS2, TCSETS2*, TIOCGWINSZ, TIOCSWINSZ, TIOCGPGRP, TIOCSPGRP, TIOCGSID, FIONREAD) and, since revision 21, of the requests fs/ioctl.c answers for every file (FIONREAD, FIONBIO, FIOASYNC, FIOQSIZE, FIGETBSZ, FS_IOC_GETFLAGS, FS_IOC_SETFLAGS; FIOCLEX, FIONCLEX, FIFREEZE, FITHAW and FICLONE have no pointer argument and no field); for any other request it records an explicit NO_DECODER marker. Driver-specific layouts are not part of the capture schema."
     },
     {
       "syscall": "uselib",
@@ -220,7 +220,7 @@
     },
     {
       "warning": "ioctl: field capture incomplete, status NO_DECODER (arg2.ioctl)",
-      "reason": "The recorder decodes the ioctl argument only for terminal requests on a tty (TCGETS, TCSETS*, TCGETS2, TCSETS2*, TIOCGWINSZ, TIOCSWINSZ, TIOCGPGRP, TIOCSPGRP, TIOCGSID, FIONREAD); any other request records an explicit NO_DECODER marker for its argument."
+      "reason": "The recorder decodes the ioctl argument of terminal requests on a tty and of the requests fs/ioctl.c answers for every file (revision 21); any other request (a driver's own, FICLONERANGE, FS_IOC_FIEMAP and the other variable layouts) records an explicit NO_DECODER marker for its argument."
     },
     {
       "warning": "setsockopt: field capture incomplete, status NO_DECODER (sockopt.unknown_option)",

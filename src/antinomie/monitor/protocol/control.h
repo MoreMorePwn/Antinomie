@@ -25,7 +25,11 @@
  * SW_SINGLE_STEP and READ_WATCH. A host sends ARCH_INFO only to a guest whose
  * INFO revision is 20 or later; an older guest counts an unknown opcode as a
  * bad command. */
-#define ANTC_REVISION 20
+/* Revision 21: decoded arguments of the ioctl requests fs/ioctl.c answers
+ * for every file (FIONREAD on any file, FIONBIO, FIOASYNC, FIOQSIZE,
+ * FIGETBSZ, FS_IOC_GETFLAGS, FS_IOC_SETFLAGS; no field for the requests
+ * without a pointer argument) and of arch_prctl ARCH_CET_STATUS. */
+#define ANTC_REVISION 21
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
 #define ANTC_UPLOAD_CHUNK 0x1002
