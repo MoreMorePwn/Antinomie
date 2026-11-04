@@ -190,7 +190,7 @@ fn the_list_is_flat_latest_run_first_with_counts_and_a_never_run_mark() {
     }
     // The sidebar counts the library.
     assert_eq!(app.samples_page.count(), 3);
-    std::fs::remove_dir_all(root).unwrap();
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
@@ -218,7 +218,7 @@ fn search_tags_and_roots_only_narrow_the_list() {
     // Roots only keeps samples with no known parent: .x was dropped.
     app.samples_page.set_roots_only(true);
     assert_eq!(names(&mut app, &ctx), ["install.sh", "notes.txt"]);
-    std::fs::remove_dir_all(root).unwrap();
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
@@ -266,8 +266,8 @@ fn add_file_reads_the_hash_without_running_and_a_known_hash_adds_an_origin() {
     let library = Library::open(&root).unwrap();
     let hash = antinomie_monitor_core::storage::sha256_hex(SCRIPT);
     assert_eq!(library.origins(&hash).unwrap().len(), 2);
-    std::fs::remove_dir_all(root).unwrap();
-    std::fs::remove_dir_all(files).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(files);
 }
 
 #[test]
@@ -292,8 +292,8 @@ fn deleting_the_original_needs_the_box_and_removes_only_that_file() {
         .unwrap()
         .iter()
         .any(|row| row.event.label() == "Original deleted"));
-    std::fs::remove_dir_all(root).unwrap();
-    std::fs::remove_dir_all(files).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(files);
 }
 
 #[test]
@@ -307,7 +307,7 @@ fn the_explorer_adds_a_file_to_samples_through_the_dialog() {
         app.take_library_pages(),
         vec![crate::workspace::LibraryPage::Samples]
     );
-    std::fs::remove_dir_all(root).unwrap();
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
@@ -394,8 +394,8 @@ fn a_typed_path_is_read_when_the_field_is_left_not_after_its_first_letters() {
         },
     );
     until(&mut app, &ctx, |app| app.samples_page.add_ready());
-    std::fs::remove_dir_all(root).unwrap();
-    std::fs::remove_dir_all(files).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(files);
 }
 
 #[test]

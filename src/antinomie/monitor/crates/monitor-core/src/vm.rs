@@ -1334,8 +1334,16 @@ mod tests {
                         headless,
                         ..BackendOptions::default()
                     };
-                    let args =
+                    let window = VmLaunchOptions {
+                        screen: crate::api::VmScreen::QemuWindow,
+                        ..VmLaunchOptions::default()
+                    };
+                    let args = launch_args(&options, &window, graphical).unwrap();
+                    // The in-app screen differs only in the display backend.
+                    let in_app =
                         launch_args(&options, &VmLaunchOptions::default(), graphical).unwrap();
+                    assert_eq!(value(&in_app, "-display"), Some("none"));
+                    assert_eq!(device_values(&in_app), device_values(&args));
                     assert_eq!(
                         value(&args, "-accel"),
                         Some(if force_tcg { "tcg" } else { "kvm" })
@@ -1389,6 +1397,7 @@ mod tests {
                     };
                     let launch = VmLaunchOptions {
                         resolution,
+                        screen: crate::api::VmScreen::QemuWindow,
                         ..VmLaunchOptions::default()
                     };
                     let args = launch_args(&options, &launch, graphical).unwrap();
@@ -1428,6 +1437,7 @@ mod tests {
             let launch = VmLaunchOptions {
                 fullscreen,
                 fit_to_window,
+                screen: crate::api::VmScreen::QemuWindow,
                 ..VmLaunchOptions::default()
             };
             for headless in [false, true] {
@@ -1696,6 +1706,7 @@ FlatView #1
                             resolution,
                             fullscreen,
                             fit_to_window,
+                            screen: crate::api::VmScreen::QemuWindow,
                             ..VmLaunchOptions::default()
                         };
                         let mut command = Command::new("qemu-system-x86_64");

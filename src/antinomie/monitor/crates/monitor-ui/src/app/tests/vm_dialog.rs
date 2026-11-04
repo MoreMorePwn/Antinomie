@@ -542,6 +542,8 @@ fn debian_new_vm_dialog_fits_large_text_and_enforces_profile_minima() {
             }),
         });
     app.new_image();
+    // Fullscreen and Fit to window belong to QEMU's own window; show them.
+    app.draft.launch.screen = antinomie_monitor_core::VmScreen::QemuWindow;
     app.draft.ram_mib = 256;
     app.draft.disk_gib = 1;
     let ctx = egui::Context::default();
@@ -557,6 +559,7 @@ fn debian_new_vm_dialog_fits_large_text_and_enforces_profile_minima() {
     let visible = texts(&output);
     for label in [
         "Resolution",
+        "VM screen",
         "Fullscreen",
         "Fit to window",
         "Acceleration",

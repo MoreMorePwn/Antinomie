@@ -111,6 +111,8 @@ fn launch_controls_edit_create_and_save_owned_configurations() {
     for label in [
         "Auto",
         "1920 x 1080",
+        "In the app (VNC)",
+        "QEMU window",
         "Fullscreen",
         "Fit to window",
         "Default",
@@ -137,7 +139,7 @@ fn launch_controls_edit_create_and_save_owned_configurations() {
             fit_to_window: true,
             acceleration: VmAcceleration::Tcg,
             cpu_model: VmCpuModel::Max,
-            ..Default::default()
+            screen: antinomie_monitor_core::VmScreen::QemuWindow,
         }
     );
     assert_eq!(created.disk_root, Some(PathBuf::from("/disks")));
@@ -229,6 +231,8 @@ fn launch_settings_save_requires_a_stopped_existing_vm() {
     theme::install(&ctx);
     theme::text_size(&ctx, 24.0);
     let size = egui::vec2(1280.0, 900.0);
+    // Fullscreen and Fit to window are options of QEMU's own window.
+    app.draft.launch.screen = antinomie_monitor_core::VmScreen::QemuWindow;
     click_label(&mut app, &ctx, size, "Fullscreen");
     click_label(&mut app, &ctx, size, "Save configuration");
     assert!(!app.draft.launch.fullscreen);

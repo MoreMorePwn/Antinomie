@@ -652,8 +652,14 @@ mod tests {
             force_tcg: true,
             ..Default::default()
         };
-        let error = require_vm(&options, &VmLaunchOptions::default()).unwrap_err();
+        let window = VmLaunchOptions {
+            screen: crate::api::VmScreen::QemuWindow,
+            ..Default::default()
+        };
+        let error = require_vm(&options, &window).unwrap_err();
         assert!(error.contains("no GTK") && error.contains("qemu-system-gui"));
+        // The in-app screen needs no GTK backend.
+        require_vm(&options, &VmLaunchOptions::default()).unwrap();
         let headless = BackendOptions {
             headless: true,
             ..options
@@ -765,11 +771,20 @@ mod tests {
         let options = BackendOptions::default();
         let launch = VmLaunchOptions {
             acceleration: VmAcceleration::Tcg,
+            screen: crate::api::VmScreen::QemuWindow,
             ..Default::default()
         };
         assert_eq!(
             vm_requirements(&options, &launch),
             vec![Dependency::Qemu, Dependency::QemuImg, Dependency::Gtk]
+        );
+        let in_app = VmLaunchOptions {
+            acceleration: VmAcceleration::Tcg,
+            ..Default::default()
+        };
+        assert_eq!(
+            vm_requirements(&options, &in_app),
+            vec![Dependency::Qemu, Dependency::QemuImg]
         );
         // Default acceleration falls back to TCG, so it needs no KVM; an
         // explicit KVM choice does, unless the app setting lets it fall back.

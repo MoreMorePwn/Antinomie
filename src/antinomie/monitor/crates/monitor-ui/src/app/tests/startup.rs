@@ -8,6 +8,15 @@ fn missing_startup_dependency_blocks_a_command_before_submission() {
     app.dependencies = crate::dependencies_window::DependenciesWindow::missing_for_test(
         antinomie_monitor_core::dependencies::Dependency::Gtk,
     );
+    // The GTK backend is needed by a VM that shows its screen in QEMU's window.
+    app.snapshot.vms.push(antinomie_monitor_core::VmConfig {
+        id: "test".into(),
+        launch: antinomie_monitor_core::VmLaunchOptions {
+            screen: antinomie_monitor_core::VmScreen::QemuWindow,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
     app.send(Command::Start {
         vm_id: "test".into(),
     });

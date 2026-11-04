@@ -565,7 +565,30 @@ mod tests {
             .unwrap();
         gtk.problem = Some("GTK missing".into());
         let options = BackendOptions::default();
-        let snapshot = Snapshot::default();
+        let mut snapshot = Snapshot::default();
+        // GTK is needed by a VM that shows its screen in QEMU's window; one
+        // that shows it in the app starts without it.
+        snapshot.vms.push(VmConfig {
+            id: "test".into(),
+            launch: antinomie_monitor_core::VmLaunchOptions {
+                screen: antinomie_monitor_core::VmScreen::QemuWindow,
+                ..Default::default()
+            },
+            ..VmConfig::default()
+        });
+        snapshot.vms.push(VmConfig {
+            id: "in-app".into(),
+            ..VmConfig::default()
+        });
+        assert!(window
+            .require(
+                &Command::Start {
+                    vm_id: "in-app".into()
+                },
+                &options,
+                &snapshot
+            )
+            .is_ok());
         assert!(window
             .require(
                 &Command::Start {
