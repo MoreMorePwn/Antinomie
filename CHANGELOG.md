@@ -129,6 +129,20 @@ x86 programs by their own table.
   for every file are decoded by their shape (an `int`, an `unsigned int`, a
   `loff_t`, or no pointer at all), not recorded as gaps; arch_prctl
   ARCH_CET_STATUS is a known selector.
+- Patches 48 and 49 (contract revision 21): ioctl arguments are captured by
+  the size their request number encodes, and the socket interface, TUN, loop,
+  FICLONERANGE and fsxattr requests by their layouts; reads of eventfd, timerfd,
+  signalfd, inotify, fanotify and userfaultfd descriptors name their records;
+  epoll_ctl's event is recorded for any operation; the common compat calls'
+  structures (iovecs, pollfds, descriptor sets, 32-bit times, dirents,
+  rt_sigaction, wait4 and rusage) are captured by their ILP32 layouts.
+- Patches 46 and 47 (contract revision 21): AArch32 programs on arm64 guests
+  get ELF32 process cores (`fs/compat_binfmt_elf.c`'s format, core flag
+  COMPAT_ELF32) and are debugged by the guest's engine (compat registers, A32
+  and Thumb breakpoints, hardware step; debug CAPS flag AARCH32); a debug-on-start
+  launch of an image the engine cannot debug is refused instead of attached.
+  The host accepts the new flags; reading those cores and the ARM debugger
+  follow.
 - Patch 45 (contract revision 21): the sender of the signal that ended a
   thread group is kept in its leader's recorder state, taken at the send that
   starts the group exit (`kernel/signal.c`) or at the delivery of a fatal

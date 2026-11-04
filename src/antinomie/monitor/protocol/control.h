@@ -33,7 +33,10 @@
  * (lifecycle.signal.*) and carries the kernel's line for an OOM kill
  * (lifecycle.kernel_log); arm64 guests write ELF32 cores of AArch32 tasks
  * (CORE_COMPAT_ELF32) and debug them (DEBUG_CAP_AARCH32), and a debug-on-start
- * session of an image the engine cannot debug answers EOPNOTSUPP. */
+ * session of an image the engine cannot debug answers EOPNOTSUPP;
+ * any other ioctl whose number encodes a size has those bytes captured, and a
+ * read of an event descriptor names its records' layout; the compat
+ * structures of common compat calls are captured by their ILP32 layouts. */
 #define ANTC_REVISION 21
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001

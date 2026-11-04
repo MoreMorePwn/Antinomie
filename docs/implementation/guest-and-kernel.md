@@ -1018,6 +1018,85 @@ on this host (it records neither). An older host refuses a revision-21 base.
   after an exec by a thread other than the leader the record stays with the
   old leader.
 
+### AArch32 programs on arm64 guests: cores and the debugger, guest side (0.9.0, contract revision 21)
+
+Multi-arch card MA-33b, guest part (the host's ELF32 core reader, ARM and Thumb
+disassembly and the ARM debugger layer come later, without a new revision).
+
+* **ELF32 cores (patch 46).** An AArch32 task's core was refused (-EOPNOTSUPP).
+  The recorder's exit and manual cores already run the task's own binary
+  format's writer (`mm->binfmt->core_dump`), which for an AArch32 program is
+  `fs/compat_binfmt_elf.c`'s: ELFCLASS32 EM_ARM, the compat NT_PRSTATUS of
+  `user_aarch32_view`, NT_ARM_VFP, compat NT_SIGINFO, a 32-bit NT_FILE and
+  auxv. `ant_core_abi_ok()` (`process_core.h`) lets it run on arm64 with
+  `CONFIG_COMPAT_BINFMT_ELF`; the expected size and the thread count read
+  either class's program headers (`core_header()`, `core_phdr()`), and the
+  status flag says which file it is: `ANTC_CORE_COMPAT_ELF32` (0x100) instead
+  of `NATIVE_ELF64`. `CORE_CAPS` offers `ANTC_CORE_CAPS_COMPAT_ELF32` (32).
+  ia32 programs on x86-64 still get no core.
+* **Debugger (patch 47).** `ant_dbg_arch_task_ok()` accepts an AArch32 task (its
+  regset view is EM_ARM). Software breakpoints of length 4 are A32
+  `0xe7f001f0`, of length 2 Thumb `0xde01` (the arm64 kernel's AArch32 break
+  patterns): `try_handle_aarch32_break()` (`arch/arm64/kernel/debug-monitors.c`)
+  hands the trap to the engine first, which claims it only at an address it
+  planted. Each breakpoint keeps its instruction set (`struct ant_dbg_bp.compat`).
+  The step is the same hardware step; a stepped SVC (A32 or T16) ends at the
+  system call's exit. `REGS_ALL` on an AArch32 thread reads its own table
+  (compat NT_PRSTATUS of 72 bytes, NT_ARM_VFP, NT_ARM_TLS). `DEBUG_CAPS` offers
+  `ANTC_DEBUG_CAP_AARCH32` (4096). A Thumb breakpoint inside an IT block is not
+  refused: whether it traps when the block's condition fails is the CPU's
+  choice (CONSTRAINED UNPREDICTABLE).
+* **Launches the engine cannot debug (T0293 b).** A debug-on-start session whose
+  image `ant_dbg_arch_task_ok()` refuses (ia32 or x32 on x86-64) does not take
+  its entry stop; ATTACH (ADOPT) answers -EOPNOTSUPP and retires it, and so does
+  any later command of a session adopted before the exec (DETACH answers 0).
+  It never blocks a new session.
+* **Host.** This host only accepts the new flag bits (debug CAPS, CORE_CAPS,
+  core status 0x100 in place of 2); it does not read ELF32 cores or debug
+  AArch32 programs yet. `debug-check a32` drives the engine directly on
+  `tests/monitor/aarch32-debug-fixture.c` (A32 and Thumb functions).
+
+### Capture gaps of the decode audit (0.9.0, contract revision 21)
+
+Card ANT-T0295 (class B of the 0.9.0 decode audit). New layouts are named in
+the recorder's sources, so `scripts/generate-filter-layouts.py` lists them in
+every `captured-layout-members.json` (it now also reads `recorder.c`, and the
+compat table's layouts).
+
+* **ioctl (patch 48, B1).** Any request outside the decoded set whose number
+  encodes a direction and a size (`_IOC_DIR`, `_IOC_SIZE`, at most 4096) has
+  those bytes recorded with an empty layout: at entry for `_IOC_WRITE`, at exit
+  on success for `_IOC_READ`. A request whose number encodes neither keeps its
+  NO_DECODER marker. Named layouts: `ifreq` (SIOCGIF* read and written back,
+  SIOCSIF* read, TUNSETIFF), `ifconf` with `arg2.ifconf.buffer` (`ifreq[]`, at
+  most 64 records) for SIOCGIFCONF, `loop_info64` and `loop_config` (loop
+  devices), `file_clone_range` (FICLONERANGE), `fsxattr` (FS_IOC_FSGETXATTR,
+  FSSETXATTR). `ifreq` is inventoried as unsupported: its members are two
+  unions the request selects.
+* **Event descriptor reads (patch 48, B2).** `read()` of an eventfd or timerfd
+  (`u64`), signalfd (`signalfd_siginfo[]`), inotify (`inotify_event[]`, variable
+  records), fanotify (`fanotify_event_metadata[]`, variable records) or
+  userfaultfd (`uffd_msg[]`) descriptor names the layout of its buffer, by the
+  anonymous inode the file was made on. `readv`, `pread64` and pidfd or mqueue
+  reads are as before.
+* **Sleep and io_cancel outputs (B3).** Already captured: nanosleep's and
+  clock_nanosleep's remaining time are recorded when the call is interrupted
+  (the only time the kernel writes them), and io_cancel's `io_event` on a
+  result of 0, which Linux 6.12 never returns (it answers EINPROGRESS and
+  delivers the event through the ring).
+* **Compat calls (patch 49, B4).** A table of compat rules records the ILP32
+  structures of readv, writev, preadv, pwritev (the iovec array and buffers),
+  poll and ppoll (`pollfd[]`, `old_timespec`, the mask as `u64`), _newselect
+  and pselect6 (`u32[]` descriptor sets, `timeval`/`old_timespec`, the mask
+  pack as `u32[2]`), nanosleep, clock_nanosleep, clock_gettime, clock_getres,
+  clock_settime (`old_timespec`), gettimeofday (`timeval`, `timezone`),
+  getdents (`linux_dirent[]`), rt_sigaction (`compat_sigaction`), wait4
+  (`wait_status`, `rusage`), getrusage and times; their layout names carry the
+  compat prefix (`linux-6.12.94/x86/`, `/arm/`). Not yet: the stat64 family,
+  sendmsg/recvmsg and the other calls of the audit's list.
+* **epoll_ctl (patch 48, B7).** The event is recorded for an operation the
+  kernel refuses too.
+
 ### arm64 debugger (0.9.0)
 
 Multi-arch plan cards MA-11 and MA-14: the debug engine, the RSP server, the

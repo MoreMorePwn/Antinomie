@@ -510,8 +510,8 @@ static void epoll_cases(void)
     DONE();
     CASE("epoll_ctl.del_missing", epoll_ctl, ENOENT, epfd, EPOLL_CTL_DEL, rp[1], NULL);
     CALL("epoll_ctl.bad_op", epoll_ctl, EINVAL, epfd, 99, ep[0], &in_ev);
-    want_status(3, "in", "NO_DECODER");
-    why("an unknown operation: its event argument is an explicit gap");
+    in_buf(3, &in_ev, sizeof in_ev);
+    why("an unknown operation: its event argument is still recorded (revision 21)");
     DONE();
     CALL("epoll_ctl.self", epoll_ctl, EINVAL, epfd, EPOLL_CTL_ADD, epfd, &in_ev);
     in_buf(3, &in_ev, sizeof in_ev);
@@ -556,6 +556,13 @@ static void counter_cases(void)
     why("a counter of 5 is readable, a counter of 0 is not");
     DONE();
 #endif
+    unsigned long long count_value = 0;
+    long got_count = CALL("read.eventfd", read, WANT_OK, efd, &count_value, sizeof count_value);
+    if (got_count > 0)
+        out_buf(1, &count_value, (size_t)got_count);
+    why("an eventfd read returns its counter (u64): the guest names the record's layout "
+        "(revision 21)");
+    DONE();
     close((int)efd);
     close((int)efd2);
 
@@ -731,6 +738,14 @@ static void notify_cases(void)
     why("creating ev-created queued an IN_CREATE event");
     DONE();
 #endif
+    char events[512];
+    long got_events = CALL("read.inotify_events", read, WANT_ANY, ifd1, events, sizeof events);
+    if (got_events > 0)
+        out_buf(1, events, (size_t)got_events);
+    volatile_case();
+    why("the queued inotify_event records (IN_CREATE ev-created): their layout is named "
+        "(revision 21)");
+    DONE();
     CASE("inotify_rm_watch.file", inotify_rm_watch, WANT_OK, ifd1, file_wd);
     CASE("inotify_rm_watch.again", inotify_rm_watch, EINVAL, ifd1, file_wd);
     CASE("inotify_rm_watch.badf", inotify_rm_watch, EBADF, 999, file_wd);
@@ -930,8 +945,27 @@ static void ioctl_cases(void)
         DONE();
     }
     CALL("ioctl.unknown_file", ioctl, ENOTTY, regular, _IOR('Z', 0x7e, int), &avail);
+    why("no driver knows the request: ENOTTY; its number says 4 bytes out, which are recorded "
+        "only on success (revision 21)");
+    DONE();
+    int written = 7;
+    CALL("ioctl.unknown_write", ioctl, ENOTTY, regular, _IOW('Z', 0x7d, int), &written);
+    in_buf(2, &written, sizeof written);
+    why("an unknown request whose number says 4 bytes in: they are recorded at entry");
+    DONE();
+    CALL("ioctl.unknown_none", ioctl, ENOTTY, regular, _IO('Z', 0x7c), &written);
     want_status(2, "in", "NO_DECODER");
-    why("no driver knows the request: ENOTTY, and the argument is recorded as a gap");
+    why("a request whose number says nothing of its argument stays an explicit gap");
+    DONE();
+    struct fsxattr fsx;
+    memset(&fsx, 0, sizeof fsx);
+    long fsx_result = CALL("ioctl.fsgetxattr_file", ioctl, WANT_ANY, regular, FS_IOC_FSGETXATTR,
+                           &fsx);
+    if (fsx_result == 0)
+        out_buf(2, &fsx, sizeof fsx);
+    volatile_case();
+    why("the file's extended attributes (struct fsxattr, named since revision 21); ENOTTY "
+        "where the file system has none");
     DONE();
     CALL("ioctl.badf", ioctl, EBADF, 999, FIONREAD, &avail);
     why("FIONREAD's int is recorded only on success");
