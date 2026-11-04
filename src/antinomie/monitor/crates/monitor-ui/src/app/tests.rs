@@ -15,6 +15,7 @@ mod details_scroll;
 mod dialog_shots;
 mod disks;
 mod evidence_delete;
+mod exec_ready;
 mod failed_runs;
 mod file_drop;
 mod fps_counter;

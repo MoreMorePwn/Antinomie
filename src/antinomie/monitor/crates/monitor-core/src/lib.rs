@@ -86,6 +86,8 @@ pub mod strings_regex;
 pub mod syscall_groups;
 pub mod syscalls;
 mod telemetry_loss;
+#[cfg(test)]
+mod test_exec;
 pub mod toolchain;
 mod transport;
 pub mod typed_fields;

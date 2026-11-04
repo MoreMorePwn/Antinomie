@@ -572,8 +572,7 @@ fn a_signature_is_made_by_the_analysts_own_tool() {
     )
     .unwrap();
     {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_exec::make_executable(&stub, 0o755);
     }
     let key = root.join("minisign.key");
     fs::write(&key, "untrusted comment: test\n").unwrap();

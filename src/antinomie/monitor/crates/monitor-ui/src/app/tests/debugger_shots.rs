@@ -107,7 +107,6 @@ fn fixture_view() -> antinomie_monitor_core::debug::view::DebugView {
 #[test]
 #[ignore = "requires X11 native rendering; exits after the given seconds"]
 fn native_debugger_fixture() {
-    use std::os::unix::fs::PermissionsExt;
     use winit::platform::x11::EventLoopBuilderExtX11;
     struct QaApp {
         app: MonitorApp,
@@ -185,8 +184,7 @@ fn native_debugger_fixture() {
                     ]
                     .join("\n");
                     std::fs::write(&gdb, script).expect("fake gdb");
-                    std::fs::set_permissions(&gdb, std::fs::Permissions::from_mode(0o755))
-                        .expect("mode");
+                    super::exec_ready::make_executable(&gdb, 0o755);
                     app.snapshot.analysis_tools = vec![tool("gef", true)];
                     app.debugger.console.set_gdb(Some(gdb));
                 }

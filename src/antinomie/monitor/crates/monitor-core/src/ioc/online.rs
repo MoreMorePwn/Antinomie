@@ -743,7 +743,6 @@ mod tests {
 
     #[test]
     fn the_curl_transport_sends_the_key_on_stdin_to_abuse_ch_only() {
-        use std::os::unix::fs::PermissionsExt;
         let dir =
             std::env::temp_dir().join(format!("ant-online-curl-{}", crate::storage::unique_id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -757,7 +756,7 @@ mod tests {
             ),
         )
         .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_exec::make_executable(&script, 0o755);
         let transport = CurlTransport { curl: script };
         let key = Secret::new("curl-online-secret-77");
         let reply = transport

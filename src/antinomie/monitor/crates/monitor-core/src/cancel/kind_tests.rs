@@ -34,8 +34,7 @@ fn hanging_curl(dir: &Path) -> PathBuf {
          exec sleep 60\n",
     )
     .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    crate::test_exec::make_executable(&script, 0o755);
     script
 }
 

@@ -939,7 +939,6 @@ mod tests {
     /// A stand-in for Suricata: runs `body` with `$OUT` set to the `-l` directory
     /// and `$ARGS` the arguments.
     fn fake_suricata(dir: &Path, body: &str) -> String {
-        use std::os::unix::fs::PermissionsExt;
         let path = dir.join("fake-suricata");
         fs::write(
             &path,
@@ -948,7 +947,7 @@ mod tests {
             ),
         )
         .unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_exec::make_executable(&path, 0o755);
         path.display().to_string()
     }
 

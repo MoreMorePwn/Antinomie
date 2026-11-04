@@ -331,7 +331,7 @@ esac
         ),
     )
     .unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    crate::test_exec::make_executable(&path, 0o755);
     path
 }
 
@@ -766,7 +766,7 @@ fn no_convert_qemu_img(fixture: &Fixture) -> PathBuf {
         "#!/bin/sh\ncase \"$1\" in convert) echo 'a second conversion ran' >&2; exit 1 ;; esac\nexec qemu-img \"$@\"\n",
     )
     .unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    crate::test_exec::make_executable(&path, 0o755);
     path
 }
 

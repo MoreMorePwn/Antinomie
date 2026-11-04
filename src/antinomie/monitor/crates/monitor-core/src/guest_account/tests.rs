@@ -10,7 +10,7 @@ fn tool_deadline_reaps_owned_child_and_preserves_unrelated_process() {
         "#!/bin/sh\nroot=$(dirname \"$0\")\nprintf '%s\\n' \"$$\" > \"$root/tool-pid\"\ncat >/dev/null\nsleep 60 &\nprintf '%s\\n' \"$!\" > \"$root/descendant-pid\"\nif test \"$1\" = exit-parent; then exit 0; fi\nwait\n",
     )
     .unwrap();
-    fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
+    crate::test_exec::make_executable(&tool, 0o700);
     let mut unrelated = Command::new("sleep").arg("60").spawn().unwrap();
     let secret = "private-timeout-password";
     // The pid of a process the tool started, once it wrote one whole.
@@ -117,7 +117,7 @@ fn account() -> GuestAccount {
 fn fake_tool(directory: &Path, fail: bool, filesystems: &str) -> std::path::PathBuf {
     let path = directory.join("fake-tool");
     fs::write(&path, format!("#!/bin/sh\nroot=$(dirname \"$0\")\nif [ \"$1\" = --ro ]; then cat > \"$root/probe\"; printf '{filesystems}'; exit 0; fi\nprintf '%s\\n' \"$@\" > \"$root/argv\"\ncat > \"$root/input\"\ncat \"$root/input\" >&2\nprintf 'hash:%s\\n' '{}'\nexit {}\n", guest_hash(), if fail { 1 } else { 0 })).unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    crate::test_exec::make_executable(&path, 0o700);
     path
 }
 #[test]

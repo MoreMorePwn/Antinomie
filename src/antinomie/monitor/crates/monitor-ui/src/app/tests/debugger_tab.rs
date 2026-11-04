@@ -407,7 +407,7 @@ fn a_missing_front_end_or_gdb_says_so_and_links_to_the_tools_page() {
 
 #[test]
 fn the_console_runs_gdb_on_a_terminal_connected_to_the_session_port() {
-    use std::{io::Read, net::TcpListener, os::unix::fs::PermissionsExt};
+    use std::{io::Read, net::TcpListener};
     let ctx = context();
     let size = egui::vec2(1280.0, 820.0);
     // A stand-in for the RSP server: it only sees the connection.
@@ -428,7 +428,7 @@ fn the_console_runs_gdb_on_a_terminal_connected_to_the_session_port() {
          while read -r line; do echo \"ran:$line\"; done\n",
     )
     .unwrap();
-    std::fs::set_permissions(&gdb, std::fs::Permissions::from_mode(0o755)).unwrap();
+    super::exec_ready::make_executable(&gdb, 0o755);
     let mut session = info();
     session.tcp_port = port;
     let mut app = attached();

@@ -75,7 +75,7 @@ cat "$D/payload-$step.bin" > "$OUT"
 "#,
     )
     .unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::test_exec::make_executable(&path, 0o755);
     path.display().to_string()
 }
 
@@ -526,7 +526,7 @@ fn an_unpacker_that_needs_the_size_record_gets_it_rebuilt() {
         ),
     )
     .unwrap();
-    std::fs::set_permissions(&upx, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::test_exec::make_executable(&upx, 0o755);
     std::fs::write(dir.join("upx.payload"), plain(7)).unwrap();
     let mut section = AnalysisSection::new(AnalysisKind::Unpacking);
     unpack_with(

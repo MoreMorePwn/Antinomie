@@ -54,10 +54,9 @@ fn actual_metadata_replies_fill_rows_and_preserve_empty_results() {
 /// still holds open for writing (ETXTBSY), and a test process full of threads
 /// that fork children inherits such descriptors for a moment.
 pub(super) fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
     let path = dir.join(name);
     std::fs::write(&path, body).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    crate::test_exec::make_executable(&path, 0o700);
     path
 }
 

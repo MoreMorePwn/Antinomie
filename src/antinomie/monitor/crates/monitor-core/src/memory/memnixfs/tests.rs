@@ -4,7 +4,6 @@
 use super::*;
 use crate::memory::{Os, import};
 use sha2::Digest;
-use std::os::unix::fs::PermissionsExt;
 
 fn temp(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!(
@@ -465,7 +464,7 @@ exit 0
 "#,
         )
         .unwrap();
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_exec::make_executable(&script, 0o755);
         let fixture = Fixture { root, data };
         fixture.mode("ok");
         fixture

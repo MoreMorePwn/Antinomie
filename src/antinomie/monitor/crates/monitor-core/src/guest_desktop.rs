@@ -57,7 +57,6 @@ pub(crate) fn wire_request(request: &ExecRequest) -> Result<ExecRequest, String>
 mod tests {
     use super::*;
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output, Stdio};
 
@@ -99,7 +98,7 @@ mod tests {
         fn tool(&self, name: &str, body: &str) {
             let path = self.root.join("bin").join(name);
             fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            crate::test_exec::make_executable(&path, 0o755);
         }
         /// Run the wire request's wrapper with `/proc/` pointing at the fake.
         fn run(&self, request: &ExecRequest, env: &[(&str, &str)], stdin: &str) -> Output {

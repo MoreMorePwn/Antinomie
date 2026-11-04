@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use super::*;
-use std::{fs, os::unix::fs::PermissionsExt};
+use std::fs;
 
 /// FLOSS 3.2.0's `-j` output for a small x86-64 ELF that builds one URL on the
 /// stack and decodes two strings, as FLOSS wrote it (static strings omitted).
@@ -24,7 +24,7 @@ fn fake(dir: &Path, body: &str, code: i32) -> String {
         ),
     )
     .unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    crate::test_exec::make_executable(&path, 0o755);
     path.display().to_string()
 }
 

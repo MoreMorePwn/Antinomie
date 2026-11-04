@@ -22,7 +22,7 @@ fn production_sandbox_publishes_light_results_while_heavy_tool_runs() {
         "#!/bin/sh\nif [ \"$1\" = --version ]; then echo fixture; else sleep 5; echo '{}'; fi\n",
     )
     .unwrap();
-    fs::set_permissions(&capa, fs::Permissions::from_mode(0o700)).unwrap();
+    crate::test_exec::make_executable(&capa, 0o700);
     let specimen = fs::read("/usr/bin/true").unwrap();
     fs::write(directory.join("specimen"), &specimen).unwrap();
     // Heavy-first user order must not prevent metadata and strings finishing.

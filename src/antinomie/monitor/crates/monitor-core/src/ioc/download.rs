@@ -404,7 +404,7 @@ mod tests {
         ioc::records::fixtures::*,
         ruleset::{Curl, Fetcher},
     };
-    use std::{cell::RefCell, collections::BTreeMap, os::unix::fs::PermissionsExt, path::PathBuf};
+    use std::{cell::RefCell, collections::BTreeMap, path::PathBuf};
 
     const KEY: &str = "abc123-very-secret-9f3a";
 
@@ -696,7 +696,7 @@ mod tests {
             ),
         )
         .unwrap();
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_exec::make_executable(&script, 0o755);
         script
     }
 

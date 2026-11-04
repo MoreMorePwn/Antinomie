@@ -408,25 +408,12 @@ fn probe_suricata() -> ToolProbe {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     fn fake_python(dir: &Path, name: &str, body: &str) -> PathBuf {
         std::fs::create_dir_all(dir).unwrap();
         let path = dir.join(name);
         std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        // Another test thread may fork while this file is open for writing;
-        // the child holds the descriptor until it execs, and running the
-        // script meanwhile fails with ETXTBSY.
-        let deadline = std::time::Instant::now() + Duration::from_secs(60);
-        while std::time::Instant::now() < deadline {
-            match std::process::Command::new(&path).output() {
-                Err(error) if error.raw_os_error() == Some(26) => {
-                    std::thread::sleep(Duration::from_millis(10))
-                }
-                _ => break,
-            }
-        }
+        crate::test_exec::make_executable(&path, 0o755);
         path
     }
 
