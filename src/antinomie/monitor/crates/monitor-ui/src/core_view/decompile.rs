@@ -104,6 +104,7 @@ pub(super) fn parse_ghidra(text: &str) -> (Vec<CoreFunction>, Vec<String>) {
             let name = parts.next().unwrap_or("FUN").to_string();
             functions.push(CoreFunction {
                 address,
+                thumb: false,
                 size,
                 name,
             });

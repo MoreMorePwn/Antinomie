@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Bounded, file-backed Linux x86-64 and aarch64 process-core inspection. Physical QEMU
-//! dumps are deliberately rejected: their CPU notes are not process threads.
+//! Bounded, file-backed Linux x86-64, aarch64 and 32-bit ARM process-core inspection.
+//! Physical QEMU dumps are deliberately rejected: their CPU notes are not process threads.
+//!
+//! The 32-bit ARM cores are the ELF32 cores arm64 guests write for AArch32 programs
+//! (`fs/compat_binfmt_elf.c`): ELFCLASS32, EM_ARM, `compat_elf_prstatus` (r0-r15, cpsr,
+//! orig_r0), `NT_ARM_VFP`, a compat siginfo and 32-bit `NT_FILE` and auxv.
+use crate::analysis::{ArmMode, decode_span_arm};
 use iced_x86::{Decoder, DecoderOptions, Formatter, IntelFormatter};
 use object::{Object, ObjectSegment, ObjectSymbol, SymbolKind};
 use serde::{Deserialize, Serialize};
@@ -23,6 +28,17 @@ const REG_NAMES: [&str; 27] = [
 /// ELF machines of the process cores this reader opens.
 pub const EM_X86_64: u16 = 62;
 pub const EM_AARCH64: u16 = 183;
+pub const EM_ARM: u16 = 40;
+/// CPSR bit 5: the program counter is in Thumb state.
+pub const CPSR_THUMB: u64 = 1 << 5;
+/// `compat_elf_prstatus`'s `pr_reg`: r0-r12, sp, lr, pc, cpsr and orig_r0.
+const ARM_REG_NAMES: [&str; 18] = [
+    "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "sp", "lr",
+    "pc", "cpsr", "orig_r0",
+];
+/// `NT_ARM_VFP`: d0-d31 then fpscr.
+const ARM_VFP_SIZE: usize = 260;
+const NT_ARM_VFP: u32 = 0x400;
 /// aarch64's `user_pt_regs`, its `elf_gregset_t`.
 const AARCH64_REG_NAMES: [&str; 34] = [
     "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14",
@@ -111,7 +127,7 @@ pub struct CoreDump {
     pub auxv: Vec<(u64, u64)>,
     pub notes: Vec<String>,
     pub warnings: Vec<String>,
-    /// ELF machine (`EM_X86_64`, `EM_AARCH64`); records saved before 0.9.0
+    /// ELF machine (`EM_X86_64`, `EM_AARCH64`, `EM_ARM`); records saved before 0.9.0
     /// are x86-64.
     #[serde(default = "x86_64_machine")]
     pub machine: u16,
@@ -157,7 +173,7 @@ impl CoreDump {
     ///
     /// | Argument / result | Meaning |
     /// |---|---|
-    /// | `path` | Existing ELF64 little-endian Linux x86-64 or aarch64 ET_CORE file |
+    /// | `path` | Existing little-endian Linux ET_CORE file: ELF64 x86-64 or aarch64, or ELF32 ARM |
     /// | result | File-backed mappings and recovered process-thread metadata |
     ///
     /// # Errors
@@ -171,22 +187,35 @@ impl CoreDump {
         let mut file = File::open(&source)?;
         let source_size = file.metadata()?.len();
         let header = read_at(&mut file, 0, 64)?;
+        let machine = u16_at(&header, 18)?;
+        let class32 = header[4] == 1;
         if &header[..4] != b"\x7fELF"
-            || header[4] != 2
+            || !(header[4] == 2 && matches!(machine, EM_X86_64 | EM_AARCH64)
+                || class32 && machine == EM_ARM)
             || header[5] != 1
             || header[6] != 1
             || u16_at(&header, 16)? != 4
-            || !matches!(u16_at(&header, 18)?, EM_X86_64 | EM_AARCH64)
         {
             return Err(invalid(
-                "requires a Linux x86-64 or aarch64 little-endian ELF64 process core",
+                "requires a Linux x86-64 or aarch64 little-endian ELF64 process core, or a 32-bit ARM ELF32 one",
             ));
         }
-        let machine = u16_at(&header, 18)?;
-        let ph_offset = u64_at(&header, 32)?;
-        let ph_size = u16_at(&header, 54)?;
-        let ph_count = usize::from(u16_at(&header, 56)?);
-        if ph_size < 56 || ph_count == 0 || ph_count > ITEM_LIMIT {
+        let (ph_offset, ph_size, ph_count, ph_min) = if class32 {
+            (
+                u64::from(u32_at(&header, 28)?),
+                u16_at(&header, 42)?,
+                usize::from(u16_at(&header, 44)?),
+                32,
+            )
+        } else {
+            (
+                u64_at(&header, 32)?,
+                u16_at(&header, 54)?,
+                usize::from(u16_at(&header, 56)?),
+                56,
+            )
+        };
+        if ph_size < ph_min || ph_count == 0 || ph_count > ITEM_LIMIT {
             return Err(invalid(
                 "unsupported or excessive program-header count (extended numbering unsupported)",
             ));
@@ -210,16 +239,35 @@ impl CoreDump {
         };
         let mut note_size = 0u64;
         for index in 0..ph_count {
-            let ph = read_at(&mut file, ph_offset + index as u64 * u64::from(ph_size), 56)?;
+            let ph = read_at(
+                &mut file,
+                ph_offset + index as u64 * u64::from(ph_size),
+                usize::from(ph_min),
+            )?;
             let kind = u32_at(&ph, 0)?;
-            let offset = u64_at(&ph, 8)?;
-            let start = u64_at(&ph, 16)?;
-            let size = u64_at(&ph, 32)?;
+            // Elf32_Phdr: type, offset, vaddr, paddr, filesz, memsz, flags;
+            // Elf64_Phdr: type, flags, offset, vaddr, paddr, filesz, memsz.
+            let (offset, start, size, memory_size, flags) = if class32 {
+                (
+                    u64::from(u32_at(&ph, 4)?),
+                    u64::from(u32_at(&ph, 8)?),
+                    u64::from(u32_at(&ph, 16)?),
+                    u64::from(u32_at(&ph, 20)?),
+                    u32_at(&ph, 24)?,
+                )
+            } else {
+                (
+                    u64_at(&ph, 8)?,
+                    u64_at(&ph, 16)?,
+                    u64_at(&ph, 32)?,
+                    u64_at(&ph, 40)?,
+                    u32_at(&ph, 4)?,
+                )
+            };
             offset
                 .checked_add(size)
                 .ok_or_else(|| invalid("segment file extent overflow"))?;
             if kind == 1 {
-                let memory_size = u64_at(&ph, 40)?;
                 start
                     .checked_add(memory_size)
                     .ok_or_else(|| invalid("segment virtual extent overflow"))?;
@@ -237,7 +285,7 @@ impl CoreDump {
                         file_offset: offset,
                         captured_size: size,
                         available_size,
-                        flags: u32_at(&ph, 4)?,
+                        flags,
                     });
                 }
             } else if kind == 4 {
@@ -318,11 +366,29 @@ impl CoreDump {
             self.notes
                 .push(format!("{owner}: type 0x{kind:x}, {desc_size} octets"));
             let desc = &data[desc_offset..end];
+            if owner == "LINUX" && kind == NT_ARM_VFP && self.machine == EM_ARM {
+                self.parse_vfp(desc)?;
+            }
             if owner == "CORE" {
+                let arm = self.machine == EM_ARM;
                 match kind {
                     // elf_prstatus: the registers at 112, then pr_fpvalid and padding
-                    // (336 octets on x86-64, 392 on aarch64).
-                    1 if desc.len() >= 112 + self.register_names().len() * 8 + 8 => {
+                    // (336 octets on x86-64, 392 on aarch64); compat_elf_prstatus
+                    // (148 octets): pid at 24, ppid at 28, the registers at 72.
+                    1 if arm && desc.len() >= 72 + ARM_REG_NAMES.len() * 4 => {
+                        let mut registers = Vec::with_capacity(ARM_REG_NAMES.len());
+                        for (index, name) in ARM_REG_NAMES.iter().enumerate() {
+                            registers
+                                .push(((*name).into(), u64::from(u32_at(desc, 72 + index * 4)?)));
+                        }
+                        self.threads.push(CoreThread {
+                            tid: u32_at(desc, 24)?,
+                            parent_pid: u32_at(desc, 28)?,
+                            signal: u16_at(desc, 12)?,
+                            registers,
+                        });
+                    }
+                    1 if !arm && desc.len() >= 112 + self.register_names().len() * 8 + 8 => {
                         let names = self.register_names();
                         let mut registers = Vec::with_capacity(names.len());
                         for (index, name) in names.iter().enumerate() {
@@ -339,17 +405,22 @@ impl CoreDump {
                         .warnings
                         .push("truncated NT_PRSTATUS; thread registers omitted".into()),
                     6 => {
-                        for entry in desc.as_chunks::<16>().0 {
-                            let key = u64_at(entry, 0)?;
+                        let pair = if arm { 8 } else { 16 };
+                        for entry in desc.chunks_exact(pair) {
+                            let (key, value) = if arm {
+                                (u64::from(u32_at(entry, 0)?), u64::from(u32_at(entry, 4)?))
+                            } else {
+                                (u64_at(entry, 0)?, u64_at(entry, 8)?)
+                            };
                             if key == 0 {
                                 break;
                             }
                             if self.auxv.len() >= ITEM_LIMIT {
                                 return Err(invalid("excessive auxv entries"));
                             }
-                            self.auxv.push((key, u64_at(entry, 8)?));
+                            self.auxv.push((key, value));
                         }
-                        if !desc.len().is_multiple_of(16) {
+                        if !desc.len().is_multiple_of(pair) {
                             self.warnings.push("truncated AUXV pair".into());
                         }
                     }
@@ -361,24 +432,35 @@ impl CoreDump {
                             "signal info: signo={signal} errno={} code={code}",
                             i32_at(desc, 4)?
                         ));
-                        // A 64-bit Linux siginfo's union starts at offset 16. Only
-                        // interpret si_addr for a known signal-specific code.
+                        // A 64-bit Linux siginfo's union starts at offset 16, a compat
+                        // (32-bit) one's at 12. Only interpret si_addr for a known
+                        // signal-specific code.
+                        let union = if arm { 12 } else { 16 };
                         if matches!(signal, 4 | 5 | 7 | 8 | 11)
                             && code > 0
                             && code < 128
-                            && desc.len() >= 24
+                            && desc.len() >= union + if arm { 4 } else { 8 }
                         {
-                            self.notes
-                                .push(format!("fault address: 0x{:016x}", u64_at(desc, 16)?));
-                        } else if matches!(code, 0 | -1 | -6) && desc.len() >= 24 {
+                            self.notes.push(if arm {
+                                format!("fault address: 0x{:08x}", u32_at(desc, union)?)
+                            } else {
+                                format!("fault address: 0x{:016x}", u64_at(desc, union)?)
+                            });
+                        } else if matches!(code, 0 | -1 | -6) && desc.len() >= union + 8 {
                             self.notes.push(format!(
                                 "signal sender PID={} UID={}",
-                                i32_at(desc, 16)?,
-                                u32_at(desc, 20)?
+                                i32_at(desc, union)?,
+                                u32_at(desc, union + 4)?
                             ));
                         }
                     }
-                    3 if desc.len() >= 136 => self.notes.push(format!(
+                    // compat_elf_prpsinfo (124 octets): pr_fname at 28, pr_psargs at 44.
+                    3 if arm && desc.len() >= 124 => self.notes.push(format!(
+                        "process: {}; arguments: {}",
+                        note_text(&desc[28..44]),
+                        note_text(&desc[44..124])
+                    )),
+                    3 if !arm && desc.len() >= 136 => self.notes.push(format!(
                         "process: {}; arguments: {}",
                         note_text(&desc[40..56]),
                         note_text(&desc[56..136])
@@ -390,20 +472,47 @@ impl CoreDump {
         }
         Ok(())
     }
+    /// `NT_ARM_VFP` of the thread the last `NT_PRSTATUS` started: d0-d31 and fpscr.
+    fn parse_vfp(&mut self, desc: &[u8]) -> Result<()> {
+        if desc.len() < ARM_VFP_SIZE {
+            self.warnings.push("truncated NT_ARM_VFP".into());
+            return Ok(());
+        }
+        let Some(thread) = self.threads.last_mut() else {
+            return Ok(());
+        };
+        for index in 0..32 {
+            thread
+                .registers
+                .push((format!("d{index}"), u64_at(desc, index * 8)?));
+        }
+        thread
+            .registers
+            .push(("fpscr".into(), u64::from(u32_at(desc, 256)?)));
+        Ok(())
+    }
     fn parse_files(&mut self, desc: &[u8]) -> Result<()> {
-        let count =
-            usize::try_from(u64_at(desc, 0)?).map_err(|_| invalid("NT_FILE count overflow"))?;
-        let page_size = u64_at(desc, 8)?;
+        // 32-bit cores: u32 count, u32 page size, u32 start/end/page-offset triples.
+        let word = if self.machine == EM_ARM { 4 } else { 8 };
+        let read = |offset: usize| -> Result<u64> {
+            if word == 4 {
+                Ok(u64::from(u32_at(desc, offset)?))
+            } else {
+                u64_at(desc, offset)
+            }
+        };
+        let count = usize::try_from(read(0)?).map_err(|_| invalid("NT_FILE count overflow"))?;
+        let page_size = read(word)?;
         if count > ITEM_LIMIT
             || self.files.len().saturating_add(count) > ITEM_LIMIT
             || page_size == 0
         {
             return Err(invalid("invalid NT_FILE count/page size"));
         }
-        let path_offset = 16usize
+        let path_offset = (2 * word)
             .checked_add(
                 count
-                    .checked_mul(24)
+                    .checked_mul(3 * word)
                     .ok_or_else(|| invalid("NT_FILE overflow"))?,
             )
             .ok_or_else(|| invalid("NT_FILE overflow"))?;
@@ -415,13 +524,13 @@ impl CoreDump {
             .ok_or_else(|| invalid("truncated NT_FILE table"))?
             .split(|byte| *byte == 0);
         for index in 0..count {
-            let offset = 16 + index * 24;
-            let start = u64_at(desc, offset)?;
-            let end = u64_at(desc, offset + 8)?;
+            let offset = 2 * word + index * 3 * word;
+            let start = read(offset)?;
+            let end = read(offset + word)?;
             if end < start {
                 return Err(invalid("reversed NT_FILE extent"));
             }
-            let file_offset = u64_at(desc, offset + 16)?
+            let file_offset = read(offset + 2 * word)?
                 .checked_mul(page_size)
                 .ok_or_else(|| invalid("NT_FILE file offset overflow"))?;
             let path = names
@@ -485,7 +594,9 @@ impl CoreDump {
     }
     /// The names of a thread's registers in the core's `NT_PRSTATUS`.
     fn register_names(&self) -> &'static [&'static str] {
-        if self.machine == EM_AARCH64 {
+        if self.machine == EM_ARM {
+            &ARM_REG_NAMES
+        } else if self.machine == EM_AARCH64 {
             &AARCH64_REG_NAMES
         } else {
             &REG_NAMES
@@ -493,9 +604,12 @@ impl CoreDump {
     }
     /// Decode only a user-selected virtual span, stopping at the first gap.
     pub fn disassemble(&self, address: u64, size: usize) -> Result<String> {
+        if self.machine == EM_ARM {
+            return self.disassemble_arm(address, size);
+        }
         if self.machine != EM_X86_64 {
             return Err(invalid(
-                "this core view disassembles x86-64 process memory only; aarch64 code is shown as bytes",
+                "this core view disassembles x86-64 and 32-bit ARM process memory only; aarch64 code is shown as bytes",
             ));
         }
         let data = self.read_virtual(address, size.min(64 * 1024))?;
@@ -513,6 +627,43 @@ impl CoreDump {
             let mut line = String::new();
             formatter.format(&instruction, &mut line);
             text.push_str(&format!("{:016x}  {line}\n", instruction.ip()));
+        }
+        if available.len() < data.len() {
+            text.push_str("[stopped at missing memory]\n");
+        }
+        Ok(text)
+    }
+}
+impl CoreDump {
+    /// The instruction set the code at `address` is in, and the address without
+    /// the Thumb marker: an odd address (a Thumb symbol or branch target) is
+    /// Thumb; a thread's own program counter follows its CPSR T bit; any other
+    /// address is ARM.
+    pub fn arm_mode_at(&self, address: u64) -> (ArmMode, u64) {
+        if address & 1 != 0 {
+            return (ArmMode::Thumb, address & !1);
+        }
+        let thumb = self.threads.iter().any(|thread| {
+            thread.register("pc") == Some(address)
+                && thread
+                    .register("cpsr")
+                    .is_some_and(|cpsr| cpsr & CPSR_THUMB != 0)
+        });
+        (if thumb { ArmMode::Thumb } else { ArmMode::Arm }, address)
+    }
+    fn disassemble_arm(&self, address: u64, size: usize) -> Result<String> {
+        let (mode, address) = self.arm_mode_at(address);
+        let data = self.read_virtual(address, size.min(64 * 1024))?;
+        let available: Vec<u8> = data.iter().map_while(|byte| *byte).collect();
+        if available.is_empty() {
+            return Err(invalid("no captured memory at selected code address"));
+        }
+        let mut text = format!(
+            "32-bit ARM process memory at 0x{address:x} ({} mode); linear decoding, not verified function boundaries\n",
+            mode.label()
+        );
+        for row in decode_span_arm(address, &available, mode) {
+            text.push_str(&format!("{:016x}  {}\n", row.address, row.text));
         }
         if available.len() < data.len() {
             text.push_str("[stopped at missing memory]\n");
@@ -615,7 +766,11 @@ pub fn list_records(roots: &[PathBuf]) -> Result<Vec<CoreRecord>> {
 
 #[derive(Clone, Debug)]
 pub struct CoreFunction {
+    /// Start address; for a Thumb function the Thumb marker (the symbol's low
+    /// bit) is in `thumb`, not here.
     pub address: u64,
+    /// A 32-bit ARM function in Thumb state (its symbol's low bit was set).
+    pub thumb: bool,
     pub size: u64,
     pub name: String,
 }
@@ -633,11 +788,14 @@ pub fn binary_functions(path: &Path, mapping: &MappedFile) -> Result<Vec<CoreFun
     }
     let object =
         object::File::parse(data.as_slice()).map_err(|error| invalid(error.to_string()))?;
-    if object.architecture() != object::Architecture::X86_64
-        || object.format() != object::BinaryFormat::Elf
+    if !matches!(
+        object.architecture(),
+        object::Architecture::X86_64 | object::Architecture::Arm
+    ) || object.format() != object::BinaryFormat::Elf
     {
-        return Err(invalid("symbol binary must be an x86-64 ELF"));
+        return Err(invalid("symbol binary must be an x86-64 or 32-bit ARM ELF"));
     }
+    let arm = object.architecture() == object::Architecture::Arm;
     let segment = object
         .segments()
         .find(|segment| {
@@ -658,13 +816,19 @@ pub fn binary_functions(path: &Path, mapping: &MappedFile) -> Result<Vec<CoreFun
         if result.len() >= 100_000 {
             return Err(invalid("symbol table exceeds 100,000 function budget"));
         }
-        if let (Ok(name), Ok(address)) = (
-            symbol.name(),
-            u64::try_from(i128::from(symbol.address()) + bias),
-        ) && !name.is_empty()
+        // An ARM function symbol's low bit marks Thumb code.
+        let thumb = arm && symbol.address() & 1 != 0;
+        let raw = if thumb {
+            symbol.address() & !1
+        } else {
+            symbol.address()
+        };
+        if let (Ok(name), Ok(address)) = (symbol.name(), u64::try_from(i128::from(raw) + bias))
+            && !name.is_empty()
         {
             result.push(CoreFunction {
                 address,
+                thumb,
                 size: symbol.size(),
                 name: name.into(),
             });
@@ -675,6 +839,8 @@ pub fn binary_functions(path: &Path, mapping: &MappedFile) -> Result<Vec<CoreFun
     Ok(result)
 }
 
+#[cfg(test)]
+mod arm_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

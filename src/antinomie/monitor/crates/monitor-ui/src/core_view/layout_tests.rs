@@ -25,6 +25,7 @@ fn has(shown: &[(String, egui::Rect)], text: &str) -> bool {
 fn function(name: &str, address: u64, size: u64) -> CoreFunction {
     CoreFunction {
         address,
+        thumb: false,
         size,
         name: name.into(),
     }
@@ -295,4 +296,46 @@ fn the_details_panel_names_what_is_selected_or_asks_for_a_selection() {
     assert!(has(&shown, "Note NT_PRSTATUS"), "{shown:?}");
     assert!(has(&shown, "from Cores · Recovered notes"));
     assert!(has(&shown, "signal 11"));
+}
+
+#[test]
+fn a_32_bit_arm_core_shows_its_registers_eight_digits_wide_with_a_vfp_group() {
+    let ctx = context();
+    let mut fixture = Fixture::new();
+    let record = fixture.view.selected.as_mut().unwrap();
+    record.core.machine = antinomie_monitor_core::core_dump::EM_ARM;
+    record.core.threads[0].registers = [
+        ("r0", 4),
+        ("r11", 0x7efff800),
+        ("sp", 0x7efff000),
+        ("lr", 0x10075),
+        ("pc", 0x10074),
+        ("cpsr", 0x2000_0030),
+        ("d0", 0x3ff8_0000_0000_0000),
+        ("fpscr", 0x0300_0000),
+    ]
+    .map(|(name, value)| (name.to_string(), value))
+    .to_vec();
+    let shown = painted(&mut fixture.view, &ctx, egui::vec2(1280.0, 820.0));
+    for text in [
+        "Instruction pointer & stack",
+        "General",
+        "VFP",
+        "pc",
+        "lr",
+        "cpsr",
+        "r0",
+        "0x00010074",
+        "0x20000030",
+        "0x00000004",
+        "0x3ff8000000000000",
+    ] {
+        assert!(has(&shown, text), "{text}: {shown:?}");
+    }
+    let pc = shown.iter().find(|(text, _)| text == "pc").unwrap().1;
+    let r0 = shown.iter().find(|(text, _)| text == "r0").unwrap().1;
+    assert!(
+        pc.min.x < r0.min.x,
+        "pointers left, general registers right"
+    );
 }

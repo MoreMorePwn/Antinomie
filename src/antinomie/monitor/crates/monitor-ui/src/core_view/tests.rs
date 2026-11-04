@@ -996,6 +996,7 @@ fn long_decompiled_lines_scroll_horizontally_at_large_font() {
     fixture.view.code_function = Some(0);
     fixture.view.functions.push(CoreFunction {
         address: 0x400000,
+        thumb: false,
         size: 16,
         name: "FUN_00400000".into(),
     });
@@ -1209,6 +1210,7 @@ fn mapping_filter_clears_hidden_hexdump_and_preserves_missing_paths() {
     let function = CoreFunction {
         name: "FUN_fffffffffffffffe".into(),
         address: u64::MAX - 1,
+        thumb: false,
         size: 0,
     };
     assert!(crate::query::compile_table(
@@ -1419,6 +1421,7 @@ fn fill_qa_core(fixture: &mut Fixture, decompiled: bool) {
         .enumerate()
         .map(|(index, name)| CoreFunction {
             address: 0x400000 + index as u64 * 0x40,
+            thumb: false,
             size: 0x40,
             name: (*name).into(),
         })
