@@ -803,19 +803,21 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
+def _debian_fetch():
+    """scripts/debian_fetch.py (retries, mirror order), loaded by path as the
+    kit's scripts load each other."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "debian_fetch", Path(__file__).resolve().with_name("debian_fetch.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def fetch(url, target, proxy=""):
-    """Download url to target (written whole or not at all)."""
-    import urllib.request
-    handlers = [urllib.request.ProxyHandler({"http": proxy, "https": proxy})] if proxy else []
-    opener = urllib.request.build_opener(*handlers)
-    partial = target.with_name(target.name + ".part")
-    try:
-        with opener.open(url, timeout=120) as response, partial.open("wb") as output:
-            shutil.copyfileobj(response, output, 1 << 20)
-        os.replace(partial, target)
-    except OSError as error:
-        partial.unlink(missing_ok=True)
-        raise RuntimeError(f"cannot download {url}: {error}") from error
+    """Download url (a dated index file of the snapshot) to target (written whole
+    or not at all), retrying transient failures."""
+    _debian_fetch().fetch(url, target, proxy)
 
 
 def archive_keyring():
@@ -876,29 +878,31 @@ def index_entries(packages, wanted, arch="amd64"):
     return found
 
 
-def debian_kernel_debs(cache, work, proxy="", arch="x86_64"):
+def debian_kernel_debs(cache, work, proxy="", arch="x86_64", mirror=""):
     """Debian's kernel packages (DEBIAN_KERNEL_PACKAGES, or arm64's), from cache
     when a copy there matches its pinned SHA-256, else downloaded into cache (or
     work) through the archive's signed index."""
     return pinned_debs((DEBIAN_KERNEL_ARCHIVE, DEBIAN_KERNEL_SUITE, DEB_ARCHES[arch]),
-                       kernel_packages(arch), cache, work, proxy, "Debian kernel packages")
+                       kernel_packages(arch), cache, work, proxy, "Debian kernel packages", mirror)
 
 
-def debian_kernel_symvers_deb(cache, work, proxy="", arch="x86_64"):
+def debian_kernel_symvers_deb(cache, work, proxy="", arch="x86_64", mirror=""):
     """The package with Debian's Module.symvers for the ABI check, where the
     kernel package has no table map (arm64); None where it has (x86-64)."""
     if arch == "x86_64":
         return None
     return pinned_debs((DEBIAN_KERNEL_ARCHIVE, DEBIAN_KERNEL_SUITE, DEB_ARCHES[arch]),
                        DEBIAN_KERNEL_SYMVERS_ARM64, cache, work, proxy,
-                       "Debian kernel headers")[0]
+                       "Debian kernel headers", mirror)[0]
 
 
-def pinned_debs(source, packages, cache, work, proxy="", what="Debian packages"):
+def pinned_debs(source, packages, cache, work, proxy="", what="Debian packages", mirror=""):
     """Pinned Debian packages, from cache when a copy there matches its
     SHA-256, else downloaded into cache (or work) through the signed index of
     source = (archive URL, suite, architecture). packages: (name, version,
-    SHA-256) triples. Returns their paths in that order."""
+    SHA-256) triples. Returns their paths in that order. The index comes from
+    the pinned snapshot; each file from the mirror (if given), deb.debian.org,
+    then the snapshot, whichever has the file the index names (debian_fetch.py)."""
     archive, suite, arch = source
     directory = cache or work
     directory.mkdir(parents=True, exist_ok=True)
@@ -911,7 +915,8 @@ def pinned_debs(source, packages, cache, work, proxy="", what="Debian packages")
     index.mkdir(parents=True, exist_ok=True)
     try:
         entries = signed_index_entries(index, proxy, source,
-                                       {(name, version) for name, version, _ in packages})
+                                       {(name, version) for name, version, _ in packages},
+                                       mirror)
         for path, (name, version, sha) in zip(debs, packages):
             filename, size, indexed = entries[(name, version)]
             if indexed != sha:
@@ -920,16 +925,13 @@ def pinned_debs(source, packages, cache, work, proxy="", what="Debian packages")
             if path.is_file() and sha256_file(path) == sha:
                 continue
             print(f"downloading {name} {version} ({size >> 20} MiB)", flush=True)
-            fetch(f"{archive}/{filename}", path, proxy)
-            if path.stat().st_size != size or sha256_file(path) != sha:
-                path.unlink()
-                raise RuntimeError(f"{path.name} does not match the Debian archive's index")
+            _debian_fetch().fetch_pool(archive, filename, path, sha, size, mirror, proxy)
     finally:
         shutil.rmtree(index)
     return debs
 
 
-def signed_index_entries(index, proxy="", source=None, wanted=None):
+def signed_index_entries(index, proxy="", source=None, wanted=None, mirror=""):
     """The wanted (package, version) pairs' index entries, from the Packages
     index of source = (archive URL, suite, architecture) whose hash its signed
     InRelease lists (both downloaded into index). Default: the kernel
@@ -944,9 +946,13 @@ def signed_index_entries(index, proxy="", source=None, wanted=None):
     release = verified_release(index / "InRelease", index)
     expected, size = release_hash(release, listing)
     listed = index / "Packages.xz"
-    fetch(f"{dists}/{listing}", listed, proxy)
-    if sha256_file(listed) != expected or listed.stat().st_size != size:
-        raise RuntimeError(f"{listing} does not match the signed Release")
+    # Only InRelease is fetched from the snapshot alone: the Packages index is
+    # named by its hash there, so a mirror's by-hash copy serves as well.
+    try:
+        _debian_fetch().fetch_index(archive, f"dists/{suite}/{listing}", listed, expected, size,
+                                    mirror, proxy)
+    except RuntimeError as error:
+        raise RuntimeError(f"{error} ({listing} must match the signed Release)") from error
     return index_entries(lzma.decompress(listed.read_bytes()).decode(), wanted, arch)
 
 
@@ -1709,14 +1715,15 @@ def build(kernel, output, kernel_config=None, modules=None, allow_unversioned=Fa
         packages_dir = staging / "kernel-packages"
         packages_dir.mkdir()
         packages_dir.chmod(0o755)
-        debs = debian_kernel_debs(kernel_package_cache, packages_dir, values["proxy"], arch)
+        debs = debian_kernel_debs(kernel_package_cache, packages_dir, values["proxy"], arch,
+                                 values["mirror"])
         stock_config(kernel_config, debs[0], arch)
         initrd_modules = root_modules(debs[0], arch)
         debian_kernel = {"hashes": [sha for _, _, sha in kernel_packages(arch)], "debs": debs}
         # The initrd's programs: Debian's pinned packages of the guest's
         # architecture, whatever the host runs.
         userland = monitor_helpers().debian_userland(kernel_package_cache, packages_dir,
-                                                     values["proxy"], arch)
+                                                     values["proxy"], arch, values["mirror"])
         try:
             with log_path.open("w") as log:
                 root = root_image(values, raw, staging, provenance, log, rootfs_cache,

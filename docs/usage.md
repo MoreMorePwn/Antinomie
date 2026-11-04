@@ -327,6 +327,19 @@ container image and the toolchain chroot have it) and takes its programs from
 Debian's pinned arm64 packages, so no arm64 program runs on the build host.
 A run's details name the guest's architecture.
 
+**Downloads during a build.** The Debian bases pin the archive to one
+snapshot.debian.org date and check every package against the SHA-256 in that
+snapshot's signed index. snapshot.debian.org is often slow, so each package
+file is tried at the Debian mirror you chose (the build wizard's mirror; a
+mirror near you from debian.org/mirror/list), then deb.debian.org, then
+snapshot at the pinned date; a 404 or a file that is not the pinned one just
+moves on, because no mirror is trusted. The dated index files (InRelease,
+Packages.xz) come from snapshot only. A failing source is retried up to five
+times (5, 15, 45 and 120 s waits, resuming a partial file where the server
+allows), and the build log has a line for every retry and fallback; the build
+fails only when every source has failed, naming them. A kernel that built is
+kept in the cache even if a later stage fails.
+
 **Debian 13 arm64 Minimal.** Its bootstrap runs arm64 maintainer scripts, so
 it needs a CPU emulator for them and is never built natively on an x86-64
 host. It builds in the container builder when the host has an enabled

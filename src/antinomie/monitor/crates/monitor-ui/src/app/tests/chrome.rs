@@ -538,3 +538,55 @@ fn texts_with_color(output: &egui::FullOutput) -> Vec<(String, egui::Color32)> {
         .for_each(|clipped| walk(&clipped.shape, &mut found));
     found
 }
+
+#[test]
+fn the_toolbar_sidebar_button_folds_and_opens_the_sidebar_from_one_place() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let size = egui::vec2(1280.0, 820.0);
+    let mut app = app();
+    observer_fixture(&mut app);
+    let icon = egui_phosphor::regular::SIDEBAR_SIMPLE;
+    let place = |app: &mut MonitorApp| {
+        for _ in 0..3 {
+            render(app, &ctx, size);
+        }
+        let output = render(app, &ctx, size);
+        let shown = texts(&output);
+        let run = shown
+            .iter()
+            .find(|(text, _)| text.ends_with("Run program"))
+            .expect("Run program on the toolbar")
+            .1;
+        let button = shown
+            .iter()
+            .find(|(text, _)| text == icon)
+            .unwrap_or_else(|| panic!("no sidebar button: {shown:?}"))
+            .1;
+        // On the toolbar row, left of every tool button.
+        assert!(
+            (button.center().y - run.center().y).abs() < 6.0,
+            "{button:?}"
+        );
+        let first_tool = shown
+            .iter()
+            .filter(|(text, rect)| {
+                (rect.center().y - run.center().y).abs() < 6.0 && text.chars().count() > 1
+            })
+            .map(|(_, rect)| rect.left())
+            .fold(f32::INFINITY, f32::min);
+        assert!(button.right() < first_tool, "{button:?} {first_tool}");
+        button
+    };
+    assert!(!app.settings.sidebar_rail);
+    let open = place(&mut app);
+    click_label(&mut app, &ctx, size, icon);
+    assert!(app.settings.sidebar_rail, "the button folds the sidebar");
+    let folded = place(&mut app);
+    assert!(
+        (open.center() - folded.center()).length() < 1.0,
+        "{open:?} {folded:?}"
+    );
+    click_label(&mut app, &ctx, size, icon);
+    assert!(!app.settings.sidebar_rail, "the same button opens it again");
+}

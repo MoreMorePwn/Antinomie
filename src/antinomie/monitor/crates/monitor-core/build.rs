@@ -11,6 +11,7 @@ const KIT_FILES: &[&str] = &[
     "LICENSES/GPL-2.0-only.txt",
     "scripts/build-base.py",
     "scripts/toolchain_chroot.py",
+    "scripts/debian_fetch.py",
     "scripts/build-monitor-kernel.sh",
     "scripts/build-monitor-image.py",
     "scripts/build-debian-image.py",

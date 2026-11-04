@@ -2,7 +2,7 @@
 //! The sidebar folded to a narrow rail of icons: Virtual machines (with the
 //! state dot of the running or selected VM), Base images, Detection rules,
 //! Analysis tools, Samples and Explorer. Ctrl+B, View > Sidebar, the palette
-//! and the chevron at the top of either form switch between them.
+//! and the sidebar button at the left end of the toolbar switch between them.
 use super::*;
 use crate::workspace::LibraryPage;
 
@@ -52,22 +52,27 @@ impl MonitorApp {
         self.settings.sidebar_rail = !self.settings.sidebar_rail;
     }
 
-    /// The chevron at the right end of the first section header of the
-    /// open sidebar: no row of its own, so a short window keeps Explorer.
-    pub(super) fn sidebar_fold_button(&mut self, ui: &mut egui::Ui) {
-        let fold = ui
+    /// The sidebar button at the left end of the toolbar: the same place
+    /// folds the sidebar to its rail and opens it again.
+    pub(super) fn sidebar_toggle_button(&mut self, ui: &mut egui::Ui) {
+        let tooltip = if self.settings.sidebar_rail {
+            "Show the sidebar"
+        } else {
+            "Fold the sidebar to icons"
+        };
+        let clicked = ui
             .add(
                 egui::Button::new(
-                    RichText::new(egui_phosphor::regular::CARET_DOUBLE_LEFT).color(theme::muted()),
+                    RichText::new(egui_phosphor::regular::SIDEBAR_SIMPLE).color(theme::muted()),
                 )
                 .frame(false),
             )
             .on_hover_text(format!(
-                "Fold the sidebar to icons ({})",
+                "{tooltip} ({})",
                 ui.ctx().format_shortcut(&keys::TOGGLE_SIDEBAR)
             ))
             .clicked();
-        if fold {
+        if clicked {
             self.toggle_sidebar();
         }
     }
@@ -88,20 +93,6 @@ impl MonitorApp {
             )
             .show(root, |ui| {
                 ui.spacing_mut().item_spacing.y = 4.0;
-                if rail_button(
-                    ui,
-                    egui_phosphor::regular::CARET_DOUBLE_RIGHT,
-                    &format!(
-                        "Show the sidebar ({})",
-                        ui.ctx().format_shortcut(&keys::TOGGLE_SIDEBAR)
-                    ),
-                    None,
-                )
-                .clicked()
-                {
-                    unfold = true;
-                }
-                ui.separator();
                 let active = self
                     .snapshot
                     .vms
