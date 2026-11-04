@@ -1,0 +1,374 @@
+From c3eb27cfda9dbfd850fb4bbb0a3b8084e7008b4c Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Thu, 5 Nov 2026 02:02:57 +0700
+Subject: [PATCH] antinomie: capture the compat stat, statfs, itimer, waitid
+ and message structures
+
+Compat programs (ia32 on x86-64, AArch32 on arm64) still recorded the
+structures of their stat and socket message calls by address only.
+compat_rules[] in kernel/antinomie/recorder.c now also records, at exit,
+the compat struct stat64 of stat64, lstat64, fstat64 and fstatat64 (x86's
+asm/ia32.h, arm64's asm/stat.h), compat_stat of stat, lstat and fstat,
+compat_statfs of statfs and fstatfs, compat_statfs64 of statfs64 and
+fstatfs64, the itimervals of getitimer and setitimer (the new one at
+entry), and waitid's compat_siginfo and rusage; the paths of these calls
+are recorded as strings as before.
+
+sendmsg and recvmsg, made directly or through ia32's socketcall, record the
+compat_msghdr and its iovec array at entry and keep both until the exit, as
+the call reads them once; a send's buffers, name and control data are
+recorded at entry, a receive's at exit with the header the call wrote back,
+under the native calls' keys. sendmmsg, recvmmsg and recvmmsg_time64 do the
+same for each of the first 1024 messages (arg1.mmsg.N), with the headers'
+lengths at exit and a receive's timeout (old_timespec32, or
+__kernel_timespec for recvmmsg_time64) at entry and exit.
+
+Contract revision 21.
+---
+ kernel/antinomie/recorder.c | 284 +++++++++++++++++++++++++++++++++++-
+ 1 file changed, 280 insertions(+), 4 deletions(-)
+
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 9ef0a57f1..251c383c4 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -33,6 +33,12 @@
+ #include <asm/antinomie_syscalls.h>
+ #ifdef ANT_ABI_COMPAT
+ #include <linux/prctl.h>
++#include <linux/time32.h>
++#include <net/compat.h>
++#include <asm/statfs.h>
++#ifdef CONFIG_X86_64
++#include <asm/ia32.h>
++#endif
+ #include <asm/antinomie_compat_syscalls.h>
+ #include ANT_COMPAT_UNISTD
+ #ifdef ANT_ARCH_COMPAT_SOCKETCALL
+@@ -1075,6 +1081,42 @@ static const struct ant_compat_rule compat_rules[] = {
+ 	COMPAT_RULE(getrusage, 1, CR_OUT, CX_FIXED, 0, sizeof(struct compat_rusage),
+ 		    "arg1.rusage", "rusage"),
+ 	COMPAT_RULE(times, 0, CR_OUT, CX_FIXED, 0, sizeof(struct compat_tms), "arg0.times", "tms"),
++	/* The stat family: struct stat64 is the compat record (x86's asm/ia32.h,
++	 * arm64's asm/stat.h), compat_stat the old one; their paths are recorded
++	 * as strings too.
++	 */
++	COMPAT_RULE(stat64, 1, CR_OUT, CX_FIXED, 0, sizeof(struct stat64), "arg1.statbuf",
++		    "stat64"),
++	COMPAT_RULE(lstat64, 1, CR_OUT, CX_FIXED, 0, sizeof(struct stat64), "arg1.statbuf",
++		    "stat64"),
++	COMPAT_RULE(fstat64, 1, CR_OUT, CX_FIXED, 0, sizeof(struct stat64), "arg1.statbuf",
++		    "stat64"),
++	COMPAT_RULE(fstatat64, 2, CR_OUT, CX_FIXED, 0, sizeof(struct stat64), "arg2.statbuf",
++		    "stat64"),
++	COMPAT_RULE(stat, 1, CR_OUT, CX_FIXED, 0, sizeof(struct compat_stat), "arg1.statbuf",
++		    "stat"),
++	COMPAT_RULE(lstat, 1, CR_OUT, CX_FIXED, 0, sizeof(struct compat_stat), "arg1.statbuf",
++		    "stat"),
++	COMPAT_RULE(fstat, 1, CR_OUT, CX_FIXED, 0, sizeof(struct compat_stat), "arg1.statbuf",
++		    "stat"),
++	COMPAT_RULE(statfs, 1, CR_OUT, CX_FIXED, 0, sizeof(struct compat_statfs), "arg1.buf",
++		    "statfs"),
++	COMPAT_RULE(fstatfs, 1, CR_OUT, CX_FIXED, 0, sizeof(struct compat_statfs), "arg1.buf",
++		    "statfs"),
++	COMPAT_RULE(statfs64, 2, CR_OUT, CX_FIXED, 0, sizeof(struct compat_statfs64), "arg2.buf",
++		    "statfs64"),
++	COMPAT_RULE(fstatfs64, 2, CR_OUT, CX_FIXED, 0, sizeof(struct compat_statfs64),
++		    "arg2.buf", "statfs64"),
++	COMPAT_RULE(getitimer, 1, CR_OUT, CX_FIXED, 0, 2 * sizeof(struct old_timeval32),
++		    "arg1.value", "itimerval"),
++	COMPAT_RULE(setitimer, 1, CR_IN, CX_FIXED, 0, 2 * sizeof(struct old_timeval32),
++		    "arg1.value", "itimerval"),
++	COMPAT_RULE(setitimer, 2, CR_OUT, CX_FIXED, 0, 2 * sizeof(struct old_timeval32),
++		    "arg2.ovalue", "itimerval"),
++	COMPAT_RULE(waitid, 2, CR_OUT, CX_FIXED, 0, sizeof(struct compat_siginfo), "arg2.infop",
++		    "siginfo_t"),
++	COMPAT_RULE(waitid, 4, CR_OUT, CX_FIXED, 0, sizeof(struct compat_rusage), "arg4.ru",
++		    "rusage"),
+ };
+ 
+ /* A compat iovec array (readv, writev, preadv, pwritev): the array, and the
+@@ -1111,6 +1153,228 @@ static void compat_vector(struct ant_task *ctx, bool output, long result)
+ 	}
+ }
+ 
++/* A compat message (sendmsg, recvmsg, one of sendmmsg's or recvmmsg's): its
++ * compat_msghdr and the iovec array the call reads once at entry, kept until
++ * the exit (iov_saved is false when the array was not saved).
++ */
++struct ant_compat_message {
++	struct compat_msghdr entry;
++	u32 iov_count;
++	bool iov_saved;
++	struct compat_iovec iov[];
++};
++
++struct ant_compat_mmsg {
++	u32 capacity, saved_count;
++	struct ant_compat_message *messages[];
++};
++
++static void compat_message_release(void *owned)
++{
++	kfree(owned);
++}
++
++static void compat_mmsg_release(void *owned)
++{
++	struct ant_compat_mmsg *state = owned;
++	u32 i;
++
++	for (i = 0; i < state->saved_count; i++)
++		kfree(state->messages[i]);
++	kfree(state);
++}
++
++/* A message header read at entry and its iovec array (key PREFIX.iov): the
++ * saved message, or NULL when it could not be allocated.
++ */
++static struct ant_compat_message *compat_message_save(struct ant_task *ctx,
++						      const struct compat_msghdr *entry,
++						      const char *prefix)
++{
++	struct ant_compat_message *message;
++	enum ant_status status = ANT_COMPLETE;
++	u64 count = entry->msg_iovlen, size;
++	char key[64];
++	u32 i;
++
++	size = count <= UIO_MAXIOV ? count * sizeof(struct compat_iovec) : U64_MAX;
++	scnprintf(key, sizeof(key), "%s.iov", prefix);
++	message = kzalloc(struct_size(message, iov, count <= UIO_MAXIOV ? count : 0), GFP_NOWAIT);
++	if (!message) {
++		field(ctx, 1, key, ANT_COMPAT_LAYOUT("iovec[]"), 3, entry->msg_iov, NULL,
++		      size, size, ANT_RESOURCE_EXHAUSTED);
++		return NULL;
++	}
++	message->entry = *entry;
++	if (count > UIO_MAXIOV)
++		status = ANT_INVALID_EXTENT;
++	else if (count && copy_from_user_nofault(message->iov, compat_ptr(entry->msg_iov), size))
++		status = entry->msg_iov ? ANT_COPY_FAULT : ANT_NULL_POINTER;
++	for (i = 0; status == ANT_COMPLETE && i < count; i++)
++		if ((compat_ssize_t)message->iov[i].iov_len < 0)
++			status = ANT_INVALID_EXTENT;
++	field(ctx, 1, key, ANT_COMPAT_LAYOUT("iovec[]"), 3, entry->msg_iov,
++	      status == ANT_COMPLETE ? message->iov : NULL, size, size, status);
++	message->iov_saved = status == ANT_COMPLETE;
++	message->iov_count = message->iov_saved ? count : 0;
++	return message;
++}
++
++/* A message's buffers, name and control data: at entry (sends) or at exit by
++ * the header the call wrote back (observed) and the bytes it moved.
++ */
++static void compat_message_payload(struct ant_task *ctx,
++				   const struct ant_compat_message *message, const char *prefix,
++				   const struct compat_msghdr *observed, u64 moved, bool output)
++{
++	const struct compat_msghdr *entry = &message->entry;
++	u64 remaining = output ? min_t(u64, moved, MAX_RW_COUNT) : MAX_RW_COUNT, size;
++	char key[80];
++	u32 i;
++
++	if (!message->iov_saved && output) {
++		scnprintf(key, sizeof(key), "%s.iov.output", prefix);
++		field(ctx, 1, key, "", 1, entry->msg_iov, NULL, U64_MAX, U64_MAX,
++		      ANT_CONTEXT_MISSING);
++	}
++	for (i = 0; i < message->iov_count && !ctx->failed_count; i++) {
++		size = min_t(u64, message->iov[i].iov_len, remaining);
++		scnprintf(key, sizeof(key), "%s.iov[%u].data", prefix, i);
++		field(ctx, 1, key, "", 1, message->iov[i].iov_base, NULL, size,
++		      message->iov[i].iov_len, ANT_COMPLETE);
++		remaining -= size;
++	}
++	if (ctx->failed_count || (output && !observed))
++		return;
++	if (entry->msg_name) {
++		size = entry->msg_namelen < 0 || (output && observed->msg_namelen < 0) ? U64_MAX :
++			min_t(u64, sizeof(struct sockaddr_storage),
++			      output ? min(entry->msg_namelen, observed->msg_namelen) :
++			      entry->msg_namelen);
++		scnprintf(key, sizeof(key), "%s.name", prefix);
++		field(ctx, 1, key, ANT_COMPAT_LAYOUT("sockaddr"), 3, entry->msg_name, NULL, size,
++		      (u64)(s64)entry->msg_namelen,
++		      size == U64_MAX ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++	}
++	if (entry->msg_control && !ctx->failed_count) {
++		size = output ? min(entry->msg_controllen, observed->msg_controllen) :
++			entry->msg_controllen;
++		scnprintf(key, sizeof(key), "%s.control", prefix);
++		field(ctx, 1, key, ANT_COMPAT_LAYOUT("cmsghdr[]"), 3, entry->msg_control, NULL,
++		      size, entry->msg_controllen,
++		      !output && size > INT_MAX ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++	}
++}
++
++/* sendmsg and recvmsg: the header and iovec array at entry, a send's
++ * buffers, name and control data at entry, a receive's at exit.
++ */
++static void compat_msg(struct ant_task *ctx, bool output, long result, bool send)
++{
++	struct ant_compat_message *message;
++	struct compat_msghdr header;
++	enum ant_status status;
++
++	if (output && (send || result < 0))
++		return;
++	status = copy_from_user_nofault(&header, compat_ptr(ctx->args[1]), sizeof(header)) ?
++		ANT_COPY_FAULT : ANT_COMPLETE;
++	if (!output) {
++		field(ctx, 1, "arg1.msghdr", ANT_COMPAT_LAYOUT("msghdr"), 3, ctx->args[1], &header,
++		      sizeof(header), sizeof(header), status);
++		if (status != ANT_COMPLETE || ctx->failed_count)
++			return;
++		message = compat_message_save(ctx, &header, "arg1.msghdr");
++		ant_capture_set_state(ctx, message, compat_message_release);
++		if (message && send && !ctx->failed_count)
++			compat_message_payload(ctx, message, "arg1.msghdr", NULL, 0, false);
++		return;
++	}
++	message = ant_capture_state(ctx);
++	if (!message) {
++		field(ctx, 1, "arg1.msghdr.output", "", 1, ctx->args[1], NULL, U64_MAX, U64_MAX,
++		      ANT_CONTEXT_MISSING);
++		return;
++	}
++	field(ctx, 1, "arg1.msghdr.output", ANT_COMPAT_LAYOUT("msghdr"), 3, ctx->args[1], &header,
++	      sizeof(header), sizeof(header), status);
++	if (!ctx->failed_count)
++		compat_message_payload(ctx, message, "arg1.msghdr",
++				       status == ANT_COMPLETE ? &header : NULL, result, true);
++}
++
++/* sendmmsg, recvmmsg and recvmmsg_time64: each message's header (arg1.mmsg.N)
++ * and payload as for compat_msg, the headers with their lengths at exit, and
++ * a receive's timeout (old_timespec32, or __kernel_timespec for _time64).
++ */
++static void compat_mmsg(struct ant_task *ctx, bool output, long result, bool send)
++{
++	u32 capacity = min_t(u64, ctx->args[2], UIO_MAXIOV), index, count;
++	struct ant_compat_message *message;
++	struct ant_compat_mmsg *state;
++	struct compat_mmsghdr header;
++	enum ant_status status;
++	u64 address, header_size, timeout_size;
++	char prefix[48], key[64];
++
++	timeout_size = ctx->wire_nr == ANT_COMPAT_NR(recvmmsg_time64) ?
++		sizeof(struct __kernel_timespec) : sizeof(struct old_timespec32);
++	if (!output) {
++		state = kzalloc(struct_size(state, messages, capacity), GFP_NOWAIT);
++		if (!state) {
++			field(ctx, 1, "arg1.mmsg.context", ANT_COMPAT_LAYOUT("mmsghdr[]"), 3,
++			      ctx->args[1], NULL, (u64)capacity * sizeof(header),
++			      (u64)capacity * sizeof(header), ANT_RESOURCE_EXHAUSTED);
++			goto timeout;
++		}
++		state->capacity = capacity;
++		ant_capture_set_state(ctx, state, compat_mmsg_release);
++		count = capacity;
++	} else {
++		if (result <= 0)
++			return;
++		state = ant_capture_state(ctx);
++		if (!state) {
++			field(ctx, 1, "arg1.mmsg.output", ANT_COMPAT_LAYOUT("mmsghdr[]"), 3,
++			      ctx->args[1], NULL, min_t(u64, result, capacity) * sizeof(header),
++			      (u64)capacity * sizeof(header), ANT_CONTEXT_MISSING);
++			goto timeout;
++		}
++		count = min_t(u64, result, state->capacity);
++	}
++	for (index = 0; index < count && !ctx->failed_count; index++) {
++		scnprintf(prefix, sizeof(prefix), "arg1.mmsg.%u", index);
++		scnprintf(key, sizeof(key), "%s.header", prefix);
++		address = ctx->args[1] + (u64)index * sizeof(header);
++		header_size = output ? sizeof(header) : sizeof(header.msg_hdr);
++		status = copy_from_user_nofault(&header, compat_ptr(address), header_size) ?
++			ANT_COPY_FAULT : ANT_COMPLETE;
++		field(ctx, 1, key,
++		      output ? ANT_COMPAT_LAYOUT("mmsghdr") : ANT_COMPAT_LAYOUT("msghdr"), 3,
++		      address, &header, header_size, header_size, status);
++		if (status != ANT_COMPLETE || ctx->failed_count)
++			break;
++		if (!output) {
++			message = compat_message_save(ctx, &header.msg_hdr, prefix);
++			if (!message)
++				break;
++			state->messages[index] = message;
++			state->saved_count = index + 1;
++			if (send && !ctx->failed_count)
++				compat_message_payload(ctx, message, prefix, NULL, 0, false);
++		} else if (!send && index < state->saved_count) {
++			compat_message_payload(ctx, state->messages[index], prefix, &header.msg_hdr,
++					       header.msg_len, true);
++		}
++	}
++timeout:
++	if (!send && ctx->args[4] && !ctx->failed_count)
++		field(ctx, 4, output ? "arg4.timeout.observed" : "arg4.timeout",
++		      timeout_size == sizeof(struct old_timespec32) ?
++		      ANT_COMPAT_LAYOUT("old_timespec") : ANT_COMPAT_LAYOUT("timespec"), 3,
++		      ctx->args[4], NULL, timeout_size, timeout_size, ANT_COMPLETE);
++}
++
+ /* The compat structures of a call by compat_rules; true when the call has any. */
+ static bool compat_rules_capture(struct ant_task *ctx, bool output, long result)
+ {
+@@ -1124,6 +1388,15 @@ static bool compat_rules_capture(struct ant_task *ctx, bool output, long result)
+ 		compat_vector(ctx, output, result);
+ 		return true;
+ 	}
++	if (ctx->wire_nr == ANT_COMPAT_NR(sendmsg) || ctx->wire_nr == ANT_COMPAT_NR(recvmsg)) {
++		compat_msg(ctx, output, result, ctx->wire_nr == ANT_COMPAT_NR(sendmsg));
++		return true;
++	}
++	if (ctx->wire_nr == ANT_COMPAT_NR(sendmmsg) || ctx->wire_nr == ANT_COMPAT_NR(recvmmsg) ||
++	    ctx->wire_nr == ANT_COMPAT_NR(recvmmsg_time64)) {
++		compat_mmsg(ctx, output, result, ctx->wire_nr == ANT_COMPAT_NR(sendmmsg));
++		return true;
++	}
+ 	for (i = 0; i < ARRAY_SIZE(compat_rules) && !ctx->failed_count; i++) {
+ 		rule = &compat_rules[i];
+ 		if (rule->nr != ctx->wire_nr)
+@@ -1165,12 +1438,14 @@ static void compat_capture_exit(struct ant_task *ctx, long result)
+ 	compat_rules_capture(ctx, true, result);
+ }
+ 
+-/* A compat call no native call captures: its path strings, and its other
+- * pointers by address only.
++/* A compat call no native call captures: its path strings, the structures
++ * compat_rules and the message and vector helpers name, and its other pointers
++ * by address only.
+  */
+ static void compat_capture_entry(struct ant_task *ctx)
+ {
+ 	const struct ant_native_syscall *schema;
++	bool captured;
+ 	char key[96];
+ 	int i;
+ 
+@@ -1180,8 +1455,7 @@ static void compat_capture_entry(struct ant_task *ctx)
+ 		return;
+ 	}
+ 	schema = &ant_compat_syscalls[ctx->wire_nr];
+-	if (compat_rules_capture(ctx, false, 0))
+-		return;
++	captured = compat_rules_capture(ctx, false, 0);
+ 	for (i = 0; i < ctx->arg_count && !ctx->failed_count; i++) {
+ 		if (!(schema->pointer_mask & BIT(i)))
+ 			continue;
+@@ -1190,6 +1464,8 @@ static void compat_capture_entry(struct ant_task *ctx)
+ 			user_string(ctx, i, key, ctx->args[i], PATH_MAX);
+ 			continue;
+ 		}
++		if (captured)
++			continue;
+ 		scnprintf(key, sizeof(key), "arg%d.%s", i,
+ 			  schema->argument_names[i] ?: "pointer");
+ 		field(ctx, i, key, "", 1, ctx->args[i], NULL, U64_MAX, U64_MAX,
+-- 
+2.53.0
+

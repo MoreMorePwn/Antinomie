@@ -155,6 +155,10 @@ TYPES = {
     "uffd_msg": ("struct uffd_msg", "linux/userfaultfd.h"),
     # The 32-bit time of the compat ABIs' *_time32 calls (old_timespec32).
     "old_timespec": ("struct __kernel_old_timespec", "linux/time_types.h"),
+    # The compat ABIs' stat64 family and statfs64 (i386 and arm UAPI records;
+    # 64-bit UAPIs have no struct stat64, so their inventories list it unsupported).
+    "stat64": ("struct stat64", "asm/stat.h"),
+    "statfs64": ("struct statfs64", "asm/statfs.h"),
 }
 SCALARS = {
     "int": ("int", True), "wait_status": ("int", True), "timer_t": ("int", True),

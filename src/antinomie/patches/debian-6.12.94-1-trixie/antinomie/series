@@ -86,3 +86,4 @@
 0047-antinomie-debug-aarch32-programs-on-arm64-and-refuse-launches-the-engine-cannot-debug.patch
 0048-antinomie-capture-ioctl-arguments-by-their-size-name-more-of-them-and-type-reads-of-event-descriptors.patch
 0049-antinomie-capture-the-compat-structures-of-common-compat-calls.patch
+0050-antinomie-capture-the-compat-stat-statfs-itimer-waitid-and-message-structures.patch

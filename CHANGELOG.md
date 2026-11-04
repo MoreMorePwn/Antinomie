@@ -149,6 +149,11 @@ x86 programs by their own table.
   epoll_ctl's event is recorded for any operation; the common compat calls'
   structures (iovecs, pollfds, descriptor sets, 32-bit times, dirents,
   rt_sigaction, wait4 and rusage) are captured by their ILP32 layouts.
+- Patch 50 (contract revision 21): compat programs' stat64, lstat64, fstat64,
+  fstatat64, stat, lstat, fstat, statfs, fstatfs, statfs64, fstatfs64,
+  getitimer, setitimer and waitid have their structures captured by their
+  ILP32 layouts, and sendmsg, recvmsg, sendmmsg, recvmmsg and recvmmsg_time64
+  their message headers, iovec arrays, buffers, names and control data.
 - Patches 46 and 47 (contract revision 21): AArch32 programs on arm64 guests
   get ELF32 process cores (`fs/compat_binfmt_elf.c`'s format, core flag
   COMPAT_ELF32) and are debugged by the guest's engine (compat registers, A32

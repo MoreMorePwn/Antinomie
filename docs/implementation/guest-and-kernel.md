@@ -1092,8 +1092,27 @@ compat table's layouts).
   clock_settime (`old_timespec`), gettimeofday (`timeval`, `timezone`),
   getdents (`linux_dirent[]`), rt_sigaction (`compat_sigaction`), wait4
   (`wait_status`, `rusage`), getrusage and times; their layout names carry the
-  compat prefix (`linux-6.12.94/x86/`, `/arm/`). Not yet: the stat64 family,
-  sendmsg/recvmsg and the other calls of the audit's list.
+  compat prefix (`linux-6.12.94/x86/`, `/arm/`).
+* **Compat stat and message calls (patch 50, B4).** The same table records
+  the stat64 family (stat64, lstat64, fstat64, fstatat64: `stat64`, 96 bytes on
+  ia32, 104 on AArch32), the old stat calls (`stat`, compat_stat), statfs and
+  fstatfs (`statfs`), statfs64 and fstatfs64 (`statfs64`, 84 bytes),
+  getitimer and setitimer (`itimerval`) and waitid (`siginfo_t`, `rusage`) at
+  exit, their paths as strings at entry. sendmsg and recvmsg (directly or
+  through ia32's socketcall) record the compat `msghdr` and its `iovec[]` at
+  entry, which the call reads once, and keep both until the exit; a send's
+  buffers, name (`sockaddr`) and control data (compat `cmsghdr[]`) are
+  recorded at entry, a receive's at exit (`arg1.msghdr.output`, the buffers up
+  to the result, the name and control data up to what the call wrote back),
+  under the native calls' keys. sendmmsg, recvmmsg and recvmmsg_time64 do the
+  same per message (`arg1.mmsg.N.header` as `msghdr` at entry and `mmsghdr` at
+  exit, `arg1.mmsg.N.iov`, `.iov[K].data`, `.name`, `.control`; the first
+  1024 messages), and a receive's timeout at entry and exit (`old_timespec`,
+  `timespec` for _time64). Still recorded by address only: futex's utime,
+  epoll_wait on arm, the SysV ctl calls and the rest of the audit's list.
+  `tests/monitor/compat-calls-fixture.c` (i686 and armhf builds) makes every
+  call of patches 49 and 50; `tests/monitor/compat-calls-check.py` checks its
+  recording (`event-dump` output).
 * **epoll_ctl (patch 48, B7).** The event is recorded for an operation the
   kernel refuses too.
 

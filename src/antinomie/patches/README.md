@@ -79,6 +79,7 @@ changes. Line counts are added/removed lines of the patch.
 | 47 | debug AArch32 programs on arm64, and refuse launches the engine cannot debug (contract revision 21) | +177 -24 | none (`debug_arm64.c`: compat regsets, A32/T16 breakpoints, compat SVC step class, CAP_AARCH32; `debug.c`: per-breakpoint instruction set, refused sessions; `debug_x86.c`, `debug.h`) | `arch/arm64/kernel/debug-monitors.c` (`try_handle_aarch32_break()`), `include/linux/antinomie_monitor.h` |
 | 48 | capture ioctl arguments by their size, name more of them, and type reads of event descriptors (contract revision 21) | +156 -9 | none (`recorder.c`: `_IOC_SIZE` fallback, ifreq/ifconf/loop/fsxattr/file_clone_range layouts, `read_records_layout()`; `native_capture.c`: epoll_ctl's event for any operation) | none |
 | 49 | capture the compat structures of common compat calls (contract revision 21) | +157 -1 | none (`recorder.c`: `compat_rules[]`, `compat_vector()`) | none |
+| 50 | capture the compat stat, statfs, itimer, waitid and message structures (contract revision 21) | +280 -4 | none (`recorder.c`: more `compat_rules[]`, `compat_msg()`, `compat_mmsg()`; a rule's call keeps its path strings) | none |
 
 Every topic also adds its part of the files shared by all of them:
 `control.c` (dispatch), `control_wire.h` (the wire contract), `antinomie_monitor.h`
