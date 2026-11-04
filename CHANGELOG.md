@@ -16,11 +16,13 @@ release also record 32-bit x86 programs by their own table.
 - **arm64 guests.** A BusyBox arm64 base (Debian 13's pinned arm64 BusyBox and
   e2fsprogs packages, the patched kernel cross-built with Debian 13's
   `aarch64-linux-gnu-gcc-14`) starts on QEMU's `virt` machine, on its device
-  tree or through UEFI (AAVMF), under TCG with eight times the usual waits.
-  Recording, captures, file activity and contents, packets and routes,
-  io_uring and AIO, notes, Triage, Sigma, the Files and Network tabs, process
-  cores, snapshots and the debugger all work on it. The VM settings offer
-  **Faster emulation (KPTI off)**.
+  tree or through UEFI (AAVMF), always under TCG, with the TCG waits (Tools >
+  Settings > Advanced, TCG multiplier). Its screen (virtio-gpu, USB keyboard
+  and tablet) shows on the VM screen tab or in the QEMU window, as the VM
+  screen setting says. Recording, captures, file activity and contents,
+  packets and routes, io_uring and AIO, notes, Triage, Sigma, the Files and
+  Network tabs, process cores, snapshots and the debugger all work on it. The
+  VM settings offer **Faster emulation (KPTI off)**.
 - **32-bit ARM programs** run on arm64 guests and are recorded and decoded by
   arm's own EABI numbers and layouts.
 - **32-bit x86 programs** (ia32, such as XorDDoS and Rex) on x86-64 guests are

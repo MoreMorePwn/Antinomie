@@ -807,7 +807,11 @@ revision 20 is unchanged: the wire carried the architecture since 0.8.0.
   `cortex-a72` with the device tree, `neoverse-n1` with AAVMF (pflash code and a
   per-VM variable store; a device profile's machine sets its own CPU, see
   "arm64 device profiles"), SATA through ich9-ahci, virtio-gpu with xHCI keyboard
-  and tablet. The shutdown deadline scales by `Machine::time_scale()`.
+  and tablet, shown on the in-app VM screen (VNC on the runtime folder's unix
+  socket, display `none`) or in the QEMU window as the VM's screen setting says
+  (`VirtDisplay::window`; the GTK check applies to the window only). The
+  accelerator is always TCG (`launch_accel`), so every wait of the start and
+  the shutdown deadline are the TCG waits of `accel::Waits`.
   `VmLaunchOptions::fast_emulation` (serialized only when set, so x86 VM files
   and snapshot identities are unchanged) boots with `antinomie_kpti=off`; the VM
   dialog offers it for arm64 bases, and the VM summary lists what still tells

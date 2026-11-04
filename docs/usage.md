@@ -310,8 +310,9 @@ Antinomie also runs arm64 Linux guests: a BusyBox arm64 base (Debian 13's
 arm64 BusyBox and e2fsprogs packages with the patched 6.12.94 kernel built for
 arm64) runs arm64 programs and, on the same kernel, 32-bit ARM (AArch32)
 programs. On an x86-64 host QEMU emulates the CPU (TCG, no KVM), so an arm64
-VM is several times slower than an x86-64 one; the app allows it eight times
-the usual waits. The host needs `qemu-system-aarch64`, AAVMF
+VM is several times slower than an x86-64 one; it always starts with TCG and
+its waits (**Tools > Settings > Advanced**, TCG multiplier). Its screen shows
+on the VM screen tab or in the QEMU window, as for x86-64 VMs. The host needs `qemu-system-aarch64`, AAVMF
 (`qemu-efi-aarch64`) for the UEFI machines below and `gdb-multiarch` for the
 debugger console.
 
