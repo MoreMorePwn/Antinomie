@@ -13,6 +13,19 @@ release also record 32-bit x86 programs by their own table.
 
 ### Host
 
+- **Base builds survive a slow snapshot.debian.org.** Pinned packages (the
+  kernel packages, the initrd's programs, the toolchain chroot's packages)
+  come from the Debian mirror you set in the build wizard (new hint text),
+  then deb.debian.org and security.debian.org, then snapshot.debian.org at the
+  pinned date; each file is still checked against the SHA-256 in the pinned
+  snapshot's signed index, so a mirror is never trusted and a 404 or a wrong
+  file just moves on to the next source. The dated index files come from
+  snapshot only. Every source gets five tries on 5xx, 429, timeouts, resets and
+  short bodies (waits of 5, 15, 45 and 120 s), resuming with a Range request,
+  and the build log says each retry and fallback. A kernel that built and passed
+  its checks goes back into the cache from the builder VM even when a later
+  stage fails, so a retry does not compile it again.
+
 - **arm64 guests.** A BusyBox arm64 base (Debian 13's pinned arm64 BusyBox and
   e2fsprogs packages, the patched kernel cross-built with Debian 13's
   `aarch64-linux-gnu-gcc-14`) starts on QEMU's `virt` machine, on its device
