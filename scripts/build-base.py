@@ -193,7 +193,7 @@ def toolchain_problem(kernel_profile, arch="x86_64"):
 
 
 def require_debian_toolchain(kernel_profile, chroot=None, work=None, inputs=None, ccache=None,
-                             arch="x86_64"):
+                             arch="x86_64", mirror="", proxy=""):
     """A Debian base's kernel (the stock profile) must carry Debian's banner,
     which only Debian 13's compiler and linker write. Use the host's when they are Debian 13's;
     else compile in the rootless toolchain chroot `chroot` (created on first
@@ -210,7 +210,7 @@ def require_debian_toolchain(kernel_profile, chroot=None, work=None, inputs=None
             "a Debian 13 host")
     module = toolchain_module()
     stage("toolchain")
-    root = module.ensure(chroot, CONTAINER_DOCKERFILE)
+    root = module.ensure(chroot, CONTAINER_DOCKERFILE, mirror=mirror, proxy=proxy)
     mounts = [(KIT, "/kit", False), (work, "/work", True), (inputs, "/inputs", False)]
     if ccache is not None:
         ccache.mkdir(parents=True, exist_ok=True)
@@ -497,19 +497,19 @@ def debian_recipe():
     return recipe
 
 
-def debian_image(inputs, work, proxy="", arch="x86_64"):
+def debian_image(inputs, work, proxy="", arch="x86_64", mirror=""):
     """Debian's linux-image package of the pinned release, in inputs (where the
     Debian Minimal image takes it from too), downloaded through the archive's
     signed index when missing."""
     work.mkdir(parents=True, exist_ok=True)
-    return debian_recipe().debian_kernel_debs(inputs, work, proxy, arch)[0]
+    return debian_recipe().debian_kernel_debs(inputs, work, proxy, arch, mirror)[0]
 
 
-def debian_symvers(inputs, work, proxy="", arch="x86_64"):
+def debian_symvers(inputs, work, proxy="", arch="x86_64", mirror=""):
     """The pinned package with Debian's Module.symvers where its kernel package
     has no table map (arm64), the same way; None on x86-64."""
     work.mkdir(parents=True, exist_ok=True)
-    return debian_recipe().debian_kernel_symvers_deb(inputs, work, proxy, arch)
+    return debian_recipe().debian_kernel_symvers_deb(inputs, work, proxy, arch, mirror)
 
 
 def memory_kib():
@@ -730,7 +730,8 @@ def main():
         require_foreign_builder(profile, arch)
         if kernel_profile == "stock":
             require_debian_toolchain(kernel_profile, args.toolchain_chroot, args.work,
-                                     args.inputs, args.ccache, arch)
+                                     args.inputs, args.ccache, arch,
+                                     values.get("mirror", ""), values.get("proxy", ""))
         kernel_space, image_space = PROFILES[profile][3]
         build = load_cached_kernel(args.kernel_cache, kernel_profile, args.work, arch)
         if build is None:
@@ -739,11 +740,11 @@ def main():
             tree = prepare_source(args.inputs, args.work)
             stage("kernel")
             stock = kernel_profile == "stock"
-            proxy = values.get("proxy", "")
+            proxy, mirror = values.get("proxy", ""), values.get("mirror", "")
             build = build_kernel(kernel_profile, tree, args.work, args.jobs, args.ccache,
-                                 debian_image(args.inputs, args.work, proxy, arch)
+                                 debian_image(args.inputs, args.work, proxy, arch, mirror)
                                  if stock else None, arch,
-                                 debian_symvers(args.inputs, args.work, proxy, arch)
+                                 debian_symvers(args.inputs, args.work, proxy, arch, mirror)
                                  if stock else None)
             if has_symbols(arch):
                 stage("symbols")

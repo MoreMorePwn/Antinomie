@@ -422,9 +422,20 @@ image_args=()
 mkdir -p /build/ccache
 curl -fsS "$base/ccache.tar" 2>/dev/null | tar -x -C /build/ccache || true
 touch /build/ccache.started
+# A kernel that built and passed its checks is written to the cache before the
+# image stage: when a later stage fails, it still goes back to the host (about
+# 25 minutes of compiling saved on the retry), and the step then fails.
+status=0
 ANTINOMIE_BUILDER=1 python3 /build/kit/scripts/build-base.py --job /build/job.json --inputs /build/inputs \
     --work /build/work --output /build/out --jobs "$(nproc)" --kernel-cache /build/kernel.tar \
-    --ccache /build/ccache "${{image_args[@]}}"
+    --ccache /build/ccache "${{image_args[@]}}" || status=$?
+if [ "$status" != 0 ]; then
+    if [ "$cached" = 0 ] && [ -f /build/kernel.tar ]; then
+        echo "the build failed after its kernel; returning the kernel for the next try"
+        curl -fsS -H 'Expect:' -T /build/kernel.tar "$base/out/kernel.tar" || true
+    fi
+    exit "$status"
+fi
 cd /build/out
 if [ -d provenance ]; then tar -cf provenance.tar provenance; fi
 if [ "$cached" = 0 ] && [ -f /build/kernel.tar ]; then mv /build/kernel.tar kernel.tar; fi
@@ -464,22 +475,15 @@ done
         let result = self.boot(&disk, &server, BUILD_TIMEOUT, on_line);
         let status = server.status();
         server.stop();
+        // The kernel goes into the cache even when a later stage failed.
+        let stored = self.store_kernel(on_line);
         result?;
         match status.as_deref() {
             Some("ok") => {}
             Some(other) => return Err(format!("build in the builder VM failed: {other}")),
             None => return Err("the builder VM stopped without reporting a result".into()),
         }
-        let built_kernel = self.output.join("kernel.tar");
-        if built_kernel.is_file() {
-            let parent = self
-                .kernel_cache
-                .parent()
-                .ok_or("kernel cache has no parent")?;
-            fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-            fs::rename(&built_kernel, self.kernel_cache).map_err(|e| e.to_string())?;
-            on_line("kernel stored in the cache for later builds");
-        }
+        stored?;
         let built_rootfs = self.output.join("rootfs.tar");
         if let (true, Some(cache)) = (built_rootfs.is_file(), self.image_cache) {
             let parent = cache.parent().ok_or("image cache has no parent")?;
@@ -504,6 +508,21 @@ done
                 return Err("unpacking the build provenance failed".into());
             }
             fs::remove_file(&provenance).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Move the kernel the VM built (if any) into the host's cache.
+    fn store_kernel(&self, on_line: &mut impl FnMut(&str)) -> Result<(), String> {
+        let built_kernel = self.output.join("kernel.tar");
+        if built_kernel.is_file() {
+            let parent = self
+                .kernel_cache
+                .parent()
+                .ok_or("kernel cache has no parent")?;
+            fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+            fs::rename(&built_kernel, self.kernel_cache).map_err(|e| e.to_string())?;
+            on_line("kernel stored in the cache for later builds");
         }
         Ok(())
     }

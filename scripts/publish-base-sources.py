@@ -38,9 +38,8 @@ from pathlib import Path
 import re
 import shutil
 import sys
-import time
+import tempfile
 import urllib.parse
-import urllib.request
 
 REPO = Path(__file__).resolve().parent.parent
 SNAPSHOT = "https://snapshot.debian.org"
@@ -68,6 +67,15 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
+def fetcher():
+    """scripts/debian_fetch.py (retries, mirror order), loaded by path."""
+    spec = importlib.util.spec_from_file_location(
+        "debian_fetch", Path(__file__).resolve().with_name("debian_fetch.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def sha1_file(path):
     digest = hashlib.sha1()
     with Path(path).open("rb") as source:
@@ -79,24 +87,32 @@ def sha1_file(path):
 class Snapshot:
     """snapshot.debian.org through its machine-readable API."""
 
-    def __init__(self, base=SNAPSHOT, retries=3):
+    def __init__(self, base=SNAPSHOT, mirror=""):
         self.base = base
-        self.retries = retries
+        self.mirror = mirror
+        self.sha1s = {}
+        self.fetcher = fetcher()
 
     def fetch(self, url, destination=None):
-        last = None
-        for attempt in range(self.retries):
-            try:
-                with urllib.request.urlopen(url, timeout=120) as response:
-                    if destination is None:
-                        return response.read()
-                    with Path(destination).open("wb") as target:
-                        shutil.copyfileobj(response, target)
-                    return None
-            except OSError as error:
-                last = error
-                time.sleep(2 * (attempt + 1))
-        raise SourceError(f"cannot fetch {url}: {last}")
+        """The listing (bytes) or a file (to destination) with retries. A file of
+        the debian or debian-security archive is tried at the mirror, then
+        deb.debian.org, then snapshot; its SHA-1 is the snapshot listing's."""
+        try:
+            if destination is None:
+                with tempfile.TemporaryDirectory() as scratch:
+                    path = Path(scratch) / "reply"
+                    self.fetcher.fetch(url, path)
+                    return path.read_bytes()
+            urls = [url]
+            match = re.fullmatch(rf"{re.escape(self.base)}/archive/(debian|debian-security)/"
+                                 r"[0-9TZ]+/(.+)", url)
+            if match:
+                urls = self.fetcher.pool_urls(f"{self.base}/archive/{match[1]}/0", match[2],
+                                              self.mirror)[:-1] + [url]
+            self.fetcher.fetch_first(urls, destination, sha1=self.sha1s.get(url))
+        except self.fetcher.FetchError as error:
+            raise SourceError(str(error)) from error
+        return None
 
     def source_files(self, source, version):
         """[(name, sha1, url, size)] of a source package version."""
@@ -111,8 +127,10 @@ class Snapshot:
                 raise SourceError(f"{source} {version}: no archive copy of {sha1}")
             choices.sort(key=lambda item: (ARCHIVE_ORDER.index(item["archive_name"]), item["first_seen"]))
             item = choices[0]
-            files.append((item["name"], sha1, f"{self.base}/archive/{item['archive_name']}/"
-                          f"{item['first_seen']}{item['path']}/{item['name']}", item["size"]))
+            link = (f"{self.base}/archive/{item['archive_name']}/"
+                    f"{item['first_seen']}{item['path']}/{item['name']}")
+            self.sha1s[link] = sha1
+            files.append((item["name"], sha1, link, item["size"]))
         if not files:
             raise SourceError(f"{source} {version} is not on snapshot.debian.org")
         return files
@@ -368,12 +386,15 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repo", type=Path, default=REPO)
     parser.add_argument("--cache", type=Path, help="keep downloaded source files here")
+    parser.add_argument("--mirror", default="",
+                        help="a Debian mirror tried first for source files (each is checked "
+                             "against snapshot.debian.org's SHA-1; snapshot is the fallback)")
     parser.add_argument("--packages", type=Path, help="JSON list of package records for a legacy bundle")
     parser.add_argument("--identity", help="the base identity, when the bundle directory is not named by it")
     args = parser.parse_args(argv)
     cache = args.cache or args.output / ".cache"
     try:
-        manifest = publish(args.bundle, args.output, args.repo, cache, Snapshot(),
+        manifest = publish(args.bundle, args.output, args.repo, cache, Snapshot(mirror=args.mirror),
                            args.packages, args.identity)
     except (SourceError, OSError, KeyError, ValueError) as error:
         print(f"publish-base-sources: {error}", file=sys.stderr)

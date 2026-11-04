@@ -65,19 +65,36 @@ def parse_pins(text):
     return stamp.group(1), {name: versions[name] for name in PACKAGES}
 
 
-def sources(stamp):
-    """The package archives of the pinned snapshot, as mmdebstrap sources."""
-    archive = f"[signed-by={SIGNED_BY}] http://snapshot.debian.org/archive"
+def fetcher():
+    """scripts/debian_fetch.py (retries, mirror order), loaded by path."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "debian_fetch", Path(__file__).resolve().with_name("debian_fetch.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def sources(stamp, base="http://snapshot.debian.org/archive"):
+    """The package archives of the pinned snapshot, as mmdebstrap sources. base
+    stands for snapshot.debian.org/archive: the snapshot itself, or the local
+    front that tries a mirror first for the pool files (PoolProxy)."""
+    archive = f"[signed-by={SIGNED_BY}] {base}"
     return [f"deb {archive}/debian/{stamp}/ trixie main",
             f"deb {archive}/debian/{stamp}/ trixie-updates main",
             f"deb {archive}/debian-security/{stamp}/ trixie-security main"]
 
 
-def bootstrap_command(stamp, versions, tarball):
-    return ["mmdebstrap", "--mode=unshare", "--variant=minbase", "--format=tar",
-            "--aptopt=Acquire::Check-Valid-Until \"false\"", "--aptopt=Acquire::Retries \"5\"",
-            "--include=" + ",".join(f"{name}={version}" for name, version in versions.items()),
-            "trixie", str(tarball), *sources(stamp)]
+def bootstrap_command(stamp, versions, tarball, base="http://snapshot.debian.org/archive"):
+    command = ["mmdebstrap", "--mode=unshare", "--variant=minbase", "--format=tar",
+               "--aptopt=Acquire::Check-Valid-Until \"false\"",
+               "--aptopt=Acquire::Retries \"5\""]
+    if base != "http://snapshot.debian.org/archive":
+        # The local front is on this machine: never through a proxy.
+        command.append("--aptopt=Acquire::http::Proxy::127.0.0.1 \"DIRECT\"")
+    return command + ["--include=" + ",".join(f"{name}={version}"
+                                              for name, version in versions.items()),
+                      "trixie", str(tarball), *sources(stamp, base)]
 
 
 def ready(directory, dockerfile):
@@ -90,8 +107,12 @@ def ready(directory, dockerfile):
         and all((Path(directory) / compiler).exists() for compiler in COMPILERS)
 
 
-def ensure(directory, dockerfile, log=print):
-    """Create the chroot under `directory` unless it is already complete."""
+def ensure(directory, dockerfile, log=print, mirror="", proxy=""):
+    """Create the chroot under `directory` unless it is already complete. Its
+    packages come from the pinned snapshot (apt checks them against its signed
+    index); pool files are tried first at `mirror` (if given) and
+    deb.debian.org, through a local front (debian_fetch.PoolProxy) that retries
+    and falls back to the snapshot. `proxy`: an HTTP proxy for that traffic."""
     directory, dockerfile = Path(directory), Path(dockerfile)
     if ready(directory, dockerfile):
         return directory / "root"
@@ -109,8 +130,9 @@ def ensure(directory, dockerfile, log=print):
     with tempfile.TemporaryDirectory(prefix="antinomie-toolchain-", dir="/var/tmp") as scratch:
         os.chmod(scratch, 0o711)
         tarball = Path(scratch) / "root.tar"
-        subprocess.run(bootstrap_command(stamp, versions, tarball), check=True,
-                       env=os.environ | {"TMPDIR": scratch, "LC_ALL": "C.UTF-8"})
+        with fetcher().PoolProxy(mirror, proxy, log=log) as front:
+            subprocess.run(bootstrap_command(stamp, versions, tarball, front.base), check=True,
+                           env=os.environ | {"TMPDIR": scratch, "LC_ALL": "C.UTF-8"})
         # The user becomes root in a one-ID namespace: files take the user's
         # ID, and /dev (device nodes) is bound in at each run instead.
         shutil.rmtree(root, ignore_errors=True)

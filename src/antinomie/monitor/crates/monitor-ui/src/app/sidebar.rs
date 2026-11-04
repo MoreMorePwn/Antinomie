@@ -219,33 +219,20 @@ impl MonitorApp {
             .show(root, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 let stopped = self.snapshot.active_vm.is_none();
-                let count = self.snapshot.vms.len() + self.pending_vm_rows().len();
-                let row = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
-                let header = ui
-                    .allocate_ui_with_layout(
-                        row,
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            self.sidebar_fold_button(ui);
-                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                section_header(
-                                    ui,
-                                    SectionHeader {
-                                        title: "Virtual machines",
-                                        count: Some(count),
-                                        tooltip: "Virtual machines: click to fold",
-                                        action: "New VM",
-                                        enabled: stopped,
-                                        open: false,
-                                    },
-                                    &mut self.settings.vms_collapsed,
-                                )
-                            })
-                            .inner
-                        },
-                    )
-                    .inner;
-                if header.clicked() {
+                if section_header(
+                    ui,
+                    SectionHeader {
+                        title: "Virtual machines",
+                        count: Some(self.snapshot.vms.len() + self.pending_vm_rows().len()),
+                        tooltip: "Virtual machines: click to fold",
+                        action: "New VM",
+                        enabled: stopped,
+                        open: false,
+                    },
+                    &mut self.settings.vms_collapsed,
+                )
+                .clicked()
+                {
                     new_vm = true;
                 }
                 if !self.settings.vms_collapsed {

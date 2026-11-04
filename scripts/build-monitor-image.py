@@ -372,7 +372,7 @@ def unpack_deb(deb, tree):
     return record, paths
 
 
-def debian_userland(cache, work, proxy="", arch="x86_64"):
+def debian_userland(cache, work, proxy="", arch="x86_64", mirror=""):
     """The pinned packages of the guest architecture arch (verified in cache,
     else downloaded there through the signed index) unpacked under work, as a
     Userland."""
@@ -383,7 +383,7 @@ def debian_userland(cache, work, proxy="", arch="x86_64"):
     spec.loader.exec_module(recipe)
     source, packages = USERLANDS[arch]
     debs = recipe.pinned_debs(source, packages, cache, work, proxy,
-                              "Debian userland packages")
+                              "Debian userland packages", mirror)
     tree = Path(work) / f"userland-{source[2]}"
     if tree.exists():
         shutil.rmtree(tree)
@@ -745,6 +745,9 @@ def main():
                         help="where the pinned Debian packages of the base's programs are kept "
                              "(default: --work)")
     parser.add_argument("--proxy", default="", help="HTTP proxy for the Debian archive")
+    parser.add_argument("--mirror", default="",
+                        help="Debian mirror tried first for the pinned packages (checked "
+                             "against the pinned snapshot's index; snapshot is the fallback)")
     args = parser.parse_args()
     try:
         valid_hostname(args.hostname)
@@ -761,7 +764,8 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     args.work.mkdir(parents=True, exist_ok=True)
     try:
-        userland = debian_userland(args.package_cache, args.work, args.proxy, args.arch)
+        userland = debian_userland(args.package_cache, args.work, args.proxy, args.arch,
+                                 args.mirror)
     except (RuntimeError, OSError) as error:
         parser.error(str(error))
     with tempfile.TemporaryDirectory(prefix="monitor-image-", dir=args.work) as temporary:
