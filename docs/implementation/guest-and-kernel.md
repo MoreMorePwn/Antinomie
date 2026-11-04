@@ -289,7 +289,8 @@ cargo run --release --locked -j 2 -p antinomie-monitor-core --example conformanc
 * **Limits.** NOT_RESIDENT inputs (static glibc's start-up readlinkat, a forked
   child's first literal) are read again at exit since series 0053 (next
   section); what the call never reads stays NOT_RESIDENT. The ioctl argument is
-  decoded for terminal requests only.
+  decoded for terminal requests only (and, since contract revision 21, for the
+  requests `fs/ioctl.c` answers for every file; see below).
   Directory removal publishes its identity since series 0054. Rows without an entry point have
   positional argument names.
 
@@ -949,6 +950,152 @@ arm64 (threads, vforks and followed children are as before; only
 `kernel/antinomie/debug.o` changes). debug-p2's `forkbp` now fails when a
 child met the parent's breakpoint (the fixture's child exits 3 when its
 SIGTRAP handler ran).
+
+### Contract revision 21: generic ioctls, CET status and the fatal signal's sender (0.9.0)
+
+Board cards "Guest decoders for undecoded ioctls and arch_prctl" and "Record the
+sender of a fatal signal". Revision 21 adds fields and decoders only: every
+field a revision-20 guest wrote is unchanged, and a revision-20 base still runs
+on this host (it records neither). An older host refuses a revision-21 base.
+
+* **Generic file ioctls (patch 44).** The ioctl argument was decoded for
+  terminal requests on a tty only; FIONREAD on a socket or pipe, FIONBIO and
+  `chattr`'s FS_IOC_SETFLAGS were NO_DECODER gaps (about 400 in a 51,000-call
+  benign run). `ioctl_field()` now also decodes the requests
+  `fs/ioctl.c` `do_vfs_ioctl()` answers for every file, before any driver: an
+  `int` written at exit on success (FIONREAD, also for a file that is not
+  regular, whose handler writes one by convention; FIGETBSZ), an `int` read at
+  entry (FIONBIO, FIOASYNC), an `unsigned int` (FS_IOC_GETFLAGS at exit,
+  FS_IOC_SETFLAGS at entry: the request encodes a `long`, the kernel copies an
+  `unsigned int`), a `loff_t` (FIOQSIZE). FIOCLEX, FIONCLEX, FIFREEZE, FITHAW
+  ignore the argument and FICLONE's is a descriptor: no field and no gap. Any
+  other request keeps its NO_DECODER marker. The code is shared, so arm64
+  (same request numbers) decodes them too; compat (ia32, AArch32) ioctls keep
+  their address-only capture.
+* **arch_prctl ARCH_CET_STATUS (patch 44, x86-64).** 0x3001, the query of the
+  CET patches mainline did not take, which glibc 2.28 to 2.38 built with CET
+  sends at start-up, was an unknown-selector gap. Linux 6.12 answers EINVAL;
+  the recorder names it as known and would record its three `u64` (features,
+  shadow stack base and size) at `arg1.cet_status` on success. The host names
+  it `ARCH_CET_STATUS`.
+* **Who sent the fatal signal (patch 45).** The task-exit record held only the
+  wait status, so a report could not name who sent SIGKILL. The guest keeps
+  one record per thread group in the group leader's recorder state
+  (`struct ant_fatal_signal` in the LSM blob, no stock structure changes),
+  written and read under the group's siglock:
+  * at the send, when the send starts the group exit (`__send_signal_locked()`
+    after `complete_signal()`: SIGKILL, which is never queued with a siginfo,
+    and fatal signals nothing catches): `si_code`, `si_pid` and `si_uid` as the
+    kernel fills them for the target, and, when a call sent it from process
+    context (`SI_USER`, `SI_TKILL`, `SI_QUEUE`), the sending task's global
+    TGID, UID and `comm`; `SEND_SIG_PRIV` is `SI_KERNEL` with no sender;
+  * else at the delivery of a fatal signal (`get_signal()` before its `fatal`
+    label: core-dumping signals, a fatal signal a debugged or ptraced task
+    gets), from the siginfo the task dequeued;
+  * the OOM killer (`mm/oom_kill.c` `__oom_kill_process()`, after its log
+    line) marks its victim's record and keeps that line ("Out of memory:
+    Killed process ..." or "Memory cgroup out of memory: ...").
+
+  The first record of a group stays. `ant_monitor_task_exit()` adds, when the
+  task's wait status names the recorded signal, scalar fields
+  `lifecycle.signal.signo`, `.code`, `.pid`, `.uid`, `.origin` (1 send, 2
+  delivery), `.sender_pid` and `.sender_uid` with a string
+  `.sender_comm` when the sender is known, `.oom` and the string
+  `lifecycle.kernel_log` for an OOM kill, to the same event as
+  `lifecycle.task_exit` (the archive index keeps classifying the event by
+  that first field).
+* **Host.** `fatal_signal::FatalSignal` reads the record
+  (`InvocationSummary::task_exit_signal()`); the process tree keeps it beside
+  the end signal, and Triage's note on killed tasks names the sender: the
+  recorded call when it was the same sender (call and time), else the sender
+  by pid, name, uid and whether it is in the recorded tree, the kernel, a fault,
+  a timer, or the OOM killer with its line. The inference text stays for tasks
+  without a record (a revision-20 base says so).
+* **Limits.** A process that shares the OOM victim's memory but is another
+  thread group gets the same SI_KERNEL SIGKILL without the OOM mark; the kernel's
+  other kill messages (seccomp, a fault's "segfault at" line) are not copied;
+  a sender's `comm` is read without its task lock, as printk's users read it;
+  after an exec by a thread other than the leader the record stays with the
+  old leader.
+
+### AArch32 programs on arm64 guests: cores and the debugger, guest side (0.9.0, contract revision 21)
+
+Multi-arch card MA-33b, guest part (the host's ELF32 core reader, ARM and Thumb
+disassembly and the ARM debugger layer come later, without a new revision).
+
+* **ELF32 cores (patch 46).** An AArch32 task's core was refused (-EOPNOTSUPP).
+  The recorder's exit and manual cores already run the task's own binary
+  format's writer (`mm->binfmt->core_dump`), which for an AArch32 program is
+  `fs/compat_binfmt_elf.c`'s: ELFCLASS32 EM_ARM, the compat NT_PRSTATUS of
+  `user_aarch32_view`, NT_ARM_VFP, compat NT_SIGINFO, a 32-bit NT_FILE and
+  auxv. `ant_core_abi_ok()` (`process_core.h`) lets it run on arm64 with
+  `CONFIG_COMPAT_BINFMT_ELF`; the expected size and the thread count read
+  either class's program headers (`core_header()`, `core_phdr()`), and the
+  status flag says which file it is: `ANTC_CORE_COMPAT_ELF32` (0x100) instead
+  of `NATIVE_ELF64`. `CORE_CAPS` offers `ANTC_CORE_CAPS_COMPAT_ELF32` (32).
+  ia32 programs on x86-64 still get no core.
+* **Debugger (patch 47).** `ant_dbg_arch_task_ok()` accepts an AArch32 task (its
+  regset view is EM_ARM). Software breakpoints of length 4 are A32
+  `0xe7f001f0`, of length 2 Thumb `0xde01` (the arm64 kernel's AArch32 break
+  patterns): `try_handle_aarch32_break()` (`arch/arm64/kernel/debug-monitors.c`)
+  hands the trap to the engine first, which claims it only at an address it
+  planted. Each breakpoint keeps its instruction set (`struct ant_dbg_bp.compat`).
+  The step is the same hardware step; a stepped SVC (A32 or T16) ends at the
+  system call's exit. `REGS_ALL` on an AArch32 thread reads its own table
+  (compat NT_PRSTATUS of 72 bytes, NT_ARM_VFP, NT_ARM_TLS). `DEBUG_CAPS` offers
+  `ANTC_DEBUG_CAP_AARCH32` (4096). A Thumb breakpoint inside an IT block is not
+  refused: whether it traps when the block's condition fails is the CPU's
+  choice (CONSTRAINED UNPREDICTABLE).
+* **Launches the engine cannot debug (T0293 b).** A debug-on-start session whose
+  image `ant_dbg_arch_task_ok()` refuses (ia32 or x32 on x86-64) does not take
+  its entry stop; ATTACH (ADOPT) answers -EOPNOTSUPP and retires it, and so does
+  any later command of a session adopted before the exec (DETACH answers 0).
+  It never blocks a new session.
+* **Host.** This host only accepts the new flag bits (debug CAPS, CORE_CAPS,
+  core status 0x100 in place of 2); it does not read ELF32 cores or debug
+  AArch32 programs yet. `debug-check a32` drives the engine directly on
+  `tests/monitor/aarch32-debug-fixture.c` (A32 and Thumb functions).
+
+### Capture gaps of the decode audit (0.9.0, contract revision 21)
+
+Card ANT-T0295 (class B of the 0.9.0 decode audit). New layouts are named in
+the recorder's sources, so `scripts/generate-filter-layouts.py` lists them in
+every `captured-layout-members.json` (it now also reads `recorder.c`, and the
+compat table's layouts).
+
+* **ioctl (patch 48, B1).** Any request outside the decoded set whose number
+  encodes a direction and a size (`_IOC_DIR`, `_IOC_SIZE`, at most 4096) has
+  those bytes recorded with an empty layout: at entry for `_IOC_WRITE`, at exit
+  on success for `_IOC_READ`. A request whose number encodes neither keeps its
+  NO_DECODER marker. Named layouts: `ifreq` (SIOCGIF* read and written back,
+  SIOCSIF* read, TUNSETIFF), `ifconf` with `arg2.ifconf.buffer` (`ifreq[]`, at
+  most 64 records) for SIOCGIFCONF, `loop_info64` and `loop_config` (loop
+  devices), `file_clone_range` (FICLONERANGE), `fsxattr` (FS_IOC_FSGETXATTR,
+  FSSETXATTR). `ifreq` is inventoried as unsupported: its members are two
+  unions the request selects.
+* **Event descriptor reads (patch 48, B2).** `read()` of an eventfd or timerfd
+  (`u64`), signalfd (`signalfd_siginfo[]`), inotify (`inotify_event[]`, variable
+  records), fanotify (`fanotify_event_metadata[]`, variable records) or
+  userfaultfd (`uffd_msg[]`) descriptor names the layout of its buffer, by the
+  anonymous inode the file was made on. `readv`, `pread64` and pidfd or mqueue
+  reads are as before.
+* **Sleep and io_cancel outputs (B3).** Already captured: nanosleep's and
+  clock_nanosleep's remaining time are recorded when the call is interrupted
+  (the only time the kernel writes them), and io_cancel's `io_event` on a
+  result of 0, which Linux 6.12 never returns (it answers EINPROGRESS and
+  delivers the event through the ring).
+* **Compat calls (patch 49, B4).** A table of compat rules records the ILP32
+  structures of readv, writev, preadv, pwritev (the iovec array and buffers),
+  poll and ppoll (`pollfd[]`, `old_timespec`, the mask as `u64`), _newselect
+  and pselect6 (`u32[]` descriptor sets, `timeval`/`old_timespec`, the mask
+  pack as `u32[2]`), nanosleep, clock_nanosleep, clock_gettime, clock_getres,
+  clock_settime (`old_timespec`), gettimeofday (`timeval`, `timezone`),
+  getdents (`linux_dirent[]`), rt_sigaction (`compat_sigaction`), wait4
+  (`wait_status`, `rusage`), getrusage and times; their layout names carry the
+  compat prefix (`linux-6.12.94/x86/`, `/arm/`). Not yet: the stat64 family,
+  sendmsg/recvmsg and the other calls of the audit's list.
+* **epoll_ctl (patch 48, B7).** The event is recorded for an operation the
+  kernel refuses too.
 
 ### arm64 debugger (0.9.0)
 

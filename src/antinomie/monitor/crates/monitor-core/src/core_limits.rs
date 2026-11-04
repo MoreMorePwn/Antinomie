@@ -75,7 +75,8 @@ impl CoreLimits {
             fast_read: flags & 16 != 0,
         };
         if word(0)? != 1
-            || flags & !0x1f != 0
+            // 32: revision 21's ELF32 cores of AArch32 tasks (read by no host yet).
+            || flags & !0x3f != 0
             || flags & 5 != 5
             || !(CORE_LEGACY_SIZE..=CORE_MAX_SUPPORTED).contains(&limits.max_size)
             || limits.pool_size < limits.max_size
@@ -355,7 +356,9 @@ mod tests {
         }
         assert!(CoreLimits::parse(&caps(2048 * MIB, 0x1f)).is_err());
         assert!(CoreLimits::parse(&caps(32 * MIB, 0x1f)).is_err());
-        assert!(CoreLimits::parse(&caps(128 * MIB, 0x3f)).is_err());
+        // Revision 21's COMPAT_ELF32 bit (32) is known; the next one is not.
+        assert!(CoreLimits::parse(&caps(128 * MIB, 0x3f)).is_ok());
+        assert!(CoreLimits::parse(&caps(128 * MIB, 0x5f)).is_err());
         let mut bad = caps(128 * MIB, 0x1f);
         bad[0] = 2;
         assert!(CoreLimits::parse(&bad).is_err());

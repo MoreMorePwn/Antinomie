@@ -1,0 +1,158 @@
+Description: antinomie: decode the ioctls every file answers alike, and arch_prctl's CET status
+ The ioctl argument was decoded only for terminal requests on a terminal.
+ FIONREAD on a socket or a pipe, FIONBIO, and chattr's FS_IOC_GETFLAGS and
+ FS_IOC_SETFLAGS were recorded as explicit gaps, hundreds of them in an
+ ordinary program's run. These requests are answered by fs/ioctl.c's
+ do_vfs_ioctl() for every file before any driver sees them, so their
+ argument has one shape whatever the file is. kernel/antinomie/recorder.c's
+ ioctl_field() now decodes them after the terminal requests: an int written
+ on success (FIONREAD, also on a file that is not regular, whose own handler
+ writes one by convention; FIGETBSZ), an int read at entry (FIONBIO,
+ FIOASYNC), an unsigned int (FS_IOC_GETFLAGS written, FS_IOC_SETFLAGS read;
+ the request number encodes a long, the kernel copies an unsigned int) and a
+ loff_t (FIOQSIZE). FIOCLEX, FIONCLEX, FIFREEZE and FITHAW ignore the
+ argument and FICLONE's is a descriptor: nothing is recorded for them, not a
+ gap. Every other request keeps its gap. The code is shared by every
+ architecture; the request numbers are the same on arm64.
+ .
+ glibc 2.28 to 2.38, built with CET, asks for the CET state at start-up with
+ arch_prctl 0x3001 (ARCH_CET_STATUS of the shadow stack patches mainline did
+ not take), which was an unknown-selector gap. kernel/antinomie/capture_x86.c
+ knows the code: Linux 6.12 answers EINVAL, and on success the three u64 it
+ would write are recorded.
+ .
+ This is contract revision 21. The control header also takes the host copy's
+ wording for the revision-20 load-only watchpoint kind, so that the two copies
+ are the same file again. No existing kernel file is hooked.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-04
+
+---
+diff --git a/kernel/antinomie/capture_x86.c b/kernel/antinomie/capture_x86.c
+index 38536e44a..9b374438b 100644
+--- a/kernel/antinomie/capture_x86.c
++++ b/kernel/antinomie/capture_x86.c
+@@ -18,6 +18,13 @@
+ 
+ #define LAYOUT(name) ANT_LAYOUT(name)
+ 
++/* ARCH_CET_STATUS of the shadow stack patches mainline did not take: glibc
++ * 2.28 to 2.38 built with CET asks with it at start-up, and Linux 6.12
++ * answers EINVAL. Where it was implemented it wrote three u64 at arg1: the
++ * enabled CET features, the shadow stack's base and its size.
++ */
++#define ANT_ARCH_CET_STATUS 0x3001
++
+ static void capture_arch_prctl(struct ant_task *ctx, const u64 args[6],
+ 			       bool output, long result)
+ {
+@@ -37,6 +44,12 @@ static void capture_arch_prctl(struct ant_task *ctx, const u64 args[6],
+ 	case ARCH_SHSTK_ENABLE: case ARCH_SHSTK_DISABLE: case ARCH_SHSTK_LOCK:
+ 	case ARCH_SHSTK_UNLOCK:
+ 		return;
++	case ANT_ARCH_CET_STATUS:
++		if (output && result == 0)
++			ant_capture_field(ctx, 1, "arg1.cet_status", LAYOUT("u64[]"), 3,
++					  args[1], NULL, 3 * sizeof(u64), 3 * sizeof(u64),
++					  ANT_COMPLETE);
++		return;
+ 	default:
+ 		if (!output)
+ 			capture_gap(ctx, "arch_prctl.unknown_selector", ANT_NO_DECODER);
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index f2a5f6369..30543699f 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -25,7 +25,11 @@
+  * SW_SINGLE_STEP and READ_WATCH. A host sends ARCH_INFO only to a guest whose
+  * INFO revision is 20 or later; an older guest counts an unknown opcode as a
+  * bad command. */
+-#define ANTC_REVISION 20
++/* Revision 21: decoded arguments of the ioctl requests fs/ioctl.c answers
++ * for every file (FIONREAD on any file, FIONBIO, FIOASYNC, FIOQSIZE,
++ * FIGETBSZ, FS_IOC_GETFLAGS, FS_IOC_SETFLAGS; no field for the requests
++ * without a pointer argument) and of arch_prctl ARCH_CET_STATUS. */
++#define ANTC_REVISION 21
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+ #define ANTC_UPLOAD_CHUNK 0x1002
+@@ -237,7 +241,11 @@
+ #define ANTC_DEBUG_BP_HW_EXEC 2
+ #define ANTC_DEBUG_BP_HW_WRITE 3
+ #define ANTC_DEBUG_BP_HW_ACCESS 4
+-/* Revision 20, only where CAPS has READ_WATCH: a watchpoint on loads alone. */
++/* Revision 20, capability-gated (added in 0.9.0 without a new revision): a
++ * watchpoint on loads alone. Only a guest whose CAPS has READ_WATCH (the arm64
++ * engine) accepts it, and a host sends it only to such a guest; x86-64 guests
++ * do not offer READ_WATCH and refuse kind 5 as an invalid argument, as every
++ * guest before it did. */
+ #define ANTC_DEBUG_BP_HW_READ 5
+ /* Telemetry lifecycle records (no control command): phase-3 events whose one
+  * field is a fixed little-endian structure. Layout names are versioned.
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 5b51310de..ae0e128de 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -667,6 +667,45 @@ static bool selected(long nr)
+ 		ant_native_syscalls[nr - ANT_ARCH_NR_BASE].valid;
+ }
+ 
++/* The requests fs/ioctl.c's do_vfs_ioctl() answers itself, for every file and
++ * before any driver sees them, so that their argument has one shape whatever
++ * the file is. FIONREAD on a file that is not regular goes on to the file's
++ * own handler, which writes an int as well (pipes, sockets, terminals). A
++ * request whose argument is no pointer has nothing to capture (size 0):
++ * FIOCLEX, FIONCLEX, FIFREEZE and FITHAW ignore it, FICLONE's is a descriptor.
++ * False for any other request.
++ */
++static bool vfs_ioctl_shape(u32 request, u64 *size, const char **layout, bool *input)
++{
++	switch (request) {
++	case FIOCLEX: case FIONCLEX: case FIFREEZE: case FITHAW: case FICLONE:
++		*size = 0;
++		return true;
++	case FIONBIO: case FIOASYNC:
++		*input = true;
++		fallthrough;
++	case FIONREAD: case FIGETBSZ:
++		*size = sizeof(int);
++		*layout = ANT_LAYOUT("int");
++		return true;
++	case FS_IOC_SETFLAGS:
++		*input = true;
++		fallthrough;
++	case FS_IOC_GETFLAGS:
++		/* The request number encodes a long; ioctl_getflags() and
++		 * ioctl_setflags() copy an unsigned int (chattr, lsattr).
++		 */
++		*size = sizeof(unsigned int);
++		*layout = ANT_LAYOUT("unsigned_int");
++		return true;
++	case FIOQSIZE:
++		*size = sizeof(loff_t);
++		*layout = ANT_LAYOUT("loff_t");
++		return true;
++	}
++	return false;
++}
++
+ static void ioctl_field(struct ant_task *ctx, bool output, long result)
+ {
+ 	struct fd fd = fdget(ctx->args[0]);
+@@ -719,11 +758,13 @@ static void ioctl_field(struct ant_task *ctx, bool output, long result)
+ 			break;
+ 		}
+ 	fdput(fd);
++	if (size == U64_MAX)
++		vfs_ioctl_shape((u32)ctx->args[1], &size, &layout, &input);
+ 	if (size == U64_MAX) {
+ 		if (!output)
+ 			field(ctx, 2, "arg2.ioctl", "", 1, ctx->args[2], NULL,
+ 			      U64_MAX, U64_MAX, ANT_NO_DECODER);
+-	} else if ((input && !output) || (!input && output && !result)) {
++	} else if (size && ((input && !output) || (!input && output && !result))) {
+ 		user_field(ctx, 2, "arg2.ioctl", layout, 3, ctx->args[2], size);
+ 	}
+ }

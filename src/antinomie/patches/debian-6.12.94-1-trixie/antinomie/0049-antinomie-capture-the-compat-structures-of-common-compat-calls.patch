@@ -1,0 +1,214 @@
+Description: antinomie: capture the compat structures of common compat calls
+ A compat call without a native counterpart (ia32 on x86-64, AArch32 on
+ arm64) recorded its non-string pointers by address only. A table in
+ kernel/antinomie/recorder.c now records the compat structures of the common
+ ones by their ILP32 layouts (ANT_COMPAT_LAYOUT names): the iovec array and
+ the buffers of readv, writev, preadv and pwritev; poll's and ppoll's pollfd
+ array, timeout and mask; _newselect's and pselect6's descriptor sets and
+ timeouts; the 32-bit times of nanosleep, clock_nanosleep (the remaining
+ time when interrupted), clock_gettime, clock_getres, clock_settime and
+ gettimeofday; getdents's records; rt_sigaction's compat_sigaction;
+ wait4's status and rusage, getrusage and times. Every other compat call is
+ recorded as before.
+ .
+ Contract revision 21.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-04
+
+---
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index a39fe073d..9de274a8c 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -35,7 +35,8 @@
+  * (CORE_COMPAT_ELF32) and debug them (DEBUG_CAP_AARCH32), and a debug-on-start
+  * session of an image the engine cannot debug answers EOPNOTSUPP;
+  * any other ioctl whose number encodes a size has those bytes captured, and a
+- * read of an event descriptor names its records' layout. */
++ * read of an event descriptor names its records' layout; the compat
++ * structures of common compat calls are captured by their ILP32 layouts. */
+ #define ANTC_REVISION 21
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index a00c5616a..9ef0a57f1 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -1018,6 +1018,153 @@ static void compat_entry(struct ant_task *ctx)
+ 	}
+ }
+ 
++/* Compat calls whose pointer arguments are compat structures the recorder
++ * captures by their ILP32 layouts (contract revision 21; the layouts are
++ * ANT_COMPAT_LAYOUT names, "linux-6.12.94/x86/" on x86-64 and "/arm/" on
++ * arm64). Every other compat pointer is recorded by address only, as before.
++ */
++#define CR_IN 1		/* read by the call: at entry */
++#define CR_OUT 2	/* written by the call: at exit, on success */
++#define CR_INTR 4	/* written only when the call was interrupted */
++enum compat_extent {
++	CX_FIXED,	/* size bytes */
++	CX_COUNT,	/* size bytes per element, args[count] elements */
++	CX_RESULT,	/* the call's result in bytes */
++	CX_FDSET,	/* select's bitmap of args[0] descriptors */
++};
++struct ant_compat_rule {
++	u16 nr;
++	u8 arg, when, extent, count;
++	u16 size;
++	const char *key, *layout;
++};
++
++#define COMPAT_RULE(name, a, w, x, c, sz, k, l) \
++	{ ANT_COMPAT_NR(name), a, w, x, c, sz, k, ANT_COMPAT_LAYOUT(l) }
++static const struct ant_compat_rule compat_rules[] = {
++	COMPAT_RULE(poll, 0, CR_IN | CR_OUT, CX_COUNT, 1, 8, "arg0.pollfds", "pollfd[]"),
++	COMPAT_RULE(ppoll, 0, CR_IN | CR_OUT, CX_COUNT, 1, 8, "arg0.pollfds", "pollfd[]"),
++	COMPAT_RULE(ppoll, 2, CR_IN, CX_FIXED, 0, 8, "arg2.timeout", "old_timespec"),
++	COMPAT_RULE(ppoll, 3, CR_IN, CX_FIXED, 0, 8, "arg3.sigmask", "u64"),
++	COMPAT_RULE(_newselect, 1, CR_IN | CR_OUT, CX_FDSET, 0, 0, "arg1.fdset", "u32[]"),
++	COMPAT_RULE(_newselect, 2, CR_IN | CR_OUT, CX_FDSET, 0, 0, "arg2.fdset", "u32[]"),
++	COMPAT_RULE(_newselect, 3, CR_IN | CR_OUT, CX_FDSET, 0, 0, "arg3.fdset", "u32[]"),
++	COMPAT_RULE(_newselect, 4, CR_IN | CR_OUT, CX_FIXED, 0, 8, "arg4.timeout", "timeval"),
++	COMPAT_RULE(pselect6, 1, CR_IN | CR_OUT, CX_FDSET, 0, 0, "arg1.fdset", "u32[]"),
++	COMPAT_RULE(pselect6, 2, CR_IN | CR_OUT, CX_FDSET, 0, 0, "arg2.fdset", "u32[]"),
++	COMPAT_RULE(pselect6, 3, CR_IN | CR_OUT, CX_FDSET, 0, 0, "arg3.fdset", "u32[]"),
++	COMPAT_RULE(pselect6, 4, CR_IN | CR_OUT, CX_FIXED, 0, 8, "arg4.timeout", "old_timespec"),
++	COMPAT_RULE(pselect6, 5, CR_IN, CX_FIXED, 0, 8, "arg5.sigmask_pack", "u32[2]"),
++	COMPAT_RULE(nanosleep, 0, CR_IN, CX_FIXED, 0, 8, "arg0.data", "old_timespec"),
++	COMPAT_RULE(nanosleep, 1, CR_INTR, CX_FIXED, 0, 8, "arg1.remaining", "old_timespec"),
++	COMPAT_RULE(clock_nanosleep, 2, CR_IN, CX_FIXED, 0, 8, "arg2.data", "old_timespec"),
++	COMPAT_RULE(clock_nanosleep, 3, CR_INTR, CX_FIXED, 0, 8, "arg3.remaining", "old_timespec"),
++	COMPAT_RULE(clock_gettime, 1, CR_OUT, CX_FIXED, 0, 8, "arg1.time", "old_timespec"),
++	COMPAT_RULE(clock_getres, 1, CR_OUT, CX_FIXED, 0, 8, "arg1.time", "old_timespec"),
++	COMPAT_RULE(clock_settime, 1, CR_IN, CX_FIXED, 0, 8, "arg1.time", "old_timespec"),
++	COMPAT_RULE(gettimeofday, 0, CR_OUT, CX_FIXED, 0, 8, "arg0.time", "timeval"),
++	COMPAT_RULE(gettimeofday, 1, CR_OUT, CX_FIXED, 0, 8, "arg1.zone", "timezone"),
++	COMPAT_RULE(getdents, 1, CR_OUT, CX_RESULT, 0, 0, "arg1.dirents", "linux_dirent[]"),
++	COMPAT_RULE(rt_sigaction, 1, CR_IN, CX_FIXED, 0, sizeof(struct compat_sigaction),
++		    "arg1.action", "compat_sigaction"),
++	COMPAT_RULE(rt_sigaction, 2, CR_OUT, CX_FIXED, 0, sizeof(struct compat_sigaction),
++		    "arg2.old_action", "compat_sigaction"),
++	COMPAT_RULE(wait4, 1, CR_OUT, CX_FIXED, 0, 4, "arg1.status", "wait_status"),
++	COMPAT_RULE(wait4, 3, CR_OUT, CX_FIXED, 0, sizeof(struct compat_rusage), "arg3.rusage",
++		    "rusage"),
++	COMPAT_RULE(getrusage, 1, CR_OUT, CX_FIXED, 0, sizeof(struct compat_rusage),
++		    "arg1.rusage", "rusage"),
++	COMPAT_RULE(times, 0, CR_OUT, CX_FIXED, 0, sizeof(struct compat_tms), "arg0.times", "tms"),
++};
++
++/* A compat iovec array (readv, writev, preadv, pwritev): the array, and the
++ * buffers it names, read at entry (writes) or at exit up to the result (reads).
++ */
++static void compat_vector(struct ant_task *ctx, bool output, long result)
++{
++	struct compat_iovec vec[16];
++	u64 count = ctx->args[2], done, i, remaining;
++	bool write = ctx->wire_nr == ANT_COMPAT_NR(writev) ||
++		ctx->wire_nr == ANT_COMPAT_NR(pwritev);
++	char key[80];
++
++	if (!output)
++		field(ctx, 1, "arg1.iov", ANT_COMPAT_LAYOUT("iovec[]"), 3, ctx->args[1], NULL,
++		      min_t(u64, count, UIO_MAXIOV) * sizeof(*vec), count * sizeof(*vec),
++		      count > UIO_MAXIOV ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++	if (count > UIO_MAXIOV || write == output)
++		return;
++	remaining = output ? (result > 0 ? result : 0) : MAX_RW_COUNT;
++	for (done = 0; done < count && remaining && !ctx->failed_count; done += i) {
++		u64 chunk = min_t(u64, count - done, ARRAY_SIZE(vec));
++
++		if (copy_from_user_nofault(vec, (void __user *)(unsigned long)
++					   (ctx->args[1] + done * sizeof(*vec)), chunk * sizeof(*vec)))
++			return;
++		for (i = 0; i < chunk && remaining && !ctx->failed_count; i++) {
++			u64 size = min_t(u64, vec[i].iov_len, remaining);
++
++			scnprintf(key, sizeof(key), "arg1.iov[%llu].data", done + i);
++			user_field(ctx, 1, key, "", 1, vec[i].iov_base, size);
++			remaining -= size;
++		}
++	}
++}
++
++/* The compat structures of a call by compat_rules; true when the call has any. */
++static bool compat_rules_capture(struct ant_task *ctx, bool output, long result)
++{
++	const struct ant_compat_rule *rule;
++	bool any = false;
++	u64 size, extent;
++	unsigned int i;
++
++	if (ctx->wire_nr == ANT_COMPAT_NR(readv) || ctx->wire_nr == ANT_COMPAT_NR(writev) ||
++	    ctx->wire_nr == ANT_COMPAT_NR(preadv) || ctx->wire_nr == ANT_COMPAT_NR(pwritev)) {
++		compat_vector(ctx, output, result);
++		return true;
++	}
++	for (i = 0; i < ARRAY_SIZE(compat_rules) && !ctx->failed_count; i++) {
++		rule = &compat_rules[i];
++		if (rule->nr != ctx->wire_nr)
++			continue;
++		any = true;
++		if (!ctx->args[rule->arg])
++			continue;
++		if (output ? !((rule->when & CR_OUT && result >= 0) ||
++			       (rule->when & CR_INTR && (result == -EINTR ||
++							 result == -ERESTART_RESTARTBLOCK))) :
++			     !(rule->when & CR_IN))
++			continue;
++		/* An absolute clock_nanosleep writes no remaining time. */
++		if (rule->when & CR_INTR && ctx->wire_nr == ANT_COMPAT_NR(clock_nanosleep) &&
++		    (ctx->args[1] & TIMER_ABSTIME))
++			continue;
++		switch (rule->extent) {
++		case CX_COUNT:
++			extent = ctx->args[rule->count] * rule->size;
++			break;
++		case CX_RESULT:
++			extent = result > 0 ? result : 0;
++			break;
++		case CX_FDSET:
++			extent = DIV_ROUND_UP(min_t(u64, ctx->args[0], 1U << 20), 32) * 4;
++			break;
++		default:
++			extent = rule->size;
++		}
++		size = min_t(u64, extent, ANT_IOCTL_GENERIC_MAX * 16);
++		field(ctx, rule->arg, rule->key, rule->layout, 3, ctx->args[rule->arg], NULL,
++		      size, extent, size < extent ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++	}
++	return any;
++}
++
++static void compat_capture_exit(struct ant_task *ctx, long result)
++{
++	compat_rules_capture(ctx, true, result);
++}
++
+ /* A compat call no native call captures: its path strings, and its other
+  * pointers by address only.
+  */
+@@ -1033,6 +1180,8 @@ static void compat_capture_entry(struct ant_task *ctx)
+ 		return;
+ 	}
+ 	schema = &ant_compat_syscalls[ctx->wire_nr];
++	if (compat_rules_capture(ctx, false, 0))
++		return;
+ 	for (i = 0; i < ctx->arg_count && !ctx->failed_count; i++) {
+ 		if (!(schema->pointer_mask & BIT(i)))
+ 			continue;
+@@ -1181,6 +1330,12 @@ static void capture_exit(struct ant_task *ctx, long result)
+ 	u8 address_index, length_index;
+ 	int error;
+ 
++#ifdef ANT_ABI_COMPAT
++	if (ctx->abi == ANT_ABI_COMPAT && ctx->compat) {
++		compat_capture_exit(ctx, result);
++		return;
++	}
++#endif
+ 	if (ctx->abi != ANT_ABI_NATIVE)
+ 		return;
+ 	if (ant_native_capture(ctx, ctx->nr, a, true, result) & ANT_CAPTURE_OWNED)

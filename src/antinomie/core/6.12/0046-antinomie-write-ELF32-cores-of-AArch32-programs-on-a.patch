@@ -1,0 +1,357 @@
+From ae055b68167f5d68c6cb0d93bdc38e9ad9ee6732 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Wed, 4 Nov 2026 21:59:55 +0700
+Subject: [PATCH] antinomie: write ELF32 cores of AArch32 programs on arm64
+
+The exit and manual process cores of an AArch32 task were refused
+(-EOPNOTSUPP), although the writer they run is the task's own binary
+format's: for an AArch32 program fs/compat_binfmt_elf.c's, which writes the
+file the arm64 kernel's own core dumps of such a program are, ELFCLASS32
+EM_ARM with the compat NT_PRSTATUS of user_aarch32_view, NT_ARM_VFP, the
+compat NT_SIGINFO, a 32-bit NT_FILE and auxv. On arm64 with
+CONFIG_COMPAT_BINFMT_ELF ant_core_abi_ok() (kernel/antinomie/process_core.h)
+lets core_writer.c and manual_core.c run it; ia32 programs on x86-64 are
+still refused.
+
+process_core.c reads the program headers of either class to find the file's
+extent and its threads (core_header(), core_phdr()), and the core's status
+says which file it is: ANTC_CORE_COMPAT_ELF32 instead of NATIVE_ELF64.
+CORE_CAPS offers ANTC_CORE_CAPS_COMPAT_ELF32. No kernel file outside
+kernel/antinomie changes but the arm64 header's comment.
+
+Contract revision 21.
+---
+ arch/arm64/include/asm/antinomie.h |   4 +-
+ kernel/antinomie/control_wire.h    |   8 +-
+ kernel/antinomie/core_writer.c     |   4 +-
+ kernel/antinomie/manual_core.c     |   2 +-
+ kernel/antinomie/process_core.c    | 148 +++++++++++++++++++++--------
+ kernel/antinomie/process_core.h    |  21 ++++
+ 6 files changed, 144 insertions(+), 43 deletions(-)
+
+diff --git a/arch/arm64/include/asm/antinomie.h b/arch/arm64/include/asm/antinomie.h
+index 9af6c1071..dfe051103 100644
+--- a/arch/arm64/include/asm/antinomie.h
++++ b/arch/arm64/include/asm/antinomie.h
+@@ -52,8 +52,8 @@ static __always_inline u16 ant_arch_syscall_abi(long nr)
+ 	return ANT_ABI_NATIVE;
+ }
+ 
+-/* The current task is an AArch32 program: the process-core writer and its
+- * readers handle native 64-bit processes only (ELF32 cores are not written).
++/* The current task is an AArch32 program: its process core is the ELF32 file
++ * of its compat binary format (process_core.h, ANT_CORE_COMPAT_MACHINE).
+  */
+ static __always_inline bool ant_arch_compat_task(void)
+ {
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index ea9cb41d6..91a2f35bb 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -31,7 +31,8 @@
+  * without a pointer argument) and of arch_prctl ARCH_CET_STATUS; the
+  * task-exit record names who sent the signal that ended a task
+  * (lifecycle.signal.*) and carries the kernel's line for an OOM kill
+- * (lifecycle.kernel_log). */
++ * (lifecycle.kernel_log); arm64 guests write ELF32 cores of AArch32 tasks
++ * (CORE_COMPAT_ELF32). */
+ #define ANTC_REVISION 21
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+@@ -104,6 +105,8 @@
+ #define ANTC_CORE_CAPS_LONG_TIMEOUT 4
+ #define ANTC_CORE_CAPS_CHUNKED 8
+ #define ANTC_CORE_CAPS_FAST_READ 16
++/* Revision 21: AArch32 tasks of an arm64 guest get ELF32 cores (ANTC_CORE_COMPAT_ELF32). */
++#define ANTC_CORE_CAPS_COMPAT_ELF32 32
+ #define ANTC_CORE_READ_HOLE 1
+ #define ANTC_CORE_LOGICAL_MAX 17179869184ULL
+ #define ANTC_CORE_ARMED 1
+@@ -121,6 +124,9 @@
+ #define ANTC_CORE_RESIDENT_ONLY 0x40
+ /* Revision 20: the core is the native ELF32 file of a 32-bit guest. */
+ #define ANTC_CORE_NATIVE_ELF32 0x80
++/* Revision 21: the core is the ELF32 file (ELFCLASS32 EM_ARM) of an AArch32
++ * task of an arm64 guest, as fs/compat_binfmt_elf.c writes it. */
++#define ANTC_CORE_COMPAT_ELF32 0x100
+ #define ANTC_RESOURCES 0x1070
+ #define ANTC_RESOURCES_SIZE 96
+ #define ANTC_RESOURCES_MEMORY_VALID 1
+diff --git a/kernel/antinomie/core_writer.c b/kernel/antinomie/core_writer.c
+index d49d28193..1881e11a3 100644
+--- a/kernel/antinomie/core_writer.c
++++ b/kernel/antinomie/core_writer.c
+@@ -325,7 +325,7 @@ int ant_coredump_live_to_file(struct file *file, unsigned long limit,
+ 	int error;
+ 
+ 	if (!current->mm->binfmt || !current->mm->binfmt->core_dump ||
+-	    ant_arch_compat_task())
++	    !ant_core_abi_ok())
+ 		return -EOPNOTSUPP;
+ 	for (i = 0; i < vma_count; i++)
+ 		cprm.vma_data_size += vmas[i].dump_size;
+@@ -362,7 +362,7 @@ int ant_coredump_to_file(struct file *file, unsigned long limit, int wait_status
+ 	};
+ 	int error;
+ 
+-	if (!mm || !mm->binfmt || !mm->binfmt->core_dump || ant_arch_compat_task())
++	if (!mm || !mm->binfmt || !mm->binfmt->core_dump || !ant_core_abi_ok())
+ 		return -EOPNOTSUPP;
+ 	/* Bound metadata before the Linux writer allocates its snapshots. */
+ 	if (get_nr_threads(current) > 256)
+diff --git a/kernel/antinomie/manual_core.c b/kernel/antinomie/manual_core.c
+index 89c53b0d8..8041c9915 100644
+--- a/kernel/antinomie/manual_core.c
++++ b/kernel/antinomie/manual_core.c
+@@ -269,7 +269,7 @@ static int frozen_identity(struct ant_manual *session)
+ 	    current->start_boottime != session->identity.start_ns ||
+ 	    task_tgid_nr(current) != session->identity.tgid ||
+ 	    !current->mm->binfmt || !current->mm->binfmt->core_dump ||
+-	    ant_arch_compat_task() ||
++	    !ant_core_abi_ok() ||
+ 	    test_bit(MMF_MULTIPROCESS, &current->mm->flags) ||
+ 	    READ_ONCE(current->signal->core_state) ||
+ 	    READ_ONCE(current->signal->flags) & SIGNAL_GROUP_EXIT ||
+diff --git a/kernel/antinomie/process_core.c b/kernel/antinomie/process_core.c
+index cc8323fe0..32cebc788 100644
+--- a/kernel/antinomie/process_core.c
++++ b/kernel/antinomie/process_core.c
+@@ -128,6 +128,12 @@ bool ant_core_reading(void)
+ 	return until && time_before(jiffies, until);
+ }
+ 
++#ifdef ANT_CORE_COMPAT_MACHINE
++#define CORE_CAPS_COMPAT ANTC_CORE_CAPS_COMPAT_ELF32
++#else
++#define CORE_CAPS_COMPAT 0
++#endif
++
+ /* What CORE_CAPS tells the host about the limits above. */
+ int ant_core_caps(const u8 *args, size_t args_len, void *reply, size_t capacity,
+ 		  size_t *reply_len)
+@@ -140,7 +146,9 @@ int ant_core_caps(const u8 *args, size_t args_len, void *reply, size_t capacity,
+ 	put_unaligned_le32(1, reply);
+ 	put_unaligned_le32(ANTC_CORE_CAPS_BUDGET | ANTC_CORE_CAPS_STORED |
+ 			   ANTC_CORE_CAPS_LONG_TIMEOUT | ANTC_CORE_CAPS_CHUNKED |
+-			   ANTC_CORE_CAPS_FAST_READ, reply + 4);
++			   ANTC_CORE_CAPS_FAST_READ |
++			   CORE_CAPS_COMPAT,
++			   reply + 4);
+ 	put_unaligned_le64(ant_core_max_bytes(), reply + 8);
+ 	put_unaligned_le64(ant_core_pool_bytes(), reply + 16);
+ 	put_unaligned_le32(ANT_CORE_HANDLES, reply + 24);
+@@ -625,30 +633,101 @@ void ant_core_live_begin(struct ant_core *core)
+ 	mutex_unlock(&core_lock);
+ }
+ 
+-static u64 core_expected_size(struct ant_core *core)
++/* The core's ELF header: the kernel's native class and machine, or, for an
++ * AArch32 task of an arm64 guest, ELFCLASS32 EM_ARM. *elf32: its program
++ * headers are struct elf32_phdr.
++ */
++static bool core_header(struct ant_core *core, u64 *phoff, u32 *phnum, bool *elf32)
+ {
+-	struct elfhdr *elf;
+-	struct elf_phdr *ph;
+-	u64 available, table, size = 0, extent;
+-	unsigned int i;
+-
+-	elf = core_span(core, 0, &available);
+-	if (!elf || available < sizeof(*elf) ||
+-	    memcmp(elf->e_ident, ELFMAG, SELFMAG) ||
+-	    elf->e_ident[EI_CLASS] != ELF_CLASS ||
+-	    elf->e_ident[EI_DATA] != ELF_DATA ||
+-	    elf->e_type != ET_CORE || elf->e_machine != ELF_ARCH ||
+-	    elf->e_phentsize != sizeof(*ph) || elf->e_phnum == PN_XNUM)
++	u64 available;
++	u8 *ident = core_span(core, 0, &available);
++
++	if (!ident || available < EI_NIDENT || memcmp(ident, ELFMAG, SELFMAG) ||
++	    ident[EI_DATA] != ELF_DATA)
++		return false;
++	if (ident[EI_CLASS] == ELF_CLASS) {
++		struct elfhdr *elf = (struct elfhdr *)ident;
++
++		if (available < sizeof(*elf) || elf->e_type != ET_CORE ||
++		    elf->e_machine != ELF_ARCH || elf->e_phentsize != sizeof(struct elf_phdr) ||
++		    elf->e_phnum == PN_XNUM)
++			return false;
++		*phoff = elf->e_phoff;
++		*phnum = elf->e_phnum;
++		*elf32 = ELF_CLASS == ELFCLASS32;
++		return true;
++	}
++#ifdef ANT_CORE_COMPAT_MACHINE
++	if (ident[EI_CLASS] == ELFCLASS32) {
++		struct elf32_hdr *elf = (struct elf32_hdr *)ident;
++
++		if (available < sizeof(*elf) || elf->e_type != ET_CORE ||
++		    elf->e_machine != ANT_CORE_COMPAT_MACHINE ||
++		    elf->e_phentsize != sizeof(struct elf32_phdr) || elf->e_phnum == PN_XNUM)
++			return false;
++		*phoff = elf->e_phoff;
++		*phnum = elf->e_phnum;
++		*elf32 = true;
++		return true;
++	}
++#endif
++	return false;
++}
++
++/* Program header i of the core: its type, file offset and file size. */
++static bool core_phdr(struct ant_core *core, u64 phoff, u32 i, bool elf32,
++		      u32 *type, u64 *offset, u64 *filesz)
++{
++	size_t size = elf32 ? sizeof(struct elf32_phdr) : sizeof(struct elf64_phdr);
++	u64 available;
++	void *ph = core_span(core, phoff + (u64)i * size, &available);
++
++	if (!ph || available < size)
++		return false;
++	if (elf32) {
++		struct elf32_phdr *p = ph;
++
++		*type = p->p_type;
++		*offset = p->p_offset;
++		*filesz = p->p_filesz;
++	} else {
++		struct elf64_phdr *p = ph;
++
++		*type = p->p_type;
++		*offset = p->p_offset;
++		*filesz = p->p_filesz;
++	}
++	return true;
++}
++
++/* The core flag that names its format, once its header is in. */
++static u32 core_format_flag(struct ant_core *core)
++{
++	u64 phoff;
++	u32 phnum;
++	bool elf32;
++
++	if (!core_header(core, &phoff, &phnum, &elf32))
+ 		return 0;
++	if (elf32 && ELF_CLASS == ELFCLASS64)
++		return ANTC_CORE_COMPAT_ELF32;
++	return elf32 ? ANTC_CORE_NATIVE_ELF32 : ANTC_CORE_NATIVE_ELF64;
++}
++
++static u64 core_expected_size(struct ant_core *core)
++{
++	u64 phoff, offset, filesz, size = 0, extent;
++	u32 phnum, type, i;
++	bool elf32;
++
+ 	/* The header and the program headers are written back to back, so they
+ 	 * sit in the first extent.
+ 	 */
+-	table = (u64)elf->e_phnum * sizeof(*ph);
+-	ph = core_span(core, elf->e_phoff, &available);
+-	if (!ph || available < table)
++	if (!core_header(core, &phoff, &phnum, &elf32))
+ 		return 0;
+-	for (i = 0; i < elf->e_phnum; i++) {
+-		if (check_add_overflow(ph[i].p_offset, ph[i].p_filesz, &extent))
++	for (i = 0; i < phnum; i++) {
++		if (!core_phdr(core, phoff, i, elf32, &type, &offset, &filesz) ||
++		    check_add_overflow(offset, filesz, &extent))
+ 			return 0;
+ 		size = max(size, extent);
+ 	}
+@@ -660,28 +739,25 @@ static u64 core_expected_size(struct ant_core *core)
+  */
+ static u32 core_thread_count(struct ant_core *core)
+ {
+-	struct elfhdr *elf;
+-	struct elf_phdr *ph;
+-	u64 available;
+-	u32 count = 0;
+-	unsigned int i;
++	u64 available, phoff, offset, filesz;
++	u32 count = 0, phnum, type, i;
++	bool elf32;
+ 
+-	if (!core->expected_size)
++	if (!core->expected_size || !core_header(core, &phoff, &phnum, &elf32))
+ 		return 0;
+-	elf = core_span(core, 0, &available);
+-	ph = elf ? core_span(core, elf->e_phoff, &available) : NULL;
+-	if (!ph)
+-		return 0;
+-	for (i = 0; i < elf->e_phnum; i++) {
++	for (i = 0; i < phnum; i++) {
+ 		u64 at = 0, length;
+ 		u8 *notes;
+ 
+-		if (ph[i].p_type != PT_NOTE)
++		/* Note headers have one layout in both classes. */
++		if (!core_phdr(core, phoff, i, elf32, &type, &offset, &filesz))
++			break;
++		if (type != PT_NOTE)
+ 			continue;
+-		notes = core_span(core, ph[i].p_offset, &available);
++		notes = core_span(core, offset, &available);
+ 		if (!notes)
+ 			continue;
+-		length = min_t(u64, ph[i].p_filesz, available);
++		length = min_t(u64, filesz, available);
+ 		while (sizeof(struct elf_note) <= length - at) {
+ 			struct elf_note *note = (struct elf_note *)(notes + at);
+ 			u64 name_size = ALIGN((u64)note->n_namesz, 4);
+@@ -720,8 +796,7 @@ void ant_core_live_finish(struct ant_core *core, int error, u32 thread_count, bo
+ 	core->thread_count = retained;
+ 	core->flags |= ANTC_CORE_PAUSE_RELEASED;
+ 	if (expected)
+-		core->flags |= ELF_CLASS == ELFCLASS32 ?
+-			ANTC_CORE_NATIVE_ELF32 : ANTC_CORE_NATIVE_ELF64;
++		core->flags |= core_format_flag(core);
+ 	if (gap || error)
+ 		core->flags |= ANTC_CORE_COVERAGE_GAP;
+ 	core->status = error;
+@@ -787,8 +862,7 @@ bool ant_monitor_core_exit(int wait_status, const kernel_siginfo_t *siginfo)
+ 		error = core->expected_size > ANT_CORE_LOGICAL_MAX ? -EOVERFLOW : -EIO;
+ 	mutex_lock(&core_lock);
+ 	if (core->expected_size)
+-		core->flags |= ELF_CLASS == ELFCLASS32 ?
+-			ANTC_CORE_NATIVE_ELF32 : ANTC_CORE_NATIVE_ELF64;
++		core->flags |= core_format_flag(core);
+ 	if (thread_count < core->thread_count)
+ 		core->flags |= ANTC_CORE_COVERAGE_GAP;
+ 	core->thread_count = thread_count;
+diff --git a/kernel/antinomie/process_core.h b/kernel/antinomie/process_core.h
+index 6682a4765..5a8b8d6b2 100644
+--- a/kernel/antinomie/process_core.h
++++ b/kernel/antinomie/process_core.h
+@@ -5,6 +5,27 @@
+ #include <linux/errno.h>
+ #include <linux/signal_types.h>
+ #include <linux/types.h>
++#include <linux/elf-em.h>
++#include <linux/antinomie_monitor.h>
++
++/* An AArch32 task of an arm64 guest has its core written by its own binary
++ * format, fs/compat_binfmt_elf.c's: ELFCLASS32 EM_ARM, the compat NT_PRSTATUS
++ * of user_aarch32_view, NT_ARM_VFP, the compat NT_SIGINFO, a 32-bit NT_FILE
++ * and auxv (contract revision 21, ANTC_CORE_COMPAT_ELF32). Other compat ABIs
++ * (ia32 on x86-64) get no core.
++ */
++#if defined(CONFIG_ARM64) && defined(CONFIG_COMPAT_BINFMT_ELF)
++#define ANT_CORE_COMPAT_MACHINE EM_ARM
++#endif
++
++static __always_inline bool ant_core_abi_ok(void)
++{
++#ifdef ANT_CORE_COMPAT_MACHINE
++	return true;
++#else
++	return !ant_arch_compat_task();
++#endif
++}
+ 
+ struct file;
+ struct page;
+-- 
+2.53.0
+

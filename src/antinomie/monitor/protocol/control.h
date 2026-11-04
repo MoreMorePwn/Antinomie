@@ -25,7 +25,19 @@
  * SW_SINGLE_STEP and READ_WATCH. A host sends ARCH_INFO only to a guest whose
  * INFO revision is 20 or later; an older guest counts an unknown opcode as a
  * bad command. */
-#define ANTC_REVISION 20
+/* Revision 21: decoded arguments of the ioctl requests fs/ioctl.c answers
+ * for every file (FIONREAD on any file, FIONBIO, FIOASYNC, FIOQSIZE,
+ * FIGETBSZ, FS_IOC_GETFLAGS, FS_IOC_SETFLAGS; no field for the requests
+ * without a pointer argument) and of arch_prctl ARCH_CET_STATUS; the
+ * task-exit record names who sent the signal that ended a task
+ * (lifecycle.signal.*) and carries the kernel's line for an OOM kill
+ * (lifecycle.kernel_log); arm64 guests write ELF32 cores of AArch32 tasks
+ * (CORE_COMPAT_ELF32) and debug them (DEBUG_CAP_AARCH32), and a debug-on-start
+ * session of an image the engine cannot debug answers EOPNOTSUPP;
+ * any other ioctl whose number encodes a size has those bytes captured, and a
+ * read of an event descriptor names its records' layout; the compat
+ * structures of common compat calls are captured by their ILP32 layouts. */
+#define ANTC_REVISION 21
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001
 #define ANTC_UPLOAD_CHUNK 0x1002
@@ -97,6 +109,8 @@
 #define ANTC_CORE_CAPS_LONG_TIMEOUT 4
 #define ANTC_CORE_CAPS_CHUNKED 8
 #define ANTC_CORE_CAPS_FAST_READ 16
+/* Revision 21: AArch32 tasks of an arm64 guest get ELF32 cores (ANTC_CORE_COMPAT_ELF32). */
+#define ANTC_CORE_CAPS_COMPAT_ELF32 32
 #define ANTC_CORE_READ_HOLE 1
 #define ANTC_CORE_LOGICAL_MAX 17179869184ULL
 #define ANTC_CORE_ARMED 1
@@ -114,6 +128,9 @@
 #define ANTC_CORE_RESIDENT_ONLY 0x40
 /* Revision 20: the core is the native ELF32 file of a 32-bit guest. */
 #define ANTC_CORE_NATIVE_ELF32 0x80
+/* Revision 21: the core is the ELF32 file (ELFCLASS32 EM_ARM) of an AArch32
+ * task of an arm64 guest, as fs/compat_binfmt_elf.c writes it. */
+#define ANTC_CORE_COMPAT_ELF32 0x100
 #define ANTC_RESOURCES 0x1070
 #define ANTC_RESOURCES_SIZE 96
 #define ANTC_RESOURCES_MEMORY_VALID 1
@@ -200,6 +217,9 @@
  * gdb stub then lets gdb step), and a watchpoint may trigger on loads only. */
 #define ANTC_DEBUG_CAP_SW_SINGLE_STEP 1024
 #define ANTC_DEBUG_CAP_READ_WATCH 2048
+/* Revision 21: AArch32 tasks of an arm64 guest are debugged (compat regsets;
+ * software breakpoints of length 4, A32, and 2, Thumb). */
+#define ANTC_DEBUG_CAP_AARCH32 4096
 /* second capability word (CAPS requested with CAPS_EXT) */
 #define ANTC_DEBUG_CAP2_FOLLOW 1
 #define ANTC_DEBUG_CAP2_NONSTOP 2

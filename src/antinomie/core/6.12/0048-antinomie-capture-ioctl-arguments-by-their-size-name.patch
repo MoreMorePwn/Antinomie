@@ -1,0 +1,270 @@
+From ece7fa81fe6fd337a7df37a8c4cb18bc3fd6dd1d Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Wed, 4 Nov 2026 22:00:29 +0700
+Subject: [PATCH] antinomie: capture ioctl arguments by their size, name more
+ of them, and type reads of event descriptors
+
+An ioctl request outside the decoded set recorded only a gap. Its number
+usually encodes the argument's direction and size (_IOC_DIR, _IOC_SIZE):
+kernel/antinomie/recorder.c now records those bytes, opaque, up to 4096,
+at entry for _IOC_WRITE and at exit on success for _IOC_READ; a request
+whose number encodes neither keeps its gap. The socket interface requests
+(SIOCGIF*, SIOCSIF*), TUNSETIFF, SIOCGIFCONF with the ifreq array it fills,
+the loop device's status (LOOP_SET_STATUS64, LOOP_GET_STATUS64,
+LOOP_CONFIGURE), FICLONERANGE and the fsxattr pair are recorded by their
+layouts (ifreq, ifconf, loop_info64, loop_config, file_clone_range,
+fsxattr).
+
+A read of an eventfd, timerfd, signalfd, inotify, fanotify or userfaultfd
+descriptor returns that kind's records; the read's buffer now names their
+layout (u64, signalfd_siginfo[], inotify_event[], fanotify_event_metadata[],
+uffd_msg[]), from the anonymous inode the file was made on.
+
+epoll_ctl's event is recorded for an operation the kernel refuses too.
+
+Contract revision 21.
+---
+ kernel/antinomie/control_wire.h   |   4 +-
+ kernel/antinomie/native_capture.c |   7 +-
+ kernel/antinomie/recorder.c       | 154 +++++++++++++++++++++++++++++-
+ 3 files changed, 156 insertions(+), 9 deletions(-)
+
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index 1f5b33fe8..a39fe073d 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -33,7 +33,9 @@
+  * (lifecycle.signal.*) and carries the kernel's line for an OOM kill
+  * (lifecycle.kernel_log); arm64 guests write ELF32 cores of AArch32 tasks
+  * (CORE_COMPAT_ELF32) and debug them (DEBUG_CAP_AARCH32), and a debug-on-start
+- * session of an image the engine cannot debug answers EOPNOTSUPP. */
++ * session of an image the engine cannot debug answers EOPNOTSUPP;
++ * any other ioctl whose number encodes a size has those bytes captured, and a
++ * read of an event descriptor names its records' layout. */
+ #define ANTC_REVISION 21
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+diff --git a/kernel/antinomie/native_capture.c b/kernel/antinomie/native_capture.c
+index 383f7b976..28977d74f 100644
+--- a/kernel/antinomie/native_capture.c
++++ b/kernel/antinomie/native_capture.c
+@@ -814,12 +814,13 @@ static void capture_epoll(struct ant_task *ctx, u64 nr, const u64 args[6],
+ 	if (ant_capture_lost(ctx))
+ 		return;
+ 	if (nr == __NR_epoll_ctl) {
++		/* The event is read for ADD and MOD; for an operation the kernel
++		 * refuses it is still the program's argument (revision 21).
++		 */
+ 		if (!output && args[1] != EPOLL_CTL_DEL)
+ 			ant_capture_field(ctx, 3, "arg3.epoll_event", LAYOUT("epoll_event"), 3,
+ 					  args[3], NULL, sizeof(struct epoll_event),
+-					  sizeof(struct epoll_event),
+-					  args[1] == EPOLL_CTL_ADD || args[1] == EPOLL_CTL_MOD ?
+-					  ANT_COMPLETE : ANT_NO_DECODER);
++					  sizeof(struct epoll_event), ANT_COMPLETE);
+ 		return;
+ 	}
+ 	if (!output) {
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 90cfac442..a00c5616a 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -23,6 +23,11 @@
+ #include <linux/unaligned.h>
+ #include <uapi/linux/major.h>
+ #include <uapi/asm/termios.h>
++#include <uapi/linux/if.h>
++#include <uapi/linux/if_tun.h>
++#include <uapi/linux/loop.h>
++#include <uapi/linux/magic.h>
++#include <uapi/linux/sockios.h>
+ #include <asm/stat.h>
+ #include <asm/syscall.h>
+ #include <asm/antinomie_syscalls.h>
+@@ -706,6 +711,113 @@ static bool vfs_ioctl_shape(u32 request, u64 *size, const char **layout, bool *i
+ 	return false;
+ }
+ 
++/* What a read from an event descriptor returns: the records of its kind,
++ * named by the anonymous inode its file was made on (contract revision 21);
++ * "" for any other file (opaque bytes).
++ */
++static const char *read_records_layout(u64 number)
++{
++	struct fd fd = fdget(number);
++	struct file *file = fd_file(fd);
++	const char *layout = "", *name;
++
++	if (file && file->f_path.dentry->d_sb->s_magic == ANON_INODE_FS_MAGIC) {
++		name = file->f_path.dentry->d_name.name;
++		if (!strcmp(name, "[eventfd]") || !strcmp(name, "[timerfd]"))
++			layout = ANT_LAYOUT("u64");
++		else if (!strcmp(name, "[signalfd]"))
++			layout = ANT_LAYOUT("signalfd_siginfo[]");
++		else if (!strcmp(name, "inotify"))
++			layout = ANT_LAYOUT("inotify_event[]");
++		else if (!strcmp(name, "[fanotify]"))
++			layout = ANT_LAYOUT("fanotify_event_metadata[]");
++		else if (!strcmp(name, "[userfaultfd]"))
++			layout = ANT_LAYOUT("uffd_msg[]");
++	}
++	fdput(fd);
++	return layout;
++}
++
++#define IOCTL_IN 1
++#define IOCTL_OUT 2
++/* The most an ioctl's size field can name is 16383 bytes; the generic capture
++ * stops at a page.
++ */
++#define ANT_IOCTL_GENERIC_MAX 4096
++#define ANT_IFCONF_MAX (64 * sizeof(struct ifreq))
++
++/* Requests the host decodes by a layout (contract revision 21): the socket
++ * interface requests of net/core/dev_ioctl.c and TUN (an ifreq read, and for a
++ * query written back), SIOCGIFCONF (an ifconf and the ifreq array it points
++ * to), the loop device's status (drivers/block/loop.c), FICLONERANGE and the
++ * fsxattr pair (fs/ioctl.c). False for any other request.
++ */
++static bool named_ioctl_shape(u32 request, u64 *size, const char **layout, u8 *dir,
++			      bool *ifconf)
++{
++	switch (request) {
++	case SIOCGIFNAME: case SIOCGIFFLAGS: case SIOCGIFADDR: case SIOCGIFDSTADDR:
++	case SIOCGIFBRDADDR: case SIOCGIFNETMASK: case SIOCGIFMETRIC: case SIOCGIFMTU:
++	case SIOCGIFHWADDR: case SIOCGIFINDEX: case SIOCGIFTXQLEN: case SIOCGIFMAP:
++	case TUNSETIFF:
++		/* A query: the interface's name in, the answer written back. */
++		*dir = IOCTL_IN | IOCTL_OUT;
++		*size = sizeof(struct ifreq);
++		*layout = ANT_LAYOUT("ifreq");
++		return true;
++	case SIOCSIFFLAGS: case SIOCSIFADDR: case SIOCSIFDSTADDR: case SIOCSIFBRDADDR:
++	case SIOCSIFNETMASK: case SIOCSIFMETRIC: case SIOCSIFMTU: case SIOCSIFNAME:
++	case SIOCSIFHWADDR: case SIOCSIFTXQLEN: case SIOCSIFMAP:
++		*dir = IOCTL_IN;
++		*size = sizeof(struct ifreq);
++		*layout = ANT_LAYOUT("ifreq");
++		return true;
++	case SIOCGIFCONF:
++		*dir = IOCTL_IN | IOCTL_OUT;
++		*size = sizeof(struct ifconf);
++		*layout = ANT_LAYOUT("ifconf");
++		*ifconf = true;
++		return true;
++	case LOOP_SET_STATUS64: case LOOP_GET_STATUS64:
++		*dir = request == LOOP_SET_STATUS64 ? IOCTL_IN : IOCTL_OUT;
++		*size = sizeof(struct loop_info64);
++		*layout = ANT_LAYOUT("loop_info64");
++		return true;
++	case LOOP_CONFIGURE:
++		*dir = IOCTL_IN;
++		*size = sizeof(struct loop_config);
++		*layout = ANT_LAYOUT("loop_config");
++		return true;
++	case FICLONERANGE:
++		*dir = IOCTL_IN;
++		*size = sizeof(struct file_clone_range);
++		*layout = ANT_LAYOUT("file_clone_range");
++		return true;
++	case FS_IOC_FSGETXATTR: case FS_IOC_FSSETXATTR:
++		*dir = request == FS_IOC_FSSETXATTR ? IOCTL_IN : IOCTL_OUT;
++		*size = sizeof(struct fsxattr);
++		*layout = ANT_LAYOUT("fsxattr");
++		return true;
++	}
++	return false;
++}
++
++/* SIOCGIFCONF wrote ifc_len bytes of ifreq records at ifc_buf (none for a
++ * NULL buffer, which asks for the length).
++ */
++static void ifconf_buffer(struct ant_task *ctx, u64 address)
++{
++	struct ifconf conf;
++
++	if (copy_from_user_nofault(&conf, (void __user *)(unsigned long)address, sizeof(conf)) ||
++	    !conf.ifc_buf || conf.ifc_len <= 0)
++		return;
++	field(ctx, 2, "arg2.ifconf.buffer", ANT_LAYOUT("ifreq[]"), 3,
++	      (unsigned long)conf.ifc_buf, NULL,
++	      min_t(u64, conf.ifc_len, ANT_IFCONF_MAX), conf.ifc_len,
++	      conf.ifc_len > ANT_IFCONF_MAX ? ANT_INVALID_EXTENT : ANT_COMPLETE);
++}
++
+ static void ioctl_field(struct ant_task *ctx, bool output, long result)
+ {
+ 	struct fd fd = fdget(ctx->args[0]);
+@@ -713,7 +825,10 @@ static void ioctl_field(struct ant_task *ctx, bool output, long result)
+ 	u32 major;
+ 	u64 size = U64_MAX;
+ 	const char *layout = "";
+-	bool tty_file = false, input = false;
++	bool tty_file = false, input = false, ifconf = false;
++	u32 request = ctx->args[1];
++	u16 encoding = 3;
++	u8 dir;
+ 
+ 	if (file && S_ISCHR(file_inode(file)->i_mode)) {
+ 		major = imajor(file_inode(file));
+@@ -759,14 +874,37 @@ static void ioctl_field(struct ant_task *ctx, bool output, long result)
+ 		}
+ 	fdput(fd);
+ 	if (size == U64_MAX)
+-		vfs_ioctl_shape((u32)ctx->args[1], &size, &layout, &input);
++		vfs_ioctl_shape(request, &size, &layout, &input);
++	dir = input ? IOCTL_IN : IOCTL_OUT;
++	if (size == U64_MAX)
++		named_ioctl_shape(request, &size, &layout, &dir, &ifconf);
++	/* Any other request whose number encodes a direction and a size: those
++	 * bytes, opaque (contract revision 21).
++	 */
++	if (size == U64_MAX && _IOC_DIR(request) != _IOC_NONE && _IOC_SIZE(request) &&
++	    _IOC_SIZE(request) <= ANT_IOCTL_GENERIC_MAX) {
++		size = _IOC_SIZE(request);
++		dir = (_IOC_DIR(request) & _IOC_WRITE ? IOCTL_IN : 0) |
++		      (_IOC_DIR(request) & _IOC_READ ? IOCTL_OUT : 0);
++		layout = "";
++		encoding = 1;
++	}
+ 	if (size == U64_MAX) {
+ 		if (!output)
+ 			field(ctx, 2, "arg2.ioctl", "", 1, ctx->args[2], NULL,
+ 			      U64_MAX, U64_MAX, ANT_NO_DECODER);
+-	} else if (size && ((input && !output) || (!input && output && !result))) {
+-		user_field(ctx, 2, "arg2.ioctl", layout, 3, ctx->args[2], size);
++		return;
+ 	}
++	if (!size)
++		return;
++	if (!output && (dir & IOCTL_IN))
++		field(ctx, 2, "arg2.ioctl", layout, encoding, ctx->args[2], NULL, size, size,
++		      ANT_COMPLETE);
++	if (output && (dir & IOCTL_OUT) && result >= 0)
++		field(ctx, 2, "arg2.ioctl", layout, encoding, ctx->args[2], NULL, size, size,
++		      ANT_COMPLETE);
++	if (output && ifconf && result >= 0)
++		ifconf_buffer(ctx, ctx->args[2]);
+ }
+ 
+ #ifdef ANT_ABI_COMPAT
+@@ -1051,9 +1189,15 @@ static void capture_exit(struct ant_task *ctx, long result)
+ 		return;
+ 	switch (ctx->nr) {
+ 	case __NR_read: case __NR_recvfrom:
+-		if (result > 0)
++		if (result > 0 && ctx->nr == __NR_read) {
++			const char *layout = read_records_layout(a[0]);
++
++			user_field(ctx, 1, "arg1.data", layout, *layout ? 3 : 1, a[1],
++				   min_t(u64, result, min_t(u64, a[2], MAX_RW_COUNT)));
++		} else if (result > 0) {
+ 			user_field(ctx, 1, "arg1.data", "", 1, a[1],
+ 				   min_t(u64, result, min_t(u64, a[2], MAX_RW_COUNT)));
++		}
+ 		if (ctx->nr == __NR_read)
+ 			break;
+ 		fallthrough;
+-- 
+2.53.0
+

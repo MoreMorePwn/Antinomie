@@ -18,6 +18,8 @@ use antinomie_monitor_core::{
     },
     *,
 };
+#[path = "debug-a32/mod.rs"]
+mod a32;
 #[path = "debug-p2/mod.rs"]
 mod p2;
 #[path = "debug-p3/mod.rs"]
@@ -999,13 +1001,14 @@ fn main() {
         return;
     }
     let [mode, bundle, data, fixture] = args.as_slice() else {
-        eprintln!("usage: debug-check spike|gdb|stress BUNDLE NEW_DATA_DIR FIXTURE");
+        eprintln!("usage: debug-check spike|gdb|stress|a32 BUNDLE NEW_DATA_DIR FIXTURE");
         std::process::exit(2);
     };
     let result = match mode.as_str() {
         "spike" => spike(bundle, data, fixture),
         "gdb" => gdb(bundle, data, fixture),
         "stress" => stress(bundle, data, fixture),
+        "a32" => a32::run(bundle, data, fixture),
         other => Err(format!("unknown mode {other}")),
     };
     if let Err(error) = result {
