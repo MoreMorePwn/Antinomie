@@ -255,7 +255,7 @@ impl MonitorApp {
                         .max_height(
                             if self.settings.explorer_collapsed {
                                 // Room for the Library rows below.
-                                budget - ui.spacing().interact_size.y * 4.0 - 24.0
+                                budget - ui.spacing().interact_size.y * 5.0 - 24.0
                             } else {
                                 budget * 0.45
                             }

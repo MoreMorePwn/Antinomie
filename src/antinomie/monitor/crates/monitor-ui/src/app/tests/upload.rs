@@ -224,7 +224,7 @@ fn explorer_persists_root_and_old_preferences_remain_compatible() {
 fn explorer_remains_below_the_library_with_folded_lists_and_large_fonts() {
     for (size, font_size) in [
         (egui::vec2(1280.0, 900.0), 16.0),
-        (egui::vec2(800.0, 600.0), 24.0),
+        (egui::vec2(800.0, 640.0), 24.0),
     ] {
         for library_folded in [false, true] {
             let mut app = app();
