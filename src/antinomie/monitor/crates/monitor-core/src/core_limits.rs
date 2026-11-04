@@ -356,7 +356,9 @@ mod tests {
         }
         assert!(CoreLimits::parse(&caps(2048 * MIB, 0x1f)).is_err());
         assert!(CoreLimits::parse(&caps(32 * MIB, 0x1f)).is_err());
-        assert!(CoreLimits::parse(&caps(128 * MIB, 0x3f)).is_err());
+        // Revision 21's COMPAT_ELF32 bit (32) is known; the next one is not.
+        assert!(CoreLimits::parse(&caps(128 * MIB, 0x3f)).is_ok());
+        assert!(CoreLimits::parse(&caps(128 * MIB, 0x5f)).is_err());
         let mut bad = caps(128 * MIB, 0x1f);
         bad[0] = 2;
         assert!(CoreLimits::parse(&bad).is_err());
