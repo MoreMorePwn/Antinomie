@@ -600,19 +600,23 @@ io_uring_setup.cqsize_below_sq | io_uring_setup(entries=8, p={sq_entries=0, cq_e
 io_uring_setup.default | io_uring_setup(entries=16, p={sq_entries=16, cq_entries=32, flags=0, sq_thread_cpu=0, sq_thread_idle=0, features=IORING_FEAT_SINGLE_MMAP|IORING_FEAT_NODROP|IORING_FEAT_SUBMIT_STABLE|IORING_FEAT_RW_CUR_POS|IORING_FEAT_CUR_PERSONALITY|IORING_FEAT_FAST_POLL|IORING_FEAT_PO...) = 3 | arg1.params:complete:{sq_entries=0, cq_entries=0, flags=0, sq_thread_cpu=0, sq_thread_idle=0, features=0, wq_fd=0, sq_off={head=0, tail=0, ring_mask=0, ring_entries=0, flags=0, dropped=0, array=0, user_addr=NULL}, cq_off={head=0, tail=0, ring_mask=0, ring_entri... arg1.params:complete
 io_uring_setup.fault | io_uring_setup(entries=4, p=0x1) = EFAULT | arg1.params:copy fault:uncaptured !3
 io_uring_setup.zero_entries | io_uring_setup(entries=0, p={sq_entries=0, cq_entries=0, flags=0, sq_thread_cpu=0, sq_thread_idle=0, features=0, wq_fd=0, sq_off={head=0, tail=0, ring_mask=0, ring_entries=0, flags=0, dropped=0, array=0, user_addr=NULL}, cq_off={head=0, tail=0, ring_mask=0, ring_entri...) = EINVAL | arg1.params:complete:{sq_entries=0, cq_entries=0, flags=0, sq_thread_cpu=0, sq_thread_idle=0, features=0, wq_fd=0, sq_off={head=0, tail=0, ring_mask=0, ring_entries=0, flags=0, dropped=0, array=0, user_addr=NULL}, cq_off={head=0, tail=0, ring_mask=0, ring_entri...
-ioctl.badf | ioctl(fd=999, cmd=FIONREAD, arg=<handle>) = EBADF | arg2.ioctl:no decoder:uncaptured !3
-ioctl.ficlone_unsupported | ioctl(fd=9, cmd=FICLONE, arg=3) = EOPNOTSUPP | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fioasync_off | ioctl(fd=4, cmd=FIOASYNC, arg=<handle>) = 0 | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fioasync_on | ioctl(fd=4, cmd=FIOASYNC, arg=<handle>) = 0 | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fioclex | ioctl(fd=4, cmd=FIOCLEX, arg=0) = 0 | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fionbio_off | ioctl(fd=4, cmd=FIONBIO, arg=<handle>) = 0 | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fionbio_on | ioctl(fd=4, cmd=FIONBIO, arg=<handle>) = 0 | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fionclex | ioctl(fd=4, cmd=FIONCLEX, arg=0) = 0 | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fionread_fault | ioctl(fd=4, cmd=FIONREAD, arg=1) = EFAULT | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fionread_file | ioctl(fd=3, cmd=FIONREAD, arg=<handle>) = 0 | arg2.ioctl:no decoder:uncaptured !3
-ioctl.fionread_pipe | ioctl(fd=4, cmd=FIONREAD, arg=<handle>) = 0 | arg2.ioctl:no decoder:uncaptured !3
+ioctl.badf | ioctl(fd=999, cmd=FIONREAD, arg=<handle>) = EBADF |
+ioctl.ficlone_unsupported | ioctl(fd=9, cmd=FICLONE, arg=3) = EOPNOTSUPP |
+ioctl.figetbsz_file | ioctl(fd=3, cmd=FIGETBSZ, arg=<data>) = <value> | arg2.ioctl:complete
+ioctl.fioasync_off | ioctl(fd=4, cmd=FIOASYNC, arg=<bytes>) = 0 | arg2.ioctl:complete:<bytes>
+ioctl.fioasync_on | ioctl(fd=4, cmd=FIOASYNC, arg=<bytes>) = 0 | arg2.ioctl:complete:<bytes>
+ioctl.fioclex | ioctl(fd=4, cmd=FIOCLEX, arg=0) = 0 |
+ioctl.fionbio_off | ioctl(fd=4, cmd=FIONBIO, arg=<bytes>) = 0 | arg2.ioctl:complete:<bytes>
+ioctl.fionbio_on | ioctl(fd=4, cmd=FIONBIO, arg=<bytes>) = 0 | arg2.ioctl:complete:<bytes>
+ioctl.fionclex | ioctl(fd=4, cmd=FIONCLEX, arg=0) = 0 |
+ioctl.fionread_fault | ioctl(fd=4, cmd=FIONREAD, arg=1) = EFAULT |
+ioctl.fionread_file | ioctl(fd=3, cmd=FIONREAD, arg=<bytes>) = 0 | arg2.ioctl:complete
+ioctl.fionread_pipe | ioctl(fd=4, cmd=FIONREAD, arg=<bytes>) = 0 | arg2.ioctl:complete
 ioctl.fionread_tty | ioctl(fd=stdin, cmd=FIONREAD, arg=<data>) = <value> | arg2.ioctl:complete
-ioctl.socket_inq | ioctl(fd=8, cmd=FIONREAD, arg=<handle>) = 0 | arg2.ioctl:no decoder:uncaptured !3
+ioctl.fioqsize_file | ioctl(fd=3, cmd=FIOQSIZE, arg=<bytes>) = 0 | arg2.ioctl:complete
+ioctl.getflags_file | ioctl(fd=3, cmd=FS_IOC_GETFLAGS, arg=<data>) = <value> | arg2.ioctl:complete
+ioctl.setflags_same | ioctl(fd=3, cmd=FS_IOC_SETFLAGS, arg=<data>) = <value> | arg2.ioctl:complete
+ioctl.socket_inq | ioctl(fd=8, cmd=FIONREAD, arg=<bytes>) = 0 | arg2.ioctl:complete
 ioctl.tcgets_fault | ioctl(fd=stdin, cmd=TCGETS, arg=1) = EFAULT |
 ioctl.tcgets_stdin | ioctl(fd=stdin, cmd=TCGETS, arg=<bytes>) = 0 | arg2.ioctl:complete
 ioctl.tiocgpgrp | ioctl(fd=stdin, cmd=TIOCGPGRP, arg=<data>) = <value> | arg2.ioctl:complete
