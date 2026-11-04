@@ -522,16 +522,23 @@ fn the_flavour_is_chosen_in_settings_and_defaults_to_gef() {
         &ctx,
         input(vec![egui::Event::PointerMoved(over_the_page)]),
     );
-    crate::app::tests::draw_input(
-        &mut app,
-        &ctx,
-        input(vec![egui::Event::MouseWheel {
-            phase: egui::TouchPhase::Move,
-            unit: egui::MouseWheelUnit::Point,
-            delta: egui::vec2(0.0, -200.0),
-            modifiers: egui::Modifiers::NONE,
-        }]),
-    );
+    // Scroll a step at a time until the label shows: the distance depends on
+    // the spacing and the sub-headings above it.
+    for _ in 0..40 {
+        if has(&frames(&mut app, &ctx, size), "Debugger console") {
+            break;
+        }
+        crate::app::tests::draw_input(
+            &mut app,
+            &ctx,
+            input(vec![egui::Event::MouseWheel {
+                phase: egui::TouchPhase::Move,
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -100.0),
+                modifiers: egui::Modifiers::NONE,
+            }]),
+        );
+    }
     let shown = frames(&mut app, &ctx, size);
     assert!(has(&shown, "Debugger console"), "{shown:?}");
     assert!(has(&shown, "GEF (bata24)") && has(&shown, "pwndbg"));

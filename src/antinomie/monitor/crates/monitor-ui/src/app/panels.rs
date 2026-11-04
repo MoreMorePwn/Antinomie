@@ -31,6 +31,9 @@ impl MonitorApp {
         }
         self.shortcuts(ctx);
         antinomie_monitor_core::analysis_tools::set_own_tools(&self.settings.own_tools);
+        antinomie_monitor_core::packet_filter::set_tshark_seconds(
+            self.triage.detection_settings().timeouts.tshark,
+        );
         self.accept_dropped_file(ctx);
         let route_tools = ["tor", "wireproxy"]
             .into_iter()

@@ -170,7 +170,9 @@ fn parse(job: &ParseJob) -> Result<(), String> {
     }
     let shared = Shared::new(Arc::clone(&store.cancel));
     let reader_store = Arc::clone(store);
-    let deadline = Duration::from_secs((300 + total / 10_000).min(3600));
+    let base = super::tshark_seconds();
+    // Larger captures get more time, up to an hour (or the time set, if longer).
+    let deadline = Duration::from_secs((base + total / 10_000).min(base.max(3600)));
     run_process(command, &shared, None, deadline, move |reader| {
         let store = reader_store;
         let mut writer = RowWriter::open(&store)?;
@@ -269,7 +271,7 @@ pub(super) fn load_detail(
         command,
         shared,
         Some(generation),
-        Duration::from_secs(300),
+        Duration::from_secs(super::tshark_seconds()),
         move |reader| {
             let mut xml = Vec::new();
             reader

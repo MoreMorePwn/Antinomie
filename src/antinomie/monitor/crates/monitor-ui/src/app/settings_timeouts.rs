@@ -2,7 +2,10 @@
 //! Settings > Analysis tools: the time each tool may run, one field per tool,
 //! with the tool's default beside it and a reset.
 use super::*;
-use antinomie_monitor_core::{TimedTool, TIMEOUT_MAX_SECONDS};
+use antinomie_monitor_core::{
+    analysis::detection::{EngineTime, EngineTimeouts},
+    TimedTool, TIMEOUT_MAX_SECONDS,
+};
 
 impl MonitorApp {
     /// One tool's time: the number it has now (its default when none was
@@ -44,6 +47,53 @@ impl MonitorApp {
                 self.settings.analysis_limits.timeouts.set(tool, 0);
             }
         });
+    }
+
+    /// The time of each detection engine (Settings > Detection rules), with
+    /// its default and a Reset. The live settings are the Triage's; they reach
+    /// the saved ones when the settings are saved.
+    pub(super) fn detection_timeouts(&mut self, ui: &mut egui::Ui) {
+        for engine in EngineTime::ALL {
+            let default = engine.default_seconds();
+            let set = self.triage.detection_settings().timeouts.get(engine);
+            let mut shown = if set == 0 { default as u32 } else { set };
+            ui.horizontal_wrapped(|ui| {
+                ui.add_sized(
+                    [ui.spacing().interact_size.x, 0.0],
+                    egui::Label::new(engine.label()),
+                );
+                let changed = ui
+                    .add(
+                        egui::DragValue::new(&mut shown)
+                            .range(10..=EngineTimeouts::MAX)
+                            .suffix(" s"),
+                    )
+                    .changed();
+                if changed {
+                    let stored = if u64::from(shown) == default {
+                        0
+                    } else {
+                        shown
+                    };
+                    self.triage
+                        .detection_settings()
+                        .timeouts
+                        .set(engine, stored);
+                }
+                ui.label(
+                    RichText::new(format!("Default ({default} s)"))
+                        .small()
+                        .color(theme::muted()),
+                );
+                if ui
+                    .add_enabled(set != 0, egui::Button::new("Reset"))
+                    .on_hover_text("Back to the default time")
+                    .clicked()
+                {
+                    self.triage.detection_settings().timeouts.set(engine, 0);
+                }
+            });
+        }
     }
 
     /// The tools that are not in the list of installable ones (binwalk and the

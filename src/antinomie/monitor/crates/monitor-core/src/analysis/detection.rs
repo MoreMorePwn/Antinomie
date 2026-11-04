@@ -48,6 +48,88 @@ pub struct Settings {
     pub partial: bool,
     /// Identity of the evidence generation this request is allowed to scan.
     pub evidence_key: String,
+    /// Seconds each engine may run (Settings > Detection rules); a 0 is the
+    /// engine's default.
+    pub timeouts: EngineTimeouts,
+}
+
+/// The tools of the detection worker whose time Settings sets one by one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EngineTime {
+    /// The Triage YARA scan of the specimen, memory and recovered files.
+    Yara,
+    /// Suricata over the captured traffic.
+    Ids,
+    /// The Sigma adapter over the event journal.
+    Sigma,
+    /// TShark reading a capture for the Network tabs and the filter.
+    Tshark,
+}
+
+impl EngineTime {
+    pub const ALL: [Self; 4] = [Self::Yara, Self::Ids, Self::Sigma, Self::Tshark];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Yara => "YARA (Triage scan)",
+            Self::Ids => "Suricata (IDS rules)",
+            Self::Sigma => "Sigma (event journal)",
+            Self::Tshark => "TShark (Network tabs)",
+        }
+    }
+
+    /// The seconds the engine had before this was a setting.
+    pub const fn default_seconds(self) -> u64 {
+        match self {
+            Self::Yara => 100,
+            Self::Ids => 100,
+            Self::Sigma => 110,
+            Self::Tshark => 300,
+        }
+    }
+}
+
+/// The seconds set for each engine; 0 is the engine's default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EngineTimeouts {
+    pub yara: u32,
+    pub ids: u32,
+    pub sigma: u32,
+    pub tshark: u32,
+}
+
+impl EngineTimeouts {
+    /// Longest time an engine may be given, in seconds.
+    pub const MAX: u32 = 8 * 60 * 60;
+
+    /// The raw setting (0 for the default).
+    pub fn get(&self, engine: EngineTime) -> u32 {
+        match engine {
+            EngineTime::Yara => self.yara,
+            EngineTime::Ids => self.ids,
+            EngineTime::Sigma => self.sigma,
+            EngineTime::Tshark => self.tshark,
+        }
+    }
+
+    pub fn set(&mut self, engine: EngineTime, seconds: u32) {
+        let seconds = seconds.min(Self::MAX);
+        match engine {
+            EngineTime::Yara => self.yara = seconds,
+            EngineTime::Ids => self.ids = seconds,
+            EngineTime::Sigma => self.sigma = seconds,
+            EngineTime::Tshark => self.tshark = seconds,
+        }
+    }
+
+    /// The seconds the engine runs for: the setting, else its default.
+    pub fn seconds(&self, engine: EngineTime) -> u64 {
+        match self.get(engine) {
+            0 => engine.default_seconds(),
+            own => u64::from(own.min(Self::MAX)),
+        }
+    }
 }
 
 impl Settings {
@@ -1004,5 +1086,50 @@ mod tests {
         let stored: ScanProgress = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(stored, flushed);
         let _ = std::fs::remove_dir_all(&directory);
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+
+    #[test]
+    fn engines_keep_their_old_times_until_one_is_set() {
+        let settings = Settings::default();
+        assert_eq!(settings.timeouts.seconds(EngineTime::Yara), 100);
+        assert_eq!(settings.timeouts.seconds(EngineTime::Ids), 100);
+        assert_eq!(settings.timeouts.seconds(EngineTime::Sigma), 110);
+        assert_eq!(settings.timeouts.seconds(EngineTime::Tshark), 300);
+        // The Suricata budget, retry and sandbox are what they were at 100 s.
+        assert_eq!(ids::budget(&settings), std::time::Duration::from_secs(100));
+        assert_eq!(ids::retry(&settings), std::time::Duration::from_secs(200));
+        assert_eq!(ids::sandbox(&settings), std::time::Duration::from_secs(360));
+    }
+
+    #[test]
+    fn a_set_time_is_carried_in_the_request_and_old_settings_load() {
+        let mut settings = Settings::default();
+        settings.timeouts.set(EngineTime::Ids, 200);
+        settings.timeouts.set(EngineTime::Sigma, u32::MAX);
+        assert_eq!(ids::budget(&settings), std::time::Duration::from_secs(200));
+        assert_eq!(ids::sandbox(&settings), std::time::Duration::from_secs(720));
+        assert_eq!(
+            settings.timeouts.get(EngineTime::Sigma),
+            EngineTimeouts::MAX
+        );
+        let text = serde_json::to_string(&settings).unwrap();
+        let back: Settings = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, settings);
+        let old: Settings = serde_json::from_str(r#"{"scan_memory": true}"#).unwrap();
+        assert_eq!(old.timeouts, EngineTimeouts::default());
+    }
+
+    #[test]
+    fn tshark_has_its_time_from_the_setting() {
+        crate::packet_filter::set_tshark_seconds(0);
+        assert_eq!(crate::packet_filter::tshark_seconds(), 300);
+        crate::packet_filter::set_tshark_seconds(900);
+        assert_eq!(crate::packet_filter::tshark_seconds(), 900);
+        crate::packet_filter::set_tshark_seconds(0);
     }
 }

@@ -1154,6 +1154,23 @@ mod process;
 mod rows;
 use process::run_process;
 
+/// Seconds TShark may spend on one capture (0 is the default, 300): set from
+/// Settings > Detection rules by the app.
+static TSHARK_SECONDS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Use `seconds` as the time TShark may spend on one capture; 0 is the default.
+pub fn set_tshark_seconds(seconds: u32) {
+    TSHARK_SECONDS.store(seconds, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The time TShark may spend on one capture, before the larger captures' extra.
+pub(crate) fn tshark_seconds() -> u64 {
+    match TSHARK_SECONDS.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => 300,
+        own => u64::from(own),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::process::ProcessReader;

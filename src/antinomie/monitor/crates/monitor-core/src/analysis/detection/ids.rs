@@ -486,17 +486,29 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     scan_with(staged, work, &tool)
 }
 
-/// Time the whole scan may take before the remaining segments are left out.
-pub(super) const IDS_BUDGET: Duration = Duration::from_secs(100);
+/// Time the whole scan may take before the remaining segments are left out
+/// (100 s unless Settings sets Suricata's time).
+pub(super) fn budget(settings: &super::Settings) -> Duration {
+    Duration::from_secs(settings.timeouts.seconds(super::EngineTime::Ids))
+}
+
 /// The limit of the one retry of a segment that timed out: a loaded host
 /// (another scan, a build) can stretch a run that normally takes seconds.
-pub(super) const IDS_RETRY: Duration = Duration::from_secs(200);
-/// How long the sandboxed worker may run: the budget, one retry and the setup.
-pub(super) const IDS_SANDBOX: Duration = Duration::from_secs(360);
+/// Twice the budget.
+pub(super) fn retry(settings: &super::Settings) -> Duration {
+    budget(settings) * 2
+}
+
+/// How long the sandboxed worker may run: the budget, one retry and the setup
+/// (360 s at the default budget).
+pub(super) fn sandbox(settings: &super::Settings) -> Duration {
+    budget(settings) * 18 / 5
+}
 
 /// The scan proper, with the Suricata executable already found.
 fn scan_with(staged: &Staged, work: &Path, tool: &str) -> Result<Report, String> {
-    scan_budgeted(staged, work, tool, IDS_BUDGET, IDS_RETRY)
+    let settings = &staged.request.settings;
+    scan_budgeted(staged, work, tool, budget(settings), retry(settings))
 }
 
 /// [`scan_with`] with its time limits given, for the tests.

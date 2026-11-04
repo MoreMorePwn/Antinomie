@@ -49,6 +49,13 @@ pub(super) fn sigma(staged: &Staged, work: &Path) -> Result<Report, String> {
     let output = work.join("sigma-report.json");
     let python = crate::ruleset::sigma_interpreter(&staged.request.settings.sigma_python);
     let python = text(&python)?;
+    let limit = Duration::from_secs(
+        staged
+            .request
+            .settings
+            .timeouts
+            .seconds(super::super::EngineTime::Sigma),
+    );
     let result = super::super::super::tools::run_with(
         &python,
         &[
@@ -59,7 +66,7 @@ pub(super) fn sigma(staged: &Staged, work: &Path) -> Result<Report, String> {
             &text(&output)?,
         ],
         &[],
-        Duration::from_secs(110),
+        limit,
         64 * 1024,
         true,
     )?;
@@ -71,7 +78,7 @@ pub(super) fn sigma(staged: &Staged, work: &Path) -> Result<Report, String> {
     );
     // A crash or timeout is a failed input with the adapter's own error lines;
     // unmapped categories or missing fields in the journal are not.
-    if let Some(reason) = result.failure_text("Sigma adapter", Duration::from_secs(110)) {
+    if let Some(reason) = result.failure_text("Sigma adapter", limit) {
         let mut report = Report::unavailable(
             Engine::Sigma,
             staged.request.identity.clone(),

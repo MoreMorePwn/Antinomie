@@ -133,3 +133,56 @@ fn a_tool_the_system_has_offers_its_own_copy_and_the_choice_is_kept() {
         "{visible:?}"
     );
 }
+
+#[test]
+fn each_detection_engine_has_a_time_with_its_default_and_a_reset() {
+    use antinomie_monitor_core::analysis::detection::EngineTime;
+    let ctx = context();
+    let size = egui::vec2(1280.0, 800.0);
+    let mut app = app();
+    app.settings_open = true;
+    app.settings_page = SettingsPage::Detection;
+    let mut visible = shown(&mut app, &ctx, size);
+    // The Detection page is short enough to show every engine's line.
+    for (engine, default) in [
+        (EngineTime::Yara, 100),
+        (EngineTime::Ids, 100),
+        (EngineTime::Sigma, 110),
+        (EngineTime::Tshark, 300),
+    ] {
+        assert_eq!(engine.default_seconds(), default);
+        assert!(
+            has(&visible, engine.label()),
+            "{}: {visible:?}",
+            engine.label()
+        );
+    }
+    assert!(has(&visible, "Default (110 s)"), "{visible:?}");
+    assert_eq!(
+        app.triage
+            .detection_settings()
+            .timeouts
+            .get(EngineTime::Yara),
+        0
+    );
+    // A set time travels with the detection settings that are saved, and
+    // Reset brings the default back.
+    app.triage
+        .detection_settings()
+        .timeouts
+        .set(EngineTime::Yara, 240);
+    visible = shown(&mut app, &ctx, size);
+    assert!(has(&visible, "Reset"));
+    let saved = serde_json::to_string(app.triage.detection_settings()).unwrap();
+    let back: antinomie_monitor_core::analysis::detection::Settings =
+        serde_json::from_str(&saved).unwrap();
+    assert_eq!(back.timeouts.get(EngineTime::Yara), 240);
+    click_label(&mut app, &ctx, size, "Reset");
+    assert_eq!(
+        app.triage
+            .detection_settings()
+            .timeouts
+            .get(EngineTime::Yara),
+        0
+    );
+}

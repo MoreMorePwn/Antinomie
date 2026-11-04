@@ -553,6 +553,13 @@ impl MonitorApp {
             }
             ui.end_row();
         });
+        ui.add_space(12.0);
+        theme::section(ui, "Time limits");
+        hint(
+            ui,
+            "How long each engine may run before it is stopped; a scan that runs out of time says so.",
+        );
+        self.detection_timeouts(ui);
     }
 
     fn notifications_page(&mut self, ui: &mut egui::Ui) {

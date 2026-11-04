@@ -983,7 +983,14 @@ YARA scan 60, UPX unpacking 240, Ghidra decompilation 840, Detect It Easy 120),
 and **Reset** puts the default back. A time set for one tool comes before the
 older **Time limit for every tool** below it, which still applies to the tools you
 did not set; a **Run again with twice the time** from a check's tab uses its own
-doubled time for that run. **Library > Analysis tools** and **Tools > App
+doubled time for that run. **Settings > Detection rules** has the same **Time
+limits** for the detection engines, each with its "Default (N s)" and a **Reset**:
+the Triage YARA scan (100 s), Suricata (100 s; its retry and the sandbox time follow
+it at twice and 3.6 times), Sigma (110 s) and TShark (300 s per capture, with the
+extra time larger captures already got). The time is carried in the detection
+request to the worker, and an older settings file has the defaults. The detection
+engines have no "Run again with twice the time"; **Scan** runs them again with the
+times in force. **Library > Analysis tools** and **Tools > App
 dependencies** give a tool the system has a **Use Antinomie's own copy instead**
 box: the copy Antinomie installed under its data folder then comes first (until
 it is installed the system's copy is used, and the row offers **Install**).

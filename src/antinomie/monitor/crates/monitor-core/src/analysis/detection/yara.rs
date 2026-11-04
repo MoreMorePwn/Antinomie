@@ -521,8 +521,11 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     progress.set_rules(loaded);
     progress.stage(ScanTarget::Specimen);
     let mut scanner = yara_x::Scanner::new(&rules);
-    scanner.set_timeout(Duration::from_secs(15));
-    let deadline = Instant::now() + Duration::from_secs(100);
+    // The whole scan has the time set for YARA; one scan of one input gets
+    // the same share of it as before (15 of 100 seconds).
+    let total = request.settings.timeouts.seconds(super::EngineTime::Yara);
+    scanner.set_timeout(Duration::from_secs((total * 15 / 100).max(5)));
+    let deadline = Instant::now() + Duration::from_secs(total);
     let mut total = 0;
     let analysis = request.directory.join("analysis");
     let mut executable = ScannedInput::new(InputKind::Executable, &analysis);
