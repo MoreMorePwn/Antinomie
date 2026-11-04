@@ -40,6 +40,7 @@ pub(super) fn node(
         last_ns: Some(last),
         state: "exit not recorded".into(),
         end_signal: None,
+        end_sender: None,
         exec_history: Vec::new(),
         thread: false,
         renames: Vec::new(),

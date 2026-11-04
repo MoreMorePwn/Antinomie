@@ -28,7 +28,10 @@
 /* Revision 21: decoded arguments of the ioctl requests fs/ioctl.c answers
  * for every file (FIONREAD on any file, FIONBIO, FIOASYNC, FIOQSIZE,
  * FIGETBSZ, FS_IOC_GETFLAGS, FS_IOC_SETFLAGS; no field for the requests
- * without a pointer argument) and of arch_prctl ARCH_CET_STATUS. */
+ * without a pointer argument) and of arch_prctl ARCH_CET_STATUS; the
+ * task-exit record names who sent the signal that ended a task
+ * (lifecycle.signal.*) and carries the kernel's line for an OOM kill
+ * (lifecycle.kernel_log). */
 #define ANTC_REVISION 21
 #define ANTC_HEADER_SIZE 8
 #define ANTC_UPLOAD_BEGIN 0x1001

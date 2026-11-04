@@ -215,3 +215,37 @@ fn a_call_still_blocking_at_the_stop_is_shown_with_where_it_started() {
     let leaving = process_nodes(&[entry_only(sys(3, 231, "exit_group", [0; 6], 0), 1)]);
     assert!(leaving[0].in_call.is_none());
 }
+
+#[test]
+fn a_task_exit_record_with_its_sender_is_kept_on_the_node() {
+    let mut killed = entry_only(sys(5, 0, "read", [0; 6], 0), 1);
+    let mut end = killed.entry.clone().unwrap();
+    end.phase = 3;
+    end.timestamp_ns = 2;
+    end.fields = vec![
+        captured("lifecycle.task_exit", "", &9u64.to_le_bytes()),
+        captured("lifecycle.signal.signo", "", &9u64.to_le_bytes()),
+        captured("lifecycle.signal.code", "", &0u64.to_le_bytes()),
+        captured("lifecycle.signal.origin", "", &1u64.to_le_bytes()),
+        captured("lifecycle.signal.sender_pid", "", &44u64.to_le_bytes()),
+        captured("lifecycle.signal.sender_uid", "", &0u64.to_le_bytes()),
+        captured("lifecycle.signal.sender_comm", "", b"pkill"),
+    ];
+    killed.task_exit = Some(end);
+    let nodes = process_nodes(&[killed]);
+    let sender = node(&nodes, 5, 5).end_sender.as_ref().unwrap();
+    assert_eq!(sender.signal, 9);
+    assert_eq!(sender.sender.as_ref().unwrap().pid, 44);
+    assert_eq!(sender.sender.as_ref().unwrap().comm, "pkill");
+    // A record for another signal than the one the wait status names is not kept.
+    let mut other = entry_only(sys(6, 0, "read", [0; 6], 0), 1);
+    let mut end = other.entry.clone().unwrap();
+    end.phase = 3;
+    end.fields = vec![
+        captured("lifecycle.task_exit", "", &15u64.to_le_bytes()),
+        captured("lifecycle.signal.signo", "", &9u64.to_le_bytes()),
+    ];
+    other.task_exit = Some(end);
+    let nodes = process_nodes(&[other]);
+    assert!(node(&nodes, 6, 6).end_sender.is_none());
+}

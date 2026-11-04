@@ -1874,6 +1874,12 @@ impl InvocationSummary {
             .find(|field| field.key == "lifecycle.task_exit")?;
         WaitStatus::from_raw(u64::from_le_bytes(field.preview.get(..8)?.try_into().ok()?))
     }
+
+    /// Who sent the signal that ended the calling task, when its task-exit
+    /// record says (a revision-21 guest; see [`crate::fatal_signal`]).
+    pub fn task_exit_signal(&self) -> Option<crate::fatal_signal::FatalSignal> {
+        crate::fatal_signal::FatalSignal::from_fields(&self.task_exit.as_ref()?.fields)
+    }
 }
 
 /// Most async observations an invocation carries in its preview.

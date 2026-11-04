@@ -80,3 +80,4 @@
 
 # Contract revision 21 in 0.9.0: the generic file ioctls and CET status, the fatal signal's sender
 0044-antinomie-decode-the-ioctls-every-file-answers-alike-and-arch-prctl-s-cet-status.patch
+0045-antinomie-record-who-sent-the-signal-that-ended-a-task.patch
