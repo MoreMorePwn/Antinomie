@@ -49,7 +49,7 @@ bind.unix_path_in_use | bind(fd=6, umyaddr=unix:net-stream, addrlen=13) = EADDRI
 bpf.attr_fault | bpf(cmd=BPF_MAP_CREATE, attr=0x1, size=16) = EFAULT | arg1.attr:copy fault:uncaptured !3
 bpf.map_create_unprivileged | bpf(cmd=BPF_MAP_CREATE, attr={map_type=BPF_MAP_TYPE_ARRAY, key_size=4, value_size=8, max_entries=4, map_flags=0x0, inner_map_fd=0, numa_node=0, map_name="ant_array", map_ifindex=0, btf_fd=0, btf_key_type_id=0, btf_value_type_id=0, btf_vmlinux_value_type_id=0, map_extra..., size=72) = EPERM | arg1.attr:complete:{map_type=BPF_MAP_TYPE_ARRAY, key_size=4, value_size=8, max_entries=4, map_flags=0x0, inner_map_fd=0, numa_node=0, map_name="ant_array", map_ifindex=0, btf_fd=0, btf_key_type_id=0, btf_value_type_id=0, btf_vmlinux_value_type_id=0, map_extra...
 bpf.obj_get_missing | bpf(cmd=BPF_OBJ_GET, attr={pathname=<addr>, bpf_fd=0, file_flags=0x0}, size=16) = ENOENT | arg1.attr:complete:{pathname=<addr>, bpf_fd=0, file_flags=0x0} arg1.attr.pathname:complete:"<work>/sys-bpf-missing"
-bpf.prog_load_unprivileged | bpf(cmd=BPF_PROG_LOAD, attr={prog_type=BPF_PROG_TYPE_SOCKET_FILTER, insn_cnt=2, insns=<addr>, license=<addr>, log_level=0, log_size=0, log_buf=NULL}, size=40) = EPERM | arg1.attr:complete:{prog_type=BPF_PROG_TYPE_SOCKET_FILTER, insn_cnt=2, insns=<addr>, license=<addr>, log_level=0, log_size=0, log_buf=NULL} arg1.attr.insns:complete:<bytes> arg1.attr.license:complete:"GPL"
+bpf.prog_load_unprivileged | bpf(cmd=BPF_PROG_LOAD, attr={prog_type=BPF_PROG_TYPE_SOCKET_FILTER, insn_cnt=2, insns=<addr>, license=<addr>, log_level=0, log_size=0, log_buf=NULL}, size=40) = EPERM | arg1.attr:complete:{prog_type=BPF_PROG_TYPE_SOCKET_FILTER, insn_cnt=2, insns=<addr>, license=<addr>, log_level=0, log_size=0, log_buf=NULL} arg1.attr.insns:complete:[mov64 r0, 0, exit] arg1.attr.license:complete:"GPL"
 bpf.size_too_big | bpf(cmd=BPF_MAP_CREATE, attr=<addr>, size=8192) = E2BIG | arg1.attr:invalid extent:uncaptured !3
 bpf.unknown | bpf(cmd=Unknown command 0x7fff, attr=<bytes>, size=16) = EINVAL | arg1.attr:complete:<bytes> bpf.unknown_selector:no decoder:uncaptured !3
 brk.below_start | brk(brk=0x1) = <value> |
@@ -364,21 +364,21 @@ futex.wake_none | futex(uaddr=<bytes>, op=FUTEX_WAKE, val=1, utime=NULL, uaddr2=
 futex.wake_op_add | futex(uaddr=<bytes>, op=FUTEX_WAKE_OP|FUTEX_PRIVATE_FLAG, val=1, utime=0x1, uaddr2=<bytes>, val3=268439552) = 0 | arg0.futex.observed:complete:<bytes> arg4.futex.observed:complete:<bytes> arg0.futex.observed:complete arg4.futex.observed:complete
 futex.wake_private_all | futex(uaddr=<bytes>, op=FUTEX_WAKE|FUTEX_PRIVATE_FLAG, val=2147483647, utime=NULL, uaddr2=NULL, val3=0) = 0 | arg0.futex.observed:complete:<bytes>
 futex.wake_requeued | futex(uaddr=<bytes>, op=FUTEX_WAKE|FUTEX_PRIVATE_FLAG, val=1, utime=NULL, uaddr2=NULL, val3=0) = 1 | arg0.futex.observed:complete:<bytes>
-futex_requeue.bad_flags | futex_requeue(waiters=<bytes>, flags=0x1, nr_wake=1, nr_requeue=1) = EINVAL | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:complete:<bytes> arg0.waiters.1.futex.observed:complete:<bytes>
-futex_requeue.mismatch | futex_requeue(waiters=<bytes>, flags=0x0, nr_wake=1, nr_requeue=1) = EAGAIN | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:complete:<bytes> arg0.waiters.1.futex.observed:complete:<bytes>
-futex_requeue.none | futex_requeue(waiters=<bytes>, flags=0x0, nr_wake=1, nr_requeue=1) = 0 | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:complete:<bytes> arg0.waiters.1.futex.observed:complete:<bytes>
+futex_requeue.bad_flags | futex_requeue(waiters=[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE), <addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], flags=0x1, nr_wake=1, nr_requeue=1) = EINVAL | arg0.waiters:complete:[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE), <addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:complete:<bytes> arg0.waiters.1.futex.observed:complete:<bytes>
+futex_requeue.mismatch | futex_requeue(waiters=[<addr> == 7 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE), <addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], flags=0x0, nr_wake=1, nr_requeue=1) = EAGAIN | arg0.waiters:complete:[<addr> == 7 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE), <addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:complete:<bytes> arg0.waiters.1.futex.observed:complete:<bytes>
+futex_requeue.none | futex_requeue(waiters=[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE), <addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], flags=0x0, nr_wake=1, nr_requeue=1) = 0 | arg0.waiters:complete:[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE), <addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:complete:<bytes> arg0.waiters.1.futex.observed:complete:<bytes>
 futex_wait.mismatch | futex_wait(uaddr=<bytes>, val=1, mask=4294967295, flags=FUTEX2_SIZE_U32|FUTEX2_PRIVATE, timespec=<bytes>, clockid=1) = EAGAIN | arg0.futex.observed:complete:<bytes> arg4.timeout:complete:<bytes>
 futex_wait.timeout | futex_wait(uaddr=<bytes>, val=0, mask=4294967295, flags=FUTEX2_SIZE_U32|FUTEX2_PRIVATE, timespec=<bytes>, clockid=1) = ETIMEDOUT | arg0.futex.observed:complete:<bytes> arg4.timeout:complete:<bytes>
 futex_wait.unknown_flag | futex_wait(uaddr=<bytes>, val=0, mask=4294967295, flags=FUTEX2_SIZE_U32|FUTEX2_PRIVATE|0x40, timespec=NULL, clockid=0) = EINVAL | arg0.futex.observed:complete:<bytes>
 futex_wait.value_too_wide | futex_wait(uaddr=<bytes>, val=<handle>, mask=4294967295, flags=FUTEX2_SIZE_U32|FUTEX2_PRIVATE, timespec=NULL, clockid=0) = EINVAL | arg0.futex.observed:complete:<bytes>
 futex_wait.woken | futex_wait(uaddr=<bytes>, val=0, mask=4294967295, flags=FUTEX2_SIZE_U32|FUTEX2_PRIVATE, timespec=<bytes>, clockid=1) = 0 | arg0.futex.observed:complete:<bytes> arg4.timeout:complete:<bytes>
-futex_waitv.bad_clock | futex_waitv(waiters=<bytes>, nr_futexes=1, flags=0x0, timeout=<bytes>, clockid=2) = EINVAL | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:complete:<bytes> arg3.timeout:complete:<bytes>
-futex_waitv.bad_flags | futex_waitv(waiters=<bytes>, nr_futexes=1, flags=0x1, timeout=NULL, clockid=0) = EINVAL | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:complete:<bytes>
-futex_waitv.mismatch | futex_waitv(waiters=<bytes>, nr_futexes=1, flags=0x0, timeout=<bytes>, clockid=1) = EAGAIN | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:complete:<bytes> arg3.timeout:complete:<bytes>
-futex_waitv.realtime_timeout | futex_waitv(waiters=<bytes>, nr_futexes=1, flags=0x0, timeout=<bytes>, clockid=0) = ETIMEDOUT | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:complete:<bytes> arg3.timeout:complete:<bytes>
-futex_waitv.reserved_set | futex_waitv(waiters=<bytes>, nr_futexes=1, flags=0x0, timeout=NULL, clockid=0) = EINVAL | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:invalid extent:uncaptured !3
-futex_waitv.timeout | futex_waitv(waiters=<bytes>, nr_futexes=2, flags=0x0, timeout=<bytes>, clockid=1) = ETIMEDOUT | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:complete:<bytes> arg0.waiters.1.futex.observed:complete:<bytes> arg3.timeout:complete:<bytes>
-futex_waitv.unknown_waiter_flag | futex_waitv(waiters=<bytes>, nr_futexes=1, flags=0x0, timeout=NULL, clockid=0) = EINVAL | arg0.waiters:complete:<bytes> arg0.waiters.0.futex.observed:no decoder:uncaptured !3
+futex_waitv.bad_clock | futex_waitv(waiters=[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], nr_futexes=1, flags=0x0, timeout=<bytes>, clockid=2) = EINVAL | arg0.waiters:complete:[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:complete:<bytes> arg3.timeout:complete:<bytes>
+futex_waitv.bad_flags | futex_waitv(waiters=[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], nr_futexes=1, flags=0x1, timeout=NULL, clockid=0) = EINVAL | arg0.waiters:complete:[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:complete:<bytes>
+futex_waitv.mismatch | futex_waitv(waiters=[<addr> == 1 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], nr_futexes=1, flags=0x0, timeout=<bytes>, clockid=1) = EAGAIN | arg0.waiters:complete:[<addr> == 1 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:complete:<bytes> arg3.timeout:complete:<bytes>
+futex_waitv.realtime_timeout | futex_waitv(waiters=[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], nr_futexes=1, flags=0x0, timeout=<bytes>, clockid=0) = ETIMEDOUT | arg0.waiters:complete:[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:complete:<bytes> arg3.timeout:complete:<bytes>
+futex_waitv.reserved_set | futex_waitv(waiters=[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], nr_futexes=1, flags=0x0, timeout=NULL, clockid=0) = EINVAL | arg0.waiters:complete:[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:invalid extent:uncaptured !3
+futex_waitv.timeout | futex_waitv(waiters=[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE), <addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)], nr_futexes=2, flags=0x0, timeout=<bytes>, clockid=1) = ETIMEDOUT | arg0.waiters:complete:[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE), <addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE)] arg0.waiters.0.futex.observed:complete:<bytes> arg0.waiters.1.futex.observed:complete:<bytes> arg3.timeout:complete:<bytes>
+futex_waitv.unknown_waiter_flag | futex_waitv(waiters=[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE|0x40)], nr_futexes=1, flags=0x0, timeout=NULL, clockid=0) = EINVAL | arg0.waiters:complete:[<addr> == 0 (FUTEX2_SIZE_U32|FUTEX2_PRIVATE|0x40)] arg0.waiters.0.futex.observed:no decoder:uncaptured !3
 futex_waitv.zero_count | futex_waitv(waiters=<addr>, nr_futexes=0, flags=0x0, timeout=NULL, clockid=0) = EINVAL | arg0.waiters:invalid extent:uncaptured !3
 futex_wake.none | futex_wake(uaddr=<bytes>, mask=4294967295, nr=1, flags=FUTEX2_SIZE_U32|FUTEX2_PRIVATE) = 0 | arg0.futex.observed:complete:<bytes>
 futex_wake.shared | futex_wake(uaddr=<bytes>, mask=3, nr=2147483647, flags=FUTEX2_SIZE_U32) = 0 | arg0.futex.observed:complete:<bytes>
@@ -638,7 +638,7 @@ kcmp.vm_self | kcmp(pid1=<pid>, pid2=<pid>, type=KCMP_VM, idx1=0, idx2=0) = <val
 kexec_file_load.unprivileged | kexec_file_load(kernel_fd=-1, initrd_fd=-1, cmdline_len=4, cmdline_ptr="ant\0", flags=0x0) = EPERM | arg3.data:complete:"ant\0"
 kexec_load.too_many_segments | kexec_load(entry=0, nr_segments=17, segments=<addr>, flags=KEXEC_ARCH_DEFAULT) = EPERM | arg2.segments:invalid extent:uncaptured !3
 kexec_load.unload_unprivileged | kexec_load(entry=0, nr_segments=0, segments=NULL, flags=KEXEC_ARCH_DEFAULT) = EPERM | arg2.segments:complete:uncaptured
-kexec_load.unprivileged | kexec_load(entry=16777216, nr_segments=1, segments=<bytes>, flags=KEXEC_ARCH_DEFAULT) = EPERM | arg2.segments:complete:<bytes> arg2.segments[0].buf:complete:"ANTINOMIE-KEXEC"
+kexec_load.unprivileged | kexec_load(entry=16777216, nr_segments=1, segments=[15 bytes to <addr> (4096 bytes of memory)], flags=KEXEC_ARCH_DEFAULT) = EPERM | arg2.segments:complete:[15 bytes to <addr> (4096 bytes of memory)] arg2.segments[0].buf:complete:"ANTINOMIE-KEXEC"
 keyctl.assume_authority_negative | keyctl(cmd=KEYCTL_ASSUME_AUTHORITY, arg2=<handle>, arg3=0, arg4=0, arg5=0) = EINVAL |
 keyctl.capabilities | keyctl(cmd=KEYCTL_CAPABILITIES, arg2="\xed\x03", arg3=16, arg4=0, arg5=0) = 2 | arg1.buffer:complete
 keyctl.chown_noop | keyctl(cmd=KEYCTL_CHOWN, arg2=<value>, arg3=<handle>, arg4=<handle>, arg5=0) = <value> |
@@ -748,7 +748,7 @@ lsm_get_self_attr.bad_flags | lsm_get_self_attr(attr=100, ctx=<addr>, size=<byte
 lsm_get_self_attr.current | lsm_get_self_attr(attr=100, ctx=<data>, size=<data>, flags=0x0) = <value> | lsm.capacity:complete lsm.returned_size:complete lsm.output:complete
 lsm_get_self_attr.single_selinux | lsm_get_self_attr(attr=100, ctx=<data>, size=<data>, flags=LSM_FLAG_SINGLE) = EOPNOTSUPP | lsm.capacity:complete arg1.lsm_selector:complete
 lsm_get_self_attr.undefined_attr | lsm_get_self_attr(attr=0, ctx=<addr>, size=<bytes>, flags=0x0) = EINVAL | lsm.capacity:complete:<bytes>
-lsm_list_modules.all | lsm_list_modules(ids=<bytes>, size=<bytes>, flags=0x0) = 10 | lsm.capacity:complete:<bytes> lsm.returned_size:complete lsm.output:complete
+lsm_list_modules.all | lsm_list_modules(ids=[100, 110, 108, 105, 104, 103, 109, 113, 111, 112], size=<bytes>, flags=0x0) = 10 | lsm.capacity:complete:<bytes> lsm.returned_size:complete lsm.output:complete
 lsm_list_modules.bad_flags | lsm_list_modules(ids=<addr>, size=<bytes>, flags=0x1) = EINVAL | lsm.capacity:complete:<bytes>
 lsm_list_modules.bad_size_pointer | lsm_list_modules(ids=<addr>, size=0x1, flags=0x0) = EFAULT | lsm.capacity:copy fault:uncaptured !3
 lsm_list_modules.too_small | lsm_list_modules(ids=<addr>, size=<bytes>, flags=0x0) = E2BIG | lsm.capacity:complete:<bytes> lsm.returned_size:complete
@@ -1077,12 +1077,12 @@ pkey_free.negative | pkey_free(pkey=-1) = EINVAL |
 pkey_free.unallocated | pkey_free(pkey=15) = EINVAL |
 pkey_mprotect.no_key | pkey_mprotect(start=<addr>, len=4096, prot=PROT_READ, pkey=-1) = <value> |
 pkey_mprotect.unallocated | pkey_mprotect(start=<addr>, len=4096, prot=PROT_READ, pkey=15) = EINVAL |
-ppoll.bad_sigsetsize | ppoll(ufds=<bytes>, nfds=1, tsp=<bytes>, sigmask=<addr>, sigsetsize=4) = EINVAL | arg0.pollfd:complete:<bytes> arg2.timeout:complete:<bytes> signal.mask:invalid extent:uncaptured !3
-ppoll.null_timeout | ppoll(ufds=<bytes>, nfds=1, tsp=NULL, sigmask=NULL, sigsetsize=0) = 1 | arg0.pollfd:complete:<bytes> arg2.timeout:null pointer:uncaptured arg0.pollfd:complete arg2.timeout.observed:null pointer
-ppoll.pidfd_exit | ppoll(ufds=<bytes>, nfds=1, tsp=<bytes>, sigmask=NULL, sigsetsize=8) = 1 | arg0.pollfd:complete:<bytes> arg2.timeout:complete:<bytes> arg0.pollfd:complete arg2.timeout.observed:complete
-ppoll.timeout | ppoll(ufds=<bytes>, nfds=1, tsp=<bytes>, sigmask=NULL, sigsetsize=8) = 0 | arg0.pollfd:complete:<bytes> arg2.timeout:complete:<bytes> arg0.pollfd:complete arg2.timeout.observed:complete
-ppoll.timeout_fault | ppoll(ufds=<bytes>, nfds=1, tsp=0x1, sigmask=NULL, sigsetsize=8) = EFAULT | arg0.pollfd:complete:<bytes> arg2.timeout:copy fault:uncaptured !3
-ppoll.zero_timeout_mask | ppoll(ufds=<bytes>, nfds=3, tsp=<bytes>, sigmask=[SIGUSR2], sigsetsize=8) = 2 | arg0.pollfd:complete:<bytes> arg2.timeout:complete:<bytes> signal.mask:complete:[SIGUSR2] arg0.pollfd:complete arg2.timeout.observed:complete
+ppoll.bad_sigsetsize | ppoll(ufds=[fd 4 waits for POLLIN], nfds=1, tsp=<bytes>, sigmask=<addr>, sigsetsize=4) = EINVAL | arg0.pollfd:complete:[fd 4 waits for POLLIN] arg2.timeout:complete:<bytes> signal.mask:invalid extent:uncaptured !3
+ppoll.null_timeout | ppoll(ufds=[fd 4 revents POLLIN], nfds=1, tsp=NULL, sigmask=NULL, sigsetsize=0) = 1 | arg0.pollfd:complete:[fd 4 waits for POLLIN] arg2.timeout:null pointer:uncaptured arg0.pollfd:complete arg2.timeout.observed:null pointer
+ppoll.pidfd_exit | ppoll(ufds=[fd 9 revents POLLIN], nfds=1, tsp=<bytes>, sigmask=NULL, sigsetsize=8) = 1 | arg0.pollfd:complete:[fd 9 waits for POLLIN] arg2.timeout:complete:<bytes> arg0.pollfd:complete arg2.timeout.observed:complete
+ppoll.timeout | ppoll(ufds=[fd 6 waits for POLLIN], nfds=1, tsp=<bytes>, sigmask=NULL, sigsetsize=8) = 0 | arg0.pollfd:complete:[fd 6 waits for POLLIN] arg2.timeout:complete:<bytes> arg0.pollfd:complete arg2.timeout.observed:complete
+ppoll.timeout_fault | ppoll(ufds=[fd 4 waits for POLLIN], nfds=1, tsp=0x1, sigmask=NULL, sigsetsize=8) = EFAULT | arg0.pollfd:complete:[fd 4 waits for POLLIN] arg2.timeout:copy fault:uncaptured !3
+ppoll.zero_timeout_mask | ppoll(ufds=[fd 4 revents POLLIN, fd 5 revents POLLOUT, fd -1 waits for POLLIN], nfds=3, tsp=<bytes>, sigmask=[SIGUSR2], sigsetsize=8) = 2 | arg0.pollfd:complete:[fd 4 waits for POLLIN, fd 5 waits for POLLOUT, fd -1 waits for POLLIN] arg2.timeout:complete:<bytes> signal.mask:complete:[SIGUSR2] arg0.pollfd:complete arg2.timeout.observed:complete
 prctl.capbset_read | prctl(option=PR_CAPBSET_READ, arg2=0, arg3=0, arg4=0, arg5=0) = 1 |
 prctl.capbset_read_bad | prctl(option=PR_CAPBSET_READ, arg2=999, arg3=0, arg4=0, arg5=0) = EINVAL |
 prctl.get_dumpable | prctl(option=PR_GET_DUMPABLE, arg2=0, arg3=0, arg4=0, arg5=0) = 1 |
@@ -1105,7 +1105,7 @@ prctl.set_name | prctl(option=PR_SET_NAME, arg2="ant-process", arg3=0, arg4=0, a
 prctl.set_name_long | prctl(option=PR_SET_NAME, arg2=5053152, arg3=0, arg4=0, arg5=0) = 0 | arg1.name:invalid extent:uncaptured !3
 prctl.set_no_new_privs | prctl(option=PR_SET_NO_NEW_PRIVS, arg2=1, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.set_no_new_privs_bad_args | prctl(option=PR_SET_NO_NEW_PRIVS, arg2=1, arg3=1, arg4=0, arg5=0) = EINVAL |
-prctl.set_seccomp_filter | prctl(option=PR_SET_SECCOMP, arg2=2, arg3=<bytes>, arg4=0, arg5=0) = 0 | arg2.program:complete:<bytes> arg2.program.filter:complete:<bytes>
+prctl.set_seccomp_filter | prctl(option=PR_SET_SECCOMP, arg2=2, arg3=<bytes>, arg4=0, arg5=0) = 0 | arg2.program:complete:<bytes> arg2.program.filter:complete:[ret #<addr> ; SECCOMP_RET_ALLOW]
 prctl.set_timerslack | prctl(option=PR_SET_TIMERSLACK, arg2=100000, arg3=0, arg4=0, arg5=0) = 0 |
 prctl.unknown_option | prctl(option=Unknown option 0x7fffffff, arg2=0, arg3=0, arg4=0, arg5=0) = EINVAL | prctl.unknown_selector:no decoder:uncaptured !3
 pread64.mmap_edit_final | pread64(fd=3, buf="ANTINOMIE-CONFORMANCE-kryfmtahovcjqxelszgnubipwd"..., count=12388, pos=0) = 12388 | arg1.data:complete file.position:complete
@@ -1380,10 +1380,10 @@ sched_yield.self | sched_yield() = 0 |
 seccomp.action_avail | seccomp(op=SECCOMP_GET_ACTION_AVAIL, flags=0x0, uargs=<bytes>) = 0 | arg2.action:complete:<bytes>
 seccomp.action_avail_bad_flags | seccomp(op=SECCOMP_GET_ACTION_AVAIL, flags=SECCOMP_FILTER_FLAG_TSYNC, uargs=<bytes>) = EINVAL | arg2.action:complete:<bytes>
 seccomp.action_unavailable | seccomp(op=SECCOMP_GET_ACTION_AVAIL, flags=0x0, uargs=<bytes>) = EOPNOTSUPP | arg2.action:complete:<bytes>
-seccomp.filter_allow_all | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=0x0, uargs=<bytes>) = 0 | arg2.program:complete:<bytes> arg2.program.filter:complete:<bytes>
-seccomp.filter_bad_flags | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=<addr>, uargs=<bytes>) = EINVAL | arg2.program:complete:<bytes> arg2.program.filter:complete:<bytes>
+seccomp.filter_allow_all | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=0x0, uargs=<bytes>) = 0 | arg2.program:complete:<bytes> arg2.program.filter:complete:[ret #<addr> ; SECCOMP_RET_ALLOW]
+seccomp.filter_bad_flags | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=<addr>, uargs=<bytes>) = EINVAL | arg2.program:complete:<bytes> arg2.program.filter:complete:[ret #<addr> ; SECCOMP_RET_ALLOW]
 seccomp.filter_empty | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=0x0, uargs=<bytes>) = EINVAL | arg2.program:complete:<bytes> arg2.program.filter:invalid extent:uncaptured !3
-seccomp.filter_without_no_new_privs | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=0x0, uargs=<bytes>) = EACCES | arg2.program:complete:<bytes> arg2.program.filter:complete:<bytes>
+seccomp.filter_without_no_new_privs | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=0x0, uargs=<bytes>) = EACCES | arg2.program:complete:<bytes> arg2.program.filter:complete:[ret #<addr> ; SECCOMP_RET_ALLOW]
 seccomp.notif_sizes | seccomp(op=SECCOMP_GET_NOTIF_SIZES, flags=0x0, uargs=<bytes>) = 0 | arg2.sizes:complete
 seccomp.strict_bad_flags | seccomp(op=SECCOMP_SET_MODE_STRICT, flags=SECCOMP_FILTER_FLAG_TSYNC, uargs=NULL) = EINVAL |
 seccomp.unknown_op | seccomp(op=Unknown operation 0x63, flags=0x0, uargs=<addr>) = EINVAL | seccomp.unknown_selector:no decoder:uncaptured !3
@@ -1413,19 +1413,19 @@ semget.named_exists | semget(key=<value>, nsems=1, semflg=IPC_CREAT|IPC_EXCL|S_I
 semget.named_open | semget(key=<value>, nsems=0, semflg=0x0) = <value> |
 semget.private | semget(key=0, nsems=3, semflg=IPC_CREAT|S_IRUSR|S_IWUSR) = <value> |
 semget.too_many_semaphores | semget(key=0, nsems=100000, semflg=IPC_CREAT|S_IRUSR|S_IWUSR) = EINVAL |
-semop.bad_id | semop(semid=-1, sops=<bytes>, nsops=1) = EINVAL | arg1.semops:complete:<bytes>
-semop.bad_index | semop(semid=0, sops=<bytes>, nsops=1) = EFBIG | arg1.semops:complete:<bytes>
-semop.decrement | semop(semid=0, sops=<bytes>, nsops=1) = 0 | arg1.semops:complete:<bytes>
+semop.bad_id | semop(semid=-1, sops=[semaphore 0: take 1], nsops=1) = EINVAL | arg1.semops:complete:[semaphore 0: take 1]
+semop.bad_index | semop(semid=0, sops=[semaphore 7: add 1], nsops=1) = EFBIG | arg1.semops:complete:[semaphore 7: add 1]
+semop.decrement | semop(semid=0, sops=[semaphore 0: take 1], nsops=1) = 0 | arg1.semops:complete:[semaphore 0: take 1]
 semop.fault | semop(semid=0, sops=0x1, nsops=1) = EFAULT | arg1.semops:copy fault:uncaptured !3
 semop.too_many_ops | semop(semid=0, sops=<addr>, nsops=600) = E2BIG | arg1.semops:invalid extent:uncaptured !3
-semop.two_ops_undo | semop(semid=0, sops=<bytes>, nsops=2) = 0 | arg1.semops:complete:<bytes>
-semop.would_block | semop(semid=0, sops=<bytes>, nsops=1) = EAGAIN | arg1.semops:complete:<bytes>
+semop.two_ops_undo | semop(semid=0, sops=[semaphore 1: add 1 SEM_UNDO, semaphore 2: take 1 IPC_NOWAIT], nsops=2) = 0 | arg1.semops:complete:[semaphore 1: add 1 SEM_UNDO, semaphore 2: take 1 IPC_NOWAIT]
+semop.would_block | semop(semid=0, sops=[semaphore 0: take 1 IPC_NOWAIT], nsops=1) = EAGAIN | arg1.semops:complete:[semaphore 0: take 1 IPC_NOWAIT]
 semop.zero_ops | semop(semid=0, sops=<addr>, nsops=0) = EINVAL | arg1.semops:invalid extent:uncaptured !3
-semtimedop.bad_timeout | semtimedop(semid=0, sops=<bytes>, nsops=1, timeout=<bytes>) = EINVAL | arg1.semops:complete:<bytes> arg3.timeout:complete:<bytes>
-semtimedop.immediate | semtimedop(semid=0, sops=<bytes>, nsops=1, timeout=<bytes>) = 0 | arg1.semops:complete:<bytes> arg3.timeout:complete:<bytes>
-semtimedop.null_timeout | semtimedop(semid=0, sops=<bytes>, nsops=1, timeout=NULL) = 0 | arg1.semops:complete:<bytes>
+semtimedop.bad_timeout | semtimedop(semid=0, sops=[semaphore 0: take 1], nsops=1, timeout=<bytes>) = EINVAL | arg1.semops:complete:[semaphore 0: take 1] arg3.timeout:complete:<bytes>
+semtimedop.immediate | semtimedop(semid=0, sops=[semaphore 1: take 1], nsops=1, timeout=<bytes>) = 0 | arg1.semops:complete:[semaphore 1: take 1] arg3.timeout:complete:<bytes>
+semtimedop.null_timeout | semtimedop(semid=0, sops=[semaphore 0: wait for zero], nsops=1, timeout=NULL) = 0 | arg1.semops:complete:[semaphore 0: wait for zero]
 semtimedop.removed_while_waiting | semtimedop(semid=0, sops=<data>, nsops=1, timeout=<data>) = EIDRM | arg1.semops:complete arg3.timeout:complete
-semtimedop.times_out | semtimedop(semid=0, sops=<bytes>, nsops=1, timeout=<bytes>) = EAGAIN | arg1.semops:complete:<bytes> arg3.timeout:complete:<bytes>
+semtimedop.times_out | semtimedop(semid=0, sops=[semaphore 0: take 1], nsops=1, timeout=<bytes>) = EAGAIN | arg1.semops:complete:[semaphore 0: take 1] arg3.timeout:complete:<bytes>
 sendfile.badf | sendfile(out_fd=999, in_fd=3, offset=NULL, count=4) = EBADF | arg2.data:null pointer:uncaptured
 sendfile.file_to_file | sendfile(out_fd=4, in_fd=3, offset=<bytes>, count=8) = 8 | arg2.data:complete:<bytes> arg2.data:complete file.copy:complete
 sendfile.null_offset | sendfile(out_fd=4, in_fd=3, offset=NULL, count=4) = 0 | arg2.data:null pointer:uncaptured arg2.data:null pointer
@@ -1436,11 +1436,11 @@ sendmmsg.fault | sendmmsg(fd=5, msg=0x1, vlen=1, flags=0x0) = EFAULT | arg1.mmsg
 sendmmsg.udp_names | sendmmsg(fd=6, msg=<data>, vlen=2, flags=0x0) = <value> | arg1.mmsg.0.header:complete arg1.mmsg.0.iov:complete arg1.mmsg.0.iov[0].data:complete arg1.mmsg.0.name:complete arg1.mmsg.1.header:complete arg1.mmsg.1.iov:complete arg1.mmsg.1.iov[0].data:complete arg1.mmsg.1.name:complete arg1.mmsg.0.header:complete arg1.mmsg.1.header:complete
 sendmmsg.unix_two | sendmmsg(fd=5, msg=10 captured objects, vlen=2, flags=0x0) = 2 | arg1.mmsg.0.header:complete:<bytes> arg1.mmsg.0.iov:complete:<bytes> arg1.mmsg.0.iov[0].data:complete:"MMSG-A0-" arg1.mmsg.0.iov[1].data:complete:"first" arg1.mmsg.1.header:complete:<bytes> arg1.mmsg.1.iov:complete:<bytes> arg1.mmsg.1.iov[0].data:complete:"MMSG-B0-" arg1.mmsg.1.iov[1].data:complete:"second!" arg1.mmsg.0.header:complete arg1.mmsg.1.header:complete
 sendmmsg.zero_vlen | sendmmsg(fd=5, msg=<addr>, vlen=0, flags=0x0) = 0 |
-sendmsg.bad_rights | sendmsg(fd=7, msg=<bytes>, flags=0x0) = EBADF | arg1.msghdr:complete:<bytes> arg1.msghdr.iov:complete:<bytes> arg1.msghdr.iov[0].data:complete:"RIGHTS-" arg1.msghdr.name:null pointer:uncaptured arg1.msghdr.control:complete:<bytes>
+sendmsg.bad_rights | sendmsg(fd=7, msg=<bytes>, flags=0x0) = EBADF | arg1.msghdr:complete:<bytes> arg1.msghdr.iov:complete:<bytes> arg1.msghdr.iov[0].data:complete:"RIGHTS-" arg1.msghdr.name:null pointer:uncaptured arg1.msghdr.control:complete:[SCM_RIGHTS fds [999]]
 sendmsg.fault | sendmsg(fd=7, msg=0x1, flags=0x0) = EFAULT | arg1.msghdr:copy fault:uncaptured !3
 sendmsg.not_connected | sendmsg(fd=6, msg=<bytes>, flags=MSG_NOSIGNAL) = ENOTCONN | arg1.msghdr:complete:<bytes> arg1.msghdr.iov:complete:<bytes> arg1.msghdr.iov[0].data:complete:"RIGHTS-" arg1.msghdr.name:null pointer:uncaptured arg1.msghdr.control:null pointer:uncaptured
 sendmsg.scm_credentials | sendmsg(fd=6, msg=<data>, flags=0x0) = <value> | arg1.msghdr:complete arg1.msghdr.iov:complete arg1.msghdr.iov[0].data:complete arg1.msghdr.iov[1].data:complete arg1.msghdr.name:complete arg1.msghdr.control:complete
-sendmsg.scm_rights | sendmsg(fd=7, msg=<bytes>, flags=0x0) = 13 | arg1.msghdr:complete:<bytes> arg1.msghdr.iov:complete:<bytes> arg1.msghdr.iov[0].data:complete:"RIGHTS-" arg1.msghdr.iov[1].data:complete:"ONE-" arg1.msghdr.iov[2].data:complete:"FD" arg1.msghdr.name:null pointer:uncaptured arg1.msghdr.control:complete:<bytes>
+sendmsg.scm_rights | sendmsg(fd=7, msg=<bytes>, flags=0x0) = 13 | arg1.msghdr:complete:<bytes> arg1.msghdr.iov:complete:<bytes> arg1.msghdr.iov[0].data:complete:"RIGHTS-" arg1.msghdr.iov[1].data:complete:"ONE-" arg1.msghdr.iov[2].data:complete:"FD" arg1.msghdr.name:null pointer:uncaptured arg1.msghdr.control:complete:[SCM_RIGHTS fds [4]]
 sendmsg.too_many_iov | sendmsg(fd=7, msg=<bytes>, flags=0x0) = EMSGSIZE | arg1.msghdr:complete:<bytes> arg1.msghdr.iov:invalid extent:uncaptured arg1.msghdr.name:null pointer:uncaptured arg1.msghdr.control:null pointer:uncaptured !3
 sendto.address_too_long | sendto(fd=6, buff="DGRAM-ONE", len=9, flags=0x0, addr=<addr>, addr_len=200) = EINVAL | arg1.data:complete:"DGRAM-ONE" arg4.address:invalid extent:uncaptured !3
 sendto.buffer_fault | sendto(fd=6, buff=0x1, len=8, flags=0x0, addr=unix:<work>/net-dgram, addr_len=40) = EFAULT | arg1.data:copy fault:uncaptured arg4.address:complete:unix:<work>/net-dgram !3
