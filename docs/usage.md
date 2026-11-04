@@ -882,7 +882,20 @@ library samples; **Enter** runs the highlighted entry through the same code as t
 menu, **Esc** (or Ctrl+K again) closes it, and an action that cannot run now stays
 in the list with the reason ("Start the selected VM first."). A menu item, its
 shortcut and its palette entry share one action list, so they cannot disagree.
-**Help > Keyboard shortcuts** (or **?**) lists every shortcut by area.
+**Help > Keyboard shortcuts** (or **?**) lists every shortcut by area, with a
+**Change shortcuts…** button that opens **Settings > Keyboard**.
+
+**Settings > Keyboard** has one row for every action (each menu item, each view and
+each page or window the palette opens, about 90 rows, under the menu they belong
+to), with a **Find** field. Click a row's key, then press the new one (**Esc**
+cancels). A shortcut must hold **Ctrl** or **Alt** (a lone letter would type), may
+not take **Ctrl+1** to **Ctrl+9** (the tabs) or the copy, paste and undo keys, and
+a key another action already has asks first: **Move it to ...** takes it from the
+other action, **Keep it where it is** leaves both. **Clear** leaves the action
+without a shortcut, **Reset** (per row) and **Reset all** bring the defaults back.
+The choice is saved with the settings (an older settings file just has the
+defaults), and the menus, tooltips, the palette and the Keyboard shortcuts window
+show what is in force.
 
 The rule for who owns the keyboard: a global shortcut never takes a key from a
 text field or the terminal (**Ctrl+K** stays with them too: it deletes to the end
@@ -894,7 +907,7 @@ button, table or graph does not block the shortcuts.
 | Ctrl+K | Command palette |
 | ? | Keyboard shortcuts |
 | Ctrl+N | New VM |
-| F5, Shift+F5 | Start VM, Stop VM |
+| Ctrl+Shift+S, Ctrl+Shift+X | Start VM, Stop VM |
 | Ctrl+R | Run program |
 | Ctrl+U | Upload file |
 | Ctrl+D | Attach debugger (the process picker); with the picker open, attach the selected process |
@@ -902,8 +915,26 @@ button, table or graph does not block the shortcuts.
 | Ctrl+Comma (the app shows it so) | Settings |
 | Ctrl+Q | Exit |
 | Ctrl+1 to Ctrl+9 | Show the 1st to 9th tab of the work area, in the order the tab bar shows them (they follow a tab you dragged) |
-| Ctrl+Shift+A, Ctrl+Shift+J | Show Activity, show Jobs (the lower bar) |
+| Ctrl+J | Fold or open the lower bar (Details, Activity and Jobs) |
+| Ctrl+Shift+D, Ctrl+Shift+A, Ctrl+Shift+J | Show Details, Activity, Jobs (the lower bar) |
 | Esc | Close the window on top (not while a field has the keyboard) |
+
+**Defaults for a 60 % keyboard.** Every default is a Ctrl or Ctrl+Shift chord on a
+letter, the comma or a digit, which a 60 % board has without a Fn layer. Three
+changed in 0.8.3 because they needed keys such a board puts behind Fn or in an awkward
+place:
+
+| Action | Before | Now |
+|---|---|---|
+| Start VM | F5 | Ctrl+Shift+S |
+| Stop VM | Shift+F5 | Ctrl+Shift+X |
+| Fold or open Details, Activity and Jobs | Ctrl+\` | Ctrl+J |
+| Show Details | none | Ctrl+Shift+D |
+
+Ctrl+N, Ctrl+R, Ctrl+U, Ctrl+D, Ctrl+K, Ctrl+B, Ctrl+Q, Ctrl+Comma,
+Ctrl+Shift+Y, Ctrl+Shift+A and Ctrl+Shift+J, and Ctrl+1 to Ctrl+9, were already of
+that kind and stay. The area keys below (arrows, Home, End, PgUp, PgDn) belong to
+the graph, table and terminal that has the focus and are not global shortcuts.
 
 The graph, table, filter and terminal keys (arrows, `F`, `T`, Ctrl+Space, Shift+PgUp
 and the rest) are listed by area in the Keyboard shortcuts window; the Triage
@@ -939,11 +970,26 @@ starts with; each VM keeps the base it was created with. Its explanations are
 tooltips.
 
 **Settings** has the pages Appearance, Recording, Detection rules, Notifications,
-Network lookup, Network routes, Analysis tools, Disks and Advanced. It opens
-centred in the window. The settings are kept between starts: text size, theme,
+Network lookup, Network routes, Analysis tools, Disks, Keyboard and Advanced. It
+opens centred in the window, wide enough that the scroll bar never lies on a text,
+with room between the settings; a page with many settings (Recording, Analysis
+tools, Advanced) is split under sub-headings. The settings are kept between starts: text size, theme,
 density and the debugger's remembered choices all survive a restart (0.8.2 fixed
 a bug where an unreadable debugger setting made every start fall back to the
-defaults). **Notifications** has **Toast for live HIGH findings** (off) and **Toast
+defaults). **Analysis tools** lists each tool with its **Time limit**: the seconds the tool
+may run before it is stopped and its check marked Timeout. The field shows the
+tool's default beside it ("Default (240 s)": capa 240, FLOSS 480, binwalk 180,
+YARA scan 60, UPX unpacking 240, Ghidra decompilation 840, Detect It Easy 120),
+and **Reset** puts the default back. A time set for one tool comes before the
+older **Time limit for every tool** below it, which still applies to the tools you
+did not set; a **Run again with twice the time** from a check's tab uses its own
+doubled time for that run. **Library > Analysis tools** and **Tools > App
+dependencies** give a tool the system has a **Use Antinomie's own copy instead**
+box: the copy Antinomie installed under its data folder then comes first (until
+it is installed the system's copy is used, and the row offers **Install**).
+**Install all missing** still skips a tool the system has, so installing the own
+copy of such a tool is always your click. The choice is saved per tool.
+**Notifications** has **Toast for live HIGH findings** (off) and **Toast
 when a run finishes** (on). A failed **Open folder** or **Open file** raises an
 error toast and an **Activity** row.
 
@@ -967,15 +1013,16 @@ addresses in the Network tabs get a Country and an Organization. **Address
 lookup** has three choices: **TShark GeoIP only** (the default), **dig and whois
 only**, and **TShark GeoIP, then dig and whois when unavailable**. Local addresses
 are never queried. Below it, **IP geolocation database (TShark)** is about the
-first choice: TShark fills Country and Organization only from MaxMind-format
-(`.mmdb`) databases and ignores the old `GeoIP.dat` files. Antinomie hands its
-own copy to its TShark runs only and never changes your Wireshark settings.
+first choice: TShark needs `.mmdb` databases to fill Country and Organization.
+Older `GeoIP.dat` files (such as `/usr/share/GeoIP` on Debian) do not work with
+TShark 4. Antinomie hands its databases to its own TShark runs only and never
+changes your Wireshark settings.
 
 **Database status.** While it looks, the page says "Looking for databases…". Then
 **Country / city** and **Organization (AS)** each show **Database found** or **No
-database**, followed by one line per database: its file name, where it came from
-("TShark's own folder", "Antinomie's DB-IP Lite copy" or "your folder") and its
-path. When something is missing, an amber warning says which column stays empty
+database**, and nothing more. Hover the chip for one line per database: its file
+name, where it came from ("TShark's own folder", "Antinomie's DB-IP Lite copy" or
+"your folder") and its path. When something is missing, an amber warning says which column stays empty
 and how to fix it (install DB-IP Lite in Library > Analysis tools, or choose a
 folder in Settings > Network lookup).
 
@@ -1003,8 +1050,10 @@ SHA-256 was recorded, not checked against a pin"). A progress bar shows
 
 **Your own GeoLite2 folder.** The text field (or the folder button, **Choose the
 folder**) names a folder with `GeoLite2-Country.mmdb` and `GeoLite2-ASN.mmdb`
-(GeoLite2 or GeoIP2, Country or City, and ASN). The files are read in place; the
-note says they need a MaxMind account to download, which Antinomie does not do. The
+(GeoLite2 or GeoIP2: a Country or City database and an ASN database). MaxMind
+requires a free account to download them, so Antinomie cannot fetch them for you;
+the DB-IP Lite install needs no account. The files are read where they are, not
+copied. The
 **X** button (**Stop using this folder**) clears it.
 
 **Attribution.** DB-IP's licence (CC BY 4.0) asks for credit wherever the data

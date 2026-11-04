@@ -31,9 +31,6 @@ pub(super) fn compile_sources(
     Ok(compiler.build())
 }
 
-/// The time one scan of the file may take, in seconds.
-const SCAN_SECONDS: u64 = 60;
-
 fn meta_text(value: &yara_x::MetaValue) -> Option<String> {
     match value {
         yara_x::MetaValue::String(text) => Some((*text).to_owned()),
@@ -84,7 +81,7 @@ pub(super) fn scan_at(section: &mut AnalysisSection, specimen: &[u8], directory:
         format!("{} selected rule files", sources.len()),
     ];
     let mut scanner = yara_x::Scanner::new(&rules);
-    let timeout = super::limits::seconds(SCAN_SECONDS);
+    let timeout = super::limits::seconds_for(super::limits::TimedTool::Yara);
     scanner.set_timeout(Duration::from_secs(timeout));
     let results = match scanner.scan(specimen) {
         Ok(results) => results,

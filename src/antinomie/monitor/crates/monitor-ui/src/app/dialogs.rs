@@ -653,6 +653,8 @@ impl MonitorApp {
         if !ctx.input(|input| input.key_pressed(egui::Key::Escape))
             || egui::Popup::is_any_open(ctx)
             || ctx.memory(|memory| memory.focused().is_some())
+            // Settings > Keyboard is waiting for a key: Esc cancels that.
+            || self.shortcut_ui.recording.is_some()
         {
             return;
         }
@@ -664,16 +666,28 @@ impl MonitorApp {
 }
 
 pub(super) fn password_input(ui: &mut egui::Ui, text: &mut String, salt: &str) {
+    password_input_width(ui, text, salt, 280.0);
+}
+
+/// [`password_input`] with a text area `inner` wide, for a form whose other
+/// fields are not 280 wide.
+pub(super) fn password_input_width(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    salt: &str,
+    inner: f32,
+) -> egui::Response {
     let mut output = egui::TextEdit::singleline(text)
         .id(egui::Id::new(salt))
         .password(true)
         .margin(theme::TEXT_EDIT_MARGIN)
         .char_limit(128)
-        .desired_width(crate::theme::edit_width(280.0))
+        .desired_width(crate::theme::edit_width(inner))
         .show(ui);
     // Do not let reopening the form restore a prior secret through undo.
     output.state.clear_undoer();
     output.state.store(ui.ctx(), output.response.id);
+    output.response.response
 }
 
 pub(super) fn directory_input(
@@ -735,9 +749,13 @@ pub(super) fn form_label_width(ctx: &egui::Context) -> f32 {
 /// A label / field grid whose label column has the same width in every
 /// section, so the fields line up.
 pub(super) fn form_grid(id: &str, ui: &egui::Ui) -> egui::Grid {
+    // Settings draws its pages with more room between the rows.
+    let roomy = ui
+        .data(|data| data.get_temp::<bool>(super::settings_window::roomy_forms()))
+        .unwrap_or(false);
     egui::Grid::new(id)
         .num_columns(2)
-        .spacing([14.0, 8.0])
+        .spacing([14.0, if roomy { 14.0 } else { 8.0 }])
         .min_col_width(form_label_width(ui.ctx()))
 }
 

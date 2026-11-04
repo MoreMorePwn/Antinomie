@@ -92,7 +92,7 @@ fn the_lookup_page_offers_the_three_modes_with_tshark_selected() {
 }
 
 #[test]
-fn the_page_list_has_no_keyboard_page_and_each_page_shows_its_settings() {
+fn the_page_list_has_a_keyboard_page_and_each_page_shows_its_settings() {
     let ctx = context();
     let mut app = app();
     app.settings_open = true;
@@ -101,7 +101,7 @@ fn the_page_list_has_no_keyboard_page_and_each_page_shows_its_settings() {
     for page in SettingsPage::ALL {
         assert!(has(&visible, page.label()), "{}: {visible:?}", page.label());
     }
-    assert!(!has(&visible, "Keyboard"));
+    assert!(has(&visible, "Keyboard"));
     click_label(&mut app, &ctx, size, "Network lookup");
     assert_eq!(app.settings_page, SettingsPage::NetworkLookup);
     for (page, label) in [
@@ -115,6 +115,7 @@ fn the_page_list_has_no_keyboard_page_and_each_page_shows_its_settings() {
         (SettingsPage::NetworkRoutes, "Default route"),
         (SettingsPage::AnalysisTools, "Manage tools…"),
         (SettingsPage::Disks, "Extraction limit"),
+        (SettingsPage::Keyboard, "Reset all"),
         (SettingsPage::Advanced, "Show FPS counter"),
     ] {
         app.settings_page = page;
@@ -140,7 +141,9 @@ fn the_footer_and_the_page_stay_inside_a_short_screen() {
                 let rect = visible
                     .iter()
                     .find(|(text, _)| text == button)
-                    .unwrap_or_else(|| panic!("{button} hidden on {page:?} at {size:?}"))
+                    .unwrap_or_else(|| {
+                        panic!("{button} hidden on {page:?} at {size:?}: {visible:?}")
+                    })
                     .1;
                 assert!(
                     rect.bottom() <= size.y && rect.right() <= size.x,

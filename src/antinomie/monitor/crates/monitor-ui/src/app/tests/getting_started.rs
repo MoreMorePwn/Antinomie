@@ -582,3 +582,47 @@ fn the_rules_step_still_asks_before_any_download() {
     assert!(app.settings.outbound_catalog);
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn install_all_does_not_pick_a_tool_set_to_its_own_copy() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let (mut app, root) = fresh_app("own_copy");
+    let on_system = |id: &str| antinomie_monitor_core::analysis_tools::ToolStatus {
+        id: id.into(),
+        name: id.into(),
+        purpose: "test".into(),
+        version: "1".into(),
+        size: 1024,
+        system: Some(format!("/usr/bin/{id}")),
+        ..Default::default()
+    };
+    app.getting_started.decided = true;
+    // The person chose Antinomie's own copy of "found"; the system has it, so
+    // Install all leaves it alone, and installs the one the system lacks.
+    app.settings.own_tools.insert("found".into());
+    app.snapshot.analysis_tools = vec![
+        on_system("found"),
+        antinomie_monitor_core::analysis_tools::ToolStatus {
+            id: "lacking".into(),
+            name: "lacking".into(),
+            version: "1".into(),
+            size: 1024,
+            ..Default::default()
+        },
+    ];
+    app.getting_started.open = true;
+    app.getting_started.step = Step::Tools;
+    click_label(&mut app, &ctx, SIZE, "Install all missing");
+    app.getting_started_tick();
+    let installs: Vec<String> = app
+        .submitted
+        .iter()
+        .filter_map(|command| match command {
+            Command::InstallTool { id } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(installs, ["lacking"]);
+    let _ = std::fs::remove_dir_all(root);
+}

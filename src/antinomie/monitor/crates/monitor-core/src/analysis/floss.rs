@@ -7,9 +7,6 @@ use super::*;
 use std::{path::Path, time::Duration};
 
 const MANAGED: &str = "/opt/antinomie-tools/floss/floss";
-/// Wall-clock budget of one FLOSS run. Emulating every candidate routine of a
-/// statically linked program takes far longer than this, and is cut off.
-pub(super) const TIMEOUT_SECONDS: u64 = 480;
 /// Strings shown in the report itself, before the listing.
 const REPORT_ROWS: usize = 256;
 
@@ -26,7 +23,8 @@ struct Found {
 }
 
 pub(super) fn strings(section: &mut AnalysisSection, specimen: &[u8], listings: &Path) {
-    let Some(floss) = tools::find_tool(crate::analysis_tools::FLOSS_SYSTEM, MANAGED) else {
+    let Some(floss) = tools::find_tool("floss", crate::analysis_tools::FLOSS_SYSTEM, MANAGED)
+    else {
         section.state = AnalysisSectionState::Unavailable;
         section.summary =
             "FLOSS is not installed; install it from Tools > Analysis tools (or on the system)"
@@ -59,7 +57,7 @@ fn run(section: &mut AnalysisSection, floss: &str, specimen: &[u8], listings: &P
     }
     // The plain strings are the Strings category's job; `--` ends the list of
     // string types, which would otherwise take the file name.
-    let timeout = Duration::from_secs(super::limits::seconds(TIMEOUT_SECONDS));
+    let timeout = Duration::from_secs(super::limits::seconds_for(super::limits::TimedTool::Floss));
     let run = match tools::run_with(
         floss,
         &[

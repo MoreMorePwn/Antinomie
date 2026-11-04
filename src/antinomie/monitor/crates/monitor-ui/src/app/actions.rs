@@ -248,6 +248,7 @@ impl Action {
                 }
                 settings_window::SettingsPage::AnalysisTools => "ghidra capa floss tools paths",
                 settings_window::SettingsPage::Disks => "ext4 image partition dump",
+                settings_window::SettingsPage::Keyboard => "shortcut keys bindings hotkeys 60%",
                 settings_window::SettingsPage::Advanced => "rows page limit developer",
             },
             Self::BaseImages => "library bases guest images",
@@ -343,9 +344,10 @@ impl Action {
         }
     }
 
-    /// The shortcut that always means this action. A view's Ctrl+digit moves
-    /// with its tab (`MonitorApp::shortcut_text`).
-    pub(super) fn shortcut(&self) -> Option<egui::KeyboardShortcut> {
+    /// The shortcut this action has until Settings > Keyboard changes it (see
+    /// `MonitorApp::shortcut_of`). A view's Ctrl+digit moves with its tab
+    /// (`MonitorApp::shortcut_text`).
+    pub(super) fn default_shortcut(&self) -> Option<egui::KeyboardShortcut> {
         Some(match self {
             Self::NewVm => keys::NEW_VM,
             Self::StartVm => keys::START_VM,
@@ -361,6 +363,7 @@ impl Action {
             Self::ToggleBottomPane => keys::TOGGLE_BOTTOM_PANE,
             Self::Go(Panel::Activity) => keys::SHOW_ACTIVITY,
             Self::Go(Panel::Jobs) => keys::SHOW_JOBS,
+            Self::Go(Panel::Details) => keys::SHOW_DETAILS,
             _ => return None,
         })
     }
@@ -696,11 +699,14 @@ impl MonitorApp {
                 .layout
                 .tab_key_position(panel)
                 .and_then(keys::tab_shortcut)
-                .or_else(|| action.shortcut())
+                .or_else(|| self.shortcut_of(action))
                 .map(|shortcut| ctx.format_shortcut(&shortcut)),
-            Action::Shortcuts => Some(keys::SHORTCUT_LIST.into()),
-            other => other
-                .shortcut()
+            Action::Shortcuts => Some(
+                self.shortcut_of(action)
+                    .map_or_else(|| keys::SHORTCUT_LIST.into(), |s| ctx.format_shortcut(&s)),
+            ),
+            other => self
+                .shortcut_of(other)
                 .map(|shortcut| ctx.format_shortcut(&shortcut)),
         }
     }

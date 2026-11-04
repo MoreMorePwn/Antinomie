@@ -21,13 +21,15 @@ pub(crate) struct RouteProgram {
     pub path: Option<std::path::PathBuf>,
 }
 
-/// Draw the page; returns a command to send.
+/// Draw the page; returns a command to send. `own` holds the tools set to
+/// Antinomie's own copy (Settings keeps it).
 pub(crate) fn show(
     ui: &mut egui::Ui,
     tools: &[ToolStatus],
     install: Option<&ToolInstall>,
     enabled: bool,
     route_programs: &[RouteProgram],
+    own: &mut std::collections::BTreeSet<String>,
 ) -> Option<Command> {
     let mut command = None;
     egui::ScrollArea::vertical()
@@ -47,9 +49,11 @@ pub(crate) fn show(
                 .filter(|tool| !analysis_tools::is_route_tool(&tool.id))
             {
                 ui.separator();
-                if let Some(next) = tool_row(ui, tool, install, enabled) {
+                let mut chosen = own.contains(&tool.id);
+                if let Some(next) = tool_row_with(ui, tool, install, enabled, Some(&mut chosen)) {
                     command = Some(next);
                 }
+                set_own(own, &tool.id, chosen);
             }
             ui.add_space(8.0);
             theme::section(ui, "Network route programs");
@@ -121,34 +125,36 @@ pub(crate) fn geoip_status(ui: &mut egui::Ui, status: Option<&Status>) {
         theme::loading_weak(ui, "Looking for databases…");
         return;
     };
-    for (label, found) in [
-        ("Country / city", status.has_location()),
-        ("Organization (AS)", status.has_asn()),
+    for (label, found, location) in [
+        ("Country / city", status.has_location(), true),
+        ("Organization (AS)", status.has_asn(), false),
     ] {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(label).strong().color(theme::heading()));
-            if found {
-                chip(ui, "Database found".to_owned(), Tone::Good);
-            } else {
-                chip(ui, "No database".to_owned(), Tone::Accent);
-            }
-        });
-    }
-    for database in &status.databases {
-        ui.add(
-            egui::Label::new(
-                RichText::new(format!(
+        let details: Vec<String> = status
+            .databases
+            .iter()
+            .filter(|database| {
+                matches!(database.kind, geoip::Kind::Country | geoip::Kind::City) == location
+            })
+            .map(|database| {
+                format!(
                     "{} · {} · {}",
                     database.name,
                     origin_text(database.origin),
                     database.path.display()
-                ))
-                .small()
-                .monospace()
-                .color(theme::muted()),
-            )
-            .wrap(),
-        );
+                )
+            })
+            .collect();
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(label).strong().color(theme::heading()));
+            let response = if found {
+                chip(ui, "Database found".to_owned(), Tone::Good)
+            } else {
+                chip(ui, "No database".to_owned(), Tone::Accent)
+            };
+            if !details.is_empty() {
+                response.on_hover_text(details.join("\n"));
+            }
+        });
     }
     if let Some(warning) = status.warning() {
         ui.add_space(4.0);
@@ -175,7 +181,29 @@ pub(crate) fn tool_row(
     install: Option<&ToolInstall>,
     enabled: bool,
 ) -> Option<Command> {
+    tool_row_with(ui, tool, install, enabled, None)
+}
+
+/// Add or remove `id` in the set of tools that use Antinomie's own copy.
+pub(crate) fn set_own(own: &mut std::collections::BTreeSet<String>, id: &str, on: bool) {
+    if on {
+        own.insert(id.to_owned());
+    } else {
+        own.remove(id);
+    }
+}
+
+/// [`tool_row`] with, for a tool the system has, the choice to use
+/// Antinomie's own copy instead (`own`, which the caller keeps).
+pub(crate) fn tool_row_with(
+    ui: &mut egui::Ui,
+    tool: &ToolStatus,
+    install: Option<&ToolInstall>,
+    enabled: bool,
+    own: Option<&mut bool>,
+) -> Option<Command> {
     let mut command = None;
+    let own_chosen = own.as_deref().copied().unwrap_or(false);
     let running = install.is_some_and(|install| !install.finished);
     ui.horizontal(|ui| {
         ui.label(RichText::new(&tool.name).strong().color(theme::heading()));
@@ -187,8 +215,9 @@ pub(crate) fn tool_row(
                 ui.colored_label(theme::good(), "On this system");
                 ui.label(RichText::new(path).monospace().color(theme::muted()));
                 if let Some(version) = installed {
-                    ui.weak(if tool.id == "magika" {
-                        // The Properties panel looks here first.
+                    ui.weak(if tool.id == "magika" || own_chosen {
+                        // The Properties panel looks here first; a tool set
+                        // to its own copy comes before the system's.
                         format!("(Antinomie's {version} also installed; used first)")
                     } else {
                         format!("(Antinomie's {version} also installed; unused)")
@@ -218,7 +247,7 @@ pub(crate) fn tool_row(
                         id: tool.id.clone(),
                     });
                 }
-            } else if tool.system.is_none()
+            } else if (tool.system.is_none() || own_chosen)
                 && ui
                     .add_enabled(
                         enabled && !running,
@@ -244,6 +273,14 @@ pub(crate) fn tool_row(
             }
         });
     });
+    if let (Some(own), Some(_)) = (own, &tool.system) {
+        ui.checkbox(own, "Use Antinomie's own copy instead")
+            .on_hover_text(
+                "The program is the copy Antinomie installs under its data folder, even though \
+                 the system has one. Until it is installed the system's copy is used. Install all \
+                 still skips a tool the system has.",
+            );
+    }
     // Where Antinomie's own copy is saved, on a line of its own: the path is
     // long and the row's buttons stay at its right.
     if let (None, Some(_), Some(path)) = (&tool.system, &tool.installed, &tool.installed_path) {

@@ -188,6 +188,9 @@ pub(super) fn spawn_worker_binary(
     if std::env::var("ANTINOMIE_ANALYSIS_TOOLS").as_deref() == Ok("managed") {
         cmd.args(["--setenv", "ANTINOMIE_ANALYSIS_TOOLS", "managed"]);
     }
+    if let Some(own) = crate::analysis_tools::own_tools_env() {
+        cmd.args(["--setenv", crate::analysis_tools::OWN_TOOLS_ENV, &own]);
+    }
     let launch = sandbox_process::prepare(&mut cmd)?;
     cmd.args([
         "--remount-ro",

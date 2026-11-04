@@ -437,8 +437,10 @@ pub(super) fn identify(section: &mut AnalysisSection, specimen: &[u8]) {
             }
         }
     }
-    let die = tools::find_tool(crate::analysis_tools::DIE_SYSTEM, DIE_MANAGED);
-    let die_limit = Duration::from_secs(super::limits::seconds(120));
+    let die = tools::find_tool("die", crate::analysis_tools::DIE_SYSTEM, DIE_MANAGED);
+    let die_limit = Duration::from_secs(super::limits::seconds_for(
+        super::limits::TimedTool::Identify,
+    ));
     let die_run = die.and_then(|die| {
         tools::run_with(
             die,
