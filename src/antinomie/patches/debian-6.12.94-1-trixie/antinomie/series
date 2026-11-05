@@ -87,3 +87,6 @@
 0048-antinomie-capture-ioctl-arguments-by-their-size-name-more-of-them-and-type-reads-of-event-descriptors.patch
 0049-antinomie-capture-the-compat-structures-of-common-compat-calls.patch
 0050-antinomie-capture-the-compat-stat-statfs-itimer-waitid-and-message-structures.patch
+0051-antinomie-capture-compat-futex-timeouts-aarch32-epoll-waits-and-sysv-ipc-control-records.patch
+0052-antinomie-show-a-desktop-or-laptop-machine-s-devices-for-qemu-s.patch
+0053-antinomie-boot-the-guest-its-boot-age-ago-and-step-to-the-present-at-the-first-launch.patch

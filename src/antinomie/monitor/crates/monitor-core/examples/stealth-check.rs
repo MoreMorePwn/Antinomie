@@ -13,8 +13,10 @@
 //! or `transparent`; on an arm64 base the preset picks the arm64 machine
 //! (an Altra workstation or server, a Graviton2 instance); entries change
 //! the preset: `firmware=bios|uefi|uefi-sb`, `disk=virtio|sata|nvme`,
-//! `nat=qemu|home`, `cdrom=on|off`, `smt=on|off` and `gpa=ADDRESS` (the
-//! bootstrap page). One BusyBox VM with two vCPUs and 2 GiB boots with that
+//! `nat=qemu|home`, `cdrom=on|off`, `smt=on|off`, `gpa=ADDRESS` (the
+//! bootstrap page), `machine=ID` (that catalog machine's realistic profile
+//! instead of a random one of the preset's kind) and `screen=on` (the in-app
+//! screen's devices, with the profile's pointer, instead of none). One BusyBox VM with two vCPUs and 2 GiB boots with that
 //! stealth profile, as the base and host can boot it (`NOTE` lines say what
 //! fell back).
 //!
@@ -40,8 +42,8 @@
 //! The data folder must be new and disposable.
 use antinomie_monitor_core::route::RouteKind;
 use antinomie_monitor_core::stealth::{
-    BaseSupport, CLOUDS, DiskBus, Firmware, HostCpu, HostSupport, NatNetwork, StealthPreset,
-    StealthProfile,
+    BaseSupport, CLOUDS, DiskBus, Firmware, HostCpu, HostSupport, MACHINES, NatNetwork,
+    StealthPreset, StealthProfile,
 };
 use antinomie_monitor_core::*;
 use std::{
@@ -52,6 +54,9 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+
+/// `screen=on`: launch with the in-app screen's devices (not headless).
+static SCREEN: AtomicBool = AtomicBool::new(false);
 
 struct Driver {
     backend: Backend,
@@ -210,6 +215,14 @@ fn profile(args: &[&str]) -> Result<(StealthProfile, Option<u64>), String> {
             ("nat", "qemu") => profile.nat = NatNetwork::default(),
             ("nat", "home") => profile.nat = NatNetwork::home(),
             ("cdrom", value) => profile.cdrom = on(value)?,
+            ("machine", id) => {
+                let machine = MACHINES
+                    .iter()
+                    .find(|machine| machine.id == id)
+                    .ok_or(format!("{entry}: no such machine"))?;
+                profile = StealthProfile::realistic_machine(machine);
+            }
+            ("screen", value) => SCREEN.store(on(value)?, std::sync::atomic::Ordering::Relaxed),
             ("smt", value) => profile.smt = on(value)?,
             ("gpa", value) => {
                 gpa = Some(
@@ -291,7 +304,7 @@ fn driver_network(
     let options = BackendOptions {
         bundle_dir: PathBuf::from(bundle),
         data_dir: data.to_path_buf(),
-        headless: true,
+        headless: !SCREEN.load(std::sync::atomic::Ordering::Relaxed),
         serial_console: true,
         capture_quota_size,
         bootstrap_gpa: gpa,

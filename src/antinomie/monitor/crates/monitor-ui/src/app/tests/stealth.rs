@@ -288,6 +288,7 @@ fn sata_on_base(support: &[&str], others: &[(&str, &str, &[&str])]) -> MonitorAp
     stealth.smt = false;
     stealth.nat = NatNetwork::default();
     stealth.usb = true;
+    stealth.boot_age_s = 0;
     app
 }
 

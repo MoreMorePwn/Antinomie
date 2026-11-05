@@ -47,7 +47,10 @@
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <sys/sysinfo.h>
+#include <sys/timerfd.h>
 #include <sys/utsname.h>
+#include <utmpx.h>
 #if defined(__x86_64__)
 #include <x86intrin.h>
 static inline uint64_t ticks(void)
@@ -756,6 +759,180 @@ static void check_devices_misc(void)
 		report(vm_word(text) ? "fail" : "pass", "scsi.models", text);
 }
 
+/* --- The guest facade's other views (guest patch 0052) ------------------- */
+
+/* PCI config space as lspci reads it (sysfs config): the IDs at 0 and, in a
+ * type 0 header, the subsystem at 0x2c. */
+static void check_pci_config(void)
+{
+	static const char vm_vendors[] = "1af4 1b36 1234 15ad 80ee";
+	struct dirent *entry;
+	DIR *dir = opendir("/sys/bus/pci/devices");
+	char path[160], found[1024] = "";
+	int total = 0;
+
+	if (!dir)
+		return;
+	while ((entry = readdir(dir))) {
+		unsigned char config[64];
+		char id[8], sub[8];
+		int fd;
+
+		if (entry->d_name[0] == '.')
+			continue;
+		snprintf(path, sizeof(path), "/sys/bus/pci/devices/%.64s/config", entry->d_name);
+		fd = open(path, O_RDONLY);
+		if (fd < 0)
+			continue;
+		if (read(fd, config, sizeof(config)) != (ssize_t)sizeof(config)) {
+			close(fd);
+			continue;
+		}
+		close(fd);
+		total++;
+		snprintf(id, sizeof(id), "%02x%02x", config[1], config[0]);
+		snprintf(sub, sizeof(sub), "%02x%02x", config[0x2d], config[0x2c]);
+		if ((strstr(vm_vendors, id) || ((config[0x0e] & 0x7f) == 0 && strstr(vm_vendors, sub))) &&
+		    strlen(found) + 48 < sizeof(found))
+			snprintf(found + strlen(found), sizeof(found) - strlen(found),
+				 "%s%s %s:%02x%02x sub %s", *found ? ", " : "", entry->d_name + 5, id,
+				 config[3], config[2], sub);
+	}
+	closedir(dir);
+	reportf(*found ? "fail" : "pass", "pci.config", "%d devices; VM IDs: %s", total,
+		*found ? found : "none");
+}
+
+/* USB devices in sysfs: makers, products and QEMU's vendor ID 0627. */
+static void check_usb(void)
+{
+	struct dirent *entry;
+	DIR *dir = opendir("/sys/bus/usb/devices");
+	char path[160], value[128], list[1024] = "";
+	int bad = 0;
+
+	if (!dir) {
+		report("info", "usb.devices", "no USB bus");
+		return;
+	}
+	while ((entry = readdir(dir))) {
+		char vendor[16] = "", maker[64] = "", product[64] = "";
+
+		if (entry->d_name[0] == '.' || strchr(entry->d_name, ':'))
+			continue;
+		snprintf(path, sizeof(path), "/sys/bus/usb/devices/%.64s/idVendor", entry->d_name);
+		if (read_line(path, vendor, sizeof(vendor)))
+			continue;
+		snprintf(path, sizeof(path), "/sys/bus/usb/devices/%.64s/manufacturer", entry->d_name);
+		read_line(path, maker, sizeof(maker));
+		snprintf(path, sizeof(path), "/sys/bus/usb/devices/%.64s/product", entry->d_name);
+		read_line(path, product, sizeof(product));
+		if (!strcmp(vendor, "0627") || vm_word(maker) || vm_word(product))
+			bad = 1;
+		snprintf(value, sizeof(value), "%.16s %.4s %.40s %.40s", entry->d_name, vendor, maker,
+			 product);
+		if (strlen(list) + strlen(value) + 3 < sizeof(list))
+			snprintf(list + strlen(list), sizeof(list) - strlen(list), "%s%s", *list ? ", " : "",
+				 value);
+	}
+	closedir(dir);
+	report(bad ? "fail" : "pass", "usb.devices", *list ? list : "none");
+}
+
+/* Input devices' bus and IDs: QEMU's USB HID vendor 0627, the virtual bus of
+ * virtio-input. */
+static void check_input_ids(void)
+{
+	static char text[65536];
+	char found[512] = "", *line;
+
+	if (read_all("/proc/bus/input/devices", text, sizeof(text)) < 0)
+		return;
+	for (line = strtok(text, "\n"); line; line = strtok(NULL, "\n"))
+		if (!strncmp(line, "I: ", 3) && (strstr(line, "Vendor=0627") || strstr(line, "Bus=0006")) &&
+		    strlen(found) + strlen(line) + 2 < sizeof(found))
+			snprintf(found + strlen(found), sizeof(found) - strlen(found), "%s%s",
+				 *found ? ", " : "", line + 3);
+	report(*found ? "fail" : "pass", "input.ids", *found ? found : "no VM IDs");
+}
+
+/* DRM_IOCTL_VERSION of the first card (root or the video group). */
+struct probe_drm_version {
+	int major, minor, patchlevel;
+	size_t name_len;
+	char *name;
+	size_t date_len;
+	char *date;
+	size_t desc_len;
+	char *desc;
+};
+
+static void check_drm(void)
+{
+	char name[64] = "", desc[128] = "", date[32] = "";
+	struct probe_drm_version version = { 0, 0, 0, sizeof(name) - 1, name, sizeof(date) - 1, date,
+		sizeof(desc) - 1, desc };
+	int fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
+
+	if (fd < 0) {
+		report(errno == EACCES ? "skip" : "info", "display.drm", strerror(errno));
+		return;
+	}
+	if (ioctl(fd, _IOWR('d', 0x00, struct probe_drm_version), &version)) {
+		report("info", "display.drm", strerror(errno));
+		close(fd);
+		return;
+	}
+	close(fd);
+	reportf(vm_word(name) || vm_word(desc) || contains_ci(name, "virtio") ||
+		contains_ci(name, "qxl") || contains_ci(name, "cirrus") ? "fail" : "pass",
+		"display.drm", "%s %d.%d.%d \"%s\"", name, version.major, version.minor,
+		version.patchlevel, desc);
+}
+
+/* Identify Controller through NVMe admin pass-through (root), as nvme-cli
+ * and smartctl read it. */
+struct probe_nvme_admin {
+	uint8_t opcode, flags;
+	uint16_t rsvd1;
+	uint32_t nsid, cdw2, cdw3;
+	uint64_t metadata, addr;
+	uint32_t metadata_len, data_len;
+	uint32_t cdw10, cdw11, cdw12, cdw13, cdw14, cdw15;
+	uint32_t timeout_ms, result;
+};
+
+static void check_nvme_identify(void)
+{
+	static unsigned char id[4096];
+	struct probe_nvme_admin cmd;
+	char model[41], firmware[9], nqn[96];
+	int fd = open("/dev/nvme0", O_RDONLY | O_CLOEXEC);
+
+	if (fd < 0) {
+		if (errno != ENOENT)
+			report("skip", "nvme.identify", strerror(errno));
+		return;
+	}
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.opcode = 0x06;
+	cmd.addr = (uintptr_t)id;
+	cmd.data_len = sizeof(id);
+	cmd.cdw10 = 1;
+	if (ioctl(fd, _IOWR('N', 0x41, struct probe_nvme_admin), &cmd)) {
+		report("skip", "nvme.identify", strerror(errno));
+		close(fd);
+		return;
+	}
+	close(fd);
+	snprintf(model, sizeof(model), "%.40s", (char *)id + 24);
+	snprintf(firmware, sizeof(firmware), "%.8s", (char *)id + 64);
+	snprintf(nqn, sizeof(nqn), "%.95s", (char *)id + 768);
+	reportf(vm_word(model) || vm_word(nqn) || (id[73] == 0x52 && id[74] == 0x54) ? "fail" : "pass",
+		"nvme.identify", "vid %02x%02x ssvid %02x%02x model %s firmware %s oui %02x%02x%02x nqn %s",
+		id[1], id[0], id[3], id[2], model, firmware, id[75], id[74], id[73], nqn);
+}
+
 /* --- Kernel identity ----------------------------------------------------- */
 
 static void check_kernel(void)
@@ -1266,6 +1443,142 @@ static int sandbox_name(const char *name)
 	return 0;
 }
 
+static double fabs_diff(double a, double b)
+{
+	return a > b ? a - b : b - a;
+}
+
+static double clock_seconds(clockid_t clock)
+{
+	struct timespec now;
+
+	clock_gettime(clock, &now);
+	return now.tv_sec + now.tv_nsec / 1e9;
+}
+
+/* Every view of the boot time agrees with /proc/uptime: sysinfo(),
+ * CLOCK_BOOTTIME, /proc/stat's btime, the utmp boot record; timers on
+ * CLOCK_BOOTTIME fire on time. How far CLOCK_BOOTTIME runs ahead of
+ * CLOCK_MONOTONIC (time asleep) is reported, not judged: normal after a
+ * suspend, odd on a server that never slept. */
+static void check_boot_time(double uptime)
+{
+	static char text[1 << 16];
+	struct sysinfo info;
+	struct utmpx *entry;
+	double boottime = clock_seconds(CLOCK_BOOTTIME), now = clock_seconds(CLOCK_REALTIME);
+	double since_btime = -1, record = -1, slept;
+	long long btime = 0;
+	char *line;
+	int bad;
+
+	if (sysinfo(&info))
+		info.uptime = -1;
+	if (read_all("/proc/stat", text, sizeof(text)) >= 0)
+		for (line = strtok(text, "\n"); line; line = strtok(NULL, "\n"))
+			if (sscanf(line, "btime %lld", &btime) == 1)
+				since_btime = now - btime;
+	bad = fabs_diff(info.uptime, uptime) > 2 || fabs_diff(boottime, uptime) > 2 ||
+	      fabs_diff(since_btime, uptime) > 2;
+	reportf(bad ? "fail" : "pass", "base.uptime-views",
+		"/proc/uptime %.0f, sysinfo %ld, CLOCK_BOOTTIME %.0f, now - btime %.0f", uptime,
+		(long)info.uptime, boottime, since_btime);
+
+	if (utmpxname("/var/run/utmp") == 0) {
+		setutxent();
+		while ((entry = getutxent()))
+			if (entry->ut_type == BOOT_TIME)
+				record = entry->ut_tv.tv_sec;
+		endutxent();
+	}
+	if (record < 0)
+		report("skip", "base.boot-record", "no utmp boot record");
+	else
+		reportf(fabs_diff(record, btime) > 2 ? "fail" : "pass", "base.boot-record",
+			"utmp boot %.0f, btime %lld", record, btime);
+
+	{
+		/* An absolute 0.2 s on CLOCK_BOOTTIME through timerfd, then 0.1 s
+		 * through clock_nanosleep: each must take about that long. */
+		struct itimerspec at = { 0 };
+		struct timespec start, until;
+		uint64_t expirations;
+		double timer = -1, sleep_time = -1, began;
+		int fd = timerfd_create(CLOCK_BOOTTIME, TFD_CLOEXEC);
+
+		if (fd >= 0) {
+			clock_gettime(CLOCK_BOOTTIME, &start);
+			at.it_value = start;
+			at.it_value.tv_nsec += 200000000;
+			if (at.it_value.tv_nsec >= 1000000000) {
+				at.it_value.tv_sec++;
+				at.it_value.tv_nsec -= 1000000000;
+			}
+			began = clock_seconds(CLOCK_MONOTONIC);
+			if (!timerfd_settime(fd, TFD_TIMER_ABSTIME, &at, NULL) &&
+			    read(fd, &expirations, sizeof(expirations)) == sizeof(expirations))
+				timer = clock_seconds(CLOCK_MONOTONIC) - began;
+			close(fd);
+		}
+		clock_gettime(CLOCK_BOOTTIME, &until);
+		until.tv_nsec += 100000000;
+		if (until.tv_nsec >= 1000000000) {
+			until.tv_sec++;
+			until.tv_nsec -= 1000000000;
+		}
+		began = clock_seconds(CLOCK_MONOTONIC);
+		if (!clock_nanosleep(CLOCK_BOOTTIME, TIMER_ABSTIME, &until, NULL))
+			sleep_time = clock_seconds(CLOCK_MONOTONIC) - began;
+		reportf(timer < 0.15 || timer > 1 || sleep_time < 0.05 || sleep_time > 1 ? "fail" : "pass",
+			"base.boottime-timers", "timerfd 0.2 s took %.3f s, clock_nanosleep 0.1 s took %.3f s",
+			timer, sleep_time);
+	}
+	{
+		/* An absolute 0.2 s on CLOCK_MONOTONIC through timerfd: programs'
+		 * monotonic clock and its timers agree (a continuous boot age moves
+		 * both). */
+		struct itimerspec at = { 0 };
+		uint64_t expirations;
+		double timer = -1, began;
+		int fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+
+		if (fd >= 0) {
+			clock_gettime(CLOCK_MONOTONIC, &at.it_value);
+			at.it_value.tv_nsec += 200000000;
+			if (at.it_value.tv_nsec >= 1000000000) {
+				at.it_value.tv_sec++;
+				at.it_value.tv_nsec -= 1000000000;
+			}
+			began = clock_seconds(CLOCK_BOOTTIME);
+			if (!timerfd_settime(fd, TFD_TIMER_ABSTIME, &at, NULL) &&
+			    read(fd, &expirations, sizeof(expirations)) == sizeof(expirations))
+				timer = clock_seconds(CLOCK_BOOTTIME) - began;
+			close(fd);
+		}
+		reportf(timer < 0.15 || timer > 1 ? "fail" : "pass", "base.monotonic-timers",
+			"timerfd 0.2 s took %.3f s", timer);
+	}
+	{
+		/* init started at the boot, as on a machine that has been up since. */
+		char stat[1024], *field;
+		unsigned long long start = 0;
+		int i;
+
+		if (read_line("/proc/1/stat", stat, sizeof(stat)) == 0 && (field = strrchr(stat, ')'))) {
+			for (i = 0, field += 2; field && i < 19; i++)
+				field = strchr(field, ' ') ? strchr(field, ' ') + 1 : NULL;
+			if (field)
+				start = strtoull(field, NULL, 10) / (unsigned long long)sysconf(_SC_CLK_TCK);
+			reportf(start > 120 ? "fail" : "pass", "base.init-start",
+				"init started %llu s after the boot", start);
+		}
+	}
+	slept = clock_seconds(CLOCK_BOOTTIME) - clock_seconds(CLOCK_MONOTONIC);
+	if (slept < 0)
+		slept = 0;
+	reportf("info", "base.time-asleep", "CLOCK_BOOTTIME - CLOCK_MONOTONIC %.0f s", slept);
+}
+
 static void check_base(void)
 {
 	static char text[1 << 16];
@@ -1339,6 +1652,7 @@ static void check_base(void)
 	if (!read_line("/proc/uptime", text, 64))
 		uptime = strtod(text, NULL);
 	reportf(uptime < 600 ? "fail" : "pass", "base.uptime", "%.0f s", uptime);
+	check_boot_time(uptime);
 	meminfo = fopen("/proc/meminfo", "r");
 	if (meminfo) {
 		if (fscanf(meminfo, "MemTotal: %llu", &mem_kib) != 1)
@@ -1605,6 +1919,11 @@ int main(int argc, char **argv)
 	check_net();
 	check_net_addresses();
 	check_devices_misc();
+	check_pci_config();
+	check_usb();
+	check_input_ids();
+	check_drm();
+	check_nvme_identify();
 	check_kernel();
 	check_kallsyms();
 	check_modules();

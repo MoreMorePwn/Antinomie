@@ -119,31 +119,167 @@ fn utmp_record(kind: i16, line: &str, id: &str, user: &str, host: &str, time: u6
     record
 }
 
-/// A few days of logins as wtmp records: an earlier boot, and the default
-/// user's SSH sessions from other hosts, each ended.
-fn wtmp(user: &str, now: u64) -> Vec<u8> {
-    const DAY: u64 = 86_400;
-    let mut data = Vec::new();
-    data.extend(utmp_record(
+/// Seconds of a day.
+const DAY: u64 = 86_400;
+
+/// One SSH login of the default user before the current boot: when it
+/// started (Unix time), how long it lasted, its terminal and peer.
+struct Session {
+    start: u64,
+    minutes: u64,
+    line: &'static str,
+    host: &'static str,
+}
+
+/// The instance's history before the current boot at `boot` (Unix time): it
+/// was created nine days before that boot, the default user logged in from
+/// time to time, and the last session ended with a reboot into the current
+/// boot (whose own record the base writes when it boots).
+fn sessions(boot: u64) -> Vec<Session> {
+    let created = boot.saturating_sub(9 * DAY);
+    vec![
+        Session {
+            start: created + DAY + 3 * 3_600,
+            minutes: 21,
+            line: "pts/0",
+            host: "203.0.113.17",
+        },
+        Session {
+            start: created + 4 * DAY + 5 * 3_600,
+            minutes: 9,
+            line: "pts/0",
+            host: "198.51.100.42",
+        },
+        Session {
+            start: created + 7 * DAY + 2 * 3_600,
+            minutes: 47,
+            line: "pts/1",
+            host: "203.0.113.17",
+        },
+        Session {
+            start: boot.saturating_sub(40 * 60),
+            minutes: 35,
+            line: "pts/0",
+            host: "198.51.100.8",
+        },
+    ]
+}
+
+/// The instance's wtmp before the current boot: the first boot at creation,
+/// the default user's SSH sessions, each ended, and the shutdown of the
+/// reboot that started the current boot.
+fn wtmp(user: &str, boot: u64) -> Vec<u8> {
+    let mut data = utmp_record(
         2,
         "~",
         "~~",
         "reboot",
         "6.12.94",
-        now.saturating_sub(12 * DAY),
-    ));
-    for (days, pid_line, host, minutes) in [
-        (11, "pts/0", "203.0.113.17", 21),
-        (7, "pts/0", "198.51.100.42", 9),
-        (4, "pts/1", "203.0.113.17", 47),
-        (1, "pts/0", "198.51.100.8", 12),
-    ] {
-        let start = now.saturating_sub(days * DAY) + 3 * 3600;
-        let id = &pid_line[pid_line.len() - 3..];
-        data.extend(utmp_record(7, pid_line, id, user, host, start));
-        data.extend(utmp_record(8, pid_line, id, "", host, start + minutes * 60));
+        boot.saturating_sub(9 * DAY),
+    );
+    for session in sessions(boot) {
+        let id = &session.line[session.line.len() - 3..];
+        data.extend(utmp_record(
+            7,
+            session.line,
+            id,
+            user,
+            session.host,
+            session.start,
+        ));
+        data.extend(utmp_record(
+            8,
+            session.line,
+            id,
+            "",
+            session.host,
+            session.start + session.minutes * 60,
+        ));
     }
+    data.extend(utmp_record(
+        1,
+        "~~",
+        "~~",
+        "shutdown",
+        "6.12.94",
+        shutdown_time(boot),
+    ));
     data
+}
+
+/// When the reboot into the current boot shut the instance down.
+fn shutdown_time(boot: u64) -> u64 {
+    boot.saturating_sub(3 * 60)
+}
+
+/// `time` (Unix seconds, UTC) as year, month, day, hour, minute, second.
+fn civil(time: u64) -> (u64, u64, u64, u64, u64, u64) {
+    let days = (time / DAY) as i64 + 719_468;
+    let era = days.div_euclid(146_097);
+    let doe = days.rem_euclid(146_097) as u64;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = (yoe as i64 + era * 400) as u64 + u64::from(month <= 2);
+    let second = time % DAY;
+    (
+        year,
+        month,
+        day,
+        second / 3_600,
+        second / 60 % 60,
+        second % 60,
+    )
+}
+
+/// A syslog time stamp: `Jan  9 06:41:12`.
+fn syslog_time(time: u64) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let (_, month, day, hour, minute, second) = civil(time);
+    format!(
+        "{} {day:>2} {hour:02}:{minute:02}:{second:02}",
+        MONTHS[(month - 1) as usize]
+    )
+}
+
+/// cloud-init's log time stamp: `2026-01-01 08:00:01,201`.
+fn cloud_init_time(time: u64, millis: u32) -> String {
+    let (year, month, day, hour, minute, second) = civil(time);
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02},{millis:03}")
+}
+
+/// The default user's SSH sessions in auth.log, and the reboot by sudo.
+fn auth_log(hostname: &str, user: &str, boot: u64) -> String {
+    let mut log = String::new();
+    let all = sessions(boot);
+    for (index, session) in all.iter().enumerate() {
+        let pid = 611 + index * 1_237;
+        let port = 51_724 + index * 3_011;
+        let end = session.start + session.minutes * 60;
+        log.push_str(&format!(
+            "{} {hostname} sshd[{pid}]: Accepted publickey for {user} from {} port {port} ssh2\n\
+             {} {hostname} sshd[{pid}]: pam_unix(sshd:session): session opened for user {user}\n",
+            syslog_time(session.start),
+            session.host,
+            syslog_time(session.start),
+        ));
+        if index + 1 == all.len() && user != "root" {
+            log.push_str(&format!(
+                "{} {hostname} sudo:   {user} : TTY={} ; PWD=/home/{user} ; USER=root ; COMMAND=/usr/sbin/reboot\n",
+                syslog_time(end - 30),
+                session.line,
+            ));
+        }
+        log.push_str(&format!(
+            "{} {hostname} sshd[{pid}]: pam_unix(sshd:session): session closed for user {user}\n",
+            syslog_time(end)
+        ));
+    }
+    log
 }
 
 /// What a cloud's guest runs as its default login, and the agents it ships
@@ -493,95 +629,94 @@ impl CloudProvider {
     /// The files a cloud instance of this provider has from its first boot,
     /// as inert content (no provider binary): cloud-init's state for
     /// `instance_id`, the default user's shell history, the login records
-    /// (wtmp) and log, and the agents' directories. `now` is the Unix time
-    /// the files are aged from. Per VM: a base keeps nothing of a provider.
-    pub fn state_files(&self, instance_id: &str, hostname: &str, now: u64) -> Vec<StateFile> {
-        const DAY: u64 = 86_400;
+    /// (wtmp) and log, and the agents' directories. `boot` is the Unix time
+    /// of the current boot (the start less the VM's boot age): the files tell
+    /// of the time before it. Per VM: a base keeps nothing of a provider.
+    pub fn state_files(&self, instance_id: &str, hostname: &str, boot: u64) -> Vec<StateFile> {
         let user = self.state.default_user;
         let home = if user == "root" {
             "/root".to_owned()
         } else {
             format!("/home/{user}")
         };
-        let text = |path: &str, mode: u32, age: u64, owner: Owner, content: String| StateFile {
+        let text = |path: &str, mode: u32, mtime: u64, owner: Owner, content: String| StateFile {
             path: path.to_owned(),
             mode,
-            mtime: now.saturating_sub(age),
+            mtime,
             owner,
             content: content.into_bytes(),
         };
         let instance = format!("/var/lib/cloud/instances/{instance_id}");
-        let log_time = now.saturating_sub(12 * DAY);
+        // Created nine days before the current boot; cloud-init finished 21 s
+        // into that first boot.
+        let created = boot.saturating_sub(9 * DAY);
+        let log_time = created + 21;
+        let last = sessions(boot)
+            .pop()
+            .map_or(created, |session| session.start + session.minutes * 60);
         let mut files = vec![
-            text("/var/lib/cloud/data/instance-id", 0o644, 12 * DAY, Owner::Root, format!("{instance_id}\n")),
-            text("/var/lib/cloud/data/previous-instance-id", 0o644, 12 * DAY, Owner::Root, "NO_PREVIOUS_INSTANCE_ID\n".into()),
+            text("/var/lib/cloud/data/instance-id", 0o644, created, Owner::Root, format!("{instance_id}\n")),
+            text("/var/lib/cloud/data/previous-instance-id", 0o644, created, Owner::Root, "NO_PREVIOUS_INSTANCE_ID\n".into()),
             text(
                 "/var/lib/cloud/data/result.json",
                 0o644,
-                12 * DAY,
+                created,
                 Owner::Root,
                 format!(
                     "{{\n \"v1\": {{\n  \"datasource\": \"DataSource{}\",\n  \"errors\": []\n }}\n}}\n",
                     self.datasource_name()
                 ),
             ),
-            text(&format!("{instance}/datasource"), 0o644, 12 * DAY, Owner::Root, format!("DataSource{}\n", self.datasource_name())),
-            text(&format!("{instance}/boot-finished"), 0o644, 12 * DAY, Owner::Root, format!("{log_time}.52 - up 21.40\n")),
-            text(&format!("{instance}/user-data.txt"), 0o600, 12 * DAY, Owner::Root, "#cloud-config\n{}\n".into()),
-            text("/etc/cloud/cloud.cfg.d/90_provider.cfg", 0o644, 12 * DAY, Owner::Root, format!("datasource_list: {}\n", self.state.datasource)),
-            text("/etc/hostname", 0o644, 12 * DAY, Owner::Root, format!("{hostname}\n")),
+            text(&format!("{instance}/datasource"), 0o644, created, Owner::Root, format!("DataSource{}\n", self.datasource_name())),
+            text(&format!("{instance}/boot-finished"), 0o644, created, Owner::Root, format!("{log_time}.52 - up 21.40\n")),
+            text(&format!("{instance}/user-data.txt"), 0o600, created, Owner::Root, "#cloud-config\n{}\n".into()),
+            text("/etc/cloud/cloud.cfg.d/90_provider.cfg", 0o644, created, Owner::Root, format!("datasource_list: {}\n", self.state.datasource)),
+            text("/etc/hostname", 0o644, created, Owner::Root, format!("{hostname}\n")),
             text(
                 "/var/log/cloud-init.log",
                 0o640,
-                12 * DAY,
+                created,
                 Owner::Root,
                 format!(
-                    "2026-01-01 08:00:01,201 - util.py[DEBUG]: Cloud-init v. 24.1.3 running 'init-local' at boot ({})\n\
-                     2026-01-01 08:00:03,774 - __init__.py[DEBUG]: Found datasource DataSource{} for instance {instance_id}\n\
-                     2026-01-01 08:00:21,409 - handlers.py[DEBUG]: finish: modules-final: SUCCESS\n",
+                    "{} - util.py[DEBUG]: Cloud-init v. 24.1.3 running 'init-local' at boot ({})\n\
+                     {} - __init__.py[DEBUG]: Found datasource DataSource{} for instance {instance_id}\n\
+                     {} - handlers.py[DEBUG]: finish: modules-final: SUCCESS\n",
+                    cloud_init_time(created + 1, 201),
                     self.label,
-                    self.datasource_name()
+                    cloud_init_time(created + 3, 774),
+                    self.datasource_name(),
+                    cloud_init_time(log_time, 409)
                 ),
             ),
             text(
                 "/var/log/cloud-init-output.log",
                 0o640,
-                12 * DAY,
+                created,
                 Owner::Root,
                 "Cloud-init v. 24.1.3 finished at boot. Datasource found. Up 21.40 seconds\n".into(),
             ),
             text(
                 &format!("{home}/.bash_history"),
                 0o600,
-                DAY,
+                last,
                 if user == "root" { Owner::Root } else { Owner::User },
-                "ls -la\ndf -h\nfree -m\nsudo apt update\nsudo apt -y upgrade\nsystemctl status ssh\ncat /var/log/auth.log | tail\nexit\n"
+                "ls -la\ndf -h\nfree -m\nsudo apt update\nsudo apt -y upgrade\nsystemctl status ssh\ncat /var/log/auth.log | tail\nsudo reboot\n"
                     .into(),
             ),
-            text(
-                "/var/log/auth.log",
-                0o640,
-                3_600,
-                Owner::Root,
-                format!(
-                    "Jan  9 06:41:12 {hostname} sshd[611]: Accepted publickey for {user} from 203.0.113.17 port 51724 ssh2\n\
-                     Jan  9 06:41:12 {hostname} sshd[611]: pam_unix(sshd:session): session opened for user {user}\n\
-                     Jan  9 07:02:40 {hostname} sshd[611]: pam_unix(sshd:session): session closed for user {user}\n"
-                ),
-            ),
+            text("/var/log/auth.log", 0o640, last, Owner::Root, auth_log(hostname, user, boot)),
         ];
         files.push(StateFile {
             path: "/var/log/wtmp".into(),
             mode: 0o664,
-            mtime: now.saturating_sub(3_600),
+            mtime: shutdown_time(boot),
             owner: Owner::Root,
-            content: wtmp(user, now),
+            content: wtmp(user, boot),
         });
         for (path, mode) in self.state.agents {
             files.push(text(
                 path,
                 if *mode == "0755" { 0o755 } else { 0o644 },
-                12 * DAY,
+                created,
                 Owner::Root,
                 "# inert stub\n".into(),
             ));

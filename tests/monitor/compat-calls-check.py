@@ -5,7 +5,7 @@
 
 The input is the text `event-dump RUN_DIR` prints for the run. Every compat
 structure the recorder captures by its ILP32 layout (contract revision 21,
-guest patches 49 and 50) must be in it, COMPLETE, with the bytes and sizes
+guest patches 49, 50 and 51) must be in it, COMPLETE, with the bytes and sizes
 the fixture's calls produce, and none of those calls may keep a pointer that
 is recorded by address only (NO_DECODER).
 
@@ -86,7 +86,42 @@ STAT64_CALLS = [("stat64", "arg1.statbuf"), ("lstat64", "arg1.statbuf"),
 # arg0.pollfd); AArch32's goes through the compat rules (arg0.pollfds).
 POLL = {"ia32": ("poll", 1, "arg0.pollfd", 8, "03000000"),
         "arm": ("poll", 1, "arg0.pollfds", 8, "03000000")}
-CALLS = {name for name, *_ in COMMON} | {name for name, _ in STAT64_CALLS}
+# Patch 51: futex's 32-bit timeout (futex_time64 is the native call's twin,
+# with the native 16-byte timeout) and the SysV IPC control records.
+COMMON += [
+    ("futex", 1, "arg0.futex.observed", 4, "07000000"),
+    ("futex", 1, "arg3.timeout", 8, "00000000e8030000"),
+    ("futex", 1, "arg4.futex.observed", 4, "09000000"),
+    ("futex_time64", 1, "arg3.timeout", 16, "0000000000000000e803000000000000"),
+    # IPC_64 records: compat_msqid64_ds, compat_shmid64_ds, compat_semid64_ds,
+    # compat_shminfo64; the IPC_SET input; msginfo, shm_info, seminfo.
+    ("msgctl", 2, "ipc.control", 88, ""),
+    ("msgctl", 1, "ipc.control", 88, ""),
+    ("msgctl", 2, "ipc.control", 32, ""),
+    ("shmctl", 2, "ipc.control", 84, ""),
+    ("shmctl", 2, "ipc.control", 36, ""),
+    ("shmctl", 2, "ipc.control", 24, ""),
+    ("semctl", 2, "ipc.control", 64, ""),
+    ("semctl", 2, "ipc.control", 40, ""),
+]
+# epoll_wait and epoll_pwait: ia32's epoll_event is x86-64's (12 bytes,
+# packed), so the native twins capture them (sigmask as signal.mask); AArch32's
+# (16 bytes) go through the compat capture.
+EPOLL = {"ia32": [("epoll_wait", 2, "arg1.epoll_events", 12, "01000000"),
+                  ("epoll_pwait", 2, "arg1.epoll_events", 12, "01000000"),
+                  ("epoll_pwait", 1, "signal.mask", 8, "")],
+         "arm": [("epoll_wait", 2, "arg1.epoll_events", 16, "0100000000000000"),
+                 ("epoll_pwait", 2, "arg1.epoll_events", 16, "0100000000000000"),
+                 ("epoll_pwait", 1, "arg4.sigmask", 8, "")]}
+# The old records without IPC_64: AArch32's direct calls (old_msgctl and the
+# others) and ia32's ipc(); ia32's direct calls copy the IPC_64 ones always.
+IPC_OLD = {"ia32": [("ipc", 2, "ipc.control", 56, ""), ("ipc", 2, "ipc.control", 88, ""),
+                    ("ipc", 2, "ipc.control", 48, ""), ("ipc", 2, "ipc.control", 64, ""),
+                    ("ipc", 2, "ipc.control", 44, "")],
+           "arm": [("msgctl", 2, "ipc.control", 56, ""), ("shmctl", 2, "ipc.control", 48, ""),
+                   ("semctl", 2, "ipc.control", 44, "")]}
+CALLS = ({name for name, *_ in COMMON} | {name for name, _ in STAT64_CALLS}
+         | {"epoll_wait", "epoll_pwait", "ipc"})
 
 
 def parse(text):
@@ -110,8 +145,8 @@ def parse(text):
 def check(events, abi):
     """Problems, one line each; empty when the recording is right."""
     problems = []
-    expected = list(COMMON) + [POLL[abi]] + [(call, 2, key, STAT64[abi], "")
-                                            for call, key in STAT64_CALLS]
+    expected = list(COMMON) + [POLL[abi]] + EPOLL[abi] + IPC_OLD[abi] + [
+        (call, 2, key, STAT64[abi], "") for call, key in STAT64_CALLS]
     for call, phase, key, size, prefix in expected:
         found = [event["fields"].get(key) for event in events
                  if event["call"] == call and event["phase"] == phase]

@@ -323,6 +323,61 @@ fn a_compat_program_reads_its_own_32_bit_layouts() {
 }
 
 #[test]
+fn compat_ipc_control_records_futex_timeouts_and_arm_epoll_events_decode() {
+    // msgctl(IPC_STAT) without IPC_64 (AArch32's old_msgctl, ia32's ipc()):
+    // the 56-byte msqid_ds, 16-bit IDs and 32-bit times.
+    let mut old = [0u8; 56];
+    put(&mut old, 0, &0x1234i32.to_le_bytes());
+    put(&mut old, 12, &0o600u16.to_le_bytes());
+    put(&mut old, 48, &16384u16.to_le_bytes());
+    for arch in ["x86", "arm"] {
+        let line = line_on(arch, "msqid_ds", &old);
+        assert!(line.contains("msg_qbytes=16384"), "{arch}: {line}");
+    }
+    // With IPC_64: the 88-byte compat_msqid64_ds.
+    let mut new = [0u8; 88];
+    put(&mut new, 68, &16384u32.to_le_bytes());
+    let line = line_on("arm", "msqid64_ds", &new);
+    assert!(line.contains("msg_qbytes=16384"), "{line}");
+    for (layout, size) in [
+        ("semid_ds", 44),
+        ("semid64_ds", 64),
+        ("shmid_ds", 48),
+        ("shmid64_ds", 84),
+        ("shminfo", 20),
+        ("shminfo64", 36),
+    ] {
+        assert!(
+            decode(
+                None,
+                &field_on("x86", layout, "ipc.control", &vec![0u8; size])
+            )
+            .is_some(),
+            "{layout}"
+        );
+    }
+    // futex's 32-bit timeout.
+    let mut timeout = [0u8; 8];
+    put(&mut timeout, 0, &2i32.to_le_bytes());
+    assert!(
+        decode(
+            None,
+            &field_on("arm", "old_timespec", "arg3.timeout", &timeout)
+        )
+        .is_some()
+    );
+    // AArch32's epoll_event is 16 bytes (data at 8).
+    let mut events = [0u8; 16];
+    put(&mut events, 0, &1u32.to_le_bytes());
+    put(&mut events, 8, &0x1122_3344_5566_7788u64.to_le_bytes());
+    let line = line_on("arm", "epoll_event[]", &events);
+    assert!(
+        line.contains("0x1122334455667788") || line.contains("1234605616436508552"),
+        "{line}"
+    );
+}
+
+#[test]
 fn a_compat_layout_the_inventory_lacks_is_bytes_with_a_note() {
     for (arch, layout) in [("x86", "user_regs_struct"), ("arm", "linux_dirent64[]")] {
         let data = [0u8; 64];

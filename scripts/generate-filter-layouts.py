@@ -159,6 +159,13 @@ TYPES = {
     # 64-bit UAPIs have no struct stat64, so their inventories list it unsupported).
     "stat64": ("struct stat64", "asm/stat.h"),
     "statfs64": ("struct statfs64", "asm/statfs.h"),
+    # The compat ABIs' SysV IPC control records without IPC_64 (ipc/msg.c's,
+    # sem.c's and shm.c's compat_msqid_ds, compat_semid_ds, compat_shmid_ds and
+    # shm.c's old shminfo copy are the ILP32 layouts of these UAPI records).
+    "msqid_ds": ("struct msqid_ds", "linux/msg.h"),
+    "semid_ds": ("struct semid_ds", "linux/sem.h"),
+    "shmid_ds": ("struct shmid_ds", "linux/shm.h"),
+    "shminfo": ("struct shminfo", "linux/shm.h"),
 }
 SCALARS = {
     "int": ("int", True), "wait_status": ("int", True), "timer_t": ("int", True),

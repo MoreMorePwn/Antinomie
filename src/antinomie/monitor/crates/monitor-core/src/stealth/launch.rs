@@ -243,7 +243,9 @@ pub(crate) fn disk_args(profile: &StealthProfile, image: &str) -> Vec<String> {
         DiskBus::Nvme => {
             // The controller's model, firmware revision and subsystem name
             // (nqn.2019-08.org.qemu:<serial>) are QEMU's; the serial and the
-            // PCI vendor can be set.
+            // PCI vendor can be set. On a base with the guest facade a
+            // desktop or laptop machine's drive is shown instead
+            // ([`facade_options`]); Intel's ID is the one its rule maps.
             let serial = if profile.identity_enabled && !id.disk_serial.is_empty() {
                 escape(&id.disk_serial)
             } else {
@@ -539,4 +541,100 @@ pub(crate) fn apply(
             .arg(format!("ide-cd.model={}", escape(&id.cdrom_model)));
     }
     Ok(())
+}
+
+/// QEMU's NVMe controller with `use-intel-id=on`.
+const QEMU_NVME_PCI: (u16, u16) = (0x8086, 0x5845);
+/// QEMU's standard VGA (Bochs display interface).
+const QEMU_VGA_PCI: (u16, u16) = (0x1234, 0x1111);
+
+/// The guest facade's boot options (guest patch 0052) for a desktop or laptop
+/// machine profile: what its GPU, NVMe drive, board subsystem, mouse, EFI
+/// vendor and ACPI creator are, shown in the guest where programs read QEMU's
+/// devices. None for other profiles (a server or cloud machine legitimately
+/// looks like QEMU/KVM) or an identity without a machine. The guest takes the
+/// options out of its command line before it prints it.
+pub(crate) fn facade_options(profile: &StealthProfile) -> Vec<String> {
+    let identity = &profile.identity;
+    let Some(machine) = super::MACHINES
+        .iter()
+        .find(|machine| machine.id == identity.profile)
+    else {
+        return Vec::new();
+    };
+    let Some(facade) = super::catalog::facade::of(machine.id) else {
+        return Vec::new();
+    };
+    if !profile.identity_enabled
+        || !matches!(
+            machine.kind,
+            StealthPreset::RealisticDesktop | StealthPreset::RealisticLaptop
+        )
+    {
+        return Vec::new();
+    }
+    let board = pci_ids(&identity.nic_subsystem).or(facade.board_subsystem);
+    let rule = |from: (u16, u16), to: (u16, u16, u16, u16)| {
+        format!(
+            "{:04x}{:04x}={:04x}{:04x}{:04x}{:04x}",
+            from.0, from.1, to.0, to.1, to.2, to.3
+        )
+    };
+    let mut rules = Vec::new();
+    if let Some((sub_vendor, sub_device)) = board {
+        rules.push(rule(
+            QEMU_VGA_PCI,
+            (facade.gpu.0, facade.gpu.1, sub_vendor, sub_device),
+        ));
+    }
+    let nvme = (profile.disk_bus == DiskBus::Nvme)
+        .then(|| identity.nvme_drive())
+        .flatten();
+    if let Some(nvme) = nvme {
+        rules.push(rule(QEMU_NVME_PCI, nvme.pci));
+    }
+    let mut options = Vec::new();
+    if !rules.is_empty() {
+        options.push(format!("antinomie_fpci={}", rules.join(",")));
+    }
+    if let Some((vendor, device)) = board {
+        options.push(format!("antinomie_fsub={vendor:04x}{device:04x}"));
+    }
+    if let Some(nvme) = nvme {
+        options.push(format!(
+            "antinomie_fnvme=\"{},{},{},{:04x},{:04x}\"",
+            nvme.model, nvme.firmware, nvme.oui, nvme.pci.0, nvme.pci.2
+        ));
+    }
+    let pad = |text: &str, width: usize| {
+        format!("{text:<width$}")
+            .chars()
+            .take(width)
+            .collect::<String>()
+    };
+    let firmware = facade.firmware;
+    options.push(format!(
+        "antinomie_facpi=\"{}:{:08x}:{}:{}\"",
+        pad(firmware.acpi_creator, 4),
+        firmware.acpi_creator_revision,
+        pad(&identity.acpi_oem_id, 6),
+        pad(&identity.acpi_table_id, 8)
+    ));
+    options.push(format!(
+        "antinomie_fdrm={}",
+        if facade.gpu.0 == 0x1002 {
+            "amdgpu"
+        } else {
+            "i915"
+        }
+    ));
+    let mouse = facade.mouse;
+    options.push(format!(
+        "antinomie_finput=\"{:04x}:{:04x}:{:04x},{},{}\"",
+        mouse.vendor, mouse.product, mouse.release, mouse.manufacturer, mouse.product_name
+    ));
+    if profile.firmware.is_uefi() {
+        options.push(format!("antinomie_fefi=\"{}\"", firmware.efi_vendor));
+    }
+    options
 }

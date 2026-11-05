@@ -1,0 +1,319 @@
+Description: antinomie: capture compat futex timeouts, AArch32 epoll waits and SysV IPC control records
+ Compat programs still recorded three kinds of structures by address only.
+ kernel/antinomie/recorder.c's compat capture now records them by their
+ ILP32 layouts, under the native calls' keys:
+ .
+ - futex (the time32 call of both compat ABIs): the futex words the native
+   capture reads (arg0.futex.observed, arg4.futex.observed for the requeue
+   and wake-op commands) and the timeout of the commands that wait,
+   arg3.timeout, as old_timespec32. futex_time64 stays the native call's
+   twin.
+ - epoll_wait and epoll_pwait of AArch32 programs, which arm64 has no
+   native call for: the events written (arg1.epoll_events, the 16-byte
+   epoll_event of both ABIs) and epoll_pwait's signal mask (arg4.sigmask).
+   ia32's calls are the native ones' twins.
+ - msgctl, semctl and shmctl, and the MSGCTL, SEMCTL and SHMCTL calls of
+   ia32's ipc(): the control record (ipc.control) of the command, at entry
+   for IPC_SET and at exit on success otherwise. IPC_64 in the command
+   selects compat_msqid64_ds, compat_semid64_ds, compat_shmid64_ds and
+   compat_shminfo64; ia32's direct calls copy those always, AArch32's
+   (compat_sys_old_msgctl and the others) and ipc() otherwise copy the old
+   records (16-bit IDs, 32-bit times), the ILP32 layouts of the UAPI
+   msqid_ds, semid_ds, shmid_ds and shminfo; msginfo, seminfo and shm_info
+   for the information commands. GETALL and SETALL keep ipc/sem.c's own
+   copy of the array. ipc()'s SEMCTL argument is the value at its pointer.
+ .
+ ia32's semctl no longer takes the native call as its twin: its
+ declaration matches, but its records are the compat ones, so the native
+ capture read an LP64 semid64_ds from it.
+ .
+ Contract revision 21.
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-05
+
+---
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index 251c383c4..9a043c9d6 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -32,8 +32,15 @@
+ #include <asm/syscall.h>
+ #include <asm/antinomie_syscalls.h>
+ #ifdef ANT_ABI_COMPAT
++#include <linux/ipc.h>
++#include <linux/msg.h>
+ #include <linux/prctl.h>
++#include <linux/sem.h>
++#include <linux/shm.h>
+ #include <linux/time32.h>
++#include <uapi/linux/eventpoll.h>
++#include <uapi/linux/futex.h>
++#include <uapi/linux/shm.h>
+ #include <net/compat.h>
+ #include <asm/statfs.h>
+ #ifdef CONFIG_X86_64
+@@ -1015,7 +1022,10 @@ static void compat_entry(struct ant_task *ctx)
+ 			value = (u64)(s64)(s32)value;
+ 		ctx->args[i] = value;
+ 	}
+-	if (twin && twin->native) {
++	/* ia32's semctl names the same declaration as the native call, but its
++	 * IPC_STAT and IPC_SET records are compat_semid64_ds (compat_rules).
++	 */
++	if (twin && twin->native && nr != ANT_COMPAT_NR(semctl)) {
+ 		ctx->nr = twin->native - 1;
+ 		ctx->abi = ANT_ABI_NATIVE;
+ 	} else if (compat_prctl_native(nr, ctx->args[0])) {
+@@ -1375,6 +1385,221 @@ static void compat_mmsg(struct ant_task *ctx, bool output, long result, bool sen
+ 		      ctx->args[4], NULL, timeout_size, timeout_size, ANT_COMPLETE);
+ }
+ 
++/* futex (the time32 call; futex_time64 is the native call's twin): the native
++ * capture's fields, the timeout of the commands that wait as the compat
++ * old_timespec32.
++ */
++static void compat_futex(struct ant_task *ctx, bool output, long result)
++{
++	u32 command = (u32)ctx->args[1] & FUTEX_CMD_MASK;
++	bool timeout = false, second = false, modifies = false;
++
++	switch (command) {
++	case FUTEX_WAIT: case FUTEX_WAIT_BITSET:
++		timeout = true;
++		break;
++	case FUTEX_WAKE: case FUTEX_WAKE_BITSET:
++		break;
++	case FUTEX_REQUEUE: case FUTEX_CMP_REQUEUE:
++		second = true;
++		break;
++	case FUTEX_WAKE_OP: case FUTEX_CMP_REQUEUE_PI:
++		second = true;
++		modifies = true;
++		break;
++	case FUTEX_WAIT_REQUEUE_PI:
++		timeout = true;
++		second = true;
++		modifies = true;
++		break;
++	case FUTEX_LOCK_PI: case FUTEX_LOCK_PI2:
++		timeout = true;
++		modifies = true;
++		break;
++	case FUTEX_UNLOCK_PI: case FUTEX_TRYLOCK_PI:
++		modifies = true;
++		break;
++	default:
++		if (!output)
++			field(ctx, 0, "futex.unknown_selector", "", 1, ctx->args[0], NULL,
++			      U64_MAX, U64_MAX, ANT_NO_DECODER);
++		return;
++	}
++	if (!output || (modifies && result >= 0)) {
++		if (ctx->args[0])
++			user_field(ctx, 0, "arg0.futex.observed", ANT_COMPAT_LAYOUT("u32"), 3,
++				   ctx->args[0], sizeof(u32));
++		if (second && ctx->args[4] && !ctx->failed_count)
++			user_field(ctx, 4, "arg4.futex.observed", ANT_COMPAT_LAYOUT("u32"), 3,
++				   ctx->args[4], sizeof(u32));
++	}
++	if (!output && timeout && ctx->args[3] && !ctx->failed_count)
++		user_field(ctx, 3, "arg3.timeout", ANT_COMPAT_LAYOUT("old_timespec"), 3,
++			   ctx->args[3], sizeof(struct old_timespec32));
++}
++
++/* epoll_wait and epoll_pwait of AArch32 programs (arm64 has neither call
++ * natively; ia32's are the native calls' twins): the events written, the
++ * signal mask read.
++ */
++static void compat_epoll_wait(struct ant_task *ctx, bool output, long result)
++{
++	s32 capacity = ctx->args[2];
++	u64 size;
++
++	if (!output) {
++		if (ctx->wire_nr == ANT_COMPAT_NR(epoll_pwait) && ctx->args[4])
++			field(ctx, 4, "arg4.sigmask", ANT_COMPAT_LAYOUT("u64"), 3, ctx->args[4],
++			      NULL, sizeof(compat_sigset_t), ctx->args[5],
++			      ctx->args[5] == sizeof(compat_sigset_t) ?
++			      ANT_COMPLETE : ANT_INVALID_EXTENT);
++		return;
++	}
++	if (result < 0)
++		return;
++	size = capacity > 0 ? min_t(u64, result, capacity) * sizeof(struct epoll_event) : 0;
++	field(ctx, 1, "arg1.epoll_events", ANT_COMPAT_LAYOUT("epoll_event[]"), 3, ctx->args[1],
++	      NULL, size, capacity > 0 ? (u64)capacity * sizeof(struct epoll_event) : 0,
++	      capacity <= 0 || capacity > INT_MAX / sizeof(struct epoll_event) ?
++	      ANT_INVALID_EXTENT : ANT_COMPLETE);
++}
++
++/* The sizes ipc/msg.c, sem.c and shm.c copy for a compat program's control
++ * command without IPC_64: their local compat_msqid_ds, compat_semid_ds and
++ * compat_shmid_ds (16-bit IDs, 32-bit times), compat_shminfo64 and
++ * compat_shm_info, the ILP32 layouts of the UAPI msqid_ds, semid_ds, shmid_ds,
++ * shminfo64 and shm_info.
++ */
++#define ANT_COMPAT_MSQID_SIZE 56
++#define ANT_COMPAT_SEMID_SIZE 44
++#define ANT_COMPAT_SHMID_SIZE 48
++#define ANT_COMPAT_SHMINFO64_SIZE 36
++#define ANT_COMPAT_SHM_INFO_SIZE 24
++/* ia32's direct msgctl, semctl and shmctl are compat_sys_msgctl and the others
++ * (IPC_64 always); AArch32's are compat_sys_old_msgctl and the others.
++ */
++#ifdef CONFIG_X86_64
++#define ANT_COMPAT_IPC_PARSES_VERSION false
++#else
++#define ANT_COMPAT_IPC_PARSES_VERSION true
++#endif
++
++/* The control buffer of msgctl, semctl and shmctl, made directly or through
++ * ia32's ipc(): as the native calls, key "ipc.control", by the record the
++ * compat call copies. IPC_64 in the command selects the *64_ds records; ia32's
++ * direct calls always copy those, AArch32's (old_msgctl and the others) and
++ * ipc() only with IPC_64, the old records otherwise (ipc/util.h's
++ * compat_ipc_parse_version()).
++ */
++static void compat_ipc_control(struct ant_task *ctx, bool output, long result, u64 nr,
++			       u32 command, bool parse_version, u8 arg, u64 address)
++{
++	bool v64 = !parse_version || (command & IPC_64), input = false;
++	const char *layout = NULL;
++	u64 size = 0;
++
++	command &= ~IPC_64;
++	if (nr == ANT_COMPAT_NR(msgctl)) {
++		switch (command) {
++		case IPC_SET:
++			input = true;
++			fallthrough;
++		case IPC_STAT: case MSG_STAT: case MSG_STAT_ANY:
++			size = v64 ? sizeof(struct compat_msqid64_ds) : ANT_COMPAT_MSQID_SIZE;
++			layout = v64 ? ANT_COMPAT_LAYOUT("msqid64_ds") : ANT_COMPAT_LAYOUT("msqid_ds");
++			break;
++		case IPC_INFO: case MSG_INFO:
++			size = sizeof(struct msginfo);
++			layout = ANT_COMPAT_LAYOUT("msginfo");
++			break;
++		case IPC_RMID:
++			return;
++		}
++	} else if (nr == ANT_COMPAT_NR(shmctl)) {
++		switch (command) {
++		case IPC_SET:
++			input = true;
++			fallthrough;
++		case IPC_STAT: case SHM_STAT: case SHM_STAT_ANY:
++			size = v64 ? sizeof(struct compat_shmid64_ds) : ANT_COMPAT_SHMID_SIZE;
++			layout = v64 ? ANT_COMPAT_LAYOUT("shmid64_ds") : ANT_COMPAT_LAYOUT("shmid_ds");
++			break;
++		case IPC_INFO:
++			size = v64 ? ANT_COMPAT_SHMINFO64_SIZE : sizeof(struct shminfo);
++			layout = v64 ? ANT_COMPAT_LAYOUT("shminfo64") : ANT_COMPAT_LAYOUT("shminfo");
++			break;
++		case SHM_INFO:
++			size = ANT_COMPAT_SHM_INFO_SIZE;
++			layout = ANT_COMPAT_LAYOUT("shm_info");
++			break;
++		case IPC_RMID: case SHM_LOCK: case SHM_UNLOCK:
++			return;
++		}
++	} else {
++		switch (command) {
++		case IPC_SET:
++			input = true;
++			fallthrough;
++		case IPC_STAT: case SEM_STAT: case SEM_STAT_ANY:
++			size = v64 ? sizeof(struct compat_semid64_ds) : ANT_COMPAT_SEMID_SIZE;
++			layout = v64 ? ANT_COMPAT_LAYOUT("semid64_ds") : ANT_COMPAT_LAYOUT("semid_ds");
++			break;
++		case IPC_INFO: case SEM_INFO:
++			size = sizeof(struct seminfo);
++			layout = ANT_COMPAT_LAYOUT("seminfo");
++			break;
++		/* GETALL and SETALL: ipc/sem.c hands over its own copy of the
++		 * array (ant_monitor_operand()), as for a native call.
++		 */
++		case GETALL: case SETALL:
++		case IPC_RMID: case GETVAL: case GETPID: case GETNCNT: case GETZCNT: case SETVAL:
++			return;
++		}
++	}
++	if (!layout) {
++		if (!output)
++			field(ctx, arg, "ipc.unknown_selector", "", 1, address, NULL,
++			      U64_MAX, U64_MAX, ANT_NO_DECODER);
++		return;
++	}
++	if (!address)
++		return;
++	if ((input && !output) || (!input && output && result >= 0))
++		field(ctx, arg, "ipc.control", layout, 3, address, NULL, size, size,
++		      ANT_COMPLETE);
++}
++
++#ifdef ANT_ARCH_COMPAT_SOCKETCALL
++/* ia32's ipc() multiplexer (call in the low 16 bits): its control calls as the
++ * direct ones; SEMCTL's argument is the value at ptr. The other IPC calls keep
++ * their records by address.
++ */
++static bool compat_ipc(struct ant_task *ctx, bool output, long result)
++{
++	u32 call = lower_16_bits(ctx->args[0]), semun;
++
++	switch (call) {
++	case SEMCTL:
++		if (!ctx->args[4] ||
++		    copy_from_user_nofault(&semun, (void __user *)(unsigned long)ctx->args[4],
++					   sizeof(semun)))
++			return false;
++		compat_ipc_control(ctx, output, result, ANT_COMPAT_NR(semctl), ctx->args[3],
++				   true, 4, semun);
++		return true;
++	case MSGCTL:
++		compat_ipc_control(ctx, output, result, ANT_COMPAT_NR(msgctl), ctx->args[2],
++				   true, 4, ctx->args[4]);
++		return true;
++	case SHMCTL:
++		compat_ipc_control(ctx, output, result, ANT_COMPAT_NR(shmctl), ctx->args[2],
++				   true, 4, ctx->args[4]);
++		return true;
++	}
++	return false;
++}
++#endif
++
+ /* The compat structures of a call by compat_rules; true when the call has any. */
+ static bool compat_rules_capture(struct ant_task *ctx, bool output, long result)
+ {
+@@ -1397,6 +1622,28 @@ static bool compat_rules_capture(struct ant_task *ctx, bool output, long result)
+ 		compat_mmsg(ctx, output, result, ctx->wire_nr == ANT_COMPAT_NR(sendmmsg));
+ 		return true;
+ 	}
++	if (ctx->wire_nr == ANT_COMPAT_NR(futex)) {
++		compat_futex(ctx, output, result);
++		return true;
++	}
++	if (ctx->wire_nr == ANT_COMPAT_NR(epoll_wait) || ctx->wire_nr == ANT_COMPAT_NR(epoll_pwait)) {
++		compat_epoll_wait(ctx, output, result);
++		return true;
++	}
++	if (ctx->wire_nr == ANT_COMPAT_NR(msgctl) || ctx->wire_nr == ANT_COMPAT_NR(shmctl)) {
++		compat_ipc_control(ctx, output, result, ctx->wire_nr, ctx->args[1],
++				   ANT_COMPAT_IPC_PARSES_VERSION, 2, ctx->args[2]);
++		return true;
++	}
++	if (ctx->wire_nr == ANT_COMPAT_NR(semctl)) {
++		compat_ipc_control(ctx, output, result, ctx->wire_nr, ctx->args[2],
++				   ANT_COMPAT_IPC_PARSES_VERSION, 3, ctx->args[3]);
++		return true;
++	}
++#ifdef ANT_ARCH_COMPAT_SOCKETCALL
++	if (ctx->wire_nr == ANT_COMPAT_NR(ipc) && compat_ipc(ctx, output, result))
++		return true;
++#endif
+ 	for (i = 0; i < ARRAY_SIZE(compat_rules) && !ctx->failed_count; i++) {
+ 		rule = &compat_rules[i];
+ 		if (rule->nr != ctx->wire_nr)

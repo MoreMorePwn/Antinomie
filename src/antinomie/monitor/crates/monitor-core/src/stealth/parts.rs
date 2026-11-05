@@ -292,3 +292,144 @@ pub(super) const X160EB: DiskModel = DiskModel {
     serial_tail: 12,
     rotation: 1,
 };
+
+/// An NVMe drive as its Identify Controller data and PCI function name it
+/// (shown by the guest facade for QEMU's controller).
+pub(super) struct NvmeModel {
+    pub model: &'static str,
+    pub firmware: &'static str,
+    /// The maker's IEEE OUI (six hex digits), as smartctl prints it.
+    pub oui: &'static str,
+    /// PCI vendor, device, subsystem vendor and subsystem device; the
+    /// Identify data's VID and SSVID are the vendor and subsystem vendor.
+    pub pci: (u16, u16, u16, u16),
+    /// The start of its serial numbers, and the characters and count of the
+    /// rest. Not from a source: public dumps hide serial numbers.
+    pub serial_prefix: &'static str,
+    pub serial_alphabet: &'static [u8],
+    pub serial_tail: usize,
+}
+
+/// Samsung PM981a, Dell's part number suffix.
+pub(super) const SAMSUNG_MZVLB256HBHQ_00000: NvmeModel = NvmeModel {
+    model: "SAMSUNG MZVLB256HBHQ-00000",
+    firmware: "EXH7201Q",
+    oui: "002538",
+    pci: (0x144d, 0xa808, 0x144d, 0xa801),
+    serial_prefix: "S4GENX0",
+    serial_alphabet: UPPER,
+    serial_tail: 7,
+};
+
+/// Samsung PM981a, Lenovo's part number suffix.
+pub(super) const SAMSUNG_MZVLB256HBHQ_000L7: NvmeModel = NvmeModel {
+    model: "SAMSUNG MZVLB256HBHQ-000L7",
+    firmware: "4M2QEXH7",
+    oui: "002538",
+    pci: (0x144d, 0xa808, 0x144d, 0xa801),
+    serial_prefix: "S4ELNX0",
+    serial_alphabet: UPPER,
+    serial_tail: 7,
+};
+
+/// Samsung PM991a, HP's part number suffix.
+pub(super) const SAMSUNG_MZVLQ256HAJD_000H1: NvmeModel = NvmeModel {
+    model: "SAMSUNG MZVLQ256HAJD-000H1",
+    firmware: "HPS4NFXV",
+    oui: "002538",
+    pci: (0x144d, 0xa809, 0x144d, 0xa801),
+    serial_prefix: "S59ANA0",
+    serial_alphabet: UPPER,
+    serial_tail: 7,
+};
+
+/// Samsung PM9A1, Lenovo's part number suffix.
+pub(super) const SAMSUNG_MZVL2512HCJQ_00BL7: NvmeModel = NvmeModel {
+    model: "SAMSUNG MZVL2512HCJQ-00BL7",
+    firmware: "CL2QGXA7",
+    oui: "002538",
+    pci: (0x144d, 0xa80a, 0x144d, 0xa801),
+    serial_prefix: "S64KNX0",
+    serial_alphabet: UPPER,
+    serial_tail: 7,
+};
+
+/// Micron 2450.
+pub(super) const MICRON_2450_MTFDKBA512TFK: NvmeModel = NvmeModel {
+    model: "Micron_2450_MTFDKBA512TFK",
+    firmware: "V5MA010",
+    oui: "00a075",
+    pci: (0x1344, 0x5411, 0x1344, 0x1100),
+    serial_prefix: "2",
+    serial_alphabet: DIGITS,
+    serial_tail: 11,
+};
+
+/// Micron 2400 (MTFDKCD).
+pub(super) const MICRON_MTFDKCD512TFK: NvmeModel = NvmeModel {
+    model: "Micron MTFDKCD512TFK",
+    firmware: "7003V5LN",
+    oui: "00a075",
+    pci: (0x1344, 0x5411, 0x1344, 0x1100),
+    serial_prefix: "2",
+    serial_alphabet: DIGITS,
+    serial_tail: 11,
+};
+
+/// KIOXIA BG5.
+pub(super) const KIOXIA_KBG50ZNS256G: NvmeModel = NvmeModel {
+    model: "KBG50ZNS256G NVMe KIOXIA 256GB",
+    firmware: "11200109",
+    oui: "8ce38e",
+    pci: (0x1e0f, 0x000c, 0x1e0f, 0x0001),
+    serial_prefix: "",
+    serial_alphabet: UPPER,
+    serial_tail: 12,
+};
+
+/// KIOXIA BG4.
+pub(super) const KIOXIA_KBG40ZNS256G: NvmeModel = NvmeModel {
+    model: "KBG40ZNS256G BG4A KIOXIA",
+    firmware: "AEMS0104",
+    oui: "8ce38e",
+    pci: (0x1e0f, 0x0001, 0x1e0f, 0x0001),
+    serial_prefix: "",
+    serial_alphabet: UPPER,
+    serial_tail: 12,
+};
+
+/// SK hynix PC801, Dell's model string.
+pub(super) const SK_HYNIX_PC801_1TB: NvmeModel = NvmeModel {
+    model: "PC801 NVMe SK hynix 1TB",
+    firmware: "51003141",
+    oui: "ace42e",
+    pci: (0x1c5c, 0x1959, 0x1c5c, 0x1959),
+    serial_prefix: "SJ",
+    serial_alphabet: UPPER,
+    serial_tail: 14,
+};
+
+/// SK hynix BC711.
+pub(super) const SK_HYNIX_BC711_256GB: NvmeModel = NvmeModel {
+    model: "BC711 NVMe SK hynix 256GB",
+    firmware: "41002131",
+    oui: "ace42e",
+    pci: (0x1c5c, 0x174a, 0x1c5c, 0x174a),
+    serial_prefix: "CY",
+    serial_alphabet: UPPER,
+    serial_tail: 14,
+};
+
+/// Every NVMe model above, for finding an identity's drive by its model.
+pub(super) const NVME_MODELS: &[&NvmeModel] = &[
+    &SAMSUNG_MZVLB256HBHQ_00000,
+    &SAMSUNG_MZVLB256HBHQ_000L7,
+    &SAMSUNG_MZVLQ256HAJD_000H1,
+    &SAMSUNG_MZVL2512HCJQ_00BL7,
+    &MICRON_2450_MTFDKBA512TFK,
+    &MICRON_MTFDKCD512TFK,
+    &KIOXIA_KBG50ZNS256G,
+    &KIOXIA_KBG40ZNS256G,
+    &SK_HYNIX_PC801_1TB,
+    &SK_HYNIX_BC711_256GB,
+];

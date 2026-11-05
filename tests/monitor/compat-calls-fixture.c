@@ -4,10 +4,12 @@
 // compat-calls-fixture.c — a benign 32-bit program (ia32 on x86-64 guests,
 // AArch32 on arm64 guests) that makes the compat calls whose structures the
 // recorder captures by their ILP32 layouts (contract revision 21, guest
-// patches 49 and 50), each with raw system calls so that the compat (32-bit
+// patches 49, 50 and 51), each with raw system calls so that the compat (32-bit
 // time, 32-bit pointer) variants are the ones called. Everything it touches
 // is its own: a file and a directory under its work directory, a pipe, an
-// AF_UNIX socket pair, a loopback UDP socket and a child that exits at once.
+// AF_UNIX socket pair, a loopback UDP socket, an epoll instance, a private
+// message queue, semaphore set and shared memory segment (removed at the end)
+// and a child that exits at once.
 // It prints "compat calls done" and exits 0; tests/monitor/compat-calls-check.py
 // checks the recording.
 //
@@ -24,6 +26,11 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/epoll.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
+#include <sys/sem.h>
+#include <sys/shm.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
@@ -39,6 +46,13 @@
 // linux/net.h's socketcall numbers (i386 only).
 #define CALL_SENDMSG 16
 #define CALL_RECVMSG 17
+
+// IPC_64 (linux/ipc.h): the *64_ds records of the control commands.
+#define IPC_64_FLAG 0x100
+// ipc()'s call numbers (linux/ipc.h, i386 only).
+#define IPC_SEMCTL 3
+#define IPC_MSGCTL 14
+#define IPC_SHMCTL 24
 
 static char work[256];
 
@@ -245,6 +259,88 @@ static void message_calls(void)
     close(pair[1]);
 }
 
+// The patch 51 calls: futex with a 32-bit timeout (and futex_time64, the
+// native call's twin), epoll_wait and epoll_pwait, and the SysV IPC control
+// commands with and without IPC_64, directly and, on i386, through ipc().
+static void futex_epoll_ipc_calls(void)
+{
+    uint32_t word = 7, other = 9, mask[2] = {0, 0};
+    struct { int32_t sec, nsec; } brief = {0, 1000};
+    struct epoll_event event = {.events = EPOLLIN, .data = {.u64 = 0x1122334455667788ull}}, got[4];
+    char record[256];
+    int pipefd[2], ep, queue, sems, segment;
+
+    // FUTEX_WAIT (0) on a value that is not there: EAGAIN at once.
+    syscall(SYS_futex, &word, 0, 8, &brief, NULL, 0);
+    // FUTEX_WAKE (1) and FUTEX_CMP_REQUEUE (4): no waiter.
+    syscall(SYS_futex, &word, 1, 1, NULL, NULL, 0);
+    syscall(SYS_futex, &word, 4, 1, 1, &other, 7);
+#ifdef SYS_futex_time64
+    {
+        struct { int64_t sec, nsec; } brief64 = {0, 1000};
+
+        syscall(SYS_futex_time64, &word, 0, 8, &brief64, NULL, 0);
+    }
+#endif
+    ep = epoll_create1(0);
+    if (ep >= 0 && pipe(pipefd) == 0) {
+        epoll_ctl(ep, EPOLL_CTL_ADD, pipefd[0], &event);
+        if (write(pipefd[1], "e", 1) != 1)
+            perror("write");
+        syscall(SYS_epoll_wait, ep, got, 4, 0);
+        syscall(SYS_epoll_pwait, ep, got, 4, 0, mask, 8);
+        close(pipefd[0]);
+        close(pipefd[1]);
+    }
+    if (ep >= 0)
+        close(ep);
+    queue = msgget(IPC_PRIVATE, IPC_CREAT | 0600);
+    sems = semget(IPC_PRIVATE, 2, IPC_CREAT | 0600);
+    segment = shmget(IPC_PRIVATE, 4096, IPC_CREAT | 0600);
+    memset(record, 0, sizeof record);
+#ifdef SYS_msgctl
+    if (queue >= 0) {
+        syscall(SYS_msgctl, queue, IPC_STAT | IPC_64_FLAG, record);
+        syscall(SYS_msgctl, queue, IPC_SET | IPC_64_FLAG, record);
+        syscall(SYS_msgctl, queue, IPC_STAT, record);
+        syscall(SYS_msgctl, queue, MSG_INFO, record);
+    }
+    if (segment >= 0) {
+        syscall(SYS_shmctl, segment, IPC_STAT | IPC_64_FLAG, record);
+        syscall(SYS_shmctl, segment, IPC_STAT, record);
+        syscall(SYS_shmctl, segment, IPC_INFO | IPC_64_FLAG, record);
+        syscall(SYS_shmctl, segment, SHM_INFO, record);
+    }
+    if (sems >= 0) {
+        syscall(SYS_semctl, sems, 0, IPC_STAT | IPC_64_FLAG, record);
+        syscall(SYS_semctl, sems, 0, IPC_STAT, record);
+        syscall(SYS_semctl, sems, 0, SEM_INFO, record);
+    }
+#endif
+#ifdef __i386__
+    {
+        uint32_t semun = (uint32_t)(uintptr_t)record;
+
+        if (queue >= 0) {
+            syscall(SYS_ipc, IPC_MSGCTL, queue, IPC_STAT, 0, record, 0);
+            syscall(SYS_ipc, IPC_MSGCTL, queue, IPC_STAT | IPC_64_FLAG, 0, record, 0);
+        }
+        if (segment >= 0)
+            syscall(SYS_ipc, IPC_SHMCTL, segment, IPC_STAT, 0, record, 0);
+        if (sems >= 0) {
+            syscall(SYS_ipc, IPC_SEMCTL, sems, 0, IPC_STAT | IPC_64_FLAG, &semun, 0);
+            syscall(SYS_ipc, IPC_SEMCTL, sems, 0, IPC_STAT, &semun, 0);
+        }
+    }
+#endif
+    if (queue >= 0)
+        msgctl(queue, IPC_RMID, NULL);
+    if (sems >= 0)
+        semctl(sems, 0, IPC_RMID);
+    if (segment >= 0)
+        shmctl(segment, IPC_RMID, NULL);
+}
+
 int main(int argc, char **argv)
 {
     snprintf(work, sizeof work, "%s", argc > 1 ? argv[1] : "/tmp");
@@ -252,6 +348,7 @@ int main(int argc, char **argv)
     stat_calls();
     timer_and_wait_calls();
     message_calls();
+    futex_epoll_ipc_calls();
     printf("compat calls done\n");
     return 0;
 }

@@ -45,8 +45,8 @@ mod tests;
 
 pub use firmware::{Ovmf, find_ovmf};
 pub(crate) use launch::{
-    aavmf_files, apply, cpu_option, disk_args, escape, firmware_args, machine_options,
-    netdev_option, nic_option_for, pointer_args, smp_option,
+    aavmf_files, apply, cpu_option, disk_args, escape, facade_options, firmware_args,
+    machine_options, netdev_option, nic_option_for, pointer_args, smp_option,
 };
 pub use nat::NatNetwork;
 
@@ -253,7 +253,8 @@ pub enum DiskBus {
     Virtio,
     /// On q35's ICH9 AHCI controller: `sda`, vendor ATA, the model set here.
     Sata,
-    /// QEMU's NVMe controller, whose model name says QEMU.
+    /// QEMU's NVMe controller, whose model name says QEMU unless the guest
+    /// facade shows a laptop's drive for it.
     Nvme,
 }
 
@@ -264,7 +265,7 @@ impl DiskBus {
         match self {
             Self::Virtio => "virtio (fastest, VM vendor ID)",
             Self::Sata => "SATA (AHCI)",
-            Self::Nvme => "NVMe (model says QEMU)",
+            Self::Nvme => "NVMe (QEMU's model, a laptop's on its facade)",
         }
     }
 }
@@ -525,6 +526,66 @@ pub struct StealthProfile {
     /// The cloud provider this profile is an instance of (a [`CLOUDS`] id),
     /// or empty.
     pub cloud: String,
+    /// How long before each start the guest's boot appears to have been, in
+    /// seconds: its uptime, boot time and CLOCK_BOOTTIME (the guest kernel
+    /// takes it as time asleep). Drawn once per VM by the preset
+    /// ([`BootAge::draw`]); 0: a fresh boot.
+    pub boot_age_s: u64,
+}
+
+/// The range a preset draws a VM's boot age from: a desktop or laptop is up
+/// for hours to days, a server or cloud instance for days to months.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BootAge {
+    Desktop,
+    Server,
+}
+
+impl BootAge {
+    const HOUR: u64 = 3_600;
+    const DAY: u64 = 86_400;
+
+    /// The shortest and longest age, in seconds.
+    pub fn range(self) -> (u64, u64) {
+        match self {
+            Self::Desktop => (3 * Self::HOUR, 6 * Self::DAY),
+            Self::Server => (3 * Self::DAY, 120 * Self::DAY),
+        }
+    }
+
+    /// The range a profile's machine belongs to: a cloud instance or a
+    /// server preset, else a desktop.
+    pub fn of(profile: &StealthProfile) -> Self {
+        if profile.cloud_provider().is_some() || profile.preset == StealthPreset::RealisticServer {
+            Self::Server
+        } else {
+            Self::Desktop
+        }
+    }
+
+    /// An age in the range, log-uniform (as many short as long uptimes per
+    /// decade), whole seconds.
+    pub fn draw(self) -> u64 {
+        self.at(f64::from(roll()) / f64::from(u32::MAX))
+    }
+
+    /// The age at `fraction` (0..=1) of the range on a log scale.
+    fn at(self, fraction: f64) -> u64 {
+        let (low, high) = self.range();
+        let (low, high) = (low as f64, high as f64);
+        let age = low * (high / low).powf(fraction.clamp(0.0, 1.0));
+        (age.round() as u64).clamp(self.range().0, self.range().1)
+    }
+}
+
+/// An age as a person reads it: `5 h 12 min`, `3 d 4 h`, `0` for a fresh boot.
+pub fn boot_age_text(seconds: u64) -> String {
+    let (days, hours, minutes) = (seconds / 86_400, seconds / 3_600 % 24, seconds / 60 % 60);
+    match (days, hours) {
+        (0, 0) => format!("{minutes} min"),
+        (0, _) => format!("{hours} h {minutes} min"),
+        _ => format!("{days} d {hours} h"),
+    }
 }
 
 impl Default for StealthProfile {
@@ -673,7 +734,32 @@ impl MachineIdentity {
     pub fn from_machine(machine: &MachineProfile) -> Self {
         let (bios, unit) = (pick(machine.bios), pick(machine.variants));
         let disk: &DiskModel = pick::<&DiskModel>(machine.disks);
-        Self::build(machine, bios, unit, disk, pick(machine.memory))
+        Self::build(machine, bios, unit, disk, pick(machine.memory)).with_machine_nvme()
+    }
+
+    /// The NVMe drive of a machine whose units have NVMe slots only, in place
+    /// of the SATA disk (the guest facade shows QEMU's controller as it).
+    fn with_machine_nvme(mut self) -> Self {
+        if let Some(nvme) = catalog::facade::of(&self.profile).and_then(|facade| facade.nvme) {
+            self.disk_model = nvme.model.into();
+            self.disk_firmware = nvme.firmware.into();
+            self.disk_serial = format!(
+                "{}{}",
+                nvme.serial_prefix,
+                random_text(nvme.serial_alphabet, nvme.serial_tail)
+            );
+            self.disk_wwn = String::new();
+            self.disk_rotation = 1;
+        }
+        self
+    }
+
+    /// The NVMe drive this identity names, if its disk is one.
+    pub(in crate::stealth) fn nvme_drive(&self) -> Option<&'static parts::NvmeModel> {
+        parts::NVME_MODELS
+            .iter()
+            .copied()
+            .find(|nvme| nvme.model == self.disk_model)
     }
 
     /// The same for the first BIOS release, unit, disk and memory module
@@ -686,6 +772,7 @@ impl MachineIdentity {
             machine.disks[0],
             &machine.memory[0],
         )
+        .with_machine_nvme()
     }
 
     fn build(
@@ -964,6 +1051,7 @@ impl StealthProfile {
             nat: NatNetwork::default(),
             machine: MachineType::Q35,
             cloud: String::new(),
+            boot_age_s: 0,
         }
     }
 
@@ -983,6 +1071,13 @@ impl StealthProfile {
             return Self::cloud_vps(&CLOUDS[0]);
         }
         let (machine, _fits) = catalog::pick_machine(kind, host, roll());
+        Self::realistic_machine(machine)
+    }
+
+    /// The realistic profile of `machine` (its kind's preset), with a new
+    /// identity, serials and MAC address.
+    pub fn realistic_machine(machine: &'static MachineProfile) -> Self {
+        let kind = machine.kind;
         let nic = NicModel::E1000e;
         let identity = MachineIdentity::from_machine(machine);
         Self {
@@ -1001,10 +1096,20 @@ impl StealthProfile {
             usb: true,
             rtc_localtime: false,
             firmware: Firmware::Uefi,
-            disk_bus: DiskBus::Sata,
+            disk_bus: if identity.nvme_drive().is_some() {
+                DiskBus::Nvme
+            } else {
+                DiskBus::Sata
+            },
             disk_media: DiskMedia::of_rotation(identity.disk_rotation),
             smt: true,
-            pointer: Pointer::VirtioTablet,
+            // On the ICH9 USB controllers; the guest facade names it as the
+            // machine's mouse (a virtio tablet is a Red Hat PCI device).
+            pointer: if catalog::facade::of(machine.id).is_some() {
+                Pointer::UsbTablet
+            } else {
+                Pointer::VirtioTablet
+            },
             smbios_entry: SmbiosEntry::Bits64,
             cpu_model: String::new(),
             cpu_brand: String::new(),
@@ -1020,6 +1125,12 @@ impl StealthProfile {
             identity,
             machine: MachineType::Q35,
             cloud: String::new(),
+            boot_age_s: if kind == StealthPreset::RealisticServer {
+                BootAge::Server
+            } else {
+                BootAge::Desktop
+            }
+            .draw(),
         }
     }
 
@@ -1040,6 +1151,7 @@ impl StealthProfile {
             machine: provider.machine,
             cloud: provider.id.into(),
             identity,
+            boot_age_s: BootAge::Server.draw(),
             ..Self::transparent()
         };
         profile.preset = StealthPreset::CloudVps;
@@ -1321,6 +1433,10 @@ impl StealthProfile {
             return self.cloud_giveaways();
         }
         let mut found = Vec::new();
+        // A desktop or laptop machine on a base with the guest facade
+        // (patch 0052): its GPU, NVMe drive, board subsystem, ACPI creator,
+        // mouse and EFI vendor are shown for QEMU's.
+        let facade = !launch::facade_options(self).is_empty();
         if !self.hide_hypervisor {
             found.push("CPUID hypervisor flag");
         }
@@ -1359,6 +1475,7 @@ impl StealthProfile {
                 found.push("SATA disk model QEMU HARDDISK")
             }
             DiskBus::Sata => {}
+            DiskBus::Nvme if facade && self.identity.nvme_drive().is_some() => {}
             DiskBus::Nvme => {
                 found.push("NVMe controller model QEMU NVMe Ctrl, QEMU's version as firmware, an org.qemu subsystem name")
             }
@@ -1377,13 +1494,30 @@ impl StealthProfile {
         }
         match self.firmware {
             Firmware::Bios => found.push("BIOS firmware (SeaBIOS): no /sys/firmware/efi"),
+            _ if facade => found.push(
+                "OVMF's boot entries in efivarfs name QEMU's devices; its vendor (EDK II) in the EFI system table, to root reading memory",
+            ),
             _ => found.push("OVMF's vendor (EDK II) in the EFI tables, to root"),
         }
         if self.nat.network.is_empty() {
             found.push("QEMU user-network addresses (10.0.2.x) on NAT");
         }
-        if self.pointer != Pointer::Ps2 {
+        if self.pointer == Pointer::VirtioTablet || (self.pointer == Pointer::UsbTablet && !facade)
+        {
             found.push("the pointer's input name (QEMU) in the VM window");
+        } else if self.pointer == Pointer::UsbTablet {
+            found.push("the USB tablet's strings to a program that asks the device (usbfs), and its absolute axes");
+        }
+        if facade {
+            found.extend([
+                "timing of VM exits (CPUID, I/O) and of traced calls",
+                "QEMU's PCI IDs to root reading config space through I/O ports",
+                "the q35 chipset's ICH9 (2009) device IDs behind the board's subsystem",
+                "the display's Bochs layout (registers, modes) behind its GPU name",
+                "udev's device database (Debian bases): the devices' true PCI IDs",
+            ]);
+            found.push(self.uptime_giveaway());
+            return found;
         }
         // Not covered by any entry: needed by Antinomie, outside QEMU options
         // or beyond what the guest kernel can hide (docs/implementation/bases-and-stealth.md,
@@ -1394,8 +1528,8 @@ impl StealthProfile {
             "q35 chipset layout, Red Hat PCI subsystem IDs on the chipset's devices",
             "QEMU's ACPI tables to root (BXPC creator ID, fw_cfg in the DSDT)",
             "the host CPU's family, model and feature flags behind the provider's CPU name",
-            "a fresh boot: minutes of uptime",
         ]);
+        found.push(self.uptime_giveaway());
         found
     }
 
@@ -1412,9 +1546,34 @@ impl StealthProfile {
             "PCI subsystem IDs and the provider's own PCI bridges and balloon device",
             "DNS servers inside the DHCP network, not the provider's",
             "no provider agent process runs (files and stubs only)",
-            "a fresh boot: minutes of uptime",
         ]);
+        found.push(self.uptime_giveaway());
         found
+    }
+
+    /// What the boot's age leaves visible: a fresh boot, or the traces of its
+    /// clock model (docs/implementation/bases-and-stealth.md, "Aged uptime").
+    fn uptime_giveaway(&self) -> &'static str {
+        if self.boot_age_s == 0 {
+            "a fresh boot: minutes of uptime"
+        } else if BootAge::of(self) == BootAge::Server {
+            "the boot age's step to the present at the first launch: processes started at boot \
+             see their clocks jump; input and display event timestamps keep the kernel's \
+             monotonic clock"
+        } else {
+            "the boot age is a sleep: CLOCK_BOOTTIME ahead of CLOCK_MONOTONIC, the kernel log's \
+             timestamps not counting it, and no suspend in the log or /sys/power/suspend_stats"
+        }
+    }
+
+    /// The guest's clock model for the boot age: `continuous` for a server or
+    /// cloud machine (it never slept: CLOCK_MONOTONIC equals CLOCK_BOOTTIME),
+    /// `suspend` for a desktop or laptop (it slept for part of its uptime).
+    pub fn boot_clock(&self) -> &'static str {
+        match BootAge::of(self) {
+            BootAge::Server => "continuous",
+            BootAge::Desktop => "suspend",
+        }
     }
 
     /// This profile as the base and the host can boot it, and what changed:
@@ -1434,6 +1593,7 @@ impl StealthProfile {
                 FallbackSetting::Firmware => fitted.firmware = Firmware::Bios,
                 FallbackSetting::DiskBus => fitted.disk_bus = DiskBus::Virtio,
                 FallbackSetting::Nat => fitted.nat = NatNetwork::default(),
+                FallbackSetting::Uptime => fitted.boot_age_s = 0,
                 FallbackSetting::Smt => fitted.smt = false,
                 FallbackSetting::Pointer => fitted.pointer = Pointer::VirtioTablet,
             }
@@ -1501,6 +1661,18 @@ impl StealthProfile {
                 reason: reason.clone(),
             });
         }
+        if self.boot_age_s > 0 && !base.uptime {
+            found.push(Fallback {
+                setting: FallbackSetting::Uptime,
+                summary: "Aged uptime not supported by this base: a fresh boot will be shown"
+                    .into(),
+                note: format!(
+                    "Uptime of {}: {UPTIME_FRESH}; a fresh boot shown",
+                    boot_age_text(self.boot_age_s)
+                ),
+                reason: UPTIME_FRESH.into(),
+            });
+        }
         if self.pointer == Pointer::UsbTablet && !self.usb {
             found.push(Fallback {
                 setting: FallbackSetting::Pointer,
@@ -1539,6 +1711,7 @@ pub enum FallbackSetting {
     Nat,
     Smt,
     Pointer,
+    Uptime,
 }
 
 /// One difference between what a profile asks for and what a VM starts with.
@@ -1630,6 +1803,9 @@ pub fn base_supporting<'a>(
         })
 }
 
+/// Why an older base shows a fresh boot.
+const UPTIME_FRESH: &str = "the base's guest kernel does not take a boot age (rebuild it)";
+
 /// Why an older base keeps QEMU's 10.0.2.0/24 network.
 const NAT_STATIC: &str = "this base sets 10.0.2.15 itself";
 
@@ -1647,6 +1823,11 @@ pub struct BaseSupport {
     /// (`onboardnic`): the NIC goes to the profile's [`NicSlot`], whatever
     /// its model, and provisioning writes the stanza for that interface.
     pub onboard_nic: bool,
+    /// The kernel has the guest facade (`facade`, guest patch 0052): it
+    /// shows a desktop or laptop machine's devices for QEMU's.
+    pub facade: bool,
+    /// The guest kernel takes the VM's boot age (`uptime`).
+    pub uptime: bool,
 }
 
 impl BaseSupport {
@@ -1658,6 +1839,8 @@ impl BaseSupport {
             nvme: has("nvme"),
             dhcp: has("dhcp"),
             onboard_nic: has("onboardnic"),
+            facade: has("facade"),
+            uptime: has("uptime"),
         }
     }
 
@@ -1669,6 +1852,8 @@ impl BaseSupport {
             nvme: true,
             dhcp: true,
             onboard_nic: true,
+            facade: true,
+            uptime: true,
         }
     }
 }

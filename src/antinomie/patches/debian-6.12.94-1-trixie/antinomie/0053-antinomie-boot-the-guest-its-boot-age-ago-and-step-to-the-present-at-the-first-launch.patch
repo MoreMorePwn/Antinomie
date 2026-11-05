@@ -1,0 +1,502 @@
+Description: antinomie: boot the guest its boot age ago and step to the present at the first launch
+ A freshly started guest shows minutes of uptime; a machine in use has been
+ up for hours (a desktop or laptop) or days to months (a server). The host
+ passes the VM's boot age, chosen once per VM, and the clock model of its
+ machine as antinomie_boot_age=SECONDS:MODEL; like the other antinomie_*
+ options it is taken out of the command line before the kernel prints it.
+ .
+ The guest boots that long in the past and reaches the present when the
+ host first launches a program (the first EXEC command), after the boot's
+ own records are written:
+ .
+ - While booting, the wall clock runs the age behind the time it was given:
+   timekeeping_init() sets it back, and do_settimeofday64() shifts every
+   setting made before the first launch (the RTC at boot, timesyncd's saved
+   time, hwclock). The utmp/wtmp boot record, the journal's first entries
+   and the files the boot writes carry that time; the boot time, uptime,
+   CLOCK_BOOTTIME, init's start time and dmesg -T agree with them.
+ - At the first launch ant_timekeeping_present() steps the wall clock to the
+   true time (the true wall time minus CLOCK_MONOTONIC at timekeeping_init()
+   plus CLOCK_MONOTONIC now, so a clock set while booting is not counted
+   twice) and CLOCK_BOOTTIME forward by the age, as a resume from sleep does,
+   then clock_was_set().
+ - suspend (desktop and laptop profiles): nothing more; CLOCK_MONOTONIC and
+   the kernel log's timestamps do not count the sleep, as after a real one.
+ - continuous (server and cloud profiles): from then on programs'
+   CLOCK_MONOTONIC runs the age ahead of the kernel's, so it equals
+   CLOCK_BOOTTIME: clock_gettime() (timens_add_monotonic()), the vDSO
+   (update_vsyscall()), absolute timers, futexes, clock_nanosleep and timerfd
+   (timens_ktime_to_host()), the kernel log's timestamps (printk), and each
+   CPU's idle time (most of the age, /proc/stat and /proc/uptime).
+ .
+ The kernel's own CLOCK_MONOTONIC, jiffies and scheduler clock never move:
+ the recorder's timestamps, the host's accounting of guest time and every
+ kernel timeout run on them. Timestamps the kernel hands out on that clock
+ (input events, DRM vblanks) and io_uring's absolute timeouts stay on it.
+ .
+ Hooked kernel files: kernel/time/timekeeping.c (timekeeping_init(),
+ do_settimeofday64(), the step), kernel/time/vsyscall.c,
+ include/linux/time_namespace.h, kernel/printk/printk.c, fs/proc/stat.c;
+ kernel/antinomie/control.c calls the step before the first launch.
+ .
+ Kconfig: ANTINOMIE_BOOT_AGE; the image builders list "uptime" in a base's
+ stealth support from it.
+ .
+ Contract revision 21 (a boot option, like antinomie_ring_kib=).
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-05
+
+---
+diff --git a/fs/proc/stat.c b/fs/proc/stat.c
+index da60956b2..f26a33e8f 100644
+--- a/fs/proc/stat.c
++++ b/fs/proc/stat.c
+@@ -1,4 +1,5 @@
+ // SPDX-License-Identifier: GPL-2.0
++#include <linux/antinomie_stealth.h>
+ #include <linux/cpumask.h>
+ #include <linux/fs.h>
+ #include <linux/init.h>
+@@ -35,7 +36,8 @@ u64 get_idle_time(struct kernel_cpustat *kcs, int cpu)
+ 	else
+ 		idle = idle_usecs * NSEC_PER_USEC;
+ 
+-	return idle;
++	/* Antinomie: a continuous boot age was mostly idle time. */
++	return idle + ant_boot_idle_ns();
+ }
+ 
+ static u64 get_iowait_time(struct kernel_cpustat *kcs, int cpu)
+diff --git a/include/linux/antinomie_stealth.h b/include/linux/antinomie_stealth.h
+index 29b9bb11a..2958d6a83 100644
+--- a/include/linux/antinomie_stealth.h
++++ b/include/linux/antinomie_stealth.h
+@@ -93,4 +93,28 @@ static inline const char *ant_efi_vendor(const char *vendor)
+ 	return vendor;
+ }
+ #endif
++
++/* The VM's boot age (kernel/antinomie/uptime.c). */
++struct timespec64;
++#ifdef CONFIG_ANTINOMIE_BOOT_AGE
++void ant_boot_age_init(struct timespec64 *wall, const struct timespec64 *boot_offset);
++void ant_boot_age_settime(struct timespec64 *ts);
++void ant_boot_age_present(void);
++/* The idle time a CPU adds for the continuous boot age (/proc/stat, /proc/uptime). */
++u64 ant_boot_idle_ns(void);
++/* kernel/time/timekeeping.c: the step to the present. */
++void ant_timekeeping_present(const struct timespec64 *true_minus_mono, s64 age_ns,
++			     u64 user_mono_ns);
++/* How far programs' CLOCK_MONOTONIC runs ahead of the kernel's. */
++extern u64 ant_user_mono_ns;
++#else
++static inline void ant_boot_age_init(struct timespec64 *wall,
++				     const struct timespec64 *boot_offset) { }
++static inline void ant_boot_age_settime(struct timespec64 *ts) { }
++static inline void ant_boot_age_present(void) { }
++static inline u64 ant_boot_idle_ns(void)
++{
++	return 0;
++}
++#endif
+ #endif
+diff --git a/include/linux/time_namespace.h b/include/linux/time_namespace.h
+index 876e31b44..299a994be 100644
+--- a/include/linux/time_namespace.h
++++ b/include/linux/time_namespace.h
+@@ -12,6 +12,46 @@
+ struct user_namespace;
+ extern struct user_namespace init_user_ns;
+ 
++/* Antinomie: how far programs' CLOCK_MONOTONIC runs ahead of the kernel's
++ * (the continuous boot age, kernel/antinomie/uptime.c); 0 otherwise. */
++#ifdef CONFIG_ANTINOMIE_BOOT_AGE
++extern u64 ant_user_mono_ns;
++
++static inline void ant_add_user_monotonic(struct timespec64 *ts)
++{
++	u64 ahead = READ_ONCE(ant_user_mono_ns);
++
++	if (ahead)
++		timespec64_add_ns(ts, ahead);
++}
++
++static inline ktime_t ant_user_monotonic_to_kernel(clockid_t clockid, ktime_t tim)
++{
++	u64 ahead = READ_ONCE(ant_user_mono_ns);
++
++	if (!ahead || clockid != CLOCK_MONOTONIC)
++		return tim;
++	return tim > (ktime_t)ahead ? tim - (ktime_t)ahead : 0;
++}
++
++static inline u64 ant_user_monotonic_s(void)
++{
++	return div_u64(READ_ONCE(ant_user_mono_ns), NSEC_PER_SEC);
++}
++#else
++static inline void ant_add_user_monotonic(struct timespec64 *ts) { }
++
++static inline u64 ant_user_monotonic_s(void)
++{
++	return 0;
++}
++
++static inline ktime_t ant_user_monotonic_to_kernel(clockid_t clockid, ktime_t tim)
++{
++	return tim;
++}
++#endif
++
+ struct vm_area_struct;
+ 
+ struct timens_offsets {
+@@ -70,6 +110,7 @@ static inline void timens_add_monotonic(struct timespec64 *ts)
+ 	struct timens_offsets *ns_offsets = &current->nsproxy->time_ns->offsets;
+ 
+ 	*ts = timespec64_add(*ts, ns_offsets->monotonic);
++	ant_add_user_monotonic(ts);
+ }
+ 
+ static inline void timens_add_boottime(struct timespec64 *ts)
+@@ -100,6 +141,7 @@ static inline ktime_t timens_ktime_to_host(clockid_t clockid, ktime_t tim)
+ {
+ 	struct time_namespace *ns = current->nsproxy->time_ns;
+ 
++	tim = ant_user_monotonic_to_kernel(clockid, tim);
+ 	if (likely(ns == &init_time_ns))
+ 		return tim;
+ 
+@@ -149,7 +191,10 @@ static inline struct page *find_timens_vvar_page(struct vm_area_struct *vma)
+ 	return NULL;
+ }
+ 
+-static inline void timens_add_monotonic(struct timespec64 *ts) { }
++static inline void timens_add_monotonic(struct timespec64 *ts)
++{
++	ant_add_user_monotonic(ts);
++}
+ static inline void timens_add_boottime(struct timespec64 *ts) { }
+ 
+ static inline u64 timens_add_boottime_ns(u64 nsec)
+@@ -161,7 +206,7 @@ static inline void timens_sub_boottime(struct timespec64 *ts) { }
+ 
+ static inline ktime_t timens_ktime_to_host(clockid_t clockid, ktime_t tim)
+ {
+-	return tim;
++	return ant_user_monotonic_to_kernel(clockid, tim);
+ }
+ #endif
+ 
+diff --git a/kernel/antinomie/Kconfig b/kernel/antinomie/Kconfig
+index 5f509b610..35429ef11 100644
+--- a/kernel/antinomie/Kconfig
++++ b/kernel/antinomie/Kconfig
+@@ -35,3 +35,16 @@ config ANTINOMIE_FACADE
+ 	  display driver's name, USB HID strings, the EFI firmware vendor)
+ 	  where programs read it, when the host passes its antinomie_f* boot
+ 	  options. The kernel's own view of the devices is unchanged.
++
++config ANTINOMIE_BOOT_AGE
++	bool "Antinomie boot age for machine profiles"
++	depends on ANTINOMIE
++	default y
++	help
++	  The guest takes its boot age from the host (antinomie_boot_age=):
++	  it boots that long in the past and steps to the present at the
++	  first program launch, as after a sleep (desktop and laptop
++	  profiles) or with CLOCK_MONOTONIC ahead by the age (server and
++	  cloud profiles). The kernel's own monotonic clock is unchanged.
++	  The image builders read this symbol to list "uptime" in a base's
++	  stealth support.
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index 8dd59246c..16ad7cf3b 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -33,5 +33,6 @@ obj-y += fileops.o
+ obj-y += filemap.o
+ obj-y += stealth.o
+ obj-$(CONFIG_ANTINOMIE_FACADE) += facade.o
++obj-$(CONFIG_ANTINOMIE_BOOT_AGE) += uptime.o
+ obj-$(CONFIG_ARM64) += stealth_arm64.o
+ obj-y += section_end.o
+diff --git a/kernel/antinomie/control.c b/kernel/antinomie/control.c
+index 431536737..cddcb0a34 100644
+--- a/kernel/antinomie/control.c
++++ b/kernel/antinomie/control.c
+@@ -1,5 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ #include <linux/antinomie.h>
++#include <linux/antinomie_stealth.h>
+ #include <linux/antinomie_monitor.h>
+ #include <linux/cred.h>
+ #include <linux/tty.h>
+@@ -329,6 +330,8 @@ static int execute(const u8 *args, size_t args_len, void *reply, size_t *reply_l
+ 	envc = get_unaligned_le32(args + 20);
+ 	if (!argc)
+ 		return -EINVAL;
++	/* The boot age reaches the present before the first program runs. */
++	ant_boot_age_present();
+ 	reap_sessions();
+ 	if (session_count >= ANT_SESSION_MAX)
+ 		return -ENOSPC;
+diff --git a/kernel/antinomie/uptime.c b/kernel/antinomie/uptime.c
+new file mode 100644
+index 000000000..2bd2e22f4
+--- /dev/null
++++ b/kernel/antinomie/uptime.c
+@@ -0,0 +1,118 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* The VM's boot age: a machine in use has been up for hours (a desktop or
++ * laptop) or days to months (a server), not the minutes of a fresh VM.
++ *
++ * The host passes antinomie_boot_age=SECONDS:MODEL, chosen once per VM; like
++ * the other antinomie_* options it is taken out of the command line before
++ * the kernel prints it. The guest then boots age seconds in the past and
++ * reaches the present when the host first launches a program (the first EXEC
++ * command, after the boot's own records are written):
++ *
++ * - While booting the wall clock runs age seconds behind the time the host
++ *   gave it (timekeeping_init(), and every setting of the clock before the
++ *   first launch: the RTC at boot, timesyncd's saved time, hwclock). What the
++ *   boot writes is stamped with that time: the utmp/wtmp boot record, the
++ *   journal's first entries, the files it creates. The boot time
++ *   (/proc/stat btime), CLOCK_BOOTTIME, uptime and the kernel log's place in
++ *   wall time agree with it, and the processes started at boot (init) have
++ *   their start time at the boot.
++ * - At the first launch the wall clock steps to the present and
++ *   CLOCK_BOOTTIME forward by the age, as a resume from sleep does: uptime,
++ *   sysinfo() and the boot time say the machine has been up since age seconds
++ *   before the boot. Then by the model:
++ *   - suspend (desktop, laptop): CLOCK_MONOTONIC does not move, as after a
++ *     real sleep (and, as there, the kernel log's timestamps do not count it).
++ *   - continuous (server, cloud): programs' CLOCK_MONOTONIC (system calls,
++ *     the vDSO, absolute timers, futexes, clock_nanosleep, timerfd) and the
++ *     kernel log's timestamps run age seconds ahead from then on, so
++ *     CLOCK_MONOTONIC equals CLOCK_BOOTTIME as on a machine that never slept,
++ *     and each CPU's idle time has most of the age in it.
++ *
++ * The kernel's own CLOCK_MONOTONIC, jiffies and scheduler clock never move:
++ * the recorder's timestamps, the host's accounting of guest time and every
++ * timeout in the kernel run on them. What stays: timestamps the kernel hands
++ * out on its own monotonic clock (input events, DRM vblanks) are behind a
++ * continuous-model program's clock by the age; a process running across the
++ * first launch sees its clocks move forward then.
++ */
++#include <linux/antinomie_stealth.h>
++#include <linux/atomic.h>
++#include <linux/init.h>
++#include <linux/kernel.h>
++#include <linux/math64.h>
++#include <linux/string.h>
++#include <linux/time64.h>
++#include <linux/timekeeping.h>
++
++/* The oldest boot the host may ask for: about three years. */
++#define ANT_BOOT_AGE_MAX_S (3ULL * 366 * 24 * 3600)
++
++static u64 boot_age_s __ro_after_init;
++static bool continuous __ro_after_init;
++/* Seconds the wall clock runs behind while booting; 0 once at the present or
++ * without an age. */
++static u64 behind_s;
++/* The true wall time minus CLOCK_MONOTONIC at timekeeping_init(). */
++static struct timespec64 true_minus_mono;
++static atomic_t reached = ATOMIC_INIT(0);
++/* Programs' CLOCK_MONOTONIC ahead of the kernel's (continuous model, after
++ * the first launch); read by time_namespace.h, vsyscall.c and printk. */
++u64 ant_user_mono_ns __read_mostly;
++
++static int __init boot_age_param(char *value)
++{
++	char *model;
++	u64 seconds;
++
++	if (!value)
++		return -EINVAL;
++	model = strchr(value, ':');
++	if (model)
++		*model++ = '\0';
++	if (kstrtoull(value, 10, &seconds) || !seconds || seconds > ANT_BOOT_AGE_MAX_S)
++		return -EINVAL;
++	boot_age_s = seconds;
++	continuous = model && !strcmp(model, "continuous");
++	return 0;
++}
++early_param("antinomie_boot_age", boot_age_param);
++
++/* timekeeping_init(): the wall clock read from the persistent clock (wall,
++ * true time) goes back by the age; boot_offset is CLOCK_MONOTONIC then. An
++ * age the wall clock cannot go back by is ignored. */
++void __init ant_boot_age_init(struct timespec64 *wall, const struct timespec64 *boot_offset)
++{
++	if (!boot_age_s || wall->tv_sec <= (time64_t)boot_age_s)
++		return;
++	true_minus_mono = timespec64_sub(*wall, *boot_offset);
++	wall->tv_sec -= boot_age_s;
++	behind_s = boot_age_s;
++}
++
++/* do_settimeofday64() before the first launch: a time set while booting (the
++ * RTC, a saved time, hwclock) is a present time, shown as the boot's. */
++void ant_boot_age_settime(struct timespec64 *ts)
++{
++	u64 behind = READ_ONCE(behind_s);
++
++	if (behind && ts->tv_sec > (time64_t)behind)
++		ts->tv_sec -= behind;
++}
++
++/* A continuous boot age as a server's: its CPUs mostly idle (97 %) through
++ * it, in each CPU's idle time (/proc/stat, /proc/uptime). A suspend leaves
++ * idle time alone, as a real sleep does. */
++u64 ant_boot_idle_ns(void)
++{
++	return div_u64(READ_ONCE(ant_user_mono_ns), 100) * 97;
++}
++
++/* The first EXEC: the present. Once; later calls return at once. */
++void ant_boot_age_present(void)
++{
++	if (!READ_ONCE(behind_s) || atomic_xchg(&reached, 1))
++		return;
++	ant_timekeeping_present(&true_minus_mono, (s64)boot_age_s * NSEC_PER_SEC,
++				continuous ? boot_age_s * NSEC_PER_SEC : 0);
++	WRITE_ONCE(behind_s, 0);
++}
+diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
+index 3a91b739e..af608b3ba 100644
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -20,6 +20,7 @@
+ #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+ 
+ #include <linux/kernel.h>
++#include <linux/time_namespace.h>
+ #include <linux/mm.h>
+ #include <linux/tty.h>
+ #include <linux/tty_driver.h>
+@@ -2246,7 +2247,8 @@ int vprintk_store(int facility, int level,
+ 	 * close to the call of printk(). This provides a more deterministic
+ 	 * timestamp with respect to the caller.
+ 	 */
+-	ts_nsec = local_clock();
++	/* Antinomie: ahead by the continuous boot age, as programs' clock. */
++	ts_nsec = local_clock() + ant_user_monotonic_s() * NSEC_PER_SEC;
+ 
+ 	caller_id = printk_caller_id();
+ 
+diff --git a/kernel/time/timekeeping.c b/kernel/time/timekeeping.c
+index e3896b2be..2b4474caf 100644
+--- a/kernel/time/timekeeping.c
++++ b/kernel/time/timekeeping.c
+@@ -24,6 +24,7 @@
+ #include <linux/compiler.h>
+ #include <linux/audit.h>
+ #include <linux/random.h>
++#include <linux/antinomie_stealth.h>
+ 
+ #include "tick-internal.h"
+ #include "ntp_internal.h"
+@@ -1343,10 +1344,13 @@ EXPORT_SYMBOL_GPL(timekeeping_clocksource_has_base);
+ int do_settimeofday64(const struct timespec64 *ts)
+ {
+ 	struct timekeeper *tk = &tk_core.timekeeper;
+-	struct timespec64 ts_delta, xt;
++	struct timespec64 ts_delta, xt, shown = *ts;
+ 	unsigned long flags;
+ 	int ret = 0;
+ 
++	/* Antinomie: a time set while booting is shown at the boot's. */
++	ant_boot_age_settime(&shown);
++	ts = &shown;
+ 	if (!timespec64_valid_settod(ts))
+ 		return -EINVAL;
+ 
+@@ -1678,6 +1682,8 @@ void __init timekeeping_init(void)
+ 
+ 	if (timespec64_compare(&wall_time, &boot_offset) < 0)
+ 		boot_offset = (struct timespec64){0};
++	/* Antinomie: the boot happens the VM's boot age in the past. */
++	ant_boot_age_init(&wall_time, &boot_offset);
+ 
+ 	/*
+ 	 * We want set wall_to_mono, so the following is true:
+@@ -1708,6 +1714,40 @@ void __init timekeeping_init(void)
+ /* time in seconds when suspend began for persistent clock */
+ static struct timespec64 timekeeping_suspend_time;
+ 
++#ifdef CONFIG_ANTINOMIE_BOOT_AGE
++/*
++ * Antinomie (kernel/antinomie/uptime.c): the boot age's step to the present.
++ * The wall clock steps to the true time (@true_minus_mono, the true wall time
++ * minus CLOCK_MONOTONIC at timekeeping_init(), plus CLOCK_MONOTONIC now),
++ * CLOCK_BOOTTIME forward by @age_ns as a resume adds a sleep, and
++ * CLOCK_MONOTONIC stays; @user_mono_ns is how far programs' CLOCK_MONOTONIC
++ * runs ahead from now on (the vDSO's data is updated here too).
++ */
++void ant_timekeeping_present(const struct timespec64 *true_minus_mono, s64 age_ns,
++			     u64 user_mono_ns)
++{
++	struct timekeeper *tk = &tk_core.timekeeper;
++	struct timespec64 delta, wall;
++	unsigned long flags;
++
++	raw_spin_lock_irqsave(&timekeeper_lock, flags);
++	write_seqcount_begin(&tk_core.seq);
++	timekeeping_forward_now(tk);
++	delta = timespec64_add(*true_minus_mono, tk->wall_to_monotonic);
++	wall = timespec64_add(tk_xtime(tk), delta);
++	if (timespec64_valid_settod(&wall)) {
++		tk_xtime_add(tk, &delta);
++		tk_set_wall_to_mono(tk, timespec64_sub(tk->wall_to_monotonic, delta));
++	}
++	tk_update_sleep_time(tk, ns_to_ktime(age_ns));
++	WRITE_ONCE(ant_user_mono_ns, user_mono_ns);
++	timekeeping_update(tk, TK_CLEAR_NTP | TK_MIRROR | TK_CLOCK_WAS_SET);
++	write_seqcount_end(&tk_core.seq);
++	raw_spin_unlock_irqrestore(&timekeeper_lock, flags);
++	clock_was_set(CLOCK_SET_WALL | CLOCK_SET_BOOT);
++}
++#endif
++
+ /**
+  * __timekeeping_inject_sleeptime - Internal function to add sleep interval
+  * @tk:		Pointer to the timekeeper to be updated
+diff --git a/kernel/time/vsyscall.c b/kernel/time/vsyscall.c
+index 9193d6133..8f31f9eb0 100644
+--- a/kernel/time/vsyscall.c
++++ b/kernel/time/vsyscall.c
+@@ -8,6 +8,7 @@
+  */
+ 
+ #include <linux/hrtimer.h>
++#include <linux/time_namespace.h>
+ #include <linux/timekeeper_internal.h>
+ #include <vdso/datapage.h>
+ #include <vdso/helpers.h>
+@@ -69,6 +70,14 @@ static inline void update_vdso_data(struct vdso_data *vdata,
+ 	vdso_ts->sec	= tk->raw_sec;
+ 	vdso_ts->nsec	= tk->tkr_raw.xtime_nsec;
+ 
++	/*
++	 * Antinomie: programs' CLOCK_MONOTONIC (and its raw clock) run ahead
++	 * of the kernel's by the continuous boot age; CLOCK_BOOTTIME has it in
++	 * its boot offset already.
++	 */
++	vdata[CS_HRES_COARSE].basetime[CLOCK_MONOTONIC].sec += ant_user_monotonic_s();
++	vdata[CS_RAW].basetime[CLOCK_MONOTONIC_RAW].sec += ant_user_monotonic_s();
++
+ 	/* CLOCK_TAI */
+ 	vdso_ts		= &vdata[CS_HRES_COARSE].basetime[CLOCK_TAI];
+ 	vdso_ts->sec	= tk->xtime_sec + (s64)tk->tai_offset;
+@@ -105,6 +114,7 @@ void update_vsyscall(struct timekeeper *tk)
+ 	nsec		= tk->tkr_mono.xtime_nsec >> tk->tkr_mono.shift;
+ 	nsec		= nsec + tk->wall_to_monotonic.tv_nsec;
+ 	vdso_ts->sec	+= __iter_div_u64_rem(nsec, NSEC_PER_SEC, &vdso_ts->nsec);
++	vdso_ts->sec	+= ant_user_monotonic_s();
+ 
+ 	/*
+ 	 * Read without the seqlock held by clock_getres().

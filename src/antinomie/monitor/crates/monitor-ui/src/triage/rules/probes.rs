@@ -61,7 +61,7 @@ impl Class {
             Self::Storage => "Device profile › Devices (disk bus, model and serial).",
             Self::Hypervisor => "Device profile › Devices and CPU (VMware port, KVM signature, PCI devices). The root disk, SeaBIOS and the q35 layout stay visible (Still visible).",
             Self::Mac => "Device profile › Network card (model and MAC address).",
-            Self::Uptime => "Not set by the profile: a freshly started guest shows minutes of uptime (Still visible).",
+            Self::Uptime => "Device profile › Clock (booted a while ago: the VM's boot age; a fresh boot shows minutes of uptime). A desktop or laptop's age is a sleep: CLOCK_BOOTTIME ahead of CLOCK_MONOTONIC (Still visible).",
             Self::Timing => "Not set by the profile: VM-exit timing and the cost of traced calls are in Still visible.",
             Self::Container => "The guest is not a container, so a container check finds nothing.",
             Self::Debugger => "Antinomie's debugger uses no ptrace: TracerPid stays 0 and PTRACE_TRACEME succeeds unless something else traces the program.",

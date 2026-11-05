@@ -535,6 +535,44 @@ class DebianImageTests(unittest.TestCase):
             self.assertEqual(image.stealth_support("none", config, kernel),
                              ["sata", "dhcp", "onboardnic"])
 
+    def test_a_kernel_that_takes_the_boot_age_lists_uptime(self):
+        with tempfile.TemporaryDirectory() as name:
+            config, kernel = Path(name) / "config", Path(name) / "kernel"
+            kernel.write_bytes(b"no EFI stub page claim")
+            config.write_text("CONFIG_ANTINOMIE=y\nCONFIG_ANTINOMIE_BOOT_AGE=y\n")
+            self.assertEqual(image.stealth_support("xfce", config, kernel), ["dhcp", "uptime"])
+            self.assertEqual(image.monitor_helpers().stealth_support(config, kernel),
+                             ["dhcp", "uptime"])
+            # A kernel with the guest facade (patch 0052) lists it before the age.
+            config.write_text("CONFIG_ANTINOMIE=y\nCONFIG_ANTINOMIE_FACADE=y\n"
+                              "CONFIG_ANTINOMIE_BOOT_AGE=y\n")
+            self.assertEqual(image.monitor_helpers().stealth_support(config, kernel),
+                             ["dhcp", "facade", "uptime"])
+
+    @unittest.skipUnless(shutil.which("busybox"), "needs busybox")
+    def test_the_busybox_base_writes_a_boot_record_at_the_kernels_boot_time(self):
+        with tempfile.TemporaryDirectory() as name:
+            tree = Path(name) / "root"
+            helpers = image.monitor_helpers()
+            with patch.object(helpers, "install_binary"):
+                helpers.base_tree(tree, userland=StandInUserland())
+            self.assertEqual(os.readlink(tree / "var/run"), "../run")
+            rcs = (tree / "etc/init.d/rcS").read_text()
+            function = rcs[rcs.index("boot_record() {"):rcs.index("\n}\n") + 3]
+            # The same function, on a /proc/stat with a known boot time.
+            stat = Path(name) / "stat"
+            stat.write_text("cpu  1 2 3\nbtime 1793125091\nprocesses 9\n")
+            script = function.replace("/proc/stat", str(stat)) + "boot_record\n"
+            record = subprocess.run(["busybox", "sh", "-c", script], capture_output=True,
+                                    check=True).stdout
+            self.assertEqual(len(record), 384)
+            self.assertEqual(struct.unpack_from("<h", record, 0)[0], 2)  # BOOT_TIME
+            self.assertEqual(record[8:10], b"~\0")
+            self.assertEqual(record[44:51], b"reboot\0")
+            self.assertEqual(struct.unpack_from("<I", record, 340)[0], 1793125091)
+            self.assertIn("boot_record > /run/utmp", rcs)
+            self.assertIn("[ -f /var/log/wtmp ] && boot_record >> /var/log/wtmp", rcs)
+
     def test_console_manifest_lists_the_requested_packages(self):
         manifest = (REPO / "src/antinomie/packaging/debian-minimal-trixie/packages.txt").read_text()
         requested = [line.split()[1] for line in manifest.splitlines()

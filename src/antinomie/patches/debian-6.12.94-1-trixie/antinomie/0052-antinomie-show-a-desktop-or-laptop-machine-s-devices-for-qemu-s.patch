@@ -1,0 +1,1167 @@
+Description: antinomie: show a desktop or laptop machine's devices for QEMU's
+ A desktop or laptop machine profile gives the VM a real machine's
+ firmware strings, but programs still read QEMU's own devices: the Bochs
+ display (1234:1111), Red Hat's subsystem 1af4 on every chipset device,
+ QEMU's NVMe controller ("QEMU NVMe Ctrl", QEMU's version as firmware, an
+ org.qemu subsystem name, the 52:54:00 EUI-64), QEMU's ACPI creator ID BXPC
+ and OVMF's INTEL/EDK2 BGRT, the fw_cfg device in the DSDT, the bochs-drm
+ driver and framebuffer names, "QEMU USB Tablet" and OVMF's EFI vendor.
+ .
+ kernel/antinomie/facade.c (CONFIG_ANTINOMIE_FACADE) shows the profile's
+ values in those views when the host passes them as boot options, which
+ ant_cmdline_take() removes from the command line before it is printed:
+ .
+ - antinomie_fpci and antinomie_fsub: PCI rules (an emulated vendor:device
+   shown as another, with its subsystem) and the board's subsystem for
+   devices that carry QEMU's. pci_user_read_config_*() (sysfs config,
+   /proc/bus/pci/BB/DD.F), the sysfs vendor, device, subsystem_* and
+   modalias attributes, the uevent file as read, /proc/bus/pci/devices and
+   the boot log's device line use them.
+ - antinomie_fnvme: model, firmware, OUI, VID and SSVID. Identify
+   Controller (with a subsystem NQN as nvme_init_subnqn() makes one),
+   Identify Namespace and the namespace descriptors (QEMU's EUI-64 prefix)
+   as the driver reads them and as admin pass-through (NVME_IOCTL_ADMIN_CMD
+   and ADMIN64, used by nvme-cli and smartctl) returns them, and the
+   firmware slot log.
+ - antinomie_facpi: creator ID and revision, OEM and OEM table IDs. Tables
+   read through /sys/firmware/acpi/tables and the boot log's table lines:
+   BXPC becomes the creator, QEMU's and OVMF's OEM IDs the machine's, the
+   DSDT's FWCF device an unused name with EisaId("PNP0C02") for its
+   QEMU0002 _HID (padded with Noop); the checksum is recomputed.
+ - antinomie_fdrm: i915 or amdgpu. bochs-drm's PCI driver name (sysfs,
+   log), its I/O resource names, DRM_IOCTL_VERSION's name, description and
+   version, and the fbdev name (/proc/fb).
+ - antinomie_finput: a mouse's IDs, release and strings, given to QEMU's
+   USB HID devices (vendor 0627, maker QEMU) right after the hub reads
+   their descriptors, before a driver binds: sysfs, the descriptors file
+   and the input device's name, IDs and (no) serial follow.
+ - antinomie_fefi: the firmware vendor of the boot log's EFI line.
+ .
+ The kernel keeps the true identities everywhere else: drivers bind and
+ quirks apply by them, and the uevents the kernel sends carry them, so
+ udev loads the emulated devices' modules. Root's raw config-space access
+ through port I/O, and USB string requests made through usbfs, still read
+ QEMU's values.
+ .
+ Hooked kernel files: drivers/pci/{access.c,pci-sysfs.c,proc.c,probe.c,
+ pci-driver.c}, drivers/base/core.c (uevent_show), kernel/resource.c,
+ drivers/nvme/host/{core.c,ioctl.c}, drivers/acpi/sysfs.c,
+ drivers/acpi/acpica/tbprint.c, drivers/gpu/drm/{drm_ioctl.c,
+ drm_fb_helper.c}, drivers/usb/core/hub.c, drivers/firmware/efi/efi.c.
+ .
+ Contract revision 21 (no protocol change; bases with the facade list
+ "facade" in stealth_support).
+Author: MikiMiku <jonathanirvinjo@gmail.com>
+Origin: project
+Forwarded: no
+Last-Update: 2026-11-05
+
+---
+diff --git a/drivers/acpi/acpica/tbprint.c b/drivers/acpi/acpica/tbprint.c
+index 544964c9c..dcc3a3a45 100644
+--- a/drivers/acpi/acpica/tbprint.c
++++ b/drivers/acpi/acpica/tbprint.c
+@@ -8,6 +8,7 @@
+  *****************************************************************************/
+ 
+ #include <acpi/acpi.h>
++#include <linux/antinomie_stealth.h>
+ #include "accommon.h"
+ #include "actables.h"
+ #include "acutils.h"
+@@ -130,6 +131,7 @@ acpi_tb_print_table_header(acpi_physical_address address,
+ 		/* Standard ACPI table with full common header */
+ 
+ 		acpi_tb_cleanup_table_header(&local_header, header);
++		ant_acpi_header_shown(&local_header);
+ 
+ 		ACPI_INFO(("%-4.4s 0x%8.8X%8.8X"
+ 			   " %06X (v%.2d %-6.6s %-8.8s %08X %-4.4s %08X)",
+diff --git a/drivers/acpi/sysfs.c b/drivers/acpi/sysfs.c
+index 687524b50..34151fa04 100644
+--- a/drivers/acpi/sysfs.c
++++ b/drivers/acpi/sysfs.c
+@@ -6,6 +6,7 @@
+ #define pr_fmt(fmt) "ACPI: " fmt
+ 
+ #include <linux/acpi.h>
++#include <linux/antinomie_stealth.h>
+ #include <linux/bitmap.h>
+ #include <linux/init.h>
+ #include <linux/kernel.h>
+@@ -325,6 +326,7 @@ static ssize_t acpi_table_show(struct file *filp, struct kobject *kobj,
+ 	struct acpi_table_attr *table_attr =
+ 	    container_of(bin_attr, struct acpi_table_attr, attr);
+ 	struct acpi_table_header *table_header = NULL;
++	void *shown;
+ 	acpi_status status;
+ 	ssize_t rc;
+ 
+@@ -333,8 +335,11 @@ static ssize_t acpi_table_show(struct file *filp, struct kobject *kobj,
+ 	if (ACPI_FAILURE(status))
+ 		return -ENODEV;
+ 
+-	rc = memory_read_from_buffer(buf, count, &offset, table_header,
++	/* The table as the guest facade shows it, if it rewrites it. */
++	shown = ant_acpi_table_shown(table_header);
++	rc = memory_read_from_buffer(buf, count, &offset, shown ?: table_header,
+ 			table_header->length);
++	kvfree(shown);
+ 	acpi_put_table(table_header);
+ 	return rc;
+ }
+diff --git a/drivers/base/core.c b/drivers/base/core.c
+index d233a245e..21d625a09 100644
+--- a/drivers/base/core.c
++++ b/drivers/base/core.c
+@@ -9,6 +9,7 @@
+  */
+ 
+ #include <linux/acpi.h>
++#include <linux/antinomie_stealth.h>
+ #include <linux/blkdev.h>
+ #include <linux/cleanup.h>
+ #include <linux/cpufreq.h>
+@@ -2761,6 +2762,9 @@ static ssize_t uevent_show(struct device *dev, struct device_attribute *attr,
+ 	if (retval)
+ 		goto out;
+ 
++	/* The IDs the guest facade shows (the uevents sent keep the true ones). */
++	ant_uevent_shown(dev, env);
++
+ 	/* copy keys to file */
+ 	for (i = 0; i < env->envp_idx; i++)
+ 		len += sysfs_emit_at(buf, len, "%s\n", env->envp[i]);
+diff --git a/drivers/firmware/efi/efi.c b/drivers/firmware/efi/efi.c
+index fcafaed37..f94cc4bd5 100644
+--- a/drivers/firmware/efi/efi.c
++++ b/drivers/firmware/efi/efi.c
+@@ -15,6 +15,7 @@
+ #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+ 
+ #include <linux/kobject.h>
++#include <linux/antinomie_stealth.h>
+ #include <linux/module.h>
+ #include <linux/init.h>
+ #include <linux/debugfs.h>
+@@ -872,7 +873,7 @@ void __init efi_systab_report_header(const efi_table_hdr_t *systab_hdr,
+ 	if (rev)
+ 		pr_cont(".%u", rev);
+ 
+-	pr_cont(" by %s\n", vendor);
++	pr_cont(" by %s\n", ant_efi_vendor(vendor));
+ 
+ 	if (IS_ENABLED(CONFIG_X86_64) &&
+ 	    systab_hdr->revision > EFI_1_10_SYSTEM_TABLE_REVISION &&
+diff --git a/drivers/gpu/drm/drm_fb_helper.c b/drivers/gpu/drm/drm_fb_helper.c
+index a8971c4eb..3d89a4d39 100644
+--- a/drivers/gpu/drm/drm_fb_helper.c
++++ b/drivers/gpu/drm/drm_fb_helper.c
+@@ -30,6 +30,7 @@
+ #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+ 
+ #include <linux/console.h>
++#include <linux/antinomie_stealth.h>
+ #include <linux/sysrq.h>
+ 
+ #include <drm/drm_atomic.h>
+@@ -1719,7 +1720,7 @@ void drm_fb_helper_fill_info(struct fb_info *info,
+ 	 * be changed due user-space tools (e.g: pm-utils) matching against it.
+ 	 */
+ 	snprintf(info->fix.id, sizeof(info->fix.id), "%sdrmfb",
+-		 fb_helper->dev->driver->name);
++		 ant_driver_name(fb_helper->dev->driver->name));
+ 
+ }
+ EXPORT_SYMBOL(drm_fb_helper_fill_info);
+diff --git a/drivers/gpu/drm/drm_ioctl.c b/drivers/gpu/drm/drm_ioctl.c
+index 51f399128..71425a542 100644
+--- a/drivers/gpu/drm/drm_ioctl.c
++++ b/drivers/gpu/drm/drm_ioctl.c
+@@ -29,6 +29,7 @@
+  */
+ 
+ #include <linux/export.h>
++#include <linux/antinomie_stealth.h>
+ #include <linux/nospec.h>
+ #include <linux/pci.h>
+ #include <linux/uaccess.h>
+@@ -522,20 +523,22 @@ int drm_version(struct drm_device *dev, void *data,
+ 		       struct drm_file *file_priv)
+ {
+ 	struct drm_version *version = data;
++	const char *name = dev->driver->name, *desc = dev->driver->desc;
+ 	int err;
+ 
+ 	version->version_major = dev->driver->major;
+ 	version->version_minor = dev->driver->minor;
+ 	version->version_patchlevel = dev->driver->patchlevel;
+-	err = drm_copy_field(version->name, &version->name_len,
+-			dev->driver->name);
++	/* The guest facade's driver for QEMU's display. */
++	ant_drm_version(&name, &desc, &version->version_major, &version->version_minor,
++			&version->version_patchlevel);
++	err = drm_copy_field(version->name, &version->name_len, name);
+ 
+ 	/* Driver date is deprecated. Userspace expects a non-empty string. */
+ 	if (!err)
+ 		err = drm_copy_field(version->date, &version->date_len, "0");
+ 	if (!err)
+-		err = drm_copy_field(version->desc, &version->desc_len,
+-				dev->driver->desc);
++		err = drm_copy_field(version->desc, &version->desc_len, desc);
+ 
+ 	return err;
+ }
+diff --git a/drivers/nvme/host/core.c b/drivers/nvme/host/core.c
+index 122de4e35..4cc3957e5 100644
+--- a/drivers/nvme/host/core.c
++++ b/drivers/nvme/host/core.c
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include <linux/async.h>
++#include <linux/antinomie_stealth.h>
+ #include <linux/blkdev.h>
+ #include <linux/blk-mq.h>
+ #include <linux/blk-integrity.h>
+@@ -1453,6 +1454,8 @@ static int nvme_identify_ctrl(struct nvme_ctrl *dev, struct nvme_id_ctrl **id)
+ 	if (error) {
+ 		kfree(*id);
+ 		*id = NULL;
++	} else {
++		ant_nvme_identify(NVME_ID_CNS_CTRL, *id, sizeof(struct nvme_id_ctrl));
+ 	}
+ 	return error;
+ }
+@@ -1538,6 +1541,7 @@ static int nvme_identify_ns_descs(struct nvme_ctrl *ctrl,
+ 			info->nsid, status);
+ 		goto free_data;
+ 	}
++	ant_nvme_identify(NVME_ID_CNS_NS_DESC_LIST, data, NVME_IDENTIFY_DATA_SIZE);
+ 
+ 	for (pos = 0; pos < NVME_IDENTIFY_DATA_SIZE; pos += len) {
+ 		struct nvme_ns_id_desc *cur = data + pos;
+@@ -1583,6 +1587,8 @@ int nvme_identify_ns(struct nvme_ctrl *ctrl, unsigned nsid,
+ 		dev_warn(ctrl->device, "Identify namespace failed (%d)\n", error);
+ 		kfree(*id);
+ 		*id = NULL;
++	} else {
++		ant_nvme_identify(NVME_ID_CNS_NS, *id, sizeof(**id));
+ 	}
+ 	return error;
+ }
+diff --git a/drivers/nvme/host/ioctl.c b/drivers/nvme/host/ioctl.c
+index 930521c63..3632c65cc 100644
+--- a/drivers/nvme/host/ioctl.c
++++ b/drivers/nvme/host/ioctl.c
+@@ -4,6 +4,7 @@
+  * Copyright (c) 2017-2021 Christoph Hellwig.
+  */
+ #include <linux/blk-integrity.h>
++#include <linux/antinomie_stealth.h>
+ #include <linux/ptrace.h>	/* for force_successful_syscall_return */
+ #include <linux/nvme_ioctl.h>
+ #include <linux/io_uring/cmd.h>
+@@ -339,6 +340,9 @@ static int nvme_user_cmd(struct nvme_ctrl *ctrl, struct nvme_ns *ns,
+ 		if (put_user(result, &ucmd->result))
+ 			return -EFAULT;
+ 	}
++	/* The guest facade's Identify data and firmware log. */
++	if (!status && !ns)
++		ant_nvme_passthru(cmd.opcode, cmd.cdw10, cmd.addr, cmd.data_len);
+ 
+ 	return status;
+ }
+@@ -386,6 +390,8 @@ static int nvme_user_cmd64(struct nvme_ctrl *ctrl, struct nvme_ns *ns,
+ 		if (put_user(cmd.result, &ucmd->result))
+ 			return -EFAULT;
+ 	}
++	if (!status && !ns)
++		ant_nvme_passthru(cmd.opcode, cmd.cdw10, cmd.addr, cmd.data_len);
+ 
+ 	return status;
+ }
+diff --git a/drivers/pci/access.c b/drivers/pci/access.c
+index b123da16b..ea5563d1d 100644
+--- a/drivers/pci/access.c
++++ b/drivers/pci/access.c
+@@ -1,5 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0
+ #include <linux/pci.h>
++#include <linux/antinomie_stealth.h>
+ #include <linux/module.h>
+ #include <linux/slab.h>
+ #include <linux/ioport.h>
+@@ -242,8 +243,10 @@ int pci_user_read_config_##size						\
+ 	raw_spin_unlock_irq(&pci_lock);					\
+ 	if (ret)							\
+ 		PCI_SET_ERROR_RESPONSE(val);				\
+-	else								\
++	else {								\
++		ant_pci_config_shown(dev, pos, sizeof(type), &data);	\
+ 		*val = (type)data;					\
++	}								\
+ 									\
+ 	return pcibios_err_to_errno(ret);				\
+ }									\
+diff --git a/drivers/pci/pci-driver.c b/drivers/pci/pci-driver.c
+index f0fbe45bf..041f28e45 100644
+--- a/drivers/pci/pci-driver.c
++++ b/drivers/pci/pci-driver.c
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include <linux/pci.h>
++#include <linux/antinomie_stealth.h>
+ #include <linux/module.h>
+ #include <linux/init.h>
+ #include <linux/device.h>
+@@ -1449,6 +1450,7 @@ int __pci_register_driver(struct pci_driver *drv, struct module *owner,
+ 			  const char *mod_name)
+ {
+ 	/* initialize common driver fields */
++	drv->name = ant_driver_name(drv->name);
+ 	drv->driver.name = drv->name;
+ 	drv->driver.bus = &pci_bus_type;
+ 	drv->driver.owner = owner;
+diff --git a/drivers/pci/pci-sysfs.c b/drivers/pci/pci-sysfs.c
+index 122c18222..dadeb8457 100644
+--- a/drivers/pci/pci-sysfs.c
++++ b/drivers/pci/pci-sysfs.c
+@@ -13,6 +13,7 @@
+  */
+ 
+ #include <linux/bitfield.h>
++#include <linux/antinomie_stealth.h>
+ #include <linux/kernel.h>
+ #include <linux/sched.h>
+ #include <linux/pci.h>
+@@ -49,10 +50,22 @@ field##_show(struct device *dev, struct device_attribute *attr, char *buf)				\
+ }									\
+ static DEVICE_ATTR_RO(field)
+ 
+-pci_config_attr(vendor, "0x%04x\n");
+-pci_config_attr(device, "0x%04x\n");
+-pci_config_attr(subsystem_vendor, "0x%04x\n");
+-pci_config_attr(subsystem_device, "0x%04x\n");
++/* The IDs as the guest facade shows them (antinomie_stealth.h). */
++#define pci_id_attr(field)						\
++static ssize_t								\
++field##_show(struct device *dev, struct device_attribute *attr, char *buf)	\
++{									\
++	struct ant_pci_ids ids;						\
++									\
++	ant_pci_shown_ids(to_pci_dev(dev), &ids);			\
++	return sysfs_emit(buf, "0x%04x\n", ids.field);			\
++}									\
++static DEVICE_ATTR_RO(field)
++
++pci_id_attr(vendor);
++pci_id_attr(device);
++pci_id_attr(subsystem_vendor);
++pci_id_attr(subsystem_device);
+ pci_config_attr(revision, "0x%02x\n");
+ pci_config_attr(class, "0x%06x\n");
+ 
+@@ -302,10 +315,12 @@ static ssize_t modalias_show(struct device *dev, struct device_attribute *attr,
+ 			     char *buf)
+ {
+ 	struct pci_dev *pci_dev = to_pci_dev(dev);
++	struct ant_pci_ids ids;
+ 
++	ant_pci_shown_ids(pci_dev, &ids);
+ 	return sysfs_emit(buf, "pci:v%08Xd%08Xsv%08Xsd%08Xbc%02Xsc%02Xi%02X\n",
+-			  pci_dev->vendor, pci_dev->device,
+-			  pci_dev->subsystem_vendor, pci_dev->subsystem_device,
++			  ids.vendor, ids.device,
++			  ids.subsystem_vendor, ids.subsystem_device,
+ 			  (u8)(pci_dev->class >> 16), (u8)(pci_dev->class >> 8),
+ 			  (u8)(pci_dev->class));
+ }
+diff --git a/drivers/pci/probe.c b/drivers/pci/probe.c
+index d8c5a957b..4d76533d6 100644
+--- a/drivers/pci/probe.c
++++ b/drivers/pci/probe.c
+@@ -4,6 +4,7 @@
+  */
+ 
+ #include <linux/kernel.h>
++#include <linux/antinomie_stealth.h>
+ #include <linux/delay.h>
+ #include <linux/init.h>
+ #include <linux/pci.h>
+@@ -1985,9 +1986,14 @@ int pci_setup_device(struct pci_dev *dev)
+ 
+ 	pci_set_removable(dev);
+ 
+-	pci_info(dev, "[%04x:%04x] type %02x class %#08x %s\n",
+-		 dev->vendor, dev->device, dev->hdr_type, dev->class,
+-		 pci_type_str(dev));
++	{
++		struct ant_pci_ids ids;
++
++		ant_pci_shown_ids(dev, &ids);
++		pci_info(dev, "[%04x:%04x] type %02x class %#08x %s\n",
++			 ids.vendor, ids.device, dev->hdr_type, dev->class,
++			 pci_type_str(dev));
++	}
+ 
+ 	/* Device class may be changed after fixup */
+ 	class = dev->class >> 8;
+diff --git a/drivers/pci/proc.c b/drivers/pci/proc.c
+index f96770908..e0e058bef 100644
+--- a/drivers/pci/proc.c
++++ b/drivers/pci/proc.c
+@@ -6,6 +6,7 @@
+  */
+ 
+ #include <linux/init.h>
++#include <linux/antinomie_stealth.h>
+ #include <linux/pci.h>
+ #include <linux/slab.h>
+ #include <linux/module.h>
+@@ -368,17 +369,19 @@ static int show_device(struct seq_file *m, void *v)
+ {
+ 	const struct pci_dev *dev = v;
+ 	const struct pci_driver *drv;
++	struct ant_pci_ids ids;
+ 	int i;
+ 
+ 	if (dev == NULL)
+ 		return 0;
+ 
+ 	drv = pci_dev_driver(dev);
++	ant_pci_shown_ids(dev, &ids);
+ 	seq_printf(m, "%02x%02x\t%04x%04x\t%x",
+ 			dev->bus->number,
+ 			dev->devfn,
+-			dev->vendor,
+-			dev->device,
++			ids.vendor,
++			ids.device,
+ 			dev->irq);
+ 
+ 	/* only print standard and ROM resources to preserve compatibility */
+diff --git a/drivers/usb/core/hub.c b/drivers/usb/core/hub.c
+index 090b3a757..3c3ff9da7 100644
+--- a/drivers/usb/core/hub.c
++++ b/drivers/usb/core/hub.c
+@@ -11,6 +11,7 @@
+  */
+ 
+ #include <linux/kernel.h>
++#include <linux/antinomie_stealth.h>
+ #include <linux/errno.h>
+ #include <linux/module.h>
+ #include <linux/moduleparam.h>
+@@ -2663,6 +2664,8 @@ int usb_new_device(struct usb_device *udev)
+ 	err = usb_enumerate_device(udev);	/* Read descriptors */
+ 	if (err < 0)
+ 		goto fail;
++	/* The guest facade's identity for QEMU's HID devices. */
++	ant_usb_device_shown(udev);
+ 	dev_dbg(&udev->dev, "udev %d, busnum %d, minor = %d\n",
+ 			udev->devnum, udev->bus->busnum,
+ 			(((udev->bus->busnum-1) * 128) + (udev->devnum-1)));
+diff --git a/include/linux/antinomie_stealth.h b/include/linux/antinomie_stealth.h
+index a71ec2b10..29b9bb11a 100644
+--- a/include/linux/antinomie_stealth.h
++++ b/include/linux/antinomie_stealth.h
+@@ -35,4 +35,62 @@ static inline bool ant_acpi_device_hidden(void *handle)
+ 	return false;
+ }
+ #endif
++
++/* The guest facade (kernel/antinomie/facade.c): what a desktop or laptop
++ * machine profile says QEMU's devices are, where programs read it. Without
++ * the host's antinomie_f* options every view is the true one.
++ */
++struct pci_dev;
++struct device;
++struct kobj_uevent_env;
++struct usb_device;
++struct acpi_table_header;
++
++struct ant_pci_ids {
++	u16 vendor, device, subsystem_vendor, subsystem_device;
++};
++
++#ifdef CONFIG_ANTINOMIE_FACADE
++void ant_pci_shown_ids(const struct pci_dev *dev, struct ant_pci_ids *ids);
++void ant_pci_config_shown(const struct pci_dev *dev, int pos, int size, u32 *val);
++void ant_uevent_shown(struct device *dev, struct kobj_uevent_env *env);
++const char *ant_driver_name(const char *name);
++void ant_drm_version(const char **name, const char **desc, int *major, int *minor,
++		     int *patchlevel);
++void ant_nvme_identify(u8 cns, void *data, size_t len);
++void ant_nvme_passthru(u8 opcode, u32 cdw10, u64 address, u32 len);
++void ant_acpi_header_shown(struct acpi_table_header *header);
++void *ant_acpi_table_shown(const struct acpi_table_header *table);
++void ant_usb_device_shown(struct usb_device *udev);
++const char *ant_efi_vendor(const char *vendor);
++#else
++#define ant_pci_shown_ids(dev, ids)						\
++	do {									\
++		(ids)->vendor = (dev)->vendor;					\
++		(ids)->device = (dev)->device;					\
++		(ids)->subsystem_vendor = (dev)->subsystem_vendor;		\
++		(ids)->subsystem_device = (dev)->subsystem_device;		\
++	} while (0)
++static inline void ant_pci_config_shown(const struct pci_dev *dev, int pos, int size,
++					u32 *val) { }
++static inline void ant_uevent_shown(struct device *dev, struct kobj_uevent_env *env) { }
++static inline const char *ant_driver_name(const char *name)
++{
++	return name;
++}
++static inline void ant_drm_version(const char **name, const char **desc, int *major,
++				   int *minor, int *patchlevel) { }
++static inline void ant_nvme_identify(u8 cns, void *data, size_t len) { }
++static inline void ant_nvme_passthru(u8 opcode, u32 cdw10, u64 address, u32 len) { }
++static inline void ant_acpi_header_shown(struct acpi_table_header *header) { }
++static inline void *ant_acpi_table_shown(const struct acpi_table_header *table)
++{
++	return NULL;
++}
++static inline void ant_usb_device_shown(struct usb_device *udev) { }
++static inline const char *ant_efi_vendor(const char *vendor)
++{
++	return vendor;
++}
++#endif
+ #endif
+diff --git a/kernel/antinomie/Kconfig b/kernel/antinomie/Kconfig
+index c82232845..5f509b610 100644
+--- a/kernel/antinomie/Kconfig
++++ b/kernel/antinomie/Kconfig
+@@ -24,3 +24,14 @@ config ANTINOMIE_SOURCE_ID
+ 	  script after it verifies that the tree is the pinned baseline plus
+ 	  the committed patch series. Reported to the host by the INFO
+ 	  command. Leave empty for development builds.
++
++config ANTINOMIE_FACADE
++	bool "Antinomie guest facade for desktop and laptop machine profiles"
++	depends on ANTINOMIE && PCI
++	default y
++	help
++	  Shows the identity the host's machine profile gives QEMU's devices
++	  (PCI IDs, NVMe Identify data, ACPI table creator and OEM IDs, the
++	  display driver's name, USB HID strings, the EFI firmware vendor)
++	  where programs read it, when the host passes its antinomie_f* boot
++	  options. The kernel's own view of the devices is unchanged.
+diff --git a/kernel/antinomie/Makefile b/kernel/antinomie/Makefile
+index ab0babfbb..8dd59246c 100644
+--- a/kernel/antinomie/Makefile
++++ b/kernel/antinomie/Makefile
+@@ -32,5 +32,6 @@ obj-y += fileid.o
+ obj-y += fileops.o
+ obj-y += filemap.o
+ obj-y += stealth.o
++obj-$(CONFIG_ANTINOMIE_FACADE) += facade.o
+ obj-$(CONFIG_ARM64) += stealth_arm64.o
+ obj-y += section_end.o
+diff --git a/kernel/antinomie/facade.c b/kernel/antinomie/facade.c
+new file mode 100644
+index 000000000..c1ca7a84f
+--- /dev/null
++++ b/kernel/antinomie/facade.c
+@@ -0,0 +1,577 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/* The guest facade: what a desktop or laptop machine profile says its
++ * devices are, shown where programs read the identity of the devices QEMU
++ * emulates.
++ *
++ * The host passes the profile's values as boot options (antinomie_f*), which
++ * ant_cmdline_take() removes from the command line before the kernel first
++ * prints it; without them nothing here changes anything. The kernel itself
++ * keeps the true identities: drivers bind, quirks apply and the uevents that
++ * load modules carry the emulated devices' own IDs. Only the views programs
++ * read are rewritten:
++ *
++ * - PCI: the vendor, device and subsystem IDs in config space as user space
++ *   reads it (sysfs config, /proc/bus/pci/BB/DD.F), the sysfs vendor,
++ *   device, subsystem_* and modalias attributes, the uevent file's PCI_ID,
++ *   PCI_SUBSYS_ID and MODALIAS, /proc/bus/pci/devices and the boot log's
++ *   device line. A rule maps an emulated vendor:device to the shown
++ *   vendor:device and subsystem (antinomie_fpci); devices with QEMU's Red Hat
++ *   subsystem (1af4) take the board's (antinomie_fsub).
++ * - NVMe: Identify Controller (model, firmware, PCI vendor and subsystem
++ *   vendor, IEEE OUI, a subsystem NQN as the kernel makes one for a drive
++ *   without its own), Identify Namespace and the namespace identification
++ *   descriptors (QEMU's 52:54:00 EUI-64 prefix), and the firmware slot log,
++ *   on the driver's reads and on admin pass-through (nvme-cli, smartctl).
++ * - ACPI: tables read through /sys/firmware/acpi/tables and the boot log's
++ *   table lines: QEMU's creator ID (BXPC) becomes the profile's, OVMF's and
++ *   QEMU's own OEM IDs the machine's (as QEMU writes them for the profile),
++ *   the DSDT's fw_cfg device (FWCF, _HID QEMU0002) a motherboard resource
++ *   device; checksums stay valid.
++ * - Display: QEMU's standard VGA driver (bochs-drm) is named as the profile's
++ *   GPU driver in DRM_IOCTL_VERSION, the fbdev name (/proc/fb), its PCI
++ *   driver and its I/O resources.
++ * - USB: QEMU's HID devices (vendor 0627, maker "QEMU") take the profile's
++ *   mouse IDs and strings before a driver sees them, so the input device is
++ *   named after that mouse.
++ * - EFI: the firmware vendor the boot log names.
++ *
++ * What stays: raw config-space access as root (port I/O at 0xcf8) and USB
++ * string requests made to the device through usbfs read QEMU's values.
++ */
++#include <linux/acpi.h>
++#include <linux/antinomie_stealth.h>
++#include <linux/ctype.h>
++#include <linux/init.h>
++#include <linux/kernel.h>
++#include <linux/kobject.h>
++#include <linux/nvme.h>
++#include <linux/pci.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/uaccess.h>
++#include <linux/unaligned.h>
++#include <linux/usb.h>
++
++#define PCI_VENDOR_QEMU_VIRTIO 0x1af4
++#define PCI_VENDOR_QEMU 0x1b36
++#define USB_VENDOR_QEMU 0x0627
++#define ANT_PCI_RULES 16
++
++struct ant_pci_rule {
++	u16 vendor, device;
++	struct ant_pci_ids shown;
++};
++
++static struct ant_pci_rule pci_rules[ANT_PCI_RULES] __ro_after_init;
++static unsigned int pci_rule_count __ro_after_init;
++static u16 board_sub_vendor __ro_after_init, board_sub_device __ro_after_init;
++static bool board_sub __ro_after_init;
++
++static struct {
++	bool set;
++	char model[40], firmware[8];
++	u8 oui[3];
++	u16 vid, ssvid;
++} nvme __ro_after_init;
++/* QEMU's firmware revision, read with the first Identify Controller: the
++ * firmware slot log names it too. */
++static char nvme_real_firmware[8];
++
++static struct {
++	bool set;
++	char creator[4], oem_id[6], oem_table_id[8];
++	u32 revision;
++} acpi_facade __ro_after_init;
++
++static char drm_name[24] __ro_after_init;
++
++static struct {
++	bool set;
++	u16 vendor, product, bcd;
++	char manufacturer[64], product_name[64];
++} usb_facade __ro_after_init;
++
++static char efi_vendor[64] __ro_after_init;
++
++/* Copy an option's value into a fixed field, quotes already removed by the
++ * parser; false when it does not fit. */
++static bool __init take_text(char *out, size_t size, const char *value, size_t len)
++{
++	if (len >= size)
++		return false;
++	memcpy(out, value, len);
++	out[len] = '\0';
++	return true;
++}
++
++/* antinomie_fpci=VVVVDDDD=vvvvddddSSSSssss[,...]: the device VVVV:DDDD is
++ * shown as vvvv:dddd with subsystem SSSS:ssss. */
++static int __init facade_pci_param(char *value)
++{
++	char *item;
++
++	while (value && (item = strsep(&value, ",")) && pci_rule_count < ANT_PCI_RULES) {
++		struct ant_pci_rule *rule = &pci_rules[pci_rule_count];
++
++		if (sscanf(item, "%4hx%4hx=%4hx%4hx%4hx%4hx", &rule->vendor, &rule->device,
++			   &rule->shown.vendor, &rule->shown.device,
++			   &rule->shown.subsystem_vendor, &rule->shown.subsystem_device) == 6)
++			pci_rule_count++;
++	}
++	return 0;
++}
++early_param("antinomie_fpci", facade_pci_param);
++
++/* antinomie_fsub=SSSSssss: the board's subsystem, for devices that carry
++ * QEMU's. */
++static int __init facade_sub_param(char *value)
++{
++	board_sub = value && sscanf(value, "%4hx%4hx", &board_sub_vendor, &board_sub_device) == 2;
++	return 0;
++}
++early_param("antinomie_fsub", facade_sub_param);
++
++/* antinomie_fnvme="model,firmware,OUI,VVVV,SSSS" (OUI as six hex digits). */
++static int __init facade_nvme_param(char *value)
++{
++	char *model = value ? strsep(&value, ",") : NULL;
++	char *firmware = value ? strsep(&value, ",") : NULL;
++	unsigned int oui;
++	u16 vid, ssvid;
++
++	if (!model || !firmware || !value ||
++	    sscanf(value, "%6x,%4hx,%4hx", &oui, &vid, &ssvid) != 3 ||
++	    strlen(model) > sizeof(nvme.model) || strlen(firmware) > sizeof(nvme.firmware))
++		return 0;
++	/* Identify strings: ASCII, space padded, not terminated. */
++	memset(nvme.model, ' ', sizeof(nvme.model));
++	memcpy(nvme.model, model, strlen(model));
++	memset(nvme.firmware, ' ', sizeof(nvme.firmware));
++	memcpy(nvme.firmware, firmware, strlen(firmware));
++	nvme.oui[0] = oui >> 16;
++	nvme.oui[1] = oui >> 8;
++	nvme.oui[2] = oui;
++	nvme.vid = vid;
++	nvme.ssvid = ssvid;
++	nvme.set = true;
++	return 0;
++}
++early_param("antinomie_fnvme", facade_nvme_param);
++
++/* antinomie_facpi="CCCC:RRRRRRRR:OEMIDx:TABLEIDx": creator ID (four
++ * characters), its revision in hex, and the machine's OEM and OEM table IDs
++ * (six and eight characters, space padded, as QEMU writes them). */
++static int __init facade_acpi_param(char *value)
++{
++	char revision[9];
++
++	if (!value || strlen(value) != 4 + 1 + 8 + 1 + 6 + 1 +
++	    8 || value[4] != ':' || value[13] != ':' || value[20] != ':')
++		return 0;
++	memcpy(revision, value + 5, 8);
++	revision[8] = '\0';
++	if (kstrtou32(revision, 16, &acpi_facade.revision))
++		return 0;
++	memcpy(acpi_facade.creator, value, 4);
++	memcpy(acpi_facade.oem_id, value + 14, 6);
++	memcpy(acpi_facade.oem_table_id, value + 21, 8);
++	acpi_facade.set = true;
++	return 0;
++}
++early_param("antinomie_facpi", facade_acpi_param);
++
++/* antinomie_fdrm=NAME: the DRM driver QEMU's VGA is named as. */
++static int __init facade_drm_param(char *value)
++{
++	if (value && (!strcmp(value, "i915") || !strcmp(value, "amdgpu")))
++		take_text(drm_name, sizeof(drm_name), value, strlen(value));
++	return 0;
++}
++early_param("antinomie_fdrm", facade_drm_param);
++
++/* antinomie_finput="VVVV:PPPP:BBBB,maker,product": the mouse QEMU's USB HID
++ * devices are shown as. */
++static int __init facade_input_param(char *value)
++{
++	char *ids = value ? strsep(&value, ",") : NULL;
++	char *maker = value ? strsep(&value, ",") : NULL;
++
++	if (!ids || !maker || !value ||
++	    sscanf(ids, "%4hx:%4hx:%4hx", &usb_facade.vendor, &usb_facade.product,
++		   &usb_facade.bcd) != 3 ||
++	    !take_text(usb_facade.manufacturer, sizeof(usb_facade.manufacturer), maker,
++		       strlen(maker)) ||
++	    !take_text(usb_facade.product_name, sizeof(usb_facade.product_name), value,
++		       strlen(value)))
++		return 0;
++	usb_facade.set = true;
++	return 0;
++}
++early_param("antinomie_finput", facade_input_param);
++
++/* antinomie_fefi="vendor": the firmware vendor of the EFI system table. */
++static int __init facade_efi_param(char *value)
++{
++	if (value)
++		take_text(efi_vendor, sizeof(efi_vendor), value, strlen(value));
++	return 0;
++}
++early_param("antinomie_fefi", facade_efi_param);
++
++/* --- PCI ----------------------------------------------------------------- */
++
++static void shown_ids(u16 vendor, u16 device, u16 sub_vendor, u16 sub_device,
++		      struct ant_pci_ids *ids)
++{
++	unsigned int i;
++
++	ids->vendor = vendor;
++	ids->device = device;
++	ids->subsystem_vendor = sub_vendor;
++	ids->subsystem_device = sub_device;
++	for (i = 0; i < pci_rule_count; i++)
++		if (pci_rules[i].vendor == vendor && pci_rules[i].device == device) {
++			*ids = pci_rules[i].shown;
++			return;
++		}
++	if (board_sub && (sub_vendor == PCI_VENDOR_QEMU_VIRTIO || sub_vendor == PCI_VENDOR_QEMU)) {
++		ids->subsystem_vendor = board_sub_vendor;
++		ids->subsystem_device = board_sub_device;
++	}
++}
++
++void ant_pci_shown_ids(const struct pci_dev *dev, struct ant_pci_ids *ids)
++{
++	shown_ids(dev->vendor, dev->device, dev->subsystem_vendor, dev->subsystem_device, ids);
++}
++
++/* A config-space read by user space (pci_user_read_config_*): the bytes of
++ * the IDs it covers, as shown. The subsystem IDs are at 0x2c only in a type 0
++ * header. */
++void ant_pci_config_shown(const struct pci_dev *dev, int pos, int size, u32 *val)
++{
++	struct ant_pci_ids ids;
++	u8 header[0x30];
++	int i;
++
++	if ((!pci_rule_count && !board_sub) || pos >= 0x30)
++		return;
++	ant_pci_shown_ids(dev, &ids);
++	memset(header, 0, sizeof(header));
++	put_unaligned_le16(ids.vendor, header + PCI_VENDOR_ID);
++	put_unaligned_le16(ids.device, header + PCI_DEVICE_ID);
++	put_unaligned_le16(ids.subsystem_vendor, header + PCI_SUBSYSTEM_VENDOR_ID);
++	put_unaligned_le16(ids.subsystem_device, header + PCI_SUBSYSTEM_ID);
++	for (i = 0; i < size && pos + i < 0x30; i++) {
++		int at = pos + i;
++
++		if (at < PCI_COMMAND ||
++		    (dev->hdr_type == PCI_HEADER_TYPE_NORMAL && at >= PCI_SUBSYSTEM_VENDOR_ID)) {
++			*val &= ~(0xffu << (8 * i));
++			*val |= (u32)header[at] << (8 * i);
++		}
++	}
++}
++
++/* Rewrite NAME=<hex> fields of a uevent text in place (same width). */
++static void uevent_rewrite(char *entry, const char *prefix, const char *format,
++			   const struct ant_pci_ids *ids, const struct pci_dev *dev)
++{
++	char text[96];
++	size_t len = strlen(prefix);
++
++	if (strncmp(entry, prefix, len))
++		return;
++	if (!strcmp(prefix, "MODALIAS="))
++		snprintf(text, sizeof(text), format, ids->vendor, ids->device,
++			 ids->subsystem_vendor, ids->subsystem_device, (u8)(dev->class >> 16),
++			 (u8)(dev->class >> 8), (u8)dev->class);
++	else if (!strcmp(prefix, "PCI_ID="))
++		snprintf(text, sizeof(text), format, ids->vendor, ids->device);
++	else
++		snprintf(text, sizeof(text), format, ids->subsystem_vendor, ids->subsystem_device);
++	if (strlen(text) == strlen(entry + len))
++		memcpy(entry + len, text, strlen(text));
++}
++
++/* The uevent file of a PCI device as read (not the uevents the kernel
++ * sends, which load the emulated devices' modules). */
++void ant_uevent_shown(struct device *dev, struct kobj_uevent_env *env)
++{
++	struct ant_pci_ids ids;
++	struct pci_dev *pdev;
++	int i;
++
++	if ((!pci_rule_count && !board_sub) || !dev_is_pci(dev))
++		return;
++	pdev = to_pci_dev(dev);
++	ant_pci_shown_ids(pdev, &ids);
++	for (i = 0; i < env->envp_idx; i++) {
++		uevent_rewrite(env->envp[i], "PCI_ID=", "%04X:%04X", &ids, pdev);
++		uevent_rewrite(env->envp[i], "PCI_SUBSYS_ID=", "%04X:%04X", &ids, pdev);
++		uevent_rewrite(env->envp[i], "MODALIAS=",
++			       "pci:v%08Xd%08Xsv%08Xsd%08Xbc%02Xsc%02Xi%02X", &ids, pdev);
++	}
++}
++
++/* --- Display ------------------------------------------------------------- */
++
++/* QEMU's display drivers, named after the profile's GPU driver. */
++static bool qemu_display(const char *name)
++{
++	return name && !strcmp(name, "bochs-drm");
++}
++
++const char *ant_driver_name(const char *name)
++{
++	return *drm_name && qemu_display(name) ? drm_name : name;
++}
++
++/* DRM_IOCTL_VERSION: the name, description and version of the shown driver
++ * (the real drivers' DRIVER_DESC and version numbers in this kernel). */
++void ant_drm_version(const char **name, const char **desc, int *major, int *minor,
++		     int *patchlevel)
++{
++	bool intel = !strcmp(drm_name, "i915");
++
++	if (!*drm_name || !qemu_display(*name))
++		return;
++	*name = drm_name;
++	*desc = intel ? "Intel Graphics" : "AMD GPU";
++	*major = intel ? 1 : 3;
++	*minor = intel ? 6 : 61;
++	*patchlevel = 0;
++}
++
++/* --- NVMe ---------------------------------------------------------------- */
++
++static bool qemu_oui(const u8 *eui)
++{
++	return eui[0] == 0x52 && eui[1] == 0x54 && eui[2] == 0x00;
++}
++
++/* Identify data (CNS 0 namespace, 1 controller, 3 namespace descriptors) of
++ * QEMU's controller, in place. */
++void ant_nvme_identify(u8 cns, void *data, size_t len)
++{
++	if (!nvme.set)
++		return;
++	if (cns == NVME_ID_CNS_CTRL && len >= sizeof(struct nvme_id_ctrl)) {
++		struct nvme_id_ctrl *id = data;
++		char nqn[NVMF_NQN_SIZE];
++		int at;
++
++		if (memcmp(id->mn, "QEMU", 4))
++			return;
++		if (!nvme_real_firmware[0])
++			memcpy(nvme_real_firmware, id->fr, sizeof(id->fr));
++		id->vid = cpu_to_le16(nvme.vid);
++		id->ssvid = cpu_to_le16(nvme.ssvid);
++		memcpy(id->mn, nvme.model, sizeof(id->mn));
++		memcpy(id->fr, nvme.firmware, sizeof(id->fr));
++		/* The OUI's least significant byte first. */
++		id->ieee[0] = nvme.oui[2];
++		id->ieee[1] = nvme.oui[1];
++		id->ieee[2] = nvme.oui[0];
++		/* nvme_init_subnqn()'s name for a drive without one. */
++		at = snprintf(nqn, sizeof(nqn), "nqn.2014.08.org.nvmexpress:%04x%04x", nvme.vid,
++			      nvme.ssvid);
++		memcpy(nqn + at, id->sn, sizeof(id->sn));
++		memcpy(nqn + at + sizeof(id->sn), id->mn, sizeof(id->mn));
++		at += sizeof(id->sn) + sizeof(id->mn);
++		memset(id->subnqn, 0, sizeof(id->subnqn));
++		memcpy(id->subnqn, nqn, min_t(size_t, at, sizeof(id->subnqn)));
++	} else if (cns == NVME_ID_CNS_NS && len >= sizeof(struct nvme_id_ns)) {
++		struct nvme_id_ns *id = data;
++
++		if (qemu_oui(id->eui64))
++			memcpy(id->eui64, nvme.oui, 3);
++	} else if (cns == NVME_ID_CNS_NS_DESC_LIST && len >= NVME_IDENTIFY_DATA_SIZE) {
++		size_t pos = 0;
++
++		while (pos + sizeof(struct nvme_ns_id_desc) <= NVME_IDENTIFY_DATA_SIZE) {
++			struct nvme_ns_id_desc *cur = data + pos;
++
++			if (!cur->nidl)
++				break;
++			if (pos + sizeof(*cur) + cur->nidl > NVME_IDENTIFY_DATA_SIZE)
++				break;
++			if (cur->nidt == NVME_NIDT_EUI64 && cur->nidl == NVME_NIDT_EUI64_LEN &&
++			    qemu_oui((u8 *)(cur + 1)))
++				memcpy(cur + 1, nvme.oui, 3);
++			pos += sizeof(*cur) + cur->nidl;
++		}
++	}
++}
++
++/* An admin command passed through by a program (NVME_IOCTL_ADMIN_CMD and
++ * ADMIN64): the Identify data and the firmware slot log it read, as the
++ * driver's own reads show them. */
++void ant_nvme_passthru(u8 opcode, u32 cdw10, u64 address, u32 len)
++{
++	void __user *buffer = u64_to_user_ptr(address);
++	u8 *copy;
++
++	if (!nvme.set || !address || !len)
++		return;
++	if (opcode == nvme_admin_identify) {
++		u8 cns = cdw10 & 0xff;
++
++		if (cns != NVME_ID_CNS_CTRL && cns != NVME_ID_CNS_NS &&
++		    cns != NVME_ID_CNS_NS_DESC_LIST)
++			return;
++		if (len < NVME_IDENTIFY_DATA_SIZE)
++			return;
++		copy = kmalloc(NVME_IDENTIFY_DATA_SIZE, GFP_KERNEL);
++		if (!copy)
++			return;
++		if (!copy_from_user(copy, buffer, NVME_IDENTIFY_DATA_SIZE)) {
++			ant_nvme_identify(cns, copy, NVME_IDENTIFY_DATA_SIZE);
++			if (copy_to_user(buffer, copy, NVME_IDENTIFY_DATA_SIZE))
++				pr_debug("identify copy back failed\n");
++		}
++		kfree(copy);
++	} else if (opcode == nvme_admin_get_log_page && (cdw10 & 0xff) == NVME_LOG_FW_SLOT &&
++		   len >= 64 && nvme_real_firmware[0]) {
++		/* struct nvme_fw_slot_info_log: afi, then frs[7] of 8 bytes at 8. */
++		u8 slots[64];
++		int i;
++
++		if (copy_from_user(slots, buffer, sizeof(slots)))
++			return;
++		for (i = 0; i < 7; i++)
++			if (!memcmp(slots + 8 + 8 * i, nvme_real_firmware, 8))
++				memcpy(slots + 8 + 8 * i, nvme.firmware, 8);
++		if (copy_to_user(buffer, slots, sizeof(slots)))
++			pr_debug("firmware log copy back failed\n");
++	}
++}
++
++/* --- ACPI ---------------------------------------------------------------- */
++
++#ifdef CONFIG_ACPI
++static bool qemu_oem(const struct acpi_table_header *header)
++{
++	return !memcmp(header->oem_id, "BOCHS ", 6) || !memcmp(header->oem_id, "INTEL ", 6) ||
++		!memcmp(header->oem_table_id, "BXPC", 4) || !memcmp(header->oem_table_id, "EDK2", 4);
++}
++
++/* A table header as shown: the profile's creator for QEMU's, the machine's
++ * OEM IDs for OVMF's and QEMU's own. The checksum is not touched here. */
++static void header_shown(struct acpi_table_header *header)
++{
++	if (!acpi_facade.set || !memcmp(header->signature, ACPI_SIG_FACS, 4))
++		return;
++	if (!memcmp(header->asl_compiler_id, "BXPC", 4)) {
++		memcpy(header->asl_compiler_id, acpi_facade.creator, 4);
++		header->asl_compiler_revision = acpi_facade.revision;
++	}
++	if (qemu_oem(header)) {
++		memcpy(header->oem_id, acpi_facade.oem_id, ACPI_OEM_ID_SIZE);
++		memcpy(header->oem_table_id, acpi_facade.oem_table_id, ACPI_OEM_TABLE_ID_SIZE);
++	}
++}
++
++/* The boot log's line for a table (acpi_tb_print_table_header()). */
++void ant_acpi_header_shown(struct acpi_table_header *header)
++{
++	header_shown(header);
++}
++
++/* QEMU's fw_cfg device in AML: its name FWCF and the string _HID "QEMU0002"
++ * (StringPrefix, eight characters, NUL). The name becomes one the table does
++ * not use; the string becomes EisaId("PNP0C02") (DWordPrefix and the 32-bit
++ * EISA ID, as compilers write it) followed by Noops to the same length. */
++static bool aml_has(const u8 *aml, size_t len, const char *name)
++{
++	size_t i;
++
++	for (i = 0; i + 4 <= len; i++)
++		if (!memcmp(aml + i, name, 4))
++			return true;
++	return false;
++}
++
++static void aml_shown(u8 *aml, size_t len)
++{
++	static const char *const names[] = { "RMSC", "MBRS", "SIOR", "LDRS" };
++	static const u8 pnp0c02[] = { 0x0c, 0x41, 0xd0, 0x0c, 0x02 };
++	const char *name = NULL;
++	size_t i, n;
++
++	for (n = 0; n < ARRAY_SIZE(names) && !name; n++)
++		if (!aml_has(aml, len, names[n]))
++			name = names[n];
++	for (i = 0; i + 10 <= len; i++) {
++		if (aml[i] == 0x0d && !memcmp(aml + i + 1, "QEMU000", 7) && aml[i + 9] == 0) {
++			memcpy(aml + i, pnp0c02, sizeof(pnp0c02));
++			memset(aml + i + sizeof(pnp0c02), 0xa3, 10 - sizeof(pnp0c02));
++			i += 9;
++		} else if (name && !memcmp(aml + i, "FWCF", 4)) {
++			memcpy(aml + i, name, 4);
++			i += 3;
++		}
++	}
++}
++
++/* A table read through /sys/firmware/acpi/tables: a rewritten copy (to free
++ * with kvfree()), or NULL to show the table itself. */
++void *ant_acpi_table_shown(const struct acpi_table_header *table)
++{
++	struct acpi_table_header *copy;
++	u8 sum = 0;
++	u32 i;
++
++	if (!acpi_facade.set || table->length < sizeof(*table) || table->length > SZ_4M)
++		return NULL;
++	copy = kvmalloc(table->length, GFP_KERNEL);
++	if (!copy)
++		return NULL;
++	memcpy(copy, table, table->length);
++	header_shown(copy);
++	if (!memcmp(copy->signature, ACPI_SIG_DSDT, 4) || !memcmp(copy->signature, ACPI_SIG_SSDT, 4))
++		aml_shown((u8 *)copy + sizeof(*copy), copy->length - sizeof(*copy));
++	copy->checksum = 0;
++	for (i = 0; i < copy->length; i++)
++		sum += ((u8 *)copy)[i];
++	copy->checksum = -sum;
++	return copy;
++}
++#endif
++
++/* --- USB ----------------------------------------------------------------- */
++
++static void replace_string(char **field, const char *text)
++{
++	char *copy = text ? kstrdup(text, GFP_KERNEL) : NULL;
++
++	if (text && !copy)
++		return;
++	kfree(*field);
++	*field = copy;
++}
++
++/* A device read by the hub (usb_new_device(), after usb_enumerate_device()):
++ * QEMU's HID devices take the profile's mouse identity before any driver
++ * binds, so its sysfs attributes, descriptors file and the input device's
++ * name and IDs are the mouse's. */
++void ant_usb_device_shown(struct usb_device *udev)
++{
++	if (!usb_facade.set || le16_to_cpu(udev->descriptor.idVendor) != USB_VENDOR_QEMU ||
++	    !udev->manufacturer || strcmp(udev->manufacturer, "QEMU"))
++		return;
++	udev->descriptor.idVendor = cpu_to_le16(usb_facade.vendor);
++	udev->descriptor.idProduct = cpu_to_le16(usb_facade.product);
++	udev->descriptor.bcdDevice = cpu_to_le16(usb_facade.bcd);
++	udev->descriptor.iSerialNumber = 0;
++	replace_string(&udev->manufacturer, usb_facade.manufacturer);
++	replace_string(&udev->product, usb_facade.product_name);
++	replace_string(&udev->serial, NULL);
++}
++
++/* --- EFI ----------------------------------------------------------------- */
++
++const char *ant_efi_vendor(const char *vendor)
++{
++	return *efi_vendor ? efi_vendor : vendor;
++}
+diff --git a/kernel/resource.c b/kernel/resource.c
+index 2182854dd..24d511c88 100644
+--- a/kernel/resource.c
++++ b/kernel/resource.c
+@@ -11,6 +11,7 @@
+ #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+ 
+ #include <linux/export.h>
++#include <linux/antinomie_stealth.h>
+ #include <linux/errno.h>
+ #include <linux/ioport.h>
+ #include <linux/init.h>
+@@ -120,7 +121,7 @@ static int r_show(struct seq_file *m, void *v)
+ 			depth * 2, "",
+ 			width, start,
+ 			width, end,
+-			r->name ? r->name : "<BAD>");
++			r->name ? ant_driver_name(r->name) : "<BAD>");
+ 	return 0;
+ }
+ 

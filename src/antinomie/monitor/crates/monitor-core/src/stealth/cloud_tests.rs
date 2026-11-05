@@ -198,13 +198,34 @@ fn instance_state_is_per_vm_and_stable() {
         find(&format!("/home/{}/.bash_history", "ubuntu")).owner,
         Owner::User
     );
-    // wtmp: whole 384-byte records, the last one an ended login.
+    // wtmp: whole 384-byte records in time order, all before the boot
+    // (2_000_000_000): the first boot, ended logins, and the last one the
+    // shutdown of the reboot into the current boot.
     let wtmp = &find("/var/log/wtmp").content;
     assert!(wtmp.len() % 384 == 0 && wtmp.len() >= 5 * 384);
-    assert_eq!(
-        i16::from_le_bytes([wtmp[wtmp.len() - 384], wtmp[wtmp.len() - 383]]),
-        8
+    let records: Vec<(i16, u32)> = wtmp
+        .chunks(384)
+        .map(|record| {
+            (
+                i16::from_le_bytes([record[0], record[1]]),
+                u32::from_le_bytes([record[340], record[341], record[342], record[343]]),
+            )
+        })
+        .collect();
+    assert_eq!(records[0].0, 2);
+    assert_eq!(records.last().unwrap().0, 1);
+    assert!(records.windows(2).all(|pair| pair[0].1 <= pair[1].1));
+    assert!(records.last().unwrap().1 < 2_000_000_000);
+    // auth.log tells the same sessions, ending with the reboot.
+    let auth = String::from_utf8_lossy(&find("/var/log/auth.log").content).into_owned();
+    assert_eq!(auth.matches("Accepted publickey for ubuntu").count(), 4);
+    assert!(auth.contains("COMMAND=/usr/sbin/reboot"));
+    assert!(auth.contains("May 18 02:53:20 "), "{auth}");
+    assert!(
+        String::from_utf8_lossy(&find("/var/log/cloud-init.log").content)
+            .starts_with("2033-05-09 03:33:21,201 - ")
     );
+    assert!(find("/var/log/auth.log").mtime < 2_000_000_000);
     let root = super::CloudProvider::find("cloud-vultr-vc2").unwrap();
     assert!(
         root.state_files("x", "h", 2_000_000_000)

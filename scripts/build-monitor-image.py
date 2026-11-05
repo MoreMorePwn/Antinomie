@@ -217,8 +217,11 @@ def stealth_support(config, kernel, root_buses=True, dhcp=True, module_buses=Fal
     page; sata, nvme: the initrd finds the root disk on that bus and the kernel
     has the controller built in, or the initrd loads its modules (module_buses:
     Debian Minimal's initrd loads Debian's); dhcp: the guest takes its address from the
-    NAT's DHCP server, so any NAT network works. A base without the field boots
-    from virtio under SeaBIOS on 10.0.2.0/24 only."""
+    NAT's DHCP server, so any NAT network works; facade: the kernel has the guest
+    facade (guest patch 0052), which shows a desktop or laptop machine profile's
+    devices for QEMU's; uptime: the kernel takes the VM's boot age
+    (CONFIG_ANTINOMIE_BOOT_AGE). A base without the field boots from virtio under
+    SeaBIOS on 10.0.2.0/24 only."""
     support = []
     values = {}
     if config is not None:
@@ -235,6 +238,10 @@ def stealth_support(config, kernel, root_buses=True, dhcp=True, module_buses=Fal
         support.append("nvme")
     if dhcp:
         support.append("dhcp")
+    if built_in("ANTINOMIE_FACADE"):
+        support.append("facade")
+    if built_in("ANTINOMIE_BOOT_AGE"):
+        support.append("uptime")
     return support
 
 
@@ -512,6 +519,8 @@ def base_tree(root, hostname="debian", userland=None, console="ttyS0"):
     require_userland(userland)
     for directory in ("bin", "sbin", "usr/bin", "usr/sbin", "etc", "dev", "proc", "sys", "run", "tmp", "root", "home/user", "var/log"):
         (root / directory).mkdir(parents=True, exist_ok=True)
+    # As on Debian: utmp lives in /run, reached through /var/run.
+    (root / "var/run").symlink_to("../run")
     (root / "tmp").chmod(0o1777)
     (root / "home/user").chmod(0o700)
     install_binary(userland.busybox(), root, "/bin/busybox", userland)
@@ -555,6 +564,23 @@ mount -t sysfs sysfs /sys
 mkdir -p /dev/pts /run
 mount -t devpts devpts /dev/pts
 chmod 1777 /tmp
+# The boot record, as init writes it: utmp gets this boot's alone, wtmp (when
+# there is one) one more. Its time is the kernel's boot time, which is the
+# VM's boot age before now.
+boot_record() {
+    btime=$(sed -n 's/^btime //p' /proc/stat)
+    pad() { head -c "$1" /dev/zero; }
+    text() { printf '%s' "$1"; pad $(($2 - ${#1})); }
+    printf '\002'; pad 7
+    text '~' 32; text '~~' 4; text reboot 32; text "$(uname -r)" 256
+    pad 8
+    printf "$(printf '\\%03o\\%03o\\%03o\\%03o' $((btime & 255)) $((btime >> 8 & 255)) \
+        $((btime >> 16 & 255)) $((btime >> 24 & 255)))"
+    pad 40
+}
+boot_record > /run/utmp
+chmod 664 /run/utmp
+[ -f /var/log/wtmp ] && boot_record >> /var/log/wtmp
 hostname "$(cat /etc/hostname)"
 ip link set lo up
 if ip link show eth0 >/dev/null 2>&1; then

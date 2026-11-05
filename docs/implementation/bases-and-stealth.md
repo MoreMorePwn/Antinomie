@@ -1063,3 +1063,133 @@ not automatically converted or modified.
 Image build uses authenticated Debian inputs and retains system account file
 ownership, package provenance and licenses. This
 does not complete the remaining syscall/async semantics of the native syscalls update below.
+
+## Guest facade (0.9.0)
+
+Guest patch 0052, contract revision 21 unchanged (boot options only). A
+real-VPS comparison (a KVM cloud instance shows the hypervisor flag, SeaBIOS,
+BOCHS/BXPC ACPI tables, Red Hat PCI IDs, virtio disks and a QEMU DVD-ROM)
+showed that server and cloud machines legitimately look like QEMU/KVM, so the
+facade applies to the **desktop and laptop machine profiles only**: a program
+on a server or cloud profile still sees QEMU's devices, as it would on such a
+host.
+
+**Passing it.** `stealth::facade_options()` (`stealth/launch.rs`) turns the
+profile's machine (`catalog/facade.rs`, cited in `catalog/SOURCES.md`, "Guest
+facade") into `antinomie_f*` boot options, added by `vm.rs` for a base whose
+`stealth_support` lists `facade` (both image builders write it when the kernel
+has `CONFIG_ANTINOMIE_FACADE`); `ant_cmdline_take()` (patch 0014) takes them out
+of the command line before the kernel prints it.
+
+| Option | Value | Shown |
+|---|---|---|
+| `antinomie_fpci` | `VVVVDDDD=vvvvddddSSSSssss,...` | QEMU's VGA (1234:1111) as the machine's integrated GPU, QEMU's NVMe controller (8086:5845) as the laptop's drive, each with its subsystem |
+| `antinomie_fsub` | `SSSSssss` | the board's subsystem (the identity's NIC subsystem) on every device with QEMU's 1af4 |
+| `antinomie_fnvme` | `"model,firmware,OUI,VID,SSVID"` | Identify Controller and Namespace data, the firmware slot log |
+| `antinomie_facpi` | `"CCCC:RRRRRRRR:OEMID :TABLEID "` | the ACPI creator ID and revision, the machine's OEM IDs |
+| `antinomie_fdrm` | `i915` or `amdgpu` | the display driver's names |
+| `antinomie_finput` | `"VVVV:PPPP:BBBB,maker,product"` | QEMU's USB HID devices as the maker's mouse |
+| `antinomie_fefi` | `"vendor"` | the boot log's EFI firmware vendor |
+
+**What the guest shows** (`kernel/antinomie/facade.c`; the kernel's own
+`pci_dev`, Identify data copies, ACPI tables, drivers and the uevents it sends
+keep the true identities, so drivers bind, quirks apply and udev loads the
+emulated devices' modules):
+
+| View | Hook |
+|---|---|
+| PCI config space read by user space (sysfs `config`, `/proc/bus/pci/BB/DD.F`; lspci reads both): bytes 0-3 and, in a type 0 header, 0x2c-0x2f | `pci_user_read_config_*()` (`drivers/pci/access.c`) |
+| sysfs `vendor`, `device`, `subsystem_vendor`, `subsystem_device`, `modalias`; the `uevent` file as read (`PCI_ID`, `PCI_SUBSYS_ID`, `MODALIAS`, same width) | `pci-sysfs.c`, `uevent_show()` (`drivers/base/core.c`) |
+| `/proc/bus/pci/devices`, the boot log's `[vvvv:dddd] type` line | `proc.c`, `probe.c` |
+| NVMe Identify Controller (VID, SSVID, model, firmware, IEEE OUI, a subsystem NQN as `nvme_init_subnqn()` makes one), Identify Namespace and the descriptor list (QEMU's 52:54:00 EUI-64 prefix → the maker's OUI) as the driver reads them; the same data and the firmware slot log through `NVME_IOCTL_ADMIN_CMD`/`ADMIN64` (nvme-cli, smartctl) | `drivers/nvme/host/core.c`, `ioctl.c` |
+| ACPI tables read through `/sys/firmware/acpi/tables` (root) and the boot log's table lines: creator `BXPC` → the maker's, OEM IDs `BOCHS`/`BXPC` and OVMF's `INTEL`/`EDK2` (BGRT) → the machine's, in the DSDT the fw_cfg device's name `FWCF` → an unused name and its `_HID "QEMU0002"` → `EisaId("PNP0C02")` padded with `Noop`; checksum recomputed | `drivers/acpi/sysfs.c`, `acpica/tbprint.c` |
+| `bochs-drm`'s PCI driver name (sysfs, `lspci -k`, the log), its resource names (`/proc/iomem`, `/proc/ioports`), DRM_IOCTL_VERSION (name, description, version of i915 or amdgpu), the fbdev name (`/proc/fb`: `i915drmfb`, `amdgpudrmfb`) | `pci-driver.c`, `kernel/resource.c`, `drm_ioctl.c`, `drm_fb_helper.c` |
+| QEMU's USB HID devices (vendor 0627, maker `QEMU`): IDs, release, maker and product strings, no serial, set right after the hub reads the descriptors (sysfs, the `descriptors` file, the input device's name and IDs) | `usb_new_device()` (`drivers/usb/core/hub.c`) |
+| the EFI firmware vendor in the boot log | `efi_systab_report_header()` |
+
+**Profiles.** Every desktop and laptop machine has its GPU from a public report
+of a unit (`catalog/SOURCES.md`); the ThinkPads, the M.2 Latitudes (5420,
+5430, 5530) and the ProBook G8s boot from NVMe again with a drive seen in their
+units or a sibling's, and the realistic desktop and laptop presets use the USB
+tablet (on q35's ICH9 USB controllers, Intel IDs) instead of the virtio tablet,
+a Red Hat PCI device. The display is renamed only where QEMU's VGA is bochs-drm:
+a graphical base uses virtio-gpu, which keeps its name (a desktop session's
+Mesa and Xorg pick drivers by these names).
+
+**Measured** (laptop profile, Debian Minimal; see the task record for the run):
+`pci.vendors`, `pci.subsystems`, `pci.config`, `acpi.oem-ids`, `acpi.tables`,
+`display.fb`, `display.drm`, `block.nvme`, `nvme.identify`, `usb.devices`,
+`input.names`, `input.ids` and `firmware.vendor` pass.
+
+**Still visible** (`giveaways()` for a facade profile): QEMU's IDs to root
+reading PCI config space through I/O ports (0xcf8/0xcfc), USB string requests
+made to the device through usbfs (`lsusb -v`), the tablet's absolute axes, the
+q35 chipset's ICH9 (2009) device IDs behind the board's subsystem, the Bochs
+display's registers and modes behind its GPU name, the `bochs` module name in
+`/sys/module`, udev's device database on Debian bases (it records the uevents'
+true IDs and the hwdb's vendor names), OVMF's boot entries in efivarfs (they
+name QEMU's devices) and its vendor in the system table to root reading memory;
+an older base (no `facade`) shows QEMU's devices.
+
+## Aged uptime (0.9.0)
+
+Guest patch 0053, contract revision 21 unchanged (a boot option). Each VM gets
+a boot age when its preset is chosen (`StealthProfile.boot_age_s`,
+`BootAge::draw`, log-uniform: desktop and laptop 3 hours to 6 days, server and
+cloud 3 days to 120 days; Transparent 0), kept for the VM's life; `vm.rs` passes
+`antinomie_boot_age=SECONDS:MODEL` to a base listing `uptime` (from
+`CONFIG_ANTINOMIE_BOOT_AGE`); another base falls back to a fresh boot. The clock
+model follows the machine (user decision 2026-11-05):
+
+| Kind | Model | After the first launch |
+|---|---|---|
+| desktop, laptop | `suspend`: it booted N ago and slept for part of it | CLOCK_BOOTTIME and uptime large, CLOCK_MONOTONIC smaller |
+| server, cloud | `continuous`: up without a break for N | CLOCK_MONOTONIC = CLOCK_BOOTTIME, both carrying the age |
+
+**Mechanism** (`kernel/antinomie/uptime.c`). The guest boots the age in the
+past and reaches the present at the host's first EXEC command, after the boot's
+own records are written (the boot wait reads files and launches nothing):
+
+- *While booting* the wall clock runs the age behind the time it was given:
+  `timekeeping_init()` sets it back, and `do_settimeofday64()` shifts every
+  setting before the first launch (the RTC at boot, timesyncd's saved time,
+  hwclock). The boot's records carry that time: the utmp/wtmp boot record (the
+  BusyBox base's `rcS` writes it at `btime`; systemd's `random-seed`,
+  `systemd-update-utmp`, wtmpdb), the journal's first entries
+  (`journalctl --list-boots`), the files the boot creates; `btime`,
+  CLOCK_BOOTTIME, uptime, init's start time and the kernel log's place in wall
+  time (`dmesg -T`) agree with them.
+- *At the first launch* `ant_timekeeping_present()` (`kernel/time/timekeeping.c`)
+  steps the wall clock to the true time (computed from CLOCK_MONOTONIC and the
+  true time at `timekeeping_init()`, so a clock set while booting does not
+  count twice) and CLOCK_BOOTTIME forward by the age, as a resume adds a sleep,
+  then `clock_was_set()`. Suspend: CLOCK_MONOTONIC does not move, and the
+  kernel log's timestamps do not count the sleep (as after a real resume).
+  Continuous: programs' CLOCK_MONOTONIC runs the age ahead of the kernel's from
+  then on: `clock_gettime()` (`timens_add_monotonic()`), the vDSO
+  (`update_vsyscall()`), absolute timers, futexes, `clock_nanosleep` and timerfd
+  (`timens_ktime_to_host()`), and the kernel log's timestamps (`printk`), so
+  `dmesg -T` places later messages in the present; each CPU's idle time
+  (`/proc/stat`, `/proc/uptime`) has 97 % of the age in it, as a mostly idle
+  server's would (a sleep adds none, as a real one does not).
+- *Never moved*: the kernel's CLOCK_MONOTONIC, jiffies and scheduler clock. The
+  recorder's timestamps, the host's accounting of guest time and every kernel
+  timeout run on them; `task->start_boottime` is an identity to the host only.
+
+**Snapshots.** A memory snapshot keeps the guest's clocks and offsets; a VM
+restored before its first launch steps to the present at the next one. The age
+is the same at every start.
+
+**Still visible:** suspend — CLOCK_BOOTTIME ahead of CLOCK_MONOTONIC, no
+suspend in the log or `/sys/power/suspend_stats`, the journal's jump without a
+sleep entry; continuous — processes started at boot see their clocks move
+forward at the first launch, and timestamps the kernel hands out on its own
+monotonic clock (input events, DRM vblanks) and io_uring's absolute timeouts
+are on the kernel's clock, behind programs' by the age (a desktop session on a
+server profile would notice).
+
+**The check.** `stealth-probe.c`: `base.uptime`, `base.uptime-views`
+(/proc/uptime, `sysinfo`, CLOCK_BOOTTIME and `now − btime`), `base.boot-record`
+(utmp at `btime`), `base.boottime-timers`, `base.monotonic-timers` (absolute
+timerfd on CLOCK_MONOTONIC), `base.init-start` (init started at the boot) and
+`base.time-asleep` (information).

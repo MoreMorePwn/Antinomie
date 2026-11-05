@@ -22,7 +22,8 @@ struct Marker {
 }
 
 /// Writes the state of `provider`'s instance for the VM whose system UUID is
-/// `uuid` into `disk`, once: a marker in `vm_directory` records it, so a
+/// `uuid`, booted `boot_age_s` before this start (its profile's boot age),
+/// into `disk`, once: a marker in `vm_directory` records it, so a
 /// later start with the same profile leaves the disk alone (and a changed
 /// profile writes again over it). Returns whether the disk was written.
 pub(crate) fn ensure(
@@ -30,6 +31,7 @@ pub(crate) fn ensure(
     vm_directory: &Path,
     provider: &CloudProvider,
     uuid: &str,
+    boot_age_s: u64,
 ) -> Result<bool, String> {
     let instance_id = provider.instance_id(uuid);
     let marker = Marker {
@@ -46,7 +48,11 @@ pub(crate) fn ensure(
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs());
-    let files = provider.state_files(&instance_id, &provider.hostname(&instance_id), now);
+    let files = provider.state_files(
+        &instance_id,
+        &provider.hostname(&instance_id),
+        now.saturating_sub(boot_age_s),
+    );
     let executable = crate::dependencies::require_tool(Path::new("guestfish"), "libguestfs-tools")?;
     write_with(disk, &executable, &files, provider.state.default_user)?;
     storage::atomic_json(&path, &marker)?;
@@ -138,7 +144,7 @@ mod tests {
         assert!(text.contains(&format!("chown ubuntu:ubuntu {home}ubuntu/.bash_history")));
         assert!(text.contains(&format!(
             "utimens \"/var/lib/cloud/data/instance-id\" {0} 0 {0} 0",
-            2_000_000_000u64 - 12 * 86_400
+            2_000_000_000u64 - 9 * 86_400
         )));
         assert!(text.ends_with("umount-all\n"));
         let root = script("/dev/sda", &files, Path::new("/stage"), "root");
@@ -157,13 +163,23 @@ mod tests {
         };
         storage::atomic_json(&directory.join(MARKER), &marker).unwrap();
         // The disk is never opened when the marker matches.
-        assert!(!ensure(Path::new("/nonexistent.qcow2"), &directory, provider, uuid).unwrap());
+        assert!(
+            !ensure(
+                Path::new("/nonexistent.qcow2"),
+                &directory,
+                provider,
+                uuid,
+                0
+            )
+            .unwrap()
+        );
         assert!(
             ensure(
                 Path::new("/nonexistent.qcow2"),
                 &directory,
                 &CLOUDS[1],
-                uuid
+                uuid,
+                86_400
             )
             .is_err()
         );

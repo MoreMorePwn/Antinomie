@@ -5,10 +5,10 @@ use super::*;
 mod arm64;
 mod cloud;
 use antinomie_monitor_core::stealth::{
-    base_supporting, chassis_label, disk_bus_unavailable, firmware_unavailable, host_cpu_vendor,
-    BaseSupport, DiskBus, DiskMedia, Fallback, FallbackSetting, Firmware, HostSupport,
-    MachineIdentity, NatNetwork, NicModel, Pointer, RtcClock, SmbiosEntry, StealthPreset,
-    StealthProfile, CHASSIS, CLOUDS, CPU_MODELS, MACHINES,
+    base_supporting, boot_age_text, chassis_label, disk_bus_unavailable, firmware_unavailable,
+    host_cpu_vendor, BaseSupport, BootAge, DiskBus, DiskMedia, Fallback, FallbackSetting, Firmware,
+    HostSupport, MachineIdentity, NatNetwork, NicModel, Pointer, RtcClock, SmbiosEntry,
+    StealthPreset, StealthProfile, CHASSIS, CLOUDS, CPU_MODELS, MACHINES,
 };
 use antinomie_monitor_core::GuestArch;
 pub(super) use cloud::launch_advice;
@@ -846,7 +846,10 @@ fn display(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
     );
 }
 
-fn clock(ui: &mut egui::Ui, profile: &mut StealthProfile) {
+fn clock(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
+    uptime(ui, profile);
+    fit.line(ui, profile, FallbackSetting::Uptime);
+    ui.add_space(4.0);
     ui.checkbox(&mut profile.rtc_localtime, "Real-time clock in local time")
         .on_hover_text(
             "Linux PCs keep it in UTC and Linux guests read it as UTC; Windows PCs in local time",
@@ -860,6 +863,48 @@ fn clock(ui: &mut egui::Ui, profile: &mut StealthProfile) {
     });
     ui.checkbox(&mut profile.rtc_driftfix, "Catch up on missed clock ticks")
         .on_hover_text("For guests that count RTC interrupts (Windows); Linux does not need it");
+}
+
+/// The boot's age: how long the guest says it has been up when it starts.
+fn uptime(ui: &mut egui::Ui, profile: &mut StealthProfile) {
+    let kind = BootAge::of(profile);
+    let (low, high) = kind.range();
+    let range = format!(
+        "{} machine: {} to {}",
+        if kind == BootAge::Server {
+            "A server or cloud"
+        } else {
+            "A desktop or laptop"
+        },
+        boot_age_text(low),
+        boot_age_text(high)
+    );
+    ui.horizontal(|ui| {
+        let mut aged = profile.boot_age_s > 0;
+        if ui
+            .checkbox(&mut aged, "Booted a while ago")
+            .on_hover_text(
+                "The guest boots this long ago, the same at every start of the VM, and \
+                 reaches the present when the first program starts: a desktop or laptop as \
+                 if it slept for part of it, a server or cloud machine as if it never \
+                 stopped. Off: a fresh boot (minutes of uptime).",
+            )
+            .changed()
+        {
+            profile.boot_age_s = if aged { kind.draw() } else { 0 };
+        }
+        if profile.boot_age_s > 0 {
+            ui.label(format!("up {}", boot_age_text(profile.boot_age_s)));
+            if ui
+                .button("Draw again")
+                .on_hover_text(range.clone())
+                .clicked()
+            {
+                profile.boot_age_s = kind.draw();
+            }
+        }
+    });
+    ui.label(RichText::new(range).small().color(theme::muted()));
 }
 
 /// A preset applied this frame stays that preset; any other edit is Custom.
@@ -923,7 +968,7 @@ pub(super) fn window(
                             ui.add_space(6.0);
                             display(ui, profile, fit);
                         });
-                        egui::CollapsingHeader::new("Clock").show(ui, |ui| clock(ui, profile));
+                        egui::CollapsingHeader::new("Clock").show(ui, |ui| clock(ui, profile, fit));
                         egui::CollapsingHeader::new("Still visible").show(ui, |ui| {
                             let (fitted, notes) = profile.fitted(&fit.base, fit.host);
                             for giveaway in fitted.giveaways_for(fit.arch, fit.fast_emulation) {

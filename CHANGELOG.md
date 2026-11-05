@@ -158,6 +158,36 @@ x86 programs by their own table.
   the server profile, booted through OVMF or AAVMF with its own variable store
   (`snapshot-check --uefi`).
 
+- **Stealth: guest facade for desktop and laptop profiles.** On a base built
+  by this release a realistic desktop or laptop machine no longer shows QEMU's
+  devices to the programs in it: `lspci -nn`, `/proc/bus/pci`, sysfs, `nvme
+  id-ctrl`, `smartctl`, `/sys/firmware/acpi/tables`, `/proc/fb`, DRM and
+  `/proc/bus/input/devices` name the machine's integrated GPU, its NVMe drive,
+  its board's PCI subsystem, its firmware's ACPI creator, the maker's USB
+  mouse and its EFI vendor (each from a public report of a real unit,
+  `catalog/SOURCES.md`). The ThinkPads, the M.2 Latitudes and the ProBook G8s
+  boot from NVMe again, and the realistic desktop and laptop presets use the
+  USB tablet. Server and cloud profiles keep QEMU's devices: real servers and
+  cloud instances show them too. Still visible: root's raw PCI config space
+  through I/O ports, USB string requests through usbfs, the ICH9 chipset IDs
+  and udev's database (see Still visible). `stealth-check` gains `machine=ID`
+  and `screen=on`; the probe gains `pci.config`, `usb.devices`, `input.ids`,
+  `display.drm`, `nvme.identify`, `base.monotonic-timers` and
+  `base.init-start`.
+- **Stealth: aged uptime.** A VM no longer shows a fresh boot: each VM gets a
+  boot age when its preset is chosen (desktop and laptop 3 hours to 6 days,
+  server and cloud 3 days to 120 days; Transparent stays fresh), the same at
+  every start, shown and redrawn under Device profile › Clock. The guest boots
+  that long in the past and reaches the present when the first program
+  starts, so /proc/uptime, `sysinfo`, the boot time in /proc/stat,
+  CLOCK_BOOTTIME and timers on it, process start times, the utmp/wtmp boot
+  record (`who -b`, `last reboot`), the journal's boots and `dmesg -T` agree. A
+  desktop or laptop looks like it slept for part of that time
+  (CLOCK_MONOTONIC smaller); a server or cloud machine like it never stopped
+  (CLOCK_MONOTONIC equal to CLOCK_BOOTTIME). A cloud profile's lived-in
+  logins, auth.log and history end before the boot. Needs a base built by
+  this release (stealth support `uptime`); older bases show a fresh boot.
+
 ### Guest
 
 - Patches 31-41 (shared ones compile out of x86-64, whose objects are
@@ -207,6 +237,24 @@ x86 programs by their own table.
   signal, marked by the OOM killer with its log line (`mm/oom_kill.c`), and
   written into the task-exit record (`lifecycle.signal.*`,
   `lifecycle.kernel_log`).
+- Patch 51 (contract revision 21): compat programs' futex timeouts (time32),
+  AArch32's epoll_wait and epoll_pwait events, and the SysV IPC control
+  records of msgctl, semctl and shmctl (directly and through ia32's `ipc()`;
+  the IPC_64 and the old records) are captured by their ILP32 layouts; ia32's
+  semctl no longer reads an LP64 record.
+- Patch 52: the guest facade. With the host's `antinomie_f*` boot options the
+  guest shows a desktop or laptop machine's GPU, NVMe drive, board subsystem,
+  ACPI creator and OEM IDs, mouse and EFI vendor for QEMU's devices where
+  programs read them (PCI config space and sysfs, NVMe Identify data and
+  admin pass-through, ACPI tables, DRM and fbdev names, USB HID descriptors,
+  the boot log); the kernel's own view of the devices is unchanged. Bases list
+  `facade` in `stealth_support`.
+- Patch 53: the boot age. With `antinomie_boot_age=SECONDS:MODEL` the guest
+  boots that long in the past (the wall clock behind while booting) and steps
+  to the present at the first program launch, as a resume does (`suspend`) or
+  with programs' CLOCK_MONOTONIC carrying the age too (`continuous`); the
+  kernel's own monotonic clock, the recorder's timestamps and the host's
+  guest-time accounting are unchanged. Bases list `uptime`.
 
 ## 0.8.3 — 2026-MM-DD
 

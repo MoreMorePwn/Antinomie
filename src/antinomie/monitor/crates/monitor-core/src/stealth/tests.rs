@@ -767,6 +767,10 @@ fn realistic_hardware_entries_become_launch_options() {
     assert!(machine_options(&profile).contains(",smm=on"));
     // The BIOS table says "UEFI is supported" under OVMF.
     assert_eq!(bios_table(&profile.identity, true)[0x13], 0x0f);
+    // A desktop or laptop machine's tablet is on USB (the guest facade names
+    // it as the maker's mouse), not the Red Hat virtio PCI device.
+    assert_eq!(pointer_args(&profile), ["-device", "usb-tablet"]);
+    profile.pointer = Pointer::VirtioTablet;
     assert_eq!(pointer_args(&profile), ["-device", "virtio-tablet-pci"]);
     profile.pointer = Pointer::Ps2;
     assert!(pointer_args(&profile).is_empty());
@@ -809,7 +813,8 @@ fn entries_the_base_or_host_lacks_fall_back() {
     assert_eq!(fitted.disk_bus, DiskBus::Virtio);
     assert_eq!(fitted.nat, NatNetwork::default());
     assert!(!fitted.smt);
-    assert_eq!(notes.len(), 4, "{notes:?}");
+    assert_eq!(fitted.boot_age_s, 0);
+    assert_eq!(notes.len(), 5, "{notes:?}");
     assert!(notes[0].contains("transport page"));
     // A new base on a host without OVMF.
     let base = BaseSupport::from_list(&["uefi".into(), "sata".into(), "dhcp".into()]);
@@ -829,7 +834,7 @@ fn entries_the_base_or_host_lacks_fall_back() {
     assert!(fitted.smm);
     assert_eq!(fitted.disk_bus, DiskBus::Virtio);
     assert_eq!(fitted.pointer, Pointer::VirtioTablet);
-    assert_eq!(notes.len(), 2, "{notes:?}");
+    assert_eq!(notes.len(), 3, "{notes:?}");
     assert!(super::smt_clean("GenuineIntel", "").is_ok());
     assert!(super::smt_clean("AuthenticAMD", "fpu sse topoext svm").is_ok());
     assert!(super::smt_clean("AuthenticAMD", "fpu sse svm").is_err());
@@ -993,6 +998,7 @@ fn every_setting_fitted_can_change_is_listed_with_a_line_for_the_setting() {
             FallbackSetting::DiskBus,
             FallbackSetting::Nat,
             FallbackSetting::Smt,
+            FallbackSetting::Uptime,
             FallbackSetting::Pointer
         ]
     );
@@ -1015,6 +1021,7 @@ fn every_setting_fitted_can_change_is_listed_with_a_line_for_the_setting() {
     );
     assert!(line(FallbackSetting::Smt).contains("this host"));
     assert!(line(FallbackSetting::Pointer).contains("virtio tablet will be used"));
+    assert!(line(FallbackSetting::Uptime).ends_with("a fresh boot will be shown"));
     // The same entries `fitted` changes, and its notes are these.
     let (fitted, notes) = profile.fitted(&BaseSupport::from_list(&[]), &host);
     assert_eq!(notes.len(), fallbacks.len());
@@ -1022,6 +1029,7 @@ fn every_setting_fitted_can_change_is_listed_with_a_line_for_the_setting() {
     assert_eq!(fitted.firmware, Firmware::Bios);
     assert_eq!(fitted.pointer, Pointer::VirtioTablet);
     assert!(!fitted.smt);
+    assert_eq!(fitted.boot_age_s, 0);
     // What the start log and the run's notes carry names the setting and why.
     let log = fallbacks[1].log_line();
     assert!(
@@ -1037,7 +1045,8 @@ fn a_base_and_host_that_support_everything_ask_for_no_fallback() {
     let profile = asks_for_everything();
     let mut profile = profile;
     profile.usb = true;
-    let support = BaseSupport::from_list(&["uefi".into(), "sata".into(), "dhcp".into()]);
+    let support =
+        BaseSupport::from_list(&["uefi".into(), "sata".into(), "dhcp".into(), "uptime".into()]);
     assert!(profile.fallbacks(&support, &HostSupport::all()).is_empty());
     assert!(
         profile
@@ -1058,8 +1067,9 @@ fn a_vm_on_a_base_without_a_support_list_falls_back_and_one_with_it_does_not() {
     vm.stealth.firmware = Firmware::Bios;
     vm.stealth.nat = NatNetwork::default();
     let old = base_named("old", &[]);
-    let new = base_named("new", &["sata", "uefi", "dhcp"]);
+    let new = base_named("new", &["sata", "uefi", "dhcp", "uptime"]);
     vm.base_identity = Some("old".into());
+    vm.stealth.boot_age_s = 0;
     let bases = [old.clone(), new.clone()];
     let host = HostSupport::all();
     let found = vm_fallbacks(&vm, &bases, &host);
@@ -1577,4 +1587,185 @@ fn a_run_records_the_machine_its_guest_looked_like() {
     let plain = MachineRecord::of(&StealthProfile::transparent(), &fitting, 2048);
     assert_eq!(plain.summary(), "Transparent (QEMU's own identity)");
     assert!(plain.profile.is_empty() && plain.nic_chip.is_empty());
+}
+
+#[test]
+fn each_vm_draws_its_boot_age_once_from_its_kind_of_machine() {
+    let desktop = StealthProfile::realistic(StealthPreset::RealisticDesktop, "GenuineIntel");
+    let server = StealthProfile::realistic(StealthPreset::RealisticServer, "GenuineIntel");
+    let cloud = StealthProfile::default().for_preset(StealthPreset::CloudVps, "GenuineIntel");
+    let (low, high) = BootAge::Desktop.range();
+    assert!(
+        (low..=high).contains(&desktop.boot_age_s),
+        "{}",
+        desktop.boot_age_s
+    );
+    let (low, high) = BootAge::Server.range();
+    assert!((low..=high).contains(&server.boot_age_s));
+    assert!((low..=high).contains(&cloud.boot_age_s));
+    assert_eq!(BootAge::of(&cloud), BootAge::Server);
+    assert_eq!(BootAge::of(&desktop), BootAge::Desktop);
+    // Transparent boots fresh; Custom keeps the drawn age.
+    assert_eq!(StealthProfile::transparent().boot_age_s, 0);
+    let custom = desktop.for_preset(StealthPreset::Custom, "GenuineIntel");
+    assert_eq!(custom.boot_age_s, desktop.boot_age_s);
+    // Log-uniform: the ends and the middle of the range on a log scale.
+    assert_eq!(BootAge::Desktop.at(0.0), 3 * 3_600);
+    assert_eq!(BootAge::Desktop.at(1.0), 6 * 86_400);
+    assert_eq!(BootAge::Server.at(0.5), 1_639_325);
+    // A profile saved before the setting existed boots fresh.
+    let mut value = serde_json::to_value(&desktop).unwrap();
+    value.as_object_mut().unwrap().remove("boot_age_s");
+    let old: StealthProfile = serde_json::from_value(value).unwrap();
+    assert_eq!(old.boot_age_s, 0);
+}
+
+#[test]
+fn an_aged_boot_needs_a_base_whose_kernel_takes_it() {
+    let mut profile = StealthProfile::realistic(StealthPreset::RealisticDesktop, "GenuineIntel");
+    profile.boot_age_s = 90_000;
+    let host = HostSupport {
+        ovmf: Ok(()),
+        ovmf_secure_boot: Ok(()),
+        smt: Ok(()),
+    };
+    let (fitted, _) = profile.fitted(&BaseSupport::from_list(&["uptime".into()]), &host);
+    assert_eq!(fitted.boot_age_s, 90_000);
+    assert!(
+        fitted
+            .giveaways()
+            .iter()
+            .any(|item| item.starts_with("the boot age is a sleep"))
+    );
+    assert_eq!(fitted.boot_clock(), "suspend");
+    let server = StealthProfile::realistic(StealthPreset::RealisticServer, "GenuineIntel");
+    assert_eq!(server.boot_clock(), "continuous");
+    assert!(server.boot_age_s >= 3 * 86_400);
+    assert!(
+        server
+            .giveaways()
+            .iter()
+            .any(|item| item.starts_with("the boot age's step to the present"))
+    );
+    let (fitted, notes) = profile.fitted(&BaseSupport::from_list(&[]), &host);
+    assert_eq!(fitted.boot_age_s, 0);
+    assert!(
+        notes
+            .iter()
+            .any(|note| note.starts_with("Uptime of 1 d 1 h: ")),
+        "{notes:?}"
+    );
+    assert!(
+        fitted
+            .giveaways()
+            .contains(&"a fresh boot: minutes of uptime")
+    );
+    assert_eq!(boot_age_text(0), "0 min");
+    assert_eq!(boot_age_text(5 * 3_600 + 12 * 60), "5 h 12 min");
+}
+
+#[test]
+fn a_laptop_machine_gets_the_guest_facade_and_a_server_none() {
+    let t14 = StealthProfile::realistic_machine(machine("lenovo-t14-gen3-amd"));
+    assert_eq!(t14.disk_bus, DiskBus::Nvme);
+    assert_eq!(t14.pointer, Pointer::UsbTablet);
+    assert_eq!(t14.identity.disk_model, "Micron_2450_MTFDKBA512TFK");
+    assert_eq!(t14.identity.disk_firmware, "V5MA010");
+    let options = facade_options(&t14).join(" ");
+    let board = t14.identity.nic_subsystem.replace(':', "");
+    assert!(
+        options.contains(&format!(
+            "antinomie_fpci=12341111=10021681{board},80865845=1344541113441100"
+        )),
+        "{options}"
+    );
+    assert!(
+        options.contains(&format!("antinomie_fsub={board}")),
+        "{options}"
+    );
+    assert!(
+        options.contains("antinomie_fnvme=\"Micron_2450_MTFDKBA512TFK,V5MA010,00a075,1344,1344\""),
+        "{options}"
+    );
+    assert!(
+        options.contains("antinomie_facpi=\"PTEC:00000002:LENOVO:TP-R23  \""),
+        "{options}"
+    );
+    assert!(options.contains("antinomie_fdrm=amdgpu"), "{options}");
+    assert!(
+        options.contains("antinomie_finput=\"046d:c077:7200,Logitech,USB Optical Mouse\""),
+        "{options}"
+    );
+    assert!(options.contains("antinomie_fefi=\"Lenovo\""), "{options}");
+    // Its giveaways no longer name QEMU's NVMe controller, display or ACPI.
+    let giveaways = t14.giveaways().join("\n");
+    assert!(!giveaways.contains("QEMU NVMe Ctrl"), "{giveaways}");
+    assert!(giveaways.contains("I/O ports"), "{giveaways}");
+    // A desktop keeps its SATA disk; an Intel GPU is i915's.
+    let optiplex = StealthProfile::realistic_machine(machine("dell-optiplex-7090"));
+    assert_eq!(optiplex.disk_bus, DiskBus::Sata);
+    assert!(
+        facade_options(&optiplex)
+            .iter()
+            .any(|option| option == "antinomie_fdrm=i915")
+    );
+    // Servers and cloud instances look like QEMU/KVM, as real ones do.
+    let server = StealthProfile::realistic(StealthPreset::RealisticServer, "GenuineIntel");
+    assert!(facade_options(&server).is_empty());
+    assert!(facade_options(&StealthProfile::cloud_vps(&CLOUDS[0])).is_empty());
+    assert!(facade_options(&StealthProfile::transparent()).is_empty());
+}
+
+#[test]
+fn every_desktop_and_laptop_machine_has_a_facade_and_the_nvme_ones_boot_from_nvme() {
+    for machine in MACHINES {
+        let desk = matches!(
+            machine.kind,
+            StealthPreset::RealisticDesktop | StealthPreset::RealisticLaptop
+        );
+        assert_eq!(
+            catalog::facade::of(machine.id).is_some(),
+            desk,
+            "{}",
+            machine.id
+        );
+        if !desk {
+            continue;
+        }
+        let profile = StealthProfile::realistic_machine(machine);
+        assert!(!facade_options(&profile).is_empty(), "{}", machine.id);
+        let nvme = catalog::facade::of(machine.id).unwrap().nvme.is_some();
+        assert_eq!(profile.disk_bus == DiskBus::Nvme, nvme, "{}", machine.id);
+        assert!(
+            facade_options(&profile)
+                .iter()
+                .any(|option| option.starts_with("antinomie_fsub=")),
+            "{} has no board subsystem",
+            machine.id
+        );
+    }
+    for id in [
+        "lenovo-t14-gen3-amd",
+        "lenovo-thinkpad-t14-gen3",
+        "lenovo-thinkpad-e14-gen4",
+        "lenovo-thinkpad-l14-gen2",
+        "lenovo-thinkpad-e15-gen3-amd",
+        "lenovo-thinkpad-l14-gen2-amd",
+        "lenovo-thinkpad-t14-gen2-amd",
+        "dell-latitude-5420",
+        "dell-latitude-5430",
+        "dell-latitude-5530",
+        "hp-probook-450-g8",
+        "hp-probook-440-g8",
+        "hp-probook-455-g8",
+    ] {
+        assert!(catalog::facade::of(id).unwrap().nvme.is_some(), "{id}");
+    }
+    for nvme in parts::NVME_MODELS {
+        assert!(
+            nvme.model.len() <= 40 && nvme.firmware.len() <= 8,
+            "{}",
+            nvme.model
+        );
+    }
 }

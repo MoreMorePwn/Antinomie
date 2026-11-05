@@ -134,7 +134,7 @@
       "kernel/antinomie/async_capture.c": "a76d8614ead62b835395279cf5b87a356fae970249ec9ba75b0c3d6ab08efd56",
       "kernel/antinomie/capture_arm64.c": "970699250c4840bddf9b08365998b7322285875c7b45013754a1f45ec91627a7",
       "kernel/antinomie/native_capture.c": "85c812b591d3ed609db4a70e0d89845312aff48ef81734c62adb2722fa1ace38",
-      "kernel/antinomie/recorder.c": "6619c5a470acee4bf257fff4cbd57a9782bfac2f9e3da8251cb37b2c81f1f636",
+      "kernel/antinomie/recorder.c": "71843648386afa7626d8874219c1357c714d2ad41965956ee3968d2c8f66ea20",
       "scripts/headers_install.sh": "67588ef43a09b582cda5105db6c8072da12b14fca3d6334093b0726542ac65e4"
     },
     "generator": "scripts/generate-filter-layouts.py",
@@ -10155,6 +10155,229 @@
       ]
     },
     {
+      "layout": "linux-6.12.94/aarch64/msqid_ds",
+      "supported": true,
+      "c_type": "struct msqid_ds",
+      "stride": 104,
+      "array": false,
+      "array_count": null,
+      "members": [
+        {
+          "member": "msg_cbytes",
+          "bit_offset": 704,
+          "bit_size": 16,
+          "size": 2,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_ctime",
+          "bit_offset": 512,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_first",
+          "bit_offset": 256,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": true,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_last",
+          "bit_offset": 320,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": true,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_lcbytes",
+          "bit_offset": 576,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_lqbytes",
+          "bit_offset": 640,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_lrpid",
+          "bit_offset": 800,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_lspid",
+          "bit_offset": 768,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_perm.cgid",
+          "bit_offset": 128,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_perm.cuid",
+          "bit_offset": 96,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_perm.gid",
+          "bit_offset": 64,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_perm.key",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_perm.mode",
+          "bit_offset": 160,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_perm.seq",
+          "bit_offset": 192,
+          "bit_size": 16,
+          "size": 2,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_perm.uid",
+          "bit_offset": 32,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_qbytes",
+          "bit_offset": 736,
+          "bit_size": 16,
+          "size": 2,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_qnum",
+          "bit_offset": 720,
+          "bit_size": 16,
+          "size": 2,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_rtime",
+          "bit_offset": 448,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "msg_stime",
+          "bit_offset": 384,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        }
+      ],
+      "unsupported_members": [],
+      "sources": [
+        "arch/arm64/include/uapi/asm/bitsperlong.h",
+        "arch/arm64/include/uapi/asm/posix_types.h",
+        "include/uapi/asm-generic/bitsperlong.h",
+        "include/uapi/asm-generic/int-ll64.h",
+        "include/uapi/asm-generic/ipcbuf.h",
+        "include/uapi/asm-generic/msgbuf.h",
+        "include/uapi/asm-generic/posix_types.h",
+        "include/uapi/asm-generic/types.h",
+        "include/uapi/linux/ipc.h",
+        "include/uapi/linux/msg.h",
+        "include/uapi/linux/posix_types.h",
+        "include/uapi/linux/stddef.h",
+        "include/uapi/linux/types.h"
+      ],
+      "arguments": [
+        {
+          "syscall_number": 187,
+          "argument_index": 2,
+          "name": "buf"
+        }
+      ]
+    },
+    {
       "layout": "linux-6.12.94/aarch64/old_timespec",
       "supported": true,
       "c_type": "struct __kernel_old_timespec",
@@ -12699,6 +12922,173 @@
       ]
     },
     {
+      "layout": "linux-6.12.94/aarch64/semid_ds",
+      "supported": true,
+      "c_type": "struct semid_ds",
+      "stride": 88,
+      "array": false,
+      "array_count": null,
+      "members": [
+        {
+          "member": "sem_base",
+          "bit_offset": 384,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": true,
+          "byte_order": "little"
+        },
+        {
+          "member": "sem_ctime",
+          "bit_offset": 320,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sem_nsems",
+          "bit_offset": 640,
+          "bit_size": 16,
+          "size": 2,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sem_otime",
+          "bit_offset": 256,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sem_pending",
+          "bit_offset": 448,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": true,
+          "byte_order": "little"
+        },
+        {
+          "member": "sem_pending_last",
+          "bit_offset": 512,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": true,
+          "byte_order": "little"
+        },
+        {
+          "member": "sem_perm.cgid",
+          "bit_offset": 128,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sem_perm.cuid",
+          "bit_offset": 96,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sem_perm.gid",
+          "bit_offset": 64,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sem_perm.key",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sem_perm.mode",
+          "bit_offset": 160,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sem_perm.seq",
+          "bit_offset": 192,
+          "bit_size": 16,
+          "size": 2,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "sem_perm.uid",
+          "bit_offset": 32,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "undo",
+          "bit_offset": 576,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": true,
+          "byte_order": "little"
+        }
+      ],
+      "unsupported_members": [],
+      "sources": [
+        "arch/arm64/include/uapi/asm/bitsperlong.h",
+        "arch/arm64/include/uapi/asm/posix_types.h",
+        "include/uapi/asm-generic/bitsperlong.h",
+        "include/uapi/asm-generic/int-ll64.h",
+        "include/uapi/asm-generic/ipcbuf.h",
+        "include/uapi/asm-generic/posix_types.h",
+        "include/uapi/asm-generic/sembuf.h",
+        "include/uapi/asm-generic/types.h",
+        "include/uapi/linux/ipc.h",
+        "include/uapi/linux/posix_types.h",
+        "include/uapi/linux/sem.h",
+        "include/uapi/linux/stddef.h",
+        "include/uapi/linux/types.h"
+      ],
+      "arguments": []
+    },
+    {
       "layout": "linux-6.12.94/aarch64/seminfo",
       "supported": true,
       "c_type": "struct seminfo",
@@ -13108,6 +13498,282 @@
           "name": "buf"
         }
       ]
+    },
+    {
+      "layout": "linux-6.12.94/aarch64/shmid_ds",
+      "supported": true,
+      "c_type": "struct shmid_ds",
+      "stride": 88,
+      "array": false,
+      "array_count": null,
+      "members": [
+        {
+          "member": "shm_atime",
+          "bit_offset": 256,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shm_cpid",
+          "bit_offset": 448,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shm_ctime",
+          "bit_offset": 384,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shm_dtime",
+          "bit_offset": 320,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shm_lpid",
+          "bit_offset": 480,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shm_nattch",
+          "bit_offset": 512,
+          "bit_size": 16,
+          "size": 2,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shm_perm.cgid",
+          "bit_offset": 128,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shm_perm.cuid",
+          "bit_offset": 96,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shm_perm.gid",
+          "bit_offset": 64,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shm_perm.key",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shm_perm.mode",
+          "bit_offset": 160,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shm_perm.seq",
+          "bit_offset": 192,
+          "bit_size": 16,
+          "size": 2,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shm_perm.uid",
+          "bit_offset": 32,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shm_segsz",
+          "bit_offset": 224,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shm_unused",
+          "bit_offset": 528,
+          "bit_size": 16,
+          "size": 2,
+          "kind": "integer",
+          "signed": false,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shm_unused2",
+          "bit_offset": 576,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": true,
+          "byte_order": "little"
+        },
+        {
+          "member": "shm_unused3",
+          "bit_offset": 640,
+          "bit_size": 64,
+          "size": 8,
+          "kind": "integer",
+          "signed": false,
+          "pointer": true,
+          "byte_order": "little"
+        }
+      ],
+      "unsupported_members": [],
+      "sources": [
+        "arch/arm64/include/uapi/asm/bitsperlong.h",
+        "arch/arm64/include/uapi/asm/posix_types.h",
+        "include/uapi/asm-generic/bitsperlong.h",
+        "include/uapi/asm-generic/int-ll64.h",
+        "include/uapi/asm-generic/ipcbuf.h",
+        "include/uapi/asm-generic/posix_types.h",
+        "include/uapi/asm-generic/types.h",
+        "include/uapi/linux/ipc.h",
+        "include/uapi/linux/posix_types.h",
+        "include/uapi/linux/stddef.h",
+        "include/uapi/linux/types.h"
+      ],
+      "arguments": [
+        {
+          "syscall_number": 195,
+          "argument_index": 2,
+          "name": "buf"
+        }
+      ]
+    },
+    {
+      "layout": "linux-6.12.94/aarch64/shminfo",
+      "supported": true,
+      "c_type": "struct shminfo",
+      "stride": 20,
+      "array": false,
+      "array_count": null,
+      "members": [
+        {
+          "member": "shmall",
+          "bit_offset": 128,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shmmax",
+          "bit_offset": 0,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shmmin",
+          "bit_offset": 32,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shmmni",
+          "bit_offset": 64,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        },
+        {
+          "member": "shmseg",
+          "bit_offset": 96,
+          "bit_size": 32,
+          "size": 4,
+          "kind": "integer",
+          "signed": true,
+          "pointer": false,
+          "byte_order": "little"
+        }
+      ],
+      "unsupported_members": [],
+      "sources": [
+        "arch/arm64/include/uapi/asm/bitsperlong.h",
+        "arch/arm64/include/uapi/asm/posix_types.h",
+        "include/uapi/asm-generic/bitsperlong.h",
+        "include/uapi/asm-generic/int-ll64.h",
+        "include/uapi/asm-generic/ipcbuf.h",
+        "include/uapi/asm-generic/posix_types.h",
+        "include/uapi/asm-generic/types.h",
+        "include/uapi/linux/ipc.h",
+        "include/uapi/linux/posix_types.h",
+        "include/uapi/linux/stddef.h",
+        "include/uapi/linux/types.h"
+      ],
+      "arguments": []
     },
     {
       "layout": "linux-6.12.94/aarch64/shminfo64",

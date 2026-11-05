@@ -15,6 +15,7 @@ use super::{CpuGen, HostCpu, NicSlot, StealthPreset};
 pub mod arm64;
 mod dell_desktops;
 mod dell_laptops;
+pub(super) mod facade;
 mod hp_desktops;
 mod hp_laptops;
 mod lenovo_desktops;

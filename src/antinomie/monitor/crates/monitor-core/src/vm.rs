@@ -205,6 +205,16 @@ fn apply_launch_settings(
         "{} antinomie_boot_gpa=0x{bootstrap:x}",
         bundle.kernel_append
     );
+    // The VM's boot age, as the profile fitted to the base keeps it (0 on a
+    // base whose kernel does not take it). The guest takes antinomie_*
+    // options out of its command line before anything can read it.
+    if stealth.boot_age_s > 0 {
+        append.push_str(&format!(
+            " antinomie_boot_age={}:{}",
+            stealth.boot_age_s,
+            stealth.boot_clock()
+        ));
+    }
     if let Some((width, height)) = launch.resolution.dimensions() {
         // virtio-gpu provides a hardware cursor, so the guest does not paint
         // its own cursor into the framebuffer. The fixed mode is selected by
@@ -569,6 +579,7 @@ impl VmProcess {
                 &vm_dir(options, &vm.id)?,
                 provider,
                 &stealth.identity.system_uuid,
+                stealth.boot_age_s,
             )
         {
             fallbacks.push(format!(
@@ -732,6 +743,14 @@ impl VmProcess {
         {
             boot.kernel_append
                 .push_str(&format!(" antinomie_ring_kib={}", vm.transport.ring_kib));
+        }
+        // The guest facade of a desktop or laptop machine profile, for a base
+        // whose kernel has it.
+        if base_support.facade && !virt {
+            for option in crate::stealth::facade_options(&stealth) {
+                boot.kernel_append.push(' ');
+                boot.kernel_append.push_str(&option);
+            }
         }
         if virt {
             let mut append = virt::append(&boot.kernel_append, bootstrap, vm.launch.fast_emulation);
@@ -1455,6 +1474,35 @@ mod tests {
             .get_args()
             .map(|arg| arg.to_str().unwrap().to_owned())
             .collect())
+    }
+
+    #[test]
+    fn an_aged_profile_passes_its_boot_age_to_the_guest_kernel() {
+        let mut stealth = crate::stealth::StealthProfile::transparent();
+        stealth.boot_age_s = 734_512;
+        let mut command = Command::new("qemu");
+        let (options, launch) = (BackendOptions::default(), VmLaunchOptions::default());
+        apply_launch_settings(
+            &mut command,
+            &options,
+            &launch,
+            &crate::accel::choose_with(&options, &launch, || None).unwrap(),
+            &stealth,
+            4,
+            &bundle(false),
+            0x40000000,
+        )
+        .unwrap();
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(
+            value(&args, "-append"),
+            Some(
+                "root=/dev/vda console=ttyS0 antinomie_boot_gpa=0x40000000 antinomie_boot_age=734512:suspend"
+            )
+        );
     }
 
     #[test]

@@ -1108,10 +1108,35 @@ compat table's layouts).
   same per message (`arg1.mmsg.N.header` as `msghdr` at entry and `mmsghdr` at
   exit, `arg1.mmsg.N.iov`, `.iov[K].data`, `.name`, `.control`; the first
   1024 messages), and a receive's timeout at entry and exit (`old_timespec`,
-  `timespec` for _time64). Still recorded by address only: futex's utime,
-  epoll_wait on arm, the SysV ctl calls and the rest of the audit's list.
+  `timespec` for _time64).
+* **Compat futex, epoll waits and SysV control records (patch 51, B4).**
+  futex (the time32 call of both compat ABIs) records the native capture's
+  fields with the compat timeout: `arg0.futex.observed` and, for the requeue
+  and wake-op commands, `arg4.futex.observed` (`u32`) at entry and after a
+  command that modifies them, `arg3.timeout` (`old_timespec`) for the commands
+  that wait; futex_time64 is the native call's twin (16-byte `timespec`).
+  AArch32's epoll_wait and epoll_pwait (arm64 has neither natively) record
+  `arg1.epoll_events` (`epoll_event[]`, 16 bytes each, the result's count) at
+  exit and epoll_pwait's `arg4.sigmask` (`u64`) at entry; ia32's are twins.
+  msgctl, semctl and shmctl, and the MSGCTL, SEMCTL and SHMCTL calls of ia32's
+  `ipc()`, record `ipc.control` as the native calls do (at entry for IPC_SET,
+  at exit on success otherwise) by the compat record the command copies:
+  with IPC_64 `msqid64_ds` (88 bytes), `semid64_ds` (64), `shmid64_ds` (84),
+  `shminfo64` (36); without it (AArch32's calls are `compat_sys_old_*`, and
+  ia32's `ipc()` parses the version) the old records `msqid_ds` (56),
+  `semid_ds` (44), `shmid_ds` (48), `shminfo` (20), the ILP32 layouts of the
+  UAPI records ipc/msg.c, sem.c and shm.c copy; `msginfo`, `seminfo` and
+  `shm_info` (24) for the information commands. ia32's direct calls always copy
+  the IPC_64 records. GETALL and SETALL keep ipc/sem.c's own copy
+  (`arg3.array`). `ipc()`'s SEMCTL argument is the value at its pointer. ia32's
+  semctl no longer takes the native call as its twin (its declaration matched,
+  so the native capture read an LP64 `semid64_ds` from it). The generator
+  lists the four old records (TYPES); the host decoders read them from the
+  inventories. Still recorded by address only: the rest of the audit's list
+  (msgsnd/msgrcv's compat `msgbuf`, clone's TID pointers, perf_event_open, bpf
+  and the others).
   `tests/monitor/compat-calls-fixture.c` (i686 and armhf builds) makes every
-  call of patches 49 and 50; `tests/monitor/compat-calls-check.py` checks its
+  call of patches 49 to 51; `tests/monitor/compat-calls-check.py` checks its
   recording (`event-dump` output).
 * **epoll_ctl (patch 48, B7).** The event is recorded for an operation the
   kernel refuses too.
