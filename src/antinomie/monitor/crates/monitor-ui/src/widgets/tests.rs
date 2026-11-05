@@ -361,3 +361,242 @@ fn a_column_divider_is_one_physical_pixel_wide_on_a_pixel_centre_in_both_themes(
         }
     }
 }
+
+#[test]
+fn the_empty_state_panel_sits_in_the_middle_of_its_pane_on_both_axes() {
+    let ctx = context();
+    let size = egui::vec2(900.0, 700.0);
+    let mut bounds = egui::Rect::NOTHING;
+    let mut output = None;
+    for _ in 0..4 {
+        output = Some(run(&ctx, vec![], size, |root| {
+            egui::CentralPanel::default().show(root, |ui| {
+                let room = ui.available_rect_before_wrap();
+                info_panel(
+                    ui,
+                    &InfoPanel {
+                        icon: "i",
+                        title: "Select a run to view its details",
+                        about: "Details show a run's recorded process tree, analysis checklist, \
+                                route and recording status.",
+                        steps_title: "To see a run",
+                        steps: &["Select a run in Run History."],
+                    },
+                );
+                bounds = room;
+            });
+        }));
+    }
+    let texts = text_rects(&output.unwrap());
+    let all = texts
+        .iter()
+        .fold(egui::Rect::NOTHING, |all, (_, rect)| all.union(*rect));
+    let title = texts
+        .iter()
+        .find(|(text, _)| text == "Select a run to view its details")
+        .unwrap()
+        .1;
+    assert!(
+        (all.center().y - bounds.center().y).abs() < 14.0,
+        "vertical: content {all:?} in {bounds:?}"
+    );
+    assert!(
+        (title.center().x - bounds.center().x).abs() < 2.0,
+        "horizontal: title {title:?} in {bounds:?}"
+    );
+}
+
+fn filled_rects(output: &egui::FullOutput) -> Vec<(egui::Rect, egui::Color32)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(egui::Rect, egui::Color32)>) {
+        match shape {
+            egui::Shape::Rect(rect) if rect.fill != egui::Color32::TRANSPARENT => {
+                out.push((rect.rect, rect.fill))
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    output
+        .shapes
+        .iter()
+        .for_each(|clipped| walk(&clipped.shape, &mut out));
+    out
+}
+
+fn horizontal_lines(output: &egui::FullOutput) -> Vec<(f32, f32, egui::Stroke)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(f32, f32, egui::Stroke)>) {
+        match shape {
+            egui::Shape::LineSegment { points, stroke } if points[0].y == points[1].y => {
+                out.push((points[0].y, (points[1].x - points[0].x).abs(), *stroke))
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    output
+        .shapes
+        .iter()
+        .for_each(|clipped| walk(&clipped.shape, &mut out));
+    out
+}
+
+/// The column divider and the header's row rule are one stroke, and the header
+/// cells share pixel-aligned edges, so no seam shows between two of them.
+#[test]
+fn column_lines_match_the_row_rule_and_cells_leave_no_seam() {
+    for ppp in [1.0_f32, 1.25, 1.5, 2.0] {
+        let ctx = context();
+        ctx.set_pixels_per_point(ppp);
+        let mut table = |ui: &mut egui::Ui| {
+            fit_table::FitBuilder::new(ui)
+                .id_salt("seam-table")
+                .resizable(true)
+                .column(fit_table::Col::fixed(101.3))
+                .column(fit_table::Col::fixed(77.7))
+                .column(fit_table::Col::rest(100.0))
+                .header(20.0, |mut header| {
+                    for name in ["One", "Two", "Three"] {
+                        header.col(|ui| fit_table::head(ui, name));
+                    }
+                })
+                .body(|body| {
+                    body.rows(18.0, 2, |mut row| {
+                        for _ in 0..3 {
+                            row.col(|ui| {
+                                ui.label("a");
+                            });
+                        }
+                    })
+                });
+        };
+        let _ = run(&ctx, vec![], SIZE, &mut table);
+        let mut output = run(&ctx, vec![], SIZE, &mut table);
+        let one = text_rects(&output)
+            .into_iter()
+            .find(|(text, _)| text == "One")
+            .unwrap()
+            .1;
+        let at = egui::pos2(one.left() + 101.3 + 4.0, one.center().y);
+        for _ in 0..3 {
+            output = run(&ctx, vec![egui::Event::PointerMoved(at)], SIZE, &mut table);
+        }
+        // The header fills sit on whole pixels, so neighbours abut exactly.
+        let panel = crate::theme::panel();
+        for (rect, fill) in filled_rects(&output) {
+            if fill != panel || (rect.height() - 20.0).abs() > 3.0 {
+                continue;
+            }
+            for edge in [rect.min.x, rect.max.x, rect.min.y, rect.max.y] {
+                let pixel = edge * ppp;
+                assert!(
+                    (pixel - pixel.round()).abs() < 1e-3,
+                    "{ppp}: header fill edge {edge} is between pixels ({rect:?})"
+                );
+            }
+        }
+        // The divider and the row rule are the same stroke.
+        let divider = vertical_lines(&output)
+            .into_iter()
+            .find(|(_, length, _)| (*length - 20.0).abs() < 1.0)
+            .expect("a divider while hovered");
+        let rule = horizontal_lines(&output)
+            .into_iter()
+            .find(|(_, length, _)| *length > 50.0)
+            .expect("the header rule");
+        assert!(
+            (divider.2 - 1.0 / ppp).abs() < 1e-4 && (rule.2.width - divider.2).abs() < 1e-4,
+            "{ppp}: divider {} wide, rule {} wide",
+            divider.2,
+            rule.2.width
+        );
+        fn line_strokes(shape: &egui::Shape, out: &mut Vec<egui::Color32>) {
+            match shape {
+                egui::Shape::LineSegment { stroke, .. } => out.push(stroke.color),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| line_strokes(s, out)),
+                _ => {}
+            }
+        }
+        let mut colours = Vec::new();
+        output
+            .shapes
+            .iter()
+            .for_each(|clipped| line_strokes(&clipped.shape, &mut colours));
+        let found = colours
+            .iter()
+            .filter(|colour| **colour == crate::theme::line())
+            .count()
+            >= 2;
+        assert!(
+            found,
+            "{ppp}: the divider and the rule share the line colour"
+        );
+    }
+}
+
+fn circles(output: &egui::FullOutput) -> Vec<(egui::Pos2, f32, egui::Color32)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(egui::Pos2, f32, egui::Color32)>) {
+        match shape {
+            egui::Shape::Circle(circle) => out.push((circle.center, circle.radius, circle.fill)),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    output
+        .shapes
+        .iter()
+        .for_each(|clipped| walk(&clipped.shape, &mut out));
+    out
+}
+
+/// The MITRE ATT&CK list (Triage > Summary) draws its technique rows with
+/// these badges: the tactic's dot is drawn on the middle of the text, not
+/// typed as a glyph that sits on the font's own box.
+#[test]
+fn a_mitre_row_draws_its_tactic_dot_on_the_middle_of_its_text() {
+    for ppp in [1.0_f32, 1.5, 2.0] {
+        let ctx = context();
+        ctx.set_pixels_per_point(ppp);
+        let mut draw = |ui: &mut egui::Ui| {
+            attack::technique_row(ui, "test", "T1059.004", None, "2 rules", |_| {});
+            attack::tactic_heading(
+                ui,
+                Some(antinomie_monitor_core::mitre::Tactic::Execution),
+                1,
+            );
+        };
+        let _ = run(&ctx, vec![], SIZE, &mut draw);
+        let output = run(&ctx, vec![], SIZE, &mut draw);
+        assert!(
+            !text_rects(&output)
+                .iter()
+                .any(|(text, _)| text.contains('●')),
+            "{ppp}: a typed dot is left"
+        );
+        let id = text_rects(&output)
+            .into_iter()
+            .find(|(text, _)| text == "T1059.004" || text.starts_with("T1059.004"))
+            .expect("the technique id")
+            .1;
+        let dots: Vec<_> = circles(&output)
+            .into_iter()
+            .filter(|(centre, _, _)| (centre.y - id.center().y).abs() < 8.0)
+            .collect();
+        assert!(!dots.is_empty(), "{ppp}: no dot beside the id {id:?}");
+        for (centre, radius, _) in dots {
+            assert!(
+                centre.x < id.left() && radius >= 2.0,
+                "{ppp}: dot {centre:?} r{radius} is not before the text {id:?}"
+            );
+            // The middle of the lowercase letters and capitals, not the box.
+            assert!(
+                (centre.y - id.center().y).abs() <= 2.0,
+                "{ppp}: dot at {} but the text's middle is {}",
+                centre.y,
+                id.center().y
+            );
+        }
+    }
+}

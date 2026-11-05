@@ -245,14 +245,13 @@ impl MonitorApp {
     /// The Network lookup page's database section.
     pub(in crate::app) fn geoip_section(&mut self, ui: &mut egui::Ui) {
         theme::section(ui, "IP geolocation database (TShark)");
-        ui.add(
-            egui::Label::new(
-                "TShark needs .mmdb databases to fill Country and Organization. Older \
-                 GeoIP.dat files (such as /usr/share/GeoIP on Debian) do not work with \
-                 TShark 4. Antinomie hands its databases to its own TShark runs only and \
-                 never changes your Wireshark settings.",
-            )
-            .wrap(),
+        hint_line(
+            ui,
+            "TShark needs .mmdb databases for Country and Organization.",
+            "TShark needs .mmdb databases to fill Country and Organization. Older \
+             GeoIP.dat files (such as /usr/share/GeoIP on Debian) do not work with \
+             TShark 4. Antinomie hands its databases to its own TShark runs only and \
+             never changes your Wireshark settings.",
         );
         ui.add_space(4.0);
         tools_page::geoip_status(ui, self.routes.geoip.status());
@@ -282,6 +281,7 @@ impl MonitorApp {
             command = tools_page::tool_row(ui, tool, install.as_ref(), enabled);
             hint_line(
                 ui,
+                "Country and AS databases from db-ip.com, CC BY 4.0.",
                 "Country and AS databases from db-ip.com, CC BY 4.0. By installing you accept \
                  that licence and the attribution it asks for. A cancelled download is kept \
                  and resumed when you install again.",
@@ -312,7 +312,9 @@ impl MonitorApp {
                 format!("Installed by Antinomie ({})", managed.month),
             );
             if !managed.pinned {
-                ui.weak("newer month; its SHA-256 was recorded, not checked against a pin");
+                ui.weak("newer month, not pinned").on_hover_text(
+                    "A newer month: its SHA-256 was recorded, not checked against a pin.",
+                );
             }
             let busy = self
                 .snapshot
@@ -371,6 +373,7 @@ impl MonitorApp {
         if !outbound {
             hint_line(
                 ui,
+                "Checking needs outbound downloads to be allowed.",
                 "Checking for a newer month needs Settings > Detection > Allow outbound catalog and rule downloads.",
             );
         }
@@ -492,6 +495,7 @@ impl MonitorApp {
         });
         hint_line(
             ui,
+            "A folder with your own MaxMind GeoLite2 or GeoIP2 .mmdb files.",
             "A folder with your own MaxMind GeoLite2 or GeoIP2 .mmdb files: a Country or City \
              database and an ASN database. MaxMind requires a free account to download them, \
              so Antinomie cannot fetch them for you; the DB-IP Lite install needs no account. \
@@ -500,6 +504,7 @@ impl MonitorApp {
     }
 }
 
-fn hint_line(ui: &mut egui::Ui, text: &str) {
-    ui.add(egui::Label::new(RichText::new(text).small().color(theme::muted())).wrap());
+/// A short muted line with the explanation in its tooltip.
+fn hint_line(ui: &mut egui::Ui, short: &str, long: &str) {
+    crate::app::widgets::hint_tip(ui, short, long);
 }

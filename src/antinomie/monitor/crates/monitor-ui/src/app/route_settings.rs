@@ -420,8 +420,9 @@ impl MonitorApp {
                         .on_hover_text(
                             "Path to a tor program; empty uses PATH, then the copy installed below.",
                         );
-                    hint(
+                    hint_tip(
                         ui,
+                        "Started for each run, stopped when it ends.",
                         "Started for each run on a free local port with its own data folder and no control port, and stopped when the run ends. A run waits for Tor to finish starting and does not start without it.",
                     );
                 });

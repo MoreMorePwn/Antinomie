@@ -31,6 +31,8 @@ pub(crate) struct RouteText {
     /// The run's overall state ("Running · 12:34 elapsed"), shown beside the
     /// route line where the run is known.
     pub run_state: Option<String>,
+    /// The run's start and end times, for the tooltip of the state words.
+    pub run_state_tip: Option<String>,
     /// The colour of the state words (the run-state palette).
     pub run_state_color: Option<egui::Color32>,
 }
@@ -51,6 +53,7 @@ pub(crate) fn describe(route: Option<&RouteRecord>, stats: Option<RouteStats>) -
             note: None,
             filter: None,
             run_state: None,
+            run_state_tip: None,
             run_state_color: None,
         };
     };
@@ -92,6 +95,7 @@ pub(crate) fn describe(route: Option<&RouteRecord>, stats: Option<RouteStats>) -
         detail,
         filter,
         run_state: None,
+        run_state_tip: None,
         run_state_color: None,
         leaves: matches!(
             route.kind,
@@ -117,11 +121,14 @@ pub(crate) fn line(ui: &mut egui::Ui, text: &RouteText) {
         }
         if let Some(state) = &text.run_state {
             ui.label(RichText::new("·").color(theme::muted()));
-            ui.label(
+            let label = ui.label(
                 RichText::new(state)
                     .strong()
                     .color(text.run_state_color.unwrap_or_else(theme::text)),
             );
+            if let Some(tip) = &text.run_state_tip {
+                label.on_hover_text(tip);
+            }
         }
     });
 }

@@ -32,6 +32,32 @@ fn summary(detail: &attack::Detail) -> String {
     parts.join(" · ")
 }
 
+/// The list as a Mermaid flowchart: each tactic pointing at the techniques
+/// filed under it, in kill-chain order.
+pub(super) fn mermaid(techniques: &[Technique], details: &[attack::Detail]) -> String {
+    let mut chart = crate::mermaid::Flowchart::new("LR");
+    for tactic in Tactic::ALL.into_iter().map(Some).chain([None]) {
+        let rows: Vec<usize> = (0..techniques.len())
+            .filter(|index| details.get(*index).is_some_and(|d| d.primary == tactic))
+            .collect();
+        if rows.is_empty() {
+            continue;
+        }
+        let (key, name) = match tactic {
+            Some(tactic) => (format!("tactic:{}", tactic.name()), tactic.name()),
+            None => ("tactic:".to_owned(), "Not in the ATT&CK table"),
+        };
+        chart.node(&key, name);
+        for index in rows {
+            let technique = &techniques[index];
+            let id = format!("technique:{}", technique.id);
+            chart.node(&id, &format!("{}\n{}", technique.id, technique.name));
+            chart.edge(&key, &id, None);
+        }
+    }
+    chart.render()
+}
+
 /// Draw the grouped list; the click that leaves the Summary is returned.
 pub(super) fn show(
     ui: &mut egui::Ui,
@@ -40,6 +66,11 @@ pub(super) fn show(
     details: &[attack::Detail],
 ) -> Option<attack::Jump> {
     let mut jump = None;
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            crate::mermaid::button(ui, || mermaid(techniques, details));
+        });
+    });
     let groups = Tactic::ALL
         .into_iter()
         .map(Some)
@@ -154,4 +185,60 @@ fn body(
         }
     });
     jump
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tactics_point_at_their_techniques() {
+        let technique = |id: &str, name: &str| Technique {
+            id: id.into(),
+            name: name.into(),
+            rules: Vec::new(),
+            count: 1,
+        };
+        let detail = |id: &str, primary| attack::Detail {
+            id: id.into(),
+            primary,
+            tactics: primary.into_iter().collect(),
+            rules: Vec::new(),
+            detections: Vec::new(),
+        };
+        let text = mermaid(
+            &[
+                technique("T1059", "Command and Scripting \"Interpreter\""),
+                technique("T1053", "Scheduled Task/Job"),
+                technique("T9999", "Unknown"),
+            ],
+            &[
+                detail("T1059", Some(Tactic::Execution)),
+                detail("T1053", Some(Tactic::Persistence)),
+                detail("T9999", None),
+            ],
+        );
+        assert!(text.starts_with("flowchart LR\n"), "{text}");
+        assert_eq!(text.matches(" --> ").count(), 3, "{text}");
+        assert!(
+            text.contains("T1059<br/>Command and Scripting #quot;Interpreter#quot;"),
+            "{text}"
+        );
+        assert!(text.contains("Not in the ATT#amp;CK table"), "{text}");
+        assert_eq!(
+            text,
+            mermaid(
+                &[
+                    technique("T1059", "Command and Scripting \"Interpreter\""),
+                    technique("T1053", "Scheduled Task/Job"),
+                    technique("T9999", "Unknown"),
+                ],
+                &[
+                    detail("T1059", Some(Tactic::Execution)),
+                    detail("T1053", Some(Tactic::Persistence)),
+                    detail("T9999", None),
+                ]
+            )
+        );
+    }
 }

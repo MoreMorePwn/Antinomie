@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 mod canvas;
 mod crowd;
 mod labels;
+mod mermaid;
 
 /// What a click in the section asks of the window.
 pub(super) enum Out {

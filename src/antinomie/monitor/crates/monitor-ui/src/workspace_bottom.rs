@@ -7,6 +7,69 @@
 use super::*;
 use egui_dock::{Node, Tree};
 
+/// The arrow at the right end of the pane's tab strip, over the slot
+/// `egui_dock` keeps free there: a down arrow hides the pane (folds it to its
+/// tabs), an up arrow shows it again. The same as Ctrl+J and a click on the
+/// shown tab.
+pub(super) fn fold_arrow(
+    ui: &mut egui::Ui,
+    viewer: &mut Viewer<'_>,
+    local: &DockState<Panel>,
+    surface: SurfaceIndex,
+    bar_fill: egui::Color32,
+) {
+    if !surface.is_main() {
+        return;
+    }
+    let Some(rect) = local.main_surface().iter().find_map(|node| match node {
+        Node::Leaf(egui_dock::LeafNode { rect, tabs, .. })
+            if tabs.iter().any(WorkspaceLayout::is_bottom_panel) =>
+        {
+            Some(*rect)
+        }
+        _ => None,
+    }) else {
+        return;
+    };
+    let bar = theme::dock_style(ui.style()).tab_bar.height;
+    let slot = egui::Rect::from_min_max(
+        egui::pos2(rect.max.x - workspace_tabs::BUTTON_SLOT, rect.min.y),
+        egui::pos2(rect.max.x, rect.min.y + bar),
+    );
+    if !slot.is_positive() {
+        return;
+    }
+    let folded = viewer.layout.bottom_folded();
+    let response = ui
+        .interact(
+            slot,
+            egui::Id::new("bottom-pane-arrow"),
+            egui::Sense::click(),
+        )
+        .on_hover_text(viewer.app.bottom_arrow_tooltip(ui.ctx(), folded))
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    ui.painter().rect_filled(slot, 0.0, bar_fill);
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(slot, 0.0, ui.visuals().widgets.hovered.weak_bg_fill);
+    }
+    ui.painter().text(
+        slot.center(),
+        egui::Align2::CENTER_CENTER,
+        if folded {
+            egui_phosphor::regular::CARET_UP
+        } else {
+            egui_phosphor::regular::CARET_DOWN
+        },
+        egui::FontId::proportional(14.0),
+        ui.visuals().text_color(),
+    );
+    if response.clicked() {
+        viewer.layout.toggle_bottom();
+        ui.ctx().request_repaint();
+    }
+}
+
 /// The fraction change that tells a drag of the separator from our own
 /// setting of it.
 const DRAGGED: f32 = 0.004;

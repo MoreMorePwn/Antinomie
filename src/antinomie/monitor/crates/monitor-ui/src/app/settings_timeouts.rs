@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Settings > Analysis tools: the time each tool may run, one field per tool,
-//! with the tool's default beside it and a reset.
+//! with a reset whose tooltip names the tool's default.
 use super::*;
 use antinomie_monitor_core::{
     analysis::detection::{EngineTime, EngineTimeouts},
@@ -9,7 +9,7 @@ use antinomie_monitor_core::{
 
 impl MonitorApp {
     /// One tool's time: the number it has now (its default when none was
-    /// set), the "Default (N s)" hint and a reset that clears the choice.
+    /// set) and a reset that clears the choice; the default is in its tooltip.
     pub(super) fn timeout_row(&mut self, ui: &mut egui::Ui, tool: TimedTool) {
         let default = tool.default_seconds();
         let set = self.settings.analysis_limits.timeouts.get(tool);
@@ -34,14 +34,10 @@ impl MonitorApp {
                 };
                 self.settings.analysis_limits.timeouts.set(tool, stored);
             }
-            ui.label(
-                RichText::new(format!("Default ({default} s)"))
-                    .small()
-                    .color(theme::muted()),
-            );
             if ui
                 .add_enabled(set != 0, egui::Button::new("Reset"))
-                .on_hover_text("Back to the default time")
+                .on_hover_text(format!("Back to the default time ({default} s)"))
+                .on_disabled_hover_text(format!("Already the default time ({default} s)"))
                 .clicked()
             {
                 self.settings.analysis_limits.timeouts.set(tool, 0);
@@ -80,14 +76,10 @@ impl MonitorApp {
                         .timeouts
                         .set(engine, stored);
                 }
-                ui.label(
-                    RichText::new(format!("Default ({default} s)"))
-                        .small()
-                        .color(theme::muted()),
-                );
                 if ui
                     .add_enabled(set != 0, egui::Button::new("Reset"))
-                    .on_hover_text("Back to the default time")
+                    .on_hover_text(format!("Back to the default time ({default} s)"))
+                    .on_disabled_hover_text(format!("Already the default time ({default} s)"))
                     .clicked()
                 {
                     self.triage.detection_settings().timeouts.set(engine, 0);

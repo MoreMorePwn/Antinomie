@@ -354,6 +354,13 @@ pub(super) fn library_row(
     response
 }
 
+/// A one-line hint under a control, muted, with the longer explanation in its
+/// tooltip. Settings keeps its paragraphs out of the page this way.
+pub(super) fn hint_tip(ui: &mut egui::Ui, short: &str, long: &str) -> egui::Response {
+    ui.add(egui::Label::new(RichText::new(short).small().color(theme::muted())).wrap())
+        .on_hover_text(long)
+}
+
 pub(super) fn tool_button(ui: &mut egui::Ui, button: ToolButton<'_>) -> bool {
     let font = egui::TextStyle::Button.resolve(ui.style());
     let (icon, label) = if button.enabled {

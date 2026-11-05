@@ -58,7 +58,7 @@ pub(super) fn paint(
         if interactive {
             egui::Sense::click_and_drag()
         } else {
-            egui::Sense::hover()
+            egui::Sense::click()
         },
     );
     let painter = ui.painter_at(rect);
@@ -195,11 +195,14 @@ pub(super) fn paint(
         false,
         font_size,
     );
-    if interactive {
+    let response = if interactive {
         response.on_hover_text(
             "Drag to pan. Scroll to pan; Ctrl + scroll to zoom. Use Tree for keyboard navigation.",
-        );
-    }
+        )
+    } else {
+        response
+    };
+    response.context_menu(|ui| crate::mermaid::menu_item(ui, || super::mermaid::of(tree)));
 }
 
 fn paint_node(

@@ -8,7 +8,7 @@
 //! Escalation and Stealth) takes the colour of the tactic of the row it is
 //! drawn in when a view groups by tactic, else of its first tactic in
 //! kill-chain order, and carries one dot per tactic.
-use super::tone::{pill, pill_font, pill_text, PillLook};
+use super::tone::{pill_dots, pill_font, pill_text, PillLook};
 use crate::theme;
 use antinomie_monitor_core::mitre::{self, Tactic};
 use eframe::egui::{self, Color32, Stroke};
@@ -50,20 +50,22 @@ pub fn technique_look(tactics: &[Tactic]) -> PillLook {
     }
 }
 
-/// The pill text of a technique: one dot per tactic, the id in monospace,
-/// then the name.
+/// The dot colours of a technique pill: one per tactic.
+pub fn technique_dots(tactics: &[Tactic]) -> Vec<Color32> {
+    tactics.iter().map(|tactic| tactic_color(*tactic)).collect()
+}
+
+/// The pill text of a technique: the id in monospace, then the name. The dots
+/// (see [`technique_dots`]) are drawn by the pill, not typed in the text.
 pub fn technique_job(
     ui: &egui::Ui,
     id: &str,
     name: &str,
-    tactics: &[Tactic],
+    _tactics: &[Tactic],
 ) -> egui::text::LayoutJob {
     let small = pill_font(ui);
     let mono = egui::FontId::monospace(small.size);
     let mut job = egui::text::LayoutJob::default();
-    for tactic in tactics {
-        pill_text(&mut job, "● ", small.clone(), tactic_color(*tactic));
-    }
     pill_text(&mut job, id, mono, theme::text());
     if !name.is_empty() {
         pill_text(&mut job, " ", small.clone(), theme::text());
@@ -97,7 +99,13 @@ pub fn technique_badge(ui: &mut egui::Ui, id: &str, context: Option<Tactic>) -> 
     let tactics = badge_tactics(id, context);
     let name = mitre::technique_name(id).unwrap_or_default();
     let job = technique_job(ui, id, &name, &tactics);
-    let response = pill(ui, technique_look(&tactics), job, 0.0);
+    let response = pill_dots(
+        ui,
+        technique_look(&tactics),
+        &technique_dots(&tactics),
+        job,
+        0.0,
+    );
     response.on_hover_text(format!(
         "{}\n{}",
         mitre::technique_label(id),
@@ -108,10 +116,9 @@ pub fn technique_badge(ui: &mut egui::Ui, id: &str, context: Option<Tactic>) -> 
 /// A tactic as a small pill: its dot and name.
 pub fn tactic_chip(ui: &mut egui::Ui, tactic: Tactic) -> egui::Response {
     let mut job = egui::text::LayoutJob::default();
-    pill_text(&mut job, "● ", pill_font(ui), tactic_color(tactic));
     pill_text(&mut job, tactic.name(), pill_font(ui), theme::text());
     let look = technique_look(&[tactic]);
-    pill(ui, look, job, 0.0)
+    pill_dots(ui, look, &[tactic_color(tactic)], job, 0.0)
 }
 
 /// The legend, folded under "Tactic colours": every tactic in kill-chain

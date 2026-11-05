@@ -86,14 +86,12 @@ impl MonitorApp {
 
     pub(super) fn keyboard_page(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.record_shortcut(ctx);
-        ui.add(
-            egui::Label::new(
+        ui.add(egui::Label::new("Click a key, then press the new one. Esc cancels.").wrap())
+            .on_hover_text(
                 "Click a key, then press the new one. Esc cancels. A shortcut needs Ctrl or Alt, \
                  so it never types a letter, and waits while a text field or the terminal has the \
                  keyboard. Ctrl+1 to Ctrl+9 always show the first nine tabs.",
-            )
-            .wrap(),
-        );
+            );
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.add(

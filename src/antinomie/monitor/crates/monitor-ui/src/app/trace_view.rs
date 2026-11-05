@@ -1016,10 +1016,13 @@ fn trace_cell(
     let palette = *theme::palette();
     // Paint the cell and half of each gap so a tinted
     // row reads as one band, as in Wireshark.
-    let cell = ui.max_rect().expand2(egui::vec2(
-        ui.spacing().item_spacing.x / 2.0,
-        ui.spacing().item_spacing.y / 2.0,
-    ));
+    let cell = crate::widgets::fit_table::snapped(
+        ui.painter(),
+        ui.max_rect().expand2(egui::vec2(
+            ui.spacing().item_spacing.x / 2.0,
+            ui.spacing().item_spacing.y / 2.0,
+        )),
+    );
     if let Some(fill) = fill {
         ui.painter().rect_filled(cell, 0.0, fill);
     }

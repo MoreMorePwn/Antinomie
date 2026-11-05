@@ -496,7 +496,7 @@ impl Default for StartSettings {
             // host at load 6, and more than 21 s at load 12; Debian takes
             // several times longer.
             tcg_multiplier: 10,
-            kvm_fallback: false,
+            kvm_fallback: true,
             boot_wait_secs: 60,
         }
     }

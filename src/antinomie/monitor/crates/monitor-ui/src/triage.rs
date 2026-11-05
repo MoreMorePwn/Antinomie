@@ -74,6 +74,7 @@ mod presentation;
 mod process_cells;
 mod process_details;
 mod process_env;
+mod process_mermaid;
 mod process_record;
 mod process_tree;
 #[cfg(test)]
@@ -773,6 +774,7 @@ impl TriageView {
         match self.process {
             ProcessTab::Tree => {
                 if let Some(scan) = &self.scan {
+                    process_mermaid::copy_button(ui, &scan.process);
                     process_tree_nodes(
                         ui,
                         &scan.process,
@@ -782,12 +784,9 @@ impl TriageView {
                 } else {
                     let suspicious =
                         suspicious_output(input.invocations, rules::Options::default()).tasks;
-                    process_tree_nodes(
-                        ui,
-                        &process_nodes(input.invocations),
-                        input.clock_anchor,
-                        &suspicious,
-                    );
+                    let nodes = process_nodes(input.invocations);
+                    process_mermaid::copy_button(ui, &nodes);
+                    process_tree_nodes(ui, &nodes, input.clock_anchor, &suspicious);
                 }
                 None
             }
