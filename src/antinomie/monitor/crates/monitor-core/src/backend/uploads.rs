@@ -16,6 +16,19 @@ pub(super) fn arch_note(snapshot: &Snapshot, program: &[u8], executable: bool) -
     }
 }
 
+/// How long after a VM starts a rejected Upload Begin is asked again.
+const BOOT_WINDOW: Duration = Duration::from_secs(45);
+/// Pause between two Upload Begin attempts.
+const BEGIN_RETRY: Duration = Duration::from_millis(500);
+const ENOENT: i32 = 2;
+
+/// Whether a rejected Upload Begin is tried again: "no such file or
+/// directory" from a guest that was started (not restored from a snapshot)
+/// less than `window` ago, which may still be booting.
+fn begin_may_retry(status: i32, started_here: bool, age: Duration, window: Duration) -> bool {
+    status == -ENOENT && started_here && age < window
+}
+
 /// Send `total` bytes from `source` to a new guest file through the upload
 /// protocol; `target` is the guest path, overwrite and executable.
 #[allow(clippy::too_many_arguments)]
@@ -29,13 +42,28 @@ pub(super) fn upload_stream(
     total: u64,
     (destination, overwrite, executable): (&str, bool, bool),
 ) -> Result<String, String> {
-    let reply = session.request(
-        control::UPLOAD_BEGIN,
-        &control::upload_begin(destination, total, overwrite, executable)?,
-        snapshot,
-        sender,
-        timeout,
-    )?;
+    let begin = control::upload_begin(destination, total, overwrite, executable)?;
+    // Just after a boot the control channel answers before init has mounted
+    // the file systems and made the destination's folder: "no such file" then
+    // says nothing, and a rejected Begin admitted no transfer, so it is asked
+    // again until the guest is up.
+    let window = session.process.waits.scaled(BOOT_WINDOW);
+    let reply = loop {
+        match session.request_typed(control::UPLOAD_BEGIN, &begin, snapshot, sender, timeout) {
+            Ok(reply) => break reply,
+            Err(RequestError::Rejected { status, .. })
+                if begin_may_retry(
+                    status,
+                    session.restored_from.is_none(),
+                    session.started.elapsed(),
+                    window,
+                ) && !stopping.load(Ordering::Relaxed) =>
+            {
+                std::thread::sleep(BEGIN_RETRY);
+            }
+            Err(error) => return Err(error.into_message()),
+        }
+    };
     if reply.len() != 8 {
         return Err("invalid upload begin reply".into());
     }
@@ -189,7 +217,19 @@ pub(super) fn validate_snapshot_command(command: &Command) -> Result<(), String>
 
 #[cfg(test)]
 mod tests {
-    use super::check_program_size;
+    use super::{begin_may_retry, check_program_size};
+    use std::time::Duration;
+
+    #[test]
+    fn a_missing_folder_is_retried_only_while_the_guest_may_still_be_booting() {
+        let window = Duration::from_secs(45);
+        let early = Duration::from_secs(5);
+        assert!(begin_may_retry(-2, true, early, window));
+        // Other rejections, a guest that has been up, a restored guest.
+        assert!(!begin_may_retry(-13, true, early, window));
+        assert!(!begin_may_retry(-2, true, window, window));
+        assert!(!begin_may_retry(-2, false, early, window));
+    }
 
     #[test]
     fn a_program_over_a_quarter_of_the_vms_ram_is_refused_before_it_is_sent() {
