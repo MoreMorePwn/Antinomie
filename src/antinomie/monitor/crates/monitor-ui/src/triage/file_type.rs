@@ -85,7 +85,7 @@ mod tests {
         assert_eq!(of(b"PK\x03\x04rest", "/tmp/x.zip"), "archive");
         assert_eq!(of(b"hello\n", "/tmp/note"), "text");
         assert_eq!(of(b"key=value\n", "/etc/app.conf"), "config");
-        assert_eq!(of(b"{\"a\":1}", "/home/u/app.json"), "config");
+        assert_eq!(of(b"{\"a\":1}", "/etc/app/app.json"), "config");
         assert_eq!(of(b"\x00\x01\x02\x03", "/tmp/blob"), "data");
         assert_eq!(of(b"", "/tmp/x"), "unknown");
     }
