@@ -43,6 +43,8 @@ fn atom(header: &str, column: usize, row: &[Cell]) -> Atom {
         "Evidence" => &["event.id", "frame.number"],
         "TID" => &["process.tid"],
         "Path" => &["file.path"],
+        "Started" => &["process.first_ns"],
+        "Lifetime" => &["process.lifetime_ns"],
         "First seen" => &["process.first_ns", "network.first_us"],
         "Last seen" => &["process.last_ns", "network.last_us"],
         _ => &[],

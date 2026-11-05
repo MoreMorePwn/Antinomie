@@ -836,18 +836,199 @@ fn tier_tones_follow_the_tier_colours() {
     assert_eq!(rules::Tier::from_tag("nope"), None);
 }
 
-#[test]
-fn clicking_a_process_opens_its_suspicious_activity() {
-    let ctx = context();
-    let (_temp, mut view) = view(Section::Process);
+/// A view of the Process tree whose process 55 is a stand-in: it runs
+/// /tmp/demo-all and calls itself "ps".
+fn demo_view() -> (PacketSpool, TriageView) {
+    let (temp, mut view) = view(Section::Process);
     view.process = ProcessTab::Tree;
+    let scan = view.scan.as_mut().unwrap();
+    let node = scan.process.iter_mut().find(|node| node.pid == 55).unwrap();
+    node.comm = "/tmp/demo-all".into();
+    node.argv = vec!["ps".into(), "aux".into()];
+    node.record.envp = vec!["PATH=/tmp".into(), "LD_PRELOAD=/tmp/x.so".into()];
+    node.record.execs = vec![("/tmp/demo-all".into(), node.first_ns.unwrap_or(0))];
+    (temp, view)
+}
+
+fn tooltip_context() -> egui::Context {
+    let ctx = context();
+    ctx.global_style_mut(|style| style.interaction.tooltip_delay = 0.0);
+    ctx
+}
+
+#[test]
+fn the_process_tree_columns_are_in_the_requested_order() {
+    let ctx = context();
+    let (_temp, mut view) = demo_view();
     let out = settle(&ctx, &mut view);
-    let at = find(&out, "PID 55 · TID 55 (main)").center();
-    click(&ctx, &mut view, at);
+    let found: Vec<(f32, &str)> = process_tree::PROCESS_HEADERS
+        .iter()
+        .skip(1)
+        .map(|title| (find(&out, title).min.x, *title))
+        .collect();
+    let sorted = {
+        let mut sorted = found.clone();
+        sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+        sorted
+    };
+    assert_eq!(found, sorted);
+    for gone in ["Executable", "TID", "Argv", "First seen", "Exec history"] {
+        assert!(!texts(&out).iter().any(|(text, _)| text.starts_with(gone)));
+    }
+    assert!(has(&out, "demo-all (55 \u{b7} 55)"), "{:?}", texts(&out));
+}
+
+#[test]
+fn a_mismatched_command_line_shows_the_warning_and_its_tooltip() {
+    let ctx = tooltip_context();
+    let (_temp, mut view) = demo_view();
+    let out = settle(&ctx, &mut view);
+    let at = find(&out, "\u{26a0} ps aux").center();
+    let mut out = out;
+    for step in 0..4 {
+        out = draw(
+            &ctx,
+            &mut view,
+            vec![egui::Event::PointerMoved(at)],
+            1.0 + f64::from(step) * 0.1,
+        );
+    }
+    assert!(
+        has(
+            &out,
+            "This process calls itself \"ps\", but the kernel loaded /tmp/demo-all."
+        ),
+        "{:?}",
+        texts(&out)
+    );
+}
+
+fn details_output(ctx: &egui::Context, view: &mut TriageView) -> egui::FullOutput {
+    ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1500.0, 2600.0),
+            )),
+            time: Some(9.0),
+            ..Default::default()
+        },
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
+                view.details(ui);
+            });
+        },
+    )
+}
+
+#[test]
+fn clicking_a_process_opens_its_details_with_the_environment() {
+    let ctx = context();
+    let (_temp, mut view) = demo_view();
+    let out = settle(&ctx, &mut view);
+    click(
+        &ctx,
+        &mut view,
+        find(&out, "demo-all (55 \u{b7} 55)").center(),
+    );
     settle(&ctx, &mut view);
-    assert!(view.section == Section::Process);
+    // The click stays in the tree: it does not jump to another list.
+    assert!(view.process == ProcessTab::Tree);
+    details_output(&ctx, &mut view);
+    let out = details_output(&ctx, &mut view);
+    for text in [
+        "Executable",
+        "/tmp/demo-all",
+        "Environment (2 variables)",
+        "Show its calls",
+    ] {
+        assert!(has(&out, text), "{text}: {:?}", texts(&out));
+    }
+    assert!(texts(&out)
+        .iter()
+        .any(|(t, _)| t.ends_with("LD_PRELOAD=/tmp/x.so")));
+}
+
+#[test]
+fn show_its_calls_filters_the_syscall_trace_to_the_process() {
+    let ctx = context();
+    let (_temp, mut view) = demo_view();
+    let out = settle(&ctx, &mut view);
+    click(
+        &ctx,
+        &mut view,
+        find(&out, "demo-all (55 \u{b7} 55)").center(),
+    );
+    settle(&ctx, &mut view);
+    details_output(&ctx, &mut view);
+    let out = details_output(&ctx, &mut view);
+    let at = find(&out, "Show its calls").center();
+    for pressed in [true, false] {
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1500.0, 2600.0),
+                )),
+                events: vec![
+                    egui::Event::PointerMoved(at),
+                    egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                time: Some(9.5),
+                ..Default::default()
+            },
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
+                    view.details(ui);
+                });
+            },
+        );
+    }
+    let cookie = view
+        .scan
+        .as_ref()
+        .unwrap()
+        .process
+        .iter()
+        .find(|node| node.pid == 55)
+        .unwrap()
+        .cookie;
+    assert_eq!(
+        view.take_trace_scope().as_deref(),
+        Some(process_details::trace_filter(55, cookie).as_str())
+    );
+}
+
+#[test]
+fn the_findings_count_lists_that_process_findings() {
+    let ctx = context();
+    let (_temp, mut view) = demo_view();
+    let out = settle(&ctx, &mut view);
+    let count = view
+        .scan
+        .as_ref()
+        .unwrap()
+        .suspicious
+        .iter()
+        .find(|((_, pid), _)| *pid == 55)
+        .map(|(_, (count, _))| *count)
+        .expect("findings");
+    // The chip is the Findings cell: the text is its number.
+    let chips: Vec<_> = texts(&out)
+        .into_iter()
+        .filter(|(t, _)| *t == count.to_string())
+        .collect();
+    let header = find(&out, "Findings");
+    let chip = chips
+        .iter()
+        .find(|(_, rect)| (rect.min.x - header.min.x).abs() < 40.0)
+        .expect("a chip under Findings");
+    click(&ctx, &mut view, chip.1.center());
+    settle(&ctx, &mut view);
     assert!(view.process == ProcessTab::Suspicious);
-    let draft =
-        ctx.data(|data| data.get_temp::<String>(egui::Id::new(("triage-filter-draft", 0usize))));
-    assert_eq!(draft.as_deref(), Some("process.pid == 55"));
 }

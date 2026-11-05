@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The process table: threads, forked children, arguments and renames.
-use super::rules::tests::support::{exec, fork, sys, with_entry};
+use super::rules::tests::support::{creds, exec, exec_env, fork, sys, with_entry};
 use super::tests::{call, captured, path_call};
 use super::*;
 
@@ -136,7 +136,7 @@ fn the_table_shows_the_arguments_the_exec_was_given() {
     let nodes = process_nodes(&[exec(3, "/bin/sh", &["sh", "-c", "echo hi"])]);
     assert_eq!(nodes[0].argv, ["sh", "-c", "echo hi"]);
     let rows = process_rows(&nodes, None, &Suspicious::new());
-    assert_eq!(rows[0][3].text, "sh -c echo hi");
+    assert_eq!(rows[0][1].text, "sh -c echo hi");
 }
 
 fn prctl_name(pid: u32, name: &str) -> InvocationSummary {
@@ -155,9 +155,9 @@ fn a_rename_is_shown_for_any_process_not_only_a_daemon_look_alike() {
     assert_eq!(nodes[0].renames, ["httpd"]);
     let rows = process_rows(&nodes, None, &Suspicious::new());
     assert!(
-        rows[0][7].text.contains("renamed to \"httpd\""),
+        rows[0][8].text.contains("renamed to \"httpd\""),
         "{}",
-        rows[0][7].text
+        rows[0][8].text
     );
     // A new exec starts the names over.
     let nodes = process_nodes(&[prctl_name(3, "httpd"), exec(3, "/tmp/y", &["y"])]);
@@ -199,7 +199,19 @@ fn a_call_still_blocking_at_the_stop_is_shown_with_where_it_started() {
     let blocked = node(&nodes, 3, 3);
     assert_eq!(blocked.in_call.as_ref().unwrap().0, "read");
     let rows = process_rows(&nodes, None, &Suspicious::new());
-    let state = &rows.iter().find(|row| row[2].text == "3").unwrap()[6].text;
+    let row = rows
+        .iter()
+        .find(|row| files::number(&row[0].values, "process.pid") == Some(3))
+        .unwrap();
+    assert_eq!(row[6].text, "in read() at end");
+    let state = match &row[0]
+        .values
+        .iter()
+        .find(|(key, _)| *key == "process.state")
+    {
+        Some((_, RowValue::Text(state))) => state.clone(),
+        _ => panic!("no state"),
+    };
     assert!(
         state.contains("still in progress at the stop: read since"),
         "{state}"
@@ -214,4 +226,203 @@ fn a_call_still_blocking_at_the_stop_is_shown_with_where_it_started() {
     // exit_group never returns: it is not a call in progress.
     let leaving = process_nodes(&[entry_only(sys(3, 231, "exit_group", [0; 6], 0), 1)]);
     assert!(leaving[0].in_call.is_none());
+}
+
+#[test]
+fn the_columns_are_the_process_view_in_order() {
+    assert_eq!(
+        PROCESS_HEADERS,
+        [
+            "Process",
+            "Command line",
+            "Findings",
+            "User",
+            "Started",
+            "Lifetime",
+            "Outcome",
+            "Calls",
+            "Exec chain"
+        ]
+    );
+    let nodes = process_nodes(&[exec(3, "/tmp/demo-all", &["demo-all"])]);
+    let rows = process_rows(&nodes, None, &Suspicious::new());
+    assert_eq!(rows[0].len(), PROCESS_HEADERS.len());
+}
+
+#[test]
+fn a_process_is_named_by_its_executable_file_with_pid_and_tid() {
+    let nodes = process_nodes(&[exec(412, "/tmp/demo-all", &["demo-all"])]);
+    let rows = process_rows(&nodes, None, &Suspicious::new());
+    assert!(rows[0][0].text.starts_with("demo-all (412 \u{b7} 412)"));
+    // The full path is the hover text.
+    assert_eq!(
+        cell_hover(0, &rows[0][0], &rows[0][0]).as_deref(),
+        Some("/tmp/demo-all")
+    );
+    // The filter keys are still on the first cell.
+    for key in [
+        "process.pid",
+        "process.tid",
+        "process.cookie",
+        "process.suspicious",
+        "process.worst_tier",
+        "process.depth",
+        "process.ppid",
+        "process.parent_cookie",
+        "process.exe",
+        "process.argv",
+        "process.state",
+        "process.first_ns",
+        "process.last_ns",
+        "event.id",
+        "stream.id",
+    ] {
+        assert!(
+            rows[0][0].values.iter().any(|(name, _)| *name == key),
+            "{key}"
+        );
+    }
+}
+
+#[test]
+fn a_fork_shows_the_parent_image_greyed_and_a_thread_its_pid_and_tid() {
+    let nodes = process_nodes(&[exec(1, "/bin/sh", &["sh"]), fork(1, 42)]);
+    let rows = process_rows(&nodes, None, &Suspicious::new());
+    let child = rows
+        .iter()
+        .find(|row| files::number(&row[0].values, "process.pid") == Some(42))
+        .unwrap();
+    assert_eq!(child[0].text, "sh (42 \u{b7} ?)  fork");
+    assert_eq!(child[0].color(), theme::muted());
+    assert!(cell_hover(0, &child[0], &child[0])
+        .unwrap()
+        .contains("Not exec'd yet"));
+    let main = exec(7, "/tmp/kaiji", &["kaiji"]);
+    let calls = [
+        as_task(main, 7, 7, 70),
+        as_task(call(7, 202, "futex", 0), 7, 8, 78),
+    ];
+    let nodes = process_nodes(&calls);
+    let rows = process_rows(&nodes, None, &Suspicious::new());
+    assert!(rows.iter().any(|row| row[0].text == "(7 \u{b7} 8)  thread"));
+}
+
+#[test]
+fn a_command_line_that_disagrees_with_the_image_carries_the_warning() {
+    let nodes = process_nodes(&[exec(3, "/tmp/demo-all", &["ps", "aux"])]);
+    let rows = process_rows(&nodes, None, &Suspicious::new());
+    assert_eq!(rows[0][1].text, "\u{26a0} ps aux");
+    assert_eq!(
+        cell_hover(1, &rows[0][1], &rows[0][0]).as_deref(),
+        Some("This process calls itself \"ps\", but the kernel loaded /tmp/demo-all.")
+    );
+    let fine = process_nodes(&[exec(3, "/bin/ls", &["ls", "-l"])]);
+    let rows = process_rows(&fine, None, &Suspicious::new());
+    assert_eq!(rows[0][1].text, "ls -l");
+    assert!(cell_hover(1, &rows[0][1], &rows[0][0]).is_none());
+}
+
+#[test]
+fn the_exec_chain_the_environment_and_the_calls_are_kept_per_task() {
+    let mut first = exec_env(3, "/bin/sh", &["sh"], &["PATH=/bin", "HOME=/root"]);
+    first.entry.as_mut().unwrap().timestamp_ns = 1_000_000_000;
+    let mut second = exec_env(
+        3,
+        "/tmp/demo-all",
+        &["demo-all"],
+        &["PATH=/tmp", "LD_PRELOAD=/x.so"],
+    );
+    second.entry.as_mut().unwrap().timestamp_ns = 2_204_000_000;
+    let nodes = process_nodes(&[first, call(3, 1, "write", 0), second]);
+    let task = node(&nodes, 3, 3);
+    assert_eq!(task.record.calls, 3);
+    assert_eq!(task.record.envp, ["PATH=/tmp", "LD_PRELOAD=/x.so"]);
+    let images: Vec<_> = task
+        .record
+        .execs
+        .iter()
+        .map(|(image, _)| image.as_str())
+        .collect();
+    assert_eq!(images, ["/bin/sh", "/tmp/demo-all"]);
+    let rows = process_rows(&nodes, None, &Suspicious::new());
+    assert_eq!(rows[0][8].text, "sh \u{2192} demo-all");
+    assert_eq!(rows[0][7].text, "3");
+    assert_eq!(rows[0][3].text, "\u{2014}");
+}
+
+#[test]
+fn a_fork_that_never_exec_s_has_its_parents_environment() {
+    let parent = exec_env(1, "/bin/sh", &["sh"], &["A=1"]);
+    let nodes = process_nodes(&[parent, fork(1, 42)]);
+    assert_eq!(node(&nodes, 42, 0).record.envp, ["A=1"]);
+}
+
+#[test]
+fn a_started_time_and_a_running_lifetime_read_from_the_run_start() {
+    let mut early = exec(1, "/bin/sh", &["sh"]);
+    early.entry.as_mut().unwrap().timestamp_ns = 5_000_000_000;
+    early.exit.as_mut().unwrap().timestamp_ns = 5_000_000_000;
+    let mut late = exec(2, "/bin/ls", &["ls"]);
+    late.entry.as_mut().unwrap().timestamp_ns = 6_204_000_000;
+    late.exit.as_mut().unwrap().timestamp_ns = 6_204_000_000;
+    let nodes = process_nodes(&[early, late]);
+    let clock = Some(antinomie_monitor_core::HostClockAnchor {
+        guest_ns: 0,
+        host_us: 1_700_000_000_000_000,
+    });
+    let rows = process_rows(&nodes, clock, &Suspicious::new());
+    let ls = rows
+        .iter()
+        .find(|row| files::number(&row[0].values, "process.pid") == Some(2))
+        .unwrap();
+    assert_eq!(ls[4].text, "+1.204 s");
+    assert!(cell_hover(4, &ls[4], &ls[0]).unwrap().starts_with('~'));
+    assert_eq!(ls[5].text, "running");
+    assert_eq!(ls[6].text, "no exit recorded");
+}
+
+#[test]
+fn a_fatal_signal_names_the_sender_only_when_a_kill_call_was_recorded() {
+    let mut nodes = std::collections::BTreeMap::new();
+    let key = |pid| TaskKey {
+        pid,
+        cookie: u64::from(pid),
+    };
+    let mut victim = TaskNode {
+        end_signal: Some(9),
+        tid: 9,
+        ..TaskNode::default()
+    };
+    victim.state = "task exit, killed by SIGKILL".into();
+    nodes.insert(key(9), victim);
+    nodes.insert(key(5), TaskNode::default());
+    process_record::match_killers(&mut nodes);
+    assert_eq!(nodes[&key(9)].record.killed_by, None);
+    nodes.get_mut(&key(5)).unwrap().record.sent.push((9, 9));
+    process_record::match_killers(&mut nodes);
+    assert_eq!(nodes[&key(9)].record.killed_by, Some(5));
+    // A different signal is not the one that killed it.
+    nodes.get_mut(&key(5)).unwrap().record.sent = vec![(9, 15)];
+    process_record::match_killers(&mut nodes);
+    assert_eq!(nodes[&key(9)].record.killed_by, None);
+}
+
+#[test]
+fn the_user_is_the_uid_or_uid_to_euid_from_the_credentials_the_run_recorded() {
+    let mut start = exec(3, "/bin/su", &["su"]);
+    start.kernel_notes.push(creds(
+        [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000],
+        0,
+        1,
+    ));
+    let mut rows = process_rows(&process_nodes(&[start.clone()]), None, &Suspicious::new());
+    assert_eq!(rows.remove(0)[3].text, "1000");
+    let mut raised = call(3, 105, "setuid", 0);
+    raised
+        .kernel_notes
+        .push(creds([1000, 0, 0, 0, 1000, 1000, 1000, 1000], 0, 7));
+    let nodes = process_nodes(&[start, raised]);
+    let rows = process_rows(&nodes, None, &Suspicious::new());
+    assert_eq!(rows[0][3].text, "1000 \u{2192} 0");
+    assert_eq!(node(&nodes, 3, 3).record.creds.len(), 2);
 }

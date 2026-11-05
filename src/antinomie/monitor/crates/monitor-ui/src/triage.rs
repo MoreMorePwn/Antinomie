@@ -71,7 +71,10 @@ mod network_index;
 mod normalized;
 mod pcap_scan;
 mod presentation;
+mod process_cells;
 mod process_details;
+mod process_env;
+mod process_record;
 mod process_tree;
 #[cfg(test)]
 mod process_tree_tests;
@@ -1120,6 +1123,7 @@ struct TaskNode {
     forked: bool,
     /// An exec committed here and no image name was recorded for it.
     exec_unnamed: bool,
+    record: process_record::ProcessRecord,
 }
 
 enum Spawn {
@@ -1154,6 +1158,8 @@ struct ProcessNode {
     in_call: Option<(String, u64)>,
     /// The image is the parent's: a fork that has not run an exec of its own.
     forked: bool,
+    /// The environment, execs, credentials and call count of the task.
+    record: process_record::ProcessRecord,
 }
 
 const FINDING_FIELDS: &[FieldSpec<'static>] = &[
