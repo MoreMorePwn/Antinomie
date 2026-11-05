@@ -38,6 +38,11 @@ Description: antinomie: boot the guest its boot age ago and step to the present 
  do_settimeofday64(), the step), kernel/time/vsyscall.c,
  include/linux/time_namespace.h, kernel/printk/printk.c, fs/proc/stat.c;
  kernel/antinomie/control.c calls the step before the first launch.
+ For a stock-profile kernel's ABI (Debian's BTF, traceable functions and
+ symbol versions): ant_timekeeping_present() is notrace, tk_xtime_add() is
+ __always_inline as Debian's build inlines it, and printk.c reads the offset
+ through <linux/antinomie_stealth.h> (time_namespace.h there changed the
+ console exports' symbol versions).
  .
  Kconfig: ANTINOMIE_BOOT_AGE; the image builders list "uptime" in a base's
  stealth support from it.
@@ -367,29 +372,30 @@ index 000000000..2bd2e22f4
 +	WRITE_ONCE(behind_s, 0);
 +}
 diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
-index 3a91b739e..af608b3ba 100644
+index 3a91b739e..796a0f681 100644
 --- a/kernel/printk/printk.c
 +++ b/kernel/printk/printk.c
 @@ -20,6 +20,7 @@
  #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
  
  #include <linux/kernel.h>
-+#include <linux/time_namespace.h>
++#include <linux/antinomie_stealth.h>
  #include <linux/mm.h>
  #include <linux/tty.h>
  #include <linux/tty_driver.h>
-@@ -2246,7 +2247,8 @@ int vprintk_store(int facility, int level,
- 	 * close to the call of printk(). This provides a more deterministic
+@@ -2247,6 +2248,10 @@ int vprintk_store(int facility, int level,
  	 * timestamp with respect to the caller.
  	 */
--	ts_nsec = local_clock();
+ 	ts_nsec = local_clock();
++#ifdef CONFIG_ANTINOMIE_BOOT_AGE
 +	/* Antinomie: ahead by the continuous boot age, as programs' clock. */
-+	ts_nsec = local_clock() + ant_user_monotonic_s() * NSEC_PER_SEC;
++	ts_nsec += READ_ONCE(ant_user_mono_ns);
++#endif
  
  	caller_id = printk_caller_id();
  
 diff --git a/kernel/time/timekeeping.c b/kernel/time/timekeeping.c
-index e3896b2be..2b4474caf 100644
+index e3896b2be..390ca97f7 100644
 --- a/kernel/time/timekeeping.c
 +++ b/kernel/time/timekeeping.c
 @@ -24,6 +24,7 @@
@@ -400,7 +406,19 @@ index e3896b2be..2b4474caf 100644
  
  #include "tick-internal.h"
  #include "ntp_internal.h"
-@@ -1343,10 +1344,13 @@ EXPORT_SYMBOL_GPL(timekeeping_clocksource_has_base);
+@@ -141,7 +142,10 @@ static void tk_set_xtime(struct timekeeper *tk, const struct timespec64 *ts)
+ 	tk->tkr_mono.xtime_nsec = (u64)ts->tv_nsec << tk->tkr_mono.shift;
+ }
+ 
+-static void tk_xtime_add(struct timekeeper *tk, const struct timespec64 *ts)
++/* Antinomie: inlined, as Debian's build does (ant_timekeeping_present() is a
++ * second caller). */
++static __always_inline void tk_xtime_add(struct timekeeper *tk,
++					 const struct timespec64 *ts)
+ {
+ 	tk->xtime_sec += ts->tv_sec;
+ 	tk->tkr_mono.xtime_nsec += (u64)ts->tv_nsec << tk->tkr_mono.shift;
+@@ -1343,10 +1347,13 @@ EXPORT_SYMBOL_GPL(timekeeping_clocksource_has_base);
  int do_settimeofday64(const struct timespec64 *ts)
  {
  	struct timekeeper *tk = &tk_core.timekeeper;
@@ -415,7 +433,7 @@ index e3896b2be..2b4474caf 100644
  	if (!timespec64_valid_settod(ts))
  		return -EINVAL;
  
-@@ -1678,6 +1682,8 @@ void __init timekeeping_init(void)
+@@ -1678,6 +1685,8 @@ void __init timekeeping_init(void)
  
  	if (timespec64_compare(&wall_time, &boot_offset) < 0)
  		boot_offset = (struct timespec64){0};
@@ -424,7 +442,7 @@ index e3896b2be..2b4474caf 100644
  
  	/*
  	 * We want set wall_to_mono, so the following is true:
-@@ -1708,6 +1714,40 @@ void __init timekeeping_init(void)
+@@ -1708,6 +1717,40 @@ void __init timekeeping_init(void)
  /* time in seconds when suspend began for persistent clock */
  static struct timespec64 timekeeping_suspend_time;
  
@@ -437,8 +455,8 @@ index e3896b2be..2b4474caf 100644
 + * CLOCK_MONOTONIC stays; @user_mono_ns is how far programs' CLOCK_MONOTONIC
 + * runs ahead from now on (the vDSO's data is updated here too).
 + */
-+void ant_timekeeping_present(const struct timespec64 *true_minus_mono, s64 age_ns,
-+			     u64 user_mono_ns)
++notrace void ant_timekeeping_present(const struct timespec64 *true_minus_mono, s64 age_ns,
++				     u64 user_mono_ns)
 +{
 +	struct timekeeper *tk = &tk_core.timekeeper;
 +	struct timespec64 delta, wall;

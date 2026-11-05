@@ -54,6 +54,11 @@ Description: antinomie: show a desktop or laptop machine's devices for QEMU's
  drivers/acpi/acpica/tbprint.c, drivers/gpu/drm/{drm_ioctl.c,
  drm_fb_helper.c,drm_drv.c,tiny/bochs.c}, drivers/usb/core/hub.c,
  drivers/firmware/efi/efi.c, drivers/ata/libata-core.c.
+ pci_read_bridge_windows() (probe.c) is __always_inline, as Debian's build
+ inlines it: the log line's hook made pci_setup_device() larger, and an
+ out-of-line copy is a BTF and traceable function Debian's kernel lacks.
+ On a stock-profile kernel (Debian bases) only the built-in hooks act:
+ NVMe, DRM, USB and libata are Debian's own modules there.
  .
  Contract revision 21 (no protocol change; bases with the facade list
  "facade" in stealth_support).
@@ -480,7 +485,7 @@ index 122c18222..dadeb8457 100644
  			  (u8)(pci_dev->class));
  }
 diff --git a/drivers/pci/probe.c b/drivers/pci/probe.c
-index d8c5a957b..4d76533d6 100644
+index d8c5a957b..20ebffec5 100644
 --- a/drivers/pci/probe.c
 +++ b/drivers/pci/probe.c
 @@ -4,6 +4,7 @@
@@ -491,7 +496,18 @@ index d8c5a957b..4d76533d6 100644
  #include <linux/delay.h>
  #include <linux/init.h>
  #include <linux/pci.h>
-@@ -1985,9 +1986,14 @@ int pci_setup_device(struct pci_dev *dev)
+@@ -454,7 +455,9 @@ static void pci_read_bridge_mmio_pref(struct pci_dev *dev, struct resource *res,
+ 	}
+ }
+ 
+-static void pci_read_bridge_windows(struct pci_dev *bridge)
++/* Antinomie: inlined, as Debian's build does (the facade's log line made the
++ * caller larger). */
++static __always_inline void pci_read_bridge_windows(struct pci_dev *bridge)
+ {
+ 	u32 buses;
+ 	u16 io;
+@@ -1985,9 +1988,14 @@ int pci_setup_device(struct pci_dev *dev)
  
  	pci_set_removable(dev);
  
