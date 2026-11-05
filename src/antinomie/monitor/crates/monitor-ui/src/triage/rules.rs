@@ -51,7 +51,7 @@ pub(in crate::triage) use present::{offset, when_text};
 pub(super) use rows::COL_WHEN;
 pub(super) use rows::{
     stamp, view_keeps, View, COL_ATTACK, COL_BEHAVIOUR, COL_COUNT, COL_PROCESS, COL_RESULT,
-    COL_SUMMARY, COL_TARGET, COL_TIER, COL_TIME, HEADERS, LIMITED, MISMATCH, SHOWN, TIP,
+    COL_SUMMARY, COL_TARGET, COL_TIER, COL_TIME, HEADERS, LIMITED, SHOWN, TIP,
 };
 pub(super) use table::{spec, Spec};
 pub(in crate::triage) use texts::{rule_description, rule_title};

@@ -156,7 +156,12 @@ pub(super) fn argv0_mismatch<'a>(exe: &str, argv: &'a [String]) -> Option<&'a st
     Some(argv0)
 }
 
-/// The warning shown for a mismatch.
+/// Whether a name is one BusyBox applets or common system tools answer to.
+pub(super) fn is_applet(name: &str) -> bool {
+    APPLETS.contains(&name)
+}
+
+/// The sentence for a mismatch.
 pub(super) fn mismatch_text(argv0: &str, exe: &str) -> String {
     format!("This process calls itself \"{argv0}\", but the kernel loaded {exe}.")
 }
@@ -235,12 +240,39 @@ pub(super) fn outcome(state: &str, in_call: Option<&str>, killed_by: Option<u32>
     }
 }
 
-/// The user of a task: "1000", or "1000 \u{2192} 0" when the effective id differs.
+/// The user id of a task: "1000", or "1000 \u{2192} 0" when the effective id differs.
 pub(super) fn user(step: Option<&CredStep>) -> String {
     match step {
         None => "\u{2014}".into(),
         Some(step) if step.uid == step.euid => step.uid.to_string(),
         Some(step) => format!("{} \u{2192} {}", step.uid, step.euid),
+    }
+}
+
+/// The name of a user id, when it is one every Linux system has.
+fn known_user(id: u32) -> Option<&'static str> {
+    match id {
+        0 => Some("root"),
+        65534 => Some("nobody"),
+        _ => None,
+    }
+}
+
+/// The hover of the User ID cell: the ids in words, and the name of each that
+/// is known.
+pub(super) fn user_hover(step: &CredStep) -> String {
+    let named = |id: u32| match known_user(id) {
+        Some(name) => format!("{id} ({name})"),
+        None => id.to_string(),
+    };
+    if step.uid == step.euid {
+        format!("User id {}", named(step.uid))
+    } else {
+        format!(
+            "User id {}, effective user id {} (the rights it acts with)",
+            named(step.uid),
+            named(step.euid)
+        )
     }
 }
 
@@ -251,6 +283,25 @@ mod tests {
     fn warns(exe: &str, argv: &[&str]) -> bool {
         let argv: Vec<String> = argv.iter().map(|arg| (*arg).to_owned()).collect();
         argv0_mismatch(exe, &argv).is_some()
+    }
+
+    #[test]
+    fn the_user_is_an_id_and_the_name_is_on_hover() {
+        use crate::triage::process_record::CredStep;
+        let step = |uid, euid| CredStep {
+            ns: 0,
+            uid,
+            euid,
+            gid: 0,
+            egid: 0,
+            change: antinomie_monitor_core::kernel_notes::CredentialChange::SetUid,
+        };
+        assert_eq!(user(None), "\u{2014}");
+        assert_eq!(user(Some(&step(1000, 1000))), "1000");
+        assert_eq!(user(Some(&step(1000, 0))), "1000 \u{2192} 0");
+        assert_eq!(user_hover(&step(0, 0)), "User id 0 (root)");
+        assert_eq!(user_hover(&step(1000, 1000)), "User id 1000");
+        assert!(user_hover(&step(1000, 0)).contains("effective user id 0 (root)"));
     }
 
     #[test]

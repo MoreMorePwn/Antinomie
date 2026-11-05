@@ -364,7 +364,7 @@ impl TriageView {
 
 /// The start of the run, in the guest's nanoseconds: when its first task was
 /// first seen, else its first file call.
-fn run_start(scan: &ArchiveScan) -> Option<u64> {
+pub(super) fn run_start(scan: &ArchiveScan) -> Option<u64> {
     scan.process
         .iter()
         .filter_map(|node| node.first_ns)
@@ -387,8 +387,7 @@ fn draw(
     rows: &[Vec<Cell>],
     notes: &file_shown::Notes<'_>,
 ) {
-    let keep = file_tabs::shown_columns(tab.slot());
-    let shown_headers: Vec<&str> = keep.iter().map(|&index| headers[index]).collect();
+    let shown_headers = file_shown::headers(tab.slot(), headers);
     let shown = file_shown::shown(tab.slot(), rows, notes);
     table_rows(ui, tab.table_id(), &shown_headers, &shown);
     details::refresh(ui.ctx(), tab.table_id(), headers, rows);

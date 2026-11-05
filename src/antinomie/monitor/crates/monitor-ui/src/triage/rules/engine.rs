@@ -483,20 +483,7 @@ impl Engine {
                 output.tiers[agg.tier.index()] += 1;
                 output.badge += 1;
             }
-            let mut row = rows::finding(agg);
-            let node = files.process_images.get(&TaskKey {
-                pid: agg.pid,
-                cookie: agg.cookie,
-            });
-            if let Some(argv0) =
-                node.and_then(|node| process_cells::argv0_mismatch(&node.comm, &node.argv))
-            {
-                rows::note_mismatch(
-                    &mut row,
-                    agg,
-                    process_cells::mismatch_text(argv0, node.map_or("", |node| node.comm.as_str())),
-                );
-            }
+            let row = rows::finding(agg);
             if !agg.hidden() && agg.tier != Tier::Info && agg.cookie != 0 {
                 tally(&mut output.tasks, &row.values);
             }

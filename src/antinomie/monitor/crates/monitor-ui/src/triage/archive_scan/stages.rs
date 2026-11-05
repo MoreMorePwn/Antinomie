@@ -818,15 +818,16 @@ impl Scan {
         counts.findings_capped = output.capped;
         let finding_notes = output.notes;
         let suspicious = output.tasks;
-        let mut flagged_paths = std::collections::BTreeSet::new();
+        let mut flagged_paths = crate::triage::file_shown::Flags::new();
         for finding in output.rows {
-            if crate::triage::file_shown::text_of(&finding.values, "finding.tier")
-                .is_some_and(|tier| tier != "info")
-            {
-                if let Some(object) =
-                    crate::triage::file_shown::text_of(&finding.values, "finding.object")
-                {
-                    flagged_paths.insert(object.to_owned());
+            let tier = crate::triage::file_shown::text_of(&finding.values, "finding.tier")
+                .and_then(rules::Tier::from_tag)
+                .filter(|tier| *tier != rules::Tier::Info);
+            if let Some(tier) = tier {
+                let text = |key| crate::triage::file_shown::text_of(&finding.values, key);
+                if let Some(object) = text("finding.object") {
+                    let rule = text("finding.rule").unwrap_or_default();
+                    crate::triage::file_shown::flag(&mut flagged_paths, object, tier, rule);
                 }
             }
             if let Some(writer) = &mut journal {

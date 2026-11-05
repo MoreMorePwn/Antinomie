@@ -5,6 +5,7 @@
 use super::ctx::{base, Ctx};
 use super::state::State;
 use super::{probes, process, Hit, Tier};
+use crate::triage::{file_location, process_cells};
 
 const MINUTE: u64 = 60 * 1_000_000_000;
 
@@ -76,7 +77,69 @@ fn exec_name(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     let (Some(argv0), Some(path)) = (cx.argv().first(), cx.exec_path()) else {
         return;
     };
+    let before = out.len();
     process::masquerade(argv0, base(&path), "exec argv[0]", out);
+    // A kernel-thread or daemon name has its own rule above.
+    if out.len() == before && cx.ok {
+        argv_masquerade(&path, cx.argv(), out);
+    }
+}
+
+/// Programs a reader trusts by name: what a disguise would copy.
+const KNOWN_TOOLS: &[&str] = &[
+    "bash",
+    "sudo",
+    "login",
+    "python",
+    "python3",
+    "perl",
+    "apt",
+    "dpkg",
+    "systemctl",
+    "journalctl",
+    "cron",
+    "init",
+    "sshd",
+    "systemd",
+    "udevd",
+    "dbus-daemon",
+    "NetworkManager",
+];
+
+/// The new program's `argv[0]` names a different program than the image the
+/// kernel loaded. Some tools rename themselves on purpose, so this is LOW; it
+/// is MEDIUM when the name is a well-known system tool and the image sits in a
+/// writable place (temp, hidden or home).
+fn argv_masquerade(path: &str, argv: &[String], out: &mut Vec<Hit>) {
+    let Some(claimed) = process_cells::argv0_mismatch(path, argv) else {
+        return;
+    };
+    let name = process_cells::file_name(claimed.trim_start_matches('-'));
+    let classes = file_location::classify(path, &[]);
+    let writable = [
+        file_location::Location::Temp,
+        file_location::Location::Hidden,
+        file_location::Location::Home,
+    ]
+    .iter()
+    .any(|place| classes.contains(place));
+    let known = KNOWN_TOOLS.contains(&name) || process_cells::is_applet(name);
+    let mut hit = Hit::new(
+        "evasion.argv_masquerade",
+        path,
+        format!("{path} runs with argv[0] {claimed:?}"),
+    )
+    .detail(process_cells::mismatch_text(claimed, path));
+    hit = if known && writable {
+        hit.tier(Tier::Medium).detail(format!(
+            "{name} is a well-known system tool and the image is in a writable location: MEDIUM."
+        ))
+    } else {
+        hit.tier(Tier::Low).detail(
+            "Some tools rename argv[0] on purpose, and the name is not a well-known tool in a writable place: LOW.",
+        )
+    };
+    out.push(hit);
 }
 
 /// A wait of a minute or more, before the program has done anything else.

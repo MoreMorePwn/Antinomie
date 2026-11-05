@@ -52,7 +52,7 @@ pub(in crate::triage) fn when_text(first: u64, last: u64, start: Option<u64>) ->
 }
 
 /// "sshd (418 \u{b7} 418)": the process and thread as the Process tree writes them.
-pub(in crate::triage) fn process_text(agg: &Agg, mismatch: bool) -> String {
+pub(in crate::triage) fn process_text(agg: &Agg) -> String {
     if agg.pid == 0 {
         return agg.process.clone();
     }
@@ -66,8 +66,7 @@ pub(in crate::triage) fn process_text(agg: &Agg, mismatch: bool) -> String {
         0 => format!("({} \u{b7} ?)", agg.pid),
         tid => format!("({} \u{b7} {tid})", agg.pid),
     };
-    let warn = if mismatch { "\u{26a0} " } else { "" };
-    format!("{warn}{name} {ids}")
+    format!("{name} {ids}")
 }
 
 /// The technique chip of a row: "T1053.003 Cron", with the names of all its

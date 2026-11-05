@@ -878,28 +878,44 @@ fn the_process_tree_columns_are_in_the_requested_order() {
 }
 
 #[test]
-fn a_mismatched_command_line_shows_the_warning_and_its_tooltip() {
+fn a_mismatched_command_line_has_no_warning_sign_and_the_findings_column_is_the_way_in() {
     let ctx = tooltip_context();
     let (_temp, mut view) = demo_view();
     let out = settle(&ctx, &mut view);
-    let at = find(&out, "\u{26a0} ps aux").center();
-    let mut out = out;
-    for step in 0..4 {
-        out = draw(
-            &ctx,
-            &mut view,
-            vec![egui::Event::PointerMoved(at)],
-            1.0 + f64::from(step) * 0.1,
-        );
-    }
+    assert!(has(&out, "ps aux"), "{:?}", texts(&out));
     assert!(
-        has(
-            &out,
-            "This process calls itself \"ps\", but the kernel loaded /tmp/demo-all."
-        ),
+        !texts(&out)
+            .iter()
+            .any(|(text, _)| text.contains('\u{26a0}')),
         "{:?}",
         texts(&out)
     );
+    assert!(has(&out, "Findings"));
+}
+
+#[test]
+fn the_user_column_is_the_user_id_with_the_effective_one_after_an_arrow() {
+    let ctx = context();
+    let (_temp, mut view) = demo_view();
+    view.scan
+        .as_mut()
+        .unwrap()
+        .process
+        .iter_mut()
+        .for_each(|node| {
+            node.record.creds.push(process_record::CredStep {
+                ns: 1,
+                uid: 1000,
+                euid: 0,
+                gid: 1000,
+                egid: 1000,
+                change: antinomie_monitor_core::kernel_notes::CredentialChange::SetUid,
+            });
+        });
+    let out = settle(&ctx, &mut view);
+    assert!(has(&out, "User ID"), "{:?}", texts(&out));
+    assert!(!has(&out, "User"), "{:?}", texts(&out));
+    assert!(has(&out, "1000 \u{2192} 0"), "{:?}", texts(&out));
 }
 
 pub(super) fn details_output(ctx: &egui::Context, view: &mut TriageView) -> egui::FullOutput {

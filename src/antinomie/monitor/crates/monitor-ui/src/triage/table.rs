@@ -29,6 +29,11 @@ pub(super) fn cell(text: impl Into<String>, color: egui::Color32, mono: bool) ->
     }
 }
 
+/// The least height a table's body keeps. A section whose filters and notes
+/// fill the pane leaves less than this under them; the page scrolls (see
+/// `TriageView::show`) instead of squeezing the table out of reach.
+pub(super) const MIN_TABLE_HEIGHT: f32 = 160.0;
+
 /// Characters a table cell shows. A cut cell's hover text is its shown text,
 /// so this also bounds the hover box; Details keeps the whole value.
 const CELL_TEXT_MAX: usize = 240;
@@ -305,7 +310,7 @@ fn table_rows_with(
     let filter_id = ui
         .ctx()
         .data(|data| data.get_temp::<egui::Id>(egui::Id::new(("triage-filter-target", id))));
-    let max_height = ui.available_height().max(60.0);
+    let max_height = ui.available_height().max(MIN_TABLE_HEIGHT);
     // The columns are planned for the width this table really has (see
     // `fit_table`): the text column takes the spare width, the others keep
     // their content width while it fits and give way, cut with an ellipsis,
@@ -572,7 +577,7 @@ fn finding_table_rows(
         .data(|data| data.get_temp::<egui::Id>(egui::Id::new(("triage-filter-target", id))));
     let font = ui.text_style_height(&egui::TextStyle::Body).max(14.0);
     let row_height = fit_table::row_height(font);
-    let max_height = ui.available_height().max(60.0);
+    let max_height = ui.available_height().max(MIN_TABLE_HEIGHT);
     let last = shown.len() - 1;
     let cols: Vec<Col> = widths
         .iter()

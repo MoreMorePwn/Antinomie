@@ -226,7 +226,10 @@ view.by_file = false;
             process_details::show(view, ui, values);
         } else if selected.table == "triage-bpf" {
             if let Some(note) = view.scan.as_ref().and_then(|scan| scan.bpf.iter().find(|note| evidence_key(&bpf_row(note, scan_clock(view))) == selected.key)) {
-                bpf_detail(ui, note, view.details_directory.as_deref(), &mut view.bpf_export_status);
+                let cx = view.scan.as_ref().map(|scan| bpf_fields::context(scan, note, view.scan_request.clock_anchor));
+                if let Some(cx) = cx {
+                    bpf_detail(ui, note, view.details_directory.as_deref(), &mut view.bpf_export_status, &cx);
+                }
             } else {
                 ui.weak("This BPF observation is not available in the retained index yet.");
             }
@@ -297,7 +300,7 @@ pub(super) fn dump_taken(ui: &mut egui::Ui, values: &[(&'static str, RowValue)])
     }) else {
         return;
     };
-    ui.label(RichText::new("Dumps taken").strong().color(theme::text()));
+    ui.label(theme::bold(ui, "Dumps taken").color(theme::text()));
     for (name, dump, tab) in [
         ("Memory dump", &record.memory, "memory"),
         ("Core", &record.core, "core"),

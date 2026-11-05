@@ -7,7 +7,6 @@ use super::window::Window;
 use super::*;
 use crate::triage::file_shown::Notes;
 use eframe::egui::{self, Pos2, Rect};
-use std::collections::BTreeSet;
 
 fn event(time: u64, kind: Kind) -> Event {
     let mut event = super::tests::event(time, kind, 0);
@@ -80,7 +79,13 @@ fn a_file_row_has_the_columns_badges_type_digest_and_warning() {
         changed: false,
         skipped: None,
     });
-    let flagged: BTreeSet<String> = ["/tmp/payload".to_owned()].into();
+    let mut flagged = file_shown::Flags::new();
+    file_shown::flag(
+        &mut flagged,
+        "/tmp/payload",
+        rules::Tier::High,
+        "execution.dropped_exec",
+    );
     let notes = Notes {
         start: Some(10),
         flagged: &flagged,
@@ -88,28 +93,36 @@ fn a_file_row_has_the_columns_badges_type_digest_and_warning() {
     let row = overview::cells(&activity, &activity.files[3], &notes, None);
     let text: Vec<&str> = row.iter().map(|cell| cell.text.as_str()).collect();
     assert_eq!(overview::HEADERS.len(), row.len());
+    assert_eq!(overview::HEADERS[1], "Tags");
     assert_eq!(text[0], "/tmp/payload");
+    // The path is only the path; its tags are in the next column.
+    assert!(row[0].badges.is_empty());
+    assert_eq!(text[1], "");
     assert_eq!(
-        text[1],
+        text[2],
         "created \u{2192} written 6 B \u{2192} renamed \u{2192} deleted"
     );
-    assert_eq!(text[2], "dropper (100 \u{b7} 100) +1");
-    assert_eq!(text[3], "+0.000 s \u{2192} +0.000 s");
-    assert_eq!(text[4], "0 B \u{2192} unknown");
-    assert_eq!(text[5], "ELF");
-    assert_eq!(text[6], format!("{}\u{2026}", &hash[..12]));
-    assert_eq!(text[7], "\u{26a0}");
-    let badges: Vec<&str> = row[0].badges.iter().map(|b| b.text.as_str()).collect();
-    assert_eq!(badges, ["/tmp", "+1 names"]);
-    assert_eq!(row[6].note.as_deref(), Some(hash.as_str()));
-    // A file no finding names has no warning.
-    let none = BTreeSet::new();
+    assert_eq!(text[3], "dropper (100 \u{b7} 100) +1");
+    assert_eq!(text[4], "+0.000 s \u{2192} +0.000 s");
+    assert_eq!(text[5], "0 B \u{2192} unknown");
+    assert_eq!(text[6], "ELF");
+    assert_eq!(text[7], format!("{}\u{2026}", &hash[..12]));
+    let badges: Vec<&str> = row[1].badges.iter().map(|b| b.text.as_str()).collect();
+    assert_eq!(
+        badges,
+        ["/tmp", "+1 names", "High \u{b7} Dropped file executed"]
+    );
+    assert!(text.iter().all(|text| !text.contains('\u{26a0}')));
+    assert_eq!(row[7].note.as_deref(), Some(hash.as_str()));
+    // A file no finding names has no finding tag.
+    let none = file_shown::Flags::new();
     let plain = Notes {
         start: Some(10),
         flagged: &none,
     };
     let row = overview::cells(&activity, &activity.files[3], &plain, None);
-    assert_eq!(row[7].text, "");
+    let badges: Vec<&str> = row[1].badges.iter().map(|b| b.text.as_str()).collect();
+    assert_eq!(badges, ["/tmp", "+1 names"]);
 }
 
 #[test]
@@ -118,7 +131,7 @@ fn the_table_draws_its_headers_and_a_row_for_each_shown_file() {
     let ctx = egui::Context::default();
     crate::theme::install(&ctx);
     let mut window = Window::default();
-    let flagged = BTreeSet::new();
+    let flagged = file_shown::Flags::new();
     let mut texts: Vec<String> = Vec::new();
     for _ in 0..3 {
         let output = ctx.run_ui(

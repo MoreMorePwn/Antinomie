@@ -105,7 +105,7 @@ pub(super) fn endpoint(object: &str) -> Option<std::net::IpAddr> {
 
 fn heading(ui: &mut egui::Ui, title: &str) {
     ui.add_space(8.0);
-    ui.label(RichText::new(title).strong().color(theme::text()));
+    ui.label(theme::bold(ui, title).color(theme::text()));
 }
 
 fn paragraph(ui: &mut egui::Ui, body: &str) {
@@ -140,7 +140,8 @@ impl TriageView {
         // The header.
         ui.horizontal_wrapped(|ui| {
             chip(ui, tier.label(), tier.tone()).on_hover_text(tier.meaning());
-            ui.label(RichText::new(title).heading().strong());
+            let size = egui::TextStyle::Heading.resolve(ui.style()).size;
+            ui.label(theme::bold(ui, title).size(size).color(theme::heading()));
         });
         ui.label(
             RichText::new(format!("{rule} \u{b7} version {version}"))
@@ -152,9 +153,6 @@ impl TriageView {
 
         heading(ui, SECTIONS[0]);
         paragraph(ui, &what_happened(process, values, &when));
-        if let Some(warning) = text(values, rules::MISMATCH) {
-            ui.colored_label(theme::warn(), format!("\u{26a0} {warning}"));
-        }
 
         heading(ui, SECTIONS[1]);
         let description = rules::rule_description(rule);

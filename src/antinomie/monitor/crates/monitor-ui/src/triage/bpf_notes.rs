@@ -435,11 +435,12 @@ pub(super) fn bpf_detail(
     note: &BpfNote,
     directory: Option<&Path>,
     status: &mut String,
+    cx: &bpf_fields::Context,
 ) {
     if !status.is_empty() {
         ui.label(status.as_str());
     }
-    ui.label(RichText::new(&note.heading).strong());
+    ui.label(theme::bold(ui, &note.heading));
     if let Some(line) = &note.lifecycle {
         ui.label(line);
     }
@@ -449,7 +450,7 @@ pub(super) fn bpf_detail(
         ));
     }
     if !note.attributes.is_empty() {
-        ui.label(RichText::new("Attributes").strong());
+        ui.label(theme::bold(ui, "Attributes"));
         for line in &note.attributes {
             ui.add(egui::Label::new(RichText::new(line).monospace()).wrap());
         }
@@ -457,7 +458,16 @@ pub(super) fn bpf_detail(
     if note.translation.is_none() && note.dump.is_none() {
         ui.weak("The instruction image was not isolated.");
     }
-    for text in [&note.translation, &note.dump, &note.export]
+    // The captured identity as labelled fields; the export's JSON is for the file.
+    bpf_fields::show(ui, note, cx);
+    // The export's hex dump, after its JSON line, unless the dump is shown already.
+    let export_dump = note
+        .export
+        .as_deref()
+        .and_then(|export| export.split_once('\n'))
+        .map(|(_, dump)| dump.to_owned())
+        .filter(|_| note.dump.is_none());
+    for text in [&note.translation, &note.dump, &export_dump]
         .into_iter()
         .flatten()
     {

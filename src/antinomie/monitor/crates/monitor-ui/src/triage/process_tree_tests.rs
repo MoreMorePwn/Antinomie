@@ -236,7 +236,7 @@ fn the_columns_are_the_process_view_in_order() {
             "Process",
             "Command line",
             "Findings",
-            "User",
+            "User ID",
             "Started",
             "Lifetime",
             "Outcome",
@@ -308,14 +308,14 @@ fn a_fork_shows_the_parent_image_greyed_and_a_thread_its_pid_and_tid() {
 }
 
 #[test]
-fn a_command_line_that_disagrees_with_the_image_carries_the_warning() {
+fn a_command_line_that_disagrees_with_the_image_has_no_warning_sign() {
+    // The disagreement is a finding of Suspicious activity now (evasion.argv_masquerade).
     let nodes = process_nodes(&[exec(3, "/tmp/demo-all", &["ps", "aux"])]);
     let rows = process_rows(&nodes, None, &Suspicious::new());
-    assert_eq!(rows[0][1].text, "\u{26a0} ps aux");
-    assert_eq!(
-        cell_hover(1, &rows[0][1], &rows[0][0]).as_deref(),
-        Some("This process calls itself \"ps\", but the kernel loaded /tmp/demo-all.")
-    );
+    assert_eq!(rows[0][1].text, "ps aux");
+    assert_eq!(rows[0][1].color(), theme::text());
+    assert!(cell_hover(1, &rows[0][1], &rows[0][0]).is_none());
+    assert!(!rows[0][0].text.contains('\u{26a0}'));
     let fine = process_nodes(&[exec(3, "/bin/ls", &["ls", "-l"])]);
     let rows = process_rows(&fine, None, &Suspicious::new());
     assert_eq!(rows[0][1].text, "ls -l");

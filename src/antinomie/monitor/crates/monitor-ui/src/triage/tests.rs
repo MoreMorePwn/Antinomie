@@ -9,6 +9,7 @@ const CLONE3: u64 = 435;
 mod async_files;
 mod async_previews;
 mod layout;
+mod scroll;
 mod suspicious;
 mod theme_switch;
 

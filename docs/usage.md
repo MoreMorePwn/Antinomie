@@ -470,12 +470,14 @@ The network capture is the guest's own view on every route.
 - **Triage › Process › Process tree**: one row per task, in the columns
   **Process** (tree lines, the executable's file name and `(pid · tid)`; the
   full path on hover; a fork that has not exec'd shows its parent's image
-  greyed with "fork"), **Command line** (a ⚠ when argv[0]'s file name is not
-  the executable's, with the explanation on hover; BusyBox applets,
+  greyed with "fork"), **Command line** (no warning sign: an
+  argv[0] whose file name is not the executable's is the Suspicious activity
+  finding **Process name disguised**, counted in Findings; BusyBox applets,
   interpreters through symlinks such as python3 and python3.13, sh and dash,
-  and a login shell's leading `-` do not warn), **Findings** (the count,
+  and a login shell's leading `-` do not count), **Findings** (the count,
   coloured by the worst tier; click it to list that process's findings),
-  **User** (uid, or uid → euid, from the guest's credential records),
+  **User ID** (the numeric uid, or uid → euid, from the guest's credential
+  records; hover for the name where it is known, such as root),
   **Started** (relative to the run start; the absolute time on hover),
   **Lifetime** ("running" when no exit was recorded), **Outcome** ("exit 0",
   "killed by SIGKILL", "killed by SIGKILL (from pid N)" when a recorded kill
@@ -495,9 +497,8 @@ The network capture is the guest's own view on every route.
   for what the tier means and why this row has it; a flag after it says the
   evidence is of limited confidence, and why), **Behaviour** (a short title;
   the rule id and its version are on hover), **Target** (the path, `ip:port` or
-  process the behaviour was aimed at), **Process** (`name (pid · tid)`, ⚠ when
-  the process calls itself by another name; click it to open that process in
-  Details), **ATT&CK** (the technique, `T1053.003 Cron`; click it to list the
+  process the behaviour was aimed at), **Process** (`name (pid · tid)`; click it to
+  open that process in Details), **ATT&CK** (the technique, `T1053.003 Cron`; click it to list the
   rows that cite it), **Count** (`×12`, or `×40 every ~5.0 s` for a steady
   loop), **Result** (succeeded, `3 of 5 failed` or `all failed`, greyed) and
   **When** (the first and last time, as offsets from the start of the run;
@@ -595,22 +596,24 @@ The network capture is the guest's own view on every route.
   selection, Space fold the lane, `H` `M` `L` `I` the tier chips and Show INFO,
   `1`…`9` and `0` the first ten category chips.
 - **Triage › Files › By file** is the first tab of Files and opens by default: one row
-  for each file the run touched, with **Path** (small badges for where it lives, such as
-  `/tmp`, `home`, `system`, `proc`, `hidden`, `persistence` and `credentials`, and `+2 names`
-  when it was also seen under other names, listed in Details), **What happened** (a chain
+  for each file the run touched, with **Path** (the path only) and
+  **Tags** (where it lives, such as `/tmp`, `home`, `system`, `proc`, `hidden`,
+  `persistence` and `credentials`; `+2 names` when it was also seen under other names,
+  listed in Details; and, when a Suspicious activity finding of Low or above names the
+  file as its object, the worst tier with the behaviour's title, `High · Dropped file
+  executed`, or `3 findings · High`), **What happened** (a chain
   such as `created → written 812 KiB → chmod +x → executed → deleted`), **By** (the process,
   and how many more), **First → last** (seconds from the start of the run, the absolute
   time on hover), **Size** (`0 B → 812 KiB`), **Type** (ELF, script, archive, config, text
   or data, read from the first bytes the run captured; `unknown` when none were) and
   **SHA-256** (the first twelve digits; the whole digest on hover and in the row menu's
-  **Copy SHA-256**). A **⚠** marks a file that a Suspicious activity finding (Low and
-  above) names as its object. **Hide stdio**, **Hide library**, **Changed only** and a path
+  **Copy SHA-256**). **Hide stdio**, **Hide library**, **Changed only** and a path
   filter narrow the list. A click shows the file in Details; the row menu opens its
   **Per-file history** or its reconstruction. The Opened, Created, Read, Written, Deleted,
   Renamed, Executed, Attributes, Probed, Other and Changed files tabs stay as the
   per-operation views, with the same filter keys. They no longer have an Evidence column
-  (Details has **Open original syscall**) or a Location column (it is a badge on the
-  path), their times are seconds from the start of the run (the absolute time on hover),
+  (Details has **Open original syscall**) or a Location column (it is a tag in the
+  Tags column after Path), their times are seconds from the start of the run (the absolute time on hover),
   **Process** is `name (pid · tid)`, and Changed files has **Changes** (`3 writes ·
   4.1 KiB`), **Type** and **SHA-256** where it had Diff count.
 - **Triage › Files › Per-file history** is the second tab of Files, before Opened, with
