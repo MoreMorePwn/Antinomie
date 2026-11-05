@@ -1161,6 +1161,19 @@ pub struct BaseSummary {
     pub stealth_support: Vec<String>,
 }
 
+impl BaseSummary {
+    /// The guest architecture the base is for, from its `bundle.json`
+    /// (x86-64 when that has none).
+    pub fn arch(&self) -> GuestArch {
+        self.arch
+    }
+    /// The base's name and its architecture, as the sidebar's VM line shows
+    /// them: `Debian 13 (Minimal) · arm64`.
+    pub fn name_and_arch(&self) -> String {
+        format!("{} · {}", self.label, self.arch.label())
+    }
+}
+
 /// Guest contract revision this app implements.
 pub const APP_REVISION: u32 = crate::control::REVISION;
 
@@ -2955,6 +2968,39 @@ mod tests {
             RevisionStatus::of_base(Some(APP_REVISION), Some(&newer)),
             RevisionStatus::NeedsNewerApp
         );
+    }
+    #[test]
+    fn a_base_reports_the_architecture_its_bundle_names() {
+        let bundle = |json: &str| -> crate::storage::Bundle {
+            let mut value: serde_json::Value = serde_json::from_str(json).unwrap();
+            value["kernel"] = "kernel".into();
+            value["base_disk"] = "base.qcow2".into();
+            value["kernel_append"] = "".into();
+            value["kernel_version"] = "6.12.94".into();
+            value["schema_id"] = 1.into();
+            serde_json::from_value(value).unwrap()
+        };
+        let summary = |arch| BaseSummary {
+            id: "id".into(),
+            label: "BusyBox".into(),
+            directory: PathBuf::new(),
+            guest: None,
+            min_ram_mib: 256,
+            min_disk_gib: 1,
+            fixed_display: false,
+            arch,
+            size_bytes: 0,
+            revision: None,
+            min_app_version: None,
+            built_with: None,
+            stealth_support: Vec::new(),
+        };
+        let arm = summary(bundle(r#"{"arch": "arm64"}"#).arch);
+        let x86 = summary(bundle("{}").arch);
+        assert_eq!(arm.arch(), GuestArch::AARCH64);
+        assert_eq!(x86.arch(), GuestArch::X86_64);
+        assert_eq!(arm.name_and_arch(), "BusyBox · arm64");
+        assert_eq!(x86.name_and_arch(), "BusyBox · x86-64");
     }
     #[test]
     fn base_refusal_names_both_sides_and_is_silent_for_usable_bases() {

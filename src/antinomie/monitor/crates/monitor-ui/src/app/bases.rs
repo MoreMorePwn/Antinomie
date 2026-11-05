@@ -391,6 +391,15 @@ pub(crate) fn selected_base<'a>(
         .or_else(|| snapshot.bases.first())
 }
 
+/// The architecture of the base `identity` names (x86-64 when it is not
+/// installed): what a VM's row and its settings show for the VM.
+pub(crate) fn base_arch(
+    snapshot: &Snapshot,
+    identity: Option<&str>,
+) -> antinomie_monitor_core::GuestArch {
+    selected_base(snapshot, identity).map_or_else(Default::default, BaseSummary::arch)
+}
+
 pub(super) fn preferred_new_base<'a>(
     snapshot: &'a Snapshot,
     directory: &str,
