@@ -1,4 +1,4 @@
-From 63c48fc5ed6a51b620df59744c5f469986a27ea0 Mon Sep 17 00:00:00 2001
+From 81fd90fd12967bfc3f38da66c736feb2ffabba80 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Thu, 5 Nov 2026 23:20:25 +0700
 Subject: [PATCH 53/53] antinomie: boot the guest its boot age ago and step to
@@ -88,10 +88,10 @@ index da60956b2..f26a33e8f 100644
  
  static u64 get_iowait_time(struct kernel_cpustat *kcs, int cpu)
 diff --git a/include/linux/antinomie_stealth.h b/include/linux/antinomie_stealth.h
-index 6995b4905..e7e38688b 100644
+index f1eb7ca86..497eb77c3 100644
 --- a/include/linux/antinomie_stealth.h
 +++ b/include/linux/antinomie_stealth.h
-@@ -98,4 +98,28 @@ static inline bool ant_ata_device_hidden(const char *model)
+@@ -100,4 +100,28 @@ static inline bool ant_ata_device_hidden(const char *model)
  	return false;
  }
  #endif

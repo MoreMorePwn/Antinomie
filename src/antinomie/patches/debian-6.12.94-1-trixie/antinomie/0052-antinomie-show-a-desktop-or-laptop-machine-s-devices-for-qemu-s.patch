@@ -59,6 +59,10 @@ Description: antinomie: show a desktop or laptop machine's devices for QEMU's
  out-of-line copy is a BTF and traceable function Debian's kernel lacks.
  On a stock-profile kernel (Debian bases) only the built-in hooks act:
  NVMe, DRM, USB and libata are Debian's own modules there.
+ ant_acpi_table_shown() takes a plain struct acpi_table_header pointer: a
+ const one would be a BTF type Debian's kernel lacks. facade.c logs
+ nothing on a failed copy back: a dynamic debug entry would name it in
+ /proc/dynamic_debug/control, which every user can read.
  .
  Contract revision 21 (no protocol change; bases with the facade list
  "facade" in stealth_support).
@@ -581,10 +585,10 @@ index 090b3a757..3c3ff9da7 100644
  			udev->devnum, udev->bus->busnum,
  			(((udev->bus->busnum-1) * 128) + (udev->devnum-1)));
 diff --git a/include/linux/antinomie_stealth.h b/include/linux/antinomie_stealth.h
-index a71ec2b10..6995b4905 100644
+index a71ec2b10..f1eb7ca86 100644
 --- a/include/linux/antinomie_stealth.h
 +++ b/include/linux/antinomie_stealth.h
-@@ -35,4 +35,67 @@ static inline bool ant_acpi_device_hidden(void *handle)
+@@ -35,4 +35,69 @@ static inline bool ant_acpi_device_hidden(void *handle)
  	return false;
  }
  #endif
@@ -613,7 +617,9 @@ index a71ec2b10..6995b4905 100644
 +void ant_nvme_identify(u8 cns, void *data, size_t len);
 +void ant_nvme_passthru(u8 opcode, u32 cdw10, u64 address, u32 len);
 +void ant_acpi_header_shown(struct acpi_table_header *header);
-+void *ant_acpi_table_shown(const struct acpi_table_header *table);
++/* Not const: Debian's kernel has no const acpi_table_header pointer type, and
++ * one here would be a BTF type its build lacks. The table is only read. */
++void *ant_acpi_table_shown(struct acpi_table_header *table);
 +void ant_usb_device_shown(struct usb_device *udev);
 +const char *ant_efi_vendor(const char *vendor);
 +bool ant_ata_device_hidden(const char *model);
@@ -637,7 +643,7 @@ index a71ec2b10..6995b4905 100644
 +static inline void ant_nvme_identify(u8 cns, void *data, size_t len) { }
 +static inline void ant_nvme_passthru(u8 opcode, u32 cdw10, u64 address, u32 len) { }
 +static inline void ant_acpi_header_shown(struct acpi_table_header *header) { }
-+static inline void *ant_acpi_table_shown(const struct acpi_table_header *table)
++static inline void *ant_acpi_table_shown(struct acpi_table_header *table)
 +{
 +	return NULL;
 +}
@@ -684,10 +690,10 @@ index ab0babfbb..8dd59246c 100644
  obj-y += section_end.o
 diff --git a/kernel/antinomie/facade.c b/kernel/antinomie/facade.c
 new file mode 100644
-index 000000000..5f70bcac1
+index 000000000..561680744
 --- /dev/null
 +++ b/kernel/antinomie/facade.c
-@@ -0,0 +1,598 @@
+@@ -0,0 +1,605 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/* The guest facade: what a desktop or laptop machine profile says its
 + * devices are, shown where programs read the identity of the devices QEMU
@@ -1128,10 +1134,17 @@ index 000000000..5f70bcac1
 +		copy = kmalloc(NVME_IDENTIFY_DATA_SIZE, GFP_KERNEL);
 +		if (!copy)
 +			return;
++		/*
++		 * On a fault the caller keeps the device's own data. No message:
++		 * a dynamic debug entry (/proc/dynamic_debug/control, readable by
++		 * every user) would name this file.
++		 */
 +		if (!copy_from_user(copy, buffer, NVME_IDENTIFY_DATA_SIZE)) {
 +			ant_nvme_identify(cns, copy, NVME_IDENTIFY_DATA_SIZE);
-+			if (copy_to_user(buffer, copy, NVME_IDENTIFY_DATA_SIZE))
-+				pr_debug("identify copy back failed\n");
++			if (copy_to_user(buffer, copy, NVME_IDENTIFY_DATA_SIZE)) {
++				kfree(copy);
++				return;
++			}
 +		}
 +		kfree(copy);
 +	} else if (opcode == nvme_admin_get_log_page && (cdw10 & 0xff) == NVME_LOG_FW_SLOT &&
@@ -1146,7 +1159,7 @@ index 000000000..5f70bcac1
 +			if (!memcmp(slots + 8 + 8 * i, nvme_real_firmware, 8))
 +				memcpy(slots + 8 + 8 * i, nvme.firmware, 8);
 +		if (copy_to_user(buffer, slots, sizeof(slots)))
-+			pr_debug("firmware log copy back failed\n");
++			return;
 +	}
 +}
 +
@@ -1219,7 +1232,7 @@ index 000000000..5f70bcac1
 +
 +/* A table read through /sys/firmware/acpi/tables: a rewritten copy (to free
 + * with kvfree()), or NULL to show the table itself. */
-+void *ant_acpi_table_shown(const struct acpi_table_header *table)
++void *ant_acpi_table_shown(struct acpi_table_header *table)
 +{
 +	struct acpi_table_header *copy;
 +	u8 sum = 0;
