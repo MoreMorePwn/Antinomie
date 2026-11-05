@@ -35,6 +35,7 @@ pub mod dump_trigger;
 pub mod errno;
 pub mod evidence_delete;
 mod execution;
+pub mod fatal_signal;
 pub mod file_before;
 pub mod file_before_store;
 pub mod file_reconstruct;

@@ -298,6 +298,9 @@ pub(super) fn observe_processes(
                     }
                     _ => None,
                 };
+                node.end_sender = invocation
+                    .task_exit_signal()
+                    .filter(|fatal| node.end_signal == Some(fatal.signal));
                 node.state = match status {
                     Some(antinomie_monitor_core::WaitStatus::Exited { code }) => {
                         format!("task exit {code}")
@@ -430,6 +433,7 @@ pub(super) fn finish_processes(
                 last_ns: node.last_ns,
                 state: node.state.clone(),
                 end_signal: node.end_signal,
+                end_sender: node.end_sender.clone(),
                 exec_history: node.exec_history.clone(),
                 thread: threads.contains(&key),
                 renames: node.renames.clone(),

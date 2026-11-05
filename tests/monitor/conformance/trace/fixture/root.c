@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/fanotify.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/quota.h>
@@ -41,6 +42,15 @@
 #include <netinet/in.h>
 #include <stddef.h>
 
+// linux/fs.h conflicts with glibc's sys/mount.h: the file attribute requests
+// as linux/fs.h defines them.
+#ifndef FS_IOC_GETFLAGS
+#define FS_IOC_GETFLAGS _IOR('f', 1, long)
+#define FS_IOC_SETFLAGS _IOW('f', 2, long)
+#endif
+#ifndef FS_IMMUTABLE_FL
+#define FS_IMMUTABLE_FL 0x00000010
+#endif
 #ifndef SYSLOG_ACTION_READ_ALL
 #define SYSLOG_ACTION_READ_ALL 3
 #define SYSLOG_ACTION_SIZE_BUFFER 10
@@ -1089,6 +1099,37 @@ static void memory_cases(void)
     DONE();
 }
 
+// chattr +i and -i on a file in work_dir (revision 21 decodes the flags).
+static void attr_cases(void)
+{
+    unsigned int attr = 0, immutable;
+    int fd = open("root-file", O_RDONLY | O_CLOEXEC);
+
+    if (fd < 0) {
+        ora_fail("root: open root-file");
+        return;
+    }
+    long r = CALL("ioctl.getflags_root", ioctl, WANT_ANY, fd, FS_IOC_GETFLAGS, &attr);
+    if (r == 0)
+        out_buf(2, &attr, sizeof attr);
+    volatile_case();
+    why("lsattr of a file in work_dir; ENOTTY on a file system without file attributes");
+    DONE();
+    if (r == 0) {
+        immutable = attr | FS_IMMUTABLE_FL;
+        CALL("ioctl.setflags_immutable", ioctl, WANT_ANY, fd, FS_IOC_SETFLAGS, &immutable);
+        in_buf(2, &immutable, sizeof immutable);
+        volatile_case();
+        why("chattr +i (CAP_LINUX_IMMUTABLE) on work_dir's file, cleared by the next case");
+        DONE();
+        CALL("ioctl.setflags_clear", ioctl, WANT_ANY, fd, FS_IOC_SETFLAGS, &attr);
+        in_buf(2, &attr, sizeof attr);
+        volatile_case();
+        DONE();
+    }
+    close(fd);
+}
+
 void area_root(void)
 {
     if (getuid() != 0 || geteuid() != 0) {
@@ -1122,6 +1163,7 @@ void area_root(void)
     in_child(715, "identity child", identity_child, NULL);
     in_child(716, "scheduler child", sched_child, NULL);
     device_cases();
+    attr_cases();
     handle_cases();
     in_child(717, "setns child", setns_child, NULL);
     in_child(718, "vhangup child", vhangup_child, NULL);

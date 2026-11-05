@@ -1,0 +1,404 @@
+From 726ba8fa5cbd94264c973a1659c938ce77b2c5d0 Mon Sep 17 00:00:00 2001
+From: MikiMiku <jonathanirvinjo@gmail.com>
+Date: Wed, 4 Nov 2026 17:36:53 +0700
+Subject: [PATCH] antinomie: record who sent the signal that ended a task
+
+The task-exit record held only the wait status, so a recording could say
+that SIGKILL ended a task but not who sent it. SIGKILL is never queued with
+its siginfo, and a fatal signal nothing catches starts the group exit when
+it is sent, so the sender has to be taken at the send.
+
+The recorder keeps one record per thread group in the group leader's state
+(the LSM blob of kernel/antinomie/state.h; no stock structure changes),
+written and read under the group's siglock, the first one staying:
+
+- kernel/signal.c __send_signal_locked(), after complete_signal(): a send
+  that started the group exit gives si_code, si_pid and si_uid as the kernel
+  fills them for the target and, for a call sent from process context
+  (SI_USER, SI_TKILL, SI_QUEUE), the sending task's global TGID, UID and
+  name. SEND_SIG_PRIV is SI_KERNEL without a sender.
+- kernel/signal.c get_signal(), before its fatal label: a fatal signal that
+  is dequeued (a core-dumping one, one a debugged or ptraced task gets)
+  gives the siginfo the task dequeued.
+- mm/oom_kill.c __oom_kill_process(), after it logs the kill: its victim's
+  record is marked as the OOM killer's, with that log line.
+
+At exit, when the task's wait status names the recorded signal, the
+task-exit event carries lifecycle.signal.signo, code, pid, uid and origin,
+the sender's pid, uid and name when known, and for an OOM kill
+lifecycle.signal.oom and the kernel's line as lifecycle.kernel_log. The
+lifecycle.task_exit field stays first and unchanged.
+
+Contract revision 21.
+---
+ include/linux/antinomie_monitor.h |  14 +++
+ kernel/antinomie/control_wire.h   |   5 +-
+ kernel/antinomie/recorder.c       | 197 +++++++++++++++++++++++++++++-
+ kernel/antinomie/state.h          |  26 ++++
+ kernel/signal.c                   |   2 +
+ mm/oom_kill.c                     |   2 +
+ 6 files changed, 239 insertions(+), 7 deletions(-)
+
+diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
+index eb3a584b5..9e9387fbb 100644
+--- a/include/linux/antinomie_monitor.h
++++ b/include/linux/antinomie_monitor.h
+@@ -170,6 +170,14 @@ bool ant_monitor_core_pending(struct task_struct *task);
+ bool ant_monitor_core_exit(int wait_status, const struct kernel_siginfo *siginfo);
+ void ant_monitor_core_unavailable(int wait_status);
+ void ant_monitor_task_exit(bool group_dead);
++/* Who sent the signal that ends a thread group (kernel/signal.c, with the
++ * target's siglock held), and the OOM killer's victim (mm/oom_kill.c).
++ */
++void ant_monitor_signal_sent(int sig, struct kernel_siginfo *info,
++			     struct task_struct *t);
++void ant_monitor_fatal_signal(int sig, const struct kernel_siginfo *info);
++void ant_monitor_oom_kill(struct task_struct *victim, struct mm_struct *mm,
++			  const char *message);
+ void ant_monitor_release(struct task_struct *task);
+ int ant_monitor_launch(const char *path, char **argv, char **envp);
+ void ant_monitor_stats(void *out);
+@@ -290,6 +298,12 @@ static inline bool ant_monitor_core_exit(int wait_status,
+ }
+ static inline void ant_monitor_core_unavailable(int wait_status) {}
+ static inline void ant_monitor_task_exit(bool group_dead) {}
++static inline void ant_monitor_signal_sent(int sig, struct kernel_siginfo *info,
++					   struct task_struct *t) {}
++static inline void ant_monitor_fatal_signal(int sig,
++					    const struct kernel_siginfo *info) {}
++static inline void ant_monitor_oom_kill(struct task_struct *victim,
++					struct mm_struct *mm, const char *message) {}
+ static inline void ant_monitor_release(struct task_struct *task) {}
+ static inline void ant_monitor_async_begin(const void *slot, u8 system, u32 opcode,
+ 					   u64 user_data, u32 flags, const void *descriptor,
+diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
+index 30543699f..ea9cb41d6 100644
+--- a/kernel/antinomie/control_wire.h
++++ b/kernel/antinomie/control_wire.h
+@@ -28,7 +28,10 @@
+ /* Revision 21: decoded arguments of the ioctl requests fs/ioctl.c answers
+  * for every file (FIONREAD on any file, FIONBIO, FIOASYNC, FIOQSIZE,
+  * FIGETBSZ, FS_IOC_GETFLAGS, FS_IOC_SETFLAGS; no field for the requests
+- * without a pointer argument) and of arch_prctl ARCH_CET_STATUS. */
++ * without a pointer argument) and of arch_prctl ARCH_CET_STATUS; the
++ * task-exit record names who sent the signal that ended a task
++ * (lifecycle.signal.*) and carries the kernel's line for an OOM kill
++ * (lifecycle.kernel_log). */
+ #define ANTC_REVISION 21
+ #define ANTC_HEADER_SIZE 8
+ #define ANTC_UPLOAD_BEGIN 0x1001
+diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
+index ae0e128de..90cfac442 100644
+--- a/kernel/antinomie/recorder.c
++++ b/kernel/antinomie/recorder.c
+@@ -1732,19 +1732,28 @@ void ant_monitor_exit(struct pt_regs *regs)
+ 	ctx->busy = false;
+ }
+ 
+-static void lifecycle(struct ant_task *ctx, const char *key, u64 value)
++/* Whether a lifecycle record of the current task is recorded: a launched
++ * run's task, or one an observer captures.
++ */
++static bool lifecycle_admit(struct ant_task *ctx)
+ {
+-	u8 scalar[8];
+ 	u64 capture_cookie;
+ 
+-	if (!ctx || ctx->busy)
+-		return;
+ 	if (!ctx->active) {
+ 		capture_cookie = ant_observer_admit(current);
+ 		if (!READ_ONCE(ant_state(current)->root_cookie) && !capture_cookie)
+-			return;
++			return false;
+ 		ctx->capture_cookie = capture_cookie;
+ 	}
++	return true;
++}
++
++static void lifecycle(struct ant_task *ctx, const char *key, u64 value)
++{
++	u8 scalar[8];
++
++	if (!ctx || ctx->busy || !lifecycle_admit(ctx))
++		return;
+ 	ctx->busy = true;
+ 	put_unaligned_le64(value, scalar);
+ 	event_begin(ctx, 3, 0);
+@@ -2104,12 +2113,188 @@ void ant_monitor_exec(struct file *file, bool interpreter)
+ 		ant_hash_exec(file, interpreter);
+ }
+ 
++/* Contract revision 21: who sent the signal that ended a thread group.
++ *
++ * A signal that starts the group exit when it is sent (SIGKILL, or a fatal
++ * signal nothing catches: complete_signal()) is never dequeued with its
++ * siginfo, and SIGKILL is never queued with one at all, so the sender is
++ * taken at the send, where the sending call's task is current. A fatal
++ * signal that is dequeued instead (a core-dumping one, one a ptraced or
++ * debugged task gets) is taken at its delivery, from the siginfo the task
++ * dequeued. Both run with the group's siglock held, which also orders them
++ * with the read at exit. The first record of a group stays.
++ */
++static bool sent_by_call(const struct kernel_siginfo *info)
++{
++	if (!in_task() || (current->flags & PF_KTHREAD))
++		return false;
++	if (info == SEND_SIG_NOINFO)
++		return true;
++	/* signal.c's is_si_special(): the special values are the two lowest. */
++	return info > SEND_SIG_PRIV &&
++		(info->si_code == SI_USER || info->si_code == SI_TKILL ||
++		 info->si_code == SI_QUEUE);
++}
++
++static void fatal_note(struct ant_fatal_signal *fatal, int sig,
++		       const struct kernel_siginfo *info, struct task_struct *t, u8 origin)
++{
++	enum siginfo_layout layout;
++
++	memset(fatal, 0, sizeof(*fatal));
++	fatal->signo = sig;
++	fatal->origin = origin;
++	if (info == SEND_SIG_PRIV) {
++		fatal->code = SI_KERNEL;
++		return;
++	}
++	if (info == SEND_SIG_NOINFO) {
++		/* As __send_signal_locked() fills it for the target. */
++		fatal->code = SI_USER;
++		fatal->pid = task_tgid_nr_ns(current, task_active_pid_ns(t));
++		rcu_read_lock();
++		fatal->uid = from_kuid_munged(task_cred_xxx(t, user_ns), current_uid());
++		rcu_read_unlock();
++	} else {
++		fatal->code = info->si_code;
++		layout = siginfo_layout(sig, info->si_code);
++		if (layout == SIL_KILL || layout == SIL_CHLD || layout == SIL_RT) {
++			fatal->pid = info->si_pid;
++			fatal->uid = info->si_uid;
++		}
++	}
++	if (origin == ANT_FATAL_SENT && sent_by_call(info)) {
++		fatal->sender_pid = task_tgid_nr(current);
++		fatal->sender_uid = from_kuid(&init_user_ns, current_uid());
++		/* Unlocked, as printk's users read it: get_task_comm() would take
++		 * the task lock inside the siglock.
++		 */
++		strscpy(fatal->sender_comm, current->comm, sizeof(fatal->sender_comm));
++	}
++}
++
++void ant_monitor_signal_sent(int sig, struct kernel_siginfo *info,
++			     struct task_struct *t)
++{
++	struct signal_struct *signal = t->signal;
++	struct ant_fatal_signal *fatal = &ant_state(t->group_leader)->fatal;
++
++	if (!(signal->flags & SIGNAL_GROUP_EXIT) || signal->group_exit_code != sig ||
++	    fatal->signo == sig)
++		return;
++	fatal_note(fatal, sig, info, t, ANT_FATAL_SENT);
++}
++
++void ant_monitor_fatal_signal(int sig, const struct kernel_siginfo *info)
++{
++	struct ant_fatal_signal *fatal = &ant_state(current->group_leader)->fatal;
++
++	if (!fatal->signo)
++		fatal_note(fatal, sig, info, current, ANT_FATAL_DELIVERED);
++}
++
++/* The OOM killer has sent its SIGKILL to the victim's group (SI_KERNEL, at
++ * the send) and logged the kill; the record keeps that line. The victim's
++ * task lock is held, which nests the siglock (do_send_sig_info() just took it).
++ */
++void ant_monitor_oom_kill(struct task_struct *victim, struct mm_struct *mm,
++			  const char *message)
++{
++	struct ant_fatal_signal *fatal;
++	unsigned long flags;
++
++	if (!lock_task_sighand(victim, &flags))
++		return;
++	fatal = &ant_state(victim->group_leader)->fatal;
++	if (fatal->signo == SIGKILL && fatal->code == SI_KERNEL && !fatal->oom) {
++		fatal->oom = true;
++		scnprintf(fatal->log, sizeof(fatal->log),
++			  "%s: Killed process %d (%s) total-vm:%lukB, anon-rss:%lukB, file-rss:%lukB, shmem-rss:%lukB, UID:%u pgtables:%lukB oom_score_adj:%hd",
++			  message, task_pid_nr(victim), victim->comm,
++			  mm->total_vm << (PAGE_SHIFT - 10),
++			  get_mm_counter(mm, MM_ANONPAGES) << (PAGE_SHIFT - 10),
++			  get_mm_counter(mm, MM_FILEPAGES) << (PAGE_SHIFT - 10),
++			  get_mm_counter(mm, MM_SHMEMPAGES) << (PAGE_SHIFT - 10),
++			  from_kuid(&init_user_ns, task_uid(victim)),
++			  mm_pgtables_bytes(mm) >> 10, victim->signal->oom_score_adj);
++	}
++	unlock_task_sighand(victim, &flags);
++}
++
++/* The task-exit record: the wait status, and for a task the signal ended, who
++ * sent that signal when its group's record has it.
++ */
++static void lifecycle_task_exit(struct ant_task *ctx)
++{
++	static const char *const keys[] = {
++		"lifecycle.signal.signo", "lifecycle.signal.code",
++		"lifecycle.signal.pid", "lifecycle.signal.uid",
++		"lifecycle.signal.origin", "lifecycle.signal.sender_pid",
++		"lifecycle.signal.sender_uid", "lifecycle.signal.oom",
++	};
++	struct ant_fatal_signal fatal;
++	u64 values[ARRAY_SIZE(keys)];
++	unsigned long flags;
++	u8 scalar[8];
++	int i, count;
++
++	if (!ctx || ctx->busy)
++		return;
++	fatal.signo = 0;
++	if ((current->exit_code & 0x7f) && lock_task_sighand(current, &flags)) {
++		fatal = ant_state(current->group_leader)->fatal;
++		unlock_task_sighand(current, &flags);
++	}
++	if (!fatal.signo || fatal.signo != (current->exit_code & 0x7f)) {
++		lifecycle(ctx, "lifecycle.task_exit", current->exit_code);
++		return;
++	}
++	if (!lifecycle_admit(ctx))
++		return;
++	values[0] = fatal.signo;
++	values[1] = (s64)fatal.code;
++	values[2] = (s64)fatal.pid;
++	values[3] = fatal.uid;
++	values[4] = fatal.origin;
++	values[5] = (s64)fatal.sender_pid;
++	values[6] = fatal.sender_uid;
++	values[7] = fatal.oom;
++	/* Sender fields only when the sending call's task is known; the OOM
++	 * mark only for the OOM killer's kill.
++	 */
++	count = fatal.sender_pid ? 7 : 5;
++	ctx->busy = true;
++	event_begin(ctx, 3, 0);
++	put_unaligned_le64(current->exit_code, scalar);
++	field(ctx, 255, "lifecycle.task_exit", "", 4, 0, scalar, sizeof(scalar),
++	      sizeof(scalar), ANT_COMPLETE);
++	for (i = 0; i < count; i++) {
++		put_unaligned_le64(values[i], scalar);
++		field(ctx, 255, keys[i], "", 4, 0, scalar, sizeof(scalar), sizeof(scalar),
++		      ANT_COMPLETE);
++	}
++	if (fatal.sender_pid)
++		field(ctx, 255, "lifecycle.signal.sender_comm", "", 2, 0, fatal.sender_comm,
++		      strnlen(fatal.sender_comm, sizeof(fatal.sender_comm)),
++		      sizeof(fatal.sender_comm), ANT_COMPLETE);
++	if (fatal.oom) {
++		put_unaligned_le64(1, scalar);
++		field(ctx, 255, keys[7], "", 4, 0, scalar, sizeof(scalar), sizeof(scalar),
++		      ANT_COMPLETE);
++		field(ctx, 255, "lifecycle.kernel_log", "", 2, 0, fatal.log,
++		      strnlen(fatal.log, sizeof(fatal.log)), sizeof(fatal.log),
++		      ANT_COMPLETE);
++	}
++	event_end(ctx);
++	ctx->busy = false;
++}
++
+ void ant_monitor_task_exit(bool group_dead)
+ {
+ 	/* Pages the address space held dirty when exit_mm() dropped it. */
+ 	filemap_note(ant_state(current)->monitor);
+ 	ant_run_exit(current, group_dead);
+-	lifecycle(ant_state(current)->monitor, "lifecycle.task_exit", current->exit_code);
++	lifecycle_task_exit(ant_state(current)->monitor);
+ 	if (ant_state(current)->counted) {
+ 		ant_state(current)->counted = false;
+ 		atomic64_dec(&tasks_live);
+diff --git a/kernel/antinomie/state.h b/kernel/antinomie/state.h
+index 375b0d87b..0f7a6bf11 100644
+--- a/kernel/antinomie/state.h
++++ b/kernel/antinomie/state.h
+@@ -10,6 +10,31 @@ struct ant_task;
+ struct ant_run;
+ struct ant_coredump_live;
+ 
++/* The kernel's log line for an OOM kill, as __oom_kill_process() prints it. */
++#define ANT_KILL_LOG_SIZE 192
++
++/* The signal that ended a thread group and who sent it (contract revision
++ * 21). It is kept in the group leader's state, written and read under the
++ * group's siglock: by the send that starts the group exit (SIGKILL, an
++ * uncaught fatal signal), else by the delivery of a fatal signal, and marked
++ * by the OOM killer with the line it logs. signo 0: nothing recorded.
++ */
++struct ant_fatal_signal {
++	s32 code;		/* si_code, as the task would read it */
++	s32 pid;		/* si_pid and si_uid, where si_code's layout has them */
++	u32 uid;
++	s32 sender_pid;		/* the task whose call sent it (global TGID), or 0 */
++	u32 sender_uid;
++	u8 signo;
++	u8 origin;		/* ANT_FATAL_SENT or ANT_FATAL_DELIVERED */
++	bool oom;		/* the OOM killer's SIGKILL; log holds its line */
++	char sender_comm[TASK_COMM_LEN];
++	char log[ANT_KILL_LOG_SIZE];
++};
++
++#define ANT_FATAL_SENT 1
++#define ANT_FATAL_DELIVERED 2
++
+ /* What the recorder keeps per task. It lives in the task's security blob
+  * (task->security), at an offset reserved after every LSM's own part when the
+  * LSMs are set up (ant_task_state_reserve()), never in struct task_struct, so
+@@ -32,6 +57,7 @@ struct ant_task_state {
+ 	/* The process core this task is writing (ant_coredump_attach()). */
+ 	struct ant_coredump_live *coredump_live;
+ 	unsigned long coredump_deadline;
++	struct ant_fatal_signal fatal;
+ 	atomic64_t event_seq;
+ 	atomic64_t packet_seq;
+ 	bool root_process;
+diff --git a/kernel/signal.c b/kernel/signal.c
+index cc8aee82b..84b8fce6d 100644
+--- a/kernel/signal.c
++++ b/kernel/signal.c
+@@ -1190,6 +1190,7 @@ static int __send_signal_locked(int sig, struct kernel_siginfo *info,
+ 	}
+ 
+ 	complete_signal(sig, t, type);
++	ant_monitor_signal_sent(sig, info, t);
+ ret:
+ 	trace_signal_generate(sig, info, t, type != PIDTYPE_PID, result);
+ 	return ret;
+@@ -2894,6 +2895,7 @@ bool get_signal(struct ksignal *ksig)
+ 			continue;
+ 		}
+ 
++		ant_monitor_fatal_signal(signr, &ksig->info);
+ 	fatal:
+ 		spin_unlock_irq(&sighand->siglock);
+ 		if (unlikely(cgroup_task_frozen(current)))
+diff --git a/mm/oom_kill.c b/mm/oom_kill.c
+index 8aa712afd..2f370dba9 100644
+--- a/mm/oom_kill.c
++++ b/mm/oom_kill.c
+@@ -46,6 +46,7 @@
+ #include <linux/mmu_notifier.h>
+ #include <linux/cred.h>
+ #include <linux/nmi.h>
++#include <linux/antinomie_monitor.h>
+ 
+ #include <asm/tlb.h>
+ #include "internal.h"
+@@ -959,6 +960,7 @@ static void __oom_kill_process(struct task_struct *victim, const char *message)
+ 		K(get_mm_counter(mm, MM_SHMEMPAGES)),
+ 		from_kuid(&init_user_ns, task_uid(victim)),
+ 		mm_pgtables_bytes(mm) >> 10, victim->signal->oom_score_adj);
++	ant_monitor_oom_kill(victim, mm, message);
+ 	task_unlock(victim);
+ 
+ 	/*
+-- 
+2.53.0
+

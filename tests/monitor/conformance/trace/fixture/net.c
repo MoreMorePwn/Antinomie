@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <net/if.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/uio.h>
@@ -360,8 +361,30 @@ static void unix_stream_cases(void)
     DONE();
     int queued = -1;
     CALL("ioctl.socket_inq", ioctl, WANT_OK, server, FIONREAD, &queued);
-    want_status(2, "in", "NO_DECODER");
-    why("socket requests are not decoded: the output is an explicit gap");
+    out_buf(2, &queued, sizeof queued);
+    why("FIONREAD on a stream socket: the bytes queued for reading (int), recorded since "
+        "revision 21");
+    DONE();
+    struct ifreq loopback;
+    memset(&loopback, 0, sizeof loopback);
+    strcpy(loopback.ifr_name, "lo");
+    struct ifreq loopback_in = loopback;
+    CALL("ioctl.siocgifindex_lo", ioctl, WANT_OK, server, SIOCGIFINDEX, &loopback);
+    in_buf(2, &loopback_in, sizeof loopback_in);
+    out_buf(2, &loopback, sizeof loopback);
+    why("the loopback interface's index: an ifreq read and written back (revision 21)");
+    DONE();
+    struct ifreq interfaces[8];
+    struct ifconf conf = {.ifc_len = sizeof interfaces, .ifc_req = interfaces};
+    struct ifconf conf_in = conf;
+    long conf_result = CALL("ioctl.siocgifconf", ioctl, WANT_OK, server, SIOCGIFCONF, &conf);
+    in_buf(2, &conf_in, sizeof conf_in);
+    out_buf(2, &conf, sizeof conf);
+    if (conf_result == 0 && conf.ifc_len > 0)
+        out_key("arg2.ifconf.buffer", interfaces, (size_t)conf.ifc_len);
+    volatile_case();
+    why("the interfaces with an IPv4 address: an ifconf and the ifreq array it names "
+        "(revision 21)");
     DONE();
     memset(buffer, 0, sizeof buffer);
     got = CALL("recvfrom.peek", recvfrom, WANT_OK, server, buffer, sizeof buffer, MSG_PEEK, NULL,

@@ -12,6 +12,8 @@
     {"revision": 18, "first_app_version": "0.8.0"},
     {"revision": 19, "first_app_version": "0.8.0"},
     {"revision": 20, "first_app_version": "0.8.0",
-     "notes": "0.9.0 adds the debug breakpoint kind BP_HW_READ (5, load-only watchpoints) without a new revision: it is offered only through the revision-20 CAPS flag READ_WATCH (arm64 guests), so an older host never sends it and an older or x86-64 guest never offers it."}
+     "notes": "0.9.0 adds the debug breakpoint kind BP_HW_READ (5, load-only watchpoints) without a new revision: it is offered only through the revision-20 CAPS flag READ_WATCH (arm64 guests), so an older host never sends it and an older or x86-64 guest never offers it."},
+    {"revision": 21, "first_app_version": "0.9.0",
+     "notes": "Task-exit records name the sender of the signal that ended a task (lifecycle.signal.*) and carry the kernel's OOM kill line (lifecycle.kernel_log); the recorder decodes the ioctl requests fs/ioctl.c answers for every file and arch_prctl ARCH_CET_STATUS. arm64 guests write ELF32 cores of AArch32 tasks (core flag COMPAT_ELF32 0x100, CORE_CAPS 32) and debug them (debug CAPS AARCH32 4096; A32 and Thumb software breakpoints); a debug-on-start session of an image the engine cannot debug answers EOPNOTSUPP. ioctl arguments are captured by their encoded size and more by layout (ifreq, ifconf, loop_info64, loop_config, file_clone_range, fsxattr); reads of event descriptors name their records; common compat calls are captured by ILP32 layouts."}
   ]
 }

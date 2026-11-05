@@ -1223,6 +1223,12 @@ static void control_cases(void)
     CALL("arch_prctl.unknown_code", arch_prctl, EINVAL, 0x9999, 0);
     want_key_status("arch_prctl.unknown_selector", "NO_DECODER");
     DONE();
+    unsigned long long cet_status[3] = {0, 0, 0};
+    CALL("arch_prctl.cet_status", arch_prctl, EINVAL, 0x3001, cet_status);
+    why("ARCH_CET_STATUS of the CET patches mainline did not take (glibc 2.28 to 2.38 built "
+        "with CET asks at start-up): Linux 6.12 answers EINVAL; a known selector, its three "
+        "u64 are recorded only on success");
+    DONE();
     in_child(404, "arch_prctl child", arch_child, NULL);
 #endif
 

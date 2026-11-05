@@ -34,6 +34,9 @@ fsopen.tmpfs | fsopen(fs_name="tmpfs", flags=CLOEXEC) = 3 | arg0.path:complete:"
 fspick.mount_root | fspick(dfd=AT_FDCWD, path="root-fsmnt", flags=FSPICK_CLOEXEC) = 5 | arg1.path:complete:"root-fsmnt"
 fspick.not_mount_root | fspick(dfd=AT_FDCWD, path=".", flags=0x0) = EINVAL | arg1.path:complete:"."
 init_module.garbage_image | init_module(umod="ANTINOMIE-CONFORMANCE-hovcjqxelszgnubipwdkryfmta"..., len=128, uargs="") = ENOEXEC | arg0.data:complete:"ANTINOMIE-CONFORMANCE-hovcjqxelszgnubipwdkryfmta"... arg2.path:complete:""
+ioctl.getflags_root | ioctl(fd=3, cmd=FS_IOC_GETFLAGS, arg=<data>) = <value> | arg2.ioctl:complete
+ioctl.setflags_clear | ioctl(fd=3, cmd=FS_IOC_SETFLAGS, arg=<data>) = <value> | arg2.ioctl:complete
+ioctl.setflags_immutable | ioctl(fd=3, cmd=FS_IOC_SETFLAGS, arg=<data>) = <value> | arg2.ioctl:complete
 kexec_file_load.unload | kexec_file_load(kernel_fd=-1, initrd_fd=-1, cmdline_len=0, cmdline_ptr=NULL, flags=KEXEC_FILE_UNLOAD) = 0 | arg3.data:null pointer:uncaptured
 kexec_load.bad_flags | kexec_load(entry=0, nr_segments=0, segments=NULL, flags=KEXEC_ARCH_DEFAULT|0x100) = EINVAL | arg2.segments:complete:uncaptured
 kexec_load.too_many_segments_root | kexec_load(entry=0, nr_segments=17, segments=<addr>, flags=KEXEC_ARCH_DEFAULT) = EINVAL | arg2.segments:invalid extent:uncaptured !3

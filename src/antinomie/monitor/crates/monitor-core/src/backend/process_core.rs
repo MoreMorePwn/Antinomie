@@ -126,7 +126,8 @@ impl CoreStatus {
             || result.tgid != tgid
             || !(1..=6).contains(&result.state)
             || result.size > LOGICAL_LIMIT
-            || result.flags & if manual { !0x7f } else { !15 } != 0
+            // 0x100: revision 21's ELF32 core of an AArch32 task (COMPAT_ELF32).
+            || result.flags & if manual { !0x17f } else { !0x10f } != 0
             || if manual {
                 result.flags & 0x51 != 0x50
                     || result.wait_status != 0
@@ -146,7 +147,7 @@ impl CoreStatus {
                 && (result.status != 0
                     || result.expected_size != result.size
                     || result.size < 64
-                    || result.flags & 2 == 0
+                    || result.flags & (2 | 0x100) == 0
                     || result.thread_count == 0))
         {
             return Err("invalid process-core identity, bounds, state or flags".into());

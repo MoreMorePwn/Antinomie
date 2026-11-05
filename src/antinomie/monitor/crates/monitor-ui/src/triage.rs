@@ -1107,6 +1107,8 @@ struct TaskNode {
     state: String,
     /// The signal number that ended the task, when its exit record says it was killed.
     end_signal: Option<u8>,
+    /// Who sent that signal, when the guest recorded it (revision 21).
+    end_sender: Option<antinomie_monitor_core::fatal_signal::FatalSignal>,
     exec_history: Vec<String>,
     renames: Vec<String>,
     in_call: Option<(String, u64)>,
@@ -1144,6 +1146,8 @@ struct ProcessNode {
     state: String,
     /// The signal number that ended the task, when its exit record says it was killed.
     end_signal: Option<u8>,
+    /// Who sent that signal, when the guest recorded it (revision 21).
+    end_sender: Option<antinomie_monitor_core::fatal_signal::FatalSignal>,
     exec_history: Vec<String>,
     /// A thread of the process with this pid, not a process of its own.
     thread: bool,

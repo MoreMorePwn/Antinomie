@@ -138,6 +138,27 @@ TYPES = {
     "xt_counters_info": ("struct xt_counters_info", "linux/netfilter/x_tables.h"),
     "user_pt_regs": ("struct user_pt_regs", "asm/ptrace.h"),
     "user_fpsimd_state": ("struct user_fpsimd_state", "asm/ptrace.h"),
+    # Revision 21: terminal ioctls (recorder.c), the ioctls of fs/ioctl.c,
+    # sockets, TUN and loop devices, and the records of event descriptors' reads.
+    "termios": ("struct termios", "asm/termbits.h"),
+    "termios2": ("struct termios2", "asm/termbits.h"),
+    "winsize": ("struct winsize", "asm/termios.h"),
+    "ifreq": ("struct ifreq", "linux/if.h"),
+    "ifconf": ("struct ifconf", "linux/if.h"),
+    "loop_info64": ("struct loop_info64", "linux/loop.h"),
+    "loop_config": ("struct loop_config", "linux/loop.h"),
+    "file_clone_range": ("struct file_clone_range", "linux/fs.h"),
+    "fsxattr": ("struct fsxattr", "linux/fs.h"),
+    "signalfd_siginfo": ("struct signalfd_siginfo", "linux/signalfd.h"),
+    "inotify_event": ("struct inotify_event", "linux/inotify.h"),
+    "fanotify_event_metadata": ("struct fanotify_event_metadata", "linux/fanotify.h"),
+    "uffd_msg": ("struct uffd_msg", "linux/userfaultfd.h"),
+    # The 32-bit time of the compat ABIs' *_time32 calls (old_timespec32).
+    "old_timespec": ("struct __kernel_old_timespec", "linux/time_types.h"),
+    # The compat ABIs' stat64 family and statfs64 (i386 and arm UAPI records;
+    # 64-bit UAPIs have no struct stat64, so their inventories list it unsupported).
+    "stat64": ("struct stat64", "asm/stat.h"),
+    "statfs64": ("struct statfs64", "asm/statfs.h"),
 }
 SCALARS = {
     "int": ("int", True), "wait_status": ("int", True), "timer_t": ("int", True),
@@ -373,6 +394,15 @@ def uapi_overlay(kernel, spec, schema, overlay, sources):
     """Fill OVERLAY with the arch's installed-UAPI view of the pinned tree."""
     (overlay / "asm").mkdir()
     (overlay / "linux").mkdir()
+    # linux/if.h takes struct sockaddr from the C library's sys/socket.h outside
+    # the kernel; give it the pinned kernel's record instead (as for "sockaddr").
+    (overlay / "sys").mkdir()
+    socket_path = kernel / "include/linux/socket.h"
+    sources[str(socket_path.relative_to(kernel))] = sha(socket_path)
+    (overlay / "sys" / "socket.h").write_text(
+        "#include <linux/socket.h>\ntypedef __kernel_sa_family_t sa_family_t;\n" +
+        extract_record(socket_path.read_text(), "sockaddr").replace(
+            "DECLARE_FLEX_ARRAY(char, sa_data);", "char sa_data[0];"))
     # Same removal as pinned scripts/headers_install.sh: compiler-only
     # declarations are not part of installed userspace ABI headers.
     for header in (kernel / "include/uapi/linux").rglob("*.h"):
@@ -417,10 +447,14 @@ def generate(kernel, arch):
     schema = json.loads(schema_path.read_text())
     by_number = {row["number"]: row for row in schema["syscalls"]}
     # The shared decoders and this arch's capture_<arch>.c, never another arch's.
+    # recorder.c names the layouts of ioctl arguments, reads and compat calls.
     capture_paths = sorted(set((kernel / "kernel/antinomie").glob("*capture.c"))
-                           | set((kernel / "kernel/antinomie").glob(spec["capture"])))
+                           | set((kernel / "kernel/antinomie").glob(spec["capture"]))
+                           | {kernel / "kernel/antinomie/recorder.c"})
     capture_source = "\n".join(path.read_text() for path in capture_paths)
     captured = set(re.findall(r'LAYOUT\("([^"]+)"\)', capture_source))
+    # recorder.c's compat table names its layouts as the last argument.
+    captured.update(re.findall(r'COMPAT_RULE\(.*?"[^"]*",\s*"([^"]+)"\)', capture_source, re.S))
     # Explicit macro rows (the syscall by its __NR_ name), including the
     # additional phase argument.
     by_name = {row["name"]: row["number"] for row in schema["syscalls"]}
@@ -448,9 +482,17 @@ def generate(kernel, arch):
         extras += "typedef __kernel_sa_family_t sa_family_t;\n" + extract_record(socket_source, "sockaddr").replace("DECLARE_FLEX_ARRAY(char, sa_data);", "char sa_data[0];")
         special = {"msghdr": "struct user_msghdr", "mmsghdr": "struct mmsghdr", "cmsghdr": "struct cmsghdr",
                    "linger": "struct linger", "sockaddr": "struct sockaddr"}
+        # The compat ABIs' rt_sigaction record (include/linux/compat.h's struct
+        # compat_sigaction on i386 and arm, which have SA_RESTORER and no IRIX
+        # order): handler, flags, restorer, then a 64-bit mask, packed.
+        extras += ("struct compat_sigaction { unsigned int sa_handler; unsigned int sa_flags;"
+                   " unsigned int sa_restorer; unsigned int sa_mask[2]; };\n")
+        special["compat_sigaction"] = "struct compat_sigaction"
         for relative, names in {
             "include/linux/sched.h": ["sched_param"],
             "include/linux/types.h": ["ustat"],
+            # getdents's record: unsigned long, so ILP32 targets give the compat one.
+            "fs/readdir.c": ["linux_dirent"],
             **spec["records"],
         }.items():
             source_path = kernel / relative

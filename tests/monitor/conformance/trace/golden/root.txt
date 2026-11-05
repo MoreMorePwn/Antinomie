@@ -34,6 +34,9 @@ fsopen.tmpfs | fsopen(fs_name="tmpfs", flags=CLOEXEC) = 3 | arg0.path:complete:"
 fspick.mount_root | fspick(dfd=AT_FDCWD, path="root-fsmnt", flags=FSPICK_CLOEXEC) = 5 | arg1.path:complete:"root-fsmnt"
 fspick.not_mount_root | fspick(dfd=AT_FDCWD, path=".", flags=0x0) = EINVAL | arg1.path:complete:"."
 init_module.garbage_image | init_module(umod="ANTINOMIE-CONFORMANCE-hovcjqxelszgnubipwdkryfmta"..., len=128, uargs="") = ENOEXEC | arg0.data:complete:"ANTINOMIE-CONFORMANCE-hovcjqxelszgnubipwdkryfmta"... arg2.path:complete:""
+ioctl.getflags_root | ioctl(fd=3, cmd=FS_IOC_GETFLAGS, arg=<data>) = <value> | arg2.ioctl:complete
+ioctl.setflags_clear | ioctl(fd=3, cmd=FS_IOC_SETFLAGS, arg=<data>) = <value> | arg2.ioctl:complete
+ioctl.setflags_immutable | ioctl(fd=3, cmd=FS_IOC_SETFLAGS, arg=<data>) = <value> | arg2.ioctl:complete
 ioperm.off_root | ioperm(from=128, num=1, on=0) = 0 |
 ioperm.on_root | ioperm(from=128, num=1, on=1) = 0 |
 iopl.lower_root | iopl(level=0) = 0 |
