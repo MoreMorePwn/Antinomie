@@ -6,6 +6,10 @@
 //! `server` device profile: its disk is installed for UEFI and it boots
 //! through the firmware (OVMF, or AAVMF on arm64) with its own variable store,
 //! which must be there after the first boot and after every restore.
+//! The UEFI run also proves the store belongs to the checkpoint: after the
+//! snapshots the guest writes an EFI variable (efivarfs), the firmware stores
+//! it in the VM's variable store, and a full restore and a disk restore must
+//! both bring the store back without it.
 //! A base of an emulated architecture (its bundle.json `arch`, arm64) gets two
 //! vCPUs and 1 GiB, the budget of a TCG guest, and every wait scaled by the
 //! architecture's time scale.
@@ -316,6 +320,66 @@ fn variable_store(vm_dir: &Path) -> Option<PathBuf> {
         })
 }
 
+/// The test variable's name, as the firmware stores it (UCS-2) in the store.
+const EFI_VAR_NAME: &str = "AntinomieSnapTest";
+const EFI_VAR_PATH: &str =
+    "/sys/firmware/efi/efivars/AntinomieSnapTest-8be4df61-93ca-11d2-aa0d-00e098032b8c";
+
+/// Whether the variable store file holds the test variable.
+fn store_has_test_variable(vars: &Path) -> Result<bool, String> {
+    let needle: Vec<u8> = EFI_VAR_NAME
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    let data = std::fs::read(vars).map_err(|error| format!("{}: {error}", vars.display()))?;
+    Ok(data.windows(needle.len()).any(|part| part == needle))
+}
+
+/// Writes the test variable's name over the store's last bytes, free space
+/// the firmware has not used, without changing the file's size.
+fn mark_store(vars: &Path) -> Result<(), String> {
+    use std::os::unix::fs::FileExt;
+    let name: Vec<u8> = EFI_VAR_NAME
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(vars)
+        .map_err(|error| format!("{}: {error}", vars.display()))?;
+    let size = file.metadata().map_err(|error| error.to_string())?.len();
+    file.write_all_at(&name, size - 4096)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| format!("{}: {error}", vars.display()))
+}
+
+/// Waits for the firmware to have written the test variable into the store.
+fn wait_for_test_variable(vars: &Path) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !store_has_test_variable(vars)? {
+        if Instant::now() > deadline {
+            return Err("the guest's EFI variable never reached the variable store".into());
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    Ok(())
+}
+
+/// A root shell that runs `script` in the guest.
+fn root_shell(script: String) -> ExecRequest {
+    ExecRequest {
+        path: "/bin/sh".into(),
+        args: vec!["-c".into(), script],
+        cwd: "/".into(),
+        env: vec!["PATH=/bin:/sbin:/usr/bin:/usr/sbin".into()],
+        uid: 0,
+        gid: 0,
+        analysis: Default::default(),
+        run_in: RunIn::AppTerminal,
+        ..Default::default()
+    }
+}
+
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let options = parse(&args)?;
@@ -362,9 +426,10 @@ fn run() -> Result<(), String> {
         backend: Backend::new(options)?,
         snapshot: Snapshot::default(),
         terminal: BTreeMap::new(),
-        // An arm64 Debian guest's kernel stays quiet on the serial port; its
-        // getty's prompt there says it is up.
-        ready: if debian && emulated {
+        // An arm64 Debian guest's kernel stays quiet on the serial port, and
+        // so does an x86 one whose console is the serial port (the UEFI VM's):
+        // its getty's prompt there says it is up.
+        ready: if debian && (emulated || uefi) {
             " login: "
         } else if debian {
             "systemd["
@@ -442,6 +507,29 @@ fn run() -> Result<(), String> {
     let original_boot = driver.snapshot.boot_id.clone();
     let full = driver.snapshot(&vm, "Full A", VmSnapshotMode::Full)?;
     let disk = driver.snapshot(&vm, "Disk A", VmSnapshotMode::Disk)?;
+    if uefi {
+        // Written after the snapshots: no checkpoint holds it.
+        let efi = driver.launch(root_shell(format!(
+            "mountpoint -q /sys/firmware/efi/efivars || mount -t efivarfs efivarfs /sys/firmware/efi/efivars; printf '\\007\\000\\000\\000x' >{EFI_VAR_PATH} && echo EFI_WRITTEN || {{ ls /sys/firmware/efi; dmesg | grep -i efi | tail -15; }}"
+        )))?;
+        let vars = vars.as_ref().ok_or("variable store missing")?;
+        match driver.marker(&efi, "EFI_WRITTEN") {
+            Ok(()) => {
+                wait_for_test_variable(vars)?;
+                eprintln!("EFI variable written by the guest, present in the store");
+            }
+            // The guest's firmware refused the write (EIO from efivarfs, seen
+            // with this QEMU's OVMF): the checkpoint logic does not depend on
+            // who wrote the store, so the host marks it instead.
+            Err(error) => {
+                eprintln!(
+                    "the guest could not write an EFI variable ({error}); marking the store from the host"
+                );
+                mark_store(vars)?;
+                wait_for_test_variable(vars)?;
+            }
+        }
+    }
     driver.input(&run, "B", "SET_B")?;
     driver.input(&run, "inc", "COUNT_8")?;
     let future = driver.snapshot(&vm, "Future B", VmSnapshotMode::Disk)?;
@@ -456,6 +544,9 @@ fn run() -> Result<(), String> {
         })?;
         if driver.snapshot.boot_id == original_boot {
             return Err("full restore appended to old timeline".into());
+        }
+        if uefi && store_has_test_variable(vars.as_ref().ok_or("variable store missing")?)? {
+            return Err("the full restore kept an EFI variable written after the snapshot".into());
         }
         let restored = driver.current_run()?;
         if restored == run {
@@ -506,6 +597,16 @@ fn run() -> Result<(), String> {
         switch_profile: false,
     })?;
     driver.guest_ready()?;
+    if uefi {
+        if store_has_test_variable(vars.as_ref().ok_or("variable store missing")?)? {
+            return Err("the disk restore kept an EFI variable written after the snapshot".into());
+        }
+        let efi = driver.launch(root_shell(format!(
+            "mountpoint -q /sys/firmware/efi/efivars || mount -t efivarfs efivarfs /sys/firmware/efi/efivars; if [ -e {EFI_VAR_PATH} ]; then echo EFI_PRESENT; else echo EFI_ABSENT; fi"
+        )))?;
+        driver.marker(&efi, "EFI_ABSENT")?;
+        eprintln!("EFI variable gone after the restores");
+    }
     let rebooted = driver.launch(ExecRequest {
         path: "/bin/sh".into(),
         args: vec!["-c".into(), format!("cat {value}; echo DISK_REBOOT_DONE")],
