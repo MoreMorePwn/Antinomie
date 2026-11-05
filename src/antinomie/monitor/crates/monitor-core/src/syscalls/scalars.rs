@@ -7,6 +7,7 @@
 //! option. Values are the pinned UAPI's; flags that differ per architecture
 //! (`O_*`) are read with the table's constants.
 use super::{Constants, Table, named};
+use crate::typed_fields::{LSM_ATTR, LSM_FLAGS};
 
 type Names = &'static [(&'static str, u64)];
 
@@ -142,7 +143,7 @@ const DNOTIFY: Names = &[
 ];
 const LEASE: Names = &[("F_RDLCK", 0), ("F_WRLCK", 1), ("F_UNLCK", 2)];
 
-const NETLINK: Names = &[
+pub(crate) const NETLINK: Names = &[
     ("NETLINK_ROUTE", 0),
     ("NETLINK_UNUSED", 1),
     ("NETLINK_USERSOCK", 2),
@@ -167,13 +168,21 @@ const NETLINK: Names = &[
 ];
 
 /// `ETH_P_*` as the program passes it: in network byte order.
-const ETHERNET: Names = &[
+pub(crate) const ETHERNET: Names = &[
     ("ETH_P_ALL", 0x0003),
     ("ETH_P_IP", 0x0800),
     ("ETH_P_ARP", 0x0806),
     ("ETH_P_IPV6", 0x86dd),
     ("ETH_P_LOOP", 0x0060),
     ("ETH_P_8021Q", 0x8100),
+    ("ETH_P_802_3", 0x0001),
+    ("ETH_P_802_2", 0x0004),
+    ("ETH_P_RARP", 0x8035),
+    ("ETH_P_MPLS_UC", 0x8847),
+    ("ETH_P_PPP_DISC", 0x8863),
+    ("ETH_P_PPP_SES", 0x8864),
+    ("ETH_P_PAE", 0x888e),
+    ("ETH_P_LLDP", 0x88cc),
 ];
 
 const SPECULATION: Names = &[
@@ -326,9 +335,15 @@ fn prctl(index: usize, args: &[u64; 6]) -> Option<String> {
         (47, 2) if matches!(args[1], 1..=3) => capability(value),
         (52 | 53, 1) => one(value, SPECULATION),
         (53, 2) => bits(value, SPECULATION_STATE),
-        (0x5961_6d61, 1) if value == u64::MAX => "PR_SET_PTRACER_ANY".into(),
+        (0x5961_6d61, 1) if value == u64::MAX || value == u64::from(u32::MAX) => {
+            "PR_SET_PTRACER_ANY".into()
+        }
         _ => return None,
     })
+}
+
+fn compat(table: &Table) -> bool {
+    matches!(table.abi, super::Abi::Arm | super::Abi::I386)
 }
 
 /// The name of argument `index` of `call` when it is one of the plain
@@ -342,7 +357,14 @@ pub(super) fn name(
     let value = args[index];
     Some(match (call, index) {
         ("inotify_add_watch", 2) => bits(value & 0xffff_ffff, INOTIFY),
+        // A 32-bit program passes the 64-bit mask as two registers.
+        ("fanotify_mark", 2) if compat(table) => {
+            bits(value & 0xffff_ffff | args[3] << 32, FANOTIFY)
+        }
         ("fanotify_mark", 2) => bits(value, FANOTIFY),
+        ("fanotify_mark", 3) if compat(table) => return None,
+        ("lsm_get_self_attr" | "lsm_set_self_attr", 0) => one(value, LSM_ATTR),
+        ("lsm_get_self_attr" | "lsm_set_self_attr", 3) => bits(value, LSM_FLAGS),
         ("access", 1) | ("faccessat" | "faccessat2", 2) => {
             if value & 7 == 0 {
                 "F_OK".into()
@@ -402,6 +424,65 @@ mod tests {
     fn shown(call: &str, index: usize, args: [u64; 6]) -> Option<String> {
         let table = native();
         table.selector_name(table.number(call)?, index, &args)
+    }
+
+    #[test]
+    fn compat_calls_read_by_their_x86_64_name() {
+        use super::super::{Abi, table};
+        for abi in [Abi::Arm, Abi::I386] {
+            let table = table(abi);
+            let shown = |call: &str, index: usize, args: [u64; 6]| {
+                table.selector_name(table.number(call)?, index, &args)
+            };
+            // fcntl64 is fcntl: F_SETFL flags, F_ADD_SEALS seals.
+            assert_eq!(
+                shown("fcntl64", 2, [3, 4, 0o4000 | 0o2000, 0, 0, 0]).unwrap(),
+                "O_APPEND|O_NONBLOCK"
+            );
+            assert_eq!(
+                shown("fcntl64", 2, [3, 1033, 0x2 | 0x8, 0, 0, 0]).unwrap(),
+                "F_SEAL_SHRINK|F_SEAL_WRITE"
+            );
+            assert_eq!(
+                shown("fcntl64", 2, [3, 2, 1, 0, 0, 0]).unwrap(),
+                "FD_CLOEXEC"
+            );
+            // prctl's sub-arguments; the 32-bit "any" tracer is 0xffffffff.
+            assert_eq!(
+                shown("prctl", 1, [22, 2, 0, 0, 0, 0]).unwrap(),
+                "SECCOMP_MODE_FILTER"
+            );
+            assert_eq!(
+                shown("prctl", 1, [0x5961_6d61, 0xffff_ffff, 0, 0, 0, 0]).unwrap(),
+                "PR_SET_PTRACER_ANY"
+            );
+            assert_eq!(
+                shown("socket", 2, [2, 1, 17, 0, 0, 0]).unwrap(),
+                "IPPROTO_UDP"
+            );
+            assert_eq!(shown("access", 1, [0, 6, 0, 0, 0, 0]).unwrap(), "R_OK|W_OK");
+            // The 64-bit fanotify mask is two registers.
+            assert_eq!(
+                shown("fanotify_mark", 2, [3, 1, 0x2, 0x0, 0, 0]).unwrap(),
+                "FAN_MODIFY"
+            );
+        }
+    }
+
+    #[test]
+    fn lsm_calls_name_the_attribute_and_flags() {
+        assert_eq!(
+            shown("lsm_get_self_attr", 0, [100, 0, 0, 1, 0, 0]).unwrap(),
+            "LSM_ATTR_CURRENT"
+        );
+        assert_eq!(
+            shown("lsm_get_self_attr", 3, [100, 0, 0, 1, 0, 0]).unwrap(),
+            "LSM_FLAG_SINGLE"
+        );
+        assert_eq!(
+            shown("lsm_set_self_attr", 0, [101, 0, 0, 0, 0, 0]).unwrap(),
+            "LSM_ATTR_EXEC"
+        );
     }
 
     #[test]
