@@ -84,6 +84,12 @@ impl MonitorApp {
         self.dump_pause_banner(root);
         self.health(root);
         self.sidebar(root);
+        // Before the tabs draw: the Debugger tab's console must belong to the
+        // session it shows. Drawn first, a new session's pane started gdb for
+        // it, and the panel reset for that session right after dropped that
+        // gdb, which could still connect, leave, and so let a program held at
+        // its start run (Debug on start then missed its breakpoints).
+        self.debugger_session();
         let mut layout = std::mem::take(&mut self.layout);
         if let Some(panel) = self.focus_panel.take() {
             layout.focus(panel);
@@ -111,7 +117,6 @@ impl MonitorApp {
             }
             captures::ProcessPurpose::Attach => self.observer_start_enabled(),
         };
-        self.debugger_session();
         if self
             .process_picker
             .selected
