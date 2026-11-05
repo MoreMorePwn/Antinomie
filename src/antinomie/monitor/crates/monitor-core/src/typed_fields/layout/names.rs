@@ -10,6 +10,7 @@
 //! as hex. Flag groups that the syscall table has (`open`, `clone_flags`,
 //! `message`) are read with the ABI's constants; the others are the pinned
 //! UAPI's values, which the shipped ABIs share.
+use super::kernel;
 use super::time::{self, TimeKind};
 use super::{Cx, Raw};
 use crate::syscalls::scalars::STATX_MASK;
@@ -58,7 +59,7 @@ const RESOLVE: Table = &[
     ("RESOLVE_CACHED", 0x20),
 ];
 
-const EFLAGS: Table = &[
+pub(in crate::typed_fields) const EFLAGS: Table = &[
     ("CF", 0x1),
     ("PF", 0x4),
     ("AF", 0x10),
@@ -253,6 +254,8 @@ enum Fmt {
     Errno,
     Rlimit,
     FsMagic,
+    /// Seconds since the epoch, as a UTC date; 0 stays 0.
+    Date,
 }
 
 /// The rule of member `path` of layout `layout`.
@@ -293,6 +296,24 @@ fn rule(layout: &str, path: &str) -> Option<Fmt> {
         ("timex", "modes") => Flags(ADJ_MODES),
         ("timex", "status") => Flags(TIMEX_STATUS),
         ("perf_event_attr", "type") => Enum(PERF_TYPE),
+        ("perf_event_attr", "sample_type") => Flags(kernel::SAMPLE_TYPE),
+        ("perf_event_attr", "read_format") => Flags(kernel::READ_FORMAT),
+        ("perf_event_attr", "precise_ip") => Enum(kernel::PRECISE_IP),
+        ("perf_event_attr", "bp_type") => Enum(kernel::BREAKPOINT_TYPE),
+        ("perf_event_attr", "config" | "config1" | "config2" | "config3" | "sig_data") => Hex,
+        ("perf_event_attr", "sample_regs_user" | "sample_regs_intr") => Hex,
+        ("perf_event_attr", "branch_sample_type") => Hex,
+        ("msqid64_ds" | "semid64_ds" | "shmid64_ds", path) if path.ends_with("time") => Date,
+        ("if_dqblk" | "if_nextdqblk", "dqb_btime" | "dqb_itime") => Date,
+        ("if_dqblk" | "if_nextdqblk", "dqb_valid") => Flags(kernel::QIF),
+        ("if_dqinfo", "dqi_flags") => Flags(kernel::DQF),
+        ("if_dqinfo", "dqi_valid") => Flags(kernel::IIF),
+        ("fs_quota_stat" | "fs_quota_statv", "qs_flags") => Flags(kernel::FS_QUOTA_STATE),
+        ("fs_disk_quota", "d_flags") => Flags(kernel::FS_QUOTA_TYPE),
+        ("fs_disk_quota", "d_fieldmask") => Flags(kernel::FS_DQ_FIELDS),
+        ("fs_disk_quota", "d_btimer" | "d_itimer" | "d_rtbtimer") => Date,
+        ("lsm_ctx", "id") => Enum(kernel::LSM_ID),
+        ("lsm_ctx", "flags") => Flags(kernel::LSM_FLAGS),
         ("mount_attr", "attr_set" | "attr_clr") => Flags(MOUNT_ATTR),
         ("mount_attr", "propagation") => Enum(PROPAGATION),
         ("landlock_ruleset_attr", "handled_access_fs") => Flags(LANDLOCK_FS),
@@ -384,6 +405,10 @@ pub(super) fn leaf(cx: &Cx<'_>, path: &str, raw: &Raw) -> String {
             1 => "SIG_IGN".into(),
             u64::MAX => "SIG_ERR".into(),
             _ => pointer(value),
+        },
+        Some(Fmt::Date) => match time::time(raw.signed, 0, 1, TimeKind::Wall) {
+            Some(date) if value != 0 => date,
+            _ => plain(raw),
         },
         Some(Fmt::Perm) => format!("{value:04o}"),
         Some(Fmt::StatMode) => stat_mode(value),

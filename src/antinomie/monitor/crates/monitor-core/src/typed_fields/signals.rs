@@ -42,6 +42,11 @@ pub(super) fn sigset(data: &[u8]) -> Option<Decoded> {
     Some(decoded)
 }
 
+/// A 64-signal mask as its set, `[SIGINT SIGTERM]`.
+pub(super) fn sigset_text(mask: u64) -> String {
+    sigset(&mask.to_le_bytes()).map_or_else(|| format!("{mask:#x}"), |set| set.full_line())
+}
+
 /// pselect6's sixth argument: `{const sigset_t *ss; size_t ss_len}`.
 pub(super) fn argpack(data: &[u8]) -> Option<Decoded> {
     let mut decoded = Decoded::new(Shape::Struct);

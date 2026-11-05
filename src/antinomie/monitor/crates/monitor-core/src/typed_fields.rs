@@ -21,28 +21,41 @@
 //! decoder covers is left to the views' byte rendering. Reserved and padding
 //! members are not shown.
 use crate::FieldSummary;
+use crate::syscalls::Abi;
 use std::collections::BTreeMap;
 
+mod aio;
 mod arrays;
 mod bpf;
 mod contextual;
 pub use contextual::PROTOCOLS;
 pub mod ebpf_asm;
+mod frames;
 mod layout;
 mod records;
+mod regset;
 mod signals;
+mod sockaddr;
+mod spec;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_hand;
+#[cfg(test)]
+mod tests_kernel;
+#[cfg(test)]
 mod tests_layout;
+mod uring;
 
 pub use arrays::{
     About, Brief, Cut, CutKind, MAX_RECORDS, Record, Records, brief, is_array, record_json,
 };
 pub use bpf::{attach_type_name, attr_member as bpf_attr_member, map_type_name, prog_type_name};
+pub(crate) use layout::{LSM_ATTR, LSM_FLAGS};
 pub use layout::{abi_of_layout, compat_gap};
 pub use records::capability_name;
 pub use signals::signal_name;
+pub use sockaddr::sockaddr;
 
 /// The call a field belongs to: the decoders that depend on another argument
 /// (bpf's command, a capability header's syscall) read it from here.
@@ -332,15 +345,14 @@ pub fn decode(call: Option<&Call<'_>>, field: &FieldSummary) -> Option<Decoded> 
     }
     let abi = layout::abi_of_layout(&field.layout)?;
     let layout = layout_type(&field.layout);
-    let compat = layout::is_compat(abi);
-    let mut decoded = match hand_written(call, field, layout, data, compat) {
-        Hand::Done(decoded) => decoded?,
-        // The generic readers: by the call's meaning (a socket option's
-        // value by its level and name), then by the inventory's members.
-        Hand::No => (!compat)
-            .then(|| contextual::decode(call, field, layout, data))
-            .flatten()
-            .or_else(|| layout::decode(abi, layout, call, argument_of(field), data))?,
+    // The call's meaning first (a socket option's value by its level and
+    // name), then the hand-written readers, then the inventory's members.
+    let mut decoded = match contextual::decode(call, field, layout, data) {
+        Some(decoded) => decoded,
+        None => match hand_written(call, field, layout, data, abi) {
+            Hand::Done(decoded) => decoded?,
+            Hand::No => layout::decode(abi, layout, call, argument_of(field), data)?,
+        },
     };
     // A decoder sets `more` for a record it could not finish; past that, the
     // field holds more when its capture is longer than the preview decoded.
@@ -377,6 +389,21 @@ const COMPAT_SAME: &[&str] = &[
     "bpf_core_relo[]",
     "futex_waitv[]",
     "u32[]",
+    // Fixed-size structures with 64-bit members on every ABI.
+    "iocb",
+    "io_event",
+    "io_event[]",
+    "io_uring_sqe",
+    "io_uring_sqe[]",
+    "io_rings",
+    "io_uring_probe",
+    "io_uring_getevents_arg",
+    "io_uring_buf[]",
+    "cpumask",
+    // As wide as the program's pointers; the readers take the ABI.
+    "pointer",
+    "pointer[]",
+    "__aio_sigset",
 ];
 
 /// The register argument a field was captured for.
@@ -395,9 +422,9 @@ fn hand_written(
     field: &FieldSummary,
     layout: &str,
     data: &[u8],
-    compat: bool,
+    abi: Abi,
 ) -> Hand {
-    if compat && !COMPAT_SAME.contains(&layout) {
+    if layout::is_compat(abi) && !COMPAT_SAME.contains(&layout) {
         return from_records(call, field, data);
     }
     let decoded = match layout {
@@ -428,6 +455,23 @@ fn hand_written(
         "xt_counters_info" => records::counters_info(data),
         "user_desc" => records::user_desc(data),
         "desc_struct[]" => list(data, 8, records::descriptor),
+        "iocb" => aio::iocb(data),
+        "io_event" => aio::io_event(data),
+        "io_event[]" => aio::io_events(data),
+        "__aio_sigset" => aio::aio_sigset(abi, data),
+        "pointer" => aio::pointers(abi, data, false),
+        "pointer[]" => aio::pointers(abi, data, true),
+        "cpumask" => Some(aio::bit_list(data)),
+        "io_uring_sqe" => uring::sqe(data),
+        "io_uring_sqe[]" => uring::sqes(data),
+        "io_rings" => uring::rings(data),
+        "io_uring_probe" => uring::probe(data),
+        "io_uring_getevents_arg" => uring::getevents_arg(data),
+        "io_uring_buf[]" => uring::buffers(data),
+        "rt_sigframe" => frames::rt_sigframe(abi, data),
+        "fxregs_state" => frames::fxregs(data),
+        "xstate" => frames::xstate(data),
+        "uretprobe_regs" => frames::uretprobe(data),
         _ => return from_records(call, field, data),
     };
     Hand::Done(decoded)
