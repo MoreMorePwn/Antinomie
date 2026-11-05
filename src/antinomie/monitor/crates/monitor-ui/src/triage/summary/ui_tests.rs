@@ -337,14 +337,17 @@ fn key_findings_are_six_by_tier_then_first_time_and_all_n_opens_the_table() {
         "injection.ld_preload_env",
         "evasion.history_clear",
     ];
-    let ys: Vec<f32> = rows.iter().map(|rule| y(&out, rule)).collect();
+    let ys: Vec<f32> = rows
+        .iter()
+        .map(|rule| y(&out, rules::rule_title(rule)))
+        .collect();
     assert!(
         ys.windows(2).all(|pair| pair[0] < pair[1]),
         "{rows:?} at {ys:?}"
     );
     // The LOW rows and the INFO row do not fit in six.
-    assert!(!has(&out, "discovery.system_info"));
-    assert!(!has(&out, "discovery.user_enum"));
+    assert!(!has(&out, rules::rule_title("discovery.system_info")));
+    assert!(!has(&out, rules::rule_title("discovery.user_enum")));
     assert!(has(&out, "\u{d7}3"));
     let all = texts(&out)
         .into_iter()

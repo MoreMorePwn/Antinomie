@@ -101,6 +101,7 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, input: &TriageInput
                 view.section = Section::Files;
                 view.files = FileTab::Executed;
                 view.history_tab = false;
+                view.by_file = false;
             }
             Destination::Ips => {
                 view.section = Section::Network;
@@ -276,7 +277,7 @@ mod tests {
         let output = draw(vec![], 0.01);
         let position = crate::app::tests::texts(&output)
             .into_iter()
-            .find(|(text, _)| text == "memory.rwx")
+            .find(|(text, _)| text == rules::rule_title("memory.rwx"))
             .expect("visible observation")
             .1
             .center();

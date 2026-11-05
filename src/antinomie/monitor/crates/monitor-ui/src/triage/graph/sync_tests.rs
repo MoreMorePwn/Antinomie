@@ -192,6 +192,16 @@ pub(super) fn view_with(spool: &PacketSpool) -> TriageView {
 }
 
 pub(super) fn draw(ctx: &egui::Context, view: &mut TriageView, time: f64) -> egui::FullOutput {
+    draw_tall(ctx, view, time, 820.0)
+}
+
+/// `draw` in a window `height` tall (the Summary's strip is far down the page).
+pub(super) fn draw_tall(
+    ctx: &egui::Context,
+    view: &mut TriageView,
+    time: f64,
+    height: f32,
+) -> egui::FullOutput {
     let input = TriageInput {
         vm_id: Some("vm"),
         boot_id: Some("boot"),
@@ -202,7 +212,7 @@ pub(super) fn draw(ctx: &egui::Context, view: &mut TriageView, time: f64) -> egu
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(1280.0, 820.0),
+                egui::vec2(1280.0, height),
             )),
             time: Some(time),
             ..Default::default()
@@ -675,8 +685,8 @@ fn the_summary_shows_the_strip_on_every_run_and_a_click_goes_to_the_graph() {
     view.process = ProcessTab::Tree;
     let ctx = egui::Context::default();
     theme::install(&ctx);
-    draw(&ctx, &mut view, 0.0);
-    let out = draw(&ctx, &mut view, 0.05);
+    draw_tall(&ctx, &mut view, 0.0, 3000.0);
+    let out = draw_tall(&ctx, &mut view, 0.05, 3000.0);
     assert!(texts(&out)
         .iter()
         .any(|(text, _)| text == "Main activity graph"));

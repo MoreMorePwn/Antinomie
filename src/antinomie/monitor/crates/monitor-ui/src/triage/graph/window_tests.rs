@@ -481,8 +481,8 @@ fn the_pop_out_button_and_the_strip_icon_open_the_window() {
     view.section = Section::Summary;
     view.process = ProcessTab::Tree;
     view.strip.open = Some(true);
-    draw_at(&ctx, &mut view, 900.0, 3.0);
-    let out = draw_at(&ctx, &mut view, 900.0, 3.05);
+    draw_at(&ctx, &mut view, 3000.0, 3.0);
+    let out = draw_at(&ctx, &mut view, 3000.0, 3.05);
     let icon = texts(&out)
         .into_iter()
         .find(|(text, _)| text == egui_phosphor::regular::ARROW_SQUARE_OUT)
@@ -492,7 +492,7 @@ fn the_pop_out_button_and_the_strip_icon_open_the_window() {
     for (n, pressed) in [true, false].into_iter().enumerate() {
         let _ = ctx.run_ui(
             egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1280.0, 900.0))),
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1280.0, 3000.0))),
                 time: Some(4.0 + n as f64 * 0.03),
                 events: vec![
                     egui::Event::PointerMoved(at),
