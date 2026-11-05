@@ -430,6 +430,14 @@ fn is_false(value: &bool) -> bool {
     !value
 }
 impl Bundle {
+    /// The base runs Debian's own signed modules: a Debian image (the only
+    /// bases with a guest profile), whose builder accepts only the stock
+    /// kernel profile, Debian's configuration. Drivers that are modules there
+    /// (NVMe, DRM, USB, libata) are Debian's builds, without Antinomie's hooks.
+    pub fn runs_debian_modules(&self) -> bool {
+        self.guest.is_some()
+    }
+
     pub fn load(dir: &Path) -> Result<Self, String> {
         let root = fs::canonicalize(dir).map_err(|e| format!("bundle {}: {e}", dir.display()))?;
         let mut b: Self = read_json(&root.join("bundle.json"))?;

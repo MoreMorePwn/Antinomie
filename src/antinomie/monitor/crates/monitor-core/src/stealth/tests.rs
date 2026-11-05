@@ -1671,7 +1671,7 @@ fn a_laptop_machine_gets_the_guest_facade_and_a_server_none() {
     assert_eq!(t14.pointer, Pointer::UsbTablet);
     assert_eq!(t14.identity.disk_model, "Micron_2450_MTFDKBA512TFK");
     assert_eq!(t14.identity.disk_firmware, "V5MA010");
-    let options = facade_options(&t14).join(" ");
+    let options = facade_options(&t14, false).join(" ");
     let board = t14.identity.nic_subsystem.replace(':', "");
     assert!(
         options.contains(&format!(
@@ -1707,15 +1707,94 @@ fn a_laptop_machine_gets_the_guest_facade_and_a_server_none() {
     let optiplex = StealthProfile::realistic_machine(machine("dell-optiplex-7090"));
     assert_eq!(optiplex.disk_bus, DiskBus::Sata);
     assert!(
-        facade_options(&optiplex)
+        facade_options(&optiplex, false)
             .iter()
             .any(|option| option == "antinomie_fdrm=i915")
     );
     // Servers and cloud instances look like QEMU/KVM, as real ones do.
     let server = StealthProfile::realistic(StealthPreset::RealisticServer, "GenuineIntel");
-    assert!(facade_options(&server).is_empty());
-    assert!(facade_options(&StealthProfile::cloud_vps(&CLOUDS[0])).is_empty());
-    assert!(facade_options(&StealthProfile::transparent()).is_empty());
+    assert!(facade_options(&server, false).is_empty());
+    assert!(facade_options(&StealthProfile::cloud_vps(&CLOUDS[0]), false).is_empty());
+    assert!(facade_options(&StealthProfile::transparent(), false).is_empty());
+}
+
+#[test]
+fn a_stock_module_base_never_pairs_a_facaded_pci_id_with_a_driver_reporting_qemu() {
+    // On Debian's own modules bochs-drm and nvme report QEMU's strings: every
+    // desktop and laptop machine keeps those devices' QEMU identity there, pinned
+    // by a rule (antinomie_fsub would otherwise give them the board's subsystem),
+    // and gets none of the options only those modules would read.
+    let pinned = |(vendor, device): (u16, u16)| {
+        format!(
+            "{vendor:04x}{device:04x}={vendor:04x}{device:04x}{:04x}{:04x}",
+            QEMU_SUBSYSTEM.0, QEMU_SUBSYSTEM.1
+        )
+    };
+    let mut checked = 0;
+    for machine in MACHINES.iter().filter(|machine| {
+        matches!(
+            machine.kind,
+            StealthPreset::RealisticDesktop | StealthPreset::RealisticLaptop
+        )
+    }) {
+        let profile = StealthProfile::realistic_machine(machine);
+        let options = facade_options(&profile, true);
+        let rules: Vec<&str> = options
+            .iter()
+            .filter_map(|option| option.strip_prefix("antinomie_fpci="))
+            .flat_map(|rules| rules.split(','))
+            .collect();
+        for device in STOCK_DRIVERS_REPORTING_QEMU {
+            let from = format!("{:04x}{:04x}=", device.0, device.1);
+            let shown: Vec<&&str> = rules
+                .iter()
+                .filter(|rule| rule.starts_with(&from))
+                .collect();
+            assert_eq!(
+                shown,
+                [&pinned(device).as_str()],
+                "{}: {options:?}",
+                machine.id
+            );
+        }
+        for driver_only in [
+            "antinomie_fdrm",
+            "antinomie_fnvme",
+            "antinomie_finput",
+            "antinomie_fnocd",
+        ] {
+            assert!(
+                !options.iter().any(|option| option.starts_with(driver_only)),
+                "{}: {options:?}",
+                machine.id
+            );
+        }
+        // The built-in hooks keep the rest: board subsystem, ACPI, EFI vendor.
+        for built_in in ["antinomie_fsub=", "antinomie_facpi="] {
+            assert!(
+                options.iter().any(|option| option.starts_with(built_in)),
+                "{}: {options:?}",
+                machine.id
+            );
+        }
+        // The Antinomie kernel's base keeps the full facade: the GPU's IDs.
+        let full = facade_options(&profile, false);
+        assert!(
+            full.iter()
+                .any(|option| option.starts_with("antinomie_fdrm=")),
+            "{}",
+            machine.id
+        );
+        assert!(
+            !full
+                .iter()
+                .any(|option| option.contains(&pinned(STOCK_DRIVERS_REPORTING_QEMU[0]))),
+            "{}",
+            machine.id
+        );
+        checked += 1;
+    }
+    assert!(checked >= 20, "{checked} machines");
 }
 
 #[test]
@@ -1735,11 +1814,15 @@ fn every_desktop_and_laptop_machine_has_a_facade_and_the_nvme_ones_boot_from_nvm
             continue;
         }
         let profile = StealthProfile::realistic_machine(machine);
-        assert!(!facade_options(&profile).is_empty(), "{}", machine.id);
+        assert!(
+            !facade_options(&profile, false).is_empty(),
+            "{}",
+            machine.id
+        );
         let nvme = catalog::facade::of(machine.id).unwrap().nvme.is_some();
         assert_eq!(profile.disk_bus == DiskBus::Nvme, nvme, "{}", machine.id);
         assert!(
-            facade_options(&profile)
+            facade_options(&profile, false)
                 .iter()
                 .any(|option| option.starts_with("antinomie_fsub=")),
             "{} has no board subsystem",

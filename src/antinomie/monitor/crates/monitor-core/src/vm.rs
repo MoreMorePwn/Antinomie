@@ -745,9 +745,9 @@ impl VmProcess {
                 .push_str(&format!(" antinomie_ring_kib={}", vm.transport.ring_kib));
         }
         // The guest facade of a desktop or laptop machine profile, for a base
-        // whose kernel has it.
+        // whose kernel has it (its built-in hooks only on Debian's modules).
         if base_support.facade && !virt {
-            for option in crate::stealth::facade_options(&stealth) {
+            for option in crate::stealth::facade_options(&stealth, bundle.runs_debian_modules()) {
                 boot.kernel_append.push(' ');
                 boot.kernel_append.push_str(&option);
             }

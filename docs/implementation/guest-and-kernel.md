@@ -1269,6 +1269,58 @@ machine of its profile's kind instead (`stealth/arm64.rs`, catalog
   giveaways, and neither is the absence of SMBIOS and EFI on a device-tree
   boot. The x86 probe is byte-identical (.text, .rodata, .data).
 
+### Guest facade and boot age on Debian bases: the gap (0.9.0)
+
+Patches 0052 (facade) and 0053 (boot age) on a stock-profile kernel, the
+kernel of every Debian base. Measured on the final Debian Minimal base
+(ThinkPad T14 Gen 3 AMD laptop, Supermicro H12SSL server).
+
+* **The gap.** A Debian base runs Debian's own signed modules (see "Debian's
+  module ABI" in bases-and-stealth.md), so only the facade's hooks in built-in
+  code act: PCI IDs and config space, `uevent`, `/proc/bus/pci`, ACPI tables,
+  the EFI vendor, the PCI driver and resource names. NVMe, DRM and bochs-drm,
+  usbcore and libata are modules there: the NVMe Identify data (`QEMU NVMe
+  Ctrl`, QEMU's firmware version and NQN), `DRM_IOCTL_VERSION`, the fbdev name
+  (`bochs-drmdrmfb`), the DRM and bochs log lines, the USB tablet's strings and
+  QEMU's default DVD-ROM (`sr0`) stay QEMU's. The user accepted the gap for
+  0.9.0; building the facade's drivers as Antinomie's own modules is the
+  "patched modules" card.
+* **Consistent, not mixed.** A Micron PCI ID next to `QEMU NVMe Ctrl`, or an
+  AMD GPU next to `bochs-drmdrmfb`, tells more than QEMU's IDs alone. On a base
+  that runs Debian's modules (`Bundle::runs_debian_modules()`: a base with a
+  guest profile, whose builder takes only the stock kernel profile), the host
+  pins QEMU's display and NVMe controller to their own IDs and QEMU's subsystem
+  (`antinomie_fpci=12341111=123411111af41100,80865845=808658451af41100`, which
+  `antinomie_fsub` does not override) and leaves out `antinomie_fdrm`,
+  `antinomie_fnvme`, `antinomie_finput` and `antinomie_fnocd`, which only those
+  modules read (`stealth/launch.rs`, `STOCK_DRIVERS_REPORTING_QEMU`). The other
+  chipset devices keep the board's subsystem, and ACPI and the EFI vendor stay
+  the machine's. A BusyBox base (the Antinomie kernel, drivers built in) keeps
+  the full facade. `a_stock_module_base_never_pairs_a_facaded_pci_id_with_a_driver_reporting_qemu`
+  checks every desktop and laptop machine.
+* **Debian's kernel ABI.** The stock profile's checks (configuration, exports,
+  traceable functions, BTF type for type) hold with both patches:
+  `ANTINOMIE_FACADE` and `ANTINOMIE_BOOT_AGE` are allowed configuration
+  changes; `ant_timekeeping_present()` is notrace; `tk_xtime_add()` and
+  `pci_read_bridge_windows()` are `__always_inline` (a second or a larger caller
+  had taken them out of line); `printk.c` includes `antinomie_stealth.h`, not
+  `time_namespace.h` (which changed the console exports' symbol versions);
+  `ant_acpi_table_shown()` takes a non-const header (a const
+  `acpi_table_header` pointer is a BTF type Debian's kernel lacks). facade.c
+  logs nothing: a `pr_debug()` would be a dynamic debug entry naming it in the
+  world-readable `/proc/dynamic_debug/control`.
+* **Boot age.** The views agree on both models: `uptime -s`, `who -b`,
+  `last reboot`, wtmpdb's start, the journal's first entry, the random-seed
+  file's time and init's start time are the boot (`btime`); `dmesg -T` dates
+  the boot lines at it on a server and, as after a real resume, just before the
+  present on a laptop. **Continuous model limit, measured:** the step makes
+  programs' CLOCK_MONOTONIC jump by the age at the first launch, so systemd
+  finds journald's and udevd's watchdog pings (WatchdogSec=3min) days old and
+  kills both with SIGABRT ("Watchdog timeout (limit 3min)!" in the journal,
+  `NRestarts=1`); they restart at once. The suspend model (desktop, laptop)
+  does not move CLOCK_MONOTONIC and has none of it. BusyBox bases have no
+  systemd.
+
 ### arm64 qualification, limits and Debian arm64 Minimal (0.9.0)
 
 Multi-arch plan cards MA-19 and the Debian half of MA-15. No contract change.

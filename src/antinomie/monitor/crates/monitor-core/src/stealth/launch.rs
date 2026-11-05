@@ -547,6 +547,14 @@ pub(crate) fn apply(
 const QEMU_NVME_PCI: (u16, u16) = (0x8086, 0x5845);
 /// QEMU's standard VGA (Bochs display interface).
 const QEMU_VGA_PCI: (u16, u16) = (0x1234, 0x1111);
+/// The subsystem QEMU gives its own PCI devices (Red Hat, QEMU).
+pub(crate) const QEMU_SUBSYSTEM: (u16, u16) = (0x1af4, 0x1100);
+/// QEMU devices whose driver reports QEMU's strings on a base that runs
+/// Debian's own modules, where the facade's hooks in those drivers are not
+/// built: bochs-drm (its DRM version, fbdev name and log lines) and nvme (the
+/// Identify data, "QEMU NVMe Ctrl" and the subsystem NQN). There they keep
+/// QEMU's whole PCI identity, so the IDs agree with what the driver says.
+pub(crate) const STOCK_DRIVERS_REPORTING_QEMU: [(u16, u16); 2] = [QEMU_VGA_PCI, QEMU_NVME_PCI];
 
 /// The guest facade's boot options (guest patch 0052) for a desktop or laptop
 /// machine profile: what its GPU, NVMe drive, board subsystem, mouse, EFI
@@ -554,7 +562,12 @@ const QEMU_VGA_PCI: (u16, u16) = (0x1234, 0x1111);
 /// devices. None for other profiles (a server or cloud machine legitimately
 /// looks like QEMU/KVM) or an identity without a machine. The guest takes the
 /// options out of its command line before it prints it.
-pub(crate) fn facade_options(profile: &StealthProfile) -> Vec<String> {
+///
+/// `stock_modules`: the base runs Debian's own signed modules (a Debian base:
+/// stock kernel profile), so only the facade's built-in hooks act. The display
+/// and the NVMe controller then keep QEMU's identity, pinned by a rule against
+/// the board subsystem, and the options only those drivers read are left out.
+pub(crate) fn facade_options(profile: &StealthProfile, stock_modules: bool) -> Vec<String> {
     let identity = &profile.identity;
     let Some(machine) = super::MACHINES
         .iter()
@@ -581,13 +594,20 @@ pub(crate) fn facade_options(profile: &StealthProfile) -> Vec<String> {
         )
     };
     let mut rules = Vec::new();
-    if let Some((sub_vendor, sub_device)) = board {
+    if stock_modules {
+        for device in STOCK_DRIVERS_REPORTING_QEMU {
+            rules.push(rule(
+                device,
+                (device.0, device.1, QEMU_SUBSYSTEM.0, QEMU_SUBSYSTEM.1),
+            ));
+        }
+    } else if let Some((sub_vendor, sub_device)) = board {
         rules.push(rule(
             QEMU_VGA_PCI,
             (facade.gpu.0, facade.gpu.1, sub_vendor, sub_device),
         ));
     }
-    let nvme = (profile.disk_bus == DiskBus::Nvme)
+    let nvme = (!stock_modules && profile.disk_bus == DiskBus::Nvme)
         .then(|| identity.nvme_drive())
         .flatten();
     if let Some(nvme) = nvme {
@@ -620,6 +640,14 @@ pub(crate) fn facade_options(profile: &StealthProfile) -> Vec<String> {
         pad(&identity.acpi_oem_id, 6),
         pad(&identity.acpi_table_id, 8)
     ));
+    if profile.firmware.is_uefi() {
+        options.push(format!("antinomie_fefi=\"{}\"", firmware.efi_vendor));
+    }
+    // Read only by drivers that are Debian's modules on a Debian base (DRM and
+    // bochs-drm, usbcore, libata).
+    if stock_modules {
+        return options;
+    }
     options.push(format!(
         "antinomie_fdrm={}",
         if facade.gpu.0 == 0x1002 {
@@ -633,9 +661,6 @@ pub(crate) fn facade_options(profile: &StealthProfile) -> Vec<String> {
         "antinomie_finput=\"{:04x}:{:04x}:{:04x},{},{}\"",
         mouse.vendor, mouse.product, mouse.release, mouse.manufacturer, mouse.product_name
     ));
-    if profile.firmware.is_uefi() {
-        options.push(format!("antinomie_fefi=\"{}\"", firmware.efi_vendor));
-    }
     // q35 adds QEMU's own CD-ROM when no IDE disk is given (an NVMe root):
     // without the profile's drive the guest leaves it unattached.
     if !profile.cdrom {

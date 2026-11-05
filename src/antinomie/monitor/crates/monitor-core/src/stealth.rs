@@ -1436,7 +1436,7 @@ impl StealthProfile {
         // A desktop or laptop machine on a base with the guest facade
         // (patch 0052): its GPU, NVMe drive, board subsystem, ACPI creator,
         // mouse and EFI vendor are shown for QEMU's.
-        let facade = !launch::facade_options(self).is_empty();
+        let facade = !launch::facade_options(self, false).is_empty();
         if !self.hide_hypervisor {
             found.push("CPUID hypervisor flag");
         }
@@ -1559,8 +1559,8 @@ impl StealthProfile {
             "a fresh boot: minutes of uptime"
         } else if BootAge::of(self) == BootAge::Server {
             "the boot age's step to the present at the first launch: processes started at boot \
-             see their clocks jump; input and display event timestamps keep the kernel's \
-             monotonic clock"
+             see their clocks jump (systemd kills journald and udevd for a watchdog timeout on \
+             Debian bases); input and display event timestamps keep the kernel's monotonic clock"
         } else {
             "the boot age is a sleep: CLOCK_BOOTTIME ahead of CLOCK_MONOTONIC, the kernel log's \
              timestamps not counting it, and no suspend in the log or /sys/power/suspend_stats"

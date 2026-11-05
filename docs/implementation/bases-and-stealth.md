@@ -1140,7 +1140,10 @@ and config space, `uevent`, `/proc/bus/pci`, ACPI tables, the EFI vendor, the
 PCI driver and resource names. NVMe, DRM, USB and libata are Debian's modules:
 the NVMe Identify data, `DRM_IOCTL_VERSION`, the fbdev name, the DRM and bochs
 log lines, the USB HID strings and QEMU's DVD-ROM stay QEMU's on Debian bases;
-the BusyBox bases build them in and show the facade's.
+the BusyBox bases build them in and show the facade's. So that the IDs agree
+with those drivers, the display and the NVMe controller keep QEMU's PCI
+identity on a Debian base too (see "Guest facade and boot age on Debian bases"
+in guest-and-kernel.md).
 The facade logs nothing: a `pr_debug()` would be a dynamic debug entry naming
 `kernel/antinomie/facade.c` in `/proc/dynamic_debug/control`, readable by every
 user on Debian's kernel.
@@ -1200,7 +1203,8 @@ sleep entry; continuous — processes started at boot see their clocks move
 forward at the first launch, and timestamps the kernel hands out on its own
 monotonic clock (input events, DRM vblanks) and io_uring's absolute timeouts
 are on the kernel's clock, behind programs' by the age (a desktop session on a
-server profile would notice).
+server profile would notice). On a systemd base the jump trips the watchdogs:
+systemd kills journald and udevd (SIGABRT, `NRestarts=1`) at the first launch.
 
 **The check.** `stealth-probe.c`: `base.uptime`, `base.uptime-views`
 (/proc/uptime, `sysinfo`, CLOCK_BOOTTIME and `now − btime`), `base.boot-record`
