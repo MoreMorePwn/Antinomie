@@ -23,6 +23,7 @@ mod process;
 mod rows;
 mod state;
 mod table;
+mod texts;
 mod tools;
 
 #[cfg(test)]
@@ -46,6 +47,7 @@ pub(super) use engine::{Engine, InfoMark, Options, Output, PackedImage};
 pub(super) use frames::{FrameKind, SUPPRESSION_VERSION};
 pub(super) use rows::{view_keeps, View, COL_PROCESS, COL_SUMMARY, COL_TIER, COL_TIME, HEADERS};
 pub(super) use table::{spec, Spec};
+pub(in crate::triage) use texts::{rule_description, rule_title};
 
 /// How unusual a behaviour is for ordinary software. The weight is what the
 /// severity curve of the activity graph adds up.
@@ -86,6 +88,36 @@ impl Tier {
         }
     }
 
+    /// What the tier means, in the words every place that shows a tier uses.
+    pub(super) fn meaning(self) -> &'static str {
+        match self {
+            Self::High => "Something ordinary software essentially never does and that directly gives control, persistence or privilege. Look at these first.",
+            Self::Medium => "Often malicious but with legitimate uses; needs context.",
+            Self::Low => "Unusual but common in normal software; supporting evidence.",
+            Self::Info => "Neutral facts that tell the story; hidden by default.",
+        }
+    }
+
+    /// The name on a chip: "High".
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::High => "High",
+            Self::Medium => "Medium",
+            Self::Low => "Low",
+            Self::Info => "Info",
+        }
+    }
+
+    /// The letter on a table chip: H, M, L or I.
+    pub(super) fn letter(self) -> &'static str {
+        match self {
+            Self::High => "H",
+            Self::Medium => "M",
+            Self::Low => "L",
+            Self::Info => "I",
+        }
+    }
+
     /// One tier lower; INFO stays INFO.
     pub(super) fn down(self) -> Self {
         match self {
@@ -113,6 +145,9 @@ impl Tier {
         }
     }
 }
+
+/// What lowers a tier, for the legend, the tier chips and Details.
+pub(super) const CONTEXT_NOTE: &str = "Context lowers a tier by one: the program is on the rule's allow-list, every call failed, the process is outside the run's tree, or it was seen only on the network.";
 
 /// What a behaviour is for. The twelve ATT&CK-shaped groups of the brief, plus
 /// Exfiltration, which has nowhere else to go.
