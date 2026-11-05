@@ -58,7 +58,9 @@ pub(super) fn column_widths<'a>(
         .map(|(index, header)| {
             let (minimum, maximum) = match *header {
                 "Endpoint" | "Endpoints" => (360.0_f32, 900.0_f32),
-                "Path" | "URI" | "Hostname" | "Transferred / content" | "Argv" => (250.0, 650.0),
+                "Path" | "URI" | "Hostname" | "Transferred / content" | "Argv" | "Command line" => {
+                    (250.0, 650.0)
+                }
                 "Time" | "First seen" | "Last seen" => (230.0, 500.0),
                 "Host" => (160.0, 400.0),
                 "Summary" => (360.0, 800.0),
@@ -274,10 +276,6 @@ fn table_rows_with(
     let branches = branches.filter(|_| order.is_none());
     let branch_font = egui::TextStyle::Monospace.resolve(ui.style());
     let branch_char = crate::tree_lines::char_width(ui, &branch_font);
-    // Room for the suspicious-count chip of the process cell.
-    if let (true, Some(first)) = (id == "triage-process", widths.first_mut()) {
-        *first += 40.0;
-    }
     if let (Some(branches), Some(first)) = (branches, widths.first_mut()) {
         let deepest = branches.iter().map(|prefix| prefix.width(branch_char));
         *first += deepest.fold(0.0, f32::max).min(branch_char * 64.0);
@@ -365,48 +363,69 @@ fn table_rows_with(
                             .truncate()
                             .selectable(false)
                             .sense(egui::Sense::hover());
+                        // A process cell may carry a note of its own (the full
+                        // path, why a command line is flagged, a time).
+                        let note = (id == "triage-process")
+                            .then(|| process_tree::cell_hover(column, cell, &cells[0]))
+                            .flatten();
+                        let hover = |response: egui::Response| match &note {
+                            Some(note) => {
+                                response.on_hover_text(note);
+                            }
+                            None => hover_errno(response, &cell.text),
+                        };
                         let draw = |ui: &mut egui::Ui| match indent {
                             Some(width) => {
                                 let mut rect = ui.max_rect();
                                 rect.min.x += width;
                                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                                    hover_errno(ui.add(label), &cell.text);
+                                    hover(ui.add(label));
                                 });
                             }
                             None => {
-                                hover_errno(ui.add(label), &cell.text);
+                                hover(ui.add(label));
                             }
                         };
-                        // The count of suspicious observations is a chip at the
-                        // right of the process cell; the label takes the rest.
-                        let suspect = (column == 0 && id == "triage-process")
-                            .then(|| files::number(&cell.values, "process.suspicious"))
-                            .flatten()
-                            .filter(|count| *count > 0);
+                        // The count of findings is a chip in the Findings column,
+                        // in the colour of the worst tier among them; it lists them.
+                        let suspect = (id == "triage-process" && headers[column] == "Findings")
+                            .then(|| files::number(&cells[0].values, "process.suspicious"))
+                            .flatten();
                         if let Some(count) = suspect {
-                            // The chip wears the colour of the worst tier among
-                            // the process's observations.
-                            let tone = cell
-                                .values
-                                .iter()
-                                .find_map(|(key, value)| match value {
-                                    RowValue::Text(tag) if *key == "process.worst_tier" => {
-                                        rules::Tier::from_tag(tag)
+                            if count > 0 {
+                                let tone = cells[0]
+                                    .values
+                                    .iter()
+                                    .find_map(|(key, value)| match value {
+                                        RowValue::Text(tag) if *key == "process.worst_tier" => {
+                                            rules::Tier::from_tag(tag)
+                                        }
+                                        _ => None,
+                                    })
+                                    .map_or(crate::widgets::Tone::Neutral, rules::Tier::tone);
+                                let chip = crate::widgets::chip(ui, count.to_string(), tone);
+                                let chip = ui.interact(
+                                    chip.rect,
+                                    chip.id.with("list-findings"),
+                                    egui::Sense::click(),
+                                );
+                                if chip
+                                    .on_hover_text("Findings in this process. Click to list them.")
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                    .clicked()
+                                {
+                                    if let Some(pid) =
+                                        files::number(&cells[0].values, "process.pid")
+                                    {
+                                        ui.ctx().data_mut(|data| {
+                                            data.insert_temp(
+                                                egui::Id::new(process_details::PROCESS_SCOPE),
+                                                pid,
+                                            )
+                                        });
                                     }
-                                    _ => None,
-                                })
-                                .map_or(crate::widgets::Tone::Neutral, rules::Tier::tone);
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    crate::widgets::chip(ui, count.to_string(), tone)
-                                        .on_hover_text("Suspicious observations in this process");
-                                    ui.with_layout(
-                                        egui::Layout::left_to_right(egui::Align::Center),
-                                        draw,
-                                    );
-                                },
-                            );
+                                }
+                            }
                         } else {
                             fit_table::aligned_cell(
                                 ui,
@@ -418,19 +437,7 @@ fn table_rows_with(
                 }
                 if row.response().clicked() {
                     details::select(&row.response().ctx, id, headers, cells);
-                    if id == "triage-process" {
-                        // A process opens its Suspicious activity; Details keep it selected.
-                        if let Some(pid) = cells
-                            .first()
-                            .and_then(|cell| files::number(&cell.values, "process.pid"))
-                        {
-                            row.response().ctx.data_mut(|data| {
-                                data.insert_temp(egui::Id::new(process_details::PROCESS_SCOPE), pid)
-                            });
-                        }
-                    } else {
-                        details::clicked(&row.response().ctx, id);
-                    }
+                    details::clicked(&row.response().ctx, id);
                     row.response()
                         .ctx
                         .data_mut(|data| data.insert_temp(selected_id, key));
@@ -501,6 +508,7 @@ fn numeric_column(header: &str) -> bool {
             | "Requests"
             | "Rcode"
             | "Evidence"
+            | "Calls"
     )
 }
 

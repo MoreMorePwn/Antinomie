@@ -461,16 +461,34 @@ The network capture is the guest's own view on every route.
   The table spans the pane. A run's details list **Analysis enabled** as a tree:
   the static analysis with its checks below it, then the capture options; a check
   that produced no result, or a capture that was deleted or failed, is greyed.
-  Click a process in the run's recorded process tree to open **Syscall Trace**
-  filtered to that process (`process.pid == N`; clear the filter to see all).
+  In a process's Details, **Show its calls** opens **Syscall Trace**
+  filtered to that process (clear the filter to see all).
 - **Export report…** (right of the Triage tabs): writes the whole Triage as
   HTML, PDF, JSON, MISP or STIX 2.1, with a checkbox per section, optional IoC
   defanging and an optional evidence bundle. See
   [the report guide](triage-report.md).
-- **Triage › Process › Process tree**: click a process to open Suspicious
-  activity filtered to it. The number beside a process is its count of
-  suspicious observations, coloured by the worst tier among them (HIGH red,
-  MEDIUM amber, LOW cyan); in Details each observation wears its own tier.
+- **Triage › Process › Process tree**: one row per task, in the columns
+  **Process** (tree lines, the executable's file name and `(pid · tid)`; the
+  full path on hover; a fork that has not exec'd shows its parent's image
+  greyed with "fork"), **Command line** (a ⚠ when argv[0]'s file name is not
+  the executable's, with the explanation on hover; BusyBox applets,
+  interpreters through symlinks such as python3 and python3.13, sh and dash,
+  and a login shell's leading `-` do not warn), **Findings** (the count,
+  coloured by the worst tier; click it to list that process's findings),
+  **User** (uid, or uid → euid, from the guest's credential records),
+  **Started** (relative to the run start; the absolute time on hover),
+  **Lifetime** ("running" when no exit was recorded), **Outcome** ("exit 0",
+  "killed by SIGKILL", "killed by SIGKILL (from pid N)" when a recorded kill
+  call sent it, "in read() at end"), **Calls** and **Exec chain**
+  (`sh → busybox → demo-all`). The parent pid, working directory and task
+  cookie are not columns; filter on `process.ppid` and `process.cookie`.
+  Click a row to open **Details**: the executable, arguments one per line, the
+  full environment of its last exec (+ added, ~ changed, − removed against its
+  parent's, with the Triage rule that flagged a variable), the working
+  directory when the task changed it, the user and credential changes, the
+  parent and the children (click to jump), the exec chain with times, the
+  outcome and its findings. **Show its calls** opens the Syscall Trace
+  filtered to the process.
 - **Triage › Process › Suspicious activity**: behaviour recognised in the run's
   calls, kernel records and packets, with the **Time** of each row first. Each row has a tier (HIGH, MEDIUM, LOW;
   INFO is only counted unless **Show INFO** is on), a category and an ATT&CK

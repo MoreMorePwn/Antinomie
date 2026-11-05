@@ -295,17 +295,8 @@ fn schema_gap_note(scan: &ArchiveScan) -> Option<String> {
 
 fn processes(scan: &ArchiveScan, clock: Option<antinomie_monitor_core::HostClockAnchor>) -> Table {
     let rows = super::super::process_tree::process_rows(&scan.process, clock, &scan.suspicious);
-    let headers = [
-        "Process",
-        "Executable",
-        "TID",
-        "Argv",
-        "First seen",
-        "Last seen",
-        "Task outcome",
-        "Exec history",
-    ];
-    let mut out = table(&headers, &[0, 1, 3, 4, 5, 6, 7], &rows, 0, &[]);
+    let headers = super::super::process_tree::PROCESS_HEADERS;
+    let mut out = table(&headers, &[0, 1, 2, 3, 4, 5, 6, 7, 8], &rows, 0, &[]);
     for (row, source) in out.rows.iter_mut().zip(&rows) {
         let depth = files::number(&source[0].values, "process.depth").unwrap_or(0) as usize;
         row[0] = format!(
