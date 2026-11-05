@@ -270,30 +270,14 @@ pub(super) fn techniques(ui: &mut egui::Ui, data: &Data) -> Option<usize> {
                         ui.set_max_width(column);
                         let context =
                             antinomie_monitor_core::mitre::Tactic::from_label(&tactic.tactic);
-                        let mut label = egui::text::LayoutJob::default();
-                        if let Some(context) = context {
-                            label.append(
-                                "● ",
-                                0.0,
-                                egui::TextFormat {
-                                    color: crate::widgets::attack::tactic_color(context),
-                                    ..egui::TextFormat::simple(
-                                        egui::TextStyle::Body.resolve(ui.style()),
-                                        theme::text(),
-                                    )
-                                },
-                            );
-                        }
-                        label.append(
-                            &tactic.tactic,
-                            0.0,
-                            egui::TextFormat::simple(
-                                egui::TextStyle::Body.resolve(ui.style()),
-                                theme::text(),
-                            ),
-                        );
-                        ui.add(egui::Label::new(label).truncate())
-                            .on_hover_text(&tactic.tactic);
+                        let shown = match context {
+                            Some(context) => ui.add(crate::widgets::dot::DotLabel::new(
+                                crate::widgets::attack::tactic_color(context),
+                                &tactic.tactic,
+                            )),
+                            None => ui.add(egui::Label::new(&tactic.tactic).truncate()),
+                        };
+                        shown.on_hover_text(&tactic.tactic);
                     },
                 );
                 ui.vertical(|ui| {

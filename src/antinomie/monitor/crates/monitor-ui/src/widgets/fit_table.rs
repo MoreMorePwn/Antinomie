@@ -370,6 +370,32 @@ pub(crate) fn divider_width(pixels_per_point: f32) -> f32 {
     1.0 / pixels_per_point.max(1.0)
 }
 
+/// The stroke of every rule of a table, the header's row rule and a column
+/// divider alike: one physical pixel of the theme's line colour. They are
+/// drawn at a pixel's centre (see [`rule_at`]) so neither smears over two
+/// pixels, and the two always match.
+pub(crate) fn rule_stroke(ctx: &egui::Context) -> Stroke {
+    Stroke::new(divider_width(ctx.pixels_per_point()), theme::line())
+}
+
+/// `position` moved onto the centre of the physical pixel it falls in.
+pub(crate) fn rule_at(painter: &egui::Painter, position: f32) -> f32 {
+    painter.round_to_pixel_center(position)
+}
+
+/// `rect` with every edge on a physical pixel. A fill that ends between two
+/// pixels is blended there, and two cells side by side then let the page
+/// through as a line a pixel or two wide between them (the "thick column
+/// line" of a table): cells that share an edge share the same snapped edge.
+pub(crate) fn snapped(painter: &egui::Painter, rect: Rect) -> Rect {
+    let ppp = painter.ctx().pixels_per_point();
+    let round = |value: f32| (value * ppp).round() / ppp;
+    Rect::from_min_max(
+        Pos2::new(round(rect.min.x), round(rect.min.y)),
+        Pos2::new(round(rect.max.x), round(rect.max.y)),
+    )
+}
+
 /// The draggable dividers on the right edge of every resizable column's
 /// header cell. Drag: the column keeps the dragged width; double click or the
 /// menu: every column is fitted again.
@@ -409,14 +435,7 @@ fn dividers(
             // line at a fractional x smears over two pixels and, on a
             // scaled display, is two or more.
             let painter = ui.painter();
-            painter.vline(
-                painter.round_to_pixel_center(x),
-                rect.y_range(),
-                egui::Stroke::new(
-                    divider_width(ui.ctx().pixels_per_point()),
-                    ui.visuals().widgets.active.bg_stroke.color,
-                ),
-            );
+            painter.vline(rule_at(painter, x), rect.y_range(), rule_stroke(ui.ctx()));
         }
         if response.dragged() {
             let width = user
@@ -792,11 +811,15 @@ pub fn head_bg(ui: &mut egui::Ui) {
         .max_rect()
         .expand2(vec2(spacing.x / 2.0, spacing.y / 2.0));
     let painter = ui.painter();
+    let rect = snapped(painter, rect);
     painter.rect_filled(rect, 0.0, theme::panel());
     painter.hline(
         rect.x_range(),
-        rect.bottom() - 0.5,
-        Stroke::new(1.0_f32, theme::line()),
+        rule_at(
+            painter,
+            rect.bottom() - 0.5 * divider_width(ui.ctx().pixels_per_point()),
+        ),
+        rule_stroke(ui.ctx()),
     );
 }
 

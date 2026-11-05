@@ -110,8 +110,30 @@ pub fn pill(
     job: egui::text::LayoutJob,
     min_width: f32,
 ) -> egui::Response {
+    pill_dots(ui, look, &[], job, min_width)
+}
+
+/// The width the dots of a pill take before its text: each is drawn by
+/// [`super::dot`] on the visual middle of the text, not typed as a glyph.
+pub fn dots_width(size: f32, count: usize) -> f32 {
+    if count == 0 {
+        return 0.0;
+    }
+    count as f32 * (super::dot::diameter(size) + 2.0) + 2.0
+}
+
+/// A [`pill`] with one dot in each of `dots` before its text.
+pub fn pill_dots(
+    ui: &mut egui::Ui,
+    look: PillLook,
+    dots: &[Color32],
+    job: egui::text::LayoutJob,
+    min_width: f32,
+) -> egui::Response {
+    let size = pill_font(ui).size;
+    let lead = dots_width(size, dots.len());
     let natural = ui.fonts_mut(|fonts| fonts.layout_job(single_line(job.clone(), f32::INFINITY)));
-    let width = |text: f32| (text + 2.0 * look.pad).max(min_width);
+    let width = |text: f32| (text + lead + 2.0 * look.pad).max(min_width);
     let layout = *ui.layout();
     if layout.is_horizontal()
         && layout.main_wrap()
@@ -120,14 +142,14 @@ pub fn pill(
     {
         ui.end_row();
     }
-    let room = ui.available_width() - 2.0 * look.pad;
+    let room = ui.available_width() - lead - 2.0 * look.pad;
     let galley = if natural.size().x > room && room > 0.0 {
         ui.fonts_mut(|fonts| fonts.layout_job(single_line(job, room)))
     } else {
         natural
     };
-    let size = egui::vec2(width(galley.size().x), galley.size().y + 2.0 * PILL_PAD_Y);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let size_box = egui::vec2(width(galley.size().x), galley.size().y + 2.0 * PILL_PAD_Y);
+    let (rect, response) = ui.allocate_exact_size(size_box, egui::Sense::hover());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         painter.rect(
@@ -137,8 +159,21 @@ pub fn pill(
             look.stroke,
             egui::StrokeKind::Inside,
         );
-        let at = rect.center() - galley.size() * 0.5;
-        painter.galley(at, galley, Color32::PLACEHOLDER);
+        let content = lead + galley.size().x;
+        let left = rect.center().x - content * 0.5;
+        let top = rect.center().y - galley.size().y * 0.5;
+        let step = super::dot::diameter(size) + 2.0;
+        for (index, color) in dots.iter().enumerate() {
+            super::dot::paint(
+                painter,
+                left + 1.0 + step * (index as f32 + 0.5),
+                top,
+                &galley,
+                size,
+                *color,
+            );
+        }
+        painter.galley(egui::pos2(left + lead, top), galley, Color32::PLACEHOLDER);
     }
     response
 }
