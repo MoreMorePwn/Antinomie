@@ -490,12 +490,39 @@ The network capture is the guest's own view on every route.
   outcome and its findings. **Show its calls** opens the Syscall Trace
   filtered to the process.
 - **Triage › Process › Suspicious activity**: behaviour recognised in the run's
-  calls, kernel records and packets, with the **Time** of each row first. Each row has a tier (HIGH, MEDIUM, LOW;
-  INFO is only counted unless **Show INFO** is on), a category and an ATT&CK
-  reference. Repeats fold into one row with a count, a failed call or a program
-  that does the thing as its job lowers the tier by one, and **Details** says
-  why a row has its tier. The chips narrow the table by tier and category (each
-  category chip carries the icon its markers have in the graph). A row
+  calls, kernel records and packets, worst tier first and each tier in the order
+  it happened. The columns are **Tier** (a coloured H, M, L or I chip: hover it
+  for what the tier means and why this row has it; a flag after it says the
+  evidence is of limited confidence, and why), **Behaviour** (a short title;
+  the rule id and its version are on hover), **Target** (the path, `ip:port` or
+  process the behaviour was aimed at), **Process** (`name (pid · tid)`, ⚠ when
+  the process calls itself by another name; click it to open that process in
+  Details), **ATT&CK** (the technique, `T1053.003 Cron`; click it to list the
+  rows that cite it), **Count** (`×12`, or `×40 every ~5.0 s` for a steady
+  loop), **Result** (succeeded, `3 of 5 failed` or `all failed`, greyed) and
+  **When** (the first and last time, as offsets from the start of the run;
+  the clock times are on hover). The category, confidence, evidence, version,
+  source and flags are in Details; every filter key still works. A row has a
+  tier (HIGH, MEDIUM, LOW; INFO is only counted unless **Show INFO** is on).
+  Repeats fold into one row with a count.
+
+  The tiers mean: **High**, something ordinary software essentially never does
+  and that directly gives control, persistence or privilege, so look at these
+  first; **Medium**, often malicious but with legitimate uses, so it needs
+  context; **Low**, unusual but common in normal software, supporting evidence;
+  **Info**, neutral facts that tell the story, hidden by default. Context lowers
+  a tier by one: the program is on the rule's allow-list, every call failed, the
+  process is outside the run's tree, or it was seen only on the network. The
+  same words are in the graph legend and on the tier chips.
+
+  **Details** of a row, top to bottom: the tier, title and rule id with its
+  version; **What happened** in one sentence; **Why it matters** (what the rule
+  saw, and the ATT&CK technique with links to its rows and to the Summary);
+  **Why this tier** (the rule's tier and each step that moved it); **Evidence**
+  (the calls the row kept, with their time, syscall, what they did and result,
+  each with Open in Syscall Trace, or the packet); **Related** (the process, the
+  target in Files or Network, and the other findings of the same process, target
+  or technique); the rule's facts; dumps taken; and the observed fields. A row
   is something to look at, not a verdict. **Evasion** lists every anti-analysis
   check the sample made through system calls (machine identity, CPU, MAC address,
   uptime, `TracerPid`, container markers, long sleeps) with the answer the guest
