@@ -646,12 +646,12 @@ The network capture is the guest's own view on every route.
 - **Triage › Summary** reads top to bottom: the **header strip** (the sample's name, ELF
   type and architecture, static or dynamic, packed when Static analysis found a
   packer, size and SHA-256 with a copy button; the base, route, run time and exit;
-  a warning link when processes call themselves by another name than the program the
-  kernel loaded; the HIGH, MEDIUM, LOW and info counts, each a button that opens
+  the HIGH, MEDIUM, LOW and info counts, each a button that opens
   Suspicious activity on that tier; **Family candidates** from the detections, each
   with its source; and behaviour tags), **Key findings** (the six worst by tier and
-  then first time, each with its description on a line below; a click opens the
-  finding's Details, **all N** opens Suspicious activity, **Show more** lists every
+  then first time, each with its description on a line below, cut to its first sentence
+  with "…" when there is more: a click on the description shows all of it and another
+  folds it; a click on the row opens the finding's Details, **all N** opens Suspicious activity, **Show more** lists every
   finding in a scrolling list and **Show less** folds it), **Indicators** (a tree of
   **Endpoints** with country and organization, **DNS names**, **URLs** and **Files**
   dropped or run with type and SHA-256; each branch shows five and **Show N more**

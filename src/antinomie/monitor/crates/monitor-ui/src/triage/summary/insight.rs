@@ -379,7 +379,10 @@ pub(super) struct Key {
     pub exe: String,
     pub count: u64,
     pub first_ns: u64,
+    /// The description, cut to its first sentence; ends in "\u{2026}" when cut.
     pub why: String,
+    /// The whole description when `why` is cut, else empty.
+    pub full: String,
 }
 
 /// How many findings the Summary lists.
@@ -411,11 +414,18 @@ pub(super) fn key_findings(findings: &[Finding], limit: usize) -> (usize, Vec<Ke
             let values = &finding.values;
             let rule = text(values, "finding.rule").to_owned();
             let description = super::rule_text::rule_description(&rule);
-            let why = if description.is_empty() {
-                short(text(values, "finding.summary"), 140)
+            let whole = if description.is_empty() {
+                text(values, "finding.summary").trim().to_owned()
             } else {
-                short(&description, 140)
+                description.trim().to_owned()
             };
+            let mut why = short(&whole, 140);
+            let cut =
+                !why.is_empty() && why.trim_end_matches('\u{2026}') != whole.trim_end_matches('.');
+            if cut && !why.ends_with('\u{2026}') {
+                why.push('\u{2026}');
+            }
+            let full = if cut { whole } else { String::new() };
             Some(Key {
                 index,
                 tier,
@@ -428,6 +438,7 @@ pub(super) fn key_findings(findings: &[Finding], limit: usize) -> (usize, Vec<Ke
                 count: number(values, "finding.count").max(1),
                 first_ns: number(values, "finding.first_ns"),
                 why,
+                full,
             })
         })
         .collect();
@@ -566,8 +577,12 @@ mod tests {
             ]
         );
         assert_eq!(
-            keys[0].why, "Opens /tmp/x",
-            "the summary stands in for a description"
+            keys[0].why, "Opens /tmp/x\u{2026}",
+            "the summary stands in for a description, cut at its first sentence"
+        );
+        assert_eq!(
+            keys[0].full, "Opens /tmp/x. More.",
+            "the whole text for a click"
         );
         assert_eq!(keys[0].target, "/tmp/x");
         assert_eq!(keys[0].count, 1);

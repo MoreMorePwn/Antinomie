@@ -117,30 +117,28 @@ pub(super) fn show(
             if !run_line.is_empty() {
                 ui.label(RichText::new(run_line.join(" \u{b7} ")).color(theme::text()));
             }
-            if built.mismatches > 0
-                && ui
-                    .link(format!(
-                        "\u{26a0} argv/image mismatch in {} {}",
-                        built.mismatches,
-                        if built.mismatches == 1 { "process" } else { "processes" }
-                    ))
-                    .on_hover_text("A process calls itself by a name other than the program the kernel loaded. Open the Process tree")
-                    .clicked()
-            {
-                acts.push(Act::Go(Destination::Tasks));
-            }
         });
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
             for (tier, count) in tier_tiles(scan.counts.finding_tiers) {
-                let label = if tier == Tier::Info { "info".to_owned() } else { tier.tag().to_uppercase() };
+                let label = if tier == Tier::Info {
+                    "info".to_owned()
+                } else {
+                    tier.tag().to_uppercase()
+                };
                 let color = tier.color();
-                let button = egui::Button::new(RichText::new(format!("{count} {label}")).strong().color(color))
-                    .fill(color.gamma_multiply(0.12))
-                    .corner_radius(4);
+                let button = egui::Button::new(
+                    RichText::new(format!("{count} {label}"))
+                        .strong()
+                        .color(color),
+                )
+                .fill(color.gamma_multiply(0.12))
+                .corner_radius(4);
                 if ui
                     .add(button)
-                    .on_hover_text(format!("Open Suspicious activity with only the {label} rows"))
+                    .on_hover_text(format!(
+                        "Open Suspicious activity with only the {label} rows"
+                    ))
                     .clicked()
                 {
                     acts.push(Act::Tier(tier));
@@ -148,9 +146,17 @@ pub(super) fn show(
             }
         });
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Family candidates").small().color(theme::muted()));
+            ui.label(
+                RichText::new("Family candidates")
+                    .small()
+                    .color(theme::muted()),
+            );
             if built.candidates.is_empty() {
-                ui.label(RichText::new("none named by a detection").small().color(theme::muted()));
+                ui.label(
+                    RichText::new("none named by a detection")
+                        .small()
+                        .color(theme::muted()),
+                );
             }
             for candidate in &built.candidates {
                 if ui
@@ -158,17 +164,24 @@ pub(super) fn show(
                     .on_hover_text(&candidate.source)
                     .clicked()
                 {
-                    acts.push(Act::Go(Destination::Detection(antinomie_monitor_core::analysis::detection::Engine::Yara)));
+                    acts.push(Act::Go(Destination::Detection(
+                        antinomie_monitor_core::analysis::detection::Engine::Yara,
+                    )));
                 }
-                ui.label(RichText::new(format!("({})", candidate.source)).small().color(theme::muted()));
+                ui.label(
+                    RichText::new(format!("({})", candidate.source))
+                        .small()
+                        .color(theme::muted()),
+                );
             }
         });
         if !built.tags.is_empty() {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("Tags").small().color(theme::muted()));
                 for tag in &built.tags {
-                    presentation::badge(ui, tag, theme::neutral_accent())
-                        .on_hover_text("Seen in this run's rules and detections: an observation, not a verdict");
+                    presentation::badge(ui, tag, theme::neutral_accent()).on_hover_text(
+                        "Seen in this run's rules and detections: an observation, not a verdict",
+                    );
                 }
             });
         }

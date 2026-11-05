@@ -317,7 +317,12 @@ fn the_header_names_the_sample_the_tiers_and_what_the_detections_say() {
     for tile in ["3 HIGH", "3 MEDIUM", "2 LOW", "21 info"] {
         assert!(has(&out, tile), "{tile}");
     }
-    assert!(has(&out, "\u{26a0} argv/image mismatch in 1 process"));
+    assert!(
+        !texts(&out)
+            .iter()
+            .any(|(text, _)| text.contains("argv/image")),
+        "the rule reports it"
+    );
     assert!(has(&out, "none named by a detection"));
     // Tags from the rules that fired: persistence, injection, discovery.
     for tag in ["persistence", "injection", "discovery", "downloader"] {
@@ -493,6 +498,31 @@ fn a_findings_description_is_on_a_line_below_its_row() {
         starting(&out, "A program that the run itself wrote").expect("the description line");
     assert!(why.min.y > title.max.y - 2.0, "{why:?} under {title:?}");
     assert!(why.min.x <= title.min.x + 1.0, "starts at the row's left");
+}
+
+#[test]
+fn a_click_on_a_cut_description_shows_all_of_it_and_another_folds_it() {
+    let (_files, mut view) = fixture();
+    let ctx = context(16.0);
+    let out = settle(&ctx, &mut view, WIDE, None);
+    let (cut, at) = starting(&out, "A program that the run itself wrote").expect("the description");
+    assert!(cut.ends_with('\u{2026}'), "{cut:?} shows it was cut");
+    assert!(!cut.contains("second stage"));
+    let section = view.section;
+    click(&ctx, &mut view, WIDE, at.center());
+    let out = settle(&ctx, &mut view, WIDE, None);
+    let (whole, at) =
+        starting(&out, "A program that the run itself wrote").expect("the description");
+    assert!(whole.contains("second stage looks like this."), "{whole:?}");
+    assert!(
+        view.section == section,
+        "the description folds, it does not open the finding"
+    );
+    click(&ctx, &mut view, WIDE, at.center());
+    let out = settle(&ctx, &mut view, WIDE, None);
+    let (again, _) =
+        starting(&out, "A program that the run itself wrote").expect("the description");
+    assert_eq!(again, cut);
 }
 
 #[test]

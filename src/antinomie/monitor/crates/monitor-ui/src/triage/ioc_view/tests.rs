@@ -487,7 +487,7 @@ fn a_run_without_a_capture_says_the_network_tabs_were_skipped() {
 }
 
 #[test]
-fn the_summary_page_has_an_ioc_card_and_the_tab_counts_the_indicators() {
+fn the_summary_indicators_header_names_the_matches_and_the_tab_counts_the_indicators() {
     if !tshark() {
         return;
     }
@@ -496,12 +496,13 @@ fn the_summary_page_has_an_ioc_card_and_the_tab_counts_the_indicators() {
     let mut view = fixture.view(scan, Section::Summary);
     let ctx = context();
     let text = shown(&settle(&ctx, &mut view));
-    assert!(text.contains("IOC datasets"), "{text}");
+    // The dataset line sits in the Indicators header and opens the IOC view.
+    assert!(text.contains("Indicators"), "{text}");
     assert!(
-        text.contains("indicators matched") || text.contains("indicator matched"),
+        text.contains("indicators matched (datasets dated ")
+            || text.contains("indicator matched (datasets dated "),
         "{text}"
     );
-    assert!(text.contains("Open IOC"), "{text}");
     let (matched, total, date) = view.ioc_headline().unwrap();
     assert!(matched >= 2 && total >= 3, "{matched} of {total}");
     assert_eq!(date.len(), 10);

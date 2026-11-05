@@ -101,44 +101,46 @@ fn key_row(
     acts: &mut Vec<Act>,
 ) {
     let color = key.tier.color();
+    let more_id = ui.id().with(("summary-key-more", key.index));
+    let mut head = egui::Rect::NOTHING;
     let response = egui::Frame::new()
         .corner_radius(4)
         .inner_margin(egui::Margin::symmetric(6, 3))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                dot(ui, color);
-                ui.label(RichText::new(&key.title).strong().color(theme::text()));
-                if !key.target.is_empty() {
-                    ui.label(RichText::new(&key.target).monospace().color(theme::text()));
-                }
-                let name = node_name(scan, key.pid, key.cookie, &key.exe);
-                ui.label(
-                    RichText::new(format!("{name} ({})", key.pid))
-                        .small()
-                        .color(theme::muted()),
-                );
-                ui.label(
-                    RichText::new(format!("\u{d7}{}", key.count))
-                        .small()
-                        .color(theme::muted()),
-                );
-                ui.label(
-                    RichText::new(process_cells::relative(Some(key.first_ns), start))
-                        .small()
-                        .monospace()
-                        .color(theme::muted()),
-                );
-            });
-            if !key.why.is_empty() {
-                ui.add(
-                    egui::Label::new(RichText::new(&key.why).small().color(theme::muted())).wrap(),
-                );
-            }
+            head = ui
+                .horizontal_wrapped(|ui| {
+                    dot(ui, color);
+                    ui.label(RichText::new(&key.title).strong().color(theme::text()));
+                    if !key.target.is_empty() {
+                        ui.label(RichText::new(&key.target).monospace().color(theme::text()));
+                    }
+                    let name = node_name(scan, key.pid, key.cookie, &key.exe);
+                    ui.label(
+                        RichText::new(format!("{name} ({})", key.pid))
+                            .small()
+                            .color(theme::muted()),
+                    );
+                    ui.label(
+                        RichText::new(format!("\u{d7}{}", key.count))
+                            .small()
+                            .color(theme::muted()),
+                    );
+                    ui.label(
+                        RichText::new(process_cells::relative(Some(key.first_ns), start))
+                            .small()
+                            .monospace()
+                            .color(theme::muted()),
+                    );
+                })
+                .response
+                .rect;
+            description(ui, key, more_id);
         })
         .response;
+    // The row's own line opens the finding; the description line folds.
     let click = ui.interact(
-        response.rect,
+        response.rect.with_max_y(head.max.y + 3.0),
         ui.id().with(("summary-key", key.index)),
         egui::Sense::click(),
     );
@@ -158,6 +160,34 @@ fn key_row(
         .clicked()
     {
         acts.push(Act::Finding(key.index));
+    }
+}
+
+/// The finding's description: its first sentence, and the whole text
+/// after a click on a cut one ("\u{2026}"); another click folds it again.
+fn description(ui: &mut egui::Ui, key: &super::insight::Key, id: egui::Id) {
+    if key.why.is_empty() {
+        return;
+    }
+    let open = !key.full.is_empty() && ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
+    let text = if open { &key.full } else { &key.why };
+    let label = egui::Label::new(RichText::new(text).small().color(theme::muted())).wrap();
+    if key.full.is_empty() {
+        ui.add(label);
+        return;
+    }
+    let response = ui
+        .add(label.sense(egui::Sense::click()))
+        .on_hover_text(if open {
+            "Show only the first sentence"
+        } else {
+            "Show the whole description"
+        });
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if response.clicked() {
+        ui.data_mut(|data| data.insert_temp(id, !open));
     }
 }
 

@@ -36,7 +36,6 @@ pub(super) struct Built {
     pub keys: Vec<KeyFinding>,
     pub candidates: Vec<Candidate>,
     pub tags: Vec<&'static str>,
-    pub mismatches: usize,
     pub interest: Vec<Interest>,
 }
 
@@ -123,7 +122,6 @@ impl Built {
             packed,
         });
         let (key_total, keys) = insight::key_findings(&scan.findings, usize::MAX);
-        let mismatches = facts.procs.iter().filter(|proc| proc.mismatch).count();
         let interest = model::interest(&facts, 5);
         Self {
             key,
@@ -136,7 +134,6 @@ impl Built {
             keys,
             candidates,
             tags,
-            mismatches,
             interest,
         }
     }
