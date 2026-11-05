@@ -1697,6 +1697,8 @@ fn a_laptop_machine_gets_the_guest_facade_and_a_server_none() {
         "{options}"
     );
     assert!(options.contains("antinomie_fefi=\"Lenovo\""), "{options}");
+    // No optical drive in the machine: QEMU's default CD-ROM stays unattached.
+    assert!(options.ends_with("antinomie_fnocd"), "{options}");
     // Its giveaways no longer name QEMU's NVMe controller, display or ACPI.
     let giveaways = t14.giveaways().join("\n");
     assert!(!giveaways.contains("QEMU NVMe Ctrl"), "{giveaways}");

@@ -1090,6 +1090,7 @@ of the command line before the kernel prints it.
 | `antinomie_fdrm` | `i915` or `amdgpu` | the display driver's names |
 | `antinomie_finput` | `"VVVV:PPPP:BBBB,maker,product"` | QEMU's USB HID devices as the maker's mouse |
 | `antinomie_fefi` | `"vendor"` | the boot log's EFI firmware vendor |
+| `antinomie_fnocd` | (flag) | a machine without an optical drive: QEMU's default CD-ROM (q35 adds `ide2-cd0` when no IDE disk is given, as with an NVMe root) is not attached |
 
 **What the guest shows** (`kernel/antinomie/facade.c`; the kernel's own
 `pci_dev`, Identify data copies, ACPI tables, drivers and the uevents it sends
@@ -1106,6 +1107,8 @@ emulated devices' modules):
 | `bochs-drm`'s PCI driver name (sysfs, `lspci -k`, the log), its resource names (`/proc/iomem`, `/proc/ioports`), DRM_IOCTL_VERSION (name, description, version of i915 or amdgpu), the fbdev name (`/proc/fb`: `i915drmfb`, `amdgpudrmfb`) | `pci-driver.c`, `kernel/resource.c`, `drm_ioctl.c`, `drm_fb_helper.c` |
 | QEMU's USB HID devices (vendor 0627, maker `QEMU`): IDs, release, maker and product strings, no serial, set right after the hub reads the descriptors (sysfs, the `descriptors` file, the input device's name and IDs) | `usb_new_device()` (`drivers/usb/core/hub.c`) |
 | the EFI firmware vendor in the boot log | `efi_systab_report_header()` |
+| QEMU's default ATAPI drive (`QEMU DVD-ROM`): disabled before it is attached, so no `sr0`, `/proc/scsi/scsi` entry or `/dev/cdrom` | `ata_dev_configure()` (`drivers/ata/libata-core.c`) |
+| the DRM core's `Initialized ...` and bochs's `Found bochs VGA` log lines (root) | `drm_drv.c`, `tiny/bochs.c` |
 
 **Profiles.** Every desktop and laptop machine has its GPU from a public report
 of a unit (`catalog/SOURCES.md`); the ThinkPads, the M.2 Latitudes (5420,

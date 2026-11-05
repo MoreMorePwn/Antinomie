@@ -70,11 +70,11 @@ index da60956b2..f26a33e8f 100644
  
  static u64 get_iowait_time(struct kernel_cpustat *kcs, int cpu)
 diff --git a/include/linux/antinomie_stealth.h b/include/linux/antinomie_stealth.h
-index 29b9bb11a..2958d6a83 100644
+index 6995b4905..e7e38688b 100644
 --- a/include/linux/antinomie_stealth.h
 +++ b/include/linux/antinomie_stealth.h
-@@ -93,4 +93,28 @@ static inline const char *ant_efi_vendor(const char *vendor)
- 	return vendor;
+@@ -98,4 +98,28 @@ static inline bool ant_ata_device_hidden(const char *model)
+ 	return false;
  }
  #endif
 +

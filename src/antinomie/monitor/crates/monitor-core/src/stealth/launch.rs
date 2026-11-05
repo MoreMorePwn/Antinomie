@@ -636,5 +636,10 @@ pub(crate) fn facade_options(profile: &StealthProfile) -> Vec<String> {
     if profile.firmware.is_uefi() {
         options.push(format!("antinomie_fefi=\"{}\"", firmware.efi_vendor));
     }
+    // q35 adds QEMU's own CD-ROM when no IDE disk is given (an NVMe root):
+    // without the profile's drive the guest leaves it unattached.
+    if !profile.cdrom {
+        options.push("antinomie_fnocd".into());
+    }
     options
 }
