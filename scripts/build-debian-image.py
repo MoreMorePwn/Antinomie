@@ -83,14 +83,15 @@ def root_module_groups(arch="x86_64"):
     return tuple((test, tuple(name for name in names if name != "crc32c-intel"))
                  for test, names in ROOT_MODULE_GROUPS)
 # What the stock kernel profile may change in Debian's configuration (the
-# recorder and the architecture's HAVE_ANTINOMIE that offers it, the embedded
-# configuration the image builders read, the release suffix, the certificate
-# path), what Debian's /boot/config leaves out
+# recorder, its guest facade and boot age, and the architecture's HAVE_ANTINOMIE
+# that offers it, the embedded configuration the image builders read, the
+# release suffix, the certificate path), what Debian's /boot/config leaves out
 # (debian/rules.real removes the signing key, trusted keys and build salt), and
 # the toolchain's own values (the banner pins the toolchain).
 STOCK_CONFIG_EXCEPTIONS = re.compile(
-    r"CONFIG_(ANTINOMIE|HAVE_ANTINOMIE|ANTINOMIE_SOURCE_ID|IKCONFIG|IKCONFIG_PROC|KERNEL_GZIP"
-    r"|KERNEL_ZSTD|LOCALVERSION|MODULE_SIG_KEY|MODULE_SIG_ALL|SYSTEM_TRUSTED_KEYS|BUILD_SALT"
+    r"CONFIG_(ANTINOMIE|HAVE_ANTINOMIE|ANTINOMIE_SOURCE_ID|ANTINOMIE_FACADE|ANTINOMIE_BOOT_AGE"
+    r"|IKCONFIG|IKCONFIG_PROC|KERNEL_GZIP|KERNEL_ZSTD|LOCALVERSION|MODULE_SIG_KEY"
+    r"|MODULE_SIG_ALL|SYSTEM_TRUSTED_KEYS|BUILD_SALT"
     r"|CC_VERSION_TEXT|GCC_VERSION|CLANG_VERSION|AS_VERSION|LD_VERSION|LLD_VERSION"
     r"|PAHOLE_VERSION|RUSTC_\w+|BINDGEN_\w+|(CC|AS|LD)_IS_\w+|(CC|AS)_HAS_\w+|CC_CAN_\w+"
     r"|LD_CAN_\w+|TOOLS_SUPPORT_\w+|RUST_IS_AVAILABLE)")

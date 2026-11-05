@@ -385,11 +385,12 @@ if [[ $profile == stock ]]; then
     require_symbols ANTINOMIE IKCONFIG "${compression[@]}" MODVERSIONS MODULE_SIG DEBUG_INFO_BTF \
         FUNCTION_TRACER DYNAMIC_FTRACE BPF_LSM
     require_source_id
-    # Nothing else of Debian's configuration may change: no symbol the
-    # recorder selects, no driver built in.
+    # Nothing else of Debian's configuration may change (the recorder's guest
+    # facade and boot age are its own): no symbol the recorder selects, no
+    # driver built in.
     "$source_tree/scripts/diffconfig" "$build_tree/debian-config" "$build_tree/.config" \
         > "$build_tree/antinomie-config-deviations.txt"
-    allowed="ANTINOMIE|ANTINOMIE_SOURCE_ID|IKCONFIG|IKCONFIG_PROC|KERNEL_GZIP|KERNEL_ZSTD|LOCALVERSION|MODULE_SIG_KEY|BUILD_SALT"
+    allowed="ANTINOMIE|ANTINOMIE_SOURCE_ID|ANTINOMIE_FACADE|ANTINOMIE_BOOT_AGE|IKCONFIG|IKCONFIG_PROC|KERNEL_GZIP|KERNEL_ZSTD|LOCALVERSION|MODULE_SIG_KEY|BUILD_SALT"
     unexpected=$(grep -vE "^[-+ ]($allowed) " \
         "$build_tree/antinomie-config-deviations.txt" || true)
     if [[ -n $unexpected ]]; then

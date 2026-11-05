@@ -297,7 +297,8 @@ class ProfileTests(unittest.TestCase):
         self.assertIn('cat "${fragments[@]}" > "$reference/.config"', stock)
         self.assertIn('"$build_tree/output/signing_key.pem"', stock)
         self.assertIn('--set-str MODULE_SIG_KEY "output/signing_key.pem"', stock)
-        self.assertIn("allowed=\"ANTINOMIE|ANTINOMIE_SOURCE_ID|IKCONFIG|IKCONFIG_PROC|KERNEL_GZIP|"
+        self.assertIn("allowed=\"ANTINOMIE|ANTINOMIE_SOURCE_ID|ANTINOMIE_FACADE|ANTINOMIE_BOOT_AGE|"
+                      "IKCONFIG|IKCONFIG_PROC|KERNEL_GZIP|"
                       "KERNEL_ZSTD|LOCALVERSION|MODULE_SIG_KEY|BUILD_SALT\"", stock)
         self.assertIn('--set-str BUILD_SALT "6.12.94$DEBIAN_LOCALVERSION"', stock)
         self.assertIn("FUNCTION_TRACER DYNAMIC_FTRACE BPF_LSM", stock)
