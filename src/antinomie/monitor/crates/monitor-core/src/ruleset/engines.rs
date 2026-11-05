@@ -21,7 +21,11 @@ pub const DEFAULT_SIGMA_PYTHON: &str = "/usr/bin/python3";
 /// How long a probe result is used before it is refreshed in the background.
 const FRESH_FOR: Duration = Duration::from_secs(60);
 /// Upper bound on one probe, including interpreter start-up.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long an answer of "unknown" (the probe timed out or printed nothing
+/// usable) is shown before the background refresh asks again. It is never
+/// reused by a blocking caller and never replaces a definite answer.
+const UNKNOWN_RETRY: Duration = Duration::from_secs(5);
 /// Upper bound on the probe's stdout, in octets.
 const PROBE_OUTPUT_SIZE: usize = 16 * 1024;
 /// Number of tool configurations kept in the cache.
@@ -207,8 +211,31 @@ fn cache() -> MutexGuard<'static, HashMap<String, Entry>> {
         .unwrap_or_else(|error| error.into_inner())
 }
 
+/// How long `probe` is used before it is asked again.
+fn fresh_for(probe: &ToolProbe) -> Duration {
+    match probe {
+        ToolProbe::Unknown(_) => UNKNOWN_RETRY,
+        _ => FRESH_FOR,
+    }
+}
+
 fn store(key: &str, probe: ToolProbe) {
     let mut entries = cache();
+    // A probe that did not answer (a slow interpreter under load) says
+    // nothing new: the earlier definite answer stays, so the tool facts, the
+    // selection digest and the results built on them do not flip back and
+    // forth with the machine's load.
+    if matches!(probe, ToolProbe::Unknown(_))
+        && let Some(entry) = entries.get_mut(key)
+        && entry
+            .probe
+            .as_ref()
+            .is_some_and(|old| !matches!(old, ToolProbe::Unknown(_)))
+    {
+        entry.probed_at = Instant::now();
+        entry.refreshing = false;
+        return;
+    }
     if entries.len() >= CACHE_COUNT
         && !entries.contains_key(key)
         && let Some(oldest) = entries
@@ -230,13 +257,24 @@ fn store(key: &str, probe: ToolProbe) {
 
 fn cached(key: &str, probe: impl FnOnce() -> ToolProbe) -> ToolProbe {
     if let Some(entry) = cache().get(key)
-        && entry.probed_at.elapsed() < FRESH_FOR
         && let Some(result) = &entry.probe
+        && entry.probed_at.elapsed() < FRESH_FOR
+        && !matches!(result, ToolProbe::Unknown(_))
     {
         return result.clone();
     }
     let result = probe();
     store(key, result.clone());
+    // An unknown answer is not kept: the next use asks again.
+    if matches!(result, ToolProbe::Unknown(_)) {
+        let mut entries = cache();
+        if entries
+            .get(key)
+            .is_some_and(|entry| matches!(entry.probe, Some(ToolProbe::Unknown(_))))
+        {
+            entries.remove(key);
+        }
+    }
     result
 }
 
@@ -250,7 +288,12 @@ fn peek(
     let (current, start) = {
         let mut entries = cache();
         match entries.get_mut(key) {
-            Some(entry) if entry.probe.is_some() && entry.probed_at.elapsed() < FRESH_FOR => {
+            Some(entry)
+                if entry
+                    .probe
+                    .as_ref()
+                    .is_some_and(|probe| entry.probed_at.elapsed() < fresh_for(probe)) =>
+            {
                 return entry.probe.clone();
             }
             Some(entry) => {
@@ -290,6 +333,10 @@ fn peek(
 }
 
 fn probe_sigma(python: &Path) -> ToolProbe {
+    probe_sigma_within(python, PROBE_TIMEOUT)
+}
+
+fn probe_sigma_within(python: &Path, timeout: Duration) -> ToolProbe {
     let Some(path) = python.to_str() else {
         return ToolProbe::Broken(format!("{} is not a UTF-8 path", python.display()));
     };
@@ -300,7 +347,7 @@ fn probe_sigma(python: &Path) -> ToolProbe {
         path,
         &["-I", "-c", SIGMA_PROBE],
         &[],
-        PROBE_TIMEOUT,
+        timeout,
         PROBE_OUTPUT_SIZE,
         false,
         &AtomicBool::new(false),
@@ -312,8 +359,8 @@ fn probe_sigma(python: &Path) -> ToolProbe {
     };
     if run.timed_out {
         return ToolProbe::Unknown(format!(
-            "interpreter {path} did not answer within {} s",
-            PROBE_TIMEOUT.as_secs()
+            "interpreter {path} did not answer within {} s (the machine may be busy; it is asked again at the next use)",
+            timeout.as_secs()
         ));
     }
     if !run.success {
@@ -472,6 +519,34 @@ mod tests {
             sigma_from_output("not json"),
             ToolProbe::Unknown(_)
         ));
+    }
+
+    #[test]
+    fn a_slow_interpreter_is_unknown_and_asked_again_at_the_next_use() {
+        let dir = std::env::temp_dir().join(format!("ant-slow-{}", crate::storage::unique_id()));
+        let python = fake_python(&dir, "python", "sleep 30");
+        let slow = probe_sigma_within(&python, Duration::from_millis(300));
+        let ToolProbe::Unknown(reason) = &slow else {
+            panic!("{slow:?}");
+        };
+        assert!(reason.contains("did not answer"), "{reason}");
+        // Not kept: the same key answers again, now from a quick interpreter.
+        let key = "sigma:test-unknown";
+        assert!(matches!(
+            cached(key, || slow.clone()),
+            ToolProbe::Unknown(_)
+        ));
+        assert!(cache().get(key).is_none(), "an unknown answer was cached");
+        let found = ToolProbe::Found {
+            identity: "pysigma 2.0.1 / sqlite 2.1.0".into(),
+            version: "2.0.1".into(),
+        };
+        assert_eq!(cached(key, || found.clone()), found);
+        // A later timeout does not replace the definite answer.
+        store(key, slow);
+        assert_eq!(cached(key, || panic!("asked again")), found);
+        cache().remove(key);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
