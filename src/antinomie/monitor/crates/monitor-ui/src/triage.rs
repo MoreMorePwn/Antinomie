@@ -46,7 +46,11 @@ mod file_category_tests;
 mod file_content;
 mod file_events;
 mod file_location;
+mod file_shown;
+#[cfg(test)]
+mod file_shown_tests;
 mod file_tabs;
+mod file_type;
 mod file_visibility;
 pub(crate) const DEFAULT_REBUILD_FILE_MIB: u32 = files::DEFAULT_FILE_MIB;
 pub(crate) const DEFAULT_REBUILD_RUN_MIB: u32 = files::DEFAULT_RUN_MIB;
@@ -208,6 +212,8 @@ pub(crate) struct TriageView {
     file_history: file_activity::Window,
     /// The Per-file history tab is chosen instead of one of [`FileTab`].
     history_tab: bool,
+    /// The Files section shows the per-file table, its first tab.
+    by_file: bool,
     new_tab: NewTab,
     /// The IOC section.
     ioc: ioc_view::View,
@@ -306,6 +312,7 @@ impl Default for TriageView {
             files: FileTab::Opened,
             file_history: Default::default(),
             history_tab: false,
+            by_file: true,
             new_tab: NewTab::Endpoints,
             ioc: ioc_view::View::default(),
             selected_call_id: None,
@@ -484,6 +491,7 @@ impl TriageView {
         self.section = Section::Files;
         self.files = FileTab::Changed;
         self.history_tab = false;
+        self.by_file = false;
         // A quote or backslash cannot be written in the filter's string.
         if !path.contains(['"', '\\']) && !path.chars().any(char::is_control) {
             let draft = format!("file.path == \"{path}\"");
@@ -501,6 +509,7 @@ impl TriageView {
     pub(crate) fn show_file_history(&mut self, path: &str, reconstruct: bool) {
         self.section = Section::Files;
         self.history_tab = true;
+        self.by_file = false;
         if reconstruct {
             self.file_history.reconstruct(path);
         } else {
@@ -1026,6 +1035,20 @@ struct Cell {
     theme: theme::Theme,
     mono: bool,
     values: Vec<(&'static str, RowValue)>,
+    /// Small pills drawn before the text (a path's location, how many other
+    /// names it has, a finding that involves it). They are made when the row
+    /// is shown, from its values, and are not stored.
+    badges: Vec<Badge>,
+    /// Said on hover instead of the text: a relative time's absolute one.
+    note: Option<String>,
+}
+
+/// A pill in a table cell.
+#[derive(Clone, Debug, PartialEq)]
+struct Badge {
+    text: String,
+    tone: crate::widgets::Tone,
+    hover: String,
 }
 
 impl Cell {
@@ -1378,6 +1401,9 @@ struct ArchiveScan {
     suspicious: Suspicious,
     findings: Vec<Finding>,
     findings_omitted: u64,
+    /// Paths a finding above Info names as its object, whatever the findings
+    /// table is filtered to: the files marked with a warning in Files.
+    flagged_paths: std::collections::BTreeSet<String>,
     /// The same rows as lanes and buckets, and the run's overview.
     graph: graph::GraphScan,
     /// Rules the scan could not evaluate, and why.

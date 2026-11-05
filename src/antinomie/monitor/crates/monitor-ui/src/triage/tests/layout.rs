@@ -18,6 +18,8 @@ fn scan() -> (PacketSpool, ArchiveScan) {
 fn view(section: Section) -> (PacketSpool, TriageView) {
     let (temp, scan) = scan();
     let mut view = TriageView::default();
+    // The tests look at the per-operation tables; By file has its own.
+    view.by_file = false;
     view.scan = Some(scan);
     view.section = section;
     view.context_key = Some("vm\nboot\nrun\n".into());
@@ -218,7 +220,7 @@ fn file_categories_are_tabs_with_counts() {
     // The Opened column set is kept.
     view.files = FileTab::Opened;
     let out = settle(&ctx, &mut view);
-    for header in ["Time", "Path", "Process (PID / TID)", "Result", "Evidence"] {
+    for header in ["Time", "Path", "Process", "Result"] {
         assert!(has(&out, header) || texts(&out).iter().any(|(t, _)| t.starts_with(header)));
     }
 }
@@ -608,17 +610,14 @@ fn an_opened_row_keeps_every_value_under_its_own_column() {
         at("Path")
     );
     assert_eq!(at("Operation"), "open");
-    assert!(at("Process (PID / TID)").contains(" \u{b7} TID "));
+    assert!(at("Process").contains(" \u{b7} "));
     assert!(at("Evidence").starts_with("call "));
     // The shown columns are the Opened table's, each from its own header.
     let shown: Vec<&str> = file_tabs::OPENED_COLUMNS
         .iter()
         .map(|&column| headers[column])
         .collect();
-    assert_eq!(
-        shown,
-        ["Time", "Path", "Process (PID / TID)", "Result", "Evidence"]
-    );
+    assert_eq!(shown, ["Time", "Path", "Process", "Result"]);
 }
 
 #[test]

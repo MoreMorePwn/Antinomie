@@ -141,12 +141,50 @@ impl Change {
             self.names.push(name.to_owned());
         }
     }
+    /// "3 writes · 4.1 KiB": the calls that wrote and the octets that differ
+    /// from the file's first known content; "partial" when the run did not see
+    /// all of it.
     pub(super) fn count_label(&self) -> String {
-        let count = self.diff_count();
-        if self.original_size.is_some() && self.final_size.is_some() && !self.has_gaps() {
-            count.to_string()
+        let writes = self
+            .operations
+            .iter()
+            .filter(|op| op.name.starts_with("write") || op.name.starts_with("pwrite"))
+            .count();
+        let differing = self.diff_count();
+        let mut parts = Vec::new();
+        match writes {
+            0 => {}
+            1 => parts.push("1 write".to_owned()),
+            count => parts.push(format!("{count} writes")),
+        }
+        if differing > 0 {
+            parts.push(file_shown::size_text(differing as u64));
+        }
+        if parts.is_empty() {
+            parts.push("no content change".to_owned());
+        }
+        if !(self.original_size.is_some() && self.final_size.is_some() && !self.has_gaps()) {
+            parts.push("partial".to_owned());
+        }
+        parts.join(" \u{b7} ")
+    }
+    /// The octets the run captured from the start of the file, for its type.
+    pub(super) fn head(&self) -> Vec<u8> {
+        let from = |store: &ByteStore| {
+            let mut head = Vec::new();
+            for (at, byte) in store.iter() {
+                if at != head.len() as u64 || head.len() == file_type::HEAD {
+                    break;
+                }
+                head.push(*byte);
+            }
+            head
+        };
+        let head = from(&self.final_data);
+        if head.is_empty() {
+            from(&self.original)
         } else {
-            format!("{count} known; gaps")
+            head
         }
     }
     pub fn evidence_key(&self) -> String {

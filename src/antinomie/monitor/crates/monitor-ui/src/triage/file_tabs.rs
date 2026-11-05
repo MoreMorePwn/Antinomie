@@ -6,38 +6,54 @@ use super::*;
 pub(super) const READ_HEADERS: &[&str] = &[
     "Time",
     "Path",
-    "Process (PID / TID)",
+    "Process",
     "Transferred / content",
     "Result",
     "Location",
     "Access",
     "Evidence",
 ];
-/// The Opened table shows only these columns of [`EVENT_HEADERS`]: time, path,
-/// PID/TID, result, evidence. The rest stay in Details.
-pub(super) const OPENED_COLUMNS: &[usize] = &[0, 3, 5, 6, 9];
-/// The Read table shows time, path, PID/TID, content, result and evidence of
+/// The Opened table shows these columns of [`EVENT_HEADERS`]: time, path,
+/// process and result. Location is a badge on the path; the rest stay in
+/// Details.
+pub(super) const OPENED_COLUMNS: &[usize] = &[0, 3, 5, 6];
+/// The other operation tables show every column of [`EVENT_HEADERS`] but
+/// Location (a badge) and Evidence (Details opens the original syscall).
+pub(super) const OPERATION_COLUMNS: &[usize] = &[0, 1, 2, 3, 4, 5, 6, 8];
+/// The Read table shows time, path, process, content and result of
 /// [`READ_HEADERS`]; Location and Access stay in Details.
-pub(super) const READ_COLUMNS: &[usize] = &[0, 1, 2, 3, 4, 7];
+pub(super) const READ_COLUMNS: &[usize] = &[0, 1, 2, 3, 4];
+/// The Changed table: time, path, process, lifecycle, changes, type and digest.
+pub(super) const CHANGED_COLUMNS: &[usize] = &[0, 1, 2, 3, 4, 7, 8];
+
+/// The stored columns the table of `slot` draws, in order.
+pub(super) fn shown_columns(slot: usize) -> &'static [usize] {
+    match slot {
+        1 => OPENED_COLUMNS,
+        2 => CHANGED_COLUMNS,
+        5 => READ_COLUMNS,
+        8..=15 => OPERATION_COLUMNS,
+        _ => &[],
+    }
+}
 /// The column of the full row behind column `shown` of a table's slot.
 pub(super) fn full_column(slot: usize, shown: usize) -> usize {
-    let columns = match slot {
-        1 => OPENED_COLUMNS,
-        5 => READ_COLUMNS,
-        ENDPOINT_SLOT | DOMAIN_SLOT | TLS_SLOT => return net_tabs::stored_column(slot, shown),
-        _ => return shown,
-    };
-    columns.get(shown).copied().unwrap_or(shown)
+    if matches!(slot, ENDPOINT_SLOT | DOMAIN_SLOT | TLS_SLOT) {
+        return net_tabs::stored_column(slot, shown);
+    }
+    shown_columns(slot).get(shown).copied().unwrap_or(shown)
 }
 
 pub(super) const CHANGED_HEADERS: &[&str] = &[
     "Time",
     "Path",
-    "Process (PID / TID)",
+    "Process",
     "Lifecycle",
-    "Diff count",
+    "Changes",
     "Location",
     "Evidence",
+    "Type",
+    "SHA-256",
 ];
 
 impl FileTab {
@@ -128,7 +144,7 @@ impl TriageView {
                 .collect()
         });
         let failed: u64 = per_tab.iter().map(|(_, count)| count).sum();
-        let tab = if self.history_tab {
+        let tab = if self.history_tab || self.by_file {
             None
         } else {
             Some(self.files)
@@ -253,8 +269,38 @@ impl TriageView {
         if let Some(path) = asked {
             self.file_history.reconstruct(&path);
             self.history_tab = true;
+            self.by_file = false;
+        }
+        // A row menu asked for the file's history.
+        let shown = ui.ctx().data_mut(|data| {
+            data.remove_temp::<String>(egui::Id::new(file_activity::HISTORY_REQUEST))
+        });
+        if let Some(path) = shown {
+            self.file_history.open_on(&path);
+            self.history_tab = true;
+            self.by_file = false;
         }
         self.file_tabs(ui);
+        if self.by_file && !self.history_tab {
+            let activity = self.scan.as_ref().map(|scan| scan.file_activity.clone());
+            let clock = self.scan.as_ref().and_then(|scan| scan.clock_anchor);
+            let (start, flagged) = self
+                .scan
+                .as_ref()
+                .map_or((None, Default::default()), |scan| {
+                    (run_start(scan), scan.flagged_paths.clone())
+                });
+            self.file_history.overview(
+                ui,
+                activity.as_deref(),
+                &file_shown::Notes {
+                    start,
+                    flagged: &flagged,
+                },
+                clock.or(input.clock_anchor),
+            );
+            return;
+        }
         if self.history_tab {
             let activity = self.scan.as_ref().map(|scan| scan.file_activity.clone());
             let clock = self.scan.as_ref().and_then(|scan| scan.clock_anchor);
@@ -291,32 +337,17 @@ impl TriageView {
             return;
         };
         let clock = scan.clock_anchor.or(input.clock_anchor);
+        let notes = file_shown::Notes {
+            start: run_start(scan),
+            flagged: &scan.flagged_paths,
+        };
         match tab {
             FileTab::Read => {
                 let rows = file_category::with_time(&scan.read, clock);
-                compact(
-                    ui,
-                    "triage-read",
-                    file_tabs::READ_HEADERS,
-                    &rows,
-                    READ_COLUMNS,
-                );
+                draw(ui, tab, file_tabs::READ_HEADERS, &rows, &notes);
             }
             FileTab::Changed => {
-                ui.scope(|ui| {
-                    table_rows(
-                        ui,
-                        "triage-changed",
-                        file_tabs::CHANGED_HEADERS,
-                        &scan.changed,
-                    );
-                });
-                details::refresh(
-                    ui.ctx(),
-                    "triage-changed",
-                    file_tabs::CHANGED_HEADERS,
-                    &scan.changed,
-                );
+                draw(ui, tab, file_tabs::CHANGED_HEADERS, &scan.changed, &notes);
             }
             _ => {
                 let source = if tab == FileTab::Opened {
@@ -325,30 +356,42 @@ impl TriageView {
                     &scan.file_tabs[index - 8].rows
                 };
                 let rows = file_category::with_time(source, clock);
-                if tab == FileTab::Opened {
-                    compact(ui, tab.table_id(), EVENT_HEADERS, &rows, OPENED_COLUMNS);
-                } else {
-                    table(ui, tab.table_id(), EVENT_HEADERS, &rows);
-                }
+                draw(ui, tab, EVENT_HEADERS, &rows, &notes);
             }
         }
     }
 }
 
-/// `headers` and `rows` with only the columns at `keep` drawn. Details still
-/// shows the selected row in full.
-fn compact(ui: &mut egui::Ui, id: &str, headers: &[&str], rows: &[Vec<Cell>], keep: &[usize]) {
-    let shown_headers: Vec<&str> = keep.iter().map(|&index| headers[index]).collect();
-    let shown: Vec<Vec<Cell>> = rows
+/// The start of the run, in the guest's nanoseconds: when its first task was
+/// first seen, else its first file call.
+fn run_start(scan: &ArchiveScan) -> Option<u64> {
+    scan.process
         .iter()
-        .map(|row| {
-            keep.iter()
-                .filter_map(|&index| row.get(index).cloned())
-                .collect()
+        .filter_map(|node| node.first_ns)
+        .min()
+        .or_else(|| {
+            scan.file_activity
+                .files
+                .iter()
+                .map(|file| file.first_ns)
+                .min()
         })
-        .collect();
-    table_rows(ui, id, &shown_headers, &shown);
-    details::refresh(ui.ctx(), id, headers, rows);
+}
+
+/// `headers` and `rows` of a tab's table drawn in the columns it shows (see
+/// [`file_shown`]). Details still shows the selected row in full.
+fn draw(
+    ui: &mut egui::Ui,
+    tab: FileTab,
+    headers: &[&str],
+    rows: &[Vec<Cell>],
+    notes: &file_shown::Notes<'_>,
+) {
+    let keep = file_tabs::shown_columns(tab.slot());
+    let shown_headers: Vec<&str> = keep.iter().map(|&index| headers[index]).collect();
+    let shown = file_shown::shown(tab.slot(), rows, notes);
+    table_rows(ui, tab.table_id(), &shown_headers, &shown);
+    details::refresh(ui.ctx(), tab.table_id(), headers, rows);
 }
 
 impl ArchiveScan {

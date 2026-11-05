@@ -20,17 +20,20 @@ use std::collections::BTreeMap;
 
 mod earlier;
 mod graph;
+mod overview;
 mod reconstruct;
 mod window;
 
 pub(super) use earlier::{copy_boot, hash_read, resolve as resolve_earlier, ReadHashes};
 
 pub(super) use reconstruct::{
-    menu as reconstruct_menu, start_of, DATA_DIR as RECONSTRUCT_DATA_DIR,
+    menu as reconstruct_menu, start_of, DATA_DIR as RECONSTRUCT_DATA_DIR, HISTORY_REQUEST,
     REQUEST as RECONSTRUCT_REQUEST,
 };
 pub(super) use window::{Window, CALLS_TABLE, FILE_TABLE};
 
+#[cfg(test)]
+mod overview_tests;
 #[cfg(test)]
 pub(super) mod reconstruct_tests;
 #[cfg(test)]
@@ -263,8 +266,8 @@ impl FileActivity {
 pub(super) struct Activity {
     /// In order of the first call on each file.
     pub files: Vec<FileActivity>,
-    /// Process id and image of whoever made the calls.
-    pub processes: Vec<(u32, Option<String>)>,
+    /// Process id, thread id and image of whoever made the calls.
+    pub processes: Vec<(u32, u32, Option<String>)>,
     pub omitted_files: u64,
     pub omitted_events: u64,
     /// Written bytes kept and skipped by the whole run, and the caps.
@@ -277,8 +280,9 @@ pub(super) struct Activity {
 impl Activity {
     pub(super) fn process_label(&self, index: u32) -> String {
         match self.processes.get(index as usize) {
-            Some((pid, Some(image))) => format!("{pid} {image}"),
-            Some((pid, None)) => pid.to_string(),
+            Some((pid, tid, image)) => {
+                super::process_cells::task_label(*pid, *tid, image.as_deref())
+            }
             None => "unknown process".into(),
         }
     }
@@ -359,7 +363,7 @@ pub(super) struct Builder {
     files: BTreeMap<String, FileActivity>,
     /// The file each name leads to now.
     current: BTreeMap<String, String>,
-    processes: Vec<(u32, Option<String>)>,
+    processes: Vec<(u32, u32, Option<String>)>,
     events: usize,
     omitted_files: u64,
     omitted_events: u64,
@@ -419,8 +423,8 @@ impl Builder {
         self.kernel_revision = revision;
     }
 
-    fn process(&mut self, pid: u32, image: Option<&str>) -> u32 {
-        let key = (pid, image.map(str::to_owned));
+    fn process(&mut self, pid: u32, tid: u32, image: Option<&str>) -> u32 {
+        let key = (pid, tid, image.map(str::to_owned));
         if let Some(index) = self.processes.iter().position(|known| *known == key) {
             return index as u32;
         }
@@ -494,7 +498,7 @@ impl Builder {
         let process = if capped {
             0
         } else {
-            self.process(event.pid, image)
+            self.process(event.pid, event.tid, image)
         };
         let outcome = file_category::outcome(call);
         let success = match outcome {
@@ -508,6 +512,12 @@ impl Builder {
             result_label(call.exit.as_ref().and_then(|exit| exit.result))
         };
         let mut note = String::new();
+        // A chmod says which bits it set that matter ("+x", "setuid").
+        if kind == Kind::Attributes && success != Some(false) {
+            if let Some(mode) = file_category::mode_argument(call, event) {
+                note = file_category::mode_flags(mode).join(" ");
+            }
+        }
         if kind == Kind::Delete && success == Some(true) {
             note = match links_left {
                 Some(0) => "last name removed".into(),
@@ -686,7 +696,7 @@ impl Builder {
         let process = if capped {
             0
         } else {
-            self.process(mapped.event.pid, mapped.image)
+            self.process(mapped.event.pid, mapped.event.tid, mapped.image)
         };
         let time = record.time_ns;
         let file = self.files.entry(key).or_insert_with(|| FileActivity {

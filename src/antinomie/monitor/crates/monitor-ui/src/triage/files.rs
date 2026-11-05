@@ -787,7 +787,7 @@ mod tests {
         assert_eq!(change.original_size, Some(5));
         assert_eq!(change.final_size, Some(5));
         assert_eq!(change.operations.len(), 3);
-        assert_eq!(change.count_label(), "2");
+        assert_eq!(change.count_label(), "1 write \u{b7} 2 B");
     }
 
     #[test]
@@ -803,7 +803,7 @@ mod tests {
         assert_eq!(change.diff_count(), 1);
         assert_eq!(change.final_data.get(&1), None);
         assert_eq!(change.final_data.get(&3), Some(&b'A'));
-        assert!(change.count_label().contains("gaps"));
+        assert!(change.count_label().contains("partial"));
     }
 
     #[test]
@@ -873,7 +873,7 @@ mod tests {
             .unwrap();
         assert_eq!(file.operations.len(), 1);
         assert_eq!(file.operations[0].name, "fchmod");
-        assert_eq!(file.operations[0].process, "Unknown (PID 1 · TID 1)");
+        assert_eq!(file.operations[0].process, "unknown (1 · 1)");
         assert!(file.gaps.iter().all(|gap| !gap.contains("mapped writes")));
         let synced = changes
             .iter()

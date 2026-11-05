@@ -233,7 +233,11 @@ impl FileIndex {
                 call: call.call_id,
                 key: trace::key(call),
                 name: file_events::operation_label(call, event),
-                process: process_identity(event.pid, event.tid, process_image(files, event)),
+                process: process_cells::task_label(
+                    event.pid,
+                    event.tid,
+                    process_image(files, event),
+                ),
                 result: result_label(ret),
             });
             self.operation_count += 1;
@@ -454,7 +458,7 @@ pub(super) fn read_cells(
         cell(event.timestamp_ns.to_string(), theme::text(), true),
         cell(path, theme::text(), true),
         cell(
-            process_identity(event.pid, event.tid, process_image(files, event)),
+            process_cells::task_label(event.pid, event.tid, process_image(files, event)),
             theme::text(),
             true,
         ),

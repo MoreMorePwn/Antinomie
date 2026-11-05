@@ -10,6 +10,16 @@ pub(super) fn file_name(path: &str) -> &str {
         .unwrap_or(path)
 }
 
+/// A task in a Files table: "name (412 \u{b7} 412)", the process and thread
+/// as bare numbers, as the Process tree shows them.
+pub(super) fn task_label(pid: u32, tid: u32, image: Option<&str>) -> String {
+    let name = match image {
+        Some("?" | "") | None => "unknown",
+        Some(image) => file_name(image),
+    };
+    format!("{name} ({pid} \u{b7} {tid})")
+}
+
 /// Applets BusyBox runs by the name it was called with.
 const APPLETS: &[&str] = &[
     "ash",

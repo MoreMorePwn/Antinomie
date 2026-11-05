@@ -295,7 +295,7 @@ fn native_triage_fixture() {
                 "changed" => scan.changed.first().cloned().map(|row| {
                     (
                         "triage-changed",
-                        vec!["Time", "Path", "PID / TID", "Diff count", "Evidence"],
+                        vec!["Time", "Path", "Process", "Diff count", "Evidence"],
                         row,
                     )
                 }),
@@ -305,7 +305,7 @@ fn native_triage_fixture() {
                         vec![
                             "Time",
                             "Path",
-                            "PID / TID",
+                            "Process",
                             "Transferred / content",
                             "Result",
                             "Evidence",
@@ -1550,8 +1550,8 @@ fn file_process_labels_follow_exec_time_without_guessing_unknown_or_reused_pid()
     let read = call(3, 0, "read", 0);
     let event = trace::representative(&read).unwrap();
     assert_eq!(
-        process_identity(event.pid, event.tid, process_image(&files, event)),
-        "old (PID 3 · TID 3)"
+        process_cells::task_label(event.pid, event.tid, process_image(&files, event)),
+        "old (3 · 3)"
     );
     let mut next = call(3, 59, "execve", 0);
     next.entry
@@ -1561,8 +1561,8 @@ fn file_process_labels_follow_exec_time_without_guessing_unknown_or_reused_pid()
         .push(captured("arg0.pathname", "", b"/bin/new\0"));
     observe_processes(&mut files.process_images, &[next]);
     assert_eq!(
-        process_identity(event.pid, event.tid, process_image(&files, event)),
-        "new (PID 3 · TID 3)"
+        process_cells::task_label(event.pid, event.tid, process_image(&files, event)),
+        "new (3 · 3)"
     );
     let mut reused = event.clone();
     reused.task_cookie += 100;
@@ -1585,8 +1585,8 @@ fn a_worker_thread_is_named_by_its_process_in_file_labels() {
     worker.tid = 4;
     worker.task_cookie = 4;
     assert_eq!(
-        process_identity(worker.pid, worker.tid, process_image(&files, &worker)),
-        "locker (PID 3 · TID 4)"
+        process_cells::task_label(worker.pid, worker.tid, process_image(&files, &worker)),
+        "locker (3 · 4)"
     );
 }
 

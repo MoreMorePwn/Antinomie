@@ -718,7 +718,7 @@ pub(super) const EVENT_HEADERS: &[&str] = &[
     "Operation",
     "Path",
     "Detail",
-    "Process (PID / TID)",
+    "Process",
     "Result",
     "Location",
     "Access",

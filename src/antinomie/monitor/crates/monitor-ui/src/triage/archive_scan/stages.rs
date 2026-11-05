@@ -818,7 +818,17 @@ impl Scan {
         counts.findings_capped = output.capped;
         let finding_notes = output.notes;
         let suspicious = output.tasks;
+        let mut flagged_paths = std::collections::BTreeSet::new();
         for finding in output.rows {
+            if crate::triage::file_shown::text_of(&finding.values, "finding.tier")
+                .is_some_and(|tier| tier != "info")
+            {
+                if let Some(object) =
+                    crate::triage::file_shown::text_of(&finding.values, "finding.object")
+                {
+                    flagged_paths.insert(object.to_owned());
+                }
+            }
             if let Some(writer) = &mut journal {
                 if let Err(error) = writer.push(&finding) {
                     journal_error = Some(error);
@@ -963,6 +973,7 @@ impl Scan {
             suspicious,
             findings,
             findings_omitted,
+            flagged_paths,
             graph,
             finding_notes,
             opened,

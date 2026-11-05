@@ -91,16 +91,19 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, input: &TriageInput
                 view.section = Section::Files;
                 view.files = FileTab::Opened;
                 view.history_tab = false;
+                view.by_file = false;
             }
             Destination::Reads => {
                 view.section = Section::Files;
                 view.files = FileTab::Read;
                 view.history_tab = false;
+                view.by_file = false;
             }
             Destination::Changed => {
                 view.section = Section::Files;
                 view.files = FileTab::Changed;
                 view.history_tab = false;
+                view.by_file = false;
             }
             Destination::Ips => {
                 view.section = Section::Network;

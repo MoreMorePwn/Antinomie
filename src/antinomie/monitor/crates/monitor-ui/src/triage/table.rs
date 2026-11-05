@@ -10,6 +10,13 @@ fn hover_errno(response: egui::Response, text: &str) {
     }
 }
 
+/// The pills of a cell, before its text.
+fn cell_badges(ui: &mut egui::Ui, cell: &Cell) {
+    for badge in &cell.badges {
+        crate::widgets::chip(ui, badge.text.clone(), badge.tone).on_hover_text(&badge.hover);
+    }
+}
+
 pub(super) fn cell(text: impl Into<String>, color: egui::Color32, mono: bool) -> Cell {
     Cell {
         text: text.into(),
@@ -17,6 +24,8 @@ pub(super) fn cell(text: impl Into<String>, color: egui::Color32, mono: bool) ->
         theme: theme::theme(),
         mono,
         values: Vec::new(),
+        badges: Vec::new(),
+        note: None,
     }
 }
 
@@ -98,6 +107,11 @@ pub(super) fn column_widths<'a>(
                             .size()
                             .x
                     }) + 24.0
+                        + cell
+                            .badges
+                            .iter()
+                            .map(|badge| 12.0 + 6.0 * badge.text.chars().count() as f32)
+                            .sum::<f32>()
                 });
             content.max(minimum).max(heading).min(maximum.max(heading))
         })
@@ -368,21 +382,23 @@ fn table_rows_with(
                         let note = (id == "triage-process")
                             .then(|| process_tree::cell_hover(column, cell, &cells[0]))
                             .flatten();
-                        let hover = |response: egui::Response| match &note {
-                            Some(note) => {
+                        let hover = |response: egui::Response| match (&note, &cell.note) {
+                            (Some(note), _) | (None, Some(note)) => {
                                 response.on_hover_text(note);
                             }
-                            None => hover_errno(response, &cell.text),
+                            (None, None) => hover_errno(response, &cell.text),
                         };
                         let draw = |ui: &mut egui::Ui| match indent {
                             Some(width) => {
                                 let mut rect = ui.max_rect();
                                 rect.min.x += width;
                                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                                    cell_badges(ui, cell);
                                     hover(ui.add(label));
                                 });
                             }
                             None => {
+                                cell_badges(ui, cell);
                                 hover(ui.add(label));
                             }
                         };
@@ -463,6 +479,7 @@ fn table_rows_with(
                 );
                 row.response().context_menu(|ui| {
                     file_activity::reconstruct_menu(ui, id, values);
+                    file_shown::copy_hash_menu(ui, values);
                     match filter_id {
                         Some(filter_id) => {
                             query::table_row_menu_with(ui, filter_id, values, extras)

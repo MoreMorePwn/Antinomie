@@ -167,9 +167,18 @@ impl TriageView {
 
     pub(super) fn file_tabs(&mut self, ui: &mut egui::Ui) {
         widgets::tab_row(ui, |ui| {
-            // Per-file history leads: it is the way into every file the run
-            // touched, with how many there are.
+            // The per-file table leads, then the history of one file: they are
+            // the way into every file the run touched, with how many there are.
             let count = self.section_count(Metric::History);
+            let by_file = TabItem::new("By file")
+                .badge(count.label(), count.tone(false))
+                .tooltip(
+                    "One row for each file the run touched: what happened to it, who did it, its size, type and SHA-256",
+                );
+            if widgets::tab(ui, self.by_file && !self.history_tab, &by_file).clicked() {
+                self.by_file = true;
+                self.history_tab = false;
+            }
             let item = TabItem::new("Per-file history")
                 .badge(count.label(), count.tone(false))
                 .tooltip(
@@ -177,6 +186,7 @@ impl TriageView {
                 );
             if widgets::tab(ui, self.history_tab, &item).clicked() {
                 self.history_tab = true;
+                self.by_file = false;
             }
             for value in FileTab::ALL {
                 let metric = match value {
@@ -187,13 +197,14 @@ impl TriageView {
                 };
                 if tab(
                     ui,
-                    self.files == value && !self.history_tab,
+                    self.files == value && !self.history_tab && !self.by_file,
                     value.title(),
                     self.section_count(metric),
                     false,
                 ) {
                     self.files = value;
                     self.history_tab = false;
+                    self.by_file = false;
                 }
             }
         });

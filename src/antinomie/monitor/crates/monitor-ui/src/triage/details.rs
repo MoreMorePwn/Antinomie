@@ -205,6 +205,7 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
                 if ui.button("Per-file history").on_hover_text("Open this file in the Per-file history tab").clicked() {
                     view.file_history.open_on(&change.path);
                     view.history_tab = true;
+view.by_file = false;
                 }
                 change.show(ui, view.scan.as_ref().and_then(|scan| scan.clock_anchor));
             } else {

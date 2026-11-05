@@ -377,6 +377,8 @@ impl Spool {
                         theme: cell.theme,
                         mono: cell.mono,
                         values,
+                        badges: Vec::new(),
+                        note: None,
                     })
                 })
                 .collect::<Result<_, &str>>()?;

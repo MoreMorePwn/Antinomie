@@ -104,7 +104,11 @@ impl FileIndex {
                     call: call.call_id,
                     key: trace::key(call),
                     name: format!("{} · mapping", file_events::operation_label(call, event)),
-                    process: process_identity(event.pid, event.tid, process_image(files, event)),
+                    process: process_cells::task_label(
+                        event.pid,
+                        event.tid,
+                        process_image(files, event),
+                    ),
                     result: format!("{} B at 0x{:x}", record.len, record.offset),
                 });
                 self.operation_count += 1;

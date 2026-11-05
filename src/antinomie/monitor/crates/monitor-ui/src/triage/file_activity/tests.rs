@@ -6,7 +6,7 @@ use super::window::{content_text, run_text, written_text, Order, Window};
 use super::*;
 use eframe::egui::{self, Pos2, Rect};
 
-fn event(time: u64, kind: Kind, process: u32) -> Event {
+pub(super) fn event(time: u64, kind: Kind, process: u32) -> Event {
     Event {
         time,
         key: (1, 2, time),
@@ -29,7 +29,7 @@ fn event(time: u64, kind: Kind, process: u32) -> Event {
     }
 }
 
-fn file(path: &str, first_ns: u64, events: Vec<Event>) -> FileActivity {
+pub(super) fn file(path: &str, first_ns: u64, events: Vec<Event>) -> FileActivity {
     FileActivity {
         path: path.into(),
         path_known: true,
@@ -103,8 +103,8 @@ pub(in crate::triage) fn activity() -> Activity {
             dropped,
         ],
         processes: vec![
-            (100, Some("/tmp/dropper".into())),
-            (101, Some("/bin/sh".into())),
+            (100, 100, Some("/tmp/dropper".into())),
+            (101, 101, Some("/bin/sh".into())),
         ],
         omitted_files: 0,
         omitted_events: 0,
@@ -257,7 +257,7 @@ fn a_file_summary_names_its_stages_in_order_with_counts() {
         activity.files[3].summary(),
         "create → write 2× → rename → delete"
     );
-    assert_eq!(activity.process_label(1), "101 /bin/sh");
+    assert_eq!(activity.process_label(1), "sh (101 · 101)");
     assert_eq!(activity.process_label(9), "unknown process");
 }
 
@@ -410,8 +410,8 @@ fn choosing_a_file_draws_its_graph_and_choosing_a_node_lists_its_calls() {
     assert!(shown.iter().any(|(text, _)| text == "deleted"));
     assert!(shown.iter().any(|(text, _)| text == "All calls"));
     // Both processes have a lane.
-    assert!(shown.iter().any(|(text, _)| text.contains("/tmp/dropper")));
-    assert!(shown.iter().any(|(text, _)| text.contains("/bin/sh")));
+    assert!(shown.iter().any(|(text, _)| text.contains("dropper (100")));
+    assert!(shown.iter().any(|(text, _)| text.contains("sh (101")));
     // The writes: where, how long, and what was written.
     assert!(shown.iter().any(|(text, _)| text == "0x4"));
     assert!(shown.iter().any(|(text, _)| text.contains("hi")));
@@ -724,4 +724,124 @@ fn a_renamed_file_is_listed_and_sorted_by_its_last_name_unless_the_first_is_chos
     use super::window::other_name;
     assert_eq!(other_name("/tmp/payload.locked", "/tmp/payload"), "payload");
     assert_eq!(other_name("/tmp/a", "/var/b"), "/var/b");
+}
+
+impl Harness {
+    /// Press at `from`, move to `to` over a few frames and let go.
+    fn drag(&mut self, activity: &Activity, from: Pos2, to: Pos2) {
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        self.frame(
+            activity,
+            vec![egui::Event::PointerMoved(from), button(from, true)],
+        );
+        for step in 1..=4 {
+            let at = from + (to - from) * (step as f32 / 4.0);
+            self.frame(activity, vec![egui::Event::PointerMoved(at)]);
+        }
+        self.frame(activity, vec![button(to, false)]);
+        self.time += 1.0;
+    }
+}
+
+fn choose(harness: &mut Harness, activity: &Activity, name: &str) -> Vec<(String, Rect)> {
+    let shown = harness.settle(activity);
+    harness.click(activity, center(&shown, name));
+    harness.settle(activity)
+}
+
+#[test]
+fn the_history_is_titled_with_the_name_and_the_sha256_or_says_it_is_unknown() {
+    let mut activity = activity();
+    let hash = "ab".repeat(32);
+    activity.files[3].hashes.push(super::HashNote {
+        time: 14,
+        moment: "closed after write",
+        sha256: Some(hash.clone()),
+        changed: false,
+        skipped: None,
+    });
+    let mut harness = Harness::new();
+    let shown = choose(&mut harness, &activity, "/tmp/.payload");
+    let title = format!("/tmp/.payload [{hash}]");
+    assert!(shown.iter().any(|(text, _)| *text == title), "{title}");
+    // The left list does not carry the hash.
+    assert!(!shown.iter().any(|(text, _)| text.contains(&hash)
+        && text.starts_with("/tmp/.payload")
+        && *text != title));
+    // A file with no digest.
+    let shown = choose(&mut harness, &activity, "/etc/hosts");
+    assert!(
+        shown
+            .iter()
+            .any(|(text, _)| text == "/etc/hosts [unknown hash]"),
+        "{:?}",
+        shown.iter().map(|s| &s.0).collect::<Vec<_>>()
+    );
+    assert_eq!(activity.files[2].sha256(), None);
+    assert_eq!(activity.files[3].sha256().as_deref(), Some(hash.as_str()));
+}
+
+#[test]
+fn the_reconstruct_button_is_at_the_top_right_of_the_history() {
+    let activity = activity();
+    let mut harness = Harness::new();
+    let shown = choose(&mut harness, &activity, "/tmp/.payload");
+    let button = shown
+        .iter()
+        .find(|(text, _)| text == "Reconstruct contents…")
+        .expect("the button")
+        .1;
+    let title = shown
+        .iter()
+        .find(|(text, _)| text.starts_with("/tmp/.payload ["))
+        .expect("the title")
+        .1;
+    let calls = shown
+        .iter()
+        .find(|(text, _)| text == "All calls")
+        .expect("the calls heading")
+        .1;
+    // On the title's line, to its right, and above the graph and the calls.
+    assert!(
+        button.center().y < title.bottom() + 12.0,
+        "{button:?} {title:?}"
+    );
+    assert!(button.left() > title.right(), "{button:?} {title:?}");
+    assert!(button.top() < calls.top());
+    // Close to the right edge of the window.
+    assert!(button.right() > SIZE.x - 60.0, "{button:?}");
+}
+
+#[test]
+fn dragging_the_background_of_the_graph_moves_it_like_the_other_graphs() {
+    let activity = activity();
+    let mut harness = Harness::new();
+    let shown = choose(&mut harness, &activity, "/tmp/.payload");
+    assert_eq!(harness.window.graph_view(), graph::View::default());
+    let node = center(&shown, "delete");
+    // Empty ground of the graph, right of the last node.
+    let from = Pos2::new(node.x + 200.0, node.y);
+    harness.drag(&activity, from, from + egui::vec2(-90.0, 6.0));
+    let view = harness.window.graph_view();
+    assert!((view.pan.x + 90.0).abs() < 1.0, "{view:?}");
+    assert!((view.pan.y - 6.0).abs() < 1.0, "{view:?}");
+    let moved = center(&harness.settle(&activity), "delete");
+    assert!(
+        (moved.x - (node.x - 90.0)).abs() < 1.5,
+        "{node:?} {moved:?}"
+    );
+    // A double click on the ground puts the graph back.
+    harness.double_click(&activity, from);
+    assert_eq!(harness.window.graph_view(), graph::View::default());
+    // A new file starts from the beginning.
+    harness.drag(&activity, from, from + egui::vec2(-40.0, 0.0));
+    assert_ne!(harness.window.graph_view(), graph::View::default());
+    let shown = harness.settle(&activity);
+    harness.click(&activity, center(&shown, "/etc/hosts"));
+    assert_eq!(harness.window.graph_view(), graph::View::default());
 }
