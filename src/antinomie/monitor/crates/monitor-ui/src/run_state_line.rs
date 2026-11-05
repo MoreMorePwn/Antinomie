@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The run's overall state in words, beside the Network route line of Triage:
-//! "Running · 12:34 elapsed", "Finished after 5:02 (exit 0)", "Still recording:
-//! 10 processes alive". The words are Run History's.
+//! "Running · 12 min 34 s elapsed", "Ran for 5 min 2 s · exit 0", "Still
+//! recording: 10 processes alive". The words are Run History's.
 use crate::widgets::Tone;
 use antinomie_monitor_core::{RunState, RunSummary, WaitStatus};
 use eframe::egui::{self, Color32};
@@ -17,12 +17,12 @@ pub(crate) fn describe(
 ) -> String {
     let elapsed = |end: u64| {
         run.started_ms
-            .map(|start| crate::time_format::elapsed(end.saturating_sub(start)))
+            .map(|start| crate::time_format::duration_ms(end.saturating_sub(start)))
     };
     let after = |text: &str| match run.started_ms.zip(ended_ms) {
         Some((start, end)) => format!(
             "{text} after {}",
-            crate::time_format::elapsed(end.saturating_sub(start))
+            crate::time_format::duration_ms(end.saturating_sub(start))
         ),
         None => text.to_owned(),
     };
@@ -55,10 +55,19 @@ pub(crate) fn describe(
         RunState::Running => running("Running"),
         RunState::StopRequested => running("Stop requested"),
         RunState::TerminalClosed => running("PTY closed"),
-        RunState::Finished => match exit {
-            Some(exit) => format!("{} ({exit})", after("Finished")),
-            None => after("Finished"),
-        },
+        RunState::Finished => {
+            let ran = match run.started_ms.zip(ended_ms) {
+                Some((start, end)) => format!(
+                    "Ran for {}",
+                    crate::time_format::duration_ms(end.saturating_sub(start))
+                ),
+                None => "Finished".to_owned(),
+            };
+            match exit {
+                Some(exit) => format!("{ran} · {exit}"),
+                None => ran,
+            }
+        }
         RunState::Stopped => after("Stopped by the user"),
         RunState::Finalized => after("Recording ended"),
         RunState::Interrupted => after("Interrupted"),
@@ -71,6 +80,17 @@ pub(crate) fn describe(
         RunState::LaunchUnconfirmed => "Launch unconfirmed".into(),
         RunState::Unknown => "State unknown".into(),
     }
+}
+
+/// The start and end times of `run` for the tooltip of its state line, in the
+/// host zone; `None` when the run has no start time.
+pub(crate) fn times(run: &RunSummary, ended_ms: Option<u64>) -> Option<String> {
+    let start = run.started_ms?;
+    let at = |ms: u64| crate::time_format::local_seconds(ms / 1000);
+    Some(match ended_ms {
+        Some(end) if !run.state.is_live() => format!("Started {}\nEnded {}", at(start), at(end)),
+        _ => format!("Started {}", at(start)),
+    })
 }
 
 /// Whether the line changes with the clock: the run is going.
@@ -166,4 +186,81 @@ fn state_tone(run: &RunSummary) -> Option<Tone> {
 /// The state words in their colour.
 pub(crate) fn text(run: &RunSummary, words: &str) -> egui::RichText {
     egui::RichText::new(words).color(color(run))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use antinomie_monitor_core::{ExecRequest, RunExecution};
+
+    fn finished() -> RunSummary {
+        RunSummary {
+            environment: None,
+            reduced: None,
+            boot_wait: None,
+            triggers: None,
+            started_ms: Some(1_700_000_000_000),
+            clock_anchor: None,
+            id: "r".into(),
+            vm_id: "vm".into(),
+            boot_id: "b".into(),
+            session_id: 1,
+            root_task_cookie: 1,
+            pid: 1,
+            request: ExecRequest::default(),
+            directory: std::path::PathBuf::new(),
+            terminal_eof: false,
+            state: RunState::Finished,
+            recording_error: None,
+            machine: None,
+            route: None,
+            execution: Some(RunExecution {
+                generation: 1,
+                live_task_count: 0,
+                pending_async_count: 0,
+                flags: 0,
+                root_wait_status: None,
+                root_exit: Some(WaitStatus::Exited { code: 0 }),
+                async_loss_count: 0,
+                total_task_count: 1,
+            }),
+            analysis: None,
+            notes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_finished_run_says_how_long_it_ran_and_how_it_ended() {
+        let run = finished();
+        let end = 1_700_000_000_000 + (3 * 60 + 52) * 1000;
+        assert_eq!(
+            describe(&run, end, Some(end), None),
+            "Ran for 3 min 52 s · exit 0"
+        );
+        assert_eq!(describe(&run, end, None, None), "Finished · exit 0");
+        let stopped = RunSummary {
+            state: RunState::Stopped,
+            ..run.clone()
+        };
+        assert_eq!(
+            describe(&stopped, end, Some(end), None),
+            "Stopped by the user after 3 min 52 s"
+        );
+    }
+
+    #[test]
+    fn the_times_go_in_the_tooltip() {
+        let run = finished();
+        let tip = times(&run, Some(1_700_000_232_000)).unwrap();
+        assert!(tip.starts_with("Started 20"), "{tip}");
+        assert!(tip.contains("\nEnded 20"), "{tip}");
+        assert!(times(
+            &RunSummary {
+                started_ms: None,
+                ..run
+            },
+            None
+        )
+        .is_none());
+    }
 }
