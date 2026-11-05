@@ -667,9 +667,7 @@ impl Session {
         let machine = self.core_machine();
         if core.offset == 0
             && data.len() >= 20
-            && (&data[..7] != b"\x7fELF\x02\x01\x01"
-                || data[16..18] != 4u16.to_le_bytes()
-                || u32::from(u16::from_le_bytes([data[18], data[19]])) != machine)
+            && !crate::core_dump::guest_core_header(&data, machine)
         {
             return Err(
                 "guest process core is not a native little-endian ELF core of the guest's architecture"

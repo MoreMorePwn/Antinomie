@@ -174,7 +174,7 @@ pub fn run(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
         println!("RESULT {line}");
     }
     println!("PASS a32 engine");
-    gdb_session(&mut driver, data)?;
+    gdb_session(&mut driver, data, fixture)?;
     println!("PASS a32 gdb");
     exit_core(&mut driver)?;
     println!("PASS a32 core");
@@ -186,7 +186,7 @@ pub fn run(bundle: &str, data: &str, fixture: &str) -> Result<(), String> {
 /// at its first stop, gdb gets the arm description, plants the ARM trap
 /// (Z0 kind 4) and the Thumb one (kind 2 or 3) by the symbols' low bits, and
 /// steps.
-fn gdb_session(driver: &mut Driver, data: &str) -> Result<(), String> {
+fn gdb_session(driver: &mut Driver, data: &str, fixture: &str) -> Result<(), String> {
     let launched = launch_program(
         driver,
         "/tmp/a32fix",
@@ -200,6 +200,8 @@ fn gdb_session(driver: &mut Driver, data: &str) -> Result<(), String> {
     let info = attach(driver, &launched.target)?;
     println!("endpoint: {}", info.gdb_command);
     let target = format!("target remote 127.0.0.1:{}", info.tcp_port);
+    // The symbols tell gdb which of the two functions is Thumb (the trap kind).
+    let file = format!("file {fixture}");
     let mut command = std::process::Command::new("gdb-multiarch");
     command.arg("-nx").arg("-batch");
     let breaks = [
@@ -210,6 +212,7 @@ fn gdb_session(driver: &mut Driver, data: &str) -> Result<(), String> {
         "set pagination off",
         "set confirm off",
         "set style enabled off",
+        file.as_str(),
         target.as_str(),
         "show architecture",
         "info registers r0 sp lr pc cpsr",

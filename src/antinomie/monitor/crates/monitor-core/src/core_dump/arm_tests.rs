@@ -322,3 +322,21 @@ fn elf32_records_round_trip_through_the_saved_metadata() {
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn the_guest_core_header_check_takes_elf32_arm_only_from_an_arm64_guest() {
+    let elf32 = guest_core(260);
+    assert!(guest_core_header(&elf32, 183));
+    assert!(
+        !guest_core_header(&elf32, 62),
+        "an x86-64 guest writes none"
+    );
+    let native = std::fs::read(fixture_path()).unwrap();
+    assert!(guest_core_header(&native, 183));
+    let mut elf64 = vec![0u8; 64];
+    elf64[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+    elf64[16] = 4;
+    elf64[18] = 183;
+    assert!(guest_core_header(&elf64, 183) && !guest_core_header(&elf64, 62));
+    assert!(!guest_core_header(&elf64[..10], 183));
+}

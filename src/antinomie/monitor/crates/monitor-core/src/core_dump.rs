@@ -49,6 +49,20 @@ fn x86_64_machine() -> u16 {
     EM_X86_64
 }
 
+/// Whether the first bytes of a core are an ET_CORE the guest of ELF machine
+/// `machine` writes: its own 64-bit little-endian one, or on an arm64 guest the
+/// ELF32 EM_ARM core of an AArch32 task (revision 21).
+pub fn guest_core_header(data: &[u8], machine: u32) -> bool {
+    if data.len() < 20 || data[16..18] != 4u16.to_le_bytes() {
+        return false;
+    }
+    let found = u32::from(u16::from_le_bytes([data[18], data[19]]));
+    (&data[..7] == b"\x7fELF\x02\x01\x01" && found == machine)
+        || (&data[..7] == b"\x7fELF\x01\x01\x01"
+            && found == u32::from(EM_ARM)
+            && machine == u32::from(EM_AARCH64))
+}
+
 #[derive(Debug)]
 pub struct CoreError(String);
 impl fmt::Display for CoreError {
