@@ -26,6 +26,7 @@ mod jobs;
 #[cfg(test)]
 mod memory_probe;
 mod memory_view;
+mod mermaid;
 mod network_view;
 mod query;
 mod reduced_text;

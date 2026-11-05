@@ -43,6 +43,7 @@ impl TriageView {
                 .on_hover_text("The graph in its own resizable window, with Details beside it")
                 .clicked();
             super::legend::button(ui);
+            crate::mermaid::button(ui, || super::mermaid::phases(&index.phases));
             ui.colored_label(theme::muted(), format!("{shown} findings · {lanes} lanes"))
                 .on_hover_text(format!(
                     "{high} high · {medium} medium · {low} low · {info} info\nWheel scrolls lanes, Shift+wheel or drag pans, Ctrl+wheel zooms, drag the axis to filter by time."

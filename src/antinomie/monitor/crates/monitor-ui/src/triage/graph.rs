@@ -15,6 +15,7 @@ mod index;
 mod input;
 mod lanes;
 mod legend;
+mod mermaid;
 mod notify;
 mod paint;
 mod phases;

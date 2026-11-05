@@ -130,6 +130,12 @@ pub(super) fn show(
         .auto_shrink([false, true])
         .show(ui, |ui| {
             let (area, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+            ui.interact(area, ui.id().with("file-activity-menu"), Sense::click())
+                .context_menu(|ui| {
+                    crate::mermaid::menu_item(ui, || {
+                        mermaid(layout, |process| activity.process_label(process))
+                    })
+                });
             let origin = area.min.to_vec2();
             // The names stay at the left edge of what is on screen; nodes that
             // scroll past them are cut off there instead of running under them.
@@ -267,6 +273,24 @@ pub(super) fn fit(painter: &egui::Painter, text: &str, font: &egui::FontId, widt
     chars[..low].iter().chain(['…'].iter()).collect()
 }
 
+/// The graph as Mermaid text: each node is one stretch of calls of one
+/// process (its name above the operation), each pointing at the next in time
+/// order, as the picture draws them. `process_label` names a process index.
+pub(super) fn mermaid(layout: &Layout, process_label: impl Fn(u32) -> String) -> String {
+    let mut chart = crate::mermaid::Flowchart::new("LR");
+    let key = |index: usize| format!("call-{index}");
+    for (index, node) in layout.nodes.iter().enumerate() {
+        chart.node(
+            &key(index),
+            &format!("{}\n{}", process_label(node.process), label(node)),
+        );
+    }
+    for index in 1..layout.nodes.len() {
+        chart.edge(&key(index - 1), &key(index), None);
+    }
+    chart.render()
+}
+
 /// What the hover on a node says: how many calls, how many octets.
 pub(super) fn tooltip(file: &FileActivity, node: &Node) -> String {
     let events = &file.events[node.events.clone()];
@@ -284,4 +308,34 @@ pub(super) fn tooltip(file: &FileActivity, node: &Node) -> String {
     }
     text.push_str("\nClick for the calls");
     text
+}
+
+#[cfg(test)]
+mod mermaid_tests {
+    use super::*;
+
+    #[test]
+    fn the_nodes_follow_each_other_with_the_process_named() {
+        let node = |kind, process, count: usize, failed| Node {
+            kind,
+            process,
+            events: 0..count,
+            failed,
+            lane: 0,
+            rest: false,
+        };
+        let layout = Layout {
+            lanes: vec![1, 2],
+            nodes: vec![
+                node(Kind::Open, 1, 1, false),
+                node(Kind::Write, 2, 3, false),
+                node(Kind::Delete, 1, 1, true),
+            ],
+        };
+        let text = mermaid(&layout, |process| format!("proc <{process}>"));
+        assert!(text.starts_with("flowchart LR\n"));
+        assert!(text.contains("proc #lt;2#gt;<br/>"), "{text}");
+        assert_eq!(text.matches(" --> ").count(), 2, "{text}");
+        assert_eq!(text.matches("[\"").count(), 3, "{text}");
+    }
 }

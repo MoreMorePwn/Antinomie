@@ -10,6 +10,7 @@ use eframe::egui::{self, RichText};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod graph;
+mod mermaid;
 pub(crate) mod summary_box;
 
 pub(crate) const WINDOW_ID: &str = "vm_snapshots";
