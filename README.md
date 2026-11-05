@@ -403,7 +403,7 @@ terminal: `antinomie --check-dependencies`. The
   why a process ended on a signal.
 * **Network and VMs:** offline IP geolocation for TShark (an optional DB-IP Lite
   download or your own MaxMind GeoLite2 folder), and a snapshot diagram on the VM
-  Summary.
+  Overview.
 
 ## What's new in 0.8.1
 

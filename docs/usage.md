@@ -184,7 +184,7 @@ thread per core). The app says so in several places: the **Device profile**
 window lists them at its top and on the setting itself ("SATA (AHCI) not supported
 by this base: virtio will be used"), with a **Use base** button when another
 installed base supports it; the VM dialog's device profile row shows "N fall back"; the
-VM list and the Summary's **Device profile** card carry a **Device profile fallback**
+VM list and the Overview's **Device profile** card carry a **Device profile fallback**
 badge; and each start warns in **Activity** and adds the same lines as notes to
 every run of that boot, shown under the run's header.
 
@@ -228,8 +228,24 @@ password; the guest account is created for you. Debian Minimal needs at least
 the base never changes.
 
 Right-click a VM for **Rename**, **Duplicate** (the VM must be stopped),
-**Open Directory**, **Settings** (resolution, fullscreen or fit to window,
-acceleration, CPU model) and **Delete**.
+**Open Directory**, **Settings** (resolution, **VM screen**, fullscreen or fit to
+window, acceleration, CPU model) and **Delete**.
+
+**VM screen** says where the VM's display shows and applies at the next start of
+the VM, not to a running one: **In the app (VNC)** (the default) opens the VM
+screen tab, **QEMU window** opens QEMU's own window (fullscreen and fit to window
+are options of that window), and **No screen** runs the VM with no display at all
+(`-display none`, no VNC). With No screen, **View > VM screen** opens a tab that
+says the VM has no screen and how to change it. The guest sees the same devices
+in all three.
+
+The **Overview** (the first tab of the work area) shows the selected VM: its name
+and state dot, the resource cards, the **Compute** card with the vCPU count and
+the RAM side by side, the configuration cards and the **Snapshots** box.
+
+The sidebar's **Explorer** title has a folder button that chooses the folder to
+browse; **File > Open folder…** does the same, and **File > Import sample…** opens
+the Samples page's **Add file** dialog.
 
 **Settings → Telemetry transport…** tunes how records leave the guest (bases
 for Antinomie 0.3.0 and newer):
@@ -242,14 +258,14 @@ for Antinomie 0.3.0 and newer):
 | Capture All: drop telemetry when the host falls behind | Off (default): Never drop holds under Capture All too, so a busy guest runs slower (a heavy BusyBox load about 10 times slower) and Triage > Summary says it is being slowed. On: while Capture All runs and the host falls behind, the guest drops telemetry instead of waiting, which keeps a desktop guest responsive but loses events; the Summary counts how often and how long. Drop mode ignores it |
 | Host event table | How many calls the host keeps assembling at once (default 16,384) |
 
-The VM's **Summary** shows a **Snapshots** box under **Device profile**: the VM's
+The VM's **Overview** shows a **Snapshots** box under **Device profile**: the VM's
 snapshots as a compact tree (name, whether it is disk only or disk + memory, when
 it was taken, its size, its notes, and a **Current** marker on the one the VM runs
 from) with **Take snapshot…**, **Restore…** (**Resume…** for a disk + memory
 snapshot that can resume, and **Restore disk and boot…**) and **Open Snapshots…**
 for the full window. It uses the Snapshots window's own dialogs and rules, so
 what is allowed while the VM runs is the same in both, and the list refreshes when
-you select the VM and when it starts or stops. The label column of the Summary
+you select the VM and when it starts or stops. The label column of the Overview
 cards is as wide as its longest label.
 
 ## 3. Start it and run a program
