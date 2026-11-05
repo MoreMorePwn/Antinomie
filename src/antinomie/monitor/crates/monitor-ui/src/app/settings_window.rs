@@ -3,6 +3,7 @@
 //! mockup's layout). Appearance and the other pages apply at once; the
 //! Recording page applies on Save.
 use super::dialogs::{form_grid, text_size_control};
+use super::widgets::hint_tip;
 use super::*;
 use crate::widgets::{self, chip, Tone};
 
@@ -141,8 +142,9 @@ impl MonitorApp {
                     if changed {
                         self.settings.analysis_limits.set(field.setting, value);
                     }
-                    hint(
+                    hint_tip(
                         ui,
+                        &format!("Default {} {}", field.default, field.unit),
                         &format!("{} Default {} {}.", field.help, field.default, field.unit),
                     );
                 });
@@ -153,9 +155,8 @@ impl MonitorApp {
                 ui.checkbox(
                     &mut self.settings.analysis_limits.ghidra_disassembly,
                     "List with Ghidra when Decompilation is not selected",
-                );
-                hint(
-                    ui,
+                )
+                .on_hover_text(
                     "A run with Disassembly but without Decompilation also starts Ghidra, which lists \
                      every architecture with labels and cross references. The built-in rows show first. \
                      Needs Ghidra (Manage tools); the time limit and the listing size apply. \
@@ -282,18 +283,16 @@ impl MonitorApp {
                         let room = (ui.available_width() - buttons).max(60.0);
                         ui.scope(|ui| {
                             ui.set_max_width(room);
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(if stopped {
-                                        "Appearance applies at once · other pages apply on Save"
-                                    } else {
-                                        "Stop the VM to save changes · Appearance applies at once"
-                                    })
-                                    .small()
-                                    .color(theme::muted()),
-                                )
-                                .truncate(),
-                            );
+                            if !stopped {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new("Stop the VM to save changes")
+                                            .small()
+                                            .color(theme::muted()),
+                                    )
+                                    .truncate(),
+                                );
+                            }
                         });
                     },
                     |ui| {
@@ -555,8 +554,9 @@ impl MonitorApp {
         });
         ui.add_space(12.0);
         theme::section(ui, "Time limits");
-        hint(
+        hint_tip(
             ui,
+            "How long each engine may run.",
             "How long each engine may run before it is stopped; a scan that runs out of time says so.",
         );
         self.detection_timeouts(ui);
@@ -658,13 +658,12 @@ impl MonitorApp {
         ui.add_space(12.0);
         theme::section(ui, "Time and size limits");
         form_grid("settings_analysis_limits", ui).show(ui, |ui| {
-            ui.label("Time limit for every tool");
-            ui.vertical(|ui| {
-                ui.add(crate::analysis::time_limit_drag(
-                    &mut self.settings.analysis_time_limit_minutes,
-                ));
-                hint(ui, crate::analysis::TIME_LIMIT_HELP);
-            });
+            ui.label("Time limit for every tool")
+                .on_hover_text(crate::analysis::TIME_LIMIT_HELP);
+            ui.add(crate::analysis::time_limit_drag(
+                &mut self.settings.analysis_time_limit_minutes,
+            ))
+            .on_hover_text(crate::analysis::TIME_LIMIT_HELP);
             ui.end_row();
             let label = ui.label("Rebuilt file bytes (Triage)");
             if std::mem::take(&mut self.settings_focus_rebuild) {
@@ -683,8 +682,13 @@ impl MonitorApp {
                             .suffix(" MiB / run"),
                     );
                 });
-                hint(
+                hint_tip(
                     ui,
+                    &format!(
+                        "Defaults {} MiB per file, {} MiB per run.",
+                        crate::triage::DEFAULT_REBUILD_FILE_MIB,
+                        crate::triage::DEFAULT_REBUILD_RUN_MIB
+                    ),
                     &format!(
                         "Most bytes Triage > Files rebuilds of one changed file, and of all files of a run together, \
                          from the writes the recording captured (memory while the run is open). Past a cap the rest \
@@ -718,13 +722,18 @@ impl MonitorApp {
         });
         ui.add_space(6.0);
         ui.label(theme::section_title(ui, "Size limits"));
-        hint(
+        hint_tip(
             ui,
+            "What a check keeps and reads before a bound cuts it short.",
             "What a check keeps and reads before it says a bound cut its result short. A warning's Analysis settings button leads here. A change applies to analyses started afterwards; a check can be run again from its tab.",
         );
         self.analysis_limit_fields(ui);
         ui.add_space(6.0);
-        hint(ui, &antinomie_monitor_core::fixed_limits_text());
+        hint_tip(
+            ui,
+            "Some bounds are fixed.",
+            &antinomie_monitor_core::fixed_limits_text(),
+        );
     }
 
     fn disks_page(&mut self, ui: &mut egui::Ui) {
@@ -827,8 +836,12 @@ impl MonitorApp {
                     fallback: None,
                 };
                 let waits = antinomie_monitor_core::accel::Waits::new(&tcg, &self.settings.start);
-                hint(
+                hint_tip(
                     ui,
+                    &format!(
+                        "With TCG a start waits up to {} s for the guest.",
+                        waits.guest_connect().as_secs()
+                    ),
                     &format!(
                         "A VM that runs with TCG waits up to {} s for its guest to connect now (the multiplier, and a host load above one per CPU, stretch every wait of a start; a QMP reply may take {} s). Raise the multiplier when a slow TCG boot is reported as not connecting. Applies to the next start.",
                         waits.guest_connect().as_secs(),
@@ -848,8 +861,12 @@ impl MonitorApp {
                         .range(crate::triage::PAGE_ROWS_RANGE)
                         .suffix(" rows"),
                 );
-                hint(
+                hint_tip(
                     ui,
+                    &format!(
+                        "Default {}.",
+                        crate::values::thousands(crate::triage::STORED_ROWS as u64)
+                    ),
                     &format!(
                         "Most rows one Triage table (Opened, Read, Changed, Findings, Network) keeps per page and \
                          one report table keeps. A table with more says \"first N of M\"; Next shows the rest. \
@@ -877,8 +894,9 @@ impl MonitorApp {
                             .suffix(" MiB / run"),
                     );
                 });
-                hint(
+                hint_tip(
                     ui,
+                    "Bytes the run wrote that File activity can give back.",
                     "Bytes the run wrote that File activity can give back exactly. When a cap is \
                      reached the first writes are kept; later ranges are listed as not captured. \
                      The recording itself is limited by the Recording quota.",
@@ -899,8 +917,9 @@ impl MonitorApp {
                             .suffix(" MiB / run"),
                     );
                 });
-                hint(
+                hint_tip(
                     ui,
+                    "Bytes the files had before the run changed them.",
                     "When a run ends, the earlier bytes (before the run changed them) of the \
                      files it changed are copied into its recording, so they stay readable \
                      after the base is gone. A file over a cap keeps its size and SHA-256 and is \

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Settings > Analysis tools and the tool rows: a time for each tool with its
-//! default and a reset, and the choice of Antinomie's own copy of a tool the
+//! Settings > Analysis tools and the tool rows: a time for each tool with a
+//! reset that names the default, and the choice of Antinomie's own copy of a tool the
 //! system has.
 use super::*;
 use crate::app::settings_window::SettingsPage;
@@ -45,8 +45,13 @@ fn each_tool_has_a_time_with_its_default_and_a_reset() {
         (TimedTool::Yara, 60),
     ] {
         assert_eq!(tool.default_seconds(), default);
-        let hint = format!("Default ({default} s)");
-        assert!(has(&visible, &hint), "{hint}: {visible:?}");
+        // The default is in the Reset button's tooltip, not on the page.
+        assert!(
+            !visible
+                .iter()
+                .any(|(text, _)| text.starts_with("Default (")),
+            "{visible:?}"
+        );
     }
     assert_eq!(
         app.settings.analysis_limits.timeouts.get(TimedTool::Capa),
@@ -157,7 +162,12 @@ fn each_detection_engine_has_a_time_with_its_default_and_a_reset() {
             engine.label()
         );
     }
-    assert!(has(&visible, "Default (110 s)"), "{visible:?}");
+    assert!(
+        !visible
+            .iter()
+            .any(|(text, _)| text.starts_with("Default (")),
+        "{visible:?}"
+    );
     assert_eq!(
         app.triage
             .detection_settings()

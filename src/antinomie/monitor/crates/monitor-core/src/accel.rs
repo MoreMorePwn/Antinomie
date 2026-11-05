@@ -299,18 +299,19 @@ mod tests {
 
     #[test]
     fn explicit_kvm_without_kvm_refuses_unless_the_app_setting_allows_tcg() {
-        let error = choose_with(
+        let mut strict = BackendOptions::default();
+        strict.start.kvm_fallback = false;
+        let error = choose_with(&strict, &launch(VmAcceleration::Kvm), missing).unwrap_err();
+        assert!(error.contains("KVM is not available on this host"));
+        assert!(error.contains("Use TCG for this VM"));
+        assert!(error.contains("Use TCG when KVM is unavailable"));
+        // On by default: a new install falls back, an explicit "off" refuses.
+        let choice = choose_with(
             &BackendOptions::default(),
             &launch(VmAcceleration::Kvm),
             missing,
         )
-        .unwrap_err();
-        assert!(error.contains("KVM is not available on this host"));
-        assert!(error.contains("Use TCG for this VM"));
-        assert!(error.contains("Use TCG when KVM is unavailable"));
-        let mut options = BackendOptions::default();
-        options.start.kvm_fallback = true;
-        let choice = choose_with(&options, &launch(VmAcceleration::Kvm), missing).unwrap();
+        .unwrap();
         assert!(choice.is_tcg() && choice.fallback.is_some());
     }
 
