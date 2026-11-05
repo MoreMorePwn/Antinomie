@@ -496,7 +496,7 @@ fn launch_options(ui: &mut egui::Ui, launch: &mut VmLaunchOptions, kvm_problem: 
             }
         })
         .response
-        .on_hover_text("Applies at the next start of this VM, not to a running one.");
+        .on_hover_text("Applies at the next start of this VM, not to a running one. No screen runs the VM without any display.");
     ui.end_row();
     // Fullscreen and Fit to window are options of QEMU's own window.
     if launch.screen == VmScreen::QemuWindow {

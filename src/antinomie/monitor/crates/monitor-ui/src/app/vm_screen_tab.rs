@@ -15,6 +15,17 @@ impl MonitorApp {
         self.snapshot.vm_screen.clone()
     }
 
+    /// The VM that runs (or starts) has its VM screen set to No screen.
+    pub(crate) fn vm_has_no_screen(&self) -> bool {
+        !matches!(self.snapshot.state, VmState::Stopped | VmState::Failed)
+            && self
+                .snapshot
+                .vms
+                .iter()
+                .find(|vm| Some(&vm.id) == self.snapshot.active_vm.as_ref())
+                .is_some_and(|vm| vm.launch.screen == VmScreen::NoScreen)
+    }
+
     /// The user closed the tab, so a new boot does not open it again.
     pub(crate) fn vm_screen_closed(&self) -> bool {
         self.settings.vm_screen_closed
@@ -31,7 +42,7 @@ impl MonitorApp {
 
     /// Why the VM screen cannot be shown now.
     pub(super) fn vm_screen_unavailable(&self) -> Option<String> {
-        if self.vm_screen_socket().is_some() {
+        if self.vm_screen_socket().is_some() || self.vm_has_no_screen() {
             return None;
         }
         Some(if self.snapshot.active_vm.is_some() {
@@ -42,6 +53,16 @@ impl MonitorApp {
     }
 
     pub(super) fn vm_screen_tab(&mut self, ui: &mut egui::Ui) {
+        if self.vm_has_no_screen() {
+            ui.centered_and_justified(|ui| {
+                ui.colored_label(
+                    theme::muted(),
+                    "This VM has no screen. Set VM screen to \"In the app (VNC)\" or \"QEMU window\" \
+                     in the VM's settings; it applies at the next start of the VM.",
+                );
+            });
+            return;
+        }
         let shots = self
             .snapshot
             .active_vm

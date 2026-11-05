@@ -145,6 +145,11 @@ fn qemu_path(path: &Path) -> Result<String, String> {
         .ok_or("QEMU composite paths must be UTF-8")?
         .replace(',', ",,"))
 }
+/// Whether the VM gets QEMU's VNC display for the in-app screen tab; QEMU's
+/// own window and No screen run with `-display` alone.
+fn in_app_screen(options: &BackendOptions, launch: &VmLaunchOptions) -> bool {
+    !options.headless && launch.screen == crate::api::VmScreen::InApp
+}
 fn initial_size(options: &BackendOptions, launch: &VmLaunchOptions) -> Option<(u16, u16)> {
     (!options.headless
         && launch.screen == crate::api::VmScreen::QemuWindow
@@ -618,8 +623,8 @@ impl VmProcess {
         // private folder), never TCP. The display backend itself is `none`.
         // lock-key-sync=off: the app sends the key (with Shift held), not a
         // keysym's case, so QEMU must not fix Caps Lock to match a keysym.
-        let screen_socket = (!options.headless && vm.launch.screen == crate::api::VmScreen::InApp)
-            .then(|| qmp_path.with_file_name("vnc.sock"));
+        let screen_socket =
+            in_app_screen(options, &vm.launch).then(|| qmp_path.with_file_name("vnc.sock"));
         if let Some(socket) = &screen_socket {
             cmd.arg("-vnc").arg(format!(
                 "unix:{},lossy=off,lock-key-sync=off",
@@ -1481,6 +1486,46 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn no_screen_runs_without_a_display_or_vnc_and_the_other_choices_keep_theirs() {
+        use crate::api::VmScreen;
+        for headless in [false, true] {
+            for graphical in [false, true] {
+                let options = BackendOptions {
+                    headless,
+                    ..BackendOptions::default()
+                };
+                let launch = |screen| VmLaunchOptions {
+                    screen,
+                    ..VmLaunchOptions::default()
+                };
+                let none = launch_args(&options, &launch(VmScreen::NoScreen), graphical).unwrap();
+                let in_app = launch_args(&options, &launch(VmScreen::InApp), graphical).unwrap();
+                let window =
+                    launch_args(&options, &launch(VmScreen::QemuWindow), graphical).unwrap();
+                assert_eq!(value(&none, "-display"), Some("none"));
+                assert_eq!(value(&in_app, "-display"), Some("none"));
+                assert_eq!(
+                    value(&window, "-display"),
+                    Some(if headless {
+                        "none"
+                    } else {
+                        "gtk,zoom-to-fit=off"
+                    })
+                );
+                // The guest sees the same devices without the window.
+                assert_eq!(none, in_app);
+                assert_eq!(in_app_screen(&options, &launch(VmScreen::InApp)), !headless);
+                assert!(!in_app_screen(&options, &launch(VmScreen::NoScreen)));
+                assert!(!in_app_screen(&options, &launch(VmScreen::QemuWindow)));
+            }
+        }
+        let saved: VmLaunchOptions = serde_json::from_str("{}").unwrap();
+        assert_eq!(saved.screen, VmScreen::InApp);
+        let saved: VmLaunchOptions = serde_json::from_str(r#"{"screen":"no_screen"}"#).unwrap();
+        assert_eq!(saved.screen, VmScreen::NoScreen);
     }
 
     #[test]

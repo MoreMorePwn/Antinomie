@@ -103,7 +103,7 @@ impl Panel {
             Self::Triage => "Triage",
             Self::StaticAnalysis => "Static analysis",
             Self::AnalysisSection { kind, .. } => kind.label(),
-            Self::Summary => "Summary",
+            Self::Summary => "Overview",
             Self::RunHistory => "Run History",
             Self::Details => "Details",
             Self::Activity => "Activity",
@@ -459,10 +459,14 @@ impl WorkspaceLayout {
         let socket = app.vm_screen_socket();
         let open = self.dock.find_tab(&Panel::VmScreen);
         let asked = app.take_vm_screen_request();
-        match (socket.is_some(), open) {
+        // A VM with No screen has no tab of itself, only when asked for: the
+        // tab then says there is no screen and how to get one.
+        match (socket.is_some() || app.vm_has_no_screen(), open) {
             (true, None) => {
                 if asked
-                    || (app.vm_screen.is_new_boot(socket.as_deref()) && !app.vm_screen_closed())
+                    || (socket.is_some()
+                        && app.vm_screen.is_new_boot(socket.as_deref())
+                        && !app.vm_screen_closed())
                 {
                     self.place_after_static(Panel::VmScreen);
                     self.focus(Panel::VmScreen);
@@ -560,6 +564,21 @@ impl WorkspaceLayout {
                 let shown = matches!(&self.dock[surface][node], Node::Leaf(egui_dock::LeafNode { active, .. }) if *active == tab);
                 (in_top && shown).then_some(split)
             })
+    }
+
+    /// Whether `panel` is a tab of the dock (for the rendered tests).
+    #[cfg(test)]
+    pub(crate) fn has_tab(&self, panel: &Panel) -> bool {
+        self.dock.find_tab(panel).is_some()
+    }
+
+    /// The share of the main window the work area has (for the rendered tests).
+    #[cfg(test)]
+    pub(crate) fn work_share(&self) -> f32 {
+        match &self.dock.main_surface()[NodeIndex::root()] {
+            egui_dock::Node::Vertical(egui_dock::SplitNode { fraction, .. }) => *fraction,
+            other => panic!("not split: {other:?}"),
+        }
     }
 
     /// Fold Details and Activity down while such a tab shows and put the
@@ -791,6 +810,10 @@ impl WorkspaceLayout {
             self.bottom_edge = origin.y + ui.max_rect().bottom() - 4.0;
         }
         let empty_target = ui.max_rect().translate(origin.to_vec2());
+        // A folded pane, or a tab that folds it away, puts the separator at
+        // the tab strip.
+        let strip_only =
+            surface.is_main() && (self.bottom_folded || self.details_fraction.is_some());
         let mut viewer = Viewer {
             app,
             layout: self,
@@ -800,8 +823,11 @@ impl WorkspaceLayout {
         };
         let fits = workspace_tabs::fit(ui, &mut viewer, &mut local, surface);
         let mut dock_style = theme::dock_style(ui.style());
-        if viewer.layout.bottom_folded() {
-            // The separator may sit at the tab strip, not 175 points up.
+        if viewer.layout.bottom_folded() || strip_only {
+            // The separator may sit at the tab strip, not 175 points up:
+            // egui_dock keeps `extra` points of the window for the pane under
+            // the separator and clamps the split to that every frame, so a
+            // split of 0.93 or 0.97 stayed at 1 - 175/height.
             dock_style.separator.extra = 0.0;
         }
         // The add button's slot stays free at the right end of every bar for
@@ -1406,7 +1432,11 @@ mod tests {
                 .unwrap()
                 .1
                 .center();
-            let title = if before { "Summary" } else { "Static analysis" };
+            let title = if before {
+                "Overview"
+            } else {
+                "Static analysis"
+            };
             let rect = texts.iter().find(|(text, _)| text == title).unwrap().1;
             let target = egui::pos2(
                 if before { rect.left() } else { rect.right() },

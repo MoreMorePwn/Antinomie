@@ -210,21 +210,24 @@ impl VmAcceleration {
 }
 
 /// Where a VM's screen shows: a tab of the app (QEMU's VNC display on a
-/// private unix socket), or QEMU's own window.
+/// private unix socket), QEMU's own window, or nowhere (`-display none`, no
+/// VNC).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VmScreen {
     #[default]
     InApp,
     QemuWindow,
+    NoScreen,
 }
 impl VmScreen {
-    pub const ALL: &'static [Self] = &[Self::InApp, Self::QemuWindow];
+    pub const ALL: &'static [Self] = &[Self::InApp, Self::QemuWindow, Self::NoScreen];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::InApp => "In the app (VNC)",
             Self::QemuWindow => "QEMU window",
+            Self::NoScreen => "No screen",
         }
     }
 
