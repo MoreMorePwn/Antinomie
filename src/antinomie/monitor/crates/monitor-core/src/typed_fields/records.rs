@@ -475,3 +475,8 @@ pub(super) fn descriptor(data: &[u8]) -> Option<Decoded> {
     decoded.push("g", (high >> 3).to_string());
     Some(decoded)
 }
+
+/// A capability's name by number (`CAP_CHOWN` for 0).
+pub fn capability_name(number: u64) -> Option<&'static str> {
+    CAPABILITIES.get(usize::try_from(number).ok()?).copied()
+}

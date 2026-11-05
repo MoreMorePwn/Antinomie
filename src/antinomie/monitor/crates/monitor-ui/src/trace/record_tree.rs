@@ -201,7 +201,7 @@ fn draw(ui: &mut egui::Ui, state: &mut State, shown: &Shown<'_>, full: &mut Opti
     if let Some(full) = full.as_mut()
         && full.records.is_none()
     {
-        full.records = Records::open(shown.call, layout, &field.key, &full.bytes);
+        full.records = Records::open(shown.call, &field.layout, &field.key, &full.bytes);
     }
     let preview_records;
     let (records, data, decoded_all) = match &*full {
@@ -211,7 +211,7 @@ fn draw(ui: &mut egui::Ui, state: &mut State, shown: &Shown<'_>, full: &mut Opti
             ..
         }) => (records, bytes.as_slice(), true),
         _ => {
-            let Some(opened) = Records::open(shown.call, layout, &field.key, preview) else {
+            let Some(opened) = Records::open(shown.call, &field.layout, &field.key, preview) else {
                 return false;
             };
             preview_records = opened;
@@ -501,9 +501,8 @@ pub(crate) fn call_json(invocation: &super::InvocationSummary) -> String {
         .chain(invocation.exit.iter())
         .flat_map(|event| &event.fields)
     {
-        let layout = typed_fields::layout_type(&field.layout);
         let data = covered_preview(field);
-        let Some(records) = Records::open(call.as_ref(), layout, &field.key, data) else {
+        let Some(records) = Records::open(call.as_ref(), &field.layout, &field.key, data) else {
             continue;
         };
         let about = About {
@@ -536,8 +535,7 @@ pub(super) fn tree_rows(
     parent: &crate::tree_lines::Prefix,
 ) {
     let data = covered_preview(field);
-    let layout = typed_fields::layout_type(&field.layout);
-    let Some(records) = Records::open(call, layout, &field.key, data) else {
+    let Some(records) = Records::open(call, &field.layout, &field.key, data) else {
         return;
     };
     let shown = records.count().min(TREE_RECORDS);

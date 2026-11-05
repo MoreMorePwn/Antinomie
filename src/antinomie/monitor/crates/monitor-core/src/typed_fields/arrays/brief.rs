@@ -4,12 +4,15 @@
 //! records' own short forms, cut to fit (`4 entries: ".", "..", "a.txt", +1
 //! more`), built from the same per-record summaries the tree shows. The full
 //! list of items goes to a hover.
-use super::{Record, Records};
+use super::{Record, Records, layout_rows as l};
 use crate::FieldSummary;
 use crate::typed_fields::{Call, covered, holds_more, layout_type};
 
 /// Characters of items a cell line carries before `+N more`.
 const LINE_BUDGET: usize = 84;
+
+/// Records whose sizes a heading adds up.
+const MAX_TOTALED: usize = 4096;
 
 /// Items the hover lists.
 const HOVER_ITEMS: usize = 200;
@@ -35,6 +38,8 @@ struct Kind {
     many: &'static str,
     item: fn(&Record) -> String,
     separator: &'static str,
+    /// What follows the count in the heading: the bytes the records hold.
+    total: fn(&[Record]) -> String,
 }
 
 fn field<'a>(record: &'a Record, name: &str) -> &'a str {
@@ -90,6 +95,7 @@ fn sembuf(record: &Record) -> String {
 }
 
 fn kind(element: &str) -> Kind {
+    let mut total: fn(&[Record]) -> String = |_| String::new();
     let (one, many, item, separator): (_, _, fn(&Record) -> String, _) = match element {
         "linux_dirent" | "linux_dirent64" => ("entry", "entries", name, ", "),
         "pollfd" => ("fd", "fds", pollfd, ", "),
@@ -106,6 +112,15 @@ fn kind(element: &str) -> Kind {
         "bpf_func_info" => ("func info", "func infos", summary, "; "),
         "bpf_line_info" => ("line info", "line infos", summary, "; "),
         "bpf_core_relo" => ("relocation", "relocations", summary, "; "),
+        "iovec" => {
+            total = l::iovec_total;
+            ("buffer", "buffers", summary, "; ")
+        }
+        "epoll_event" => ("event", "events", summary, "; "),
+        "mmsghdr" => {
+            total = l::mmsg_total;
+            ("message", "messages", summary, "; ")
+        }
         _ => ("record", "records", summary, "; "),
     };
     Kind {
@@ -113,6 +128,7 @@ fn kind(element: &str) -> Kind {
         many,
         item,
         separator,
+        total,
     }
 }
 
@@ -140,7 +156,12 @@ impl Records {
             } else {
                 kind.many
             };
-            format!("{count}{plus} {noun}")
+            let records: Vec<Record> = self
+                .page(data, 0, MAX_TOTALED)
+                .into_iter()
+                .map(|(_, record)| record)
+                .collect();
+            format!("{count}{plus} {noun}{}", (kind.total)(&records))
         };
         let mut shown = 0usize;
         let mut used = 0usize;
@@ -186,6 +207,6 @@ pub fn brief(call: Option<&Call<'_>>, field: &FieldSummary) -> Option<Brief> {
         return None;
     }
     let data = covered(field);
-    let records = Records::open(call, layout, &field.key, data)?;
+    let records = Records::open(call, &field.layout, &field.key, data)?;
     records.brief(data, holds_more(field, data.len()))
 }
