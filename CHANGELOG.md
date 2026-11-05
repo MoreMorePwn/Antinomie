@@ -28,6 +28,18 @@ x86 programs by their own table.
   its checks goes back into the cache from the builder VM even when a later
   stage fails, so a retry does not compile it again.
 
+- **Remaining trace decoders (ANT-T0302, host part).** The layouts the
+  generic reader could not describe now have readers: AIO (`iocb`, `io_event`,
+  `__aio_sigset`), io_uring (submission entries, rings, probe, extended
+  argument, buffer ring), CPU and node masks as lists (`0-3,6`), `rt_sigframe`
+  (x86-64 and aarch64), x87/SSE and extended state summaries, `uretprobe`
+  registers, and aarch64/AArch32/x86 `PTRACE_GETREGSET` register sets. Socket
+  addresses add `AF_UNSPEC`, netlink, packet, vsock, ALG and CAN;
+  `perf_event_attr` names the event and its option flags; SysV IPC, quota and
+  LSM structures show dates and flag names. A 32-bit program's wait status,
+  socket options, select sets, masks and `fcntl`/`prctl`/`fanotify_mark`
+  arguments are named like a native one's.
+
 - **Layout-driven trace decoding (ANT-T0294).** One decoder reads any captured
   layout from the per-architecture member inventory (offsets and widths, so
   `epoll_event` is 12 bytes on x86-64 and 16 on aarch64) as named fields,

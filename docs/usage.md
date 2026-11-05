@@ -510,6 +510,25 @@ The network capture is the guest's own view on every route.
   offsets. Decoded fields are also in the trace JSON export (`decoded_fields`)
   and in the `records` filter text. Integers and pointers of layouts nothing
   decodes show in hex.
+  Hand-written readers cover the layouts the inventory cannot describe: AIO
+  (`iocb`, `io_event`, `__aio_sigset`, the pointer arrays of `io_submit`),
+  io_uring (`io_uring_sqe` with the opcode and `IOSQE_*` flags by name, the
+  rings, the probe reply, the extended `enter` argument, the buffer ring), CPU
+  and NUMA masks as lists (`0-3,6`; `sched_setaffinity`, `mbind`, io_uring's
+  worker affinity), signal frames (`rt_sigframe` on x86-64 and aarch64: where
+  the handler returns), the floating-point and extended state as a summary of
+  the components in use, `uretprobe` registers, and `PTRACE_GETREGSET` /
+  `SETREGSET` register sets by note type and length (aarch64 `x0`-`x30`, `sp`,
+  `pc`, `pstate` as `EL0t N|C`; AArch32 `r0`-`r12`, `cpsr`). The decoder sees
+  the first 256 captured bytes, so the tails of long frames and register sets
+  (aarch64 `pc`, `pstate`) show as "more captured than decoded". Socket
+  addresses cover `AF_UNSPEC`, netlink (pid, groups), packet (protocol,
+  interface, hardware type, packet type, MAC), vsock, ALG and CAN.
+  `perf_event_attr` names the event by type and config (hardware, software,
+  cache, tracepoint) and gathers the option bits as `flags`; SysV IPC and quota
+  times read as dates and their flag words by name; LSM contexts show the module
+  and label. A 32-bit program's wait status, socket options, select sets,
+  `fcntl`/`prctl`/`fanotify_mark` arguments and masks read the same way.
   A captured **array of records** (directory entries of `getdents`/`getdents64`,
   `cap_data`, `gid_t`, `siginfo_t`, `desc_struct`, `pollfd`, `sembuf`, the
   control messages of `sendmsg`/`recvmsg`, classic BPF filters of
