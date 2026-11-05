@@ -9,13 +9,15 @@ order: the mirror the user chose, deb.debian.org (a CDN; security packages from
 its debian-security tree and security.debian.org), then snapshot.debian.org at
 the pinned date. Every file is checked against the SHA-256 and size of the
 pinned snapshot's signed index, so no mirror is trusted: a 404 or a mismatch
-on one just moves to the next source. The dated index files (InRelease,
-Packages.xz, Sources, by-hash) come from snapshot only. Each source gets
+on one just moves to the next source. Only the dated InRelease comes from
+snapshot alone; the other index files are fetched by the SHA-256 it lists, from
+by-hash on the mirrors first, then the snapshot. Each source gets
 ATTEMPTS tries on transient failures (HTTP 5xx and 429, timeouts, resets,
 refusals, short bodies) with growing waits, and a partial download resumes with
 a Range request where the server supports it. One log line says each retry and
-each fallback. Standard library only; this file is self-contained so that
-build scripts can load it by path.
+each fallback, naming the file, and another names the source that served a
+file after a fallback. Standard library only; this file is self-contained so
+that build scripts can load it by path.
 """
 import hashlib
 import http.client
@@ -154,7 +156,7 @@ def fetch_from(url, target, proxy="", sha256=None, size=None, attempts=ATTEMPTS,
                     break
                 wait = waits[min(attempt - 1, len(waits) - 1)]
                 wait += random.uniform(0, wait * 0.2)
-                log(f"{name} answered {last}; retrying in {wait:.0f} s "
+                log(f"{target.name}: {name} answered {last}; retrying in {wait:.0f} s "
                     f"(attempt {attempt + 1} of {attempts})")
                 sleep(wait)
         raise FetchError(f"{url}: {attempts} attempts failed, last {last}")
@@ -171,6 +173,8 @@ def fetch_first(urls, target, proxy="", sha256=None, size=None, **options):
     for number, url in enumerate(urls):
         try:
             fetch_from(url, target, proxy, sha256, size, **options)
+            if number:
+                log(f"{Path(target).name}: from {host(url)}")
             return url
         except (Missing, Mismatch, FetchError) as error:
             failures.append(f"{url} ({error})")
@@ -180,7 +184,7 @@ def fetch_first(urls, target, proxy="", sha256=None, size=None, **options):
             if isinstance(error, Missing):
                 reason = str(error).rsplit(": ", 1)[-1]
             if more:
-                log(f"{host(url)}: {reason}, trying {host(urls[number + 1])}")
+                log(f"{Path(target).name}: {host(url)}: {reason}, trying {host(urls[number + 1])}")
     raise FetchError(f"cannot download {Path(target).name}: " + "; ".join(failures))
 
 

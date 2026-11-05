@@ -323,7 +323,7 @@ unattributed, the gaps and the calls per second are in the report and
 | Tier | Runs | Takes (this machine) |
 |---|---|---|
 | quick | the conformance trace suite's oracle groups `user`, `root`, `threads` (`conf-quick`) | about 1 min with the examples built, 5 to 7 min when the render test has to build too |
-| full | quick; `conf-stress-light`, `conf-stress-heavy`, `conf-stress-extreme`, `conf-stress-lossy`, `conf-stress-contended` (0.8.0) (one check and one conformance run each, cleaned up in between); `debug-p2`, `debug-p3`, `audit-stop`, `audit-core`, `uring-status`, `uring-boots`, `tracer-record`, `tracer-qa`, `debugger-live`, `stealth`, `cloud`, `snapshot`; `uring-legacy` and `tracer-legacy` on the old base; interop in both directions (`io-old-new-*`: the old host with BASE; this host with the old base: `io-new-old-audit` and the two legacy checks, since an old guest lacks what the other checks need) | about 2 h 10 min plus, the first time, about 15 min to build the old host; the five stress groups take 80 to 95 min of it (light 5-7, heavy 10-24, extreme 35-56, lossy 4-13, contended 14-17) |
+| full | quick; `conf-stress-light`, `conf-stress-heavy`, `conf-stress-extreme`, `conf-stress-lossy`, `conf-stress-contended` (0.8.0) (one check and one conformance run each, cleaned up in between); `debug-p2`, `debug-p3`, `audit-stop`, `audit-core`, `uring-status`, `uring-boots`, `tracer-record`, `tracer-qa`, `debugger-live`, `stealth`, `cloud`, `snapshot`, `snapshot-uefi` (Debian bases); `uring-legacy` and `tracer-legacy` on the old base; interop in both directions (`io-old-new-*`: the old host with BASE; this host with the old base: `io-new-old-audit` and the two legacy checks, since an old guest lacks what the other checks need) | about 2 h 10 min plus, the first time, about 15 min to build the old host; the five stress groups take 80 to 95 min of it (light 5-7, heavy 10-24, extreme 35-56, lossy 4-13, contended 14-17) |
 
 Quick is the default for every change. Full is required when a change touches the
 kernel/host contract, and for a release check:
@@ -1109,6 +1109,15 @@ Multi-arch plan cards MA-19 and the Debian half of MA-15. No contract change.
   `snapshot-check` on the arm64 base and passes only when it fails with its
   refusal (`ARM64_REFUSAL`: "does not start arm64 VMs", or a base of a newer
   revision), before QEMU runs.
+* **Snapshots on a UEFI VM** (`snapshot-uefi`, full tier, x86-64 and arm64, a
+  Debian base only: SKIP on BusyBox): `snapshot-check BUNDLE WORK_DIR --uefi`
+  creates the VM with the `server` device profile, so its disk is installed for
+  UEFI and it boots through OVMF (AAVMF on arm64) with its own variable store
+  (`efi-vars*.fd` in the VM folder), with the console on the serial port. It
+  runs the `snapshot` check's full and disk restores, branches and reconnect on
+  that VM; the profile phase keeps the firmware (it toggles the hypervisor
+  bit), and the variable store must exist after the first boot and after every
+  restore.
 * **Build kit.** `monitor-core/build.rs` `KIT_FILES` carries every repository
   file the kit's scripts read (0.8.0: the kconfig fragments per architecture,
   the BTF and ABI checks, Debian's x86-64 module-signing certificate), and

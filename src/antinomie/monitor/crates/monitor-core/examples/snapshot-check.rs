@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Real four-vCPU snapshot/reconnect qualification in a disposable data folder.
-//! Usage: snapshot-check BUNDLE WORK_DIR [debian]
+//! Usage: snapshot-check BUNDLE WORK_DIR [debian] [--uefi]
 //! With `debian` the VM is sized for a Debian desktop base and boots longer.
+//! With `--uefi` (a Debian base that boots UEFI) the VM is created with the
+//! `server` device profile: its disk is installed for UEFI and it boots
+//! through the firmware (OVMF, or AAVMF on arm64) with its own variable store,
+//! which must be there after the first boot and after every restore.
 //! A base of an emulated architecture (its bundle.json `arch`, arm64) gets two
 //! vCPUs and 1 GiB, the budget of a TCG guest, and every wait scaled by the
 //! architecture's time scale.
 use antinomie_monitor_core::*;
 use std::{
     collections::BTreeMap,
-    path::PathBuf,
+    ffi::OsString,
+    path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
 };
@@ -262,35 +267,94 @@ fn profile_phase(driver: &mut Driver, vm: &str, keep_firmware: bool) -> Result<(
     eprintln!("profile phase passed");
     Ok(())
 }
+/// The command line: BUNDLE WORK_DIR, then `debian` and `--uefi` in any order.
+#[derive(Debug, PartialEq)]
+struct Options {
+    bundle: PathBuf,
+    work: PathBuf,
+    /// `debian` was given; otherwise the base's bundle.json decides.
+    debian: bool,
+    uefi: bool,
+}
+
+const USAGE: &str = "usage: snapshot-check BUNDLE WORK_DIR [debian] [--uefi]";
+
+fn parse(args: &[OsString]) -> Result<Options, String> {
+    let [bundle, work, rest @ ..] = args else {
+        return Err(USAGE.into());
+    };
+    let mut options = Options {
+        bundle: bundle.into(),
+        work: work.into(),
+        debian: false,
+        uefi: false,
+    };
+    for arg in rest {
+        let flag = match arg.to_str() {
+            Some("debian") => &mut options.debian,
+            Some("--uefi") => &mut options.uefi,
+            _ => return Err(USAGE.into()),
+        };
+        if *flag {
+            return Err(USAGE.into());
+        }
+        *flag = true;
+    }
+    Ok(options)
+}
+
+/// The VM's UEFI variable store (`efi-vars*.fd` in its folder), if it has one.
+fn variable_store(vm_dir: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(vm_dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("efi-vars") && name.ends_with(".fd"))
+        })
+}
+
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let options = parse(&args)?;
+    let bundle: serde_json::Value = std::fs::read_to_string(options.bundle.join("bundle.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
     // `debian`, or a base that asks for an account (Debian, as vm-regress
     // passes an arm64 one without the word).
-    let debian = match args.get(2).and_then(|arg| arg.to_str()) {
-        None if args.len() == 2 => {
-            std::fs::read_to_string(PathBuf::from(&args[0]).join("bundle.json"))
-                .ok()
-                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-                .is_some_and(|bundle| bundle["guest"]["requires_credentials"] == true)
-        }
-        Some("debian") if args.len() == 3 => true,
-        _ => return Err("usage: snapshot-check BUNDLE WORK_DIR [debian]".into()),
-    };
-    let work = PathBuf::from(&args[1]);
+    let debian = options.debian || bundle["guest"]["requires_credentials"] == true;
+    let uefi = options.uefi;
+    if uefi && !debian {
+        return Err(
+            "--uefi needs a Debian base: a VM's disk is installed for UEFI only there".into(),
+        );
+    }
+    if uefi
+        && !bundle["stealth_support"]
+            .as_array()
+            .is_some_and(|support| support.iter().any(|value| value == "uefi"))
+    {
+        return Err(
+            "--uefi: this base does not boot UEFI (its stealth_support has no \"uefi\")".into(),
+        );
+    }
+    let work = options.work.clone();
     // The base's guest architecture (bundle.json `arch`; x86-64 when absent).
-    let arch: GuestArch = std::fs::read_to_string(PathBuf::from(&args[0]).join("bundle.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|bundle| serde_json::from_value(bundle["arch"].clone()).ok())
-        .unwrap_or_default();
+    let arch: GuestArch = serde_json::from_value(bundle["arch"].clone()).unwrap_or_default();
     let emulated = arch != GuestArch::X86_64;
     if work.exists() {
         return Err("qualification requires a fresh disposable work directory".into());
     }
     let options = BackendOptions {
         data_dir: work.clone(),
-        bundle_dir: PathBuf::from(&args[0]),
+        bundle_dir: options.bundle.clone(),
         headless: true,
+        // The UEFI VM's console on the serial port, where its login prompt
+        // says it is up.
+        serial_console: uefi,
         capture_quota_size: 256 * 1024 * 1024,
         ..BackendOptions::default()
     };
@@ -316,6 +380,12 @@ fn run() -> Result<(), String> {
         cpus,
         ram_mib: if debian && !emulated { 4096 } else { 1024 },
         disk_gib: if debian { 16 } else { 2 },
+        stealth: if uefi {
+            use antinomie_monitor_core::stealth::{StealthPreset, StealthProfile, host_cpu_vendor};
+            StealthProfile::realistic(StealthPreset::RealisticServer, &host_cpu_vendor())
+        } else {
+            Default::default()
+        },
         ..VmConfig::default()
     };
     driver.command(if debian {
@@ -351,6 +421,14 @@ fn run() -> Result<(), String> {
         thread::sleep(Duration::from_millis(50));
     }
     driver.guest_ready()?;
+    let vm_dir = work.join(&vm);
+    let vars = variable_store(&vm_dir);
+    if uefi {
+        let vars = vars
+            .as_ref()
+            .ok_or("the UEFI VM booted without its variable store")?;
+        eprintln!("UEFI boot with variable store {}", vars.display());
+    }
     driver.command(Command::CaptureAll)?;
     // On disk for the disk restore: Debian keeps /tmp in memory.
     let value = if debian {
@@ -441,7 +519,10 @@ fn run() -> Result<(), String> {
     })?;
     driver.marker(&rebooted, "A\r\nDISK_REBOOT_DONE")?;
     driver.command(Command::Stop)?;
-    profile_phase(&mut driver, &vm, debian && emulated)?;
+    profile_phase(&mut driver, &vm, debian && emulated || uefi)?;
+    if uefi && vars.as_ref().is_none_or(|vars| !vars.is_file()) {
+        return Err("the UEFI VM's variable store is gone after the restores".into());
+    }
     driver.command(Command::DeleteVmSnapshot {
         vm_id: vm.clone(),
         snapshot_id: full.clone(),
@@ -462,7 +543,7 @@ fn run() -> Result<(), String> {
     {
         return Err("snapshot branches/dependencies lost".into());
     }
-    std::fs::write(work.join("qualification.json"),serde_json::to_vec_pretty(&serde_json::json!({"passed":true,"base":if debian {"debian"} else {"busybox"},"cpus":cpus,"arch":arch,"full_restores":2,"disk_reboot":true,"reconnect":true,"graph":tree,"health":driver.snapshot.health})).map_err(|error|error.to_string())?).map_err(|error|error.to_string())?;
+    std::fs::write(work.join("qualification.json"),serde_json::to_vec_pretty(&serde_json::json!({"passed":true,"base":if debian {"debian"} else {"busybox"},"firmware":if uefi {"uefi"} else {"default"},"variable_store":vars,"cpus":cpus,"arch":arch,"full_restores":2,"disk_reboot":true,"reconnect":true,"graph":tree,"health":driver.snapshot.health})).map_err(|error|error.to_string())?).map_err(|error|error.to_string())?;
     driver.backend.shutdown()?;
     println!("{cpus}-vCPU snapshot, branch and reconnect qualification passed");
     Ok(())
@@ -476,7 +557,57 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::serial_ready;
+    use super::{Options, parse, serial_ready, variable_store};
+    use std::ffi::OsString;
+
+    fn args(words: &[&str]) -> Vec<OsString> {
+        words.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn the_command_line_takes_debian_and_uefi_in_any_order_once() {
+        let options = |debian, uefi| Options {
+            bundle: "b".into(),
+            work: "w".into(),
+            debian,
+            uefi,
+        };
+        assert_eq!(parse(&args(&["b", "w"])), Ok(options(false, false)));
+        assert_eq!(
+            parse(&args(&["b", "w", "debian"])),
+            Ok(options(true, false))
+        );
+        assert_eq!(
+            parse(&args(&["b", "w", "--uefi"])),
+            Ok(options(false, true))
+        );
+        assert_eq!(
+            parse(&args(&["b", "w", "--uefi", "debian"])),
+            Ok(options(true, true))
+        );
+        for bad in [
+            &["b"][..],
+            &["b", "w", "server"],
+            &["b", "w", "--uefi", "--uefi"],
+            &["b", "w", "debian", "debian"],
+        ] {
+            assert!(parse(&args(bad)).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_variable_store_is_the_vms_efi_vars_file() {
+        let dir = std::env::temp_dir().join(format!("snapshot-check-vars-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(variable_store(&dir), None);
+        std::fs::write(dir.join("disk.qcow2"), b"").unwrap();
+        std::fs::write(dir.join(".efi-vars-1.tmp"), b"").unwrap();
+        assert_eq!(variable_store(&dir), None);
+        std::fs::write(dir.join("efi-vars-aarch64.fd"), b"").unwrap();
+        assert_eq!(variable_store(&dir), Some(dir.join("efi-vars-aarch64.fd")));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(variable_store(&dir), None);
+    }
 
     #[test]
     fn a_kernel_message_cannot_hide_the_completed_busybox_banner() {

@@ -167,7 +167,8 @@ class PlanTests(unittest.TestCase):
                      "debug-p2", "debug-p3", "audit-stop", "audit-core", "uring-status",
                      "uring-boots", "uring-legacy", "tracer-record", "tracer-ia32", "tracer-legacy",
                      "tracer-qa",
-                     "debugger-live", "stealth", "cloud", "route", "snapshot", "specimen", "io-old-new-p3",
+                     "debugger-live", "stealth", "cloud", "route", "snapshot", "snapshot-uefi", "specimen",
+                     "io-old-new-p3",
                      "io-new-old-audit"):
             self.assertIn(name, names)
         self.assertEqual(len(names), len(set(names)))
@@ -190,6 +191,40 @@ class PlanTests(unittest.TestCase):
         folders = [a for c in vm.plan("full", self.ctx()) if c.vm and c.argv
                    for a in c.argv if a.startswith("/out/runs/")]
         self.assertEqual(len(folders), len(set(folders)))
+
+    def test_snapshot_uefi_is_the_snapshot_check_on_a_uefi_vm_of_a_debian_base(self):
+        for arch in ("x86_64", "arm64"):
+            with self.subTest(arch=arch):
+                checks = {c.name: c for c in vm.plan("full", self.ctx(), arch)}
+                check = checks["snapshot-uefi"]
+                self.assertEqual(check.group, "full")
+                self.assertTrue(check.argv[0].endswith("/snapshot-check"))
+                self.assertEqual(check.argv[1:], ["/base", "/out/runs/snapshot-uefi", "--uefi"])
+                self.assertEqual(check.needs, ("base", "debian_base"))
+                self.assertEqual(check.timeout, checks["snapshot"].timeout)
+                self.assertNotIn("snapshot-uefi", {c.name for c in vm.plan("quick", self.ctx(), arch)})
+        check = {c.name: c for c in vm.plan("full", self.ctx())}["snapshot-uefi"]
+        self.assertEqual(vm.missing(check, {**self.ctx(), "debian_base": True}), None)
+        for ctx in (self.ctx(), {**self.ctx(), "debian_base": False}):
+            self.assertEqual(vm.missing(check, ctx), "needs a Debian base (BASE's guest asks for an account)")
+        snapshot = {c.name: c for c in vm.plan("full", self.ctx())}["snapshot"]
+        self.assertEqual(vm.missing(snapshot, self.ctx()), None)
+
+    def test_a_debian_base_is_one_whose_guest_asks_for_an_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            def bundle(name, text):
+                folder = Path(tmp) / name
+                folder.mkdir()
+                if text is not None:
+                    (folder / "bundle.json").write_text(text)
+                return folder
+            self.assertTrue(vm.bundle_debian(bundle("debian", '{"guest": {"requires_credentials": true}}')))
+            for name, text in (("busybox", '{"guest": {"requires_credentials": false}}'),
+                               ("noguest", '{"antinomie_revision": 20}'), ("missing", None),
+                               ("broken", "{"), ("list", "[]"), ("text", '{"guest": "debian"}'),
+                               ("truthy", '{"guest": {"requires_credentials": 1}}')):
+                with self.subTest(name=name):
+                    self.assertFalse(vm.bundle_debian(bundle(name, text)))
 
     def test_select_rejects_unknown_names(self):
         checks = vm.plan("full", self.ctx())
