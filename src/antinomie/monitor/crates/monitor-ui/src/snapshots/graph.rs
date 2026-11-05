@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The snapshot graph: one drawing for the Snapshots window and the VM
-//! Summary box. The base image is the root, each checkpoint hangs from its
+//! Overview box. The base image is the root, each checkpoint hangs from its
 //! parent, and a "You are here" node marks where the next snapshot attaches.
 use super::{graph_layout, mode_label};
 use crate::theme;

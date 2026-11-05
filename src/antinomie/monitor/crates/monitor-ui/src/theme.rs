@@ -166,7 +166,7 @@ pub const ANSI_COLORS: [[u8; 3]; 16] = [
     [255, 255, 255],
 ];
 
-/// The colour of series `index` in the VM Summary's meters (amber, teal,
+/// The colour of series `index` in the VM Overview's meters (amber, teal,
 /// blue; later ones repeat the blue). The same in every theme.
 pub fn series(index: usize) -> Color32 {
     match index {

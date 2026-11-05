@@ -25,6 +25,7 @@ mod launch;
 mod launch_source;
 mod layout;
 mod library;
+mod main_window_ui;
 mod memory_probe;
 mod network;
 mod pending;
@@ -64,6 +65,7 @@ mod trace_view;
 mod ui_polish_shots;
 mod upload;
 mod vm_dialog;
+mod vm_screen_fold;
 mod workspace;
 
 use antinomie_monitor_core::{RunIn, WaitStatus};

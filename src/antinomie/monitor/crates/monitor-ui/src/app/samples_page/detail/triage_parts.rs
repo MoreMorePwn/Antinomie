@@ -394,8 +394,11 @@ fn technique_rows(ui: &mut egui::Ui, data: &Data) -> Option<usize> {
                 Some(tactic) => (pills::tactic_color(tactic), row.tactic.as_str()),
                 None => (theme::muted(), row.tactic.as_str()),
             };
-            ui.label(RichText::new("●").color(dot));
-            ui.label(RichText::new(name).strong().color(theme::text()));
+            ui.add(
+                crate::widgets::dot::DotLabel::new(dot, name)
+                    .strong()
+                    .text_color(theme::text()),
+            );
             ui.label(
                 RichText::new(format!("({})", row.techniques.len()))
                     .small()

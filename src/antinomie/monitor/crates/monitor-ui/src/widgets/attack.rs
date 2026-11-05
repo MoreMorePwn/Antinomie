@@ -143,8 +143,11 @@ pub fn tactic_heading(ui: &mut egui::Ui, tactic: Option<Tactic>, count: usize) {
             Some(tactic) => (tactic_color(tactic), tactic.name()),
             None => (theme::muted(), "Not in the ATT&CK table"),
         };
-        ui.label(egui::RichText::new("●").color(dot));
-        ui.label(egui::RichText::new(name).strong().color(theme::text()));
+        ui.add(
+            crate::widgets::dot::DotLabel::new(dot, name)
+                .strong()
+                .text_color(theme::text()),
+        );
         ui.label(
             egui::RichText::new(format!("({count})"))
                 .small()

@@ -1010,11 +1010,18 @@ enum BaseAction {
 /// A sidebar entry: a colored mark, the name, an optional state on the
 /// right, then detail lines in small text. The whole row is one target.
 struct SidebarRow<'a> {
-    mark: (&'a str, egui::Color32),
+    mark: RowMark<'a>,
     name: &'a str,
     state: Option<(&'a str, egui::Color32)>,
     details: Vec<Vec<(String, egui::Color32)>>,
     selected: bool,
+}
+
+/// What leads a sidebar row: a state dot, drawn on the middle of the name, or
+/// an icon glyph.
+enum RowMark<'a> {
+    Dot(egui::Color32),
+    Icon(&'a str, egui::Color32),
 }
 
 struct SectionHeader<'a> {
@@ -1022,7 +1029,11 @@ struct SectionHeader<'a> {
     /// The muted number after the title; none for a section that has no count.
     count: Option<usize>,
     tooltip: &'a str,
+    /// The icon of the action on the right ("+" to add, a folder to choose one).
+    glyph: &'a str,
     action: &'a str,
+    /// Why the action is off, for its tooltip ("(stop the running VM first)").
+    blocked: &'a str,
     enabled: bool,
     open: bool,
 }

@@ -134,7 +134,7 @@ pub(crate) fn ending(run: &RunSummary) -> Option<Ending> {
 
 /// The colour of a run's state words, the one palette the run-finished toast
 /// (green success, amber crash or kill), the Triage state line, Run History,
-/// the Samples window's Runs and the VM Summary share. Colour never stands
+/// the Samples window's Runs and the VM Overview share. Colour never stands
 /// alone: the state words stay beside it.
 pub(crate) fn color(run: &RunSummary) -> Color32 {
     crate::widgets::fg_or_muted(state_tone(run))

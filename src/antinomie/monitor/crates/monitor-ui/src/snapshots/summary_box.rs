@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The Snapshots box on the VM Summary, under Device profile: the VM's
+//! The Snapshots box on the VM Overview, under Device profile: the VM's
 //! checkpoints as a compact tree with Take snapshot, Restore and Open
 //! Snapshots. It only draws and asks; the app answers through the snapshot
 //! manager's own dialogs, so every rule of the Snapshots window applies
@@ -12,7 +12,7 @@ use egui_phosphor::regular as icon;
 
 /// Set for one frame when a button is pressed; the app takes it.
 pub(crate) const ACTION: &str = "summary_snapshots_action";
-/// Set by the app before the Summary is drawn: what the manager is doing.
+/// Set by the app before the Overview is drawn: what the manager is doing.
 pub(crate) const STATE: &str = "summary_snapshots_state";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

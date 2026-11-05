@@ -395,8 +395,14 @@ impl SnapshotManager {
                         }
                     });
                 }
-                ui.colored_label(theme::good(), "● You are here — Unsaved changes")
-                    .on_hover_text("Use Tab and Enter to select checkpoints and actions.");
+                ui.add(
+                    crate::widgets::dot::DotLabel::new(
+                        theme::good(),
+                        "You are here — Unsaved changes",
+                    )
+                    .text_color(theme::good()),
+                )
+                .on_hover_text("Use Tab and Enter to select checkpoints and actions.");
             });
     }
 
