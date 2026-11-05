@@ -472,4 +472,5 @@ a fresh, short data path so its QMP Unix socket fits the system path limit.
 ## Contract checks
 
 The kernel build runs `tests/monitor/check-contracts.sh` to reject drift between
-exported guest copies and the host transport/control contracts.
+exported guest copies and the host transport/control contracts. It replays the canonical patch series' hunks for those files, so it needs no kernel
+tree, and CI runs it on every push; `--update` refreshes the host copies from it.
