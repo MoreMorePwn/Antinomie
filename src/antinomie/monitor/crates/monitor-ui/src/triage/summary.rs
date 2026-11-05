@@ -5,6 +5,7 @@ use antinomie_monitor_core::analysis::detection::{Engine, State};
 mod attack_list;
 mod indicators;
 mod insight;
+mod relations;
 mod report;
 mod rule_text;
 mod sample;
