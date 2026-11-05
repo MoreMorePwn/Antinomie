@@ -1099,6 +1099,34 @@ fn unix_query(path: &std::path::Path, request: &[u8], seconds: u64) -> Result<St
     Ok(String::from_utf8_lossy(&reply).into_owned())
 }
 
+/// Everything a child writes to its two pipes, as it arrives (stdout and
+/// stderr interleaved), so a caller can watch for a line while it runs.
+fn collect(
+    stdout: Option<std::process::ChildStdout>,
+    stderr: Option<std::process::ChildStderr>,
+) -> std::sync::Arc<std::sync::Mutex<Vec<u8>>> {
+    use std::io::Read;
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    fn pump(mut pipe: impl Read + Send + 'static, seen: std::sync::Arc<std::sync::Mutex<Vec<u8>>>) {
+        thread::spawn(move || {
+            let mut buffer = [0u8; 4096];
+            while let Ok(used) = pipe.read(&mut buffer) {
+                if used == 0 {
+                    break;
+                }
+                seen.lock().unwrap().extend_from_slice(&buffer[..used]);
+            }
+        });
+    }
+    if let Some(pipe) = stdout {
+        pump(pipe, seen.clone());
+    }
+    if let Some(pipe) = stderr {
+        pump(pipe, seen.clone());
+    }
+    seen
+}
+
 fn text_of(output: &std::process::Output) -> String {
     format!(
         "{}{}",
@@ -1176,18 +1204,39 @@ fn scenarios(driver: &mut Driver, fixture: &str) -> Result<(), String> {
     // 4. Interrupt: SIGINT to gdb while the process runs stops it.
     let launched = launch(driver, 150)?;
     let info = attach(driver, &launched.target)?;
-    let child = gdb_batch(info.tcp_port, fixture, &["continue", &registers, "detach"])
+    let mut child = gdb_batch(info.tcp_port, fixture, &["continue", &registers, "detach"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| e.to_string())?;
-    thread::sleep(Duration::from_millis(2500));
+    // The interrupt must come while gdb waits for the process. gdb 17 takes a
+    // SIGINT that arrives earlier (while it connects and reads the stopped
+    // frame) as a Quit of that command, and `continue` then says "The program
+    // is not being run". Batch mode prints no "Continuing.", so the line that
+    // says where the connection stopped (`0x... in main ()`) is the cue: the
+    // `continue` follows at once.
+    let seen = collect(child.stdout.take(), child.stderr.take());
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let connected = |text: &str| {
+        text.lines()
+            .any(|line| line.starts_with("0x") && line.trim_end().ends_with(" ()"))
+    };
+    while !connected(&String::from_utf8_lossy(&seen.lock().unwrap())) {
+        if Instant::now() > deadline || child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            let text = String::from_utf8_lossy(&seen.lock().unwrap()).into_owned();
+            let _ = child.kill();
+            return Err(format!("gdb never connected to the process:\n{text}"));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    thread::sleep(Duration::from_millis(1500));
     let _ = Process::new("kill")
         .arg("-INT")
         .arg(child.id().to_string())
         .status();
-    let output = child.wait_with_output().map_err(|e| e.to_string())?;
-    let text = text_of(&output);
+    child.wait().map_err(|e| e.to_string())?;
+    thread::sleep(Duration::from_millis(200));
+    let text = String::from_utf8_lossy(&seen.lock().unwrap()).into_owned();
     if !text.contains("SIGINT") || !text.contains(pc) {
         return Err(format!("interrupt did not stop the process:\n{text}"));
     }
