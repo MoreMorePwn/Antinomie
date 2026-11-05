@@ -34,6 +34,8 @@ fn atom(header: &str, column: usize, row: &[Cell]) -> Atom {
         .unwrap_or_default();
     let names: &[&str] = match header {
         "Time" => &["event.time_ns", "frame.time_us"],
+        "When" => &["finding.first_ns"],
+        "Count" => &["finding.count"],
         "Frame" => &["frame.number"],
         "Diff count" => &["file.diff_count"],
         "Requests" | "Queries" => &["network.count"],

@@ -71,6 +71,10 @@ pub(super) fn column_widths<'a>(
                     (250.0, 650.0)
                 }
                 "Time" | "First seen" | "Last seen" => (230.0, 500.0),
+                "Behaviour" => (170.0, 260.0),
+                "Target" => (220.0, 560.0),
+                "ATT&CK" => (150.0, 300.0),
+                "When" => (150.0, 320.0),
                 "Host" => (160.0, 400.0),
                 "Summary" => (360.0, 800.0),
                 "Observation" => (260.0, 340.0),
@@ -529,16 +533,14 @@ fn numeric_column(header: &str) -> bool {
     )
 }
 
-/// The stored columns of a table in the order they are laid out. Time comes
-/// first in the Suspicious activity table, whose rows keep the order the
-/// filters, sorts and Details know them by.
+/// The stored columns of a table in the order they are laid out. The
+/// Suspicious activity table lays out only [`rules::SHOWN`]; its other columns
+/// stay in the row, where the filters, sorts, exports and Details read them.
 pub(super) fn display_order(id: &str, count: usize) -> Vec<usize> {
-    let mut order: Vec<usize> = (0..count).collect();
     if id == "triage-findings" && count == rules::HEADERS.len() {
-        order.retain(|column| *column != rules::COL_TIME);
-        order.insert(0, rules::COL_TIME);
+        return rules::SHOWN.to_vec();
     }
-    order
+    (0..count).collect()
 }
 
 fn finding_table_rows(
@@ -625,20 +627,11 @@ fn finding_table_rows(
                         continue;
                     };
                     row.col(|ui| {
-                        let mut text = RichText::new(bounded_cell(&cell.text)).color(cell.color());
-                        if cell.mono {
-                            text = text.monospace();
-                        }
                         let align = fit_table::numeric_align(numeric_column(
                             headers.get(column).copied().unwrap_or_default(),
                         ));
                         fit_table::aligned_cell(ui, align, |ui| {
-                            ui.add(
-                                egui::Label::new(text)
-                                    .truncate()
-                                    .selectable(false)
-                                    .sense(egui::Sense::hover()),
-                            );
+                            finding_cells::draw(ui, column, finding, cell)
                         });
                     });
                 }
@@ -681,17 +674,25 @@ mod display_tests {
     use super::*;
 
     #[test]
-    fn time_leads_the_suspicious_activity_table_and_no_other() {
+    fn the_suspicious_activity_table_lays_out_its_eight_columns_and_no_other_table_does() {
         let count = rules::HEADERS.len();
-        let findings = display_order("triage-findings", count);
-        assert_eq!(findings[0], rules::COL_TIME);
-        assert_eq!(rules::HEADERS[findings[0]], "Time");
-        // Every stored column is shown once, the rest in their old order.
-        let mut sorted = findings.clone();
-        sorted.sort_unstable();
-        assert_eq!(sorted, (0..count).collect::<Vec<_>>());
-        assert_eq!(findings[1], 0, "Rule follows Time");
-        assert_eq!(rules::HEADERS[findings[2]], "Tier");
+        let shown: Vec<&str> = display_order("triage-findings", count)
+            .into_iter()
+            .map(|column| rules::HEADERS[column])
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                "Tier",
+                "Behaviour",
+                "Target",
+                "Process",
+                "ATT&CK",
+                "Count",
+                "Result",
+                "When"
+            ]
+        );
         // Other tables, and a findings table of another width, keep theirs.
         assert_eq!(display_order("triage-opened", 5), vec![0, 1, 2, 3, 4]);
         assert_eq!(display_order("triage-findings", 3), vec![0, 1, 2]);

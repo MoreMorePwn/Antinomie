@@ -310,21 +310,30 @@ fn processes(scan: &ArchiveScan, clock: Option<antinomie_monitor_core::HostClock
 }
 
 fn findings(scan: &ArchiveScan, clock: Option<antinomie_monitor_core::HostClockAnchor>) -> Table {
+    let start = scan.process.iter().filter_map(|node| node.first_ns).min();
     let rows: Vec<Vec<Cell>> = scan
         .findings
         .iter()
         .map(|finding| {
-            let mut cells = finding.cells.clone();
-            cells[rules::COL_TIME].text = crate::time_format::guest_ns(
-                clock,
-                files::number(&finding.values, "event.time_ns"),
-            );
-            cells
+            let mut finding = finding.clone();
+            rules::stamp(&mut finding, clock, start);
+            finding.cells
         })
         .collect();
     table(
         rules::HEADERS,
-        &[rules::COL_TIME, 1, 0, 2, 3, 4, 5, 11],
+        &[
+            rules::COL_TIME,
+            rules::COL_TIER,
+            rules::COL_BEHAVIOUR,
+            0,
+            rules::COL_TARGET,
+            rules::COL_PROCESS,
+            rules::COL_ATTACK,
+            rules::COL_COUNT,
+            rules::COL_RESULT,
+            rules::COL_SUMMARY,
+        ],
         &rows,
         scan.findings_omitted,
         &[],

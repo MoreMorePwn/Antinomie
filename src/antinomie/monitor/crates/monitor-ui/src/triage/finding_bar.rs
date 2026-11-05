@@ -27,7 +27,12 @@ impl TriageView {
             let on = view.tiers == 0 || view.tier_on(tier);
             let label = tier.tag().to_uppercase();
             if toggle_chip(ui, &label, on, counts.map(|counts| counts[tier.index()]))
-                .on_hover_text("Rows of this tier. Click to show only this tier; click again to add or remove tiers.")
+                .on_hover_text(format!(
+                    "{}: {}\n\n{}\n\nClick to show only this tier; click again to add or remove tiers.",
+                    tier.label(),
+                    tier.meaning(),
+                    super::rules::CONTEXT_NOTE
+                ))
                 .clicked()
             {
                 if view.tiers == 0 {
@@ -40,7 +45,10 @@ impl TriageView {
         }
         let info = counts.map(|counts| counts[Tier::Info.index()]);
         if toggle_chip(ui, "Show INFO", view.show_info, info)
-            .on_hover_text("INFO matches are always counted; their rows are built only when this is on. The calls stay in the recording either way.")
+            .on_hover_text(format!(
+                "Info: {}\n\nINFO matches are always counted; their rows are built only when this is on. The calls stay in the recording either way.",
+                Tier::Info.meaning()
+            ))
             .clicked()
         {
             view.show_info = !view.show_info;

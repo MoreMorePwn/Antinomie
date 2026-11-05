@@ -108,8 +108,8 @@ pub(super) struct Agg {
     pub flags: u16,
     pub detail: Vec<String>,
     pub siblings: u64,
-    /// Occurrences kept as extra evidence, after the first.
-    pub samples: Vec<(u64, u64)>,
+    /// Occurrences kept as evidence, the first included, at most `SAMPLES + 1`.
+    pub samples: Vec<Sample>,
     /// The capture and frame a row stands on, for a row found in packets.
     pub packet: Option<(String, u64)>,
     /// The tier after context; set by [`settle`].
@@ -118,6 +118,44 @@ pub(super) struct Agg {
 }
 
 pub(super) const SAMPLES: usize = 16;
+
+/// One call kept as evidence of a row: where it is, and what it did.
+#[derive(Clone)]
+pub(super) struct Sample {
+    pub stream: u64,
+    pub call_id: u64,
+    pub ns: u64,
+    pub syscall: String,
+    /// The matching facts of this call (its own summary line, cut short).
+    pub what: String,
+    pub result: String,
+}
+
+impl Sample {
+    pub(super) fn new(call: &InvocationSummary, syscall: &str, what: &str, ns: u64) -> Self {
+        let mut shown: String = what.chars().take(160).collect();
+        if what.chars().count() > 160 {
+            shown.push('\u{2026}');
+        }
+        Self {
+            stream: call.stream_id,
+            call_id: call.call_id,
+            ns,
+            syscall: syscall.to_owned(),
+            what: shown,
+            result: findings::outcome(call),
+        }
+    }
+
+    /// One text value of `finding.samples`, fields apart by U+001F: time,
+    /// stream, call, syscall, what, result.
+    pub(super) fn encode(&self) -> String {
+        format!(
+            "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+            self.ns, self.stream, self.call_id, self.syscall, self.what, self.result
+        )
+    }
+}
 
 impl Agg {
     pub(super) fn spec(&self) -> &'static Spec {

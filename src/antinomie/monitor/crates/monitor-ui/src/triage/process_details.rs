@@ -479,7 +479,7 @@ fn relative_link(ui: &mut egui::Ui, relative: &Relative) -> egui::Response {
 }
 
 /// Select a process in the tree and open its Details.
-fn open_process(view: &TriageView, ctx: &egui::Context, pid: u32, cookie: u64) {
+pub(super) fn open_process(view: &TriageView, ctx: &egui::Context, pid: u32, cookie: u64) {
     let Some(scan) = &view.scan else { return };
     let rows = process_tree::process_rows(&scan.process, scan.clock_anchor, &scan.suspicious);
     let Some(row) = rows.into_iter().find(|row| {

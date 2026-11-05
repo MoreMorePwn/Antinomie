@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The rows of the Suspicious activity table, and the chips that narrow them.
 use super::super::*;
-use super::noise::{flag, pace, Agg, Overflow};
+use super::noise::{flag, pace, Agg, Overflow, Sample};
+use super::present;
 use super::{Category, Tier};
 
-/// The table's columns.
+/// The table's stored columns. Filters, sorts and exports address them by
+/// place; [`SHOWN`] says which are laid out and in what order.
 pub(in crate::triage) const HEADERS: &[&str] = &[
     "Rule",
     "Tier",
@@ -18,11 +20,42 @@ pub(in crate::triage) const HEADERS: &[&str] = &[
     "Evidence",
     "Version",
     "Outcome",
+    "Behaviour",
+    "Target",
+    "ATT&CK",
+    "Result",
+    "When",
 ];
 pub(in crate::triage) const COL_TIER: usize = 1;
 pub(in crate::triage) const COL_PROCESS: usize = 3;
 pub(in crate::triage) const COL_SUMMARY: usize = 4;
+pub(in crate::triage) const COL_COUNT: usize = 5;
 pub(in crate::triage) const COL_TIME: usize = 7;
+pub(in crate::triage) const COL_BEHAVIOUR: usize = 12;
+pub(in crate::triage) const COL_TARGET: usize = 13;
+pub(in crate::triage) const COL_ATTACK: usize = 14;
+pub(in crate::triage) const COL_RESULT: usize = 15;
+pub(in crate::triage) const COL_WHEN: usize = 16;
+/// The columns the table lays out, left to right. The others (Rule, Category,
+/// Summary, Source, Time, Confidence, Evidence, Version, Outcome) stay in the
+/// row for filters and exports and are read in Details.
+pub(in crate::triage) const SHOWN: [usize; 8] = [
+    COL_TIER,
+    COL_BEHAVIOUR,
+    COL_TARGET,
+    COL_PROCESS,
+    COL_ATTACK,
+    COL_COUNT,
+    COL_RESULT,
+    COL_WHEN,
+];
+
+/// The key of a cell's own hover text, and of the reason a tier chip carries
+/// a flag for limited confidence.
+pub(in crate::triage) const TIP: &str = "cell.tooltip";
+pub(in crate::triage) const LIMITED: &str = "cell.limited";
+/// The key of the text that says a process calls itself by another name.
+pub(in crate::triage) const MISMATCH: &str = "finding.argv_mismatch";
 
 /// Which rows the table shows: the chips above it.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
@@ -130,10 +163,11 @@ pub(super) fn finding(agg: &Agg) -> Finding {
     }
     let attack: Vec<String> = agg.attack.iter().map(|id| (*id).to_owned()).collect();
     let mut detail = agg.detail.clone();
-    if agg.count > 1 && !agg.samples.is_empty() {
-        let calls: Vec<String> = std::iter::once(agg.call_id)
-            .chain(agg.samples.iter().map(|(_, call)| *call))
-            .map(|call| call.to_string())
+    if agg.count > 1 && agg.samples.len() > 1 {
+        let calls: Vec<String> = agg
+            .samples
+            .iter()
+            .map(|sample| sample.call_id.to_string())
             .collect();
         detail.push(format!(
             "Occurrences: calls {}{} ({} in all)",
@@ -147,6 +181,11 @@ pub(super) fn finding(agg: &Agg) -> Finding {
         ));
     }
     let source = spec.source(agg.attack);
+    let title = super::rule_title(agg.rule);
+    let result = present::result_text(agg.count, agg.failed, agg.ret.is_some());
+    let (technique, technique_hover) = present::technique(agg.attack);
+    let why = present::why_short(agg);
+    let limited = present::limited_reason(agg);
     let time = if agg.first_ns == 0 {
         "—".to_string()
     } else {
@@ -195,6 +234,18 @@ pub(super) fn finding(agg: &Agg) -> Finding {
         ),
         ("finding.last_ns", RowValue::Number(i128::from(agg.last_ns))),
         ("finding.why", RowValue::List(agg.why.clone())),
+        ("finding.title", RowValue::Text(title.into())),
+        ("finding.what", RowValue::Text(agg.summary.clone())),
+        ("finding.rank", RowValue::Number(agg.tier.index() as i128)),
+        (
+            "finding.siblings",
+            RowValue::Number(i128::from(agg.siblings)),
+        ),
+        ("finding.result", RowValue::Text(result.clone())),
+        (
+            "finding.samples",
+            RowValue::List(agg.samples.iter().map(Sample::encode).collect()),
+        ),
         ("finding.detail", RowValue::List(detail)),
         (
             "syscall.ret",
@@ -221,17 +272,51 @@ pub(super) fn finding(agg: &Agg) -> Finding {
         values.push(("capture.path", RowValue::Text(capture.clone())));
         values.push(("frame.number", RowValue::Number(i128::from(*frame))));
     }
+    let mut tier = cell(agg.tier.tag(), color, false);
+    tier.values.push((
+        TIP,
+        RowValue::Text(present::tier_hover(agg.tier, &why, limited)),
+    ));
+    if let Some(reason) = limited {
+        tier.values.push((LIMITED, RowValue::Text(reason.into())));
+    }
+    let mut behaviour = cell(title, theme::text(), false);
+    behaviour.values.push((
+        TIP,
+        RowValue::Text(format!("{} \u{b7} version {}", agg.rule, spec.version)),
+    ));
+    let mut count = cell(
+        present::count_text(agg.count, agg.period()),
+        theme::text(),
+        true,
+    );
+    if agg.siblings > 1 {
+        count.values.push((
+            TIP,
+            RowValue::Text(format!("The same in {} processes: one row.", agg.siblings)),
+        ));
+    }
+    let mut attack_cell = cell(technique, theme::text(), false);
+    attack_cell
+        .values
+        .push((TIP, RowValue::Text(technique_hover)));
+    let result_color = if result == "all failed" {
+        theme::muted()
+    } else {
+        theme::text()
+    };
+    let identity = present::process_text(agg, false);
     Finding {
         key: agg.key(),
         call_id: agg.call_id,
         values,
         cells: vec![
             cell(agg.rule, color, false),
-            cell(agg.tier.tag(), color, false),
+            tier,
             cell(spec.category.label(), theme::text(), false),
-            cell(agg.process.clone(), theme::text(), true),
+            cell(identity, theme::text(), true),
             cell(summary, theme::text(), false),
-            cell(agg.count.to_string(), theme::text(), true),
+            count,
             cell(source, theme::muted(), false),
             cell(time, theme::text(), true),
             cell(
@@ -246,8 +331,52 @@ pub(super) fn finding(agg: &Agg) -> Finding {
             cell(agg.evidence.clone(), theme::text(), true),
             cell(spec.version.to_string(), theme::text(), true),
             cell(outcome(agg), theme::text(), false),
+            behaviour,
+            cell(agg.object.clone(), theme::text(), true),
+            attack_cell,
+            cell(result, result_color, false),
+            cell(
+                present::when_text(agg.first_ns, agg.last_ns, Some(0)),
+                theme::text(),
+                true,
+            ),
         ],
     }
+}
+
+/// A process that calls itself by another name than the image the kernel
+/// loaded: a warning on its cell, with the sentence that says so.
+pub(super) fn note_mismatch(row: &mut Finding, agg: &Agg, warning: String) {
+    row.cells[COL_PROCESS].text = present::process_text(agg, true);
+    row.cells[COL_PROCESS].color = theme::warn();
+    row.cells[COL_PROCESS]
+        .values
+        .push((TIP, RowValue::Text(warning.clone())));
+    row.values.push((MISMATCH, RowValue::Text(warning)));
+}
+
+/// Fill the cells that read the run's clocks: `Time` on the host's clock and
+/// `When` as an offset from `start`, the first moment of the run.
+pub(in crate::triage) fn stamp(
+    finding: &mut Finding,
+    clock: Option<antinomie_monitor_core::HostClockAnchor>,
+    start: Option<u64>,
+) {
+    let number = |key: &str| files::number(&finding.values, key);
+    let (first, last) = (number("finding.first_ns"), number("finding.last_ns"));
+    let wall = |ns: Option<u64>| crate::time_format::guest_ns(clock, ns);
+    let first_wall = wall(number("event.time_ns"));
+    let when = present::when_text(first.unwrap_or(0), last.unwrap_or(0), start);
+    let hover = if first == last {
+        format!("At {first_wall}")
+    } else {
+        format!("First {first_wall}\nLast {}", wall(last))
+    };
+    finding.cells[COL_TIME].text = first_wall;
+    let cell = &mut finding.cells[COL_WHEN];
+    cell.text = when;
+    cell.values.retain(|(key, _)| *key != TIP);
+    cell.values.push((TIP, RowValue::Text(hover)));
 }
 
 /// The row that stands for rows a cap did not keep.

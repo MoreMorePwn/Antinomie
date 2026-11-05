@@ -15,7 +15,7 @@ fn scan() -> (PacketSpool, ArchiveScan) {
     (temp, scan)
 }
 
-fn view(section: Section) -> (PacketSpool, TriageView) {
+pub(super) fn view(section: Section) -> (PacketSpool, TriageView) {
     let (temp, scan) = scan();
     let mut view = TriageView::default();
     // The tests look at the per-operation tables; By file has its own.
@@ -26,7 +26,7 @@ fn view(section: Section) -> (PacketSpool, TriageView) {
     (temp, view)
 }
 
-fn draw(
+pub(super) fn draw(
     ctx: &egui::Context,
     view: &mut TriageView,
     events: Vec<egui::Event>,
@@ -55,7 +55,7 @@ fn draw(
 }
 
 /// Draw until the layout settles; returns the last output.
-fn settle(ctx: &egui::Context, view: &mut TriageView) -> egui::FullOutput {
+pub(super) fn settle(ctx: &egui::Context, view: &mut TriageView) -> egui::FullOutput {
     let mut out = draw(ctx, view, vec![], 0.0);
     for n in 1..4 {
         out = draw(ctx, view, vec![], f64::from(n) * 0.02);
@@ -63,7 +63,7 @@ fn settle(ctx: &egui::Context, view: &mut TriageView) -> egui::FullOutput {
     out
 }
 
-fn context() -> egui::Context {
+pub(super) fn context() -> egui::Context {
     let ctx = egui::Context::default();
     theme::install(&ctx);
     ctx
@@ -73,7 +73,7 @@ fn open_packets_label() -> String {
     format!("{} Open Packets", egui_phosphor::regular::NETWORK)
 }
 
-fn find(out: &egui::FullOutput, text: &str) -> egui::Rect {
+pub(super) fn find(out: &egui::FullOutput, text: &str) -> egui::Rect {
     texts(out)
         .into_iter()
         .find(|(shown, _)| shown == text)
@@ -81,11 +81,11 @@ fn find(out: &egui::FullOutput, text: &str) -> egui::Rect {
         .1
 }
 
-fn has(out: &egui::FullOutput, text: &str) -> bool {
+pub(super) fn has(out: &egui::FullOutput, text: &str) -> bool {
     texts(out).iter().any(|(shown, _)| shown == text)
 }
 
-fn click(ctx: &egui::Context, view: &mut TriageView, at: egui::Pos2) {
+pub(super) fn click(ctx: &egui::Context, view: &mut TriageView, at: egui::Pos2) {
     let mut time = 1.0;
     for pressed in [true, false] {
         draw(
@@ -758,7 +758,7 @@ fn the_details_of_an_evasion_row_list_each_check_the_answer_and_why_it_has_its_t
         .find(|row| row.cells[0].text == "evasion.sandbox_probe")
         .expect("a sandbox probe row")
         .clone();
-    let label = probe.cells[0].text.clone();
+    let label = probe.cells[rules::COL_BEHAVIOUR].text.clone();
     let mut view = TriageView::default();
     let mut draw = |events, time| {
         ctx.run_ui(
@@ -849,7 +849,7 @@ fn demo_view() -> (PacketSpool, TriageView) {
     (temp, view)
 }
 
-fn tooltip_context() -> egui::Context {
+pub(super) fn tooltip_context() -> egui::Context {
     let ctx = context();
     ctx.global_style_mut(|style| style.interaction.tooltip_delay = 0.0);
     ctx
@@ -902,7 +902,7 @@ fn a_mismatched_command_line_shows_the_warning_and_its_tooltip() {
     );
 }
 
-fn details_output(ctx: &egui::Context, view: &mut TriageView) -> egui::FullOutput {
+pub(super) fn details_output(ctx: &egui::Context, view: &mut TriageView) -> egui::FullOutput {
     ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
