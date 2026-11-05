@@ -138,6 +138,7 @@ fn caps() -> DebugCaps {
         debug_on_start: false,
         auxv: false,
         read_watch: false,
+        aarch32: false,
         follow: true,
         nonstop: true,
         adopt: true,

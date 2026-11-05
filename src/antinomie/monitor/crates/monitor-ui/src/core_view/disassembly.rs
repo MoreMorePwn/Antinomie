@@ -342,7 +342,8 @@ impl CoreView {
             let size = usize::try_from(octets)
                 .map_err(|_| "function disassembly window does not fit".to_owned())?;
             self.code_address = format!("{:x}", function.address);
-            return Ok((function.address, size));
+            // A Thumb function is asked for with its symbol's marker bit set.
+            return Ok((function.address | u64::from(function.thumb), size));
         }
         let address = captured_code_origin(core, &self.code_address)?;
         self.code_address = format!("{address:x}");

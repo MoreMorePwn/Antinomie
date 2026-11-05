@@ -624,13 +624,30 @@ impl Session {
             return Ok(());
         }
         if matches!(status.state, 5 | 6) {
-            owner.finish(
-                RunArtifactState::Failed,
-                format!(
+            // The guest's errno has a clear reading (a refused AArch32 or ia32
+            // program, a budget, a deadline): say it, not the raw state.
+            let reason = guest_reason(&CoreOutcome {
+                state: status.state,
+                status: status.status,
+                expected: status.expected_size,
+                size: status.size,
+                stored: status.stored,
+                flags: status.flags,
+                budget: u64::from(owner.summary.max_size),
+                limits: self.core_limits.unwrap_or(CoreLimits::LEGACY),
+            });
+            let text = match reason {
+                Some(reason) => {
+                    let text = reason.text.clone();
+                    owner.summary.reason.get_or_insert(reason);
+                    text
+                }
+                None => format!(
                     "manual guest capture unavailable/canceled (state {}, status {})",
                     status.state, status.status
                 ),
-            );
+            };
+            owner.finish(RunArtifactState::Failed, text);
             return Ok(());
         }
         owner.summary.phase = ProcessCorePhase::Transfer;
@@ -718,9 +735,7 @@ impl Session {
         let machine = self.core_machine();
         if owner.summary.stored_size == 0
             && retained >= 20
-            && (&data[..7] != b"\x7fELF\x02\x01\x01"
-                || data[16..18] != 4u16.to_le_bytes()
-                || u32::from(u16::from_le_bytes([data[18], data[19]])) != machine)
+            && !crate::core_dump::guest_core_header(&data, machine)
         {
             return Err(
                 "manual core is not a native little-endian ELF core of the guest's architecture"

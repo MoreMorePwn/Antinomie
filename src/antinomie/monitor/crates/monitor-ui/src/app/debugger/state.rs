@@ -9,7 +9,7 @@ use antinomie_monitor_core::{
         view::{DebugRequest, WindowKind},
         ArchTag,
     },
-    decode_window, decode_window_aarch64, DecodedInstruction,
+    decode_window, decode_window_aarch64, decode_window_arm, ArmMode, DecodedInstruction,
 };
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -79,20 +79,27 @@ impl DebuggerPanel {
         let key = (window.sequence, window.address, window.bytes.len());
         if self.code.as_ref().is_none_or(|cache| cache.key != key) {
             // iced-x86 for x86-64 (as the static listing), Capstone for aarch64.
-            let decode = match view.caps.arch {
-                ArchTag::X86_64 => decode_window,
-                ArchTag::Aarch64 => decode_window_aarch64,
-            };
-            self.code = Some(CodeCache {
-                key,
-                lines: decode(
-                    window.address,
-                    &window.bytes,
+            let (address, bytes) = (window.address, &window.bytes[..]);
+            let lines = match view.caps.arch {
+                ArchTag::X86_64 => decode_window(address, bytes, pc, CODE_BEFORE_COUNT, CODE_COUNT),
+                ArchTag::Aarch64 => {
+                    decode_window_aarch64(address, bytes, pc, CODE_BEFORE_COUNT, CODE_COUNT)
+                }
+                // AArch32: CPSR.T says which instruction set the pc is in.
+                ArchTag::Arm => decode_window_arm(
+                    address,
+                    bytes,
                     pc,
                     CODE_BEFORE_COUNT,
                     CODE_COUNT,
+                    if view.thumb() {
+                        ArmMode::Thumb
+                    } else {
+                        ArmMode::Arm
+                    },
                 ),
-            });
+            };
+            self.code = Some(CodeCache { key, lines });
         }
         self.code.as_ref().map_or(&[], |cache| &cache.lines)
     }

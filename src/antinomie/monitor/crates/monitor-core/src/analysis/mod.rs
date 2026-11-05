@@ -13,6 +13,7 @@ mod decompile;
 pub mod detection;
 mod disasm;
 mod disasm_aarch64;
+mod disasm_arm;
 mod elf_facts;
 mod floss;
 mod ghidra_listing;
@@ -32,6 +33,7 @@ mod worker;
 pub use decompile::{decompile_captured_core, sparse_core_plan, synthetic_captured_elf};
 pub use disasm::{ARCHITECTURE_MARK, DecodedInstruction, decode_window};
 pub use disasm_aarch64::decode_window_aarch64;
+pub use disasm_arm::{ArmMode, decode_span_arm, decode_window_arm, thumb_len};
 pub use limits::{
     AnalysisLimits, LIMIT_FIELDS, LimitField, LimitSetting, duration_text, fixed_limits_text,
 };

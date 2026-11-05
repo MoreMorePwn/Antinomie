@@ -462,6 +462,15 @@ impl DebugView {
             notice: None,
         }
     }
+    /// An AArch32 thread executes Thumb code at this stop (CPSR.T).
+    pub fn thumb(&self) -> bool {
+        self.caps.arch == ArchTag::Arm
+            && self
+                .registers
+                .as_ref()
+                .and_then(|registers| registers.get("cpsr"))
+                .is_some_and(|cpsr| cpsr & super::arm::CPSR_THUMB as u64 != 0)
+    }
     /// Whether the panel may send commands that move or change the process.
     pub fn app_controls(&self) -> bool {
         self.controller == Controller::App
@@ -572,6 +581,43 @@ pub const CODE_AFTER_SIZE: usize = 208;
 /// Bytes of stack shown from the stack pointer.
 pub const STACK_WINDOW_SIZE: usize = 256;
 
+/// The flags of an AArch32 CPSR: the condition flags, then the state bits
+/// (`T` is Thumb state) and the mode.
+pub fn decode_cpsr(value: u64) -> Vec<String> {
+    const BITS: [(u32, &str); 11] = [
+        (31, "N"),
+        (30, "Z"),
+        (29, "C"),
+        (28, "V"),
+        (27, "Q"),
+        (9, "E"),
+        (8, "A"),
+        (7, "I"),
+        (6, "F"),
+        (5, "T"),
+        (24, "J"),
+    ];
+    let mut flags: Vec<String> = BITS
+        .iter()
+        .filter(|(bit, _)| value & (1 << bit) != 0)
+        .map(|(_, name)| (*name).to_string())
+        .collect();
+    flags.push(
+        match value & 0x1f {
+            0x10 => "usr",
+            0x11 => "fiq",
+            0x12 => "irq",
+            0x13 => "svc",
+            0x17 => "abt",
+            0x1b => "und",
+            0x1f => "sys",
+            _ => "mode?",
+        }
+        .to_string(),
+    );
+    flags
+}
+
 /// The flags of an x86 `rflags` value, in bit order, as the names a debugger
 /// prints. `IOPL` carries its two-bit level.
 pub fn decode_rflags(value: u64) -> Vec<String> {
@@ -614,6 +660,8 @@ mod tests {
     #[test]
     fn rflags_decode_names_the_set_bits_in_order() {
         // Reserved bit 1 is always set and is not a flag.
+        assert_eq!(decode_cpsr(0x6000_0010), ["Z", "C", "usr"]);
+        assert_eq!(decode_cpsr(0x2000_0030), ["C", "T", "usr"]);
         assert_eq!(decode_rflags(0x2), Vec::<String>::new());
         assert_eq!(decode_rflags(0x246), ["PF", "ZF", "IF"]);
         assert_eq!(decode_rflags(0x203), ["CF", "IF"]);

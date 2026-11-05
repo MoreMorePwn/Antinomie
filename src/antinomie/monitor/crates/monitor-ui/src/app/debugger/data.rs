@@ -5,8 +5,8 @@
 use super::*;
 use crate::hex_view::{self, Cell};
 use antinomie_monitor_core::debug::{
-    view::{decode_rflags, MemoryWindow, WindowKind, MAX_READ_SIZE},
-    RegKind,
+    view::{decode_cpsr, decode_rflags, MemoryWindow, WindowKind, MAX_READ_SIZE},
+    ArchTag, RegKind,
 };
 
 /// Bytes the memory pane asks for.
@@ -78,6 +78,8 @@ fn registers(ui: &mut egui::Ui, view: &DebugView) {
                 let text = match entry.kind {
                     RegKind::Segment => format!("{:#06x}", entry.value),
                     RegKind::Flags => format!("{:#010x}", entry.value),
+                    // AArch32 registers are 32 bits wide.
+                    _ if arch == ArchTag::Arm => format!("{:#010x}", entry.value),
                     _ => format!("{:#018x}", entry.value),
                 };
                 ui.horizontal(|ui| {
@@ -90,9 +92,17 @@ fn registers(ui: &mut egui::Ui, view: &DebugView) {
                     )));
                     if entry.kind == RegKind::Flags {
                         ui.label(
-                            RichText::new(format!("[{}]", decode_rflags(entry.value).join(" ")))
-                                .monospace()
-                                .color(theme::value(theme::ValueKind::Flags)),
+                            RichText::new(format!(
+                                "[{}]",
+                                if arch == ArchTag::Arm {
+                                    decode_cpsr(entry.value)
+                                } else {
+                                    decode_rflags(entry.value)
+                                }
+                                .join(" ")
+                            ))
+                            .monospace()
+                            .color(theme::value(theme::ValueKind::Flags)),
                         );
                     }
                 });

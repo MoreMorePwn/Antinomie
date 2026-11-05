@@ -374,6 +374,39 @@ and Network tabs, process cores, snapshots, and the debugger (gdb-multiarch;
 the Code pane disassembles with Capstone; hardware breakpoints and write and
 read watchpoints).
 
+**32-bit ARM programs on an arm64 guest** (a base of guest revision 21 or
+later) have cores and a debugger too:
+
+- **Core view.** An ELF32 core opens like an arm64 one. The Context tab lists
+  r0-r12, sp, lr, pc, cpsr and orig_r0 (the VFP registers d0-d31 and fpscr
+  under their own heading); the other tabs show the mappings, captured memory,
+  mapped files, auxv, the fault address and the process name. **Disassemble**
+  decodes ARM or Thumb: at a thread's pc the CPSR T bit decides; at another
+  address a set low bit (a Thumb symbol) means Thumb, and a function chosen from
+  a symbol binary uses its symbol's mode; any other address is ARM. The header
+  line of the listing says which mode it used.
+- **Debugger.** The panel recognises the program at the first stop (its
+  registers are 32 bits wide) and shows r0-r12, sp, lr, pc and cpsr with its
+  flags (`T` is Thumb state). The Code pane decodes in the pc's state, marked
+  ARM or Thumb; clicking the gutter sets a 4-byte ARM trap in ARM state and a
+  2-byte Thumb trap in Thumb state (instructions before the current one in
+  Thumb are a best guess). gdb-multiarch gets the `arm` target description
+  (core, VFP and TPIDRURO registers); gdb's breakpoint kinds are honoured:
+  4 is an ARM trap, 2 and 3 a Thumb one (a 32-bit Thumb-2 instruction too),
+  and gdb picks the kind from the pc's state or the symbol. Single-step moves
+  one ARM or Thumb instruction. Hardware breakpoints are ARM code only (a
+  Thumb breakpoint is a software one); hardware watchpoints are unverified for
+  AArch32. A breakpoint inside a Thumb IT block is planted as asked: the
+  guest does not refuse it, but whether it traps when the block's condition
+  fails is architecturally unpredictable.
+- **Older bases.** A base of guest revision 20 or earlier has no AArch32 core
+  writer and debugger. For a library sample known as 32-bit ARM, Core Dump on
+  Exit and Debug on start are refused before the program starts, naming the
+  revision 21 base they need. For any other program the guest's own refusal is
+  explained the same way: the core's failure reads "needs a base of guest
+  revision 21 or later" (not "state 5, status -95") and Debug says the guest's
+  debugger refused the program.
+
 **Device profiles.** An arm64 VM does not present a PC. With a realistic preset
 it presents an arm64 machine of the preset's kind, the same one for the VM's
 life: an Ampere Altra server (Gigabyte R272-P33, HPE ProLiant RL300 Gen11) or

@@ -77,6 +77,7 @@ fn caps() -> DebugCaps {
         debug_on_start: false,
         auxv: false,
         read_watch: false,
+        aarch32: false,
         follow: false,
         nonstop: false,
         adopt: false,
@@ -1003,6 +1004,7 @@ fn read_watchpoints_are_served_only_where_the_guest_offers_them() {
             hardware_watchpoints: 4,
             watch_len_mask: 0x8b,
             read_watch: true,
+            aarch32: false,
             ..caps()
         },
     );

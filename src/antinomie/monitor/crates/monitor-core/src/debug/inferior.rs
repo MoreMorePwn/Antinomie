@@ -9,8 +9,9 @@
 //! while either wants it. A vfork child shares its parent's registry, as it shares
 //! its memory.
 use super::{
+    arm,
     regs::{RegisterFile, TargetDescription},
-    target::{DebugBackend, DebugError, RegsetBlob, StopEvent, ThreadInfo},
+    target::{ArchTag, DebugBackend, DebugError, RegsetBlob, StopEvent, ThreadInfo},
     view::BreakpointKind,
 };
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
@@ -21,6 +22,9 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 pub(super) struct Wanted {
     pub client: u32,
     pub panel: bool,
+    /// The software breakpoint's length as planted (1 asks for the
+    /// architecture's own); the hardware table keeps its length in the key.
+    pub len: u32,
 }
 impl Wanted {
     fn none(&self) -> bool {
@@ -79,6 +83,7 @@ impl Registry {
             Wanted {
                 client: 1,
                 panel: false,
+                len,
             },
         );
         Ok(())
@@ -97,7 +102,8 @@ impl Registry {
         }
         wanted.client -= 1;
         if wanted.none() {
-            backend.clear_breakpoint(addr, len)?;
+            // The length it was planted with: a Thumb trap is not an ARM one.
+            backend.clear_breakpoint(addr, if wanted.len == 0 { len } else { wanted.len })?;
             self.breakpoints.remove(&addr);
         }
         Ok(true)
@@ -120,6 +126,7 @@ impl Registry {
             Wanted {
                 client: 1,
                 panel: false,
+                len,
             },
         );
         Ok(())
@@ -152,7 +159,7 @@ impl Registry {
             if let Some(wanted) = self.breakpoints.get_mut(&address) {
                 wanted.client = 0;
                 if wanted.none() {
-                    let _ = backend.clear_breakpoint(address, 1);
+                    let _ = backend.clear_breakpoint(address, wanted.len.max(1));
                     self.breakpoints.remove(&address);
                 }
             }
@@ -177,6 +184,7 @@ impl Registry {
         &mut self,
         backend: &mut dyn DebugBackend,
         addr: u64,
+        len: u32,
         on: bool,
     ) -> Result<(), DebugError> {
         if on {
@@ -188,7 +196,8 @@ impl Registry {
                 return Ok(());
             }
             if !self.breakpoints.contains_key(&addr) {
-                backend.set_breakpoint(addr, 1)?;
+                backend.set_breakpoint(addr, len)?;
+                self.breakpoints.entry(addr).or_default().len = len;
             }
             self.breakpoints.entry(addr).or_default().panel = true;
             return Ok(());
@@ -201,7 +210,7 @@ impl Registry {
         }
         wanted.panel = false;
         if wanted.none() {
-            backend.clear_breakpoint(addr, 1)?;
+            backend.clear_breakpoint(addr, wanted.len.max(1))?;
             self.breakpoints.remove(&addr);
         }
         Ok(())
@@ -257,6 +266,7 @@ impl Registry {
                 Wanted {
                     client: 0,
                     panel: true,
+                    len: key.2,
                 },
             );
             added.push((key, true));
@@ -347,7 +357,7 @@ impl Registry {
             .breakpoints
             .iter()
             .filter(|(_, wanted)| wanted.panel)
-            .map(|(addr, _)| (BreakpointKind::Software, *addr, 1))
+            .map(|(addr, wanted)| (BreakpointKind::Software, *addr, wanted.len.max(1)))
             .collect();
         items.extend(
             self.hardware
@@ -393,6 +403,10 @@ pub(super) struct Inferior {
     pub current_tid: u32,
     pub exec_path: Option<String>,
     description: &'static TargetDescription,
+    /// The task's own architecture: the guest's, or `Arm` for an AArch32 task
+    /// of an arm64 guest, known once its registers were first read.
+    arch: ArchTag,
+    settled: bool,
 }
 
 impl Inferior {
@@ -403,7 +417,8 @@ impl Inferior {
         shared_memory: bool,
         registry: Rc<RefCell<Registry>>,
     ) -> Self {
-        let description = backend.caps().arch.description();
+        let backend_arch = backend.caps().arch;
+        let description = backend_arch.description();
         Self {
             pid,
             backend,
@@ -421,10 +436,33 @@ impl Inferior {
             current_tid: pid,
             exec_path: None,
             description,
+            arch: backend_arch,
+            settled: false,
         }
     }
     pub(super) fn description(&self) -> &'static TargetDescription {
         self.description
+    }
+    pub(super) fn arch(&self) -> ArchTag {
+        self.arch
+    }
+    /// An arm64 guest serves an AArch32 task the compat register sets under the
+    /// same `Aarch64` tag; the 72-byte `NT_PRSTATUS` (against the native 272)
+    /// tells them apart. Read once per image, at a stop, before any register
+    /// layout is used; a failed read leaves the guest's own architecture.
+    pub(super) fn settle(&mut self, tid: u32) {
+        if self.settled || self.backend.caps().arch != ArchTag::Aarch64 || !self.is_stopped() {
+            return;
+        }
+        if let Ok(blobs) = self.backend.read_regsets(tid, &[arm::NT_PRSTATUS]) {
+            self.settled = true;
+            if blobs.iter().any(|blob| arm::is_compat_prstatus(&blob.data)) {
+                self.arch = ArchTag::Arm;
+                self.backend.set_task_arch(ArchTag::Arm);
+                self.description = self.arch.description();
+                self.registers = None;
+            }
+        }
     }
     pub(super) fn is_running(&self) -> bool {
         matches!(self.run, RunState::Running)
@@ -449,6 +487,7 @@ impl Inferior {
     }
     /// The registers of one thread, read once per stop.
     pub(super) fn load(&mut self, tid: u32) -> Result<&RegisterFile, DebugError> {
+        self.settle(tid);
         if self
             .registers
             .as_ref()
@@ -502,6 +541,11 @@ impl Inferior {
     pub(super) fn image_replaced(&mut self) {
         self.auxv = None;
         self.registers = None;
+        // The new image may be of the other instruction set.
+        self.settled = false;
+        self.arch = self.backend.caps().arch;
+        self.backend.set_task_arch(self.arch);
+        self.description = self.arch.description();
         let path = self.backend.exec_path();
         self.exec_path = path;
         if !self.shared_memory || self.parent.is_none() {

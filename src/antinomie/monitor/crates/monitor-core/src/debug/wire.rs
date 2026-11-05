@@ -205,6 +205,7 @@ pub fn parse_caps(reply: &[u8], ext: bool) -> Result<DebugCaps, String> {
         debug_on_start: flags & CAP_START != 0,
         auxv: flags & CAP_AUXV != 0,
         read_watch: flags & CAP_READ_WATCH != 0,
+        aarch32: flags & CAP_AARCH32 != 0 && arch == ArchTag::Aarch64,
         follow: flags2 & CAP2_FOLLOW != 0,
         nonstop: flags2 & CAP2_NONSTOP != 0,
         adopt: flags2 & CAP2_ADOPT != 0,

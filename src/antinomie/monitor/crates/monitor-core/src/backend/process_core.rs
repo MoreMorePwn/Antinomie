@@ -581,10 +581,20 @@ impl Session {
                 return Ok(());
             }
             if state >= 5 {
-                return Err(format!(
-                    "guest core unavailable or canceled (state {state}, status {})",
-                    core.status.as_ref().map_or(0, |status| status.status)
-                ));
+                // The guest's own errno has a clear reading (a refused AArch32 or
+                // ia32 program, a budget, a deadline): say it, not the raw state.
+                let status = core.status.clone().ok_or("core status missing")?;
+                return Err(match core.guest_reason(&status, &limits) {
+                    Some(reason) => {
+                        let text = reason.text.clone();
+                        core.reason.get_or_insert(reason);
+                        text
+                    }
+                    None => format!(
+                        "guest core unavailable or canceled (state {state}, status {})",
+                        status.status
+                    ),
+                });
             }
             owner.summary.core_state = RunArtifactState::InProgress;
             queue_artifacts(owner)?;
@@ -657,9 +667,7 @@ impl Session {
         let machine = self.core_machine();
         if core.offset == 0
             && data.len() >= 20
-            && (&data[..7] != b"\x7fELF\x02\x01\x01"
-                || data[16..18] != 4u16.to_le_bytes()
-                || u32::from(u16::from_le_bytes([data[18], data[19]])) != machine)
+            && !crate::core_dump::guest_core_header(&data, machine)
         {
             return Err(
                 "guest process core is not a native little-endian ELF core of the guest's architecture"

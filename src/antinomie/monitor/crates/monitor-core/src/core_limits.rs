@@ -37,6 +37,9 @@ pub struct CoreLimits {
     pub chunked: bool,
     /// The guest polls every tick while a finished core is read.
     pub fast_read: bool,
+    /// Revision 21: the guest writes ELF32 cores of AArch32 tasks (arm64 guests only).
+    #[serde(default)]
+    pub compat_elf32: bool,
 }
 
 impl CoreLimits {
@@ -51,6 +54,7 @@ impl CoreLimits {
         stored_status: false,
         chunked: false,
         fast_read: false,
+        compat_elf32: false,
     };
 
     /// Decode a `CORE_CAPS` reply (48 bytes).
@@ -73,9 +77,10 @@ impl CoreLimits {
             stored_status: flags & 2 != 0,
             chunked: flags & 8 != 0,
             fast_read: flags & 16 != 0,
+            compat_elf32: flags & 32 != 0,
         };
         if word(0)? != 1
-            // 32: revision 21's ELF32 cores of AArch32 tasks (read by no host yet).
+            // 32: revision 21's ELF32 cores of AArch32 tasks (`compat_elf32`).
             || flags & !0x3f != 0
             || flags & 5 != 5
             || !(CORE_LEGACY_SIZE..=CORE_MAX_SUPPORTED).contains(&limits.max_size)
@@ -240,6 +245,17 @@ pub struct CoreOutcome {
     pub limits: CoreLimits,
 }
 
+/// A 32-bit ARM (AArch32) program on an arm64 guest gets an ELF32 core only from
+/// a revision-21 guest (`CORE_CAPS` bit `COMPAT_ELF32`). Says so before the run
+/// when the guest's limits are known and lack it (ANT-T0293).
+pub fn aarch32_core_refusal(limits: Option<CoreLimits>) -> Option<&'static str> {
+    limits.filter(|limits| !limits.compat_elf32).map(|_| {
+        "this program is a 32-bit ARM (AArch32) program and this arm64 base (guest revision 20 or \
+         older) cannot write its core; use a base of guest revision 21 or later, or run without \
+         Core Dump on Exit"
+    })
+}
+
 /// The reason a terminal guest status gives for an incomplete core; None for a
 /// complete one. The errno is the guest's, so each reading means one thing
 /// (`ANTC_CORE_STATUS` documents the table).
@@ -312,13 +328,22 @@ pub fn guest_reason(outcome: &CoreOutcome) -> Option<CoreReason> {
             Some(-4),
             "a signal interrupted the acquisition",
         ),
-        // EOPNOTSUPP: the guest's writer refuses the process outright (a
-        // 32-bit address space, ia32 and x32 on x86-64 too, or no core writer).
+        // EOPNOTSUPP: the guest's writer refuses the process outright (ia32 and
+        // x32 on x86-64, an AArch32 program on a guest older than revision 21, or
+        // no core writer).
+        95 if outcome.limits.compat_elf32 => CoreReason::new(
+            CoreReasonCode::Writer,
+            Some(-95),
+            "the guest writes no core of an ia32 or x32 program on an x86-64 guest or of a \
+             program format without a core writer (AArch32 programs get ELF32 cores on this guest)",
+        ),
         95 => CoreReason::new(
             CoreReasonCode::Writer,
             Some(-95),
-            "the guest writes no core of a 32-bit program (an ia32 program on x86-64, an \
-             AArch32 program on arm64) or of a program format without a core writer",
+            "the guest writes no core of a 32-bit program: an AArch32 program on an arm64 guest \
+             needs a base of guest revision 21 or later (this guest cannot write its ELF32 \
+             core); an ia32 or x32 program on an x86-64 guest never gets a core; nor does a \
+             program format without a core writer",
         ),
         _ => CoreReason::new(
             CoreReasonCode::Writer,
@@ -437,6 +462,31 @@ mod tests {
         let refused = reason(-95, 0).unwrap();
         assert_eq!(refused.code, CoreReasonCode::Writer);
         assert!(refused.text.contains("32-bit program"), "{}", refused.text);
+        assert!(refused.text.contains("revision 21"), "{}", refused.text);
+        assert!(aarch32_core_refusal(Some(limits)).is_some());
+        assert!(aarch32_core_refusal(Some(CoreLimits::LEGACY)).is_some());
+        assert!(
+            aarch32_core_refusal(None).is_none(),
+            "unknown limits are asked for later"
+        );
+        // A revision-21 guest says AArch32 cores are written: the refusal is then
+        // about ia32/x32 or a format.
+        let current = CoreLimits::parse(&caps(384 * MIB, 0x3f)).unwrap();
+        assert!(aarch32_core_refusal(Some(current)).is_none());
+        assert!(current.compat_elf32 && !limits.compat_elf32);
+        let refused = guest_reason(&CoreOutcome {
+            state: 5,
+            status: -95,
+            expected: 0,
+            size: 0,
+            stored: None,
+            flags: 0,
+            budget: 64 * MIB,
+            limits: current,
+        })
+        .unwrap();
+        assert!(refused.text.contains("ia32 or x32"), "{}", refused.text);
+        assert!(!refused.text.contains("needs a base"), "{}", refused.text);
         let old = guest_reason(&CoreOutcome {
             state: 4,
             status: -12,

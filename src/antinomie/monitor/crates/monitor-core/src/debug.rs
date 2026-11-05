@@ -11,6 +11,7 @@
 //! [`TargetDescription`] per architecture. x86-64 is the first and only entry.
 pub mod aarch64;
 pub mod amd64;
+pub mod arm;
 pub(crate) mod debugger;
 mod inferior;
 mod kernel_backend;
@@ -30,7 +31,9 @@ pub mod view;
 pub mod wire;
 
 pub use debugger::AdoptedChild;
-pub use kernel_backend::{AttachedSession, KernelDebugBackend};
+pub use kernel_backend::{
+    AttachedSession, KernelDebugBackend, NO_AARCH32_DEBUGGER, PROGRAM_NOT_DEBUGGABLE,
+};
 pub use regs::{RegKind, RegSource, RegSpec, RegisterFile, TargetDescription};
 pub use rsp_server::{DebugEndpoints, DebugServer};
 pub use target::{

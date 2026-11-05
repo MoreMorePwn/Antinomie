@@ -169,6 +169,7 @@ impl<W: Wire> Session<'_, W> {
         let Some(inferior) = self.debugger.get(pid) else {
             return Ok(errno(3));
         };
+        inferior.settle(tid);
         if image.len() != inferior.description().image_len() {
             // A protocol violation: nothing is half applied, the session ends.
             return Err(DebugError::Invalid(
@@ -194,6 +195,7 @@ impl<W: Wire> Session<'_, W> {
         let Some(inferior) = self.debugger.get(pid) else {
             return Ok(errno(3));
         };
+        inferior.settle(tid);
         let description = inferior.description();
         let Some(register) = description.regs.get(index) else {
             return Ok(errno(22));
@@ -224,6 +226,7 @@ impl<W: Wire> Session<'_, W> {
         let Some(inferior) = self.debugger.get(pid) else {
             return Ok(errno(3));
         };
+        inferior.settle(tid);
         let description = inferior.description();
         let Some(register) = description.regs.get(index) else {
             return Ok(errno(22));
@@ -322,9 +325,37 @@ impl<W: Wire> Session<'_, W> {
         let Some(pid) = self.target_pid() else {
             return Ok(errno(3));
         };
+        let tid = self.target_tid(pid);
         let Some(inferior) = self.debugger.get(pid) else {
             return Ok(errno(3));
         };
+        if let Some(tid) = tid {
+            inferior.settle(tid);
+        }
+        // 32-bit ARM: gdb's `kind` is the instruction set, not a length. 4 is an
+        // ARM-state trap (word aligned), 2 and 3 Thumb (halfword aligned; a
+        // Thumb-2 instruction's trap sits at its first halfword). A Thumb
+        // address arrives with bit 0 clear, but a set one is Thumb's marker.
+        let mut addr = addr;
+        let mut size = size;
+        if inferior.arch() == super::target::ArchTag::Arm
+            && matches!(kind, BreakpointKind::Software | BreakpointKind::Hardware)
+        {
+            let Some(len) = super::arm::breakpoint_len_for_kind(size) else {
+                return Ok(errno(22));
+            };
+            if len == super::arm::THUMB_BREAKPOINT_LEN {
+                // The debug registers of an AArch32 task execute-break on 4-byte
+                // aligned ARM code only (guest contract).
+                if kind == BreakpointKind::Hardware {
+                    return Ok(unsupported());
+                }
+                addr &= !1;
+            } else if addr % 4 != 0 {
+                return Ok(errno(22));
+            }
+            size = u64::from(len);
+        }
         let caps = inferior.backend.caps();
         match kind {
             BreakpointKind::Software if !caps.software_breakpoints => return Ok(unsupported()),
@@ -422,8 +453,15 @@ impl<W: Wire> Session<'_, W> {
             return Ok(ok());
         }
         if let Some(rest) = packet.strip_prefix(b"qXfer:features:read:target.xml:") {
-            let xml = match self.target_pid().and_then(|pid| self.debugger.get(pid)) {
-                Some(inferior) => inferior.description().xml(),
+            let pid = self.target_pid();
+            let tid = pid.and_then(|pid| self.target_tid(pid));
+            let xml = match pid.and_then(|pid| self.debugger.get(pid)) {
+                Some(inferior) => {
+                    if let Some(tid) = tid {
+                        inferior.settle(tid);
+                    }
+                    inferior.description().xml()
+                }
                 None => return Ok(errno(3)),
             };
             return Ok(Self::xfer(xml.trim().as_bytes(), rest));

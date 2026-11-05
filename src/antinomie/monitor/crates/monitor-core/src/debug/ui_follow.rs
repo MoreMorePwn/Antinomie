@@ -225,7 +225,7 @@ impl PanelControl {
         for (kind, addr, len) in items {
             let result = inferior.with_registry(|registry, backend| match kind {
                 super::view::BreakpointKind::Software => {
-                    registry.panel_breakpoint(backend, addr, true)
+                    registry.panel_breakpoint(backend, addr, len, true)
                 }
                 kind => registry.panel_hardware(backend, kind, addr, u64::from(len), true),
             });

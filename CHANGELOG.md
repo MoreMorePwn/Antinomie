@@ -65,6 +65,18 @@ x86 programs by their own table.
   VM settings offer **Faster emulation (KPTI off)**.
 - **32-bit ARM programs** run on arm64 guests and are recorded and decoded by
   arm's own EABI numbers and layouts.
+- **Core dumps and a debugger for 32-bit ARM programs on arm64 guests** (a base
+  of guest revision 21). The core view opens the ELF32 cores they write:
+  registers (r0-r12, sp, lr, pc, cpsr, and the VFP registers), mappings, memory,
+  mapped files, auxv, the fault address and the process name, and disassembles
+  the code in ARM or Thumb state (Capstone; the pc follows the CPSR T bit, other
+  addresses their low bit, a Thumb function its symbol's). The debugger, the
+  panel and gdb-multiarch both, shows the program with the ARM register set (r0-r12,
+  sp, lr, pc, cpsr with its flags, VFP, TPIDRURO), the `arm` target description,
+  ARM and Thumb breakpoints (gdb's Z0 kinds 4, 2 and 3), single-step in both
+  states and a code pane that decodes in the pc's state. On a base older than
+  revision 21, Dump core and Debug say that the guest cannot handle a 32-bit ARM
+  program instead of "state 5, status -95".
 - **32-bit x86 programs** (ia32, such as XorDDoS and Rex) on x86-64 guests are
   recorded and decoded by the i386 table: their calls by name, their arguments,
   paths, written bytes, socket addresses (also through `socketcall`), task
@@ -188,8 +200,7 @@ x86 programs by their own table.
   COMPAT_ELF32) and are debugged by the guest's engine (compat registers, A32
   and Thumb breakpoints, hardware step; debug CAPS flag AARCH32); a debug-on-start
   launch of an image the engine cannot debug is refused instead of attached.
-  The host accepts the new flags; reading those cores and the ARM debugger
-  follow.
+  The host reads those cores and has an ARM debugger (see Host).
 - Patch 45 (contract revision 21): the sender of the signal that ended a
   thread group is kept in its leader's recorder state, taken at the send that
   starts the group exit (`kernel/signal.c`) or at the delivery of a fatal

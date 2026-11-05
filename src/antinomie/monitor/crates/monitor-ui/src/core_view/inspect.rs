@@ -177,26 +177,32 @@ impl CoreView {
     fn register_cell(&mut self, ui: &mut egui::Ui, record: &CoreRecord, name: &str, value: u64) {
         let name_color = match name {
             "rip" | "eip" | "pc" => crate::theme::error(),
-            "rsp" | "esp" | "rbp" | "ebp" => crate::theme::neutral_accent(),
-            "rflags" | "eflags" | "flags" => crate::theme::value(crate::theme::ValueKind::Flags),
+            "rsp" | "esp" | "rbp" | "ebp" | "sp" => crate::theme::neutral_accent(),
+            "rflags" | "eflags" | "flags" | "cpsr" => {
+                crate::theme::value(crate::theme::ValueKind::Flags)
+            }
             _ => crate::theme::value(crate::theme::ValueKind::Name),
         };
-        let value_color = if matches!(name, "rflags" | "eflags" | "flags") {
+        let value_color = if matches!(name, "rflags" | "eflags" | "flags" | "cpsr") {
             crate::theme::value(crate::theme::ValueKind::Flags)
         } else {
             crate::theme::value(crate::theme::ValueKind::Pointer)
         };
         ui.horizontal(|ui| {
             ui.label(RichText::new(name).monospace().color(name_color));
-            ui.label(
-                RichText::new(format!("0x{value:016x}"))
-                    .monospace()
-                    .color(value_color),
-            );
+            // 32-bit ARM registers are 8 digits wide; so is the VFP control register.
+            let text = if record.core.machine == core_dump::EM_ARM && !name.starts_with('d') {
+                format!("0x{value:08x}")
+            } else {
+                format!("0x{value:016x}")
+            };
+            ui.label(RichText::new(text).monospace().color(value_color));
             if ui.small_button("Copy").clicked() {
                 ui.ctx().copy_text(format!("0x{value:x}"));
             }
-            if (name == "rip" || name == "rsp")
+            if (name == "rip"
+                || name == "rsp"
+                || (name == "pc" || name == "sp") && record.core.machine == core_dump::EM_ARM)
                 && ui
                     .small_button(egui_phosphor::regular::MEMORY)
                     .on_hover_text("View memory at this register")
@@ -262,13 +268,23 @@ impl CoreView {
             .show(ui, |ui| {
                 let groups: &[(&str, &[&str])] = &[
                     ("Instruction pointer", &["rip", "eip", "pc"]),
-                    ("Stack and frame", &["rsp", "esp", "rbp", "ebp"]),
-                    ("Flags", &["rflags", "eflags", "flags"]),
+                    ("Stack and frame", &["rsp", "esp", "rbp", "ebp", "sp", "lr"]),
+                    ("Flags", &["rflags", "eflags", "flags", "cpsr"]),
                     (
                         "General",
                         &[
                             "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11",
                             "r12", "r13", "r14", "r15", "eax", "ebx", "ecx", "edx", "esi", "edi",
+                            "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "orig_r0",
+                        ],
+                    ),
+                    (
+                        "VFP",
+                        &[
+                            "fpscr", "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "d8", "d9",
+                            "d10", "d11", "d12", "d13", "d14", "d15", "d16", "d17", "d18", "d19",
+                            "d20", "d21", "d22", "d23", "d24", "d25", "d26", "d27", "d28", "d29",
+                            "d30", "d31",
                         ],
                     ),
                 ];
