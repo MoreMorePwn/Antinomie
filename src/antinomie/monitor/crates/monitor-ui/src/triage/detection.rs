@@ -744,13 +744,12 @@ impl View {
     /// grows (the list of rules not applied, a long match list) scrolls the
     /// page instead of running past the bottom of the pane.
     pub fn show(&mut self, ui: &mut egui::Ui, scan: Option<&ArchiveScan>) {
-        let viewport = ui.available_height();
         egui::ScrollArea::vertical()
             .id_salt("detection-page")
             .auto_shrink([false, false])
-            .show(ui, |ui| self.show_page(ui, scan, viewport));
+            .show(ui, |ui| self.show_page(ui, scan));
     }
-    fn show_page(&mut self, ui: &mut egui::Ui, scan: Option<&ArchiveScan>, viewport: f32) {
+    fn show_page(&mut self, ui: &mut egui::Ui, scan: Option<&ArchiveScan>) {
         if self.fresh_registry().is_none() {
             self.request_registry(ui.ctx());
         }
@@ -869,12 +868,6 @@ impl View {
             &self.filtered[index],
             &mut self.settings.match_sort,
         );
-        ui.add_space(8.0);
-        // The page scrolls, so the table is given a height of its own.
-        ui.scope(|ui| {
-            ui.set_max_height((viewport * 0.7).max(240.0));
-            table(ui, TABLES[index], HEADERS, &self.filtered[index]);
-        });
         if let Some(key) = opened {
             self.open_window(key);
         }
