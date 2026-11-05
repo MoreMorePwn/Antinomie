@@ -12,15 +12,7 @@ pub(super) fn process_tree_mermaid(nodes: &[ProcessNode]) -> String {
         .iter()
         .map(|node| crate::mermaid::TreeNode {
             key: key(node.pid, node.cookie),
-            label: format!(
-                "{}\n{}",
-                if node.comm.is_empty() {
-                    "?"
-                } else {
-                    &node.comm
-                },
-                process_tree::process_label(node)
-            ),
+            label: process_tree::process_label(node),
             parent: node.parent.map(|parent| key(parent.pid, parent.cookie)),
         })
         .collect();
@@ -62,7 +54,7 @@ mod tests {
         assert!(text.starts_with("flowchart TD\n"), "{text}");
         assert_eq!(text.matches("[\"").count(), 2, "{text}");
         assert_eq!(text.matches(" --> ").count(), 1, "{text}");
-        assert!(text.contains("PID 7"), "{text}");
+        assert!(text.contains("kaiji (7 · 7)"), "{text}");
         assert!(text.contains("thread"), "{text}");
         assert_eq!(text, process_tree_mermaid(&nodes));
     }
