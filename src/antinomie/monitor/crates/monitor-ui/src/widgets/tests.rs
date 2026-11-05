@@ -283,3 +283,81 @@ fn a_card_shows_its_title_header_and_body_inside_the_width_it_is_given() {
     assert!(rect("body text").min.y > rect("Identity").max.y);
     assert!(rect("link").max.x <= size.x);
 }
+
+fn vertical_lines(output: &egui::FullOutput) -> Vec<(f32, f32, f32)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(f32, f32, f32)>) {
+        match shape {
+            egui::Shape::LineSegment { points, stroke } if points[0].x == points[1].x => {
+                out.push((points[0].x, (points[1].y - points[0].y).abs(), stroke.width))
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    output
+        .shapes
+        .iter()
+        .for_each(|clipped| walk(&clipped.shape, &mut out));
+    out
+}
+
+#[test]
+fn a_column_divider_is_one_physical_pixel_wide_on_a_pixel_centre_in_both_themes() {
+    use crate::theme::Theme;
+    for theme in Theme::ALL {
+        for ppp in [1.0_f32, 1.5, 2.0] {
+            let ctx = context();
+            crate::theme::apply_theme(&ctx, theme);
+            ctx.set_pixels_per_point(ppp);
+            let mut table = |ui: &mut egui::Ui| {
+                fit_table::FitBuilder::new(ui)
+                    .id_salt("divider-table")
+                    .resizable(true)
+                    .column(fit_table::Col::fixed(100.0))
+                    .column(fit_table::Col::rest(100.0))
+                    .header(20.0, |mut header| {
+                        header.col(|ui| fit_table::head(ui, "One"));
+                        header.col(|ui| fit_table::head(ui, "Two"));
+                    })
+                    .body(|body| {
+                        body.rows(18.0, 3, |mut row| {
+                            row.col(|ui| {
+                                ui.label("a");
+                            });
+                            row.col(|ui| {
+                                ui.label("b");
+                            });
+                        })
+                    });
+            };
+            let _ = run(&ctx, vec![], SIZE, &mut table);
+            let mut output = run(&ctx, vec![], SIZE, &mut table);
+            let one = text_rects(&output)
+                .into_iter()
+                .find(|(text, _)| text == "One")
+                .unwrap()
+                .1;
+            let at = egui::pos2(one.left() + 100.0 + 4.0, one.center().y);
+            for _ in 0..3 {
+                output = run(&ctx, vec![egui::Event::PointerMoved(at)], SIZE, &mut table);
+            }
+            let lines: Vec<_> = vertical_lines(&output)
+                .into_iter()
+                .filter(|(_, length, _)| (*length - 20.0).abs() < 1.0)
+                .collect();
+            assert!(!lines.is_empty(), "no divider while hovered: {lines:?}");
+            for (x, _, width) in lines {
+                assert!(
+                    (width - 1.0 / ppp).abs() < 1e-4,
+                    "{theme:?} {ppp}: {width} wide"
+                );
+                let pixel = x * ppp;
+                assert!(
+                    (pixel - pixel.floor() - 0.5).abs() < 1e-3,
+                    "{theme:?} {ppp}: x {x} is not a pixel centre"
+                );
+            }
+        }
+    }
+}

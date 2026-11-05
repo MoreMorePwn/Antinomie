@@ -86,7 +86,7 @@ impl MonitorApp {
         let response = sidebar_row(
             ui,
             SidebarRow {
-                mark: ("●", color),
+                mark: RowMark::Dot(color),
                 name: &vm.name,
                 state: Some((word, color)),
                 details: if fallbacks.is_empty() {
@@ -155,7 +155,7 @@ impl MonitorApp {
         let response = sidebar_row(
             ui,
             SidebarRow {
-                mark: (egui_phosphor::regular::CIRCLE_NOTCH, theme::warn()),
+                mark: RowMark::Icon(egui_phosphor::regular::CIRCLE_NOTCH, theme::warn()),
                 name: &work.name,
                 state: Some((word, theme::warn())),
                 details: vec![
@@ -225,7 +225,9 @@ impl MonitorApp {
                         title: "Virtual machines",
                         count: Some(self.snapshot.vms.len() + self.pending_vm_rows().len()),
                         tooltip: "Virtual machines: click to fold",
+                        glyph: egui_phosphor::regular::PLUS,
                         action: "New VM",
+                        blocked: "stop the running VM first",
                         enabled: stopped,
                         open: false,
                     },
@@ -345,7 +347,9 @@ impl MonitorApp {
     pub(super) fn health(&mut self, root: &mut egui::Ui) {
         let ctx = &root.ctx().clone();
         let mut open_jobs = false;
+        let bar_height = root.spacing().interact_size.y + 8.0;
         let bar = egui::Panel::bottom("health")
+            .exact_size(bar_height)
             .frame(theme::frame(theme::raised()))
             .show(root, |ui| {
                 let dropped = self.snapshot.health.dropped;
@@ -368,10 +372,11 @@ impl MonitorApp {
                     .or_else(|| self.snapshot.launch_wait.as_ref().map(|wait| format!("{}…", wait.text)));
                 let loss = |count: u64| if count == 0 { theme::good() } else { theme::warn() };
                 let saved = persisted as f64 / 1_073_741_824.0;
-                ui.add_space(3.0);
-                // Allocate the right-aligned figures first. The remaining
-                // left rectangle bounds both message layout and painting.
-                let row_size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+                // The row takes the bar's whole height and centres every item
+                // in it, so nothing hangs from the top. Allocate the
+                // right-aligned figures first. The remaining left rectangle
+                // bounds both message layout and painting.
+                let row_size = egui::vec2(ui.available_width(), ui.available_height());
                 ui.allocate_ui_with_layout(row_size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // A name stays next to its number. Groups are separated.
                     ui.spacing_mut().item_spacing.x = 8.0;
@@ -426,7 +431,6 @@ impl MonitorApp {
                         }
                     });
                 });
-                ui.add_space(3.0);
             });
         if open_jobs {
             self.show_panel_asked(Panel::Jobs);

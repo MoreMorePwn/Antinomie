@@ -288,6 +288,7 @@ impl Action {
             Self::NewVm | Self::ImportBase | Self::DownloadBase | Self::BuildBase | Self::Quit => {
                 "File"
             }
+            Self::ExplorerFolder | Self::AddSampleFile => "File",
             Self::StartVm
             | Self::StopVm
             | Self::ConfigureVm
@@ -313,14 +314,11 @@ impl Action {
                 "View"
             }
             Self::SettingsTo(_) => "Settings",
-            Self::BaseImages | Self::SamplesPage | Self::ScreenshotsPage | Self::AddSampleFile => {
-                "Library"
-            }
+            Self::BaseImages | Self::SamplesPage | Self::ScreenshotsPage => "Library",
             Self::RulesEngine(..) => "Rules",
             Self::ImportMemoryDump | Self::PluginCatalog => "Memory",
             Self::ImportDiskImage => "Disks",
             Self::ImportCore => "Core dumps",
-            Self::ExplorerFolder => "Explorer",
             Self::TelemetryTransport | Self::DeviceProfile => "VM",
             Self::OpenTerminal | Self::EditRunTags | Self::DeleteRun | Self::ExportReport => "Run",
             Self::RuleDetails | Self::AbusechPacks => "Rules",
@@ -426,7 +424,7 @@ impl Action {
             Self::BaseImages => "Base images".into(),
             Self::SamplesPage => "Samples".into(),
             Self::ScreenshotsPage => "Screenshots".into(),
-            Self::AddSampleFile => "Add file to Samples…".into(),
+            Self::AddSampleFile => "Import sample…".into(),
             Self::RulesEngine(engine, catalog) => {
                 let name = match *engine {
                     "yara" => "YARA rules",
@@ -446,7 +444,7 @@ impl Action {
             Self::PluginCatalog => "Memory plugin catalog…".into(),
             Self::ImportDiskImage => "Import disk image…".into(),
             Self::ImportCore => "Import process core…".into(),
-            Self::ExplorerFolder => "Choose Explorer folder…".into(),
+            Self::ExplorerFolder => "Open folder…".into(),
             Self::TelemetryTransport => "Telemetry transport…".into(),
             Self::DeviceProfile => "Device profile…".into(),
             Self::OpenTerminal => "Open terminal of the selected run".into(),

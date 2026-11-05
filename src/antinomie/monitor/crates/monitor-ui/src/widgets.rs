@@ -28,6 +28,7 @@
 
 pub(crate) mod attack;
 mod card;
+pub(crate) mod dot;
 mod facts;
 mod fit;
 pub mod fit_table;

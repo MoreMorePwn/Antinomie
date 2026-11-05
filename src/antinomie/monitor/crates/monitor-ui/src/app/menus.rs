@@ -81,6 +81,9 @@ impl MonitorApp {
                             self.menu_item(ui, Action::BuildBase, None);
                         });
                         ui.separator();
+                        self.menu_item(ui, Action::ExplorerFolder, None);
+                        self.menu_item(ui, Action::AddSampleFile, None);
+                        ui.separator();
                         self.menu_item(ui, Action::Quit, None);
                     });
                     ui.menu_button("VM", |ui| {
@@ -322,21 +325,24 @@ impl MonitorApp {
                 theme::spinner(ui);
             }
         }
-        ui.scope(|ui| {
-            // Less the dot that follows the name.
-            let room = (ui.available_width() - 20.0).max(24.0);
-            ui.set_max_width(room);
-            ui.add(
-                egui::Label::new(RichText::new(name).color(if active.is_some() {
-                    theme::text()
-                } else {
-                    theme::muted()
-                }))
-                .truncate(),
-            )
-            .on_hover_text(name);
-        });
-        ui.colored_label(color, "●");
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let label = ui
+            .scope(|ui| {
+                // Less the dot that follows the name.
+                let room = (ui.available_width() - 20.0).max(24.0);
+                ui.set_max_width(room);
+                ui.add(
+                    egui::Label::new(RichText::new(name).color(if active.is_some() {
+                        theme::text()
+                    } else {
+                        theme::muted()
+                    }))
+                    .truncate(),
+                )
+                .on_hover_text(name)
+            })
+            .inner;
+        crate::widgets::dot::after(ui, &label, &font, color);
     }
 
     /// The toolbar's buttons in the order they are drawn.

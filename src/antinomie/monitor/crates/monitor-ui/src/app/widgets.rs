@@ -74,14 +74,15 @@ pub(super) fn sidebar_row(ui: &mut egui::Ui, row: SidebarRow<'_>) -> egui::Respo
     let left = rect.left() + padding.x;
     let right = rect.right() - padding.x;
     let top = rect.top() + padding.y;
-    let mark = line_galley(
-        ui,
-        &[(row.mark.0.to_owned(), row.mark.1)],
-        &body,
-        f32::INFINITY,
-    );
-    let text_left = left + mark.size().x.max(body.size) + 6.0;
-    ui.painter().galley(egui::pos2(left, top), mark, row.mark.1);
+    let text_left = match &row.mark {
+        RowMark::Dot(_) => left + crate::widgets::dot::advance(body.size),
+        RowMark::Icon(icon, color) => {
+            let mark = line_galley(ui, &[((*icon).to_owned(), *color)], &body, f32::INFINITY);
+            let text_left = left + mark.size().x.max(body.size) + 6.0;
+            ui.painter().galley(egui::pos2(left, top), mark, *color);
+            text_left
+        }
+    };
     let mut name_right = right;
     if let Some((word, color)) = row.state {
         let state = line_galley(ui, &[(word.to_owned(), color)], &small, f32::INFINITY);
@@ -98,6 +99,17 @@ pub(super) fn sidebar_row(ui: &mut egui::Ui, row: SidebarRow<'_>) -> egui::Respo
         &body,
         name_right - text_left,
     );
+    if let RowMark::Dot(color) = row.mark {
+        // On the middle of the name's letters, not of the row.
+        crate::widgets::dot::paint(
+            ui.painter(),
+            left + crate::widgets::dot::diameter(body.size) * 0.5,
+            top,
+            &name,
+            body.size,
+            color,
+        );
+    }
     ui.painter()
         .galley(egui::pos2(text_left, top), name, theme::text());
     let mut y = top + body_height + gap;
@@ -111,7 +123,7 @@ pub(super) fn sidebar_row(ui: &mut egui::Ui, row: SidebarRow<'_>) -> egui::Respo
 }
 
 /// A sidebar section title: a fold arrow and the title in the heading color
-/// (click to fold), a muted count, and a "+" action on the right; a
+/// (click to fold), a muted count, and an action (a "+" or a folder) on the right; a
 /// separator below. The "+" lights up while hovered, or while its menu is
 /// `open`. Returns the "+" response.
 pub(super) fn section_header(
@@ -206,7 +218,7 @@ pub(super) fn section_header(
                 ui.painter().text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
-                    egui_phosphor::regular::PLUS,
+                    header.glyph,
                     egui::FontId::proportional(ui.text_style_height(&egui::TextStyle::Body)),
                     color,
                 );
@@ -214,7 +226,7 @@ pub(super) fn section_header(
             if header.enabled {
                 response.on_hover_text(header.action)
             } else {
-                response.on_hover_text(format!("{} (stop the running VM first)", header.action))
+                response.on_hover_text(format!("{} ({})", header.action, header.blocked))
             }
         })
         .inner;

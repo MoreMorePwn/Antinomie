@@ -365,6 +365,11 @@ pub fn show_keyed<R>(
     out
 }
 
+/// The width of a column divider: one physical pixel.
+pub(crate) fn divider_width(pixels_per_point: f32) -> f32 {
+    1.0 / pixels_per_point.max(1.0)
+}
+
 /// The draggable dividers on the right edge of every resizable column's
 /// header cell. Drag: the column keeps the dragged width; double click or the
 /// menu: every column is fitted again.
@@ -400,10 +405,17 @@ fn dividers(
             .on_hover_cursor(egui::CursorIcon::ResizeColumn)
             .on_hover_text("Drag to resize. Double-click to fit the columns.");
         if response.hovered() || response.dragged() {
-            ui.painter().vline(
-                x,
+            // One physical pixel wide, on a pixel's centre: a point-wide
+            // line at a fractional x smears over two pixels and, on a
+            // scaled display, is two or more.
+            let painter = ui.painter();
+            painter.vline(
+                painter.round_to_pixel_center(x),
                 rect.y_range(),
-                egui::Stroke::new(1.0_f32, ui.visuals().widgets.active.bg_stroke.color),
+                egui::Stroke::new(
+                    divider_width(ui.ctx().pixels_per_point()),
+                    ui.visuals().widgets.active.bg_stroke.color,
+                ),
             );
         }
         if response.dragged() {
