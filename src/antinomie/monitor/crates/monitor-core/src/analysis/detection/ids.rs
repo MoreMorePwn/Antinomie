@@ -635,10 +635,12 @@ fn scan_budgeted(
             evaluated += 1;
             continue;
         }
+        let t0 = Instant::now();
         progress.stage(ScanTarget::CaptureSegment {
             index: index as u64 + 1,
             total: capture_total.max(1),
         });
+        eprintln!("DBG stage took {:?}", t0.elapsed());
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             report
                 .warnings
