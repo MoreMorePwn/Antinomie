@@ -932,7 +932,7 @@ button, table or graph does not block the shortcuts.
 | Ctrl+Comma (the app shows it so) | Settings |
 | Ctrl+Q | Exit |
 | Ctrl+1 to Ctrl+9 | Show the 1st to 9th tab of the work area, in the order the tab bar shows them (they follow a tab you dragged) |
-| Ctrl+J | Fold or open the lower bar (Details, Activity and Jobs) |
+| Ctrl+J | Fold or open the lower bar (Details, Activity and Jobs); the arrow at the right end of its tab strip does the same |
 | Ctrl+Shift+D, Ctrl+Shift+A, Ctrl+Shift+J | Show Details, Activity, Jobs (the lower bar) |
 | Esc | Close the window on top (not while a field has the keyboard) |
 
@@ -1083,6 +1083,16 @@ copied. The
 **Attribution.** DB-IP's licence (CC BY 4.0) asks for credit wherever the data
 appears, so the page ends with "IP geolocation by DB-IP" (linking db-ip.com) and
 "DB-IP Lite databases, CC BY 4.0" (linking the licence).
+
+### Copy as Mermaid
+
+Every diagram can be copied as a Mermaid flowchart to paste into a README or an
+issue. The lineage graph of a sample, the VM snapshot graph and the file
+activity graph have **Copy as Mermaid** in their right-click menu; the Triage
+process tree, the phases of the Graph tab and the MITRE ATT&CK list in
+Summary have a small **Mermaid** button. Labels are escaped and each node's id
+is made from its own key (a hash, a task, a snapshot id), so a copy keeps its
+ids when the diagram grows.
 
 ### Exported tables
 

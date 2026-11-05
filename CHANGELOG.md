@@ -27,6 +27,17 @@ it runs.
 - **Settings has more room.** The window is wider, the scroll bar no longer lies on a text, rows are further apart, and the pages with many settings (Recording, Analysis tools, Advanced) have sub-headings.
 - **Keyboard shortcuts can be changed.** Settings > Keyboard has one row for every action and view (click, press the new keys; Esc cancels), refuses a key another action has until you choose to move it, and has Clear, Reset and Reset all. The menus, tooltips, the palette and the shortcut list show your keys. Saved with the settings.
 - **Defaults for a 60 % keyboard.** Start VM is Ctrl+Shift+S (was F5), Stop VM Ctrl+Shift+X (was Shift+F5), fold or open Details, Activity and Jobs is Ctrl+J (was Ctrl+\`), and Show Details is Ctrl+Shift+D. No default uses an F-key, an arrow, Home, End or the backtick.
+- **Copy as Mermaid on every diagram.** The samples lineage graph, the VM snapshot graph and the file activity graph have it in their right-click menu; the Triage process tree, the phases of the Graph tab and the MITRE ATT&CK list have a small Mermaid button. Each puts a flowchart on the clipboard with escaped labels and ids made from the node's own key, so they stay the same from one copy to the next.
+- **"Select a run to view its details" and the other empty states are centred** on both axes of their pane.
+- **The toolbar's sidebar button lights on hover and press** like the other toolbar buttons.
+- **Settings keeps explanations in tooltips.** Every page shows a short line where it had a paragraph; the rest is on hover. "Appearance applies at once · other pages apply on Save" is gone.
+- **"Use TCG when KVM is unavailable" is on for a new install** (and where the setting was never saved). A saved choice is kept.
+- **The time limit rows no longer say "Default (N s)".** The Reset button's tooltip names the default.
+- **Table column lines match the row lines.** Cells next to each other were filled up to a position between two pixels, so the page showed through between them as a line one or two pixels wide on a scaled display. Every table fill now ends on a pixel, and the column divider and the header's row rule are one stroke (one pixel, the line colour).
+- **The sidebar VM line reads "<base image> · <architecture>"**, for example "Debian 13 (Minimal) · x86-64". CPU and memory are in the hover text.
+- **An arrow at the right end of the Details, Activity and Jobs tab strip** hides the pane (down) or shows it (up); its tooltip has the shortcut (Ctrl+J by default).
+- **Dots beside text are drawn, not typed**: the tactic dots of ATT&CK badges (Triage > Summary), sample tags and verdicts sit on the middle of the text.
+- **Run summaries say what the time is.** "Ran for 3 min 52 s · exit 0" instead of "Finished after 3:52 (exit 0)"; the start and end times are in the tooltip.
 - **Preparing run evidence is centred in its panel**, both ways, in Triage > Summary.
 - **Column dividers are one pixel wide while hovered or dragged**, with the same drag area as before.
 - **The Explorer title no longer shows a count.**
