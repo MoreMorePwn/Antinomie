@@ -92,6 +92,15 @@ fn x86_frame(data: &[u8]) -> Option<Decoded> {
         u64f("uc_sigmask", 304, Show::SigSet),
     ];
     tree.extend(spec::nodes(&[Item::Group("uc", &uc)], data, &mut cut));
+    // The siginfo follows the 312-byte head; a short capture stops before it.
+    match data.get(312..440).and_then(signals::siginfo) {
+        Some(info) => tree.push(Node {
+            name: "info".into(),
+            text: info.full_line(),
+            children: info.nodes(),
+        }),
+        None => cut = true,
+    }
     if tree.is_empty() {
         return None;
     }

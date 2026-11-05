@@ -519,9 +519,10 @@ The network capture is the guest's own view on every route.
   the handler returns), the floating-point and extended state as a summary of
   the components in use, `uretprobe` registers, and `PTRACE_GETREGSET` /
   `SETREGSET` register sets by note type and length (aarch64 `x0`-`x30`, `sp`,
-  `pc`, `pstate` as `EL0t N|C`; AArch32 `r0`-`r12`, `cpsr`). The decoder sees
-  the first 256 captured bytes, so the tails of long frames and register sets
-  (aarch64 `pc`, `pstate`) show as "more captured than decoded". Socket
+  `pc`, `pstate` as `EL0t N|C`; AArch32 `r0`-`r12`, `cpsr`). Rows show a
+  decode of the first 256 captured bytes; the selected call's Details re-reads
+  up to 64 KiB of the capture so long frames and register sets (aarch64 `pc`,
+  `pstate`) decode whole when the recording is readable. Socket
   addresses cover `AF_UNSPEC`, netlink (pid, groups), packet (protocol,
   interface, hardware type, packet type, MAC), vsock, ALG and CAN.
   `perf_event_attr` names the event by type and config (hardware, software,

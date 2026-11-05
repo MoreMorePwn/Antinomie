@@ -247,6 +247,20 @@ fn an_x86_signal_frame_names_where_the_handler_returns() {
     assert!(line.contains("eflags=PF|ZF|IF"), "{line}");
     assert!(line.contains("cs=0x33"), "{line}");
     assert!(decoded.more, "the signal mask lies past the preview");
+    // The whole 440-byte frame: the mask and the siginfo are read too.
+    let mut whole = frame.clone();
+    whole.resize(440, 0);
+    put(&mut whole, 304, &(1u64 << 9).to_le_bytes());
+    put(&mut whole, 312, &11i32.to_le_bytes());
+    let decoded = decode(
+        None,
+        &field_on("x86_64", "rt_sigframe", "context.rt_sigframe", &whole),
+    )
+    .unwrap();
+    let line = decoded.full_line();
+    assert!(line.contains("uc_sigmask=[SIGUSR1]"), "{line}");
+    assert!(line.contains("info={"), "{line}");
+    assert!(!decoded.more, "{line}");
 }
 
 #[test]
