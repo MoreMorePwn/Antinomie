@@ -403,10 +403,17 @@ pub struct TransportSettings {
     pub max_wait_ms: u32,
     /// Host table of events still being assembled, 2048..=131072.
     pub event_table: u32,
+    /// Under Capture All, drop telemetry while the host falls behind instead
+    /// of slowing the guest (keeps a desktop guest responsive; the recording
+    /// loses events). Off by default, and only meaningful with `lossless`:
+    /// never-drop then never drops under Capture All, the guest runs slower.
+    pub capture_all_shed: bool,
 }
 impl TransportSettings {
     pub const RING_KIB: [u32; 5] = [256, 512, 1024, 2048, 4096];
     pub const EVENT_TABLE: std::ops::RangeInclusive<u32> = 2048..=131_072;
+    /// Checks the ranges; `capture_all_shed` takes either value (drop mode
+    /// ignores it, so switching modes keeps the choice).
     pub fn validate(&self) -> Result<(), String> {
         if !Self::RING_KIB.contains(&self.ring_kib) {
             return Err("transport ring must be 256, 512, 1024, 2048 or 4096 KiB".into());
@@ -437,6 +444,7 @@ impl Default for TransportSettings {
             lossless: true,
             max_wait_ms: 5000,
             event_table: 16_384,
+            capture_all_shed: false,
         }
     }
 }
@@ -2326,10 +2334,24 @@ pub struct Health {
     pub writer_held_ns: u64,
     #[serde(default)]
     pub writer_held_longest_ns: u64,
-    /// Capture All is dropping telemetry because the host is behind; the
-    /// guest would otherwise wait on every traced syscall.
+    /// Capture All is dropping telemetry because the host is behind and the
+    /// VM's transport settings allow it; the guest would otherwise wait on
+    /// every traced syscall.
     #[serde(default)]
     pub shedding: bool,
+    /// Never-drop is slowing the guest under Capture All: its senders waited
+    /// more than half the time for the host, and nothing is dropped for it
+    /// (shedding is off in the VM's transport settings).
+    #[serde(default)]
+    pub never_drop_slowing: bool,
+    /// How often this boot Capture All started shedding, and for how long in
+    /// all (spells that ended); always 0 unless the VM's transport settings
+    /// allow shedding. Any other drop in never-drop mode is a send that waited
+    /// out its whole wait.
+    #[serde(default)]
+    pub shed_count: u64,
+    #[serde(default)]
+    pub shed_ns: u64,
     /// Pauses between telemetry reads (see [`crate::read_gaps`]).
     #[serde(default)]
     pub read_gaps: crate::read_gaps::ReadGapStats,
@@ -3158,6 +3180,23 @@ mod tests {
         for raw in [0x7f, 0x17f, 0x109, 0x10000] {
             assert_eq!(WaitStatus::from_raw(raw), None, "{raw:#x}");
         }
+    }
+    #[test]
+    fn older_transport_settings_load_with_capture_all_shedding_off() {
+        let old: TransportSettings = serde_json::from_str(
+            r#"{"ring_kib":2048,"lossless":true,"max_wait_ms":5000,"event_table":16384}"#,
+        )
+        .unwrap();
+        assert!(old.lossless && !old.capture_all_shed);
+        assert_eq!(old.validate(), Ok(()));
+        assert!(!TransportSettings::default().capture_all_shed);
+        let allowed = TransportSettings {
+            capture_all_shed: true,
+            ..TransportSettings::default()
+        };
+        assert_eq!(allowed.validate(), Ok(()));
+        let saved = serde_json::to_string(&allowed).unwrap();
+        assert!(saved.contains(r#""capture_all_shed":true"#), "{saved}");
     }
     #[test]
     fn older_recording_health_defaults_new_loss_counters() {

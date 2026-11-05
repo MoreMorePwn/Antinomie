@@ -19,6 +19,7 @@ mod run_route;
 mod saving;
 mod session_runs;
 mod session_transport;
+mod shed;
 mod snapshot_recovery;
 mod snapshot_saving;
 mod terminal_drain;
@@ -37,8 +38,8 @@ mod worker_vm_config;
 pub use self::debug_service::DebugLink;
 use self::{
     completions::*, debug_service::DebugService, launch_failure::*, run_network::*, saving::*,
-    session_transport::*, terminal_drain::*, uploads::*, worker_artifacts::*, worker_loop::*,
-    worker_vm::*,
+    session_transport::*, shed::Shed, terminal_drain::*, uploads::*, worker_artifacts::*,
+    worker_loop::*, worker_vm::*,
 };
 use crate::{
     api::*,
@@ -664,41 +665,6 @@ impl RunArtifactOwner {
         true
     }
 }
-/// Capture All of a busy guest (a desktop) can produce telemetry faster than
-/// the host decodes and saves it. Never-drop sends then make every traced
-/// syscall wait for room, up to seconds each, and the guest stops responding.
-/// While Capture All runs and the host falls behind, senders drop instead of
-/// waiting (each drop is counted as lost telemetry); never-drop returns once
-/// the host has caught up.
-#[derive(Clone, Copy, Debug)]
-struct Shed {
-    active: bool,
-    since: Instant,
-    /// The guest's total send wait at `sampled`, and the share of wall time
-    /// it spent waiting since the sample before.
-    sampled: Instant,
-    sampled_wait_ns: u64,
-    wait_share: f64,
-}
-
-impl Default for Shed {
-    fn default() -> Self {
-        Self {
-            active: false,
-            since: Instant::now(),
-            sampled: Instant::now(),
-            sampled_wait_ns: 0,
-            wait_share: 0.0,
-        }
-    }
-}
-
-/// Shed when this much recording waits for the disk, or the guest's senders
-/// together waited this share of the time; resume below the lower backlog.
-const SHED_BACKLOG: usize = 64 * 1024 * 1024;
-const RESUME_BACKLOG: usize = 16 * 1024 * 1024;
-const SHED_WAIT_SHARE: f64 = 0.5;
-const SHED_MIN: Duration = Duration::from_secs(2);
 
 /// Progress of the INFO probe that identifies the running guest kernel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

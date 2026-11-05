@@ -221,10 +221,28 @@ impl ProcessTracker {
     /// Name a process after the program the app launched for it.
     pub fn name_launched(&mut self, pid: u32, path: &str) {
         let process = self.process(pid);
-        if process.name.is_empty() {
-            process.name = file_name(path);
-            process.exe = Some(path.to_owned());
-            self.changed = true;
+        if !process.name.is_empty() {
+            return;
+        }
+        let name = file_name(path);
+        process.name = name.clone();
+        process.exe = Some(path.to_owned());
+        self.changed = true;
+        // Children it forked before the host knew its PID took its empty
+        // name; one that has not executed anything still runs its program
+        // (a shell's forked built-in or BusyBox applet).
+        let mut parents = vec![pid];
+        let mut named = std::collections::BTreeSet::from([pid]);
+        while let Some(parent) = parents.pop() {
+            for child in self.processes.values_mut().filter(|child| {
+                child.parent_pid == parent && child.name.is_empty() && child.exe.is_none()
+            }) {
+                if named.insert(child.pid) {
+                    child.name = name.clone();
+                    child.exe = Some(path.to_owned());
+                    parents.push(child.pid);
+                }
+            }
         }
     }
 
@@ -595,6 +613,46 @@ mod tests {
         assert_eq!(process.name, "sample");
         assert_eq!(process.exe.as_deref(), Some("/tmp/sample"));
         assert!(!tracker.unnamed(300));
+    }
+
+    #[test]
+    fn children_forked_before_the_launch_was_known_take_its_name() {
+        let mut tracker = ProcessTracker::default();
+        let fork = |parent, child: u64| {
+            event(
+                parent,
+                3,
+                0,
+                &[("lifecycle.child_tgid", child.to_le_bytes().to_vec())],
+            )
+        };
+        // The launched shell forks a BusyBox applet (no exec) and a program
+        // that executes, then a grandchild, all before the host has its PID.
+        tracker.packet(&header(300, 1, 1));
+        tracker.event(&fork(300, 301));
+        tracker.packet(&header(301, 1, 1));
+        tracker.event(&fork(301, 303));
+        tracker.packet(&header(303, 1, 1));
+        tracker.event(&fork(300, 302));
+        tracker.event(&event(302, 1, 59, &[("arg0.path", b"/bin/cat\0".to_vec())]));
+        tracker.event(&event(
+            302,
+            3,
+            0,
+            &[("lifecycle.exec_commit", 302u64.to_le_bytes().to_vec())],
+        ));
+        tracker.packet(&header(302, 1, 1));
+        tracker.name_launched(300, "/bin/sh");
+        let name = |pid| {
+            let list = tracker.list();
+            let process = list.iter().find(|p| p.pid == pid).unwrap();
+            (process.name.clone(), process.exe.clone())
+        };
+        let shell = ("sh".to_owned(), Some("/bin/sh".to_owned()));
+        assert_eq!(name(300), shell);
+        assert_eq!(name(301), shell);
+        assert_eq!(name(303), shell);
+        assert_eq!(name(302), ("cat".to_owned(), Some("/bin/cat".to_owned())));
     }
 
     #[test]

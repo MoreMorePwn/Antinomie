@@ -29,7 +29,8 @@
 //! runs and stops it after them; `"keep"` leaves it running for the VM stop
 //! to end. The report then lists the VM's network captures.
 //! `"vm": {"transport": {"ring_kib": 4096, "lossless": true, "max_wait_ms": 100,
-//! "event_table": 16384}}` sets the VM's transport settings (any subset).
+//! "event_table": 16384, "capture_all_shed": true}}` sets the VM's transport
+//! settings (any subset).
 //!
 //! A run may set `"core_dump_on_exit"`, `"memory_dump_on_exit"`, and
 //! `"capture_network"` (each boolean).
@@ -131,22 +132,35 @@ impl Session {
 
     fn command(&mut self, command: Command, seconds: u64) -> Result<String, String> {
         let id = self.backend.send(command)?;
+        self.result(id, seconds).map_err(|late| {
+            late.unwrap_or_else(|| {
+                format!("command {id} deadline; state {:?}", self.snapshot.state)
+            })
+        })
+    }
+
+    /// Waits for command `id`'s result; `Err(None)` when it is not in yet.
+    fn result(&mut self, id: u64, seconds: u64) -> Result<String, Option<String>> {
         let deadline = Instant::now() + Duration::from_secs(seconds);
         loop {
             if let Some((_, success, message)) = self.pump().filter(|(reply, ..)| *reply == id) {
-                return if success { Ok(message) } else { Err(message) };
+                return if success {
+                    Ok(message)
+                } else {
+                    Err(Some(message))
+                };
             }
             if Instant::now() > deadline {
-                return Err(format!(
-                    "command {id} deadline; state {:?}",
-                    self.snapshot.state
-                ));
+                return Err(None);
             }
             thread::sleep(Duration::from_millis(10));
         }
     }
 
     /// Retries a guest command until the guest's kernel control accepts it.
+    /// A command still unanswered is waited for, not sent again: the backend
+    /// is still working on it, and a second Execute would launch the program
+    /// twice.
     fn guest_command(
         &mut self,
         make: impl Fn() -> Command,
@@ -154,7 +168,18 @@ impl Session {
     ) -> Result<String, String> {
         let deadline = Instant::now() + Duration::from_secs(seconds);
         loop {
-            match self.command(make(), 60) {
+            let id = self.backend.send(make())?;
+            let mut outcome = self.result(id, 60);
+            while outcome == Err(None) && Instant::now() < deadline {
+                eprintln!("guest command {id} still unanswered; waiting");
+                outcome = self.result(id, 60);
+            }
+            let outcome = outcome.map_err(|late| {
+                late.unwrap_or_else(|| {
+                    format!("command {id} deadline; state {:?}", self.snapshot.state)
+                })
+            });
+            match outcome {
                 Ok(message) => return Ok(message),
                 Err(error) if Instant::now() < deadline => {
                     // Let a busy command worker drain before asking again.
@@ -646,18 +671,30 @@ fn run() -> Result<Value, String> {
     // run can leave in the hundreds of megabytes.
     session.command(Command::Stop, 600)?;
     session.settle(|s| s.state == VmState::Stopped, 60)?;
-    let network_captures = network_capture
-        .then(|| {
-            session
-                .snapshot
-                .vm_locations
-                .iter()
-                .find(|location| location.vm_id == vm_id)
-                .map(|location| {
-                    antinomie_monitor_core::network::list_captures(&location.recording_directory)
-                })
-        })
-        .flatten();
+    // A stopped capture's final summary (its end and size) is a queued
+    // background write: on a busy disk the folder still holds the summary
+    // from its start for a while.
+    let recordings = session
+        .snapshot
+        .vm_locations
+        .iter()
+        .find(|location| location.vm_id == vm_id)
+        .map(|location| location.recording_directory.clone());
+    let network_captures = match recordings.filter(|_| network_capture) {
+        Some(recordings) => {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            loop {
+                let captures = antinomie_monitor_core::network::list_captures(&recordings);
+                if captures.iter().all(|capture| capture.stopped_ms.is_some())
+                    || Instant::now() > deadline
+                {
+                    break Some(captures);
+                }
+                thread::sleep(Duration::from_millis(200));
+            }
+        }
+        None => None,
+    };
     session.backend.shutdown()?;
     Ok(
         json!({"vm_id": vm_id, "base": base, "boot_seconds": boot_seconds,
