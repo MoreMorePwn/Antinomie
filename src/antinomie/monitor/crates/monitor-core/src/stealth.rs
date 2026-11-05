@@ -1515,6 +1515,7 @@ impl StealthProfile {
                 "the q35 chipset's ICH9 (2009) device IDs behind the board's subsystem",
                 "the display's Bochs layout (registers, modes) behind its GPU name",
                 "udev's device database (Debian bases): the devices' true PCI IDs",
+                "Debian's own NVMe, DRM, USB and libata modules (Debian bases): QEMU's NVMe Identify data, display driver names, USB HID strings and default DVD-ROM",
             ]);
             found.push(self.uptime_giveaway());
             return found;
