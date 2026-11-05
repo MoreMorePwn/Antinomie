@@ -34,26 +34,17 @@ impl MonitorApp {
             None => machine.push(("No base".into(), theme::warn())),
         }
         let fallbacks = self.stealth_fallbacks_of(vm);
+        // The base image's name and its architecture. A base records no
+        // architecture yet: every base is x86-64 until the arm64 ones come.
         machine.extend([
             (" · ".into(), theme::muted()),
-            (vm.cpus.to_string(), number),
-            (" CPU · ".into(), theme::muted()),
-            (vm.ram_mib.to_string(), number),
-            (" MiB".into(), theme::muted()),
+            (
+                antinomie_monitor_core::GuestArch::default().label(),
+                theme::muted(),
+            ),
         ]);
+        // The q35 fallback and the network are in the tooltip.
         let (_, machine_note) = vm.stealth.machine.for_ram(u64::from(vm.ram_mib) << 20);
-        if machine_note.is_some() {
-            machine.push((" · q35 fallback".into(), theme::warn()));
-        }
-        if vm.isolated_network {
-            machine.push((" · Isolated network".into(), theme::good()));
-        } else if vm.network() == antinomie_monitor_core::VmNetwork::Routed {
-            machine.push((" · ".into(), theme::muted()));
-            machine.push(("Routed".into(), theme::good()));
-        } else if vm.nat {
-            machine.push((" · ".into(), theme::muted()));
-            machine.push(("NAT".into(), theme::info()));
-        }
         let last = match self.settings.last_runs.get(&vm.id) {
             Some(last) => vec![
                 (

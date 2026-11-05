@@ -322,9 +322,9 @@ fn sidebar_shows_each_vm_state_resources_and_latest_run() {
     assert_eq!(text_color(&output, "Running"), Some(theme::good()));
     let details: Vec<&String> = sidebar.iter().map(|(text, _)| text).collect();
     assert!(
-        details.iter().any(|text| text.starts_with("Linux 6.12.94")
-            && text.contains("2 CPU")
-            && text.contains("1024 MiB")),
+        details
+            .iter()
+            .any(|text| text.as_str() == "Linux 6.12.94 · x86-64"),
         "{details:?}"
     );
     assert!(

@@ -25,6 +25,7 @@ mod launch;
 mod launch_source;
 mod layout;
 mod library;
+mod main_polish;
 mod main_window_ui;
 mod memory_probe;
 mod network;

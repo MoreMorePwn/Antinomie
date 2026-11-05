@@ -846,6 +846,7 @@ impl WorkspaceLayout {
             .show_leaf_close_all_buttons(false)
             .show_leaf_collapse_buttons(false)
             .show_inside(ui, &mut viewer);
+        workspace_bottom::fold_arrow(ui, &mut viewer, &local, surface, bar_fill);
         for leaf in fits.iter().filter(|leaf| leaf.overflows) {
             if let Some(index) = workspace_tabs::list_button(
                 ui,

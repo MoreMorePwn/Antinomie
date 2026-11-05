@@ -717,6 +717,17 @@ impl MonitorApp {
         }
     }
 
+    /// The tooltip of the arrow at the right end of the Details, Activity and
+    /// Jobs tab strip, with the shortcut as the user has set it.
+    pub(crate) fn bottom_arrow_tooltip(&self, ctx: &egui::Context, folded: bool) -> String {
+        let text = if folded {
+            "Show Details, Activity and Jobs"
+        } else {
+            "Hide Details, Activity and Jobs"
+        };
+        self.with_shortcut(ctx, text, &Action::ToggleBottomPane)
+    }
+
     /// Run `action` if it can run now. Everything that does something for a
     /// menu item, a shortcut or a palette entry is here.
     pub(super) fn run_action(&mut self, ctx: &egui::Context, action: Action) {
