@@ -567,7 +567,26 @@ The network capture is the guest's own view on every route.
   finding in time, ↑/↓ lane, Enter evidence, `T` spacing, `F` fit, `+`/`-` zoom at the
   selection, Space fold the lane, `H` `M` `L` `I` the tier chips and Show INFO,
   `1`…`9` and `0` the first ten category chips.
-- **Triage › Files › Per-file history** is the first tab of Files, before Opened, with
+- **Triage › Files › By file** is the first tab of Files and opens by default: one row
+  for each file the run touched, with **Path** (small badges for where it lives, such as
+  `/tmp`, `home`, `system`, `proc`, `hidden`, `persistence` and `credentials`, and `+2 names`
+  when it was also seen under other names, listed in Details), **What happened** (a chain
+  such as `created → written 812 KiB → chmod +x → executed → deleted`), **By** (the process,
+  and how many more), **First → last** (seconds from the start of the run, the absolute
+  time on hover), **Size** (`0 B → 812 KiB`), **Type** (ELF, script, archive, config, text
+  or data, read from the first bytes the run captured; `unknown` when none were) and
+  **SHA-256** (the first twelve digits; the whole digest on hover and in the row menu's
+  **Copy SHA-256**). A **⚠** marks a file that a Suspicious activity finding (Low and
+  above) names as its object. **Hide stdio**, **Hide library**, **Changed only** and a path
+  filter narrow the list. A click shows the file in Details; the row menu opens its
+  **Per-file history** or its reconstruction. The Opened, Created, Read, Written, Deleted,
+  Renamed, Executed, Attributes, Probed, Other and Changed files tabs stay as the
+  per-operation views, with the same filter keys. They no longer have an Evidence column
+  (Details has **Open original syscall**) or a Location column (it is a badge on the
+  path), their times are seconds from the start of the run (the absolute time on hover),
+  **Process** is `name (pid · tid)`, and Changed files has **Changes** (`3 writes ·
+  4.1 KiB`), **Type** and **SHA-256** where it had Diff count.
+- **Triage › Files › Per-file history** is the second tab of Files, before Opened, with
   the number of files the run touched on it (it was a floating window). The
   left list holds every file the run touched, in order of the first call (also
   those that were only opened, read or probed); **Hide stdio**, **Hide library**
@@ -576,8 +595,11 @@ The network capture is the guest's own view on every route.
   path. Choose a file to see its history as a graph: one box for each stretch of
   the same call by the same process (create, open, read, write ×3, rename, delete),
   joined in the order the calls happened, on a lane for each process involved.
-  Process names stay at the left of the graph while it scrolls, cut to fit (the
-  whole name is the tooltip). A click on a file in the list shows it in Details (its
+  Process names (`name (pid · tid)`) stay at the left of the graph, cut to fit (the
+  whole name is the tooltip). Drag the background of the graph to move it, Ctrl+wheel or a pinch
+  zooms at the pointer, and a double-click puts it back. The title of the history is the
+  file and its SHA-256, `name [sha256]` (a click copies it), or `name [unknown hash]`;
+  **Reconstruct contents…** is at its top right. A click on a file in the list shows it in Details (its
   names, first and last call, steps, state, sizes and hash).
   Click a box to list its calls in a table that spans the pane: time, process, call, result (a rename shows the new
   name, a delete says whether another link remains), and for reads and writes the
