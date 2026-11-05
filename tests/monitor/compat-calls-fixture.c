@@ -282,6 +282,9 @@ static void futex_epoll_ipc_calls(void)
         syscall(SYS_futex_time64, &word, 0, 8, &brief64, NULL, 0);
     }
 #endif
+    // The kernel writes events and data only: zero the padding AArch32's
+    // 16-byte epoll_event has, so the recorded bytes are known.
+    memset(got, 0, sizeof got);
     ep = epoll_create1(0);
     if (ep >= 0 && pipe(pipefd) == 0) {
         epoll_ctl(ep, EPOLL_CTL_ADD, pipefd[0], &event);
@@ -309,6 +312,9 @@ static void futex_epoll_ipc_calls(void)
         syscall(SYS_shmctl, segment, IPC_STAT | IPC_64_FLAG, record);
         syscall(SYS_shmctl, segment, IPC_STAT, record);
         syscall(SYS_shmctl, segment, IPC_INFO | IPC_64_FLAG, record);
+        // ia32's direct shmctl refuses IPC_64 (it copies the IPC_64 records
+        // always): its shminfo64 comes from plain IPC_INFO, AArch32's shminfo.
+        syscall(SYS_shmctl, segment, IPC_INFO, record);
         syscall(SYS_shmctl, segment, SHM_INFO, record);
     }
     if (sems >= 0) {

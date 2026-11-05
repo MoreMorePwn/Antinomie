@@ -1115,9 +1115,11 @@ compat table's layouts).
   and wake-op commands, `arg4.futex.observed` (`u32`) at entry and after a
   command that modifies them, `arg3.timeout` (`old_timespec`) for the commands
   that wait; futex_time64 is the native call's twin (16-byte `timespec`).
-  AArch32's epoll_wait and epoll_pwait (arm64 has neither natively) record
-  `arg1.epoll_events` (`epoll_event[]`, 16 bytes each, the result's count) at
-  exit and epoll_pwait's `arg4.sigmask` (`u64`) at entry; ia32's are twins.
+  AArch32's epoll_wait (arm64 has no epoll_wait) records `arg1.epoll_events`
+  (`epoll_event[]`, 16 bytes each, the result's count) at exit; AArch32's
+  epoll_pwait and ia32's two calls are the native calls' twins (the native
+  `arg1.epoll_events` and `signal.mask`). The compat capture's epoll_pwait
+  branch (`arg4.sigmask`) is never reached: a twin is recorded as native.
   msgctl, semctl and shmctl, and the MSGCTL, SEMCTL and SHMCTL calls of ia32's
   `ipc()`, record `ipc.control` as the native calls do (at entry for IPC_SET,
   at exit on success otherwise) by the compat record the command copies:

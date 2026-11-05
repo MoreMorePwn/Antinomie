@@ -105,14 +105,15 @@ COMMON += [
     ("semctl", 2, "ipc.control", 40, ""),
 ]
 # epoll_wait and epoll_pwait: ia32's epoll_event is x86-64's (12 bytes,
-# packed), so the native twins capture them (sigmask as signal.mask); AArch32's
-# (16 bytes) go through the compat capture.
+# packed), so the native twins capture them (sigmask as signal.mask). AArch32's
+# is arm64's (16 bytes): epoll_pwait is the native call's twin (signal.mask),
+# epoll_wait, which arm64 lacks, goes through the compat capture.
 EPOLL = {"ia32": [("epoll_wait", 2, "arg1.epoll_events", 12, "01000000"),
                   ("epoll_pwait", 2, "arg1.epoll_events", 12, "01000000"),
                   ("epoll_pwait", 1, "signal.mask", 8, "")],
          "arm": [("epoll_wait", 2, "arg1.epoll_events", 16, "0100000000000000"),
                  ("epoll_pwait", 2, "arg1.epoll_events", 16, "0100000000000000"),
-                 ("epoll_pwait", 1, "arg4.sigmask", 8, "")]}
+                 ("epoll_pwait", 1, "signal.mask", 8, "")]}
 # The old records without IPC_64: AArch32's direct calls (old_msgctl and the
 # others) and ia32's ipc(); ia32's direct calls copy the IPC_64 ones always.
 IPC_OLD = {"ia32": [("ipc", 2, "ipc.control", 56, ""), ("ipc", 2, "ipc.control", 88, ""),
