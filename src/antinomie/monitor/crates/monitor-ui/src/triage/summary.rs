@@ -42,7 +42,6 @@ enum Act {
 
 #[derive(Clone, Copy)]
 enum Destination {
-    Properties,
     Tasks,
     Findings,
     Graph,
@@ -77,7 +76,6 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, input: &TriageInput
     }
     if let Some(destination) = destination {
         match destination {
-            Destination::Properties => view.section = Section::Properties,
             Destination::Tasks => {
                 view.section = Section::Process;
                 view.process = ProcessTab::Tree;
@@ -414,7 +412,7 @@ mod tests {
                 .min
                 .y
         };
-        assert!(y("Notes") > y("Open IOC"));
+        assert!(y("Notes") > y("Open results"));
         assert!(y(note) > y("Notes"));
     }
 

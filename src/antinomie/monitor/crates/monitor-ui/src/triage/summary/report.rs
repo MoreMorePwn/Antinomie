@@ -134,58 +134,6 @@ fn detector(
         .inner
 }
 
-/// The IOC datasets card: how many of the run's indicators matched a dataset.
-fn datasets(ui: &mut egui::Ui, view: &TriageView) -> bool {
-    presentation::frame()
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            presentation::heading(ui, "IOC datasets", "");
-            match view.ioc_headline() {
-                Some((matched, total, date)) => {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            RichText::new(matched.to_string())
-                                .size(27.0)
-                                .strong()
-                                .color(if matched > 0 {
-                                    theme::error()
-                                } else {
-                                    theme::text()
-                                }),
-                        );
-                        ui.label(format!(
-                            "of {total} indicator{} matched",
-                            if total == 1 { "" } else { "s" }
-                        ))
-                        .on_hover_text(super::super::ioc_view::NO_MATCH_NOTE);
-                    });
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(if date.is_empty() {
-                                "No datasets loaded".to_owned()
-                            } else {
-                                format!("Datasets dated {date}")
-                            })
-                            .small()
-                            .color(theme::muted()),
-                        )
-                        .wrap(),
-                    );
-                }
-                None => {
-                    ui.label(RichText::new("—").size(27.0).color(theme::muted()));
-                    ui.label(
-                        RichText::new("Indicators appear after the recording is indexed")
-                            .small()
-                            .color(theme::muted()),
-                    );
-                }
-            }
-            ui.button("Open IOC").clicked()
-        })
-        .inner
-}
-
 /// What the run recorded about itself: facts about its recording and its
 /// device profile that are no warning, with the run's last screenshot.
 fn notes(
@@ -310,16 +258,17 @@ pub(super) fn content(
             presentation::badge(ui, "Unavailable", theme::muted());
         }
         if ui
-            .add_enabled(input.archive.is_some(), egui::Button::new("Refresh"))
+            .add_enabled(
+                input.archive.is_some(),
+                egui::Button::new(egui_phosphor::regular::ARROW_CLOCKWISE),
+            )
+            .on_hover_text("Refresh")
             .clicked()
         {
             view.request_refresh();
         }
         if view.scan_rx.is_some() {
             crate::theme::spinner(ui);
-        }
-        if ui.button("Open properties").clicked() {
-            destination = Some(Destination::Properties);
         }
     });
     ui.add_space(8.0);
@@ -348,6 +297,7 @@ pub(super) fn content(
             {
                 state.built = Some(Built::of(view, scan, view.scan_request.packed.is_some()));
             }
+            let ioc_line = view.ioc_headline();
             let sample = input.analysis.map(SampleInfo::of);
             let program = view
                 .scan_request
@@ -364,9 +314,16 @@ pub(super) fn content(
                 };
                 header::show(ui, built, scan, &facts, &mut acts);
                 ui.add_space(10.0);
-                panels::key_findings(ui, built, scan, &mut acts);
+                panels::key_findings(ui, built, scan, &mut state.keys_open, &mut acts);
                 ui.add_space(10.0);
-                panels::indicators(ui, built, &mut state.status, &mut acts);
+                panels::indicators(
+                    ui,
+                    built,
+                    ioc_line.clone(),
+                    &mut state.more,
+                    &mut state.status,
+                    &mut acts,
+                );
                 ui.add_space(10.0);
             }
             relations::ui::show(ui, &mut state, &mut acts);
@@ -386,41 +343,34 @@ pub(super) fn content(
             }
             pop_out |= strip.open_window;
             ui.add_space(10.0);
-            // One-line rows. The ATT&CK list is folded in the row's "list".
-            let fold = ui.make_persistent_id("summary-attack-open");
-            let mut fold_state = egui::collapsing_header::CollapsingState::load_with_default_open(
-                ui.ctx(),
-                fold,
-                false,
-            );
-            let open = fold_state.is_open();
-            let mut toggle = false;
+            // One-line rows, then the full ATT&CK list folded below them.
             presentation::frame().show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                panels::attack_row(ui, attack.len(), &attack_details, open, &mut toggle);
+                panels::attack_row(ui, attack.len(), &attack_details);
                 if let Some(built) = &state.built {
                     panels::interest_row(ui, built, scan, &mut acts);
                 }
                 panels::files_row(ui, scan, &mut acts);
                 panels::network_row(ui, scan, &mut acts);
             });
-            if toggle {
-                fold_state.set_open(!open);
-            }
-            if open && !attack.is_empty() {
+            if !attack.is_empty() {
                 ui.add_space(4.0);
-                if let Some(jump) = attack_list::show(ui, view, &attack, &attack_details) {
-                    attack_jump = Some(jump);
-                }
-                crate::widgets::attack::legend(ui, "summary-attack-legend");
+                egui::CollapsingHeader::new(
+                    RichText::new(format!("MITRE ATT&CK techniques ({})", attack.len()))
+                        .strong()
+                        .color(theme::heading()),
+                )
+                .id_salt("summary-attack-open")
+                .default_open(false)
+                .show(ui, |ui| {
+                    if let Some(jump) = attack_list::show(ui, view, &attack, &attack_details) {
+                        attack_jump = Some(jump);
+                    }
+                    crate::widgets::attack::legend(ui, "summary-attack-legend");
+                });
             }
-            fold_state.store(ui.ctx());
             ui.add_space(10.0);
             engines(ui, view, scan, &mut destination);
-            ui.add_space(14.0);
-            if datasets(ui, view) {
-                destination = Some(Destination::Ioc);
-            }
             ui.add_space(14.0);
             let mut shown = view.notes.clone();
             shown.extend(super::run_end::run_end(scan).map(|end| end.text));
@@ -433,7 +383,6 @@ pub(super) fn content(
                 acts.push(Act::Screenshot(shot.unwrap_or_default()));
             }
         });
-    relations::ui::window(ui.ctx(), &mut state, &mut acts);
     view.summary_state = state;
     if attack_jump.is_some() {
         view.attack_jump = attack_jump;

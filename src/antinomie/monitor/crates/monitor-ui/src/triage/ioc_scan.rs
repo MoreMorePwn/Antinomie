@@ -816,6 +816,27 @@ pub(super) fn run_inputs(
 }
 
 #[cfg(test)]
+impl IocScan {
+    /// A scan of `indicators` with no datasets, for the Summary's tests.
+    pub(super) fn for_tests(indicators: Vec<Indicator>) -> Self {
+        let scan = Arc::new(Scan::default());
+        Self {
+            indicators,
+            scan: scan.clone(),
+            omitted: 0,
+            capture: Capture::Off,
+            frames: None,
+            cache: Cache {
+                key: String::new(),
+                scan,
+                disk: None,
+            },
+            disk_notes: Vec::new(),
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use antinomie_monitor_core::{

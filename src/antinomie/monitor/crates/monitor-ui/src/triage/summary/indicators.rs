@@ -5,8 +5,8 @@
 use antinomie_monitor_core::ioc::indicator::{Indicator, Type};
 use serde_json::json;
 
-/// Rows of each kind the box lists before "+N more".
-pub(super) const SHOWN: usize = 6;
+/// Rows of each kind the box lists before "Show N more".
+pub(super) const SHOWN: usize = 5;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct EndpointRow {
@@ -188,11 +188,11 @@ impl Indicators {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::triage::summary) mod tests {
     use super::*;
     use antinomie_monitor_core::ioc::indicator::Hashes;
 
-    fn indicator(ty: Type, value: &str) -> Indicator {
+    pub(in crate::triage::summary) fn indicator(ty: Type, value: &str) -> Indicator {
         Indicator {
             ty,
             key: value.into(),
@@ -217,7 +217,7 @@ mod tests {
         }
     }
 
-    pub(super) fn sample() -> Vec<Indicator> {
+    pub(in crate::triage::summary) fn sample() -> Vec<Indicator> {
         let mut file = indicator(Type::File, "9b1c");
         file.path = "/tmp/.x/kdevtmpfsi".into();
         file.roles = vec!["created".into(), "executed".into()];

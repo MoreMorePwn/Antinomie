@@ -24,17 +24,6 @@ fn number(values: &[(&'static str, RowValue)], key: &str) -> u64 {
         .map_or(0, |number| number.clamp(0, i128::from(u64::MAX)) as u64)
 }
 
-/// A capture time (host Unix microseconds) as guest nanoseconds, through the
-/// run's clock anchor.
-fn guest_ns(
-    anchor: Option<antinomie_monitor_core::HostClockAnchor>,
-    host_us: Option<u64>,
-) -> Option<u64> {
-    let (anchor, us) = (anchor?, host_us?);
-    let delta = (i128::from(us) - i128::from(anchor.host_us)) * 1000;
-    u64::try_from(i128::from(anchor.guest_ns) + delta).ok()
-}
-
 pub(in crate::triage) fn facts_of(scan: &ArchiveScan) -> Facts {
     let mut facts = Facts::default();
     for node in scan.process.iter().filter(|node| !node.thread) {
@@ -45,7 +34,6 @@ pub(in crate::triage) fn facts_of(scan: &ArchiveScan) -> Facts {
             name: process_cells::file_name(&node.comm).to_owned(),
             mismatch: !node.forked
                 && process_cells::argv0_mismatch(&node.comm, &node.argv).is_some(),
-            first_ns: node.first_ns,
             execs: node.record.execs.clone(),
             sent: node.record.sent.clone(),
             forked: node.forked,
@@ -68,11 +56,9 @@ pub(in crate::triage) fn facts_of(scan: &ArchiveScan) -> Facts {
             object: text(values, "finding.object").to_owned(),
             pid: number(values, "process.pid") as u32,
             cookie: number(values, "process.cookie"),
-            first_ns: number(values, "finding.first_ns"),
         });
     }
     if let Some(ioc) = &scan.ioc {
-        let anchor = scan.clock_anchor;
         for indicator in ioc
             .indicators
             .iter()
@@ -82,7 +68,6 @@ pub(in crate::triage) fn facts_of(scan: &ArchiveScan) -> Facts {
                 .process
                 .as_ref()
                 .map(|process| (process.pid, process.cookie));
-            let ns = guest_ns(anchor, indicator.first_us);
             match indicator.ty {
                 Type::File => facts.files.push(FileFact {
                     path: if indicator.path.is_empty() {
@@ -92,12 +77,10 @@ pub(in crate::triage) fn facts_of(scan: &ArchiveScan) -> Facts {
                     },
                     roles: indicator.roles.clone(),
                     process,
-                    ns,
                 }),
                 Type::Endpoint => facts.endpoints.push(EndpointFact {
                     endpoint: indicator.value.clone(),
                     process,
-                    ns,
                 }),
                 _ => {}
             }

@@ -67,9 +67,7 @@ pub(super) fn show(
 ) -> Option<attack::Jump> {
     let mut jump = None;
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            crate::mermaid::button(ui, || mermaid(techniques, details));
-        });
+        crate::mermaid::button(ui, || mermaid(techniques, details));
     });
     let groups = Tactic::ALL
         .into_iter()

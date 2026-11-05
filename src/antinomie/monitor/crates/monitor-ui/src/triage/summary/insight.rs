@@ -412,9 +412,9 @@ pub(super) fn key_findings(findings: &[Finding], limit: usize) -> (usize, Vec<Ke
             let rule = text(values, "finding.rule").to_owned();
             let description = super::rule_text::rule_description(&rule);
             let why = if description.is_empty() {
-                short(text(values, "finding.summary"), 90)
+                short(text(values, "finding.summary"), 140)
             } else {
-                short(&description, 90)
+                short(&description, 140)
             };
             Some(Key {
                 index,

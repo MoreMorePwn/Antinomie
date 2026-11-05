@@ -15,9 +15,6 @@ pub(in crate::triage) fn mermaid(graph: &Graph, shown: &[usize]) -> String {
     for &at in shown {
         let node = &graph.nodes[at];
         let mut label = node.label.clone();
-        if node.warn {
-            label.push_str(" \u{26a0} argv");
-        }
         if let Some(tier) = node.tier {
             label.push_str(&format!("\n[{}]", tier.tag().to_uppercase()));
         }
@@ -49,9 +46,9 @@ mod tests {
         assert!(text.starts_with("flowchart LR\n"), "{text}");
         assert_eq!(text.matches("[\"").count(), graph.nodes.len(), "{text}");
         assert_eq!(text.matches(" -->|").count(), graph.edges.len(), "{text}");
-        assert!(text.contains("demo-all (401) \u{26a0} argv"), "{text}");
+        assert!(!text.contains('\u{26a0}'), "{text}");
         assert!(text.contains("[HIGH]"), "{text}");
-        assert!(text.contains("injected"), "{text}");
+        assert!(text.contains("|\"inject\"|"), "{text}");
         assert_eq!(text, mermaid(&graph, &all), "stable");
         // A subset leaves out the edges that lose an end.
         let two = mermaid(&graph, &all[..2]);

@@ -1,91 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The Relationships graph's viewport: a left-to-right layout (the root at the
-//! left, what it started, wrote, contacted and acted on to its right), pan by
-//! dragging the background, zoom with the buttons, ctrl and the wheel or a
-//! pinch, and a click on a node. It draws the graph and says what was
+//! The Relationships graph's viewport: pan by dragging the background, zoom
+//! with the buttons, ctrl and the wheel or a pinch, and a click on a node.
+//! Where the nodes sit is `layout`'s. It draws the graph and says what was
 //! clicked; it keeps no data of its own.
+use super::layout::{Layout, NODE};
 use super::model::{EdgeKind, Graph, NodeKind};
 use crate::theme;
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Shape, Stroke, Vec2};
-use std::collections::BTreeMap;
 
-const NODE: Vec2 = egui::vec2(188.0, 30.0);
-const ROW: f32 = 46.0;
-const COLUMN: f32 = 250.0;
-/// A level with more nodes than this wraps into more columns.
-const WRAP: usize = 10;
-const WRAP_GAP: f32 = 24.0;
 const MIN_ZOOM: f32 = 0.15;
 const MAX_ZOOM: f32 = 3.0;
-
-/// Where each shown node sits, in graph space.
-pub(in crate::triage) struct Layout {
-    pub at: BTreeMap<usize, Rect>,
-    pub bounds: Rect,
-}
-
-impl Default for Layout {
-    fn default() -> Self {
-        Self {
-            at: BTreeMap::new(),
-            bounds: Rect::from_min_size(Pos2::ZERO, Vec2::splat(1.0)),
-        }
-    }
-}
-
-impl Layout {
-    pub(in crate::triage) fn of(graph: &Graph, shown: &[usize]) -> Self {
-        let level = graph.levels(shown);
-        let mut by_level: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-        for &node in shown {
-            by_level
-                .entry(level.get(&node).copied().unwrap_or(0))
-                .or_default()
-                .push(node);
-        }
-        let mut at = BTreeMap::new();
-        let mut x = 0.0;
-        let mut bounds: Option<Rect> = None;
-        let mut row_of: BTreeMap<usize, f32> = BTreeMap::new();
-        for nodes in by_level.values_mut() {
-            // Under the anchor, so an edge runs short: order by where the
-            // node that leads to it sits.
-            nodes.sort_by(|a, b| {
-                let key = |n: &usize| {
-                    graph
-                        .edges
-                        .iter()
-                        .find(|edge| edge.to == *n)
-                        .and_then(|edge| row_of.get(&edge.from))
-                        .copied()
-                        .unwrap_or(0.0)
-                };
-                key(a).total_cmp(&key(b)).then(a.cmp(b))
-            });
-            let rows = nodes.len().min(WRAP);
-            let columns = nodes.len().div_ceil(WRAP.max(1));
-            let height = (rows.max(1) - 1) as f32 * ROW;
-            for (i, &node) in nodes.iter().enumerate() {
-                let (column, row) = (i / WRAP, i % WRAP);
-                let min = Pos2::new(
-                    x + column as f32 * (NODE.x + WRAP_GAP),
-                    -height / 2.0 + row as f32 * ROW - NODE.y / 2.0,
-                );
-                let rect = Rect::from_min_size(min, NODE);
-                bounds = Some(bounds.map_or(rect, |b| b.union(rect)));
-                row_of.insert(node, rect.center().y);
-                at.insert(node, rect);
-            }
-            x += (columns.max(1) - 1) as f32 * (NODE.x + WRAP_GAP) + COLUMN;
-        }
-        Self {
-            at,
-            bounds: bounds
-                .unwrap_or_else(|| Rect::from_min_size(Pos2::ZERO, Vec2::splat(1.0)))
-                .expand(24.0),
-        }
-    }
-}
+/// The smallest size a graph opens at.
+const READABLE: f32 = 0.6;
 
 /// Pan and zoom: `offset` is where graph-space (0, 0) sits in the viewport.
 #[derive(Clone, Copy, Debug)]
@@ -167,8 +93,8 @@ pub(in crate::triage) struct Outcome {
     pub clicked: Option<usize>,
 }
 
-/// Draw the graph in a viewport `height` tall. `wheel` zooms with the plain
-/// wheel (a window); otherwise ctrl and the wheel, or a pinch, do.
+/// Draw the graph in a viewport `height` tall. Ctrl and the wheel, or a
+/// pinch, zoom; the plain wheel is left to the page that holds the graph.
 pub(in crate::triage) fn show(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -176,7 +102,6 @@ pub(in crate::triage) fn show(
     layout: &Layout,
     view: &mut View,
     height: f32,
-    wheel: bool,
 ) -> Outcome {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
@@ -184,6 +109,12 @@ pub(in crate::triage) fn show(
     let viewport = rect.size();
     if !view.fitted && viewport.x > 1.0 {
         view.fit(viewport, layout.bounds);
+        // A graph too big for the box opens at a size the names can be read
+        // at, on the root; "Fit" shows all of it.
+        if view.zoom < READABLE {
+            view.zoom = READABLE;
+            view.offset = viewport / 2.0 - egui::vec2(NODE.x / 2.0, 0.0) * READABLE;
+        }
     }
     if response.dragged() {
         view.offset += response.drag_delta();
@@ -194,7 +125,7 @@ pub(in crate::triage) fn show(
         let pivot = pointer - rect.min;
         if pinch != 1.0 {
             view.zoom_about(pivot, pinch);
-        } else if scroll != 0.0 && (wheel || ctrl) {
+        } else if scroll != 0.0 && ctrl {
             view.zoom_about(pivot, (scroll * 0.0015).exp());
         }
     }
@@ -217,29 +148,40 @@ pub(in crate::triage) fn show(
             view.rect_to_screen(origin, *from),
             view.rect_to_screen(origin, *to),
         );
-        let (a, b) = if to.left() >= from.right() {
-            (from.right_center(), to.left_center())
+        // Right of the root: along the row; left of it: back along the row;
+        // below: down the column.
+        let (a, b, away) = if to.left() >= from.right() {
+            (from.right_center(), to.left_center(), egui::vec2(1.0, 0.0))
+        } else if to.right() <= from.left() {
+            (from.left_center(), to.right_center(), egui::vec2(-1.0, 0.0))
+        } else if to.top() >= from.bottom() {
+            (from.center_bottom(), to.center_top(), egui::vec2(0.0, 1.0))
         } else {
-            (from.center_bottom(), to.center_top())
+            (from.center_top(), to.center_bottom(), egui::vec2(0.0, -1.0))
         };
-        let bend = ((b.x - a.x).abs() * 0.5).max(20.0 * scale);
+        let reach = if away.x != 0.0 {
+            (b.x - a.x).abs()
+        } else {
+            (b.y - a.y).abs()
+        };
+        let bend = away * (reach * 0.5).max(20.0 * scale);
         let color = kind_color(edge.kind);
         painter.add(Shape::CubicBezier(
             egui::epaint::CubicBezierShape::from_points_stroke(
-                [a, a + egui::vec2(bend, 0.0), b - egui::vec2(bend, 0.0), b],
+                [a, a + bend, b - bend, b],
                 false,
                 Color32::TRANSPARENT,
                 Stroke::new(1.3, color),
             ),
         ));
-        let back = (b - (b - egui::vec2(bend, 0.0))).normalized();
+        let back = -away;
         let side = egui::vec2(-back.y, back.x);
         let tip = 7.0 * scale.clamp(0.6, 1.3);
         painter.add(Shape::convex_polygon(
             vec![
                 b,
-                b - back * tip + side * tip * 0.45,
-                b - back * tip - side * tip * 0.45,
+                b + back * tip + side * tip * 0.45,
+                b + back * tip - side * tip * 0.45,
             ],
             color,
             Stroke::NONE,
@@ -290,10 +232,7 @@ pub(in crate::triage) fn show(
             );
             x += 12.0 * scale.clamp(0.7, 1.2);
         }
-        let mut text = format!("{} {}", glyph(&item.kind), item.label);
-        if item.warn {
-            text.push_str(" \u{26a0}");
-        }
+        let text = format!("{} {}", glyph(&item.kind), item.label);
         let galley = inner.layout_no_wrap(text, font.clone(), theme::text());
         inner.galley(
             Pos2::new(x, screen.center().y - galley.size().y / 2.0),
@@ -310,21 +249,35 @@ pub(in crate::triage) fn show(
             if let Some(tier) = graph.nodes[node].tier {
                 ui.label(format!("Highest tier: {}", tier.tag().to_uppercase()));
             }
-            if graph.nodes[node].warn {
-                ui.label("argv[0] does not match the image the kernel loaded");
-            }
             ui.weak("Click to open its details");
         });
     }
-    // The zoom bar.
-    let bar = Rect::from_min_size(
-        rect.right_top() + egui::vec2(-108.0, 6.0),
-        egui::vec2(102.0, 24.0),
+    // The zoom bar, from the top right corner inwards, so it stays in the box
+    // however narrow the box is.
+    let bar = Rect::from_min_max(
+        rect.left_top() + egui::vec2(6.0, 6.0),
+        rect.right_top() + egui::vec2(-6.0, 30.0),
     );
     let mut zoom_ui = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(bar)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+    );
+    zoom_ui.set_clip_rect(rect);
+    if zoom_ui
+        .small_button("Fit")
+        .on_hover_text("Show the whole graph")
+        .clicked()
+    {
+        view.fit(viewport, layout.bounds);
+    }
+    if zoom_ui.small_button("+").on_hover_text("Zoom in").clicked() {
+        view.zoom_about(viewport / 2.0, 1.2);
+    }
+    zoom_ui.label(
+        RichText::new(format!("{:.0}%", view.zoom * 100.0))
+            .small()
+            .color(theme::muted()),
     );
     if zoom_ui
         .small_button("\u{2212}")
@@ -333,21 +286,6 @@ pub(in crate::triage) fn show(
     {
         view.zoom_about(viewport / 2.0, 1.0 / 1.2);
     }
-    zoom_ui.label(
-        RichText::new(format!("{:.0}%", view.zoom * 100.0))
-            .small()
-            .color(theme::muted()),
-    );
-    if zoom_ui.small_button("+").on_hover_text("Zoom in").clicked() {
-        view.zoom_about(viewport / 2.0, 1.2);
-    }
-    if zoom_ui
-        .small_button("Fit")
-        .on_hover_text("Show the whole graph")
-        .clicked()
-    {
-        view.fit(viewport, layout.bounds);
-    }
     Outcome { clicked }
 }
 
@@ -355,42 +293,6 @@ pub(in crate::triage) fn show(
 mod tests {
     use super::super::model::{tests::fixture, Graph};
     use super::*;
-
-    #[test]
-    fn layout_puts_levels_in_columns_left_to_right_without_overlap() {
-        let graph = Graph::build(&fixture());
-        let all: Vec<usize> = (0..graph.nodes.len()).collect();
-        let layout = Layout::of(&graph, &all);
-        assert_eq!(layout.at.len(), all.len());
-        let rects: Vec<Rect> = layout.at.values().copied().collect();
-        for (i, a) in rects.iter().enumerate() {
-            for b in &rects[i + 1..] {
-                assert!(!a.intersects(*b), "{a:?} overlaps {b:?}");
-            }
-        }
-        let root = layout.at[&0];
-        assert!(layout.at.values().all(|r| r.left() >= root.left()));
-        assert!(layout.bounds.contains_rect(root));
-    }
-
-    #[test]
-    fn a_wide_level_wraps_into_columns() {
-        let mut facts = fixture();
-        for n in 0..40u32 {
-            facts.procs.push(super::super::model::Proc {
-                pid: 1000 + n,
-                cookie: 100 + u64::from(n),
-                parent: Some((401, 1)),
-                name: "ls".into(),
-                ..Default::default()
-            });
-        }
-        let graph = Graph::build(&facts);
-        let all: Vec<usize> = (0..graph.nodes.len()).collect();
-        let layout = Layout::of(&graph, &all);
-        let height = layout.bounds.height();
-        assert!(height < (WRAP as f32 + 3.0) * ROW, "{height}");
-    }
 
     #[test]
     fn zoom_keeps_the_point_under_the_pointer_and_fit_never_enlarges() {
@@ -437,7 +339,7 @@ mod tests {
                 egui::CentralPanel::default()
                     .frame(egui::Frame::NONE)
                     .show(root, |ui| {
-                        out = show(ui, egui::Id::new("c"), graph, layout, view, 300.0, false);
+                        out = show(ui, egui::Id::new("c"), graph, layout, view, 300.0);
                     });
             },
         );

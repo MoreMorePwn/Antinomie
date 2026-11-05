@@ -18,7 +18,6 @@ pub(in crate::triage) struct Proc {
     pub name: String,
     /// argv[0] names a program other than the image the kernel loaded.
     pub mismatch: bool,
-    pub first_ns: Option<u64>,
     /// The images the task ran, each with when.
     pub execs: Vec<(String, u64)>,
     /// `(target pid, signal)` of each kill it made.
@@ -35,7 +34,6 @@ pub(in crate::triage) struct Fact {
     pub object: String,
     pub pid: u32,
     pub cookie: u64,
-    pub first_ns: u64,
 }
 
 /// A file a process wrote or ran.
@@ -44,7 +42,6 @@ pub(in crate::triage) struct FileFact {
     pub path: String,
     pub roles: Vec<String>,
     pub process: Option<Key>,
-    pub ns: Option<u64>,
 }
 
 /// An endpoint a process contacted.
@@ -52,7 +49,6 @@ pub(in crate::triage) struct FileFact {
 pub(in crate::triage) struct EndpointFact {
     pub endpoint: String,
     pub process: Option<Key>,
-    pub ns: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -98,13 +94,13 @@ pub(in crate::triage) enum EdgeKind {
 impl EdgeKind {
     pub(in crate::triage) fn label(self) -> &'static str {
         match self {
-            Self::Forked => "forked",
-            Self::Execed => "execed",
-            Self::Wrote => "wrote",
-            Self::Ran => "ran",
-            Self::Connected => "connected",
-            Self::Injected => "injected",
-            Self::Signalled => "signalled",
+            Self::Forked => "fork",
+            Self::Execed => "exec",
+            Self::Wrote => "write",
+            Self::Ran => "run",
+            Self::Connected => "connect",
+            Self::Injected => "inject",
+            Self::Signalled => "signal",
         }
     }
 }
@@ -352,13 +348,27 @@ impl Graph {
     }
 
     /// The node that connects `node` to the rest: the process that started,
-    /// wrote, contacted or acted on it.
-    fn anchor(&self, node: usize) -> Option<usize> {
+    /// wrote, contacted or acted on it. A parent comes before an injector.
+    pub(in crate::triage) fn anchor(&self, node: usize) -> Option<usize> {
         self.edges
             .iter()
             .filter(|edge| edge.to == node)
+            .min_by_key(|edge| {
+                (
+                    matches!(edge.kind, EdgeKind::Injected | EdgeKind::Signalled),
+                    edge.from,
+                )
+            })
             .map(|edge| edge.from)
-            .next()
+    }
+
+    /// The first process with no anchor: the run's root.
+    pub(in crate::triage) fn root(&self) -> usize {
+        (0..self.nodes.len())
+            .find(|&at| {
+                matches!(self.nodes[at].kind, NodeKind::Process(_)) && self.anchor(at).is_none()
+            })
+            .unwrap_or(0)
     }
 
     /// How much a node is worth showing: its tier first, then what it does.
@@ -387,50 +397,54 @@ impl Graph {
             + i64::from(item.warn) * 100
     }
 
-    /// The nodes to show when the box is small: the root, then the ones the
-    /// findings and their importance pick, each with the chain that joins it
-    /// to what is already shown. At most `limit`.
-    pub(in crate::triage) fn pick(&self, limit: usize) -> Vec<usize> {
-        let mut chosen: Vec<usize> = Vec::new();
-        if self.nodes.is_empty() || limit == 0 {
-            return chosen;
-        }
-        if self.nodes.len() <= limit {
-            return (0..self.nodes.len()).collect();
-        }
-        let root = (0..self.nodes.len())
-            .find(|&at| {
-                matches!(self.nodes[at].kind, NodeKind::Process(_)) && self.anchor(at).is_none()
-            })
-            .unwrap_or(0);
-        chosen.push(root);
-        let mut order: Vec<usize> = (0..self.nodes.len()).collect();
-        order.sort_by_key(|&at| (std::cmp::Reverse(self.score(at)), at));
-        for at in order {
-            if chosen.contains(&at) {
-                continue;
-            }
-            let mut chain = vec![at];
-            let mut next = self.anchor(at);
-            let mut guard = 0;
-            while let Some(parent) = next {
-                if chosen.contains(&parent) || chain.contains(&parent) || guard > 64 {
-                    break;
-                }
-                chain.push(parent);
-                next = self.anchor(parent);
-                guard += 1;
-            }
-            if chosen.len() + chain.len() <= limit {
-                chosen.extend(chain.into_iter().rev());
-            }
-            if chosen.len() >= limit {
+    /// `node` and the chain of anchors that joins it to the root.
+    fn add_chain(&self, node: usize, chosen: &mut BTreeSet<usize>) {
+        let mut next = Some(node);
+        let mut guard = 0;
+        while let Some(at) = next {
+            if !chosen.insert(at) || guard > 64 {
                 break;
             }
+            next = self.anchor(at);
+            guard += 1;
         }
-        chosen.sort_unstable();
-        chosen.dedup();
-        chosen
+    }
+
+    /// The nodes of the Compact view: the root, the `per_kind` best
+    /// processes, files and endpoints (by `score`), and the processes the run
+    /// injected into or signalled, each with the chain that joins it to the
+    /// root. Processes the chains pull in come on top of the `per_kind`.
+    pub(in crate::triage) fn compact(&self, per_kind: usize) -> Vec<usize> {
+        if self.nodes.is_empty() {
+            return Vec::new();
+        }
+        let mut chosen: BTreeSet<usize> = BTreeSet::new();
+        chosen.insert(self.root());
+        let best = |wanted: &dyn Fn(usize) -> bool| -> Vec<usize> {
+            let mut all: Vec<usize> = (0..self.nodes.len()).filter(|&at| wanted(at)).collect();
+            all.sort_by_key(|&at| (std::cmp::Reverse(self.score(at)), at));
+            all.truncate(per_kind);
+            all
+        };
+        let kind = |at: usize| &self.nodes[at].kind;
+        let victim = |at: usize| {
+            matches!(kind(at), NodeKind::Victim(_))
+                || self.edges.iter().any(|edge| {
+                    edge.to == at
+                        && matches!(kind(at), NodeKind::Process(_))
+                        && edge.kind == EdgeKind::Injected
+                })
+        };
+        let picks = [
+            best(&|at| matches!(kind(at), NodeKind::Process(_))),
+            best(&victim),
+            best(&|at| matches!(kind(at), NodeKind::File(_))),
+            best(&|at| matches!(kind(at), NodeKind::Endpoint(_))),
+        ];
+        for node in picks.into_iter().flatten() {
+            self.add_chain(node, &mut chosen);
+        }
+        chosen.into_iter().collect()
     }
 
     /// The level of each node from the left: the root is 0, what a process
@@ -518,7 +532,6 @@ pub(super) mod tests {
             cookie,
             parent,
             name: name.into(),
-            first_ns: Some(u64::from(pid) * 1_000_000),
             ..Proc::default()
         }
     }
@@ -540,7 +553,6 @@ pub(super) mod tests {
                     object: "pid 418 poke".into(),
                     pid: 401,
                     cookie: 1,
-                    first_ns: 4_000_000_000,
                 },
                 Fact {
                     tier: Tier::Medium,
@@ -548,7 +560,6 @@ pub(super) mod tests {
                     object: "/tmp/.x/kdevtmpfsi".into(),
                     pid: 420,
                     cookie: 4,
-                    first_ns: 480_000_000,
                 },
                 Fact {
                     tier: Tier::Info,
@@ -556,7 +567,6 @@ pub(super) mod tests {
                     object: "x".into(),
                     pid: 430,
                     cookie: 6,
-                    first_ns: 1,
                 },
             ],
             files: vec![
@@ -564,19 +574,16 @@ pub(super) mod tests {
                     path: "/tmp/.x/kdevtmpfsi".into(),
                     roles: vec!["created".into(), "executed".into()],
                     process: Some((420, 4)),
-                    ns: Some(450_000_000),
                 },
                 FileFact {
                     path: "/etc/passwd".into(),
                     roles: vec!["changed".into()],
                     process: None,
-                    ns: None,
                 },
             ],
             endpoints: vec![EndpointFact {
                 endpoint: "45.9.148.9:80".into(),
                 process: Some((430, 6)),
-                ns: Some(460_000_000),
             }],
         }
     }
@@ -672,6 +679,24 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn edge_labels_are_the_plain_verb() {
+        let all = [
+            EdgeKind::Forked,
+            EdgeKind::Execed,
+            EdgeKind::Wrote,
+            EdgeKind::Ran,
+            EdgeKind::Connected,
+            EdgeKind::Injected,
+            EdgeKind::Signalled,
+        ];
+        let labels: Vec<_> = all.iter().map(|kind| kind.label()).collect();
+        assert_eq!(
+            labels,
+            ["fork", "exec", "write", "run", "connect", "inject", "signal"]
+        );
+    }
+
+    #[test]
     fn target_pids_come_from_the_object() {
         assert_eq!(target_pid("pid 418 poke"), Some(418));
         assert_eq!(target_pid("pid 7"), Some(7));
@@ -681,9 +706,9 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn about_fifteen_nodes_are_picked_by_findings_and_stay_connected() {
+    fn the_compact_view_takes_the_top_fifteen_of_each_kind_and_their_chains() {
         let mut facts = fixture();
-        // Thirty quiet children of the sh, and one with a HIGH finding.
+        // Thirty quiet children of the sh, and one deep one with a HIGH finding.
         for n in 0..30u32 {
             facts
                 .procs
@@ -696,24 +721,47 @@ pub(super) mod tests {
             object: "/etc/cron.d/x".into(),
             pid: 2000,
             cookie: 200,
-            first_ns: 9,
         });
+        // Twenty files and twenty endpoints the demo-all wrote and contacted.
+        for n in 0..20 {
+            facts.files.push(FileFact {
+                path: format!("/tmp/f{n}"),
+                roles: vec!["created".into()],
+                process: Some((401, 1)),
+            });
+            facts.endpoints.push(EndpointFact {
+                endpoint: format!("10.0.0.{n}:80"),
+                process: Some((401, 1)),
+            });
+        }
         let graph = Graph::build(&facts);
-        let picked = graph.pick(15);
-        assert!(picked.len() <= 15, "{}", picked.len());
+        let picked = graph.compact(15);
+        let count = |wanted: fn(&NodeKind) -> bool| {
+            picked
+                .iter()
+                .filter(|&&at| wanted(&graph.nodes[at].kind))
+                .count()
+        };
         let name = |at: usize| graph.nodes[at].label.clone();
         let names: Vec<String> = picked.iter().map(|&at| name(at)).collect();
-        assert!(
-            names.contains(&"demo-all (401)".to_string()),
-            "root: {names:?}"
+        // Files and endpoints: fifteen each (the kdevtmpfsi file is among the
+        // files, the one endpoint of the fixture among the endpoints).
+        assert_eq!(count(|k| matches!(k, NodeKind::File(_))), 15, "{names:?}");
+        assert_eq!(
+            count(|k| matches!(k, NodeKind::Endpoint(_))),
+            15,
+            "{names:?}"
         );
-        assert!(
-            names.contains(&"deep (2000)".to_string()),
-            "a HIGH process: {names:?}"
-        );
+        assert!(names.contains(&"demo-all (401)".to_string()), "root");
+        assert!(names.contains(&"deep (2000)".to_string()), "a HIGH process");
         // Its chain to the root is shown with it.
         assert!(names.contains(&"ls (1029)".to_string()), "{names:?}");
         assert!(names.contains(&"sh (420)".to_string()), "{names:?}");
+        // The injected-into process is shown with the processes.
+        assert!(names.contains(&"pid 418".to_string()), "{names:?}");
+        // Processes: fifteen best, plus the chains that join them.
+        let processes = count(|k| matches!(k, NodeKind::Process(_)));
+        assert!((15..=15 + 4).contains(&processes), "{processes}");
         // Every picked node but the root has its anchor picked.
         for &at in &picked {
             if let Some(anchor) = graph.anchor(at) {
@@ -721,10 +769,8 @@ pub(super) mod tests {
             }
         }
         // A small graph is shown whole.
-        assert_eq!(
-            Graph::build(&fixture()).pick(15).len(),
-            Graph::build(&fixture()).nodes.len()
-        );
+        let small = Graph::build(&fixture());
+        assert_eq!(small.compact(15).len(), small.nodes.len());
     }
 
     #[test]
@@ -736,7 +782,6 @@ pub(super) mod tests {
         assert_eq!(l(NodeKind::Process((401, 1))), 0);
         assert_eq!(l(NodeKind::Process((420, 4))), 1);
         assert_eq!(l(NodeKind::Process((430, 6))), 2);
-        assert!(l(NodeKind::Endpoint("45.9.148.9:80".into())) >= 3);
     }
 
     #[test]
