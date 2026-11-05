@@ -1140,10 +1140,15 @@ pub(super) mod tests {
             preview(&typed("address.data", "sockaddr", object, &address)),
             "10.0.2.3:53"
         );
-        // A family the view cannot decode: the address's bytes.
+        // AF_UNSPEC (the disconnect idiom) is named.
         assert_eq!(
             preview(&typed("arg1.address", "sockaddr", object, &[0; 4])),
-            "00 00 00 00"
+            "AF_UNSPEC"
+        );
+        // A family the view cannot decode: the address's bytes.
+        assert_eq!(
+            preview(&typed("arg1.address", "sockaddr", object, &[9, 0, 1, 2])),
+            "09 00 01 02"
         );
     }
 
