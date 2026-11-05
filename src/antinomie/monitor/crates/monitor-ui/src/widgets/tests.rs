@@ -598,5 +598,22 @@ fn a_mitre_row_draws_its_tactic_dot_on_the_middle_of_its_text() {
                 id.center().y
             );
         }
+        // Room between the dots and before the text.
+        let mut row: Vec<_> = circles(&output)
+            .into_iter()
+            .filter(|(centre, _, _)| (centre.y - id.center().y).abs() < 8.0 && centre.x < id.left())
+            .collect();
+        row.sort_by(|a, b| a.0.x.total_cmp(&b.0.x));
+        let last = row.last().unwrap();
+        assert!(
+            id.left() - (last.0.x + last.1) >= 4.0,
+            "{ppp}: the last dot touches the id"
+        );
+        for pair in row.windows(2) {
+            assert!(
+                pair[1].0.x - pair[1].1 - (pair[0].0.x + pair[0].1) >= 4.0,
+                "{ppp}: two dots are too close"
+            );
+        }
     }
 }

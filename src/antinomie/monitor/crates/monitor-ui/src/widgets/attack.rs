@@ -133,7 +133,7 @@ pub fn legend(ui: &mut egui::Ui, id: &str) {
     .default_open(false)
     .show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.spacing_mut().item_spacing.x = 8.0;
             for tactic in Tactic::ALL {
                 tactic_chip(ui, tactic);
             }

@@ -119,7 +119,12 @@ pub fn dots_width(size: f32, count: usize) -> f32 {
     if count == 0 {
         return 0.0;
     }
-    count as f32 * (super::dot::diameter(size) + 2.0) + 2.0
+    count as f32 * dot_step(size) + 4.0
+}
+
+/// From the middle of one dot of a pill to the next: the dot and a gap of 5.
+fn dot_step(size: f32) -> f32 {
+    super::dot::diameter(size) + 5.0
 }
 
 /// A [`pill`] with one dot in each of `dots` before its text.
@@ -162,7 +167,7 @@ pub fn pill_dots(
         let content = lead + galley.size().x;
         let left = rect.center().x - content * 0.5;
         let top = rect.center().y - galley.size().y * 0.5;
-        let step = super::dot::diameter(size) + 2.0;
+        let step = dot_step(size);
         for (index, color) in dots.iter().enumerate() {
             super::dot::paint(
                 painter,
