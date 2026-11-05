@@ -154,10 +154,47 @@ class PlanTests(unittest.TestCase):
         return {"out": out, "base": Path("/base"), "old_base": Path("/old"), "new": Path("/new"),
                 "fix": out / "fixtures", "old": Path("/oldhost"), "old_ok": True}
 
-    def test_quick_is_the_three_oracle_groups(self):
+    def test_quick_is_the_three_oracle_groups_and_the_in_app_screen(self):
         checks = vm.plan("quick", self.ctx())
-        self.assertEqual([c.name for c in checks], ["conf-quick"])
+        self.assertEqual([c.name for c in checks], ["conf-quick", "screen"])
         self.assertEqual(checks[0].argv[-1], "user,root,threads")
+        self.assertEqual(checks[1].argv, ["/new/guest-run", "/out/runs/screen/plan.json"])
+        self.assertIn("screen", [c.name for c in vm.plan("full", self.ctx())])
+
+    def screen_plan(self, bundle):
+        with tempfile.TemporaryDirectory() as tmp:
+            base, out = Path(tmp) / "base", Path(tmp) / "out"
+            base.mkdir()
+            (base / "bundle.json").write_text(bundle)
+            ctx = {**self.ctx(), "base": base, "out": out}
+            check = next(c for c in vm.plan("quick", ctx) if c.name == "screen")
+            argv, env = vm.command_for(check, ctx, None)
+            path = Path(argv[-1])
+            self.assertEqual((argv[0], env), (str(Path("/new/guest-run")), {}))
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            return vm.json.loads(path.read_text()), base, out
+
+    def test_the_screen_check_starts_a_vm_with_its_in_app_screen(self):
+        plan, base, out = self.screen_plan('{"antinomie_revision": 20}')
+        self.assertIs(plan["headless"], False)
+        self.assertIs(plan["screen_check"], True)
+        self.assertEqual(plan["import"], str(base))
+        self.assertEqual(plan["data_dir"], str(out / "runs/screen/data"))
+        self.assertEqual(plan["vm"], {"name": "vm-regress screen", "cpus": 2, "ram_mib": 1024, "disk_gib": 1})
+
+    def test_the_screen_check_meets_a_debian_bases_minima_with_a_throwaway_account(self):
+        plan, _, _ = self.screen_plan('{"guest": {"min_ram_mib": 2048, "min_disk_gib": 4, '
+                                      '"requires_credentials": true}}')
+        vm_spec = plan["vm"]
+        self.assertEqual((vm_spec["ram_mib"], vm_spec["disk_gib"], vm_spec["username"]), (2048, 4, "screencheck"))
+        self.assertRegex(vm_spec["password"], r"^[0-9a-f]{32}$")
+        self.assertNotEqual(vm_spec["password"], self.screen_plan(
+            '{"guest": {"requires_credentials": true}}')[0]["vm"]["password"])
+
+    def test_a_base_without_a_readable_bundle_is_an_error(self):
+        ctx = {**self.ctx(), "base": Path("/nonexistent-base")}
+        with self.assertRaisesRegex(vm.Failure, "bundle.json"):
+            vm.screen_plan(ctx)
 
     def test_full_contains_quick_and_both_interop_directions(self):
         names = [c.name for c in vm.plan("full", self.ctx())]

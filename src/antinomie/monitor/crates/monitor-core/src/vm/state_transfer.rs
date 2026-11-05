@@ -31,11 +31,23 @@ impl VmProcess {
         Ok(())
     }
     pub(super) fn transfer_state(&self, mut file: File, incoming: bool) -> Result<(), String> {
-        let mut qmp = Qmp::connect_with(
-            &self.qmp_path,
-            self.waits.qmp_connect(),
-            self.waits.qmp_reply(),
-        )?;
+        // A restore loads into a QEMU it has just started (`-incoming
+        // defer`), which creates its monitor socket during startup: on a busy
+        // host that is well past the short connect wait of a running QEMU,
+        // and the missing socket failed the restore with "No such file or
+        // directory". It gets the startup wait, as the RAM layout check does.
+        let wait = if incoming {
+            self.waits.qmp_startup()
+        } else {
+            self.waits.qmp_connect()
+        };
+        let mut qmp =
+            Qmp::connect_with(&self.qmp_path, wait, self.waits.qmp_reply()).map_err(|error| {
+                format!(
+                    "QMP connect for the snapshot state: {error}{}",
+                    qemu_log_hint(&self.runtime_dir)
+                )
+            })?;
         if !incoming {
             qmp.reply("{\"execute\":\"migrate-set-capabilities\",\"arguments\":{\"capabilities\":[{\"capability\":\"x-ignore-shared\",\"state\":false}]}}\n")?;
             let capabilities = qmp.reply("{\"execute\":\"query-migrate-capabilities\"}\n")?;

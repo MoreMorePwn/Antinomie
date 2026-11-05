@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-use std::{env, fs, path::Path};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
+
+#[path = "build/git_head.rs"]
+mod git_head;
 
 /// Repository files the app writes out as its base build kit, in
 /// their repository layout.
@@ -68,16 +74,16 @@ fn build_commit(repo: &Path) -> String {
             .and_then(short_commit)
     {
         {
-            if let Some(dir) = git(&["rev-parse", "--absolute-git-dir"]) {
-                // Only files that exist: cargo reruns every build for a missing one.
-                let mut watch = vec![format!("{dir}/HEAD"), format!("{dir}/packed-refs")];
-                if let Some(reference) = git(&["symbolic-ref", "-q", "HEAD"]) {
-                    watch.push(format!("{dir}/{reference}"));
-                }
-                for path in watch.into_iter().filter(|path| Path::new(path).exists()) {
-                    println!("cargo:rerun-if-changed={path}");
-                }
+            // A commit, checkout or reset changes one of these, in a clone and
+            // in a worktree (whose branch and packed-refs are in the common dir).
+            for path in git_head::head_files(repo) {
+                println!("cargo:rerun-if-changed={}", path.display());
             }
+            // Worktrees that share one target dir share this script's last
+            // output, and cargo checks the paths above of the worktree that
+            // ran it last. A relative path is checked in the package being
+            // built, so touching its lib.rs runs the script there again.
+            println!("cargo:rerun-if-changed=src/lib.rs");
             let dirty = git(&["status", "--porcelain", "--untracked-files=no"])
                 .is_some_and(|out| !out.is_empty());
             return if dirty {
@@ -99,9 +105,16 @@ fn build_commit(repo: &Path) -> String {
         .unwrap_or_else(|| "unknown".to_owned())
 }
 
+/// The package being built, as cargo says when it runs this script. Not the
+/// compile-time `env!`: worktrees that share a target dir can run a script
+/// another worktree compiled, which would read that worktree's files.
+fn manifest_dir() -> PathBuf {
+    PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"))
+}
+
 fn main() {
     {
-        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../../..");
+        let repo = manifest_dir().join("../../../../..");
         let repo = repo.canonicalize().unwrap_or(repo);
         println!(
             "cargo:rustc-env=ANTINOMIE_BUILD_COMMIT_STAMP={}",
@@ -122,7 +135,7 @@ fn main() {
 }
 
 fn build_kit() {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let repo = manifest_dir()
         .join("../../../../..")
         .canonicalize()
         .expect("repository root");
