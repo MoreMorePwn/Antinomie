@@ -287,6 +287,10 @@ pub(crate) struct TriageView {
     notes: Vec<String>,
     /// Export report: the dialog, its choices and the running export.
     report: report_export::Dialog,
+    /// The Summary's Relationships box and the data derived for it.
+    summary_state: summary::SummaryState,
+    /// The base image and last screenshot of the selected run.
+    run_facts: summary::RunFacts,
 }
 
 impl TriageView {
@@ -351,6 +355,8 @@ impl Default for TriageView {
             route: crate::route_ui::RouteText::default(),
             notes: Vec::new(),
             report: report_export::Dialog::default(),
+            summary_state: Default::default(),
+            run_facts: Default::default(),
         }
     }
 }

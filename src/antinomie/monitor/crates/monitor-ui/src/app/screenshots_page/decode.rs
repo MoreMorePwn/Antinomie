@@ -10,7 +10,7 @@ const LIMIT: u64 = 100_000_000;
 
 /// The picture at `path`, scaled down to at most `max_side` pixels wide or
 /// high (thumbnails ask for their width; the viewer for its longest side).
-pub(super) fn load(path: &Path, max_side: usize) -> Result<ColorImage, String> {
+pub(crate) fn load(path: &Path, max_side: usize) -> Result<ColorImage, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let mut decoder = png::Decoder::new(BufReader::new(file));
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);

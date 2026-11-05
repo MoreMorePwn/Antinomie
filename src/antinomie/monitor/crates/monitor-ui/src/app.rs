@@ -38,7 +38,7 @@ mod run_labels;
 mod run_selector;
 mod run_state_text;
 mod samples_page;
-mod screenshots_page;
+pub(crate) mod screenshots_page;
 mod session;
 mod settings_timeouts;
 mod settings_window;
