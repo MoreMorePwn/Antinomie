@@ -34,7 +34,10 @@ profiles, interop, stress-extreme: see ARM64_LATER).
 
 BASE is a BusyBox base bundle built from the current guest series; the quick
 tier also runs on a Debian Minimal base (its VMs get a throwaway account and
-the base's minima). Everything a check writes goes under --out (default vm-regress-out): logs, runs, the
+the base's minima). The full tier's snapshot-uefi check runs on a Debian base
+only (SKIP on BusyBox): snapshot-check --uefi, the snapshot check on a VM of
+the server device profile, whose disk is installed for UEFI and which boots
+through OVMF (AAVMF on arm64) with its own variable store. Everything a check writes goes under --out (default vm-regress-out): logs, runs, the
 fixtures built from tests/monitor and private HOME and XDG folders per check.
 The app's own data and settings are never used.
 """
@@ -499,6 +502,11 @@ def plan_x86_64(tier, ctx):
               2400, needs=("base",)),
         Check("snapshot", "full", example("snapshot-check", base, runs / "snapshot"), str(ROOT), 2400,
               needs=("base",)),
+        # The same on a UEFI VM (server profile: OVMF or AAVMF and the VM's
+        # variable store); a Debian base only, the one whose VM disks are
+        # installed for UEFI.
+        Check("snapshot-uefi", "full", example("snapshot-check", base, runs / "snapshot-uefi", "--uefi"),
+              str(ROOT), 2400, needs=("base", "debian_base")),
         # A 95 MiB program analysed whole on a 2 GiB VM, refused on a 320 MiB one (two boots).
         Check("specimen", "full", example("specimen-check", base, runs / "specimen", fix / "specimen-probe"),
               str(ROOT), 3600, needs=("base",)),
@@ -753,12 +761,23 @@ def missing(check, ctx):
     labels = {"old_base": "--old-base", "old": "--old-host", "base": "BASE",
               "legacy_base": f"--legacy-base (a base of revision {LEGACY_TRACER_REVISION} or older, "
                              f"the 0.7.0 BusyBox base; or {LEGACY_BASE_ENV})",
-              "tools": "--debugger-tools (a data folder with tools/gef and tools/pwndbg)"}
+              "tools": "--debugger-tools (a data folder with tools/gef and tools/pwndbg)",
+              "debian_base": "a Debian base (BASE's guest asks for an account)"}
     keys = {"old": "old_ok", "tools": "debugger_ok"}
     for need in check.needs:
         if not ctx.get(keys.get(need, need)):
             return f"needs {labels[need]}"
     return None
+
+
+def bundle_debian(bundle):
+    """Whether a base is a Debian one: its guest asks for an account (bundle.json
+    guest.requires_credentials)."""
+    try:
+        guest = json.loads((Path(bundle) / "bundle.json").read_text()).get("guest")
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+    return isinstance(guest, dict) and guest.get("requires_credentials") is True
 
 
 def bundle_revision(bundle):
@@ -1224,7 +1243,8 @@ def main(argv=None):
             raise Failure(f"{legacy} is not a base bundle (no bundle.json)")
         ctx = {"out": out, "base": base, "old_base": old_base, "new": MONITOR / EXAMPLES,
                "fix": out / "fixtures", "old": out / "old-host-examples", "old_ok": False,
-               "legacy_base": legacy, "base_revision": bundle_revision(base)}
+               "legacy_base": legacy, "base_revision": bundle_revision(base),
+               "debian_base": bundle_debian(base)}
         checks = plan(tier, ctx, args.arch)
         if args.list:
             for check in checks:
