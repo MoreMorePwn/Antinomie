@@ -590,6 +590,19 @@ The network capture is the guest's own view on every route.
   names are always in the badge's tooltip and in a folded **Tactic colours**
   legend under the Summary and the sample window's ATT&CK section. The Sigma
   rules of low or informational severity add no techniques to the list.
+- **Triage › Detection** lists each engine's matches as cards under **Matches**.
+  **Sort by** orders them by risk (the default), name, MITRE technique, engine
+  (rule pack), hit count or first hit (where the first hit was recorded:
+  journal event, call or packet order; matches with no position come last); the
+  choice is saved. A card shows the rule's title, severity tag and hit count, the
+  description, the rule pack and every author, and the MITRE tags. **Details…**
+  opens the rule: description, then the evidence locations as a scrollable
+  table, the rule's metadata and its text (wrapped by default). The page scrolls
+  when a section grows. An empty result says how many inputs were not scanned
+  and why. For IDS, "Rule packs: N rules" counts every rule in the enabled
+  packs and the coverage line counts what Suricata loaded; hover it for the
+  difference. A scan that starts by itself and fails never replaces the result
+  on screen, and no scan starts by itself while an engine tool has not answered.
 - **Triage › Summary** also names the run's root process from the launch request
   when the recording's launch record cannot (the program and arguments the run
   was asked to start, kept as the first name in its exec history), and the

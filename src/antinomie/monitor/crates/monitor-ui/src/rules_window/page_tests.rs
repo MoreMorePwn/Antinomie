@@ -659,6 +659,11 @@ fn the_header_counts_packs_groups_and_patterns_in_the_right_number() {
         )),
         "{text}"
     );
+    // The engine tab repeats the counts for its own rules, in the IOC style.
+    assert!(
+        text.contains("1 of 1 pack enabled · 0 custom groups"),
+        "{text}"
+    );
 }
 
 #[test]

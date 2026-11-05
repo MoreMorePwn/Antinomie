@@ -76,19 +76,21 @@ impl Model {
         if !self.loaded {
             self.ensure(data_dir);
         }
-        ui.label(
-            RichText::new("Detection rules")
-                .size(ui.text_style_height(&egui::TextStyle::Heading))
-                .color(theme::heading()),
-        );
         self.regex.load(data_dir);
+        // The counts sit in the heading row like the IOC tab's "x of y loaded"
+        // sits in its button row; each tab repeats them for its own rules.
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Scans never use the network.").color(theme::muted()))
-                .on_hover_text("Installed packs and custom groups are the only production rules. Scans do not download rules or upload evidence.");
+            ui.label(
+                RichText::new("Detection rules")
+                    .size(ui.text_style_height(&egui::TextStyle::Heading))
+                    .color(theme::heading()),
+            );
             ui.weak(self.counts_line()).on_hover_text(
-                "Installed packs and how many are enabled, custom groups, and the string patterns that are switched on. The tabs show the packs per engine.",
+                "Installed packs and how many are enabled, custom groups, and the string patterns that are switched on. Each tab counts its own rules.",
             );
         });
+        ui.label(RichText::new("Scans never use the network.").color(theme::muted()))
+            .on_hover_text("Installed packs and custom groups are the only production rules. Scans do not download rules or upload evidence.");
         let mut engine = ENGINES
             .iter()
             .map(|(id, _)| *id)
@@ -256,6 +258,9 @@ impl Model {
                 let root = ruleset::rules_root(data_dir);
                 crate::folders::show_created_detached(root);
             }
+            ui.weak(self.engine_counts()).on_hover_text(
+                "The packs of this engine that are switched on, and its custom groups. Rules are counted per pack in the Installed list.",
+            );
         });
     }
 

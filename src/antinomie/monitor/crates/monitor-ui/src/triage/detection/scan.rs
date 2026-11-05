@@ -158,6 +158,12 @@ impl View {
             if !self.automatic || self.rx.is_some() || !key.starts_with("ready:") {
                 continue;
             }
+            // An engine tool that has not answered yet (a busy machine) is
+            // asked again by the probe; scanning now would only record that
+            // nothing could be evaluated.
+            if self.tool_unanswered(index) {
+                continue;
+            }
             let now = std::time::Instant::now();
             if !self.budgets[index].allow(now) {
                 if let Some(at) = self.budgets[index].ready_at {
@@ -185,6 +191,16 @@ impl View {
             }
             break;
         }
+    }
+    /// Whether the probe of the tool behind engine `index` has no answer.
+    pub(super) fn tool_unanswered(&self, index: usize) -> bool {
+        use antinomie_monitor_core::ruleset::ToolProbe;
+        self.digest_facts.as_ref().is_some_and(|facts| {
+            matches!(
+                [None, Some(&facts.suricata), Some(&facts.sigma)][index],
+                Some(ToolProbe::Unknown(_))
+            )
+        })
     }
     pub(super) fn fresh_registry(&self) -> Option<&antinomie_monitor_core::ruleset::Registry> {
         self.registry

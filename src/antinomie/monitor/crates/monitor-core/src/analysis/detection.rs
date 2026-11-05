@@ -32,9 +32,50 @@ pub enum Engine {
     Sigma,
 }
 
+/// The order of the match cards in Triage > Detection (Settings keeps it).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchSort {
+    /// Highest severity first.
+    #[default]
+    Risk,
+    Name,
+    /// By the first MITRE technique id (T1003 before T1055.001).
+    Mitre,
+    Engine,
+    /// Most hits first.
+    Hits,
+    /// By where the first hit was recorded in the evidence, earliest first.
+    FirstHit,
+}
+
+impl MatchSort {
+    pub const ALL: [Self; 6] = [
+        Self::Risk,
+        Self::Name,
+        Self::Mitre,
+        Self::Engine,
+        Self::Hits,
+        Self::FirstHit,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Risk => "Risk",
+            Self::Name => "Name",
+            Self::Mitre => "MITRE technique",
+            Self::Engine => "Engine",
+            Self::Hits => "Hit count",
+            Self::FirstHit => "First hit",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Order of the match cards; Risk when settings predate it.
+    pub match_sort: MatchSort,
     pub yara_rules: String,
     pub ids_rules: String,
     pub sigma_rules: String,
@@ -794,6 +835,18 @@ pub fn mitre_references(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_match_sort_is_risk_when_settings_do_not_name_one_and_persists() {
+        let old: Settings = serde_json::from_str(r#"{"scan_memory":true}"#).unwrap();
+        assert_eq!(old.match_sort, MatchSort::Risk);
+        let mut chosen = old;
+        chosen.match_sort = MatchSort::FirstHit;
+        let saved = serde_json::to_string(&chosen).unwrap();
+        assert!(saved.contains(r#""match_sort":"first_hit""#), "{saved}");
+        let back: Settings = serde_json::from_str(&saved).unwrap();
+        assert_eq!(back.match_sort, MatchSort::FirstHit);
+    }
 
     #[test]
     fn index_temporaries_left_by_a_killed_scan_are_removed_when_idle() {

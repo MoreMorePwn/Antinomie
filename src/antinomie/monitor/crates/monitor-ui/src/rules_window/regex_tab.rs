@@ -128,6 +128,12 @@ impl Model {
         if let Some(error) = &self.regex.error {
             crate::activity::error(ui, error);
         }
+        let total = builtin_patterns().len() + self.regex.config.custom.len();
+        ui.weak(format!(
+            "{} of {total} string patterns in use",
+            self.regex.active_count()
+        ))
+        .on_hover_text("The built-in and custom patterns that are switched on.");
         ui.add_space(4.0);
         theme::section(ui, "Add patterns");
         self.custom_patterns(ui, data_dir);

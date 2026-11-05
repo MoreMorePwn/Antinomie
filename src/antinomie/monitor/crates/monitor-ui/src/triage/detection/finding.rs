@@ -276,39 +276,68 @@ pub(super) fn evidence_list(
     if finding.evidence.is_empty() {
         ui.weak("No evidence location was recorded for this rule.");
     }
+    if finding.evidence.is_empty() {
+        return None;
+    }
+    // A table the person can scroll when the list is long: the number, the
+    // location (a button that opens it) and, for Sigma, the journal event.
+    let journal = finding
+        .evidence
+        .iter()
+        .enumerate()
+        .any(|(index, _)| journal_focus(engine, finding, index).is_some());
     egui::ScrollArea::vertical()
         .id_salt(salt)
         .max_height(max_height)
         .auto_shrink([false, true])
         .show(ui, |ui| {
-            for (index, evidence) in finding.evidence.iter().enumerate() {
-                let focus = journal_focus(engine, finding, index);
-                ui.horizontal_wrapped(|ui| {
-                    if let Some(Focus::Event(event)) = &focus {
-                        let label = format!("Journal event #{event}");
-                        let button = ui
-                            .add(egui::Button::new(label).wrap())
-                            .on_hover_text("Open this event in the normalized event journal");
-                        if button.clicked() {
-                            selected = Some(Pick::Journal(Focus::Event(*event)));
-                        }
+            egui::Grid::new(("detection-evidence-table", finding.rule_id.as_str()))
+                .num_columns(if journal { 3 } else { 2 })
+                .striped(true)
+                .spacing([14.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label(RichText::new("#").small().color(theme::muted()));
+                    ui.label(RichText::new("Location").small().color(theme::muted()));
+                    if journal {
+                        ui.label(RichText::new("Journal").small().color(theme::muted()));
                     }
-                    if ui
-                        .add(egui::Button::new(evidence_label(evidence)).wrap())
-                        .clicked()
-                    {
-                        selected = Some(Pick::Source(evidence.clone()));
-                    }
-                    if let Some(Focus::Source(source)) = &focus {
-                        let button = ui.small_button("In journal").on_hover_text(
-                            "Saved before event numbers were kept: shows the first journal event recorded for this source",
-                        );
-                        if button.clicked() {
-                            selected = Some(Pick::Journal(Focus::Source(source.clone())));
+                    ui.end_row();
+                    for (index, evidence) in finding.evidence.iter().enumerate() {
+                        let focus = journal_focus(engine, finding, index);
+                        ui.label(RichText::new((index + 1).to_string()).color(theme::muted()));
+                        if ui
+                            .add(egui::Button::new(evidence_label(evidence)).wrap())
+                            .clicked()
+                        {
+                            selected = Some(Pick::Source(evidence.clone()));
                         }
+                        match &focus {
+                            Some(Focus::Event(event)) => {
+                                let button = ui
+                                    .add(egui::Button::new(format!("Journal event #{event}")))
+                                    .on_hover_text(
+                                        "Open this event in the normalized event journal",
+                                    );
+                                if button.clicked() {
+                                    selected = Some(Pick::Journal(Focus::Event(*event)));
+                                }
+                            }
+                            Some(Focus::Source(source)) => {
+                                let button = ui.small_button("In journal").on_hover_text(
+                                    "Saved before event numbers were kept: shows the first journal event recorded for this source",
+                                );
+                                if button.clicked() {
+                                    selected = Some(Pick::Journal(Focus::Source(source.clone())));
+                                }
+                            }
+                            None if journal => {
+                                ui.label("");
+                            }
+                            None => {}
+                        }
+                        ui.end_row();
                     }
                 });
-            }
         });
     if (finding.count as usize) > finding.evidence.len() {
         ui.weak(format!(
@@ -494,6 +523,16 @@ fn finding_body(
                     egui::Label::new(RichText::new(&parsed.summary).color(theme::text())).wrap(),
                 );
             }
+            section(
+                ui,
+                &format!("Evidence locations ({})", finding.evidence.len()),
+            );
+            if let Some(pick) =
+                evidence_list(ui, report.engine, finding, "detection-finding-hits", 240.0)
+            {
+                clicked = Some(pick);
+            }
+            byte_preview(ui, preview, loading, finding);
             if !parsed.rows.is_empty() {
                 section(ui, "Rule metadata");
                 let rows: Vec<_> = parsed
@@ -510,16 +549,6 @@ fn finding_body(
                 &format!("{} · {}", name(report.engine), finding.title),
                 &finding.rule_text,
             );
-            section(
-                ui,
-                &format!("Evidence locations ({})", finding.evidence.len()),
-            );
-            if let Some(pick) =
-                evidence_list(ui, report.engine, finding, "detection-finding-hits", 240.0)
-            {
-                clicked = Some(pick);
-            }
-            byte_preview(ui, preview, loading, finding);
         });
     clicked
 }
@@ -529,10 +558,7 @@ fn finding_body(
 /// and a button that opens the whole rule in a large window of its own.
 fn rule_text(ui: &mut egui::Ui, id: egui::Id, title: &str, text: &str) {
     let wrap_id = id.with("wrap");
-    let mut wrap = ui
-        .ctx()
-        .data(|data| data.get_temp::<bool>(wrap_id))
-        .unwrap_or(false);
+    let mut wrap = wrap_on(ui.ctx(), wrap_id);
     ui.horizontal_wrapped(|ui| {
         ui.label(theme::section_title(ui, "Rule"));
         if text.is_empty() {
@@ -591,6 +617,11 @@ fn rule_text(ui: &mut egui::Ui, id: egui::Id, title: &str, text: &str) {
         });
 }
 
+/// Whether long rule lines wrap: on until the person turns it off.
+fn wrap_on(ctx: &egui::Context, id: egui::Id) -> bool {
+    ctx.data(|data| data.get_temp::<bool>(id)).unwrap_or(true)
+}
+
 /// The rule's lines, selectable, in a scroll area of the space given.
 fn rule_lines(ui: &mut egui::Ui, id: egui::Id, text: &str, wrap: bool) {
     egui::ScrollArea::new([!wrap, true])
@@ -627,10 +658,7 @@ pub(super) fn show_rule_window(ctx: &egui::Context) {
         .resizable(true)
         .show(ctx, |ui| {
             let wrap_id = key.with("wrap");
-            let mut wrap = ui
-                .ctx()
-                .data(|data| data.get_temp::<bool>(wrap_id))
-                .unwrap_or(false);
+            let mut wrap = wrap_on(ui.ctx(), wrap_id);
             ui.horizontal(|ui| {
                 if ui.button("Copy rule").clicked() {
                     ui.ctx().copy_text(text.clone());
@@ -641,7 +669,14 @@ pub(super) fn show_rule_window(ctx: &egui::Context) {
                 ui.weak(format!("{} lines", text.lines().count()));
             });
             ui.add_space(4.0);
-            rule_lines(ui, key.with("scroll"), &text, wrap);
+            egui::Frame::new()
+                .fill(ui.visuals().code_bg_color)
+                .corner_radius(4)
+                .inner_margin(egui::Margin::same(6))
+                .show(ui, |ui| {
+                    ui.set_min_size(ui.available_size());
+                    rule_lines(ui, key.with("scroll"), &text, wrap);
+                });
         });
     if !open {
         ctx.data_mut(|data| data.remove::<Option<(String, String)>>(key));
@@ -844,5 +879,55 @@ mod tests {
             view.show_windows(ctx)
         });
         assert!(view.windows.is_empty());
+    }
+
+    #[test]
+    fn rule_lines_wrap_until_turned_off() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("rule-wrap-test");
+        assert!(wrap_on(&ctx, id));
+        ctx.data_mut(|data| data.insert_temp(id, false));
+        assert!(!wrap_on(&ctx, id));
+    }
+
+    #[test]
+    fn the_evidence_table_sits_below_the_description_and_above_the_metadata() {
+        let mut view = View::default();
+        let mut finding = super::super::tests::finding(
+            "sample_rule",
+            "Sample rule",
+            vec![bytes_at(0x10), bytes_at(0x20)],
+        );
+        finding.details = "Finds the sample; author: Ann; tags: MALWARE".into();
+        finding.rule_text = "rule sample_rule { condition: true }".into();
+        view.results[0] = Some(Ok(super::super::tests::report(vec![finding])));
+        view.open_window(WindowKey {
+            engine: 0,
+            rule_id: "sample_rule".into(),
+            title: "Sample rule".into(),
+        });
+        let ctx = egui::Context::default();
+        let shapes = frames(&ctx, 4, |root| {
+            let ctx = &root.ctx().clone();
+            view.show_windows(ctx)
+        });
+        let mut y = std::collections::HashMap::new();
+        for shape in &shapes {
+            super::super::tests::each_galley_rect(&shape.shape, &mut |text, rect| {
+                y.entry(text.to_owned()).or_insert(rect.min.y);
+            });
+        }
+        let at = |needle: &str| {
+            *y.iter()
+                .find(|(text, _)| text.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} not drawn: {:?}", y.keys()))
+                .1
+        };
+        assert!(at("Finds the sample") < at("Evidence locations (2)"));
+        assert!(at("Evidence locations (2)") < at("0x10"));
+        assert!(at("0x10") < at("0x20"));
+        // The first column of the table is the location number.
+        assert!(y.contains_key("Location"), "{:?}", y.keys());
+        assert!(at("Evidence locations (2)") < at("rule sample_rule"));
     }
 }

@@ -34,7 +34,19 @@ fn reasons(coverage: &Coverage, wanted: &[CoverageReason]) -> String {
 /// "2,094 rules loaded · 5 not loadable (TLS fingerprint 3, dataset 2)" for IDS,
 /// "12 rules evaluated · 40 not applicable (no matching events 30, ...)" for Sigma.
 /// None for YARA and for results saved before the counts were kept.
+#[cfg(test)]
 pub(super) fn summary(engine: Engine, coverage: &Coverage) -> Option<String> {
+    summary_of(engine, coverage, None)
+}
+
+/// [`summary`], with the rules of the enabled packs when the Rule packs line
+/// above counts more than the engine loaded: "370 rules loaded (of 386 in the
+/// enabled packs)".
+pub(super) fn summary_of(
+    engine: Engine,
+    coverage: &Coverage,
+    offered: Option<u64>,
+) -> Option<String> {
     let (done, other, wanted, total) = match engine {
         Engine::Ids => (
             "loaded",
@@ -51,11 +63,45 @@ pub(super) fn summary(engine: Engine, coverage: &Coverage) -> Option<String> {
         Engine::Yara => return None,
     };
     let mut text = format!("{} {done}", plural(coverage.evaluated, "rule", "rules"));
+    if let Some(offered) = offered.filter(|offered| *offered != coverage.evaluated) {
+        text.push_str(&format!(
+            " (of {} in the enabled packs)",
+            engine::group_digits(offered)
+        ));
+    }
     if total > 0 {
         text.push_str(&format!(
             " · {} {other} ({})",
             engine::group_digits(total),
             reasons(coverage, wanted)
+        ));
+    }
+    Some(text)
+}
+
+/// Why the Rule packs line and the loaded count differ, for the tooltip.
+pub(super) fn difference_note(engine: Engine, coverage: &Coverage, offered: u64) -> Option<String> {
+    if engine != Engine::Ids || offered == coverage.evaluated {
+        return None;
+    }
+    let digits = engine::group_digits;
+    let refused = coverage.not_loadable();
+    let rest = offered.saturating_sub(coverage.evaluated + refused);
+    let mut text = format!(
+        "The Rule packs line counts every rule in the enabled packs ({}). Suricata loaded {} of them for this scan.",
+        digits(offered),
+        digits(coverage.evaluated)
+    );
+    if refused > 0 {
+        text.push_str(&format!(
+            " {} were refused before the scan (the list below names each one and why).",
+            digits(refused)
+        ));
+    }
+    if rest > 0 {
+        text.push_str(&format!(
+            " {} more were switched off one by one, belong to a pack the scan could not use, or were left out by Suricata itself (an unsupported keyword, a rule it could not parse, a protocol the capture does not have).",
+            digits(rest)
         ));
     }
     Some(text)
@@ -90,10 +136,21 @@ impl View {
         let Some(coverage) = report.coverage.as_ref() else {
             return;
         };
-        let Some(line) = summary(report.engine, coverage) else {
+        let offered: u64 = self.sets[index]
+            .iter()
+            .filter(|set| set.enabled)
+            .map(|set| set.rules)
+            .sum();
+        let offered = (report.engine == Engine::Ids && offered > 0).then_some(offered);
+        let Some(line) = summary_of(report.engine, coverage, offered) else {
             return;
         };
-        ui.label(RichText::new(line).small().color(theme::muted()));
+        let line = ui.label(RichText::new(line).small().color(theme::muted()));
+        if let Some(note) =
+            offered.and_then(|offered| difference_note(report.engine, coverage, offered))
+        {
+            line.on_hover_text(note);
+        }
         if !coverage.listed.is_empty() {
             let count = coverage.listed.len() as u64 + coverage.unlisted;
             let title = if report.engine == Engine::Ids {
@@ -167,6 +224,30 @@ mod tests {
         };
         assert_eq!(summary(Engine::Ids, &clean).unwrap(), "1 rule loaded");
         assert!(summary(Engine::Yara, &clean).is_none());
+    }
+
+    #[test]
+    fn the_rule_packs_count_and_the_loaded_count_are_told_apart() {
+        let coverage = ids();
+        // 2,094 loaded + 7 refused of 2,110 offered leaves 9 unexplained by us.
+        assert_eq!(
+            summary_of(Engine::Ids, &coverage, Some(2110)).unwrap(),
+            "2,094 rules loaded (of 2,110 in the enabled packs) · 7 not loadable (TLS fingerprint 3, dataset 2, duplicate 1, no SID 1)"
+        );
+        let note = difference_note(Engine::Ids, &coverage, 2110).unwrap();
+        assert!(
+            note.contains("every rule in the enabled packs (2,110)"),
+            "{note}"
+        );
+        assert!(note.contains("Suricata loaded 2,094"), "{note}");
+        assert!(note.contains("7 were refused"), "{note}");
+        assert!(note.contains("9 more were switched off"), "{note}");
+        // Equal counts need no explanation.
+        assert_eq!(
+            summary_of(Engine::Ids, &coverage, Some(2094)).unwrap(),
+            summary(Engine::Ids, &coverage).unwrap()
+        );
+        assert!(difference_note(Engine::Ids, &coverage, 2094).is_none());
     }
 
     #[test]

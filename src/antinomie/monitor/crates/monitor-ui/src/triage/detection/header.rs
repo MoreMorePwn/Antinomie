@@ -171,7 +171,10 @@ impl View {
                         .frame(false)
                         .truncate(),
                     )
-                    .on_hover_text("Show or hide the installed rule packs")
+                    .on_hover_text(
+                        "Show or hide the installed rule packs. The rule count is every rule in \
+                         the enabled packs; a scan can load fewer, and the line under Scan says how many and why.",
+                    )
                     .clicked();
             },
             |ui| manager = ui.button("Detection rules").clicked(),
@@ -369,6 +372,7 @@ impl View {
     pub(super) fn notes_line(&self, ui: &mut egui::Ui, index: usize) {
         let mut short = Vec::new();
         let mut long = Vec::new();
+        let mut why: Vec<String> = Vec::new();
         let mut note = |brief: String, full: String| {
             short.push(brief);
             long.push(full);
@@ -388,18 +392,13 @@ impl View {
             if let Some(line) = limitation_line(&report.state).filter(|_| !says_why) {
                 note(line.to_owned(), line.to_owned());
             }
+            // The engine's own words, whole: they name the pack, the
+            // requirement and why it was not met, and a cut line hides that.
             if says_why {
-                if let Some(first) = warnings.first() {
-                    let more = warnings.len() - 1;
-                    note(
-                        if more == 0 {
-                            first.clone()
-                        } else {
-                            format!("{first} (+{more} more)")
-                        },
-                        warnings.join("\n"),
-                    );
-                }
+                why = warnings.clone();
+            }
+            if !self.kept_note[index].is_empty() {
+                note(self.kept_note[index].clone(), self.kept_note[index].clone());
             }
             if report.omitted_evidence > 0 {
                 note(
@@ -438,6 +437,9 @@ impl View {
                 )
                 .wrap(),
             );
+        }
+        if !why.is_empty() {
+            crate::activity::warning(ui, why.join("\n"));
         }
         if short.is_empty() {
             return;
@@ -920,7 +922,9 @@ mod tests {
             title.max.y <= size.y && details.max.y <= size.y,
             "card title {title:?}"
         );
-        assert!(title.min.y < size.y * 0.7, "card title {title:?}");
+        // The filter gap and the Sort by row (asked for) push the first card down;
+        // it still starts in the upper four fifths of the pane.
+        assert!(title.min.y < size.y * 0.8, "card title {title:?}");
     }
 
     #[test]
