@@ -18,6 +18,7 @@ pub(super) mod ioc;
 mod network;
 mod noise;
 mod paths;
+mod present;
 mod probes;
 mod process;
 mod rows;
@@ -45,7 +46,13 @@ fn collect_hits(cx: &ctx::Ctx, st: &mut state::State) -> Vec<Hit> {
 pub(super) use calls::watched as watched_calls;
 pub(super) use engine::{Engine, InfoMark, Options, Output, PackedImage};
 pub(super) use frames::{FrameKind, SUPPRESSION_VERSION};
-pub(super) use rows::{view_keeps, View, COL_PROCESS, COL_SUMMARY, COL_TIER, COL_TIME, HEADERS};
+pub(in crate::triage) use present::{offset, when_text};
+#[cfg(test)]
+pub(super) use rows::COL_WHEN;
+pub(super) use rows::{
+    stamp, view_keeps, View, COL_ATTACK, COL_BEHAVIOUR, COL_COUNT, COL_PROCESS, COL_RESULT,
+    COL_SUMMARY, COL_TARGET, COL_TIER, COL_TIME, HEADERS, LIMITED, MISMATCH, SHOWN, TIP,
+};
 pub(super) use table::{spec, Spec};
 pub(in crate::triage) use texts::{rule_description, rule_title};
 

@@ -67,6 +67,13 @@ pub(super) fn clicked(ctx: &egui::Context, table: &str) {
     }
 }
 
+/// The table of the row Details shows now.
+#[cfg(test)]
+pub(super) fn selected_table(ctx: &egui::Context) -> Option<String> {
+    ctx.data(|data| data.get_temp::<Selection>(selection_id()))
+        .map(|selection| selection.table)
+}
+
 pub(super) fn select(ctx: &egui::Context, table: &str, headers: &[&str], cells: &[Cell]) {
     // Timeline rows are already inside the selected changed file's Details.
     if table == "file-operation-timeline" {
@@ -181,6 +188,13 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical().id_salt("triage-shared-details")
         .auto_shrink([false, false]).show(ui, |ui| {
         presentation::heading(ui, title(&selected.table), "");
+        if selected.table == "triage-findings" {
+            let values = selected.cells.first().map(|cell| cell.values.clone()).unwrap_or_default();
+            let process = selected.cells.get(rules::COL_PROCESS).map_or("", |cell| cell.text.as_str());
+            view.finding_details(ui, &values, process);
+            observed_fields(ui, &values);
+            return;
+        }
         presentation::frame().show(ui, |ui| {
         ui.set_width(ui.available_width());
         egui::Grid::new("triage-detail-values").num_columns(2).spacing(egui::vec2(14.0, 9.0))
@@ -195,9 +209,6 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
         });
         ui.add_space(10.0);
         let values = selected.cells.first().map(|cell| cell.values.as_slice()).unwrap_or_default();
-        if selected.table == "triage-findings" {
-            finding_details(ui, values);
-        }
         if matches!(selected.table.as_str(), "triage-yara" | "triage-ids" | "triage-sigma") { view.detection.details(ui, values); }
         if selected.table == "triage-changed" {
             disk_diff_link(ui, &selected);
@@ -219,24 +230,7 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
                 ui.weak("This BPF observation is not available in the retained index yet.");
             }
         }
-        if !values.is_empty() {
-            egui::CollapsingHeader::new("Observed fields").show(ui, |ui| {
-                for (name, value) in values {
-                    ui.colored_label(theme::muted(), *name);
-                    let text = match value {
-                        RowValue::Text(value) => value.clone(),
-                        RowValue::Number(value) => u64::try_from(*value).ok()
-                            .filter(|_| *name == "file.fd")
-                            .and_then(crate::values::standard_fd_name)
-                            .map_or_else(|| value.to_string(), |role| format!("{value} ({role})")),
-                        RowValue::Bool(value) => value.to_string(),
-                        RowValue::List(values) => values.join(", "),
-                        RowValue::Missing => "Unavailable".into(),
-                    };
-                    ui.add(egui::Label::new(RichText::new(text).monospace()).wrap());
-                }
-            });
-        }
+        observed_fields(ui, values);
         if files::number(values, "event.id").is_some()
             && files::number(values, "stream.id").is_some()
             && files::number(values, "process.cookie").is_some()
@@ -259,45 +253,32 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui) {
     });
 }
 
-/// The lines behind a Suspicious activity row: why it has its tier, and the
-/// facts the rule gathered (for an anti-analysis row, each check and its answer).
-fn finding_details(ui: &mut egui::Ui, values: &[(&'static str, RowValue)]) {
-    let lines = |key: &str| -> Vec<String> {
-        values
-            .iter()
-            .find_map(|(name, value)| match value {
-                RowValue::List(lines) if *name == key => Some(lines.clone()),
-                _ => None,
-            })
-            .unwrap_or_default()
-    };
-    let rule = values.iter().find_map(|(name, value)| match value {
-        RowValue::Text(text) if *name == "finding.rule" => Some(text.as_str()),
-        _ => None,
+/// Every value the row carries, folded: for a check against the other sections.
+fn observed_fields(ui: &mut egui::Ui, values: &[(&'static str, RowValue)]) {
+    if values.is_empty() {
+        return;
+    }
+    egui::CollapsingHeader::new("Observed fields").show(ui, |ui| {
+        for (name, value) in values {
+            ui.colored_label(theme::muted(), *name);
+            let text = match value {
+                RowValue::Text(value) => value.clone(),
+                RowValue::Number(value) => u64::try_from(*value)
+                    .ok()
+                    .filter(|_| *name == "file.fd")
+                    .and_then(crate::values::standard_fd_name)
+                    .map_or_else(|| value.to_string(), |role| format!("{value} ({role})")),
+                RowValue::Bool(value) => value.to_string(),
+                RowValue::List(values) => values.join(", "),
+                RowValue::Missing => "Unavailable".into(),
+            };
+            ui.add(egui::Label::new(RichText::new(text).monospace()).wrap());
+        }
     });
-    let section = |ui: &mut egui::Ui, title: &str, lines: Vec<String>| {
-        if lines.is_empty() {
-            return;
-        }
-        ui.label(RichText::new(title).small().color(theme::muted()));
-        for line in lines {
-            ui.add(egui::Label::new(RichText::new(line).monospace()).wrap());
-        }
-        ui.add_space(8.0);
-    };
-    let title = if rule.is_some_and(|rule| rule.starts_with("evasion.")) {
-        "Checks and what the guest answered"
-    } else {
-        "Details"
-    };
-    section(ui, title, lines("finding.detail"));
-    dump_taken(ui, values);
-    evidence_link(ui, values);
-    section(ui, "Why this tier", lines("finding.why"));
 }
 
 /// "Dump taken" under a finding that triggered one, with a link to the tab.
-fn dump_taken(ui: &mut egui::Ui, values: &[(&'static str, RowValue)]) {
+pub(super) fn dump_taken(ui: &mut egui::Ui, values: &[(&'static str, RowValue)]) {
     use antinomie_monitor_core::dump_trigger::TriggerLog;
     let Some(log) = ui.ctx().data(|data| {
         data.get_temp::<std::sync::Arc<TriggerLog>>(egui::Id::new(super::TRIGGER_LOG))
@@ -315,7 +296,7 @@ fn dump_taken(ui: &mut egui::Ui, values: &[(&'static str, RowValue)]) {
     }) else {
         return;
     };
-    ui.label(RichText::new("Dump taken").small().color(theme::muted()));
+    ui.label(RichText::new("Dumps taken").strong().color(theme::text()));
     for (name, dump, tab) in [
         ("Memory dump", &record.memory, "memory"),
         ("Core", &record.core, "core"),
@@ -364,7 +345,7 @@ fn evidence_filter(cookie: Option<u64>, calls: &[u64]) -> String {
 /// "Show the N calls in Syscall Trace" for a finding whose detail lines cite
 /// more calls than its own (an anti-analysis row lists each check's call):
 /// Open original syscall below goes to the first one only.
-fn evidence_link(ui: &mut egui::Ui, values: &[(&'static str, RowValue)]) {
+pub(super) fn evidence_link(ui: &mut egui::Ui, values: &[(&'static str, RowValue)]) {
     let calls = super::digest::evidence_calls(values);
     if calls.len() < 2 {
         return;
@@ -500,7 +481,7 @@ mod tests {
         call.entry.as_mut().unwrap().args = Some([0, 4096, 7, 0, 0, 0]);
         let findings = suspicious_rows(&[call]);
         assert!(!findings.is_empty());
-        let label = findings[0].cells[0].text.clone();
+        let label = findings[0].cells[rules::COL_BEHAVIOUR].text.clone();
         let mut view = TriageView::default();
         let mut draw = |events, time| {
             ctx.run_ui(
@@ -553,7 +534,7 @@ mod tests {
         let labels = crate::app::tests::texts(&output);
         assert!(labels
             .iter()
-            .any(|(text, rect)| text == "Open original syscall" && rect.left() >= 990.0));
+            .any(|(text, rect)| text == "Open in Syscall Trace" && rect.left() >= 990.0));
         assert!(!labels.iter().any(|(text, _)| text.contains(": Text(")));
         assert!(view.take_details_focus(&ctx));
     }

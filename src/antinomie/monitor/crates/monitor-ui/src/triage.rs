@@ -52,6 +52,8 @@ pub(crate) const DEFAULT_REBUILD_FILE_MIB: u32 = files::DEFAULT_FILE_MIB;
 pub(crate) const DEFAULT_REBUILD_RUN_MIB: u32 = files::DEFAULT_RUN_MIB;
 mod files;
 mod finding_bar;
+mod finding_cells;
+mod finding_details;
 mod findings;
 mod geoip_fill;
 mod graph;
@@ -842,11 +844,9 @@ impl TriageView {
             .as_ref()
             .and_then(|scan| scan.clock_anchor)
             .or(self.scan_request.clock_anchor);
+        let start = self.run_start();
         for finding in &mut findings {
-            finding.cells[rules::COL_TIME].text = crate::time_format::guest_ns(
-                clock,
-                files::number(&finding.values, "event.time_ns"),
-            );
+            rules::stamp(finding, clock, start);
         }
         let rows = if self.scan.is_some() {
             findings
@@ -864,6 +864,7 @@ impl TriageView {
             self.selected_call_id,
             self.table_focus.take(),
         );
+        self.finding_requests(ui.ctx());
         if let Some(call_id) = clicked {
             self.selected_call_id = Some(call_id);
         }
@@ -1163,6 +1164,7 @@ struct ProcessNode {
 
 const FINDING_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("finding.rule", "Stable activity rule"),
+    FieldSpec::text("finding.title", "The rule's short title"),
     FieldSpec::number("finding.version", "Rule version"),
     FieldSpec::text("finding.tier", "high, medium, low or info, after context"),
     FieldSpec::text("finding.severity", "Same as finding.tier"),

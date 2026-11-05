@@ -9,6 +9,7 @@ const CLONE3: u64 = 435;
 mod async_files;
 mod async_previews;
 mod layout;
+mod suspicious;
 mod theme_switch;
 
 #[test]
@@ -917,7 +918,7 @@ fn caps_keep_two_thousand_rows_per_rule_and_count_the_rest_in_an_overflow_row() 
         second.findings[0].cells[rules::COL_SUMMARY].text,
         "+51 more not stored (cap)"
     );
-    assert_eq!(second.findings[0].cells[5].text, "51");
+    assert_eq!(second.findings[0].cells[5].text, "\u{d7}51");
     let journal = std::fs::read_to_string(temp.directory.join("triage-findings-v2.jsonl")).unwrap();
     assert_eq!(journal.lines().count(), 2001);
     let fact: serde_json::Value = serde_json::from_str(journal.lines().next().unwrap()).unwrap();
@@ -949,7 +950,11 @@ fn repeats_of_one_task_are_one_row_with_a_count_and_a_time_span() {
     .unwrap();
     assert_eq!(scan.findings.len(), 1);
     let row = &scan.findings[0];
-    assert_eq!(row.cells[5].text, "40");
+    assert!(
+        row.cells[5].text.starts_with("\u{d7}40"),
+        "{}",
+        row.cells[5].text
+    );
     assert_eq!(files::number(&row.values, "finding.count"), Some(40));
     assert!(
         files::number(&row.values, "finding.last_ns")
