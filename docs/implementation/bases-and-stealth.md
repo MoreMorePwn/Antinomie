@@ -1119,10 +1119,17 @@ a Red Hat PCI device. The display is renamed only where QEMU's VGA is bochs-drm:
 a graphical base uses virtio-gpu, which keeps its name (a desktop session's
 Mesa and Xorg pick drivers by these names).
 
-**Measured** (laptop profile, Debian Minimal; see the task record for the run):
-`pci.vendors`, `pci.subsystems`, `pci.config`, `acpi.oem-ids`, `acpi.tables`,
-`display.fb`, `display.drm`, `block.nvme`, `nvme.identify`, `usb.devices`,
-`input.names`, `input.ids` and `firmware.vendor` pass.
+**Measured** (ThinkPad T14 Gen 3 AMD laptop profile; see the task record for
+the runs). BusyBox (every hook built in): `pci.vendors`, `pci.subsystems`,
+`pci.config`, `acpi.oem-ids`, `acpi.tables`, `display.fb`, `display.drm`,
+`block.nvme`, `nvme.identify`, `usb.devices`, `input.names`, `input.ids`,
+`firmware.vendor` and `iomem.names` pass. Debian Minimal (Debian's modules):
+`acpi.oem-ids`, `acpi.tables`, `acpi.devices` and `firmware.vendor` pass and
+nine chipset devices carry the board's subsystem; the display (1234:1111) and
+the NVMe controller (8086:5845) keep QEMU's IDs and subsystem 1af4:1100, as
+their drivers report (`pci.vendors`, `pci.subsystems`, `pci.config`,
+`display.*`, `block.nvme`, `nvme.identify`, `iomem.names`), and the USB tablet
+and `sr0` stay QEMU's.
 
 **Still visible** (`giveaways()` for a facade profile): QEMU's IDs to root
 reading PCI config space through I/O ports (0xcf8/0xcfc), USB string requests
