@@ -647,18 +647,23 @@ The network capture is the guest's own view on every route.
   kernel loaded; the HIGH, MEDIUM, LOW and info counts, each a button that opens
   Suspicious activity on that tier; **Family candidates** from the detections, each
   with its source; and behaviour tags), **Key findings** (the six worst by tier and
-  then first time; a click opens the finding's Details, **all N** opens Suspicious
-  activity), **Indicators** (contacted endpoints with country and organization, DNS
-  names, URLs, dropped or run files with type and SHA-256; **Copy all** and
-  **Export**, which writes JSON to the run's `ioc` folder), **Relationships** (a
-  process, file, endpoint and injection graph of about 15 nodes chosen by their
-  findings; drag the background to pan, Ctrl and the wheel or the buttons to zoom,
-  click a node to open it, **Open full graph** for every node, **Mermaid** to copy;
-  the **Timeline** switch shows a lane per process with fork, exec, file, connection
-  and finding markers), then one line each for **MITRE ATT&CK** (**list** opens the
-  technique list), **Processes of interest**, **Files** and **Network**, the
-  **Detection engines**, the **IOC datasets**, the notes and the run's last
-  screenshot. The Summary states observations only: no verdict and no score. Family
+  then first time, each with its description on a line below; a click opens the
+  finding's Details, **all N** opens Suspicious activity, **Show more** lists every
+  finding in a scrolling list and **Show less** folds it), **Indicators** (a tree of
+  **Endpoints** with country and organization, **DNS names**, **URLs** and **Files**
+  dropped or run with type and SHA-256; each branch shows five and **Show N more**
+  lists the rest; **Copy all** and **Export**, which writes JSON to the run's `ioc`
+  folder; the header says how many indicators matched the IOC datasets), **Relationships**
+  (a process, file, endpoint and injection graph with the root in the middle:
+  processes grow to the right, files below, network endpoints to the left, one
+  column per level; **Compact** shows the 15 best of each kind and what joins them,
+  **Full** every node; drag the background to pan, Ctrl and the wheel or the
+  buttons to zoom, the plain wheel scrolls the page; click a node to open it,
+  **Mermaid** to copy; edges read fork, exec, write, run, connect, inject, signal),
+  then one line each for **MITRE ATT&CK**, **Processes of interest**, **Files** and
+  **Network**, the folded **MITRE ATT&CK techniques** list, the **Detection engines**,
+  the notes and the run's last screenshot. The Summary states observations only: no
+  verdict and no score. Family
   candidates and tags show only what a detection or rule named, so a run nothing
   matched has none.
 - **Triage › Summary** has a card for each detection engine (YARA, IDS, Sigma). Its
@@ -674,8 +679,8 @@ The network capture is the guest's own view on every route.
   fill the whole width instead of sitting in a sliver of a long run; it follows
   the Graph's **Events** or **Time** choice. In both, a run with only a few
   findings has them near the left and right edges of the plot.
-- **Triage › Summary › MITRE ATT&CK (N)** shows the techniques as a badge row
-  and **Show all N**. Open, it lists the techniques grouped by tactic in
+- **Triage › Summary › MITRE ATT&CK (N)** counts the techniques by tactic in a
+  one-line row; the folded **MITRE ATT&CK techniques** list below the one-line rows lists the techniques grouped by tactic in
   kill-chain order, one foldable row each: the technique and its name, its
   tactics, the Triage rules that cited it (with tier and count), the YARA, IDS
   and Sigma rules that cited it, and links that open **Suspicious activity** or
@@ -764,8 +769,8 @@ The network capture is the guest's own view on every route.
   never JA3 or certificate fingerprints, never a value a known false positive
   excuses) to threatfox-api.abuse.ch and urlhaus-api.abuse.ch, at most 50 values
   per press; the answers are marked *online* with their time and kept in the run's
-  folder (`ioc-online.json`). **Triage › Summary** has an **IOC datasets** card with the
-  matched count and the dataset date.
+  folder (`ioc-online.json`). **Triage › Summary** says how many indicators matched
+  and the dataset date in its Indicators header.
 - **Triage › Network** shows **Endpoints**, **Domains**, **URLs** and **TLS**, all
   read from TShark (the capture is VM-wide, so no row names a process), each with
   an IOC column. The 0.7.0 tabs (IPs, Hosts, HTTP, DNS, Sessions) and the switch
