@@ -795,7 +795,16 @@ fn the_rule_file_filter_keeps_allowed_licenses_and_drops_duplicates_and_broken_r
     );
     // The findings and the rule list show the rule's own YARAhub license.
     let listed = pack_index(&dir, "yara", "hub").unwrap();
-    assert_eq!(listed[0].license, "CC0 1.0");
+    // The index order follows the file system, so look the rules up by name.
+    let license = |name: &str| {
+        listed
+            .iter()
+            .find(|rule| rule.name == name)
+            .map(|rule| rule.license.clone())
+            .unwrap_or_else(|| panic!("{name} in the index"))
+    };
+    assert_eq!(license("A_Cc0"), "CC0 1.0");
+    assert_eq!(license("B_By"), "CC BY 4.0");
     let _ = fs::remove_dir_all(dir);
 }
 
