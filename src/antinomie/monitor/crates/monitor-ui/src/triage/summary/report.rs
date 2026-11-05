@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Report overview composed from cached run evidence, never from render-time I/O.
+use super::sample::SampleInfo;
+use super::state::Built;
 use super::*;
+use super::{header, panels, relations};
 
 /// The status chip of a detector card. A scan waiting or running outranks an
 /// older result, so a card never says "Not scanned" while its engine is queued
@@ -131,119 +134,12 @@ fn detector(
         .inner
 }
 
-fn activity(ui: &mut egui::Ui, scan: &ArchiveScan) -> Option<Destination> {
-    presentation::heading(ui, "Behavior & files", "");
-    let mut target = None;
-    egui::Grid::new("triage-summary-activity")
-        .num_columns(2)
-        .max_col_width(ui.available_width() * 0.66)
-        .spacing(egui::vec2(16.0, 9.0))
-        .show(ui, |ui| {
-            for (title, count, destination) in [
-                ("Syscalls", scan.counts.calls, Destination::Tasks),
-                ("Processes", scan.process.len() as u64, Destination::Tasks),
-                (
-                    "Suspicious observations",
-                    scan.counts.findings,
-                    Destination::Findings,
-                ),
-                (
-                    "Opened-file operations",
-                    scan.counts.opened,
-                    Destination::Opened,
-                ),
-                (
-                    "Read-file operations",
-                    scan.counts.reads,
-                    Destination::Reads,
-                ),
-                (
-                    "Changed-file groups",
-                    scan.counts.changed,
-                    Destination::Changed,
-                ),
-            ] {
-                if metric(ui, title, Some(count)) {
-                    target = Some(destination);
-                }
-            }
-        });
-    target
-}
-
-fn network(
-    ui: &mut egui::Ui,
-    scan: &ArchiveScan,
-    route: &crate::route_ui::RouteText,
-) -> Option<Destination> {
-    presentation::heading(ui, "Network evidence", "");
-    let mut target = None;
-    crate::route_ui::line(ui, route);
-    // Without a capture every count is unavailable: one sentence says so and
-    // how to record one, instead of five identical rows.
-    if scan.network_counts.is_none() {
-        ui.add(
-            egui::Label::new(
-                RichText::new(
-                    "No network capture for this run. Turn on Capture network in Run program to record one.",
-                )
-                .color(theme::muted()),
-            )
-            .wrap(),
-        );
-        return None;
-    }
-    egui::Grid::new("triage-summary-network")
-        .num_columns(2)
-        .max_col_width(ui.available_width() * 0.66)
-        .spacing(egui::vec2(16.0, 9.0))
-        .show(ui, |ui| {
-            for (title, count, destination) in [
-                (
-                    "Capture frames",
-                    scan.network_counts.map(|count| count.0),
-                    Destination::Http,
-                ),
-                (
-                    "Destination IPs",
-                    scan.network_counts.map(|count| count.1),
-                    Destination::Ips,
-                ),
-                (
-                    "Observed hostnames",
-                    scan.network_counts.map(|count| count.2),
-                    Destination::Hosts,
-                ),
-                (
-                    "HTTP/1 requests",
-                    scan.network_counts.map(|_| scan.counts.http),
-                    Destination::Http,
-                ),
-                (
-                    "DNS questions",
-                    scan.network_counts.map(|_| scan.counts.dns),
-                    Destination::Dns,
-                ),
-            ] {
-                let hover = if title == "HTTP/1 requests" {
-                    "Encrypted request contents are unavailable."
-                } else {
-                    ""
-                };
-                if super::metric_hover(ui, title, count, hover) {
-                    target = Some(destination);
-                }
-            }
-        });
-    target
-}
-
-/// The IOC card: how many of the run's indicators matched a dataset.
-fn indicators(ui: &mut egui::Ui, view: &TriageView) -> bool {
+/// The IOC datasets card: how many of the run's indicators matched a dataset.
+fn datasets(ui: &mut egui::Ui, view: &TriageView) -> bool {
     presentation::frame()
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            presentation::heading(ui, "Indicators (IOC)", "");
+            presentation::heading(ui, "IOC datasets", "");
             match view.ioc_headline() {
                 Some((matched, total, date)) => {
                     ui.horizontal_wrapped(|ui| {
@@ -290,97 +186,22 @@ fn indicators(ui: &mut egui::Ui, view: &TriageView) -> bool {
         .inner
 }
 
-fn observations(ui: &mut egui::Ui, scan: &ArchiveScan) -> bool {
-    presentation::frame()
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            presentation::heading(ui, "Observed activity", "");
-            // The worst rows first, then the earliest.
-            let mut worst: Vec<&Finding> = scan.findings.iter().collect();
-            worst.sort_by_key(|finding| {
-                rules::Tier::ALL.iter().position(|tier| {
-                    finding
-                        .cells
-                        .get(rules::COL_TIER)
-                        .is_some_and(|cell| cell.text == tier.tag())
-                })
-            });
-            for (index, finding) in worst.into_iter().take(4).enumerate() {
-                let severity = finding
-                    .cells
-                    .get(rules::COL_TIER)
-                    .map_or("Observed", |cell| cell.text.as_str());
-                let color = match severity {
-                    "high" => theme::error(),
-                    "medium" => theme::warn(),
-                    "low" => theme::blue(),
-                    _ => theme::muted(),
-                };
-                // One syscall can produce several observations, so the click
-                // target needs the rule as well as the invocation.
-                let rule = finding
-                    .cells
-                    .first()
-                    .map(|cell| cell.text.as_str())
-                    .unwrap_or("");
-                let response = egui::Frame::new()
-                    .fill(theme::panel())
-                    .corner_radius(4)
-                    .inner_margin(8)
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal_wrapped(|ui| {
-                            presentation::badge(ui, severity, color);
-                            if !rule.is_empty() {
-                                ui.label(RichText::new(rule).strong().color(theme::text()));
-                            }
-                            if let Some(process) = finding.cells.get(rules::COL_PROCESS) {
-                                ui.label(
-                                    RichText::new(&process.text).small().color(theme::muted()),
-                                );
-                            }
-                        });
-                        if let Some(summary) = finding.cells.get(rules::COL_SUMMARY) {
-                            ui.add(egui::Label::new(&summary.text).truncate());
-                        }
-                    })
-                    .response;
-                let clicked = ui.interact(
-                    response.rect,
-                    ui.id()
-                        .with(("summary-observation", index, finding.key, rule)),
-                    egui::Sense::click(),
-                );
-                if clicked.clicked() {
-                    let mut cells = finding.cells.clone();
-                    if let Some(first) = cells.first_mut() {
-                        first.values.clone_from(&finding.values);
-                    }
-                    details::select(ui.ctx(), "triage-findings", rules::HEADERS, &cells);
-                    details::clicked(ui.ctx(), "triage-findings");
-                }
-                if clicked.double_clicked() {
-                    request_evidence_jump(ui.ctx(), &finding.values);
-                }
-                ui.add_space(5.0);
-            }
-            if scan.findings.is_empty() {
-                ui.weak("No observations.");
-            }
-            ui.button("Open suspicious activity").clicked()
-        })
-        .inner
-}
-
 /// What the run recorded about itself: facts about its recording and its
-/// device profile that are no warning, at the bottom of the Summary.
-fn notes(ui: &mut egui::Ui, notes: &[String]) {
-    if notes.is_empty() {
-        return;
+/// device profile that are no warning, with the run's last screenshot.
+fn notes(
+    ui: &mut egui::Ui,
+    notes: &[String],
+    shot: Option<(&std::path::Path, &mut super::thumb::Thumb)>,
+) -> bool {
+    let mut open = false;
+    if notes.is_empty() && shot.is_none() {
+        return open;
     }
     presentation::frame().show(ui, |ui| {
         ui.set_width(ui.available_width());
-        presentation::heading(ui, "Notes", "");
+        if !notes.is_empty() {
+            presentation::heading(ui, "Notes", "");
+        }
         for note in notes {
             ui.add(egui::Label::new(RichText::new(note).color(theme::muted())).wrap());
         }
@@ -388,7 +209,80 @@ fn notes(ui: &mut egui::Ui, notes: &[String]) {
         if notes.iter().any(|note| note.contains("recording quota")) {
             crate::settings_link::button(ui, "Recording");
         }
+        if let Some((path, thumb)) = shot {
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new("Last screenshot")
+                    .small()
+                    .color(theme::muted()),
+            );
+            open = thumb.show(ui, path);
+        }
     });
+    open
+}
+
+/// The three detector cards, and the line that says one needs attention.
+fn engines(
+    ui: &mut egui::Ui,
+    view: &TriageView,
+    scan: &ArchiveScan,
+    destination: &mut Option<Destination>,
+) {
+    presentation::heading(ui, "Detection engines", "");
+    if ui.available_width() >= 620.0 {
+        ui.columns(3, |columns| {
+            for (index, engine) in [Engine::Yara, Engine::Ids, Engine::Sigma]
+                .into_iter()
+                .enumerate()
+            {
+                if detector(&mut columns[index], view, index, engine, false) {
+                    *destination = Some(Destination::Detection(engine));
+                }
+            }
+        });
+    } else {
+        for (index, engine) in [Engine::Yara, Engine::Ids, Engine::Sigma]
+            .into_iter()
+            .enumerate()
+        {
+            if detector(ui, view, index, engine, true) {
+                *destination = Some(Destination::Detection(engine));
+            }
+            ui.add_space(6.0);
+        }
+    }
+    // Notes and errors stay in the Detection view; one line says when
+    // something there needs attention.
+    let attention: Vec<Engine> = [Engine::Yara, Engine::Ids, Engine::Sigma]
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| match view.detection.results[*index].as_ref() {
+            Some(Ok(report)) => matches!(report.state, State::Partial | State::Missing),
+            Some(Err(_)) => true,
+            None => false,
+        })
+        .map(|(_, engine)| engine)
+        .collect();
+    if scan.event_error.is_some() || !attention.is_empty() {
+        let count = attention.len() + usize::from(scan.event_error.is_some());
+        let first = attention.first().copied().unwrap_or(Engine::Sigma);
+        if ui
+            .link(format!(
+                "Detection: {count} {} need attention (open Detection)",
+                if count == 1 { "note" } else { "notes" }
+            ))
+            .clicked()
+        {
+            *destination = Some(Destination::Detection(first));
+        }
+    }
+    if scan.network_warning.is_some() {
+        // The note itself is in the Network view.
+        if ui.link("Network: 1 note (open Network)").clicked() {
+            *destination = Some(Destination::Http);
+        }
+    }
 }
 
 pub(super) fn content(
@@ -399,6 +293,7 @@ pub(super) fn content(
     let mut destination = None;
     let mut pop_out = false;
     let mut attack_jump = None;
+    let mut acts: Vec<Act> = Vec::new();
     ui.horizontal_wrapped(|ui| {
         ui.label(
             RichText::new("Run overview")
@@ -428,6 +323,7 @@ pub(super) fn content(
         }
     });
     ui.add_space(8.0);
+    let mut state = std::mem::take(&mut view.summary_state);
     egui::ScrollArea::vertical()
         .id_salt("triage-summary")
         .auto_shrink([false, false])
@@ -445,114 +341,37 @@ pub(super) fn content(
                 theme::loading_centered(ui, title);
                 return;
             };
-            presentation::heading(ui, "Detection evidence", "");
-            if ui.available_width() >= 620.0 {
-                ui.columns(3, |columns| {
-                    for (index, engine) in [Engine::Yara, Engine::Ids, Engine::Sigma]
-                        .into_iter()
-                        .enumerate()
-                    {
-                        if detector(&mut columns[index], view, index, engine, false) {
-                            destination = Some(Destination::Detection(engine));
-                        }
-                    }
-                });
-            } else {
-                for (index, engine) in [Engine::Yara, Engine::Ids, Engine::Sigma]
-                    .into_iter()
-                    .enumerate()
-                {
-                    if detector(ui, view, index, engine, true) {
-                        destination = Some(Destination::Detection(engine));
-                    }
-                    ui.add_space(6.0);
-                }
+            if !state
+                .built
+                .as_ref()
+                .is_some_and(|built| built.current(view, scan))
+            {
+                state.built = Some(Built::of(view, scan, view.scan_request.packed.is_some()));
             }
-            // Notes and errors stay in the Detection view; one line says when
-            // something there needs attention.
-            let attention: Vec<Engine> = [Engine::Yara, Engine::Ids, Engine::Sigma]
-                .into_iter()
-                .enumerate()
-                .filter(|(index, _)| match view.detection.results[*index].as_ref() {
-                    Some(Ok(report)) => matches!(report.state, State::Partial | State::Missing),
-                    Some(Err(_)) => true,
-                    None => false,
-                })
-                .map(|(_, engine)| engine)
-                .collect();
-            if scan.event_error.is_some() || !attention.is_empty() {
-                let count = attention.len() + usize::from(scan.event_error.is_some());
-                let first = attention.first().copied().unwrap_or(Engine::Sigma);
-                if ui
-                    .link(format!(
-                        "Detection: {count} {} need attention (open Detection)",
-                        if count == 1 { "note" } else { "notes" }
-                    ))
-                    .clicked()
-                {
-                    destination = Some(Destination::Detection(first));
-                }
+            let sample = input.analysis.map(SampleInfo::of);
+            let program = view
+                .scan_request
+                .launch
+                .as_ref()
+                .map(|(_, path, _)| process_cells::file_name(path).to_owned())
+                .unwrap_or_default();
+            if let Some(built) = &state.built {
+                let facts = header::Facts {
+                    sample: sample.as_ref(),
+                    run: &view.run_facts,
+                    route: &view.route,
+                    program: &program,
+                };
+                header::show(ui, built, scan, &facts, &mut acts);
+                ui.add_space(10.0);
+                panels::key_findings(ui, built, scan, &mut acts);
+                ui.add_space(10.0);
+                panels::indicators(ui, built, &mut state.status, &mut acts);
+                ui.add_space(10.0);
             }
-            ui.add_space(8.0);
-            if !attack.is_empty() {
-                // Folded: the badge row and "Show all N"; open: the list by
-                // tactic. Kept for the rest of the app session.
-                let fold = ui.make_persistent_id("summary-attack-open");
-                let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
-                    ui.ctx(),
-                    fold,
-                    false,
-                );
-                let open = state.is_open();
-                let mut toggle = false;
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        RichText::new(format!("MITRE ATT&CK ({})", attack.len()))
-                            .small()
-                            .color(theme::muted()),
-                    );
-                    if open {
-                        toggle |= crate::widgets::link(ui, "Hide")
-                            .on_hover_text("Fold the list back to the badge row")
-                            .clicked();
-                    } else {
-                        for technique in attack.iter().take(16) {
-                            crate::widgets::attack::technique_badge(ui, &technique.id, None);
-                        }
-                        toggle |= crate::widgets::link(ui, format!("Show all {}", attack.len()))
-                            .on_hover_text(
-                                "One row per technique, by tactic, with what produced it",
-                            )
-                            .clicked();
-                    }
-                });
-                if toggle {
-                    state.set_open(!open);
-                }
-                if open {
-                    ui.add_space(4.0);
-                    if let Some(jump) = attack_list::show(ui, view, &attack, &attack_details) {
-                        attack_jump = Some(jump);
-                    }
-                }
-                state.store(ui.ctx());
-                crate::widgets::attack::legend(ui, "summary-attack-legend");
-            }
-            ui.add_space(14.0);
-            let (mut left, mut right) = (None, None);
-            presentation::pair(
-                ui,
-                |ui| left = activity(ui, scan),
-                |ui| right = network(ui, scan, &view.route),
-            );
-            destination = left.or(right).or(destination);
-            if scan.network_warning.is_some() {
-                // The note itself is in the Network view.
-                if ui.link("Network: 1 note (open Network)").clicked() {
-                    destination = Some(Destination::Http);
-                }
-            }
-            ui.add_space(14.0);
+            relations::ui::show(ui, &mut state, &mut acts);
+            ui.add_space(10.0);
+            // The strip of findings over the run's time: its own way into the Graph.
             let busy = view.preparing();
             let strip = view.strip.show(
                 ui,
@@ -566,25 +385,68 @@ pub(super) fn content(
                 destination = Some(Destination::Graph);
             }
             pop_out |= strip.open_window;
-            ui.add_space(14.0);
-            if indicators(ui, view) {
-                destination = Some(Destination::Ioc);
+            ui.add_space(10.0);
+            // One-line rows. The ATT&CK list is folded in the row's "list".
+            let fold = ui.make_persistent_id("summary-attack-open");
+            let mut fold_state = egui::collapsing_header::CollapsingState::load_with_default_open(
+                ui.ctx(),
+                fold,
+                false,
+            );
+            let open = fold_state.is_open();
+            let mut toggle = false;
+            presentation::frame().show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                panels::attack_row(ui, attack.len(), &attack_details, open, &mut toggle);
+                if let Some(built) = &state.built {
+                    panels::interest_row(ui, built, scan, &mut acts);
+                }
+                panels::files_row(ui, scan, &mut acts);
+                panels::network_row(ui, scan, &mut acts);
+            });
+            if toggle {
+                fold_state.set_open(!open);
             }
+            if open && !attack.is_empty() {
+                ui.add_space(4.0);
+                if let Some(jump) = attack_list::show(ui, view, &attack, &attack_details) {
+                    attack_jump = Some(jump);
+                }
+                crate::widgets::attack::legend(ui, "summary-attack-legend");
+            }
+            fold_state.store(ui.ctx());
+            ui.add_space(10.0);
+            engines(ui, view, scan, &mut destination);
             ui.add_space(14.0);
-            if observations(ui, scan) {
-                destination = Some(Destination::Findings);
+            if datasets(ui, view) {
+                destination = Some(Destination::Ioc);
             }
             ui.add_space(14.0);
             let mut shown = view.notes.clone();
             shown.extend(super::run_end::run_end(scan).map(|end| end.text));
-            notes(ui, &shown);
+            let shot = view.run_facts.screenshot.clone();
+            if notes(
+                ui,
+                &shown,
+                shot.as_deref().map(|path| (path, &mut state.thumb)),
+            ) {
+                acts.push(Act::Screenshot(shot.unwrap_or_default()));
+            }
         });
+    relations::ui::window(ui.ctx(), &mut state, &mut acts);
+    view.summary_state = state;
     if attack_jump.is_some() {
         view.attack_jump = attack_jump;
     }
     if pop_out {
         view.clear_finding_filters(ui.ctx());
         view.open_graph_window(ui.ctx());
+    }
+    for act in acts {
+        match act {
+            Act::Go(target) => destination = Some(target),
+            other => view.apply_act(ui.ctx(), other, &mut destination),
+        }
     }
     destination
 }

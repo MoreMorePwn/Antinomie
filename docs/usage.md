@@ -640,6 +640,27 @@ The network capture is the guest's own view on every route.
   a descriptor it did not see opened) shows `unknown`, and bytes the kernel did not
   capture show `not captured`; nothing is guessed. In **Changed files**, Details has
   a **Per-file history** button that opens the tab on that file.
+- **Triage › Summary** reads top to bottom: the **header strip** (the sample's name, ELF
+  type and architecture, static or dynamic, packed when Static analysis found a
+  packer, size and SHA-256 with a copy button; the base, route, run time and exit;
+  a warning link when processes call themselves by another name than the program the
+  kernel loaded; the HIGH, MEDIUM, LOW and info counts, each a button that opens
+  Suspicious activity on that tier; **Family candidates** from the detections, each
+  with its source; and behaviour tags), **Key findings** (the six worst by tier and
+  then first time; a click opens the finding's Details, **all N** opens Suspicious
+  activity), **Indicators** (contacted endpoints with country and organization, DNS
+  names, URLs, dropped or run files with type and SHA-256; **Copy all** and
+  **Export**, which writes JSON to the run's `ioc` folder), **Relationships** (a
+  process, file, endpoint and injection graph of about 15 nodes chosen by their
+  findings; drag the background to pan, Ctrl and the wheel or the buttons to zoom,
+  click a node to open it, **Open full graph** for every node, **Mermaid** to copy;
+  the **Timeline** switch shows a lane per process with fork, exec, file, connection
+  and finding markers), then one line each for **MITRE ATT&CK** (**list** opens the
+  technique list), **Processes of interest**, **Files** and **Network**, the
+  **Detection engines**, the **IOC datasets**, the notes and the run's last
+  screenshot. The Summary states observations only: no verdict and no score. Family
+  candidates and tags show only what a detection or rule named, so a run nothing
+  matched has none.
 - **Triage › Summary** has a card for each detection engine (YARA, IDS, Sigma). Its
   status reads **Queued** while the scan waits for its turn and **Scanning** while it
   is checked, **Not scanned** only when neither is the case. It also shows the same curve, phases and heat strip for the whole
@@ -743,7 +764,7 @@ The network capture is the guest's own view on every route.
   never JA3 or certificate fingerprints, never a value a known false positive
   excuses) to threatfox-api.abuse.ch and urlhaus-api.abuse.ch, at most 50 values
   per press; the answers are marked *online* with their time and kept in the run's
-  folder (`ioc-online.json`). **Triage › Summary** has an IOC card with the
+  folder (`ioc-online.json`). **Triage › Summary** has an **IOC datasets** card with the
   matched count and the dataset date.
 - **Triage › Network** shows **Endpoints**, **Domains**, **URLs** and **TLS**, all
   read from TShark (the capture is VM-wide, so no row names a process), each with

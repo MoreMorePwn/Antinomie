@@ -10,7 +10,7 @@ use antinomie_monitor_core::{
     ruleset::Fetcher,
 };
 
-const SIZE: egui::Vec2 = egui::vec2(1400.0, 1500.0);
+const SIZE: egui::Vec2 = egui::vec2(1400.0, 2800.0);
 
 // The fixture capture is a GET of http://example.com/ to 93.184.216.34:80.
 const THREATFOX: &str = "# \"first_seen_utc\", \"ioc_id\", \"ioc_value\", \"ioc_type\", \"threat_type\", \"fk_malware\", \"malware_alias\", \"malware_printable\", \"last_seen_utc\", \"confidence_level\"\n\"2026-09-02 10:11:12\", \"1831204\", \"93.184.216.34:80\", \"ip:port\", \"botnet_cc\", \"elf.mirai\", \"\", \"Mirai\", \"\", \"75\"\n";
@@ -496,7 +496,7 @@ fn the_summary_page_has_an_ioc_card_and_the_tab_counts_the_indicators() {
     let mut view = fixture.view(scan, Section::Summary);
     let ctx = context();
     let text = shown(&settle(&ctx, &mut view));
-    assert!(text.contains("Indicators (IOC)"), "{text}");
+    assert!(text.contains("IOC datasets"), "{text}");
     assert!(
         text.contains("indicators matched") || text.contains("indicator matched"),
         "{text}"

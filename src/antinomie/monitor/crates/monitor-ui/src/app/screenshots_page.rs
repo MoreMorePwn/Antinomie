@@ -15,7 +15,7 @@ use std::{
     sync::mpsc::{self, Receiver, Sender},
 };
 
-mod decode;
+pub(crate) mod decode;
 
 /// The thumbnail cell: picture area and gap.
 const THUMB_W: f32 = 224.0;
@@ -759,5 +759,36 @@ fn count(n: usize, noun: &str) -> String {
         format!("1 {noun}")
     } else {
         format!("{n} {noun}s")
+    }
+}
+
+impl MonitorApp {
+    /// The last screenshot taken on the VM screen tab during `run`: after it
+    /// began and no later than a few seconds after its process tree ended.
+    /// The folders are read once, on a thread, the first time this asks.
+    pub(super) fn last_run_screenshot(
+        &mut self,
+        ctx: &egui::Context,
+        run: &antinomie_monitor_core::RunSummary,
+        ended_ms: Option<u64>,
+    ) -> Option<PathBuf> {
+        self.screenshots_page.poll(ctx);
+        if !self.screenshots_page.loaded && self.screenshots_page.scan.is_none() {
+            self.screenshot_scan();
+        }
+        let from = run.started_ms?;
+        self.screenshots_page
+            .shots
+            .iter()
+            .filter(|shot| shot.vm_id == run.vm_id && shot.ms >= from)
+            .filter(|shot| ended_ms.is_none_or(|end| shot.ms <= end + 10_000))
+            .max_by_key(|shot| shot.ms)
+            .map(|shot| shot.path.clone())
+    }
+
+    /// Open `path` in the Screenshots page's viewer.
+    pub(super) fn open_screenshot_path(&mut self, ctx: &egui::Context, path: PathBuf) {
+        self.open_library(crate::workspace::LibraryPage::Screenshots);
+        self.screenshot_act(ctx, Act::Open(path));
     }
 }
