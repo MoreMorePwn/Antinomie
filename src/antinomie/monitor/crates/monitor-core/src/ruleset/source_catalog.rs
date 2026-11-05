@@ -113,6 +113,9 @@ pub enum SourceFilter {
     },
     /// Split a YARA-Forge package by source repository and apply licenses.
     YaraForge(YaraForgeFilter),
+    /// A download of one rule per file, each naming its own license in a meta
+    /// key (abuse.ch YARAhub).
+    YaraRuleFiles(YaraRuleFilesFilter),
     /// Keep Sigma rules whose log source is listed.
     Sigma(SigmaFilter),
 }
@@ -126,6 +129,19 @@ pub struct YaraForgeFilter {
     /// Repository URL to its license. `none` means the repository has no
     /// license file; a repository missing from this table is treated the same way.
     pub repository_licenses: BTreeMap<String, RepositoryLicense>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct YaraRuleFilesFilter {
+    /// Meta keys that name a rule's license, first match wins.
+    pub license_keys: Vec<String>,
+    /// A rule's license is allowed when it starts with one of these. A rule
+    /// that names none, or another, is dropped.
+    pub allowed_licenses: Vec<String>,
+    /// Files the generator found to duplicate a rule of another pack at the
+    /// pinned revision (the same rule body); they are not installed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_files: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -358,6 +374,17 @@ pub(super) fn check_source_pack(pack: &SourcePack) -> Result<(), String> {
         (SourceFilter::YaraForge(_), _) => {
             return Err("the YARA-Forge filter belongs to a YARA pack".into());
         }
+        (SourceFilter::YaraRuleFiles(filter), "yara") => {
+            if filter.allowed_licenses.is_empty() || filter.license_keys.is_empty() {
+                return Err("the YARA rule-file filter names no license keys or licenses".into());
+            }
+            for path in &filter.exclude_files {
+                checked_member_path(path)?;
+            }
+        }
+        (SourceFilter::YaraRuleFiles(_), _) => {
+            return Err("the YARA rule-file filter belongs to a YARA pack".into());
+        }
         (SourceFilter::Sigma(filter), "sigma") => {
             if filter.keep.is_empty() {
                 return Err("the Sigma filter keeps no log source".into());
@@ -417,7 +444,7 @@ fn check_source_fetch(source: &SourceFetch) -> Result<(), String> {
     for prefix in &source.paths {
         checked_member_path(prefix.trim_end_matches('/'))?;
     }
-    if source.rolling && source.paths.is_empty() && source.format != "file" {
+    if source.rolling && source.paths.is_empty() && source.format == "tar.gz" {
         return Err(format!("{} is rolling and names no rule paths", source.url));
     }
     Ok(())

@@ -88,6 +88,7 @@ fn schema_two_rejects_unsafe_or_incomplete_entries() {
     reject(&|p| p.sources[0].size = MAX_SOURCE_BYTES + 1, "size");
     reject(
         &|p| {
+            p.sources[0].format = "tar.gz".into();
             p.sources[0].rolling = true;
             p.sources[0].paths.clear();
         },

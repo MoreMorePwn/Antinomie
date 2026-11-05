@@ -696,3 +696,151 @@ fn removing_a_pack_deletes_its_files_and_toggles() {
     assert_eq!(load_registry(&dir).unwrap().packs.len(), 1);
     let _ = fs::remove_dir_all(dir);
 }
+
+fn hub_rule(name: &str, license: Option<&str>, condition: &str) -> String {
+    let license = license
+        .map(|license| format!("\t\tyarahub_license =  \"{license}\"\n"))
+        .unwrap_or_default();
+    format!(
+        "rule {name}\n{{\n\tmeta:\n\t\tauthor = \"a\"\n{license}\tstrings:\n\t\t$a = \"{name}\"\n\tcondition:\n\t\t{condition}\n}}\n"
+    )
+}
+
+#[test]
+fn the_rule_file_filter_keeps_allowed_licenses_and_drops_duplicates_and_broken_rules() {
+    let dir = temp_dir("hub");
+    let url = "https://hub.example.org/rules.zip";
+    let members = [
+        ("a_cc0.yar", hub_rule("A_Cc0", Some("CC0 1.0"), "$a")),
+        ("b_by.yar", hub_rule("B_By", Some("CC BY 4.0"), "$a")),
+        ("c_nc.yar", hub_rule("C_Nc", Some("CC BY-NC 4.0"), "$a")),
+        ("d_none.yar", hub_rule("D_None", None, "$a")),
+        ("e_dup.yar", hub_rule("E_Dup", Some("CC0 1.0"), "$a")),
+        ("f_bad.yar", hub_rule("F_Bad", Some("CC0 1.0"), "$nope")),
+        ("g_same.yar", hub_rule("A_Cc0", Some("CC0 1.0"), "$a")),
+        (
+            "h_module.yar",
+            format!(
+                "import \"nosuchmodule\"\n{}",
+                hub_rule("H_Module", Some("CC0 1.0"), "$a")
+            ),
+        ),
+    ];
+    let refs: Vec<(&str, &str)> = members.iter().map(|(n, t)| (*n, t.as_str())).collect();
+    let archive = zip_bytes(&refs);
+    let pack = SourcePack {
+        id: "hub".into(),
+        engine: "yara".into(),
+        name: "Hub".into(),
+        homepage: "https://hub.example.org/".into(),
+        license: "Per rule".into(),
+        license_url: String::new(),
+        revision: "snapshot-2026-11-05".into(),
+        revision_kind: "rolling".into(),
+        app: ">=0.8.3".into(),
+        engine_requirement: "YARA-X 1.21".into(),
+        rules: 2,
+        helpers: 0,
+        evidence: vec!["sample".into()],
+        limits: Vec::new(),
+        sources: vec![SourceFetch {
+            url: url.into(),
+            format: "zip".into(),
+            size: archive.len() as u64,
+            sha256: sha(&archive),
+            rolling: true,
+            strip: 0,
+            paths: Vec::new(),
+            files: members
+                .iter()
+                .map(|(path, text)| SourceFile {
+                    path: (*path).into(),
+                    sha256: sha(text.as_bytes()),
+                })
+                .collect(),
+        }],
+        filter: SourceFilter::YaraRuleFiles(YaraRuleFilesFilter {
+            license_keys: vec!["yarahub_license".into()],
+            allowed_licenses: ["CC0 1.0", "CC BY 4.0", "CC BY-SA 4.0"]
+                .map(String::from)
+                .to_vec(),
+            exclude_files: vec!["e_dup.yar".into()],
+        }),
+        options: Vec::new(),
+        notices: Vec::new(),
+    };
+    validate_catalog(&catalog_json_of(&pack)).unwrap();
+    let fixture = Fixture::default().with(url, archive);
+    let installed = install(&dir, &pack, &[], &fixture).unwrap();
+    assert_eq!(names(&dir, "hub"), ["A_Cc0", "B_By"]);
+    assert_eq!(installed.rules, 2);
+    let report = installed.provenance.summary.join("\n");
+    assert!(report.contains("Kept 2 rules"), "{report}");
+    assert!(
+        report.contains("1 because its own license is not an allowed one"),
+        "{report}"
+    );
+    assert!(report.contains("1 because it names no license"), "{report}");
+    assert!(
+        report.contains("1 because it duplicates a rule of another pack"),
+        "{report}"
+    );
+    assert!(
+        report.contains("1 because another file already holds a rule with that name"),
+        "{report}"
+    );
+    assert!(
+        report.contains("2 because it does not compile with YARA-X"),
+        "{report}"
+    );
+    // The findings and the rule list show the rule's own YARAhub license.
+    let listed = pack_index(&dir, "yara", "hub").unwrap();
+    assert_eq!(listed[0].license, "CC0 1.0");
+    let _ = fs::remove_dir_all(dir);
+}
+
+fn catalog_json_of(pack: &SourcePack) -> Value {
+    serde_json::json!({"schema": 2, "packs": [pack]})
+}
+
+/// Not run by default: checks a real YARAhub snapshot against a generated
+/// catalog entry. `ANT_YARAHUB_CATALOG` is the catalog.json, `ANT_YARAHUB_ZIP`
+/// the downloaded yaraify-rules.zip.
+#[test]
+#[ignore = "needs a downloaded YARAhub snapshot"]
+fn a_real_yarahub_snapshot_compiles_with_the_catalog_filter() {
+    let catalog = std::env::var("ANT_YARAHUB_CATALOG").expect("ANT_YARAHUB_CATALOG");
+    let zip_path = std::env::var("ANT_YARAHUB_ZIP").expect("ANT_YARAHUB_ZIP");
+    let catalog =
+        validate_catalog(&serde_json::from_slice(&fs::read(catalog).unwrap()).unwrap()).unwrap();
+    let pack = catalog
+        .sources
+        .iter()
+        .find(|pack| pack.id == "abuse-ch-yarahub")
+        .expect("the catalog has the YARAhub pack");
+    let SourceFilter::YaraRuleFiles(filter) = &pack.filter else {
+        panic!("the YARAhub pack uses another filter");
+    };
+    let mut archive = zip::ZipArchive::new(fs::File::open(zip_path).unwrap()).unwrap();
+    let mut files = Vec::new();
+    for index in 0..archive.len() {
+        let mut member = archive.by_index(index).unwrap();
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut member, &mut text).unwrap();
+        files.push((
+            member
+                .name_raw()
+                .iter()
+                .map(|b| char::from(*b))
+                .collect::<String>(),
+            text,
+        ));
+    }
+    let outcome = filter_yara_rule_files(&files, filter, &no_cancel()).unwrap();
+    println!("files {}", files.len());
+    println!("kept {}", outcome.report.kept);
+    for (reason, count) in &outcome.report.dropped {
+        println!("dropped {count}: {reason}");
+    }
+    println!("examples {:?}", outcome.report.examples);
+}

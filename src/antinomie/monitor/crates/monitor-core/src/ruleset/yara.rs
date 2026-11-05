@@ -14,6 +14,7 @@ pub(super) fn parse_yara(text: &str) -> Vec<IndexedRule> {
             severity: String::new(),
             license: Some(meta_in(&body, "license"))
                 .filter(|license| !license.is_empty())
+                .or_else(|| Some(meta_in(&body, "yarahub_license")).filter(|l| !l.is_empty()))
                 .unwrap_or_else(|| meta_in(&body, REPOSITORY_LICENSE_META)),
             source_url: meta_in(&body, "source_url"),
             condition: clip(&meta_in(&body, "description"), 180),

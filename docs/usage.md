@@ -56,6 +56,18 @@ versions; existing VMs keep their pinned base.
   Python 3.11 or newer with venv support (`python3-venv` on Debian/Ubuntu).
   The page shows counts under its title (installed packs, how many are enabled,
   custom groups, string patterns); its long explanations are in tooltips.
+  The YARA packs are YARA-Forge Core, Elastic protections-artifacts and
+  **abuse.ch YARAhub** (community rules shared as TLP:CLEAR at
+  yaraify.abuse.ch/yarahub, downloaded from abuse.ch without an Auth-Key). Each
+  YARAhub rule names its own Creative Commons license in `yarahub_license`:
+  CC0 1.0, CC BY 4.0 and CC BY-SA 4.0 rules are kept, non-commercial and
+  no-derivatives rules and rules that YARA-X cannot compile are removed on
+  your computer, and the install summary counts each. A rule that duplicates a
+  YARA-Forge Core rule (same name, or same strings and condition) is not
+  installed twice. abuse.ch rewrites the archive daily, so the pack is a
+  snapshot; the catalog is regenerated monthly and Check for updates offers the
+  newer snapshot. The pack needs Antinomie 0.8.3 or newer and shows the rule's
+  own license with every finding.
 
 - **Tools > Detection rules > IOC** keeps abuse.ch datasets on your computer
   for matching a run's indicators offline: ThreatFox `full.csv`, the URLhaus

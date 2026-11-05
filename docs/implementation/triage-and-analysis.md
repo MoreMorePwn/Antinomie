@@ -810,7 +810,7 @@ bucket holds only `catalog.json`, a README and a NOTICE. When a catalog says
 | `revision`, `revision_kind` | The pin: a release tag, a commit, or `rolling` |
 | `app`, `engine_requirement`, `rules`, `helpers`, `evidence`, `limits` | As schema 1; counts are approximate |
 | `sources[]` | `url` (HTTPS), `format` (`file`, `zip`, `tar.gz`), `size`, optional archive `sha256`, `rolling`, `strip`, `paths` (directories holding rules) and `files[]` (`path`, `sha256` of every file kept) |
-| `filter` | `copy` (extensions, support files), `yara-forge` (allowed rule licenses, allowed repository licenses, repository to license table) or `sigma` (log sources to keep) |
+| `filter` | `copy` (extensions, support files), `yara-forge` (allowed rule licenses, allowed repository licenses, repository to license table), `yara-rule-files` (one rule per file: `license_keys`, `allowed_licenses`, `exclude_files`; abuse.ch YARAhub) or `sigma` (log sources to keep) |
 | `options[]` | Per-install choices, off unless `default`; `include-unlicensed` adds YARA-Forge rules from repositories without a license, with a warning |
 | `notices[]` | Terms shown before the download |
 
@@ -845,7 +845,7 @@ allowed license or, when it names none, whose repository's license is allowed,
 drops repositories without a license unless the `include-unlicensed` option is
 on, adds the repository license to kept rules as `antinomie_repo_license` meta,
 and drops rules YARA-X cannot compile; the Sigma filter (`source_sigma.rs`)
-keeps documents whose log source is listed. The result is indexed like any
+keeps documents whose log source is listed; the rule-file filter keeps a file's rule when its `yarahub_license` meta is allowed, it is not in `exclude_files` (rules the generator found in YARA-Forge Core) and YARA-X compiles it, and writes the file unchanged. A rolling zip with no `paths` accepts any unlisted `.yar` member. The result is indexed like any
 pack and registered as a version named `<revision>-<12 hex of the plan digest>`,
 where the plan digest covers the pinned inputs, the filter, the chosen options
 and `FILTER_REVISION`; the installed pack records its source, hashes and what

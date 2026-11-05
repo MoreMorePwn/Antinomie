@@ -110,10 +110,11 @@ pub(super) fn extract(
     let wanted = |path: &str| -> bool {
         listed.contains_key(path)
             || (source.rolling
-                && source
-                    .paths
-                    .iter()
-                    .any(|prefix| path.starts_with(prefix.trim_end_matches('/')))
+                && (source.paths.is_empty()
+                    || source
+                        .paths
+                        .iter()
+                        .any(|prefix| path.starts_with(prefix.trim_end_matches('/'))))
                 && accept_unlisted(path))
     };
     match source.format.as_str() {
