@@ -110,6 +110,7 @@ fn record(
                     license: metadata
                         .get("license")
                         .or_else(|| metadata.get("malpedia_license"))
+                        .or_else(|| metadata.get("yarahub_license"))
                         .or_else(|| metadata.get(crate::ruleset::REPOSITORY_LICENSE_META))
                         .cloned()
                         .unwrap_or_else(|| {

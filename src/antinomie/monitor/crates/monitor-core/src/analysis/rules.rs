@@ -141,6 +141,7 @@ pub(super) fn scan_at(section: &mut AnalysisSection, specimen: &[u8], directory:
         let author = meta("author").unwrap_or_else(|| "unknown author".into());
         let license = meta("license")
             .or_else(|| meta("malpedia_license"))
+            .or_else(|| meta("yarahub_license"))
             .unwrap_or_default();
         let ruleset = format!("{author}; {license}");
         let mut tags: Vec<String> = rule.tags().map(|t| t.identifier().to_owned()).collect();

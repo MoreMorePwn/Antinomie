@@ -391,6 +391,27 @@ fn build_tree(
                 }
             }
         }
+        SourceFilter::YaraRuleFiles(filter) => {
+            let mut files = Vec::new();
+            for (key, file) in &kept_files {
+                if file.path.ends_with(".yar") || file.path.ends_with(".yara") {
+                    files.push((file.path.clone(), read_text(&extracted, key)?));
+                }
+            }
+            let outcome = filter_yara_rule_files(&files, filter, cancel)?;
+            report.kept += outcome.report.kept;
+            report.helpers += outcome.report.helpers;
+            for (reason, count) in outcome.report.dropped {
+                report.omit(&reason, count);
+            }
+            for (basis, count) in outcome.report.kept_by {
+                *report.kept_by.entry(basis).or_default() += count;
+            }
+            report.examples.extend(outcome.report.examples);
+            for file in outcome.files {
+                write(&file.path, &file.text)?;
+            }
+        }
         SourceFilter::Sigma(filter) => {
             for (key, file) in &kept_files {
                 if !file.path.ends_with(".yml") && !file.path.ends_with(".yaml") {
@@ -526,7 +547,7 @@ fn unlisted_ok(filter: &SourceFilter, path: &str) -> bool {
             extensions.iter().any(|ext| path.ends_with(ext.as_str()))
         }
         SourceFilter::Sigma(_) => path.ends_with(".yml") || path.ends_with(".yaml"),
-        SourceFilter::YaraForge(_) => path.ends_with(".yar"),
+        SourceFilter::YaraForge(_) | SourceFilter::YaraRuleFiles(_) => path.ends_with(".yar"),
     }
 }
 
