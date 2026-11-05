@@ -1127,8 +1127,13 @@ impl Table {
                 args[1] as i32,
                 args[2] as i32,
             )),
-            _ => selectors::named_argument(c, call, index, args)
-                .or_else(|| scalars::name(self, call, index, args)),
+            _ => selectors::named_argument(c, call, index, args).or_else(|| {
+                // A compat call by its x86-64 name (`fcntl64` is `fcntl`).
+                let family = self
+                    .by_number(number)
+                    .and_then(|info| info.family.as_deref());
+                scalars::name(self, family.unwrap_or(call), index, args)
+            }),
         }
     }
 

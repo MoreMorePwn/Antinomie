@@ -16,6 +16,7 @@ mod call_tree;
 #[cfg(test)]
 mod conformance;
 mod fields;
+mod full_field;
 mod record_tree;
 pub(crate) use record_tree::call_json as record_call_json;
 mod tree_row;
@@ -67,6 +68,8 @@ pub(crate) struct Inspector {
     pub(crate) observations: async_browse::State,
     /// The record tree of the selected array field.
     records: record_tree::State,
+    /// Fields decoded from more than their preview.
+    full: full_field::FullFields,
     /// The recording the selected call's captured bytes can be read from.
     pub(crate) directory: Option<std::path::PathBuf>,
 }
@@ -667,7 +670,10 @@ impl Inspector {
             directory: self.directory.as_deref(),
         };
         if !record_tree::show(ui, &mut self.records, &shown) {
-            if let Some(decoded) = decoded(call.as_ref(), field) {
+            if let Some(decoded) = self
+                .full
+                .decode(self.directory.as_deref(), call.as_ref(), field)
+            {
                 ui.add_space(2.0);
                 // Nested structures and arrays indent under their member; the
                 // raw bytes stay in the hex dump below.
@@ -1140,10 +1146,15 @@ pub(super) mod tests {
             preview(&typed("address.data", "sockaddr", object, &address)),
             "10.0.2.3:53"
         );
-        // A family the view cannot decode: the address's bytes.
+        // AF_UNSPEC (the disconnect idiom) is named.
         assert_eq!(
             preview(&typed("arg1.address", "sockaddr", object, &[0; 4])),
-            "00 00 00 00"
+            "AF_UNSPEC"
+        );
+        // A family the view cannot decode: the address's bytes.
+        assert_eq!(
+            preview(&typed("arg1.address", "sockaddr", object, &[9, 0, 1, 2])),
+            "09 00 01 02"
         );
     }
 

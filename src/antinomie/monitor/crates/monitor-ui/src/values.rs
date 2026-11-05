@@ -358,47 +358,11 @@ pub(crate) fn quoted_bytes(data: &[u8]) -> String {
     text
 }
 
-/// A captured `struct sockaddr` as an address: `10.0.2.3:53`,
-/// `[::1]:443` or a Unix socket path. None for other families or short data.
+/// A captured `struct sockaddr` as an address (`10.0.2.3:53`, `[::1]:443`, a
+/// Unix socket path, a netlink, packet, vsock, ALG or CAN address, or
+/// `AF_UNSPEC`). None for other families or short data.
 pub(crate) fn sockaddr(data: &[u8]) -> Option<String> {
-    let family = u16::from_le_bytes(data.get(..2)?.try_into().ok()?);
-    let port =
-        |data: &[u8]| -> Option<u16> { Some(u16::from_be_bytes(data.get(2..4)?.try_into().ok()?)) };
-    match family {
-        // AF_UNIX; a leading NUL names an abstract socket.
-        1 => {
-            let path = data.get(2..)?;
-            let (prefix, path) = match path.split_first() {
-                Some((0, rest)) => ("@", rest),
-                _ => ("", path),
-            };
-            let end = path
-                .iter()
-                .position(|byte| *byte == 0)
-                .unwrap_or(path.len());
-            let text = String::from_utf8_lossy(&path[..end]);
-            Some(format!("unix:{prefix}{text}"))
-        }
-        // AF_INET
-        2 => {
-            let address: [u8; 4] = data.get(4..8)?.try_into().ok()?;
-            Some(format!(
-                "{}:{}",
-                std::net::Ipv4Addr::from(address),
-                port(data)?
-            ))
-        }
-        // AF_INET6
-        10 => {
-            let address: [u8; 16] = data.get(8..24)?.try_into().ok()?;
-            Some(format!(
-                "[{}]:{}",
-                std::net::Ipv6Addr::from(address),
-                port(data)?
-            ))
-        }
-        _ => None,
-    }
+    antinomie_monitor_core::typed_fields::sockaddr(data, None)
 }
 
 /// A file's size as the exact byte count and, from 1024 bytes up, a rounded
@@ -529,6 +493,23 @@ mod tests {
         );
         assert_eq!(sockaddr(&[2, 0, 0]), None);
         assert_eq!(sockaddr(&[17, 0, 0, 0]), None);
+        assert_eq!(sockaddr(&[0, 0]).as_deref(), Some("AF_UNSPEC"));
+        // Families with their own members.
+        let mut netlink = vec![16, 0, 0, 0];
+        netlink.extend(0u32.to_le_bytes());
+        netlink.extend(1u32.to_le_bytes());
+        assert_eq!(
+            sockaddr(&netlink).as_deref(),
+            Some("netlink:pid=0,groups=0x1")
+        );
+        let mut packet = vec![17, 0, 0x08, 0x06];
+        packet.extend(2i32.to_le_bytes());
+        packet.extend([1, 0, 0, 6]);
+        packet.extend([0x52, 0x54, 0, 0x12, 0x34, 0x56, 0, 0]);
+        assert_eq!(
+            sockaddr(&packet).as_deref(),
+            Some("packet:proto=ETH_P_ARP,ifindex=2,hatype=ARPHRD_ETHER,mac=52:54:00:12:34:56")
+        );
     }
 
     #[test]

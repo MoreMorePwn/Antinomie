@@ -500,7 +500,7 @@ fn partial_captures_and_other_layouts_are_not_guessed() {
     holed.ranges = vec![(8, 16)];
     assert!(decode(None, &holed).is_none());
     // A layout not decoded here.
-    assert!(decode(None, &field("iocb", "arg0.data", &[0; 16])).is_none());
+    assert!(decode(None, &field("bpf_info", "arg0.data", &[0; 16])).is_none());
     assert!(decode(None, &field("", "arg1.buf", b"abc")).is_none());
     // More captured than the preview: marked.
     let mut long = field("gid_t[]", "arg1.data", &[0; 8]);

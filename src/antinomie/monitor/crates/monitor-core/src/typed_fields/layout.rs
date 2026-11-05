@@ -23,8 +23,11 @@ use crate::syscalls::{self, Abi};
 use serde::Deserialize;
 use std::{collections::HashMap, sync::OnceLock};
 
-mod names;
+mod kernel;
+pub(super) mod names;
 pub(super) mod time;
+
+pub(crate) use kernel::{LSM_ATTR, LSM_FLAGS};
 
 /// Elements of an array one decode lists (the rest is `more`).
 const ARRAY_LIMIT: usize = 64;
@@ -466,7 +469,8 @@ fn element(cx: &Cx<'_>, schema: &Schema, data: &[u8]) -> Option<(String, Vec<Nod
         return Some((names::leaf(cx, "value", &raw), Vec::new(), false));
     }
     let mut walk = Walk { cx, cut: false };
-    let nodes = walk.nodes(&schema.root, data, "");
+    let mut nodes = walk.nodes(&schema.root, data, "");
+    kernel::refine(cx.layout, &mut nodes, data);
     if nodes.is_empty() {
         return None;
     }
