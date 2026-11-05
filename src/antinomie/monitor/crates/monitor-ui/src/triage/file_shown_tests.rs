@@ -2,7 +2,6 @@
 //! The columns, badges and times the Files tables draw.
 use super::file_shown::{self, Notes};
 use super::*;
-use std::collections::BTreeSet;
 
 fn headers_of(tab: FileTab, stored: &[&'static str]) -> Vec<&'static str> {
     file_tabs::shown_columns(tab.slot())
@@ -123,8 +122,10 @@ fn stored_row(path: &str, time_ns: u64) -> Vec<Cell> {
 }
 
 #[test]
-fn a_path_carries_its_location_names_and_warning_as_badges_and_the_time_is_relative() {
-    let flagged: BTreeSet<String> = ["/tmp/.x".to_owned()].into();
+fn a_path_is_only_the_path_and_its_tags_are_in_the_next_column() {
+    let mut flagged = file_shown::Flags::new();
+    let mut flag = |rule| file_shown::flag(&mut flagged, "/tmp/.x", rules::Tier::Medium, rule);
+    flag("evasion.hidden_artifact");
     let notes = Notes {
         start: Some(1_000_000_000),
         flagged: &flagged,
@@ -134,7 +135,12 @@ fn a_path_carries_its_location_names_and_warning_as_badges_and_the_time_is_relat
         stored_row("/tmp/y", 3_000_000_000),
     ];
     let shown = file_shown::shown(8, &rows, &notes);
-    assert_eq!(shown[0].len(), file_tabs::OPERATION_COLUMNS.len());
+    // One column more than the stored selection: Tags, after the Path.
+    assert_eq!(shown[0].len(), file_tabs::OPERATION_COLUMNS.len() + 1);
+    let headers = file_shown::headers(8, file_category::EVENT_HEADERS);
+    assert_eq!(headers.len(), shown[0].len());
+    assert_eq!(headers[3], "Path");
+    assert_eq!(headers[4], "Tags");
     // The time is from the start of the run, the absolute one on hover.
     assert_eq!(shown[0][0].text, "+1.204 s");
     assert_eq!(shown[0][0].note.as_deref(), Some("~12:00:01.000"));
@@ -142,22 +148,51 @@ fn a_path_carries_its_location_names_and_warning_as_badges_and_the_time_is_relat
     assert!(shown[0][0].values.iter().any(|(key, _)| *key == "event.id"));
     let path = &shown[0][3];
     assert_eq!(path.text, "/tmp/.x");
-    let badges: Vec<&str> = path.badges.iter().map(|b| b.text.as_str()).collect();
-    assert_eq!(badges, ["/tmp", "hidden", "+2 names", "\u{26a0}"]);
-    // No finding names the other path: no warning.
-    let badges: Vec<&str> = shown[1][3].badges.iter().map(|b| b.text.as_str()).collect();
-    assert_eq!(badges, ["/tmp", "hidden", "+2 names"]);
-    // The row without a start of the run keeps its absolute time.
-    let none = BTreeSet::new();
-    let shown = file_shown::shown(
-        8,
-        &rows[..1],
-        &Notes {
-            start: None,
-            flagged: &none,
-        },
+    assert!(path.badges.is_empty());
+    let tags =
+        |row: &Vec<Cell>| -> Vec<String> { row[4].badges.iter().map(|b| b.text.clone()).collect() };
+    assert_eq!(
+        tags(&shown[0]),
+        [
+            "/tmp",
+            "hidden",
+            "+2 names",
+            "Medium \u{b7} Hidden file created"
+        ]
     );
+    // No finding names the other path: no finding tag.
+    assert_eq!(tags(&shown[1]), ["/tmp", "hidden", "+2 names"]);
+    // Several findings: their number and the worst tier.
+    file_shown::flag(
+        &mut flagged,
+        "/tmp/.x",
+        rules::Tier::High,
+        "execution.temp_exec",
+    );
+    file_shown::flag(
+        &mut flagged,
+        "/tmp/.x",
+        rules::Tier::Low,
+        "evasion.dumpable_off",
+    );
+    let notes = Notes {
+        start: None,
+        flagged: &flagged,
+    };
+    let shown = file_shown::shown(8, &rows[..1], &notes);
+    assert_eq!(tags(&shown[0]).last().unwrap(), "3 findings \u{b7} High");
+    // The row without a start of the run keeps its absolute time.
     assert_eq!(shown[0][0].text, "~12:00:01.000");
+    // No table draws a warning sign.
+    for slot in [1, 2, 5, 8] {
+        let stored: Vec<Cell> = (0..10).map(|_| cell("x", theme::text(), false)).collect();
+        let drawn = file_shown::shown(slot, &[stored], &notes);
+        assert!(drawn[0].iter().all(|cell| !cell.text.contains('\u{26a0}')
+            && cell
+                .badges
+                .iter()
+                .all(|badge| !badge.text.contains('\u{26a0}'))));
+    }
 }
 
 #[test]

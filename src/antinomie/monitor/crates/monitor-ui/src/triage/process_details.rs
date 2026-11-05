@@ -95,11 +95,7 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, values: &[(&str, Ro
         })
         .unwrap_or_default();
     ui.separator();
-    ui.label(
-        RichText::new("Suspicious observations")
-            .strong()
-            .color(theme::text()),
-    );
+    ui.label(theme::bold(ui, "Suspicious observations").color(theme::text()));
     if total == 0 {
         ui.weak("None recorded for this process.");
     }
@@ -348,7 +344,7 @@ impl Facts {
         let mut open = None;
         let heading = |ui: &mut egui::Ui, text: &str| {
             ui.add_space(4.0);
-            ui.label(RichText::new(text).strong().color(theme::text()));
+            ui.label(theme::bold(ui, text).color(theme::text()));
         };
         ui.separator();
         heading(ui, "Executable");
@@ -378,7 +374,7 @@ impl Facts {
             });
         }
         let title = format!("Environment ({} variables)", self.env.len());
-        egui::CollapsingHeader::new(RichText::new(title).strong())
+        egui::CollapsingHeader::new(theme::bold(ui, title))
             .id_salt("triage-process-env")
             .default_open(true)
             .show(ui, |ui| self.environment(ui));

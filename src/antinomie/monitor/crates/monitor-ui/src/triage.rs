@@ -33,6 +33,7 @@ mod async_files;
 mod attack;
 mod auditd_events;
 mod bpf_attach;
+mod bpf_fields;
 mod bpf_notes;
 mod counts;
 mod descriptors;
@@ -633,27 +634,43 @@ impl TriageView {
         if self.section == Section::Bpf {
             self.refresh_row(ui, &input);
         }
-        let jump = match self.section {
-            Section::Summary | Section::Properties | Section::Detection | Section::Ioc => None,
-            Section::Process => self.process(ui, &input),
-            Section::Files => {
-                self.files(ui, &input);
-                None
-            }
-            Section::Network => {
-                crate::widgets::fact_line(ui, "Route", &self.route.headline);
-                self.new_network(ui, &input);
-                None
-            }
-            Section::Bpf => {
-                let indexed = self.scan.as_ref().map(|scan| scan.bpf.as_slice());
-                if self.scan.as_ref().is_some_and(|scan| scan.bpf_omitted > 0) {
-                    crate::activity::info(ui, "Some BPF observations exceed the preview limit; original syscall evidence remains available.");
+        // The body of a table section is a page that scrolls when its filters
+        // and notes leave a table under `MIN_TABLE_HEIGHT` of room: the pane
+        // itself has no scroll area, so a table pushed below its bottom edge
+        // could not be reached. The tables keep their own scroll area, sized
+        // to what is left of the pane.
+        let viewport = ui.available_height();
+        let page = egui::Id::new(("triage-page", std::mem::discriminant(&self.section)));
+        let jump = egui::ScrollArea::vertical()
+            .id_salt(page)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_max_height(viewport);
+                match self.section {
+                    Section::Summary | Section::Properties | Section::Detection | Section::Ioc => {
+                        None
+                    }
+                    Section::Process => self.process(ui, &input),
+                    Section::Files => {
+                        self.files(ui, &input);
+                        None
+                    }
+                    Section::Network => {
+                        crate::widgets::fact_line(ui, "Route", &self.route.headline);
+                        self.new_network(ui, &input);
+                        None
+                    }
+                    Section::Bpf => {
+                        let indexed = self.scan.as_ref().map(|scan| scan.bpf.as_slice());
+                        if self.scan.as_ref().is_some_and(|scan| scan.bpf_omitted > 0) {
+                            crate::activity::info(ui, "Some BPF observations exceed the preview limit; original syscall evidence remains available.");
+                        }
+                        bpf_view(ui, &input, indexed);
+                        None
+                    }
                 }
-                bpf_view(ui, &input, indexed);
-                None
-            }
-        };
+            })
+            .inner;
         jump.or_else(|| self.take_navigation(ui.ctx()))
     }
 
@@ -1162,6 +1179,7 @@ enum Spawn {
     Skip,
 }
 
+#[cfg_attr(test, derive(Clone))]
 struct ProcessNode {
     parent: Option<TaskKey>,
     call_id: Option<trace::InvocationKey>,
@@ -1410,8 +1428,8 @@ struct ArchiveScan {
     findings: Vec<Finding>,
     findings_omitted: u64,
     /// Paths a finding above Info names as its object, whatever the findings
-    /// table is filtered to: the files marked with a warning in Files.
-    flagged_paths: std::collections::BTreeSet<String>,
+    /// table is filtered to, with what they say: the tag of those files in Files.
+    flagged_paths: file_shown::Flags,
     /// The same rows as lanes and buckets, and the run's overview.
     graph: graph::GraphScan,
     /// Rules the scan could not evaluate, and why.

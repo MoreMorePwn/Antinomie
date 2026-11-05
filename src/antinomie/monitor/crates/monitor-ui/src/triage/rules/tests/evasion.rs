@@ -566,3 +566,63 @@ fn a_packed_program_is_flagged_when_the_run_starts_it_and_tiered_by_its_headers(
         "evasion.packed_image"
     ));
 }
+
+#[test]
+fn argv_naming_another_program_than_the_image_is_a_low_or_medium_finding() {
+    // The demo-all stand-in: the image is /tmp/demo-all, argv says "ps aux".
+    let out = run(vec![exec(1, "/tmp/demo-all", &["ps", "aux"])]);
+    let row = rows(&out, "evasion.argv_masquerade");
+    assert_eq!(row.len(), 1);
+    // A well-known tool name from a temp directory: MEDIUM.
+    assert_eq!(text(row[0], "finding.tier"), "medium");
+    assert_eq!(list(row[0], "finding.technique"), ["T1036.005"]);
+    assert_eq!(text(row[0], "finding.object"), "/tmp/demo-all");
+    // The same name from a system directory, or an unknown name: LOW.
+    assert_eq!(
+        tier(
+            &run(vec![exec(1, "/usr/local/bin/tool", &["ps", "aux"])]),
+            "evasion.argv_masquerade"
+        )
+        .as_deref(),
+        Some("low")
+    );
+    assert_eq!(
+        tier(
+            &run(vec![exec(1, "/tmp/x", &["worker-1"])]),
+            "evasion.argv_masquerade"
+        )
+        .as_deref(),
+        Some("low")
+    );
+    assert_eq!(
+        tier(
+            &run(vec![exec(1, "/home/user/.cache/x", &["sudo", "-v"])]),
+            "evasion.argv_masquerade"
+        )
+        .as_deref(),
+        Some("medium")
+    );
+}
+
+#[test]
+fn argv_that_is_not_a_disguise_raises_no_argv_finding() {
+    let none = |path: &str, argv: &[&str]| {
+        !has(&run(vec![exec(1, path, argv)]), "evasion.argv_masquerade")
+    };
+    assert!(none("/usr/bin/ls", &["ls", "-l"]));
+    assert!(none("/usr/bin/ls", &["/bin/ls"]));
+    // BusyBox applets, interpreter families, login shells and daemon titles.
+    assert!(none("/bin/busybox", &["ls", "-l"]));
+    assert!(none("/usr/bin/python3.13", &["python3", "x.py"]));
+    assert!(none("/bin/bash", &["-bash"]));
+    assert!(none("/usr/sbin/nginx", &["nginx: master process", "-g"]));
+    // A failed exec loaded nothing.
+    assert!(!has(
+        &run(vec![failed_exec(1, "/tmp/demo-all", &["ps", "aux"])]),
+        "evasion.argv_masquerade"
+    ));
+    // A kernel-thread or daemon name has its own rule, not a second finding.
+    let daemon = run(vec![exec(1, "/tmp/x", &["/sbin/udevd", "-d"])]);
+    assert!(has(&daemon, "evasion.masquerade_daemon"));
+    assert!(!has(&daemon, "evasion.argv_masquerade"));
+}

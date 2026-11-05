@@ -37,27 +37,7 @@ pub(super) fn process_rows(
         .iter()
         .map(|node| {
             let ended = node.state.starts_with("task exit");
-            let mismatch = (!node.forked)
-                .then(|| process_cells::argv0_mismatch(&node.comm, &node.argv))
-                .flatten();
-            let mut command = cell(
-                match mismatch {
-                    Some(_) => format!("\u{26a0} {}", node.argv.join(" ")),
-                    None => node.argv.join(" "),
-                },
-                if mismatch.is_some() {
-                    theme::warn()
-                } else {
-                    theme::text()
-                },
-                false,
-            );
-            if let Some(argv0) = mismatch {
-                tip(
-                    &mut command,
-                    process_cells::mismatch_text(argv0, &node.comm),
-                );
-            }
+            let command = cell(node.argv.join(" "), theme::text(), false);
             let mut findings = cell(
                 suspicious
                     .get(&(node.cookie, node.pid))
@@ -78,6 +58,14 @@ pub(super) fn process_rows(
                 &mut started,
                 crate::time_format::guest_ns(clock, node.first_ns),
             );
+            let mut user = cell(
+                process_cells::user(node.record.creds.last()),
+                theme::text(),
+                true,
+            );
+            if let Some(step) = node.record.creds.last() {
+                tip(&mut user, process_cells::user_hover(step));
+            }
             let mut row = vec![
                 cell(
                     process_label(node),
@@ -90,11 +78,7 @@ pub(super) fn process_rows(
                 ),
                 command,
                 findings,
-                cell(
-                    process_cells::user(node.record.creds.last()),
-                    theme::text(),
-                    true,
-                ),
+                user,
                 started,
                 cell(
                     process_cells::lifetime(node.first_ns, node.last_ns, ended),
@@ -213,7 +197,7 @@ pub(super) const PROCESS_HEADERS: [&str; 9] = [
     "Process",
     "Command line",
     "Findings",
-    "User",
+    "User ID",
     "Started",
     "Lifetime",
     "Outcome",

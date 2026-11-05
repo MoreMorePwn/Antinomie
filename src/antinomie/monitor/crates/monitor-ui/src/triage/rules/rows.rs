@@ -54,8 +54,6 @@ pub(in crate::triage) const SHOWN: [usize; 8] = [
 /// a flag for limited confidence.
 pub(in crate::triage) const TIP: &str = "cell.tooltip";
 pub(in crate::triage) const LIMITED: &str = "cell.limited";
-/// The key of the text that says a process calls itself by another name.
-pub(in crate::triage) const MISMATCH: &str = "finding.argv_mismatch";
 
 /// Which rows the table shows: the chips above it.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
@@ -305,7 +303,7 @@ pub(super) fn finding(agg: &Agg) -> Finding {
     } else {
         theme::text()
     };
-    let identity = present::process_text(agg, false);
+    let identity = present::process_text(agg);
     Finding {
         key: agg.key(),
         call_id: agg.call_id,
@@ -342,17 +340,6 @@ pub(super) fn finding(agg: &Agg) -> Finding {
             ),
         ],
     }
-}
-
-/// A process that calls itself by another name than the image the kernel
-/// loaded: a warning on its cell, with the sentence that says so.
-pub(super) fn note_mismatch(row: &mut Finding, agg: &Agg, warning: String) {
-    row.cells[COL_PROCESS].text = present::process_text(agg, true);
-    row.cells[COL_PROCESS].color = theme::warn();
-    row.cells[COL_PROCESS]
-        .values
-        .push((TIP, RowValue::Text(warning.clone())));
-    row.values.push((MISMATCH, RowValue::Text(warning)));
 }
 
 /// Fill the cells that read the run's clocks: `Time` on the host's clock and

@@ -2,19 +2,18 @@
 //! What the Files tables draw of the rows they keep. A stored row has every
 //! column its filters, sorts and Details know it by; the table draws fewer: the
 //! time from the start of the run (the absolute time on hover), the location,
-//! other names and a finding that involves the path as small badges on the
-//! Path cell, and no Evidence column (Details opens the original syscall).
+//! other names and a finding that involves the path as tags in a Tags
+//! column after the Path, and no Evidence column (Details opens the original syscall).
 use super::file_location::Location;
 use super::*;
 use crate::widgets::Tone;
-use std::collections::BTreeSet;
 
 /// What a table needs besides its rows.
 pub(super) struct Notes<'a> {
     /// The start of the run, in the guest's nanoseconds.
     pub start: Option<u64>,
     /// Paths a Suspicious activity finding names as its object.
-    pub flagged: &'a BTreeSet<String>,
+    pub flagged: &'a Flags,
 }
 
 /// The stored column a table's Path is in.
@@ -42,17 +41,68 @@ fn list_of<'a>(values: &'a [(&'static str, RowValue)], key: &str) -> &'a [String
         .unwrap_or_default()
 }
 
-/// The badge of a path a finding involves.
-pub(super) fn finding_badge() -> Badge {
-    Badge {
-        text: "\u{26a0}".into(),
-        tone: Tone::Warn,
-        hover: "A Suspicious activity finding involves this file".into(),
+/// What the findings above Info say of one path: how many name it as their
+/// object, and the worst of them.
+#[derive(Clone)]
+pub(super) struct PathFlag {
+    pub count: u64,
+    pub worst: rules::Tier,
+    /// The rule of the worst finding, whose title the tag shows.
+    pub rule: String,
+}
+
+/// The paths that findings above Info name, with what they say of each.
+pub(super) type Flags = std::collections::BTreeMap<String, PathFlag>;
+
+/// Count one finding of `rule` and `tier` against `path`.
+pub(super) fn flag(flags: &mut Flags, path: &str, tier: rules::Tier, rule: &str) {
+    let entry = flags.entry(path.to_owned()).or_insert_with(|| PathFlag {
+        count: 0,
+        worst: tier,
+        rule: rule.to_owned(),
+    });
+    entry.count += 1;
+    if tier > entry.worst {
+        entry.worst = tier;
+        entry.rule = rule.to_owned();
     }
 }
 
-/// The badges of a path: where it lives, its other names, and a finding.
-pub(super) fn path_badges(locations: &[String], names: &[String], flagged: bool) -> Vec<Badge> {
+/// The tag of a path a finding involves: the worst tier with the behaviour's
+/// title, or the number of findings when there are several.
+pub(super) fn finding_tag(flag: &PathFlag) -> Badge {
+    let title = rules::rule_title(&flag.rule);
+    let (text, hover) = if flag.count == 1 {
+        (
+            format!("{} \u{b7} {title}", flag.worst.label()),
+            format!(
+                "Suspicious activity: {title} ({}). Open Suspicious activity for the evidence.",
+                flag.worst.label()
+            ),
+        )
+    } else {
+        (
+            format!("{} findings \u{b7} {}", flag.count, flag.worst.label()),
+            format!(
+                "{} Suspicious activity findings name this file; the worst is {title} ({}).",
+                flag.count,
+                flag.worst.label()
+            ),
+        )
+    };
+    Badge {
+        text,
+        tone: flag.worst.tone(),
+        hover,
+    }
+}
+
+/// The tags of a path: where it lives, its other names, and a finding.
+pub(super) fn path_tags(
+    locations: &[String],
+    names: &[String],
+    flagged: Option<&PathFlag>,
+) -> Vec<Badge> {
     let mut badges: Vec<Badge> = locations
         .iter()
         .map(|tag| Badge {
@@ -72,10 +122,17 @@ pub(super) fn path_badges(locations: &[String], names: &[String], flagged: bool)
             hover: format!("Also seen as {}", names[1..].join(", ")),
         });
     }
-    if flagged {
-        badges.push(finding_badge());
+    if let Some(flag) = flagged {
+        badges.push(finding_tag(flag));
     }
     badges
+}
+
+/// The Tags cell: the tags of a path as pills, and no text of its own.
+pub(super) fn tags_cell(badges: Vec<Badge>) -> Cell {
+    let mut cell = table::cell("", theme::text(), false);
+    cell.badges = badges;
+    cell
 }
 
 /// A SHA-256 as the table shows it: the first twelve digits.
@@ -100,29 +157,31 @@ fn relative_time(cell: &mut Cell, notes: &Notes<'_>) {
     cell.note = Some(absolute);
 }
 
+/// The headers a Files table draws: those of the columns it shows (see
+/// [`file_tabs::shown_columns`]), with Tags after the Path.
+pub(super) fn headers<'a>(slot: usize, stored: &[&'a str]) -> Vec<&'a str> {
+    let mut shown: Vec<&str> = file_tabs::shown_columns(slot)
+        .iter()
+        .map(|&index| stored[index])
+        .collect();
+    let at = shown.iter().position(|title| *title == "Path");
+    shown.insert(at.map_or(shown.len(), |at| at + 1), "Tags");
+    shown
+}
+
 /// The rows of a Files table as drawn: the columns of `slot` (see
 /// [`file_tabs::shown_columns`]) with the decoration above.
 pub(super) fn shown(slot: usize, rows: &[Vec<Cell>], notes: &Notes<'_>) -> Vec<Vec<Cell>> {
     let keep = file_tabs::shown_columns(slot);
     let path_at = path_column(slot);
+    let path_shown = keep.iter().position(|&index| index == path_at).unwrap_or(0);
     rows.iter()
         .map(|row| {
-            let values = row.first().map(|cell| cell.values.as_slice());
-            let values = values.unwrap_or_default();
             keep.iter()
                 .filter_map(|&index| {
                     let mut cell = row.get(index)?.clone();
-                    match index {
-                        0 => relative_time(&mut cell, notes),
-                        _ if index == path_at => {
-                            let path = text_of(values, "file.path").unwrap_or(&cell.text);
-                            cell.badges = path_badges(
-                                list_of(values, "file.location"),
-                                list_of(values, "file.names"),
-                                notes.flagged.contains(path),
-                            );
-                        }
-                        _ => {}
+                    if index == 0 {
+                        relative_time(&mut cell, notes);
                     }
                     if slot == 2 && index == 8 {
                         // Changed files: the digest cut, the whole one on hover.
@@ -132,7 +191,23 @@ pub(super) fn shown(slot: usize, rows: &[Vec<Cell>], notes: &Notes<'_>) -> Vec<V
                     }
                     Some(cell)
                 })
-                .collect()
+                .collect::<Vec<_>>()
+        })
+        .map(|mut cells| {
+            // The tags of the path, in a column after it.
+            let tags = {
+                let values = cells.first().map_or(&[][..], |cell| cell.values.as_slice());
+                let path = text_of(values, "file.path")
+                    .or_else(|| cells.get(path_shown).map(|cell| cell.text.as_str()))
+                    .unwrap_or_default();
+                tags_cell(path_tags(
+                    list_of(values, "file.location"),
+                    list_of(values, "file.names"),
+                    notes.flagged.get(path),
+                ))
+            };
+            cells.insert((path_shown + 1).min(cells.len()), tags);
+            cells
         })
         .collect()
 }

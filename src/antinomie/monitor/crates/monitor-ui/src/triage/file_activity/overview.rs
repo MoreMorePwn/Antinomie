@@ -16,13 +16,13 @@ pub(in crate::triage) const TABLE: &str = "triage-files";
 
 pub(in crate::triage) const HEADERS: &[&str] = &[
     "Path",
+    "Tags",
     "What happened",
     "By",
     "First \u{2192} last",
     "Size",
     "Type",
     "SHA-256",
-    "\u{26a0}",
 ];
 
 /// Steps of the chain written out before it ends in an ellipsis.
@@ -177,7 +177,6 @@ pub(in crate::triage) fn cells(
     notes: &Notes<'_>,
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
 ) -> Vec<Cell> {
-    let flagged = notes.flagged.contains(&file.path);
     let locations: Vec<String> = file_location::classify(&file.path, &[])
         .into_iter()
         .map(|location| location.tag().to_owned())
@@ -188,7 +187,11 @@ pub(in crate::triage) fn cells(
     let hash = file.sha256();
     let kind = type_of(file);
     let mut path = table::cell(&file.path, theme::text(), true);
-    path.badges = file_shown::path_badges(&locations, &names, false);
+    let tags = file_shown::tags_cell(file_shown::path_tags(
+        &locations,
+        &names,
+        notes.flagged.get(&file.path),
+    ));
     // The first call of the file: what Details opens in Trace.
     let mut values = vec![
         ("file.path", RowValue::Text(file.path.clone())),
@@ -234,13 +237,13 @@ pub(in crate::triage) fn cells(
     digest.note = hash;
     vec![
         path,
+        tags,
         table::cell(chain(file), theme::text(), false),
         table::cell(by(activity, file), theme::text(), false),
         span,
         table::cell(size_change(file), theme::text(), true),
         table::cell(kind, theme::text(), false),
         digest,
-        table::cell(if flagged { "\u{26a0}" } else { "" }, theme::warn(), false),
     ]
 }
 

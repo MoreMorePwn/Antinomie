@@ -356,10 +356,9 @@ pub fn section_title(ui: &egui::Ui, title: impl Into<String>) -> egui::RichText 
         .text_styles
         .get(&TextStyle::Body)
         .map_or(DEFAULT_TEXT_SIZE, |font| font.size);
-    egui::RichText::new(title)
-        .strong()
-        .color(heading())
-        .size(body + 2.0)
+    let mut font = bold_font(ui);
+    font.size = body + 2.0;
+    egui::RichText::new(title).font(font).color(heading())
 }
 
 /// What a list, table or tab says when it has nothing in it: one muted line a
