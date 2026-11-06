@@ -241,20 +241,16 @@ fn trigger_selection(
     let core_ok = capabilities.core_on_exit;
     ui.indent("dump-trigger", |ui| {
         ui.horizontal_wrapped(|ui| {
-            ui.label("At tier");
+            ui.label("Minimum tier");
             egui::ComboBox::from_id_salt("dump-trigger-tier")
-                .selected_text(format!("{} or higher", plan.min_tier.label()))
+                .selected_text(plan.min_tier.label())
                 .show_ui(ui, |ui| {
                     for tier in TriggerTier::ALL {
-                        ui.selectable_value(
-                            &mut plan.min_tier,
-                            tier,
-                            format!("{} or higher", tier.label()),
-                        );
+                        ui.selectable_value(&mut plan.min_tier, tier, tier.label());
                     }
                 })
                 .response
-                .on_hover_text("The tiers Triage gives its findings; there is nothing above High.");
+                .on_hover_text("The lowest Triage tier that takes a dump: this tier and every tier above it. Triage tiers are Low, Medium and High; there is nothing above High.");
         });
         ui.checkbox(&mut plan.memory, "Memory dump")
             .on_hover_text("Dump the VM's RAM. Skipped when the VM has more RAM than the cap below or the disk is too full.");
@@ -384,12 +380,13 @@ fn identity_fields(ui: &mut egui::Ui, request: &mut ExecRequest) {
         let selected = match (request.uid, request.gid) {
             (0, 0) => "Root",
             (1000, 1000) => "Normal user",
+            (65534, 65534) => "Nobody",
             _ => "Custom",
         };
         egui::ComboBox::from_id_salt("launch-user-preset")
             .selected_text(selected)
             .show_ui(ui, |ui| {
-                for (label, id) in [("Root", 0), ("Normal user", 1000)] {
+                for (label, id) in [("Root", 0), ("Normal user", 1000), ("Nobody", 65534)] {
                     if ui
                         .selectable_label(request.uid == id && request.gid == id, label)
                         .on_hover_text(format!("UID {id}, GID {id}"))
@@ -873,6 +870,8 @@ pub(crate) fn other_progress<'a>(
 
 #[cfg(test)]
 mod identity_tests;
+#[cfg(test)]
+mod trigger_tests;
 
 #[cfg(test)]
 mod tests {

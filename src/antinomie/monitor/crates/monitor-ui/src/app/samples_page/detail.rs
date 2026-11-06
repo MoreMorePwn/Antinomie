@@ -732,6 +732,14 @@ pub(in crate::app) type Probe = (usize, bool, Option<(usize, usize, u64)>);
 
 #[cfg(test)]
 impl SamplesPage {
+    /// The least widths of the Runs list's Arguments, Tree status, Root exit
+    /// and VM columns.
+    #[cfg(test)]
+    pub(in crate::app) fn run_column_minimums() -> [f32; 4] {
+        use runs::{RUN_ARGUMENTS_MIN, RUN_EXIT_MIN, RUN_STATUS_MIN, RUN_VM_MIN};
+        [RUN_ARGUMENTS_MIN, RUN_STATUS_MIN, RUN_EXIT_MIN, RUN_VM_MIN]
+    }
+
     /// Show the tab named `summary`, `runs` or `custody`.
     pub(in crate::app) fn show_detail_tab(&mut self, name: &str) {
         if let Some(detail) = &mut self.detail {

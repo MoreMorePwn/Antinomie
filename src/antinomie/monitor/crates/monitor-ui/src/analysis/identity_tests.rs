@@ -146,3 +146,38 @@ fn uid_and_gid_stay_on_one_line_at_every_width() {
         assert!(values[1].right() <= width, "width {width}: {:?}", values[1]);
     }
 }
+
+#[test]
+fn nobody_is_offered_and_sends_uid_and_gid_65534() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut request = ExecRequest {
+        path: "/bin/true".into(),
+        uid: 1000,
+        gid: 1000,
+        ..Default::default()
+    };
+    let mut output = render(&ctx, &mut request, vec![], 600.0);
+    for _ in 0..3 {
+        output = render(&ctx, &mut request, vec![], 600.0);
+    }
+    let point = find(&output, "Normal user").unwrap().center();
+    let _ = click(&ctx, &mut request, point);
+    for _ in 0..3 {
+        output = render(&ctx, &mut request, vec![], 600.0);
+    }
+    let point = find(&output, "Nobody")
+        .expect("Nobody is a choice")
+        .center();
+    let _ = click(&ctx, &mut request, point);
+    for _ in 0..3 {
+        output = render(&ctx, &mut request, vec![], 600.0);
+    }
+    assert_eq!((request.uid, request.gid), (65534, 65534));
+    assert!(
+        find(&output, "Nobody").is_some(),
+        "the preset names the pair"
+    );
+    let sent = snapshot(&request, "", "", false).unwrap();
+    assert_eq!((sent.uid, sent.gid), (65534, 65534));
+}
