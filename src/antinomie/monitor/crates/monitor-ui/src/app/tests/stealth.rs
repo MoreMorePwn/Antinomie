@@ -649,3 +649,47 @@ fn an_x86_vm_is_never_offered_an_arm64_base_to_switch_to() {
         "{lines:?}"
     );
 }
+
+#[test]
+fn the_clock_model_combo_shows_what_auto_resolves_to() {
+    let size = egui::vec2(1280.0, 900.0);
+    let mut app = sata_on_base(&["uptime"], &[]);
+    app.snapshot.bases[0].guest = Some(antinomie_monitor_core::GuestProfile {
+        id: "debian-minimal".into(),
+        label: "Debian Minimal".into(),
+        min_ram_mib: 256,
+        min_disk_gib: 1,
+        requires_credentials: false,
+        graphical: false,
+    });
+    app.draft.stealth = StealthProfile::realistic(StealthPreset::RealisticServer, "GenuineIntel");
+    assert!(app.draft.stealth.boot_age_s > 0);
+    app.stealth_open = true;
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    for _ in 0..3 {
+        render(&mut app, &ctx, size);
+    }
+    click_label(&mut app, &ctx, size, "Clock");
+    for _ in 0..2 {
+        render(&mut app, &ctx, size);
+    }
+    let output = render(&mut app, &ctx, size);
+    let lines: Vec<String> = texts(&output).into_iter().map(|(text, _)| text).collect();
+    assert!(lines.iter().any(|text| text == "Clock model"), "{lines:?}");
+    assert!(
+        lines.iter().any(|text| text == "Auto (Suspend)"),
+        "{lines:?}"
+    );
+    // Away from Debian the same server profile is always running.
+    app.snapshot.bases[0].guest = None;
+    for _ in 0..2 {
+        render(&mut app, &ctx, size);
+    }
+    let output = render(&mut app, &ctx, size);
+    let lines: Vec<String> = texts(&output).into_iter().map(|(text, _)| text).collect();
+    assert!(
+        lines.iter().any(|text| text == "Auto (Always running)"),
+        "{lines:?}"
+    );
+}

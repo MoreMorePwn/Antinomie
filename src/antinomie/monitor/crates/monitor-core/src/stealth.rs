@@ -17,6 +17,7 @@ pub use arm64::arm_machine;
 pub use catalog::arm64::{ARM_MACHINES, ArmKind, ArmMachine, ArmPlan, BoardTree};
 pub use catalog::{MACHINES, MachineProfile, NicFit, Variant};
 use catalog::{SerialStyle, SmbiosFields, Subsystem};
+pub use clock::ClockModel;
 pub use cloud::{CLOUDS, CloudProvider, MachineType, MetadataStyle, Owner, Plan, StateFile};
 pub use cpu::{CpuGen, HostCpu, classify};
 use parts::{DiskModel, RamPart};
@@ -25,6 +26,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod arm64;
 mod catalog;
+mod clock;
 mod cloud;
 #[cfg(test)]
 mod cloud_tests;
@@ -531,6 +533,8 @@ pub struct StealthProfile {
     /// takes it as time asleep). Drawn once per VM by the preset
     /// ([`BootAge::draw`]); 0: a fresh boot.
     pub boot_age_s: u64,
+    /// How the boot age treats the clocks: see [`ClockModel`].
+    pub clock_model: ClockModel,
 }
 
 /// The range a preset draws a VM's boot age from: a desktop or laptop is up
@@ -1052,6 +1056,7 @@ impl StealthProfile {
             machine: MachineType::Q35,
             cloud: String::new(),
             boot_age_s: 0,
+            clock_model: ClockModel::Auto,
         }
     }
 
@@ -1131,6 +1136,7 @@ impl StealthProfile {
                 BootAge::Desktop
             }
             .draw(),
+            clock_model: ClockModel::Auto,
         }
     }
 
@@ -1415,6 +1421,7 @@ impl StealthProfile {
         &self,
         arch: crate::api::GuestArch,
         fast_emulation: bool,
+        debian: bool,
     ) -> Vec<&'static str> {
         if arch == crate::api::GuestArch::AARCH64 {
             let machine = arm_machine(self);
@@ -1424,13 +1431,20 @@ impl StealthProfile {
                 fast_emulation,
             );
         }
-        self.giveaways()
+        self.giveaways_on(debian)
     }
 
-    /// What still tells a VM apart, most telling first.
+    /// What still tells a VM apart, most telling first, on a base that does
+    /// not run Debian's modules.
     pub fn giveaways(&self) -> Vec<&'static str> {
+        self.giveaways_on(false)
+    }
+
+    /// [`giveaways`](Self::giveaways) on a base that runs Debian's modules
+    /// (`debian`) or not.
+    pub fn giveaways_on(&self, debian: bool) -> Vec<&'static str> {
         if self.cloud_provider().is_some() {
-            return self.cloud_giveaways();
+            return self.cloud_giveaways(debian);
         }
         let mut found = Vec::new();
         // A desktop or laptop machine on a base with the guest facade
@@ -1517,7 +1531,7 @@ impl StealthProfile {
                 "udev's device database (Debian bases): the devices' true PCI IDs",
                 "Debian's own NVMe, DRM, USB and libata modules (Debian bases): QEMU's NVMe Identify data, display driver names, USB HID strings and default DVD-ROM",
             ]);
-            found.push(self.uptime_giveaway());
+            found.push(self.uptime_giveaway(debian));
             return found;
         }
         // Not covered by any entry: needed by Antinomie, outside QEMU options
@@ -1530,12 +1544,12 @@ impl StealthProfile {
             "QEMU's ACPI tables to root (BXPC creator ID, fw_cfg in the DSDT)",
             "the host CPU's family, model and feature flags behind the provider's CPU name",
         ]);
-        found.push(self.uptime_giveaway());
+        found.push(self.uptime_giveaway(debian));
         found
     }
 
     /// What still tells a cloud profile from an instance of the provider.
-    fn cloud_giveaways(&self) -> Vec<&'static str> {
+    fn cloud_giveaways(&self, debian: bool) -> Vec<&'static str> {
         let mut found =
             vec!["the QEMU/KVM hypervisor, visible by design as on the provider's machines"];
         if self.nat.network.is_empty() {
@@ -1548,32 +1562,38 @@ impl StealthProfile {
             "DNS servers inside the DHCP network, not the provider's",
             "no provider agent process runs (files and stubs only)",
         ]);
-        found.push(self.uptime_giveaway());
+        found.push(self.uptime_giveaway(debian));
         found
     }
 
     /// What the boot's age leaves visible: a fresh boot, or the traces of its
     /// clock model (docs/implementation/bases-and-stealth.md, "Aged uptime").
-    fn uptime_giveaway(&self) -> &'static str {
+    fn uptime_giveaway(&self, debian: bool) -> &'static str {
         if self.boot_age_s == 0 {
-            "a fresh boot: minutes of uptime"
-        } else if BootAge::of(self) == BootAge::Server {
-            "the boot age's step to the present at the first launch: processes started at boot \
-             see their clocks jump (systemd kills journald and udevd for a watchdog timeout on \
-             Debian bases); input and display event timestamps keep the kernel's monotonic clock"
-        } else {
-            "the boot age is a sleep: CLOCK_BOOTTIME ahead of CLOCK_MONOTONIC, the kernel log's \
-             timestamps not counting it, and no suspend in the log or /sys/power/suspend_stats"
+            return "a fresh boot: minutes of uptime";
         }
-    }
-
-    /// The guest's clock model for the boot age: `continuous` for a server or
-    /// cloud machine (it never slept: CLOCK_MONOTONIC equals CLOCK_BOOTTIME),
-    /// `suspend` for a desktop or laptop (it slept for part of its uptime).
-    pub fn boot_clock(&self) -> &'static str {
-        match BootAge::of(self) {
-            BootAge::Server => "continuous",
-            BootAge::Desktop => "suspend",
+        match (self.resolved_clock(debian), BootAge::of(self), debian) {
+            (ClockModel::Continuous, _, true) => {
+                "the boot age's step to the present at the first launch: systemd's watchdogs \
+                 kill journald, udevd and logind for a timeout (in the journal; logind drops \
+                 its sessions), and processes started at boot see their clocks jump; input \
+                 and display event timestamps keep the kernel's monotonic clock"
+            }
+            (ClockModel::Continuous, _, false) => {
+                "the boot age's step to the present at the first launch: processes started at \
+                 boot see their clocks jump; input and display event timestamps keep the \
+                 kernel's monotonic clock"
+            }
+            (_, BootAge::Server, _) => {
+                "a server that slept for most of its uptime: CLOCK_BOOTTIME is ahead of \
+                 CLOCK_MONOTONIC by the age, the kernel log's timestamps not counting it, and \
+                 no suspend in the log or /sys/power/suspend_stats"
+            }
+            _ => {
+                "the boot age is a sleep: CLOCK_BOOTTIME ahead of CLOCK_MONOTONIC, the kernel \
+                 log's timestamps not counting it, and no suspend in the log or \
+                 /sys/power/suspend_stats"
+            }
         }
     }
 

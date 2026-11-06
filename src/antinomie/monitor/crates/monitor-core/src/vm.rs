@@ -212,7 +212,7 @@ fn apply_launch_settings(
         append.push_str(&format!(
             " antinomie_boot_age={}:{}",
             stealth.boot_age_s,
-            stealth.boot_clock()
+            stealth.boot_clock(bundle.runs_debian_modules())
         ));
     }
     if let Some((width, height)) = launch.resolution.dimensions() {
@@ -1503,6 +1503,41 @@ mod tests {
                 "root=/dev/vda console=ttyS0 antinomie_boot_gpa=0x40000000 antinomie_boot_age=734512:suspend"
             )
         );
+    }
+
+    #[test]
+    fn the_clock_model_reaches_the_guest_as_resolved_for_the_base() {
+        use crate::stealth::{ClockModel, StealthPreset, StealthProfile};
+        let append = |stealth: &StealthProfile, debian: bool| {
+            let mut command = Command::new("qemu");
+            let (options, launch) = (BackendOptions::default(), VmLaunchOptions::default());
+            apply_launch_settings(
+                &mut command,
+                &options,
+                &launch,
+                &crate::accel::choose_with(&options, &launch, || None).unwrap(),
+                stealth,
+                4,
+                &bundle(debian),
+                0x40000000,
+            )
+            .unwrap();
+            let args: Vec<String> = command
+                .get_args()
+                .map(|arg| arg.to_str().unwrap().to_owned())
+                .collect();
+            let append = value(&args, "-append").unwrap().to_owned();
+            append.rsplit(':').next().unwrap().to_owned()
+        };
+        let mut server = StealthProfile::realistic(StealthPreset::RealisticServer, "GenuineIntel");
+        // Auto: a server is always running, except on a Debian base.
+        assert_eq!(append(&server, false), "continuous");
+        assert_eq!(append(&server, true), "suspend");
+        // A choice wins on either base.
+        server.clock_model = ClockModel::Continuous;
+        assert_eq!(append(&server, true), "continuous");
+        server.clock_model = ClockModel::Suspend;
+        assert_eq!(append(&server, false), "suspend");
     }
 
     #[test]

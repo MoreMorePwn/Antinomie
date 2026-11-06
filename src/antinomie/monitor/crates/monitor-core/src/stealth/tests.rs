@@ -1637,9 +1637,9 @@ fn an_aged_boot_needs_a_base_whose_kernel_takes_it() {
             .iter()
             .any(|item| item.starts_with("the boot age is a sleep"))
     );
-    assert_eq!(fitted.boot_clock(), "suspend");
+    assert_eq!(fitted.boot_clock(false), "suspend");
     let server = StealthProfile::realistic(StealthPreset::RealisticServer, "GenuineIntel");
-    assert_eq!(server.boot_clock(), "continuous");
+    assert_eq!(server.boot_clock(false), "continuous");
     assert!(server.boot_age_s >= 3 * 86_400);
     assert!(
         server
@@ -1853,4 +1853,93 @@ fn every_desktop_and_laptop_machine_has_a_facade_and_the_nvme_ones_boot_from_nvm
             nvme.model
         );
     }
+}
+
+#[test]
+fn auto_resolves_the_clock_model_from_the_machine_and_the_base() {
+    let cpu = "GenuineIntel";
+    let machines = [
+        (StealthPreset::RealisticDesktop, false),
+        (StealthPreset::RealisticLaptop, false),
+        (StealthPreset::RealisticServer, true),
+        (StealthPreset::CloudVps, true),
+    ];
+    for (preset, server) in machines {
+        let profile = StealthProfile::default().for_preset(preset, cpu);
+        assert_eq!(profile.clock_model, ClockModel::Auto, "{preset:?}");
+        assert_eq!(BootAge::of(&profile) == BootAge::Server, server);
+        // BusyBox: the machine decides. Debian (systemd): suspend.
+        let busybox = if server {
+            ClockModel::Continuous
+        } else {
+            ClockModel::Suspend
+        };
+        assert_eq!(profile.resolved_clock(false), busybox, "{preset:?}");
+        assert_eq!(
+            profile.resolved_clock(true),
+            ClockModel::Suspend,
+            "{preset:?}"
+        );
+        // An explicit choice always wins.
+        for debian in [false, true] {
+            let mut chosen = profile.clone();
+            chosen.clock_model = ClockModel::Continuous;
+            assert_eq!(chosen.boot_clock(debian), "continuous");
+            chosen.clock_model = ClockModel::Suspend;
+            assert_eq!(chosen.boot_clock(debian), "suspend");
+        }
+        // The age range does not follow the model.
+        let mut chosen = profile.clone();
+        chosen.clock_model = ClockModel::Suspend;
+        assert_eq!(
+            BootAge::of(&chosen) == BootAge::Server,
+            server,
+            "{preset:?}"
+        );
+    }
+}
+
+#[test]
+fn a_profile_saved_without_a_clock_model_loads_as_auto() {
+    let mut value = serde_json::to_value(StealthProfile::realistic(
+        StealthPreset::RealisticServer,
+        "GenuineIntel",
+    ))
+    .unwrap();
+    assert_eq!(value["clock_model"], "auto");
+    value.as_object_mut().unwrap().remove("clock_model");
+    let old: StealthProfile = serde_json::from_value(value).unwrap();
+    assert_eq!(old.clock_model, ClockModel::Auto);
+    let chosen: StealthProfile =
+        serde_json::from_value(serde_json::json!({"clock_model": "suspend"})).unwrap();
+    assert_eq!(chosen.clock_model, ClockModel::Suspend);
+}
+
+#[test]
+fn the_giveaways_say_what_the_resolved_clock_model_costs() {
+    let cpu = "GenuineIntel";
+    let has = |profile: &StealthProfile, debian: bool, text: &str| {
+        profile
+            .giveaways_on(debian)
+            .iter()
+            .any(|item| item.contains(text))
+    };
+    const SLEPT: &str = "a server that slept for most of its uptime: CLOCK_BOOTTIME is ahead of \
+                         CLOCK_MONOTONIC by the age";
+    const KILLS: &str = "kill journald, udevd and logind";
+    for preset in [StealthPreset::RealisticServer, StealthPreset::CloudVps] {
+        let mut server = StealthProfile::default().for_preset(preset, cpu);
+        // Auto: always running on BusyBox, a sleeping server on Debian.
+        assert!(!has(&server, false, SLEPT) && !has(&server, false, KILLS));
+        assert!(has(&server, true, SLEPT) && !has(&server, true, KILLS));
+        // Always running on Debian: the watchdog kills.
+        server.clock_model = ClockModel::Continuous;
+        assert!(has(&server, true, KILLS) && !has(&server, true, SLEPT));
+        assert!(!has(&server, false, KILLS));
+        server.clock_model = ClockModel::Suspend;
+        assert!(has(&server, false, SLEPT));
+    }
+    let desktop = StealthProfile::realistic(StealthPreset::RealisticDesktop, cpu);
+    assert!(has(&desktop, true, "the boot age is a sleep"));
+    assert!(!has(&desktop, true, SLEPT));
 }

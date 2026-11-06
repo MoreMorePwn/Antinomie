@@ -53,7 +53,11 @@ pub(super) fn show(ui: &mut egui::Ui, vm: &VmConfig, snapshot: &Snapshot) {
     );
     let base = crate::app::selected_base(snapshot, vm.base_identity.as_deref());
     let arch = crate::app::base_arch(snapshot, vm.base_identity.as_deref());
-    let giveaways = vm.stealth.giveaways_for(arch, vm.launch.fast_emulation);
+    let giveaways = vm.stealth.giveaways_for(
+        arch,
+        vm.launch.fast_emulation,
+        base.is_some_and(|base| base.guest.is_some()),
+    );
     // An arm64 VM shows the arm64 machine its profile presents.
     let shown = antinomie_monitor_core::stealth::arm64::shown_profile(
         &vm.stealth,
@@ -627,7 +631,7 @@ mod tests {
             "the setting's line: {texts:?}"
         );
         let new = Snapshot {
-            bases: vec![base_with(&["sata", "uefi", "dhcp"])],
+            bases: vec![base_with(&["sata", "uefi", "dhcp", "uptime"])],
             ..Snapshot::default()
         };
         let texts: Vec<String> = drawn(&sata_vm(), &new, Vec::new())

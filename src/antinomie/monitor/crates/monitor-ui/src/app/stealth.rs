@@ -6,9 +6,9 @@ mod arm64;
 mod cloud;
 use antinomie_monitor_core::stealth::{
     base_supporting, boot_age_text, chassis_label, disk_bus_unavailable, firmware_unavailable,
-    host_cpu_vendor, BaseSupport, BootAge, DiskBus, DiskMedia, Fallback, FallbackSetting, Firmware,
-    HostSupport, MachineIdentity, NatNetwork, NicModel, Pointer, RtcClock, SmbiosEntry,
-    StealthPreset, StealthProfile, CHASSIS, CLOUDS, CPU_MODELS, MACHINES,
+    host_cpu_vendor, BaseSupport, BootAge, ClockModel, DiskBus, DiskMedia, Fallback,
+    FallbackSetting, Firmware, HostSupport, MachineIdentity, NatNetwork, NicModel, Pointer,
+    RtcClock, SmbiosEntry, StealthPreset, StealthProfile, CHASSIS, CLOUDS, CPU_MODELS, MACHINES,
 };
 use antinomie_monitor_core::GuestArch;
 pub(super) use cloud::launch_advice;
@@ -139,6 +139,13 @@ impl<'a> Fit<'a> {
             current,
             switch: None,
         }
+    }
+
+    /// The VM's base runs Debian's own modules (systemd).
+    pub(super) fn debian(&self) -> bool {
+        self.current
+            .and_then(|id| self.bases.iter().find(|base| base.id == id))
+            .is_some_and(|base| base.guest.is_some())
     }
 
     /// The line on a setting that fell back, in a form grid: under the setting.
@@ -847,7 +854,7 @@ fn display(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
 }
 
 fn clock(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
-    uptime(ui, profile);
+    uptime(ui, profile, fit.debian());
     fit.line(ui, profile, FallbackSetting::Uptime);
     ui.add_space(4.0);
     ui.checkbox(&mut profile.rtc_localtime, "Real-time clock in local time")
@@ -866,7 +873,7 @@ fn clock(ui: &mut egui::Ui, profile: &mut StealthProfile, fit: &mut Fit) {
 }
 
 /// The boot's age: how long the guest says it has been up when it starts.
-fn uptime(ui: &mut egui::Ui, profile: &mut StealthProfile) {
+fn uptime(ui: &mut egui::Ui, profile: &mut StealthProfile, debian: bool) {
     let kind = BootAge::of(profile);
     let (low, high) = kind.range();
     let range = format!(
@@ -905,6 +912,57 @@ fn uptime(ui: &mut egui::Ui, profile: &mut StealthProfile) {
         }
     });
     ui.label(RichText::new(range).small().color(theme::muted()));
+    if profile.boot_age_s > 0 {
+        clock_model(ui, profile, debian);
+    }
+}
+
+/// The label of a clock model; Auto names what it resolves to.
+pub(super) fn clock_model_label(
+    model: ClockModel,
+    profile: &StealthProfile,
+    debian: bool,
+) -> String {
+    match model {
+        ClockModel::Auto => format!(
+            "Auto ({})",
+            match profile.resolved_clock(debian) {
+                ClockModel::Continuous => "Always running",
+                _ => "Suspend",
+            }
+        ),
+        ClockModel::Continuous => "Always running".into(),
+        ClockModel::Suspend => "Suspend".into(),
+    }
+}
+
+/// How the boot age reaches the guest's clocks.
+fn clock_model(ui: &mut egui::Ui, profile: &mut StealthProfile, debian: bool) {
+    ui.horizontal(|ui| {
+        ui.label("Clock model");
+        let shown = clock_model_label(profile.clock_model, profile, debian);
+        egui::ComboBox::from_id_salt("stealth_clock_model")
+            .selected_text(shown)
+            .show_ui(ui, |ui| {
+                for option in [
+                    ClockModel::Auto,
+                    ClockModel::Continuous,
+                    ClockModel::Suspend,
+                ] {
+                    let label = clock_model_label(option, profile, debian);
+                    ui.selectable_value(&mut profile.clock_model, option, label);
+                }
+            })
+            .response
+            .on_hover_text(
+                "Always running: the machine never stopped, so both of the guest's clocks \
+                 (CLOCK_MONOTONIC and CLOCK_BOOTTIME) step by the boot age. Suspend: the age \
+                 reads as time asleep, so only CLOCK_BOOTTIME steps. Auto: a server or cloud \
+                 machine is always running and a desktop or laptop suspends, except on a \
+                 Debian base, where stepping CLOCK_MONOTONIC makes systemd's watchdogs kill \
+                 journald, udevd and logind at the first launch.",
+            );
+    });
 }
 
 /// A preset applied this frame stays that preset; any other edit is Custom.
@@ -971,7 +1029,9 @@ pub(super) fn window(
                         egui::CollapsingHeader::new("Clock").show(ui, |ui| clock(ui, profile, fit));
                         egui::CollapsingHeader::new("Still visible").show(ui, |ui| {
                             let (fitted, notes) = profile.fitted(&fit.base, fit.host);
-                            for giveaway in fitted.giveaways_for(fit.arch, fit.fast_emulation) {
+                            for giveaway in
+                                fitted.giveaways_for(fit.arch, fit.fast_emulation, fit.debian())
+                            {
                                 ui.label(format!("• {giveaway}"));
                             }
                             for note in notes {
