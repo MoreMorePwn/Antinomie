@@ -1382,7 +1382,9 @@ Multi-arch plan cards MA-19 and the Debian half of MA-15. No contract change.
   `io-old-arm64-refused`: the old host (`--old-host`, 0.8.0) runs
   `snapshot-check` on the arm64 base and passes only when it fails with its
   refusal (`ARM64_REFUSAL`: "does not start arm64 VMs", or a base of a newer
-  revision), before QEMU runs.
+  revision: "This base needs guest contract revision 21", which 0.8.0 says to
+  every revision-21 base before it looks at the architecture), before QEMU
+  runs.
 * **Snapshots on a UEFI VM** (`snapshot-uefi`, full tier, x86-64 and arm64, a
   Debian base only: SKIP on BusyBox): `snapshot-check BUNDLE WORK_DIR --uefi`
   creates the VM with the `server` device profile, so its disk is installed for

@@ -252,7 +252,8 @@ class PlanTests(unittest.TestCase):
         self.assertIn("guest-run", refused.argv[-1])
         self.assertEqual(vm.command_for(refused, self.ctx(), None)[1], {"ANTINOMIE_FORCE_TCG": "1"})
         self.assertRegex("Error: this Antinomie does not start arm64 VMs yet", refused.refusal)
-        self.assertRegex("this base is for a newer Antinomie (revision 21)", refused.refusal)
+        self.assertRegex("This base needs guest contract revision 21 (Antinomie 0.9.0 or newer); "
+                         "this build is Antinomie 0.8.0", refused.refusal)
         self.assertNotIn("io-old-arm64-refused", {c.name for c in vm.plan("full", self.ctx())})
         self.assertIn("snapshot", arm64)
         self.assertIn("debug-p2", arm64)
@@ -280,6 +281,9 @@ class PlanTests(unittest.TestCase):
             refused = outcome("echo 'snapshot-check: this Antinomie does not start arm64 VMs yet'; exit 1")
             self.assertEqual(refused["status"], "PASS", refused)
             self.assertIn("does not start arm64 VMs", refused["detail"])
+            newer = outcome("echo 'This base needs guest contract revision 21 (Antinomie 0.9.0 or "
+                            "newer); this build is Antinomie 0.8.0'; exit 1")
+            self.assertEqual(newer["status"], "PASS", newer)
             # Starting the VM, or failing for another reason, is not a refusal.
             self.assertEqual(outcome("echo booted; exit 0")["status"], "FAIL")
             self.assertEqual(outcome("echo 'qemu: cannot boot'; exit 1")["status"], "FAIL")

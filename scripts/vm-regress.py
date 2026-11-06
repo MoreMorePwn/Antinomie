@@ -121,8 +121,10 @@ ARM64_LATER = {"debugger-live", "conf-stress-extreme", "uring-legacy", "tracer-l
                "tracer-ia32"}
 # What an old host (--old-host: 0.8.0, which has no arm64 VMs) says when it is
 # asked to start a VM on an arm64 base: it must refuse before QEMU runs, with
-# its own message, or as a base of a newer revision.
-ARM64_REFUSAL = r"does not start arm64 VMs|this base is for a newer Antinomie"
+# its own message, or as a base of a newer revision (0.8.0's base_refusal():
+# "This base needs guest contract revision 21 ...", which a revision-21 arm64
+# base gets before the architecture is looked at).
+ARM64_REFUSAL = r"does not start arm64 VMs|needs guest contract revision \d+"
 MACHINE_RS = MONITOR / "crates/monitor-core/src/vm/machine.rs"
 
 
