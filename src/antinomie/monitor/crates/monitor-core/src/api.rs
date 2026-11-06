@@ -1561,13 +1561,16 @@ impl GuestArch {
     }
 
     /// The architecture names a sample's ELF header may carry to run on this
-    /// guest (`samples::elf_arch`); an AArch64 guest also runs 32-bit ARM
-    /// programs once its compat table is decoded.
+    /// guest (`samples::elf_arch`), as [`Self::elf_mismatch`] (Run program)
+    /// allows: x86-64 also runs i386 programs, an arm64 guest 32-bit ARM ones.
     pub fn runs_elf_arch(self, elf_arch: &str) -> bool {
         let elf_arch = elf_arch.to_ascii_lowercase();
         match self {
-            Self::X86_64 => matches!(elf_arch.as_str(), "x86_64" | "amd64" | "x86-64"),
-            Self::AARCH64 => matches!(elf_arch.as_str(), "aarch64" | "arm64"),
+            Self::X86_64 => matches!(
+                elf_arch.as_str(),
+                "x86_64" | "amd64" | "x86-64" | "x86" | "i386" | "i686"
+            ),
+            Self::AARCH64 => matches!(elf_arch.as_str(), "aarch64" | "arm64" | "arm"),
             Self::RISCV64 => elf_arch == "risc-v",
             Self::ARM => elf_arch == "arm",
             Self::MIPS | Self::MIPSEL => elf_arch == "mips",

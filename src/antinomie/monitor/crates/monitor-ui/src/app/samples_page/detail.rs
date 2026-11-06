@@ -510,8 +510,11 @@ impl MonitorApp {
     }
 
     fn detail_header(&mut self, ui: &mut egui::Ui, data: &Data, action: &mut Option<Action>) {
-        let can_run = self.running() && self.samples_page.run_error(&data.record).is_none();
-        let why = self.samples_page.run_error(&data.record);
+        let guest = self
+            .selected_vm()
+            .map(|vm| crate::app::base_arch(&self.snapshot, vm.base_identity.as_deref()));
+        let why = run_error(&data.record, guest);
+        let can_run = self.running() && why.is_none();
         let mut back = false;
         let mut chosen = None;
         // The back link has a line of its own; the title bar with the
@@ -579,7 +582,7 @@ impl MonitorApp {
                     "Send the archive into the running VM (its SHA-256 is read back first) \
                          and open Run program with it",
                 )
-                .on_disabled_hover_text(why.unwrap_or_else(|| "Start a VM first".into()))
+                .on_disabled_hover_text(why.clone().unwrap_or_else(|| "Start a VM first".into()))
                 .clicked()
             {
                 chosen = Some(Action::RunInVm);
@@ -603,6 +606,9 @@ impl MonitorApp {
             *action = Some(Action::Back);
         } else if chosen.is_some() {
             *action = chosen;
+        }
+        if guest.is_some() && data.record.removed_ms.is_none() {
+            show_refusal(ui, why.as_deref());
         }
         if !data.archived {
             ui.colored_label(
@@ -632,19 +638,35 @@ impl SamplesPage {
             .as_ref()
             .is_some_and(|detail| detail.loading.is_some())
     }
+}
 
-    /// Why the sample cannot be sent into a VM and run, when it cannot.
-    fn run_error(&self, record: &SampleRecord) -> Option<String> {
-        if record.removed_ms.is_some() {
-            return Some("The archive was removed".into());
-        }
-        let kind = record.file_type.to_ascii_lowercase();
-        let runs = matches!(kind.as_str(), "sh" | "bash")
-            || kind == "elf"
-                && (record.arch.is_empty()
-                    || antinomie_monitor_core::samples::arch_label(&record.arch) == "x86-64");
-        (!runs).then(|| "Only x86-64 Linux programs and shell scripts can be sent from this page; arm64 and 32-bit ARM programs are not offered here yet".into())
+/// The sample's mismatch with the selected VM, in words, under the buttons.
+fn show_refusal(ui: &mut egui::Ui, why: Option<&str>) {
+    if let Some(why) = why {
+        ui.colored_label(theme::warn(), why);
     }
+}
+
+#[cfg(test)]
+mod gate_tests;
+
+/// Why the sample cannot be sent into a VM of architecture `guest` (any VM
+/// when None) and run, when it cannot: the architecture rule is Run program's.
+pub(super) fn run_error(
+    record: &SampleRecord,
+    guest: Option<antinomie_monitor_core::GuestArch>,
+) -> Option<String> {
+    if record.removed_ms.is_some() {
+        return Some("The archive was removed".into());
+    }
+    let kind = record.file_type.to_ascii_lowercase();
+    antinomie_monitor_core::samples::run_verdict(
+        matches!(kind.as_str(), "sh" | "bash"),
+        kind == "elf",
+        Some(record.arch.as_str()),
+        guest,
+    )
+    .err()
 }
 
 /// The ATT&CK techniques Triage mapped in the sample's runs, as tag labels,

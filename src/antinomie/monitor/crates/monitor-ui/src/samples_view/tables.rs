@@ -261,19 +261,18 @@ impl SamplesView {
                     });
                     row.col(|ui| match arch(sample) {
                         Some(label) => {
-                            let runs = sample.may_run();
+                            let runs = sample.may_run_on(cx.vm_arch);
                             ui.label(RichText::new(label).color(if runs {
                                 theme::good()
                             } else {
                                 theme::text()
                             }))
-                            .on_hover_text(if sample.is_script() {
-                                "A shell script: runs in the guests through /bin/sh"
-                            } else if runs {
-                                "Runs in Antinomie's x86-64 guests"
-                            } else {
-                                "Will not run in the x86-64 guests"
-                            });
+                            .on_hover_text(samples::run_hover(
+                                sample.is_script(),
+                                sample.is_elf(),
+                                sample.file_arch.as_deref(),
+                                cx.vm_arch,
+                            ));
                         }
                         None => {
                             ui.colored_label(theme::muted(), "?").on_hover_text(
@@ -499,7 +498,13 @@ impl SamplesView {
                     let sample = &stored[order[row.index()]];
                     let info = &sample.info;
                     let arch = arch(info);
-                    let runs_here = info.is_script() || arch.as_deref() == Some("x86-64");
+                    let verdict = samples::run_verdict(
+                        info.is_script(),
+                        info.is_elf(),
+                        info.file_arch.as_deref(),
+                        cx.vm_arch,
+                    );
+                    let runs_here = verdict.is_ok();
                     row.col(|ui| {
                         ui.add(egui::Label::new(RichText::new(&info.file_name).font(mono.clone())).truncate())
                             .on_hover_text(format!(
@@ -521,13 +526,12 @@ impl SamplesView {
                                 theme::warn()
                             }),
                         )
-                        .on_hover_text(if info.is_script() {
-                            "A shell script: runs in the guests through /bin/sh"
-                        } else if runs_here {
-                            "Runs in Antinomie's x86-64 guests"
-                        } else {
-                            "Built for another processor or not a Linux program: it will not run in the x86-64 guests"
-                        });
+                        .on_hover_text(samples::run_hover(
+                            info.is_script(),
+                            info.is_elf(),
+                            info.file_arch.as_deref(),
+                            cx.vm_arch,
+                        ));
                     });
                     row.col(|ui| {
                         ui.colored_label(theme::muted(), crate::values::short_size(info.file_size))
@@ -576,7 +580,7 @@ impl SamplesView {
                                 .on_disabled_hover_text(if runs_here {
                                     "Start the VM first"
                                 } else {
-                                    "Only x86-64 Linux programs and shell scripts can be sent from this page; arm64 and 32-bit ARM programs are not offered here yet"
+                                    verdict.as_ref().err().map_or("", String::as_str)
                                 })
                                 .clicked()
                             {
