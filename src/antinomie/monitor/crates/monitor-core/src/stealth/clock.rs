@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 //! The clock model of the boot age: how the guest kernel's first-launch step
 //! treats CLOCK_MONOTONIC (docs/implementation/bases-and-stealth.md, "Aged
 //! uptime").
