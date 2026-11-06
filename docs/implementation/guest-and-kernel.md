@@ -794,7 +794,13 @@ revision 20 is unchanged: the wire carried the architecture since 0.8.0.
   loads). What a module would have given and x86-64 builds in is listed in
   `kconfig/arm64/minimal.cfg`: IPv6 (Debian has it built in; nftables' inet
   family needs it) and the iptables tables and conntrack. `!NAME` turns a symbol
-  off (`PREEMPT`: Debian's arm64 banner says SMP).
+  off (`PREEMPT`: Debian's arm64 banner says SMP). It also turns
+  `CORE_DUMP_DEFAULT_ELF_HEADERS` back on (Debian and x86_64_defconfig have it,
+  arm64's defconfig does not): a process core then keeps the first page of each
+  unmodified ELF mapping, so a crash in the first page of a program's text has
+  its code in the core view, as on x86-64 (found by `debug-check a32` on the
+  final revision-21 BusyBox arm64 base, whose AArch32 exit core had no code at
+  the pc).
 * **BusyBox arm64 base.** `build-monitor-image.py --arch arm64` takes its
   userland from Debian 13's pinned arm64 packages (`ARM64_USERLAND`:
   busybox-static, e2fsprogs and the libraries resize2fs and chattr load,

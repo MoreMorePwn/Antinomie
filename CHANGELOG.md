@@ -248,6 +248,10 @@ x86 programs by their own table.
   entry that takes the siginfo without const, so the stock arm64 kernel's BTF
   stays Debian's type for type (the const pointer had renumbered 13 types);
   x86-64's objects are unchanged.
+- The BusyBox arm64 kernel keeps `CORE_DUMP_DEFAULT_ELF_HEADERS`, as Debian's
+  kernels and the x86-64 BusyBox kernel do (arm64's defconfig turns it off):
+  a process core carries the first page of each unmodified ELF mapping, so a
+  crash early in a program's text has its code in the core view.
 - Patch 51 (contract revision 21): compat programs' futex timeouts (time32),
   AArch32's epoll_wait and epoll_pwait events, and the SysV IPC control
   records of msgctl, semctl and shmctl (directly and through ia32's `ipc()`;
