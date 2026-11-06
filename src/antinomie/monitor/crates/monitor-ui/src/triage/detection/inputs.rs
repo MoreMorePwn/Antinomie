@@ -4,7 +4,9 @@
 use super::*;
 use crate::triage::{OpenInput, OPEN_INPUT};
 use crate::widgets::Tone;
-use antinomie_monitor_core::analysis::detection::{InputKind, InputOutcome, ScannedInput};
+use antinomie_monitor_core::analysis::detection::{
+    InputKind, InputOutcome, ScannedInput, SIGMA_COVERAGE_WARNING,
+};
 use egui_phosphor::regular as icon;
 
 /// Rows drawn at once; a run can recover thousands of files.
@@ -235,6 +237,27 @@ pub(super) fn target(input: &ScannedInput) -> Option<Route> {
     Some(Route::Open(open))
 }
 
+/// The width a pane needs to hold the scan controls beside Scanned inputs.
+const STATUS_BESIDE_WIDTH: f32 = 1000.0;
+
+/// The hover text of the Scanned inputs heading: what it does, then the
+/// engine's fixed caveat, which is not drawn as a line of its own.
+fn heading_hover(engine: Engine) -> String {
+    let mut text = "Show or hide what the last scan passed to the rules".to_owned();
+    match engine {
+        Engine::Sigma => {
+            text.push('\n');
+            text.push_str(SIGMA_COVERAGE_WARNING);
+        }
+        Engine::Ids => {
+            text.push('\n');
+            text.push_str(super::header::IDS_PCAP_NOTE);
+        }
+        Engine::Yara => {}
+    }
+    text
+}
+
 fn hover(input: &ScannedInput, target: Option<&Route>) -> String {
     let mut text = input.path.display().to_string();
     if let Some(target) = target {
@@ -366,21 +389,26 @@ fn row(
     if !input.detail.is_empty() {
         wrapped(ui, &input.detail, theme::muted());
     }
-    if !input.warning.is_empty() {
+    // How Sigma events are converted is on the Scanned inputs heading's hover.
+    if !input.warning.is_empty() && input.warning != SIGMA_COVERAGE_WARNING {
         wrapped(ui, &input.warning, theme::text());
     }
     action
 }
 
 impl View {
-    /// The collapsible list below the rule sets, for the shown result.
+    /// The collapsible list below the rule sets, for the shown result. The scan
+    /// controls and status ride at the right of its heading, and wrap below it
+    /// in a narrow pane; with no result they have the line to themselves.
     pub(super) fn scanned_inputs(
         &mut self,
         ui: &mut egui::Ui,
         index: usize,
         scan: Option<&ArchiveScan>,
+        scanning: bool,
     ) {
         let Some(Ok(report)) = &self.results[index] else {
+            self.scan_controls(ui, index, scan, scanning);
             return;
         };
         let inputs = report.inputs.as_deref();
@@ -390,32 +418,43 @@ impl View {
         } else {
             icon::CARET_RIGHT
         };
-        let toggle = ui
-            .horizontal(|ui| {
-                let toggle = ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new(format!("{caret} {}", title(inputs)))
-                                .color(theme::text()),
-                        )
+        let label = format!("{caret} {}", title(inputs));
+        let counts = inputs
+            .filter(|inputs| !inputs.is_empty())
+            .map(outcome_counts);
+        let hover = heading_hover(self.selected);
+        let mut toggle = false;
+        let heading = |ui: &mut egui::Ui| {
+            let clicked = ui
+                .add(
+                    egui::Button::new(RichText::new(label).color(theme::text()))
                         .frame(false)
                         .truncate(),
-                    )
-                    .on_hover_text("Show or hide what the last scan passed to the rules")
-                    .clicked();
-                if let Some(inputs) = inputs.filter(|inputs| !inputs.is_empty()) {
-                    ui.label(
-                        RichText::new(outcome_counts(inputs))
-                            .small()
-                            .color(theme::muted()),
-                    );
-                }
-                toggle
-            })
-            .inner;
+                )
+                .on_hover_text(hover)
+                .clicked();
+            if let Some(counts) = counts {
+                ui.label(RichText::new(counts).small().color(theme::muted()));
+            }
+            clicked
+        };
+        if ui.available_width() >= STATUS_BESIDE_WIDTH {
+            egui::Sides::new().show(
+                ui,
+                |ui| toggle = heading(ui),
+                |ui| self.scan_controls_right(ui, index, scan, scanning),
+            );
+        } else {
+            toggle = ui.horizontal(heading).inner;
+            self.scan_controls(ui, index, scan, scanning);
+        }
         if toggle {
             self.inputs_open[index] = !open;
         }
+        let Some(Ok(report)) = &self.results[index] else {
+            return;
+        };
+        let inputs = report.inputs.as_deref();
         if !open {
             return;
         }
@@ -517,7 +556,7 @@ mod tests {
 
     fn shown(view: &mut View, ctx: &egui::Context) -> String {
         rendered_text(&frames(ctx, 2, |root| {
-            egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
+            egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None, false));
         }))
     }
 
@@ -586,7 +625,11 @@ mod tests {
         assert!(text.contains("Scanned inputs: not recorded"), "{text}");
         assert!(text.contains("Scan again to list them"), "{text}");
         let mut empty = super::View::default();
-        assert_eq!(shown(&mut empty, &ctx), "", "no result, no section");
+        let text = shown(&mut empty, &ctx);
+        assert!(
+            !text.contains("Scanned inputs"),
+            "no result, no section: {text}"
+        );
     }
 
     #[test]
@@ -625,7 +668,7 @@ mod tests {
         view.inputs_open[0] = true;
         let mut position = None;
         for shape in frames(&ctx, 2, |root| {
-            egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
+            egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None, false));
         }) {
             super::super::tests::each_galley_rect(&shape.shape, &mut |text, rect| {
                 if text == "sample" {
@@ -653,7 +696,8 @@ mod tests {
                     ..Default::default()
                 },
                 |root| {
-                    egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
+                    egui::CentralPanel::default()
+                        .show(root, |ui| view.scanned_inputs(ui, 0, None, false));
                 },
             );
         }
@@ -684,7 +728,8 @@ mod tests {
                 ..Default::default()
             },
             |root| {
-                egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
+                egui::CentralPanel::default()
+                    .show(root, |ui| view.scanned_inputs(ui, 0, None, false));
             },
         );
         let text = rendered_text(&output.shapes);
@@ -703,7 +748,7 @@ mod tests {
     fn click(view: &mut View, ctx: &egui::Context, label: &str) {
         let mut position = None;
         for shape in frames(ctx, 2, |root| {
-            egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
+            egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None, false));
         }) {
             super::super::tests::each_galley_rect(&shape.shape, &mut |text, rect| {
                 if text == label && position.is_none() {
@@ -731,7 +776,8 @@ mod tests {
                     ..Default::default()
                 },
                 |root| {
-                    egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
+                    egui::CentralPanel::default()
+                        .show(root, |ui| view.scanned_inputs(ui, 0, None, false));
                 },
             );
         }
@@ -763,7 +809,7 @@ mod tests {
         theme::install(&ctx);
         let mut view = run_view();
         let output = frames(&ctx, 2, |root| {
-            egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
+            egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None, false));
         });
         let (mut again, mut scan, mut log) = (0, 0, 0);
         for shape in &output {
@@ -774,8 +820,8 @@ mod tests {
             });
         }
         // Three rows: the Failed one has both buttons, the Skipped one Scan,
-        // and the Succeeded sample none.
-        assert_eq!((again, scan, log), (1, 1, 1), "{}", rendered_text(&output));
+        // and the Succeeded sample none; the heading's own Scan makes two.
+        assert_eq!((again, scan, log), (1, 2, 1), "{}", rendered_text(&output));
     }
 
     #[test]
@@ -789,15 +835,15 @@ mod tests {
         assert_eq!(view.phase[0], "running");
         // While it runs the rows show a spinner and no Scan button.
         let output = frames(&ctx, 2, |root| {
-            egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
+            egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None, false));
         });
         let text = rendered_text(&output);
         assert!(text.contains("Scanning…"), "{text}");
         assert!(!text.contains("Scan again"), "{text}");
         assert_eq!(
             theme::spinners_in(&output),
-            2,
-            "one per Failed or Skipped row"
+            3,
+            "one per Failed or Skipped row and one beside Cancel"
         );
         // With no run selected the button is disabled and starts nothing.
         let mut idle = view_without_run();
@@ -806,32 +852,26 @@ mod tests {
     }
 
     #[test]
-    fn the_sigma_caveat_above_the_findings_is_a_plain_note_and_other_warnings_stay_warnings() {
+    fn the_sigma_caveat_above_the_findings_is_not_drawn_and_other_warnings_stay_warnings() {
         let ctx = egui::Context::default();
-        let first_color = |text: &str| {
+        let drawn = |text: &str| {
             let output = frames(&ctx, 2, |root| {
                 egui::CentralPanel::default().show(root, |ui| super::super::input_note(ui, text));
             });
-            let mut color = None;
-            for shape in &output {
-                super::super::tests::each_galley(&shape.shape, &mut |galley| {
-                    if galley.text().contains(text) && color.is_none() {
-                        color = galley
-                            .job
-                            .sections
-                            .first()
-                            .map(|section| section.format.color);
-                    }
-                });
-            }
-            color
+            rendered_text(&output).contains(text)
         };
         let sigma = antinomie_monitor_core::analysis::detection::SIGMA_COVERAGE_WARNING;
-        assert_eq!(first_color(sigma), Some(theme::text()));
-        assert_ne!(
-            first_color("The Suricata warning limit was reached."),
-            Some(theme::text())
-        );
+        assert!(!drawn(sigma));
+        assert!(drawn("The Suricata warning limit was reached."));
+    }
+
+    #[test]
+    fn the_engine_notes_are_the_hover_text_of_the_scanned_inputs_heading() {
+        let sigma = antinomie_monitor_core::analysis::detection::SIGMA_COVERAGE_WARNING;
+        assert!(heading_hover(Engine::Sigma).contains(sigma));
+        assert!(heading_hover(Engine::Ids).contains(super::super::header::IDS_PCAP_NOTE));
+        assert!(!heading_hover(Engine::Yara).contains("Sigma events"));
+        assert!(!heading_hover(Engine::Yara).contains("VM-wide"));
     }
 
     #[test]
@@ -857,29 +897,10 @@ mod tests {
         view.inputs_open[0] = true;
         let text = shown(&mut view, &ctx);
         assert!(text.contains("1 complete · 1 skipped · 0 failed"), "{text}");
-        assert!(
-            text.contains("may not cover everything a Sysmon or auditd log would contain"),
-            "{text}"
-        );
+        // The caveat is the heading's hover text, not a line of the row.
+        assert!(!text.contains("Sysmon or auditd"), "{text}");
         assert!(text.contains("no packets captured"), "{text}");
         assert!(!text.to_lowercase().contains("partial"), "{text}");
-        // The caveat is ordinary text, not a warning.
-        let output = frames(&ctx, 2, |root| {
-            egui::CentralPanel::default().show(root, |ui| view.scanned_inputs(ui, 0, None));
-        });
-        let mut color = None;
-        for shape in &output {
-            super::super::tests::each_galley(&shape.shape, &mut |galley| {
-                if galley.text().starts_with("Sigma events are converted") {
-                    color = galley
-                        .job
-                        .sections
-                        .first()
-                        .map(|section| section.format.color);
-                }
-            });
-        }
-        assert_eq!(color, Some(theme::text()));
     }
 
     /// Draw until the worker's answer shows `count` missing rows.

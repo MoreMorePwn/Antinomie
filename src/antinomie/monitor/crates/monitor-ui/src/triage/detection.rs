@@ -14,6 +14,8 @@ pub(in crate::triage) use header::ScanActivity;
 mod inputs;
 mod journal;
 mod kept;
+#[cfg(test)]
+mod qa;
 mod scan;
 mod selection;
 
@@ -284,12 +286,11 @@ pub(super) struct View {
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
 }
 
-/// An input's caveat above the findings: how Sigma events are converted is a
-/// plain note, anything else an input says (an IDS limit) stays a warning.
+/// An input's caveat above the findings. How Sigma events are converted is
+/// the hover text of Scanned inputs, so only another caveat (an IDS limit) is
+/// drawn, as a warning.
 fn input_note(ui: &mut egui::Ui, text: &str) {
-    if text == antinomie_monitor_core::analysis::detection::SIGMA_COVERAGE_WARNING {
-        ui.add(egui::Label::new(egui::RichText::new(text).color(theme::text())).wrap());
-    } else {
+    if text != antinomie_monitor_core::analysis::detection::SIGMA_COVERAGE_WARNING {
         crate::activity::warning(ui, text);
     }
 }
@@ -759,9 +760,8 @@ impl View {
             .position(|engine| *engine == self.selected)
             .unwrap_or(0);
         self.rule_sets(ui, index);
-        self.scanned_inputs(ui, index, scan);
         let scanning = self.is_scanning(index);
-        self.scan_controls(ui, index, scan, scanning);
+        self.scanned_inputs(ui, index, scan, scanning);
         if scanning {
             self.scan_progress(ui, index);
         }
@@ -840,8 +840,27 @@ impl View {
             let draft = format!("finding.mitre == \"{technique}\"");
             ui.data_mut(|data| data.insert_temp(draft_id, draft));
         }
-        let filter =
-            query::table_filter(ui, TABLES[index], "finding.severity == high", FIELDS, &[]);
+        // "Matches" and Sort by, with the filter beside it on the same row.
+        let has_matches = !report.findings.is_empty();
+        if has_matches {
+            presentation::heading(ui, "Matches", "");
+        }
+        let base = ui.id();
+        let filter = ui
+            .horizontal(|ui| {
+                if has_matches {
+                    cards::sort_picker(ui, &mut self.settings.match_sort);
+                }
+                query::table_filter_under(
+                    ui,
+                    base,
+                    TABLES[index],
+                    "finding.severity == high",
+                    FIELDS,
+                    &[],
+                )
+            })
+            .inner;
         // Room between the filter and the start of the matches.
         ui.add_space(12.0);
         let draft = ui
@@ -866,7 +885,7 @@ impl View {
             report,
             TABLES[index],
             &self.filtered[index],
-            &mut self.settings.match_sort,
+            self.settings.match_sort,
         );
         if let Some(key) = opened {
             self.open_window(key);

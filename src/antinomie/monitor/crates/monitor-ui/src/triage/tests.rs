@@ -198,6 +198,10 @@ fn native_triage_fixture() {
             view.process = ProcessTab::Suspicious;
         }
         "bpf" => view.section = Section::Bpf,
+        "detection" => {
+            view.section = Section::Detection;
+            view.detection.qa_scene();
+        }
         "opened" => {
             view.section = Section::Files;
             view.files = FileTab::Opened;

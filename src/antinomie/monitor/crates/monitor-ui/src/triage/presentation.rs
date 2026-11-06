@@ -64,16 +64,18 @@ pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui, input: &Triag
     let mut fits = true;
     crate::widgets::tab_row(ui, |ui| {
         let first_line = ui.cursor().min.y;
-        for (section, label) in [
-            (Section::Summary, "Summary"),
-            (Section::Properties, "Properties"),
-            (Section::Detection, "Detection"),
-            (Section::Process, "Process"),
-            (Section::Files, "Files"),
-            (Section::Network, "Network"),
-            (Section::Bpf, "eBPF"),
+        let detection =
+            super::counts::detection_tab([0, 1, 2].map(|i| view.detection.tab_count(i)));
+        for (section, item) in [
+            (Section::Summary, "Summary".into()),
+            (Section::Properties, "Properties".into()),
+            (Section::Detection, detection),
+            (Section::Process, "Process".into()),
+            (Section::Files, "Files".into()),
+            (Section::Network, "Network".into()),
+            (Section::Bpf, "eBPF".into()),
         ] {
-            if crate::widgets::tab(ui, view.section == section, &label.into()).clicked() {
+            if crate::widgets::tab(ui, view.section == section, &item).clicked() {
                 view.section = section;
             }
         }

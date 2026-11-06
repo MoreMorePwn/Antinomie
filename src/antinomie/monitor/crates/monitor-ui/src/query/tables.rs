@@ -173,7 +173,21 @@ pub(crate) fn table_filter(
     fields: &[FieldSpec<'_>],
     known_values: &[String],
 ) -> Compiled {
-    let id = ui.id().with(("table-filter", id));
+    let base = ui.id();
+    table_filter_under(ui, base, id, hint, fields, known_values)
+}
+
+/// [`table_filter`] drawn inside a child ui (a row beside other controls) while
+/// its draft stays keyed under the parent's id `base`, where callers look for it.
+pub(crate) fn table_filter_under(
+    ui: &mut egui::Ui,
+    base: egui::Id,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    hint: &str,
+    fields: &[FieldSpec<'_>],
+    known_values: &[String],
+) -> Compiled {
+    let id = base.with(("table-filter", id));
     let mut text = ui
         .data(|data| data.get_temp::<String>(id))
         .unwrap_or_default();
