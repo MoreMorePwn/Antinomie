@@ -565,28 +565,21 @@ fn rects(out: &egui::FullOutput) -> Vec<(egui::Rect, egui::Color32)> {
     found
 }
 
-/// The "Show more" boxes: the rectangles with the inset fill.
-fn insets(out: &egui::FullOutput) -> Vec<egui::Rect> {
-    rects(out)
-        .into_iter()
-        .filter(|(_, fill)| *fill == rows::inset_fill())
-        .map(|(rect, _)| rect)
-        .collect()
-}
-
-/// A scroll bar inside `inset`: a narrow rectangle at its right edge.
-fn has_scroll_bar(out: &egui::FullOutput, inset: egui::Rect) -> bool {
+/// A scroll bar between `top` and `bottom`, right of `text_right`: a narrow
+/// rectangle, drawn although the list is not being scrolled.
+fn has_scroll_bar(out: &egui::FullOutput, top: f32, bottom: f32, text_right: f32) -> bool {
     rects(out).into_iter().any(|(rect, _)| {
         rect.width() >= 3.0
             && rect.width() <= 16.0
             && rect.height() >= 8.0
-            && inset.contains_rect(rect)
-            && inset.right() - rect.right() <= 10.0
+            && rect.top() >= top - 12.0
+            && rect.bottom() <= bottom + 4.0
+            && rect.left() > text_right
     })
 }
 
 #[test]
-fn show_more_puts_the_other_findings_in_a_two_row_box_with_a_visible_scroll_bar() {
+fn show_more_turns_the_findings_into_one_scroll_area_of_the_same_height() {
     let (_files, mut view) = crowded(0, 12);
     let ctx = context(16.0);
     let size = egui::vec2(1280.0, 1600.0);
@@ -594,40 +587,40 @@ fn show_more_puts_the_other_findings_in_a_two_row_box_with_a_visible_scroll_bar(
     let first = rules::rule_title("execution.dropped_exec");
     assert!(has(&out, "Show more (14)"), "{:?}", texts(&out));
     assert!(!has(&out, "discovery.extra05"));
-    assert!(insets(&out).is_empty(), "closed: no box");
-    click(&ctx, &mut view, size, find(&out, "Show more (14)").center());
+    let top = find(&out, first).min.y;
+    let button = find(&out, "Show more (14)");
+    click(&ctx, &mut view, size, button.center());
     let out = settle(&ctx, &mut view, size, None);
     assert!(has(&out, "Show less"));
-    // The first six stay where they were; the box is below them.
+    // The first six stay where they were, and the button after the list is
+    // where it was: the list took the space of the six rows.
     assert!(has(&out, first));
-    let boxes = insets(&out);
-    assert_eq!(boxes.len(), 1, "{boxes:?}");
-    let inset = boxes[0];
-    assert!(inset.top() > find(&out, first).bottom());
-    // About two findings tall (each is a title row and a description line),
-    // not the 14 that wait in it, and not the old 380 px list.
-    assert!(inset.height() > 60.0 && inset.height() < 150.0, "{inset:?}");
-    assert!(has_scroll_bar(&out, inset), "the bar is always drawn");
-    assert!(!has(&out, "discovery.extra11"), "{:?}", texts(&out));
-    let before = find(&out, rules::rule_title("discovery.system_info")).min.y;
-    wheel(&ctx, &mut view, size, inset.center(), -400.0);
-    let out = settle(&ctx, &mut view, size, None);
-    let moved = texts(&out)
-        .into_iter()
-        .find(|(text, _)| text == rules::rule_title("discovery.system_info"))
-        .map(|(_, rect)| rect.min.y);
+    assert!((find(&out, first).min.y - top).abs() < 1.0);
+    let less = find(&out, "Show less");
     assert!(
-        moved.is_none_or(|y| y < before - 20.0),
-        "{moved:?} {before}"
+        (less.min.y - button.min.y).abs() < 6.0,
+        "{less:?} {button:?}"
     );
-    assert_eq!(
-        insets(&out)[0].size(),
-        inset.size(),
-        "the box keeps its size"
+    // No inset box any more; the scroll bar is drawn at the right edge.
+    let right = find(&out, first).right();
+    assert!(
+        has_scroll_bar(&out, top, less.min.y, right),
+        "the bar is always drawn"
+    );
+    assert!(!has(&out, "discovery.extra11"), "{:?}", texts(&out));
+    let middle = egui::pos2(300.0, (top + less.min.y) / 2.0);
+    for _ in 0..3 {
+        wheel(&ctx, &mut view, size, middle, -600.0);
+    }
+    let out = settle(&ctx, &mut view, size, None);
+    assert!(
+        has(&out, "discovery.extra11"),
+        "a finding past the sixth: {:?}",
+        texts(&out)
     );
     click(&ctx, &mut view, size, find(&out, "Show less").center());
     let out = settle(&ctx, &mut view, size, None);
-    assert!(has(&out, "Show more (14)") && insets(&out).is_empty());
+    assert!(has(&out, "Show more (14)") && !has(&out, "discovery.extra11"));
 }
 
 fn with_indicators(view: &mut TriageView) {
@@ -658,17 +651,36 @@ fn indicators_are_a_tree_with_show_more_and_the_dataset_line_in_its_header() {
     // Five endpoints show; the other two wait behind "Show 2 more".
     assert!(has(&out, "45.9.148.9:80") && has(&out, "10.1.1.3:443"));
     assert!(!has(&out, "10.1.1.5:443"));
-    click(&ctx, &mut view, WIDE, find(&out, "Show 2 more").center());
+    let shut_more = find(&out, "Show 2 more");
+    click(&ctx, &mut view, WIDE, shut_more.center());
     let out = settle(&ctx, &mut view, WIDE, None);
-    assert!(has(&out, "10.1.1.5:443") && has(&out, "Show fewer"));
-    // The first five are where they were; the other two are in a framed box
-    // of two rows with its scroll bar drawn.
-    assert!(has(&out, "10.1.1.3:443") && has(&out, "10.1.1.4:443"));
-    let boxes = insets(&out);
-    assert_eq!(boxes.len(), 1, "{boxes:?}");
-    assert!(boxes[0].top() > find(&out, "10.1.1.3:443").bottom());
-    assert!(boxes[0].height() < 3.0 * 30.0, "{:?}", boxes[0]);
-    assert!(has_scroll_bar(&out, boxes[0]));
+    assert!(has(&out, "Show fewer"));
+    // The branch is one scroll area of the five rows' height, with its bar.
+    let list_top = find(&out, "45.9.148.9:80").min.y;
+    let fewer = find(&out, "Show fewer");
+    assert!(
+        (fewer.min.y - shut_more.min.y).abs() < 6.0,
+        "{fewer:?} {shut_more:?}"
+    );
+    assert!(has_scroll_bar(
+        &out,
+        list_top,
+        fewer.min.y,
+        find(&out, "10.1.1.3:443").right()
+    ));
+    wheel(
+        &ctx,
+        &mut view,
+        WIDE,
+        egui::pos2(300.0, (list_top + fewer.min.y) / 2.0),
+        -400.0,
+    );
+    let out = settle(&ctx, &mut view, WIDE, None);
+    assert!(
+        has(&out, "10.1.1.5:443"),
+        "{list_top} {fewer:?} {:?}",
+        texts(&out)
+    );
     // "x of y indicators matched" sits in the Indicators header row.
     let (line, rect) = starting(&out, "0 of ").expect("the dataset line");
     assert!(line.contains("indicators matched"), "{line}");
@@ -1036,11 +1048,18 @@ fn native_summary_boxes_fixture() {
     struct Fixture {
         view: TriageView,
         deadline: std::time::Instant,
+        frames: u32,
         _files: PacketSpool,
     }
     impl eframe::App for Fixture {
         fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
             let ctx = root.ctx().clone();
+            // Open the boxes after a few shut frames, as a click would.
+            self.frames += 1;
+            if self.frames == 5 && std::env::var_os("ANTINOMIE_QA_OPEN").is_some() {
+                self.view.summary_state.keys_open = true;
+                self.view.summary_state.more = [true; 4];
+            }
             egui::CentralPanel::default().show(root, |ui| {
                 let input = TriageInput::empty();
                 show(&mut self.view, ui, &input);
@@ -1054,10 +1073,6 @@ fn native_summary_boxes_fixture() {
     let (files, mut view) = crowded(0, 12);
     with_indicators(&mut view);
     view.section = Section::Summary;
-    if std::env::var_os("ANTINOMIE_QA_OPEN").is_some() {
-        view.summary_state.keys_open = true;
-        view.summary_state.more = [true; 4];
-    }
     eframe::run_native(
         "Antinomie summary QA",
         eframe::NativeOptions {
@@ -1077,6 +1092,7 @@ fn native_summary_boxes_fixture() {
             Ok(Box::new(Fixture {
                 view,
                 deadline: std::time::Instant::now() + std::time::Duration::from_secs(8),
+                frames: 0,
                 _files: files,
             }))
         }),
@@ -1115,7 +1131,12 @@ fn indicator_parts_have_their_own_colours_and_a_hover_shows_they_click() {
         }
     }
     assert_eq!(colour(&out, "executable"), theme::muted());
-    assert_eq!(colour(&out, "Endpoints (7)"), theme::heading());
+    // The branch titles are plain strong text, not the link or accent blue.
+    for title in ["Endpoints (7)", "DNS names (1)", "URLs (2)", "Files (1)"] {
+        let c = colour(&out, title);
+        assert_eq!(c, theme::text(), "{title}");
+        assert!(![link, accent, theme::heading()].contains(&c), "{title}");
+    }
     // Hover: underline and the pointing hand.
     let at = find(&out, "pool.minexmr.com").center();
     let mut out = settle(&ctx, &mut view, WIDE, None);

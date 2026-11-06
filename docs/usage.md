@@ -651,15 +651,15 @@ The network capture is the guest's own view on every route.
   with its source; and behaviour tags), **Key findings** (the six worst by tier and
   then first time, each with its description on a line below, cut to its first sentence
   with "…" when there is more: a click on the description shows all of it and another
-  folds it; a click on the row opens the finding's Details, **all N** opens Suspicious activity, **Show more** opens the
-  other findings in a small inset box below the first six, two findings tall, that
-  scrolls inside with its scroll bar always drawn; **Show less** folds it), **Indicators** (a tree of
+  folds it; a click on the row opens the finding's Details, **all N** opens Suspicious activity, **Show more** turns
+  the six rows into one scroll area of every finding, as tall as the six rows
+  were, with its scroll bar always drawn at the right edge; **Show less** puts the six back), **Indicators** (a tree of
   **Endpoints** with country and organization, **DNS names**, **URLs** and **Files**
   dropped or run with type and SHA-256; each item shows its value in the normal
   text colour in monospace and its country, organization, type or hash muted
   (hover underlines it and shows the pointing hand; nothing is link-blue); each
-  branch shows five and **Show N more** opens the rest in a small inset box of two
-  rows that scrolls, with its scroll bar always drawn; the one-line rows (MITRE
+  branch shows five and **Show N more** turns the five rows into one scroll area of every item,
+  as tall as the five rows were, with its scroll bar always drawn (**Show fewer** puts the five back); the branch titles are plain strong text with a muted count; the one-line rows (MITRE
   ATT&CK, Processes of interest, Files, Network) show numbers strong and words muted; **Copy all** and **Export**, which writes JSON to the run's `ioc`
   folder; the header says how many indicators matched the IOC datasets), **Relationships**
   (a process, file, endpoint and injection graph laid out as a tree from the root
