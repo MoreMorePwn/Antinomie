@@ -924,8 +924,14 @@ impl View {
         egui::CollapsingHeader::new(format!("Evidence locations ({})", finding.evidence.len()))
             .default_open(true)
             .show(ui, |ui| {
-                selected =
-                    evidence_list(ui, report.engine, finding, "detection-evidence-hits", 240.0);
+                let height = finding::evidence_height(ui);
+                selected = evidence_list(
+                    ui,
+                    report.engine,
+                    finding,
+                    "detection-evidence-hits",
+                    height,
+                );
             });
         byte_preview(ui, self.bytes.as_ref(), self.byte_rx.is_some(), finding);
         if let Some(key) = window {

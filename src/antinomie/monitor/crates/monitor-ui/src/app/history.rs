@@ -680,13 +680,16 @@ pub(super) fn sample_name(run: &RunSummary) -> &str {
 /// the tree scrolls inside the box, both ways.
 fn bounded_tree<R>(ui: &mut egui::Ui, viewport: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let height = crate::details_scroll::tree_height(ui, viewport);
-    let result = ui
-        .allocate_ui_with_layout(
-            egui::vec2(ui.available_width(), height),
-            egui::Layout::top_down(egui::Align::Min),
-            add,
-        )
-        .inner;
+    // The Details area's own scroll bar runs along its right edge; the box
+    // stops short of it so the tree's bar never sits on top of that one.
+    let width = (ui.available_width() - crate::details_scroll::bar_gutter(ui)).max(120.0);
+    let boxed = ui.allocate_ui_with_layout(
+        egui::vec2(width, height),
+        egui::Layout::top_down(egui::Align::Min),
+        add,
+    );
+    crate::details_scroll::remember_tree_rect(ui.ctx(), boxed.response.rect);
+    let result = boxed.inner;
     crate::details_scroll::tree_splitter(ui, height);
     result
 }

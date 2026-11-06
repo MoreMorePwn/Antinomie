@@ -220,8 +220,9 @@ fn a_pack_lists_all_its_rules_and_a_rule_shows_its_details_and_source() {
     f.click("Rule");
     let shown = f.frame();
     assert!(top_of(&shown, "Zeta_Rule") < top_of(&shown, "Alpha_Rule"));
-    // A click on a rule shows its details and its source text.
-    assert!(joined(&shown).contains("Select a rule."));
+    // A click on a rule opens its details window with the source text.
+    assert!(!joined(&shown).contains("Source text"));
+    assert!(f.model.rule_windows.is_empty());
     f.click("Alpha_Rule");
     let shown = f.until("$a = \"alpha\"");
     let text = joined(&shown);
@@ -274,6 +275,12 @@ fn a_catalog_pack_shows_its_metadata_and_that_its_rules_come_after_install() {
     assert!(text.contains("Forge Core"), "{text}");
     assert!(text.contains("Available"), "{text}");
     assert!(text.contains("License: Each rule's own license"), "{text}");
+    // Nothing follows the pack details, so no "Rules" heading ends the pane.
+    let last = shown
+        .iter()
+        .max_by(|a, b| a.1.bottom().total_cmp(&b.1.bottom()))
+        .map(|(text, _, _)| text.as_str());
+    assert_ne!(last, Some("Rules"), "{text}");
     assert!(model.job.is_none(), "nothing was fetched");
     assert!(model.rows.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
@@ -704,4 +711,150 @@ fn long_explanations_are_a_tooltip_and_not_on_the_page() {
         hovered.contains("They change only when you press Download or Update."),
         "{hovered}"
     );
+}
+
+type Texts = Vec<(String, egui::Rect, egui::Rect)>;
+
+fn fills(f: &mut Fixture) -> (Texts, Vec<(egui::Color32, egui::Rect)>) {
+    fn walk(shape: &egui::epaint::Shape, out: &mut Vec<(egui::Color32, egui::Rect)>) {
+        match shape {
+            egui::epaint::Shape::Rect(rect) => out.push((rect.fill, rect.rect)),
+            egui::epaint::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, out)),
+            _ => {}
+        }
+    }
+    let mut detection = antinomie_monitor_core::analysis::detection::Settings::default();
+    let tools = ruleset::ToolConfig::default();
+    let output = f.ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+            ..Default::default()
+        },
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
+                let _ = f
+                    .model
+                    .page(ui, &f.dir, &mut f.outbound, &tools, &mut detection);
+            });
+            let ctx = root.ctx().clone();
+            f.model.show_rule_windows(&ctx, &f.dir);
+        },
+    );
+    let mut rects = Vec::new();
+    for shape in &output.shapes {
+        walk(&shape.shape, &mut rects);
+    }
+    (super::source_tests::texts(&output), rects)
+}
+
+#[test]
+fn clicking_a_rule_opens_its_own_window_and_the_code_sits_on_a_filled_block() {
+    let mut f = Fixture::new("rule-window");
+    f.pack("fixture", "yara", "rules.yar", YARA);
+    f.until("Alpha_Rule");
+    f.click("Alpha_Rule");
+    f.until("$a = \"alpha\"");
+    assert_eq!(f.model.rule_windows.len(), 1);
+    // Another rule opens a second window; the same rule again does not.
+    f.click("Zeta_Rule");
+    f.until("$a = \"zeta\"");
+    assert_eq!(f.model.rule_windows.len(), 2);
+    let (shown, rects) = fills(&mut f);
+    let code = shown
+        .iter()
+        .find(|(text, _, _)| text.contains("$a = \"alpha\""))
+        .expect("the code is drawn")
+        .1;
+    let background = f.ctx.global_style().visuals.code_bg_color;
+    let block = rects
+        .iter()
+        .find(|(fill, rect)| *fill == background && rect.contains_rect(code))
+        .expect("the code sits on the code background")
+        .1;
+    assert!(
+        block.min.x < code.min.x && block.max.x > code.max.x,
+        "padded"
+    );
+    assert!(
+        block.min.y < code.min.y && block.max.y > code.max.y,
+        "padded"
+    );
+}
+
+#[test]
+fn the_table_rules_stay_within_the_table_and_are_one_pixel_wide() {
+    let mut f = Fixture::new("rules-lines");
+    f.pack("fixture", "yara", "rules.yar", YARA);
+    f.until("Alpha_Rule");
+    f.settle();
+    let mut detection = antinomie_monitor_core::analysis::detection::Settings::default();
+    let tools = ruleset::ToolConfig::default();
+    let output = f.ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+            ..Default::default()
+        },
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
+                let _ = f
+                    .model
+                    .page(ui, &f.dir, &mut f.outbound, &tools, &mut detection);
+            });
+        },
+    );
+    fn walk(shape: &egui::epaint::Shape, out: &mut Vec<(egui::Pos2, egui::Pos2, f32)>) {
+        match shape {
+            egui::epaint::Shape::LineSegment { points, stroke } => {
+                out.push((points[0], points[1], stroke.width))
+            }
+            egui::epaint::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut lines = Vec::new();
+    for shape in &output.shapes {
+        walk(&shape.shape, &mut lines);
+    }
+    let rules: Vec<_> = lines
+        .iter()
+        .filter(|(a, b, _)| a.y == b.y && b.x - a.x > 100.0)
+        .collect();
+    assert!(!rules.is_empty());
+    // The page is 1100 wide with an 8 point margin; a header cell reaches
+    // half of the theme's column spacing past the table and no more.
+    let reach = f.ctx.global_style().spacing.item_spacing.x / 2.0 + 0.01;
+    for (a, b, width) in &rules {
+        assert!(*width <= 1.0, "rule {width} wide");
+        assert!(a.x >= 8.0 - reach && b.x <= 1092.0 + reach, "{a:?} {b:?}");
+    }
+}
+
+#[test]
+fn a_rule_window_stays_drawn_when_the_rules_page_is_not() {
+    let mut f = Fixture::new("rule-window-stays");
+    f.pack("fixture", "yara", "rules.yar", YARA);
+    f.until("Alpha_Rule");
+    f.click("Alpha_Rule");
+    f.until("$a = \"alpha\"");
+    // Another page is showing: the app draws only the spawned windows.
+    let mut shown = String::new();
+    for _ in 0..3 {
+        let output = f.ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                ..Default::default()
+            },
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
+                    ui.label("Another page");
+                });
+                let ctx = root.ctx().clone();
+                f.model.show_rule_windows(&ctx, &f.dir);
+            },
+        );
+        shown = joined(&super::source_tests::texts(&output));
+    }
+    assert!(shown.contains("Another page"), "{shown}");
+    assert!(shown.contains("$a = \"alpha\""), "{shown}");
+    assert_eq!(f.model.rule_windows.len(), 1);
 }

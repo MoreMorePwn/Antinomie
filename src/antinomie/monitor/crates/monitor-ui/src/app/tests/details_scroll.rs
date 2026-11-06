@@ -187,3 +187,24 @@ fn the_offset_resets_when_another_run_is_selected() {
         top(&before, "Recorded process tree")
     );
 }
+
+#[test]
+fn the_tree_scroll_bar_stays_clear_of_the_details_scroll_bar() {
+    let mut panel = Panel::new(chain(80));
+    panel.settle(OUTSIDE_TREE);
+    let tree = crate::details_scroll::tree_rect(&panel.ctx).expect("the tree box was drawn");
+    let spacing = panel.ctx.global_style().spacing.scroll;
+    let gutter = spacing.bar_width + spacing.bar_inner_margin + spacing.bar_outer_margin;
+    // The Details area spans the whole panel; its bar is along its right edge.
+    let outer_bar = egui::Rect::from_x_y_ranges(SIZE.x - gutter..=SIZE.x, 0.0..=SIZE.y);
+    // The tree's bar is along the right edge of its own box.
+    let inner_bar = egui::Rect::from_x_y_ranges(
+        tree.right() - gutter..=tree.right(),
+        tree.top()..=tree.bottom(),
+    );
+    assert!(
+        !outer_bar.intersects(inner_bar),
+        "tree bar {inner_bar:?} touches the Details bar {outer_bar:?}"
+    );
+    assert!(tree.right() <= SIZE.x - gutter, "{tree:?}");
+}

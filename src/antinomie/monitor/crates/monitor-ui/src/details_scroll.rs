@@ -72,6 +72,23 @@ pub(crate) fn tree_splitter(ui: &mut egui::Ui, height: f32) {
     ui.painter().hline(rect.x_range(), rect.center().y, stroke);
 }
 
+/// The width a vertical scroll bar takes along the right edge of a scroll
+/// area: its track plus both margins.
+pub(crate) fn bar_gutter(ui: &egui::Ui) -> f32 {
+    let scroll = &ui.spacing().scroll;
+    scroll.bar_width + scroll.bar_inner_margin + scroll.bar_outer_margin
+}
+
+/// Where the process tree box was drawn last, for the render tests.
+pub(crate) fn remember_tree_rect(ctx: &egui::Context, rect: egui::Rect) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new("details-process-tree-rect"), rect));
+}
+
+#[cfg(test)]
+pub(crate) fn tree_rect(ctx: &egui::Context) -> Option<egui::Rect> {
+    ctx.data(|data| data.get_temp(egui::Id::new("details-process-tree-rect")))
+}
+
 fn height_id() -> egui::Id {
     egui::Id::new("details-process-tree-height")
 }
