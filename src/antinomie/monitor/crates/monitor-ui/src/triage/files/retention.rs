@@ -6,6 +6,9 @@ use super::Change;
 use crate::trace;
 
 const MIB: usize = 1 << 20;
+/// Most bytes of a transfer held at once while they are placed: a call's
+/// buffer is placed in pieces this size, not copied whole.
+const STORE_STEP: usize = 65_536;
 
 /// The caps on the bytes rebuilt, in bytes: per file, and over every file of a
 /// run's view. Settings > Analysis limits.
@@ -53,6 +56,7 @@ pub(super) struct LimitHit {
 /// A call whose captured buffer held fewer bytes than the call moved.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ShortCapture {
+    pub what: &'static str,
     pub first: trace::InvocationKey,
     pub moved: u64,
     pub captured: u64,
@@ -98,8 +102,10 @@ impl Change {
             let Some(at) = offset.checked_add(relative) else {
                 break;
             };
-            if !run.is_empty() && start + run.len() as u64 != at {
-                self.store_run(start, &run, original, budget);
+            if !run.is_empty() && (start + run.len() as u64 != at || run.len() >= STORE_STEP) {
+                if !self.store_run(start, &run, original, budget) {
+                    return;
+                }
                 run.clear();
             }
             if run.is_empty() {
@@ -112,7 +118,14 @@ impl Change {
         }
     }
 
-    fn store_run(&mut self, start: u64, run: &[u8], original: bool, budget: &mut Budget<'_>) {
+    /// Whether all of `run` was kept; once a cap cuts it, nothing more fits.
+    fn store_run(
+        &mut self,
+        start: u64,
+        run: &[u8],
+        original: bool,
+        budget: &mut Budget<'_>,
+    ) -> bool {
         let room_file = budget
             .retention
             .per_file
@@ -137,9 +150,10 @@ impl Change {
                 },
             });
         }
+        let whole = kept == run.len();
         let run = &run[..kept];
         if run.is_empty() {
-            return;
+            return whole;
         }
         if original {
             for (from, to) in self.original.unknown_in(start, start + run.len() as u64) {
@@ -148,11 +162,14 @@ impl Change {
             }
         }
         *budget.used += self.final_data.put(start, run);
+        whole
     }
 
-    /// A call moved `moved` bytes and its buffer held `captured`.
+    /// A call (`what`: "write", "read"...) moved `moved` bytes and the
+    /// recording captured `captured` of its buffer.
     pub(super) fn note_short_capture(
         &mut self,
+        what: &'static str,
         call: trace::InvocationKey,
         moved: u64,
         captured: u64,
@@ -161,6 +178,7 @@ impl Change {
             Some(known) => known.calls += 1,
             None => {
                 self.short_capture = Some(ShortCapture {
+                    what,
                     first: call,
                     moved,
                     captured,
@@ -199,14 +217,15 @@ impl Change {
             } else {
                 String::new()
             };
+            let missing = short.moved.saturating_sub(short.captured);
             notes.push(GapNote {
                 text: format!(
-                    "A transfer moved {} bytes but the buffer the recording captured for that call holds {} ({} not captured){more}: \
-                     the call's captured buffer was shorter than the transfer, or has gaps. \
-                     The captured part is placed; the call's own record shows what was kept.",
-                    short.moved,
-                    short.captured,
-                    short.moved.saturating_sub(short.captured)
+                    "This {} moved {} B, but the recording kept only {} B of its buffer ({} B were not recorded){more}. \
+                     Those bytes are a gap in the rebuilt file; the call's own record shows what was kept.",
+                    short.what,
+                    crate::values::thousands(short.moved),
+                    crate::values::thousands(short.captured),
+                    crate::values::thousands(missing),
                 ),
                 limit: false,
                 evidence: Some(short.first),

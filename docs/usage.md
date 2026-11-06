@@ -642,7 +642,11 @@ The network capture is the guest's own view on every route.
   size before and after, and the guest's SHA-256 when it took one. An offset the run could not know (an append,
   a descriptor it did not see opened) shows `unknown`, and bytes the kernel did not
   capture show `not captured`; nothing is guessed. In **Changed files**, Details has
-  a **Per-file history** button that opens the tab on that file.
+  a **Per-file history** button that opens the tab on that file. The rebuilt bytes
+  are every byte the recording kept of each write, up to **Rebuilt file bytes** in
+  Settings > Analysis limits (per file and per run); a note about a call that moved
+  more bytes than the recording kept of its buffer says so, and a note about the
+  limit says that instead.
 - **Triage › Summary** reads top to bottom: the **header strip** (the sample's name, ELF
   type and architecture, static or dynamic, packed when Static analysis found a
   packer, size and SHA-256 with a copy button; the base, route, run time and exit;

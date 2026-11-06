@@ -3,57 +3,161 @@
 use super::*;
 use antinomie_monitor_core::api::FieldSummary;
 use antinomie_monitor_core::file_writes::{self, Captured, Source};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{path::PathBuf, sync::Arc};
 
+/// Most captured bytes read from the run's object store in one go.
+const READ_STEP: u64 = 65_536;
+/// How much of a transfer's start is kept in memory for previews.
+const LEAD: usize = 512;
+
+/// A stretch of a transfer's captured bytes: where it lies in the transfer,
+/// and where to read it from when it is needed.
+struct Segment {
+    at: u64,
+    len: u64,
+    /// The run's object store, when the field has a saved object.
+    source: Option<Source>,
+    /// What the event itself holds of the stretch, used when the object cannot
+    /// be read (or there is none).
+    fallback: Vec<u8>,
+}
+
+impl Segment {
+    fn read(&self, skip: u64, len: u64) -> Option<Vec<u8>> {
+        if let Some(data) = self
+            .source
+            .as_ref()
+            .and_then(|source| source.read(skip, len).ok())
+        {
+            return Some(data);
+        }
+        let from = usize::try_from(skip).ok()?;
+        let to = from.checked_add(usize::try_from(len).ok()?)?;
+        self.fallback.get(from..to).map(<[u8]>::to_vec)
+    }
+}
+
+/// The bytes one call moved that the recording captured. Only the first
+/// few hundred are held; the rest are read from the object store in steps of
+/// at most 64 KiB while [`Self::iter`] runs, so a call's memory does not grow
+/// with the size of its buffer.
 #[derive(Default)]
 pub(super) struct CapturedPayload {
-    chunks: Vec<(u64, Vec<u8>)>,
-    captured_size: usize,
+    segments: Vec<Segment>,
+    /// Bytes the recording says it captured, in place within the transfer.
+    captured_size: u64,
     logical_size: u64,
+    /// The transfer's first bytes, `None` where not captured.
+    lead: Vec<Option<u8>>,
+    /// Bytes of a captured stretch that could not be read back.
+    unread: AtomicU64,
+}
+
+/// The captured bytes in transfer order, read as they are asked for.
+pub(super) struct Bytes<'a> {
+    payload: &'a CapturedPayload,
+    until: u64,
+    count_unread: bool,
+    segment: usize,
+    within: u64,
+    chunk: Vec<u8>,
+    chunk_at: u64,
+    next: usize,
+}
+
+impl Iterator for Bytes<'_> {
+    type Item = (u64, u8);
+    fn next(&mut self) -> Option<(u64, u8)> {
+        loop {
+            if let Some(byte) = self.chunk.get(self.next) {
+                let offset = self.chunk_at + self.next as u64;
+                self.next += 1;
+                return Some((offset, *byte));
+            }
+            let segment = self.payload.segments.get(self.segment)?;
+            let at = segment.at + self.within;
+            if self.within >= segment.len || at >= self.until {
+                self.segment += 1;
+                self.within = 0;
+                continue;
+            }
+            let step = READ_STEP
+                .min(segment.len - self.within)
+                .min(self.until - at);
+            let from = self.within;
+            self.within += step;
+            match segment.read(from, step) {
+                Some(data) => {
+                    self.chunk = data;
+                    self.chunk_at = at;
+                    self.next = 0;
+                }
+                None if self.count_unread => {
+                    self.payload.unread.fetch_add(step, Ordering::Relaxed);
+                }
+                None => {}
+            }
+        }
+    }
 }
 
 impl CapturedPayload {
+    /// Bytes of the transfer the recording captured and that read back.
     pub fn len(&self) -> usize {
-        self.captured_size
+        let lost = self.unread.load(Ordering::Relaxed);
+        usize::try_from(self.captured_size.saturating_sub(lost)).unwrap_or(usize::MAX)
     }
-    pub fn iter(&self) -> impl Iterator<Item = (u64, u8)> + '_ {
-        self.chunks.iter().flat_map(|(start, data)| {
-            data.iter().enumerate().filter_map(move |(index, byte)| {
-                start
-                    .checked_add(index as u64)
-                    .map(|offset| (offset, *byte))
-            })
-        })
+    /// Every captured byte with its offset in the transfer. Reads in steps of
+    /// at most 64 KiB; one that cannot be read is counted out of [`Self::len`].
+    pub fn iter(&self) -> Bytes<'_> {
+        self.bytes(u64::MAX, true)
+    }
+    fn bytes(&self, until: u64, count_unread: bool) -> Bytes<'_> {
+        Bytes {
+            payload: self,
+            until,
+            count_unread,
+            segment: 0,
+            within: 0,
+            chunk: Vec::new(),
+            chunk_at: 0,
+            next: 0,
+        }
+    }
+    /// Fill in what is held in memory once the stretches are known.
+    fn settle(&mut self) {
+        self.captured_size = self.segments.iter().map(|segment| segment.len).sum();
+        let mut lead = vec![
+            None;
+            usize::try_from(self.logical_size)
+                .unwrap_or(usize::MAX)
+                .min(LEAD)
+        ];
+        for (offset, byte) in self.bytes(LEAD as u64, false) {
+            if let Some(cell) = usize::try_from(offset)
+                .ok()
+                .and_then(|offset| lead.get_mut(offset))
+            {
+                *cell = Some(byte);
+            }
+        }
+        self.lead = lead;
     }
     /// The first `limit` octets of the transfer, up to the first one that was
     /// not captured.
     pub fn head(&self, limit: usize) -> Vec<u8> {
-        let mut head = Vec::new();
-        for (start, data) in &self.chunks {
-            if *start != head.len() as u64 || head.len() >= limit {
-                break;
-            }
-            head.extend(data.iter().take(limit - head.len()));
-        }
-        head
+        self.lead
+            .iter()
+            .take(limit)
+            .map_while(|byte| *byte)
+            .collect()
     }
     pub fn preview(&self) -> String {
-        let mut shown = vec![
-            None;
-            usize::try_from(self.logical_size)
-                .unwrap_or(usize::MAX)
-                .min(512)
-        ];
-        for (offset, byte) in self.iter() {
-            if let Ok(offset) = usize::try_from(offset) {
-                if let Some(cell) = shown.get_mut(offset) {
-                    *cell = Some(byte);
-                }
-            }
-        }
+        let shown = &self.lead;
         let mut text: String = shown
-            .into_iter()
-            .map(|byte| match byte {
+            .iter()
+            .map(|byte| match *byte {
                 None => "??".into(),
                 Some(b'\n') => "\\n".into(),
                 Some(b'\r') => "\\r".into(),
@@ -254,7 +358,15 @@ pub(super) fn field_capture(
         logical_size: size,
         ..Default::default()
     };
-    field_capture_at(field, 0, directory, size, &mut result);
+    field_capture_at(
+        field,
+        0,
+        directory,
+        size,
+        &mut Interned::default(),
+        &mut result,
+    );
+    result.settle();
     result
 }
 
@@ -294,6 +406,7 @@ pub(super) fn capture(
         return result;
     };
     let mut base = 0u64;
+    let mut interned = Interned::default();
     for (expected, (index, vector, field)) in fields.into_iter().enumerate() {
         if vector && index != expected {
             break;
@@ -301,7 +414,7 @@ pub(super) fn capture(
         if base >= size {
             break;
         }
-        field_capture_at(field, base, directory, size, &mut result);
+        field_capture_at(field, base, directory, size, &mut interned, &mut result);
         if !vector {
             break;
         }
@@ -313,48 +426,82 @@ pub(super) fn capture(
         };
         base = next;
     }
+    result.settle();
     result
 }
 
-/// Read one field's captured bytes, placed `base` bytes into a transfer of
-/// `size` bytes, into `result` (at most 64 KiB and 1024 chunks in all).
+/// Note one field's captured stretches, placed `base` bytes into a transfer
+/// of `size` bytes, in `result`. Nothing is read here.
 fn field_capture_at(
     field: &FieldSummary,
     base: u64,
     directory: Option<&Path>,
     size: u64,
+    interned: &mut Interned,
     result: &mut CapturedPayload,
 ) {
     for (start, end) in field_ranges(field) {
         let Some(at) = base.checked_add(start).filter(|at| *at < size) else {
             continue;
         };
-        let count = usize::try_from((end - start).min(size - at))
-            .unwrap_or(usize::MAX)
-            .min(65536usize.saturating_sub(result.captured_size));
-        if count == 0 || result.chunks.len() >= 1024 {
-            break;
+        let count = (end - start).min(size - at);
+        let rest = usize::try_from(start)
+            .ok()
+            .and_then(|from| field.preview.get(from..))
+            .unwrap_or_default();
+        let kept = rest.len().min(usize::try_from(count).unwrap_or(usize::MAX));
+        match (directory, &field.raw_path) {
+            (Some(directory), Some(raw)) => result.segments.push(Segment {
+                at,
+                len: count,
+                source: Some(interned.source(directory, raw, start)),
+                fallback: rest[..kept].to_vec(),
+            }),
+            _ if kept > 0 => result.segments.push(Segment {
+                at,
+                len: kept as u64,
+                source: None,
+                fallback: rest[..kept].to_vec(),
+            }),
+            _ => {}
         }
-        let data = directory
-            .and_then(|directory| {
-                antinomie_monitor_core::recording::read_captured_range(
-                    directory, field, start, count,
-                )
-                .ok()
-            })
-            .unwrap_or_else(|| {
-                usize::try_from(start)
-                    .ok()
-                    .and_then(|start| field.preview.get(start..))
-                    .unwrap_or_default()
-                    .iter()
-                    .take(count)
-                    .copied()
-                    .collect()
-            });
-        if !data.is_empty() {
-            result.captured_size += data.len();
-            result.chunks.push((at, data));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::triage::tests::{call, captured};
+
+    #[test]
+    fn a_big_buffer_is_read_in_steps_of_at_most_64_kib() {
+        let size = 3 * (1u64 << 20) + 123;
+        let root = std::env::temp_dir().join(format!("ant-payload-steps-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("objects")).unwrap();
+        let data: Vec<u8> = (0..size).map(|at| (at % 253) as u8).collect();
+        std::fs::write(root.join("objects/big.raw"), &data).unwrap();
+        let mut write = call(1, 1, "write", size as i64);
+        let mut field = captured("buf", "", b"");
+        field.raw_path = Some(PathBuf::from("objects/big.raw"));
+        field.logical_len = Some(size);
+        field.captured_len = size;
+        field.ranges = vec![(0, size)];
+        write.entry.as_mut().unwrap().fields.push(field);
+        let payload = capture(&write, false, Some(&root), size);
+        assert_eq!(payload.len() as u64, size);
+        // Nothing but the first bytes is held before the bytes are asked for.
+        assert!(payload.lead.len() <= LEAD);
+        let mut bytes = payload.iter();
+        let (mut count, mut widest) = (0u64, 0);
+        while let Some((offset, byte)) = bytes.next() {
+            assert_eq!((offset, byte), (count, data[count as usize]));
+            count += 1;
+            widest = widest.max(bytes.chunk.len());
         }
+        assert_eq!(count, size);
+        assert_eq!(widest as u64, READ_STEP);
+        assert_eq!(payload.len() as u64, size);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

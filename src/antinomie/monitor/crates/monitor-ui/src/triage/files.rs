@@ -24,6 +24,8 @@ pub(super) use ioc::IocFile;
 const READ_NAMES: &[&str] = &["read", "pread64", "readv", "preadv", "preadv2"];
 const TRACKED_FILES: usize = 8192;
 mod bytes;
+#[cfg(test)]
+mod payload_tests;
 mod retention;
 use bytes::ByteStore;
 use observe::{read_cells, CallFacts, Observed, ReadRow};

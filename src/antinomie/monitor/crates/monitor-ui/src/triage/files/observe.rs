@@ -311,7 +311,12 @@ impl FileIndex {
                 }
             }
             if bytes.len() as u64 != size {
-                change.note_short_capture(trace::key(call), size, bytes.len() as u64);
+                change.note_short_capture(
+                    if writing { "write" } else { "read" },
+                    trace::key(call),
+                    size,
+                    bytes.len() as u64,
+                );
             }
             if !explicit {
                 if let Some((position, _)) =
