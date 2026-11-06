@@ -28,3 +28,88 @@ fn the_legacy_arm_reply_record_reads_in_plain_words() {
     );
     assert_eq!(catalog::plain_issue("something else"), "something else");
 }
+
+#[test]
+fn capture_issues_are_plain_lines_without_a_close_button() {
+    let ctx = egui::Context::default();
+    let mut view = CoreView::default();
+    view.catalog_issues = vec!["Run a: broken".into(), "Run b: other".into()];
+    let mut frame = |view: &mut CoreView, n: u32, events: Vec<egui::Event>| {
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                time: Some(f64::from(n) * 0.02),
+                events,
+                ..Default::default()
+            },
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| view.analysis(ui));
+            },
+        )
+    };
+    let out = frame(&mut view, 0, Vec::new());
+    let header = rect_of(&out, "Capture issues (2)").expect("the header");
+    let at = header.center();
+    for (n, pressed) in [(1, true), (2, false)] {
+        frame(
+            &mut view,
+            n,
+            vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    let mut texts = Vec::new();
+    for n in 3..8 {
+        texts = shown(&frame(&mut view, n, Vec::new()));
+    }
+    assert!(
+        texts.iter().any(|text| text == "Run a: broken"),
+        "{texts:?}"
+    );
+    assert!(texts.iter().any(|text| text == "Run b: other"), "{texts:?}");
+    assert!(
+        !texts.iter().any(|text| text == "\u{d7}"),
+        "no close button in {texts:?}"
+    );
+}
+
+fn rect_of(output: &egui::FullOutput, wanted: &str) -> Option<egui::Rect> {
+    fn find(shape: &egui::Shape, wanted: &str) -> Option<egui::Rect> {
+        match shape {
+            egui::Shape::Text(text) if text.galley.text() == wanted => {
+                Some(text.visual_bounding_rect())
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| find(shape, wanted)),
+            _ => None,
+        }
+    }
+    output
+        .shapes
+        .iter()
+        .find_map(|shape| find(&shape.shape, wanted))
+}
+
+fn shown(output: &egui::FullOutput) -> Vec<String> {
+    fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for shape in &output.shapes {
+        collect(&shape.shape, &mut out);
+    }
+    out
+}

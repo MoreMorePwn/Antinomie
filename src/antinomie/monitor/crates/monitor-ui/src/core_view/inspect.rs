@@ -2,6 +2,10 @@
 //! Registers, mappings and notes of the selected core.
 use super::*;
 
+/// The Capture issues header's id: the same whatever the count, so it stays
+/// open or closed when an issue is added.
+pub(super) const CAPTURE_ISSUES: &str = "core-capture-issues";
+
 impl CoreView {
     pub(super) fn analysis(&mut self, ui: &mut egui::Ui) {
         if !self.status.is_empty() {
@@ -9,9 +13,13 @@ impl CoreView {
         }
         if !self.catalog_issues.is_empty() {
             egui::CollapsingHeader::new(format!("Capture issues ({})", self.catalog_issues.len()))
+                .id_salt(CAPTURE_ISSUES)
                 .show(ui, |ui| {
+                    // Plain lines, not dismissable notices: the list is the
+                    // count's own content, and each issue already reached
+                    // Activity once (`report_new_issues`).
                     for issue in &self.catalog_issues {
-                        crate::activity::error(ui, format!("Core dump list: {issue}"));
+                        crate::activity::inline_only(ui, crate::activity::Level::Error, issue);
                     }
                 });
         }
