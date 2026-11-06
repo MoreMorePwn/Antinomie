@@ -871,7 +871,7 @@ fn the_process_tree_columns_are_in_the_requested_order() {
         sorted
     };
     assert_eq!(found, sorted);
-    for gone in ["Executable", "TID", "Argv", "First seen", "Exec history"] {
+    for gone in ["Executable", "TID", "First seen", "Exec history"] {
         assert!(!texts(&out).iter().any(|(text, _)| text.starts_with(gone)));
     }
     assert!(has(&out, "demo-all (55 \u{b7} 55)"), "{:?}", texts(&out));

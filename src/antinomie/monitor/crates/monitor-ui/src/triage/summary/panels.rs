@@ -203,7 +203,7 @@ fn node_name(scan: &ArchiveScan, pid: u32, cookie: u64, exe: &str) -> String {
 /// scroll area with all of them.
 fn category(
     ui: &mut egui::Ui,
-    title: &str,
+    (title, color): (&str, egui::Color32),
     total: usize,
     more: &mut bool,
     destination: Destination,
@@ -213,17 +213,17 @@ fn category(
     if total == 0 {
         return;
     }
-    // The title in the text colour (strong), its count muted: not a link.
+    // The title bold in its category's colour, its count muted: not a link.
     let mut head = egui::text::LayoutJob::default();
     for (text, color) in [
-        (title.to_owned(), theme::text()),
+        (title.to_owned(), color),
         (format!(" ({total})"), theme::muted()),
     ] {
         let rich = RichText::new(text).color(color);
-        let rich = if color == theme::text() {
-            rich.strong()
-        } else {
+        let rich = if color == theme::muted() {
             rich
+        } else {
+            rich.strong()
         };
         rich.append_to(
             &mut head,
@@ -319,7 +319,7 @@ pub(super) fn indicators(
             let [endpoints, domains, urls, files] = more;
             category(
                 ui,
-                "Endpoints",
+                ("Endpoints", theme::category(0)),
                 found.endpoints.len(),
                 endpoints,
                 Destination::Ips,
@@ -336,7 +336,7 @@ pub(super) fn indicators(
             );
             category(
                 ui,
-                "DNS names",
+                ("DNS names", theme::category(1)),
                 found.domains.len(),
                 domains,
                 Destination::Dns,
@@ -351,7 +351,7 @@ pub(super) fn indicators(
             );
             category(
                 ui,
-                "URLs",
+                ("URLs", theme::category(2)),
                 found.urls.len(),
                 urls,
                 Destination::Http,
@@ -360,7 +360,7 @@ pub(super) fn indicators(
             );
             category(
                 ui,
-                "Files",
+                ("Files", theme::category(3)),
                 found.files.len(),
                 files,
                 Destination::Executed,

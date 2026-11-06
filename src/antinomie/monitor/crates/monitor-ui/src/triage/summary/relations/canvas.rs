@@ -6,6 +6,7 @@
 use super::fold::Fold;
 use super::layout::Layout;
 use super::model::{EdgeKind, Graph, GroupInfo, NodeKind};
+use super::trunk;
 use crate::theme;
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Shape, Stroke, Vec2};
 
@@ -250,7 +251,16 @@ pub(in crate::triage) fn show(
         rect.right_top() + egui::vec2(-BAR_MARGIN - bar_size.x, BAR_MARGIN),
         bar_size,
     );
-    for edge in &graph.edges {
+    // A parent whose children are in several lanes: trunks, not a curve each.
+    let trunks = trunk::find(graph, layout, |node| graph.nodes[node].tier.map(tier_color));
+    let mut trunked = vec![false; graph.edges.len()];
+    for kid in trunks.iter().flat_map(|trunks| &trunks.kids) {
+        trunked[kid.edge] = true;
+    }
+    for (at, edge) in graph.edges.iter().enumerate() {
+        if trunked[at] {
+            continue;
+        }
         // What a comb draws below; a member with a finding is drawn as any.
         if edge.kind == EdgeKind::Member && comb(edge.from) && graph.nodes[edge.to].tier.is_none() {
             continue;
@@ -325,6 +335,9 @@ pub(in crate::triage) fn show(
             painter.rect_filled(pill, pill.height() / 2.0, theme::panel());
             painter.galley(pill.center() - galley.size() / 2.0, galley, color);
         }
+    }
+    for trunks in &trunks {
+        draw_trunks(&painter, trunks, view, rect, reach);
     }
     for &node in &layout.shown {
         if comb(node) {
@@ -540,6 +553,45 @@ pub(in crate::triage) fn show(
         view.zoom_about(viewport / 2.0, 1.0 / 1.2);
     }
     Outcome { clicked, folded }
+}
+
+/// The trunk lines of a parent whose children are in several lanes: the
+/// trunk and rail in the muted colour, each stub in its child's tier colour
+/// when it has a finding, with an arrowhead at the child.
+fn draw_trunks(
+    painter: &egui::Painter,
+    trunks: &trunk::Trunks,
+    view: &View,
+    rect: Rect,
+    reach: Rect,
+) {
+    let scale = view.zoom;
+    let lines = trunk::segments(trunks, scale, |world| view.rect_to_screen(rect.min, world));
+    for line in lines {
+        let span = Rect::from_two_pos(line.line[0], line.line[1]);
+        if !span.intersects(reach) {
+            continue;
+        }
+        let tinted = line.tint.is_some();
+        let color = line.tint.unwrap_or_else(|| kind_color(EdgeKind::Forked));
+        painter.line_segment(
+            line.line,
+            Stroke::new(if tinted { 1.8 } else { 1.3 }, color),
+        );
+        if line.stub_of.is_some() && scale >= CURVES_FROM {
+            let b = line.line[1];
+            let tip = 6.0 * scale.clamp(0.6, 1.3);
+            painter.add(Shape::convex_polygon(
+                vec![
+                    b,
+                    b + egui::vec2(-tip, tip * 0.45),
+                    b + egui::vec2(-tip, -tip * 0.45),
+                ],
+                color,
+                Stroke::NONE,
+            ));
+        }
+    }
 }
 
 /// The comb of an open group: per column of members one connector from the

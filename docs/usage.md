@@ -470,7 +470,7 @@ The network capture is the guest's own view on every route.
 - **Triage › Process › Process tree**: one row per task, in the columns
   **Process** (tree lines, the executable's file name and `(pid · tid)`; the
   full path on hover; a fork that has not exec'd shows its parent's image
-  greyed with "fork"), **Command line** (no warning sign: an
+  greyed with "fork"), **Argv** (every argument shell-quoted, so `sh -c 'curl x | sh'` stays unambiguous; hover numbers them as `argv[0] = sh`, `argv[1] = -c` with the count and any argument cut short; no warning sign: an
   argv[0] whose file name is not the executable's is the Suspicious activity
   finding **Hiding the process name: argv[0] rewritten**, counted in Findings; BusyBox applets,
   interpreters through symlinks such as python3 and python3.13, sh and dash,
@@ -663,7 +663,7 @@ The network capture is the guest's own view on every route.
   text colour in monospace and its country, organization, type or hash muted
   (hover underlines it and shows the pointing hand; nothing is link-blue); each
   branch shows five and **Show N more** turns the five rows into one scroll area of every item,
-  as tall as the five rows were, with its scroll bar always drawn (**Show fewer** puts the five back); the branch titles are plain strong text with a muted count; the one-line rows (MITRE
+  as tall as the five rows were, with its scroll bar always drawn (**Show fewer** puts the five back); the branch titles (Endpoints, DNS names, URLs, Files) are bold, each in a colour of its own that is neither the text colour nor link blue, with a muted count; the one-line rows (MITRE
   ATT&CK, Processes of interest, Files, Network) show numbers strong and words muted; **Copy all** and **Export**, which writes JSON to the run's `ioc`
   folder; the header says how many indicators matched the IOC datasets), **Relationships**
   (a process, file, endpoint and injection graph laid out as a tree from the root
@@ -685,7 +685,7 @@ The network capture is the guest's own view on every route.
   in the window; **Laying out…** shows while a big run is
   placed; the icon beside **Mermaid** opens the graph in a window of its own with the
   same controls; drag the background to pan, Ctrl and the wheel or the
-  buttons (a small bar that fits its buttons) to zoom, the plain wheel scrolls the page; click a node to open it,
+  buttons (a small bar that fits its buttons) to zoom, the plain wheel scrolls the page everywhere, over the graph too, and the Key findings and Indicators lists take it only while they can still scroll that way; a process whose children sit in several lanes draws its fork and exec edges as one trunk beside each lane with a stub to every child (a child with a finding keeps its tier colour on its stub); click a node to open it,
   **Mermaid** to copy what is shown; edges read fork, exec, write, run, connect, inject, signal),
   then one line each for **MITRE ATT&CK**, **Processes of interest**, **Files** and
   **Network**, the folded **MITRE ATT&CK techniques** list, the **Detection engines**,

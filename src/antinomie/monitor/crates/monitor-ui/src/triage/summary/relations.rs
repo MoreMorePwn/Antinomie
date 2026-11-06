@@ -9,5 +9,6 @@ pub(super) mod fold;
 pub(super) mod group;
 pub(super) mod layout;
 pub(super) mod model;
+pub(super) mod trunk;
 pub(super) mod ui;
 pub(super) mod window;

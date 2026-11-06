@@ -136,7 +136,7 @@ fn the_table_shows_the_arguments_the_exec_was_given() {
     let nodes = process_nodes(&[exec(3, "/bin/sh", &["sh", "-c", "echo hi"])]);
     assert_eq!(nodes[0].argv, ["sh", "-c", "echo hi"]);
     let rows = process_rows(&nodes, None, &Suspicious::new());
-    assert_eq!(rows[0][1].text, "sh -c echo hi");
+    assert_eq!(rows[0][1].text, "sh -c 'echo hi'");
 }
 
 fn prctl_name(pid: u32, name: &str) -> InvocationSummary {
@@ -234,7 +234,7 @@ fn the_columns_are_the_process_view_in_order() {
         PROCESS_HEADERS,
         [
             "Process",
-            "Command line",
+            "Argv",
             "Findings",
             "User ID",
             "Started",
@@ -314,12 +314,17 @@ fn a_command_line_that_disagrees_with_the_image_has_no_warning_sign() {
     let rows = process_rows(&nodes, None, &Suspicious::new());
     assert_eq!(rows[0][1].text, "ps aux");
     assert_eq!(rows[0][1].color(), theme::text());
-    assert!(cell_hover(1, &rows[0][1], &rows[0][0]).is_none());
+    // The hover numbers the arguments and carries no warning sign.
+    let hover = cell_hover(1, &rows[0][1], &rows[0][0]).unwrap();
+    assert_eq!(hover, "argv[0] = ps\nargv[1] = aux\n2 arguments");
     assert!(!rows[0][0].text.contains('\u{26a0}'));
     let fine = process_nodes(&[exec(3, "/bin/ls", &["ls", "-l"])]);
     let rows = process_rows(&fine, None, &Suspicious::new());
     assert_eq!(rows[0][1].text, "ls -l");
-    assert!(cell_hover(1, &rows[0][1], &rows[0][0]).is_none());
+    assert_eq!(
+        cell_hover(1, &rows[0][1], &rows[0][0]).unwrap(),
+        "argv[0] = ls\nargv[1] = -l\n2 arguments"
+    );
 }
 
 #[test]
@@ -425,4 +430,26 @@ fn the_user_is_the_uid_or_uid_to_euid_from_the_credentials_the_run_recorded() {
     let rows = process_rows(&nodes, None, &Suspicious::new());
     assert_eq!(rows[0][3].text, "1000 \u{2192} 0");
     assert_eq!(node(&nodes, 3, 3).record.creds.len(), 2);
+}
+
+#[test]
+fn the_argv_column_quotes_each_argument_and_the_hover_numbers_them() {
+    let nodes = process_nodes(&[exec(3, "/bin/sh", &["sh", "-c", "curl x | sh"])]);
+    let rows = process_rows(&nodes, None, &Suspicious::new());
+    let cell = &rows[0][1];
+    assert_eq!(cell.text, "sh -c 'curl x | sh'");
+    let hover = cell_hover(1, cell, &rows[0][0]).expect("a hover");
+    assert_eq!(
+        hover,
+        "argv[0] = sh\nargv[1] = -c\nargv[2] = curl x | sh\n3 arguments"
+    );
+    // A quote inside an argument, an empty one and a gap.
+    let argv: Vec<String> = ["echo", "it's", "", "\u{2026}"].map(String::from).to_vec();
+    assert_eq!(
+        process_cells::argv_line(&argv),
+        "echo 'it'\\''s' '' \u{2026}"
+    );
+    let hover = process_cells::argv_hover(&argv).unwrap();
+    assert!(hover.contains("argv[3] = \u{2026}") && hover.contains("4 arguments, 1 cut short"));
+    assert_eq!(process_cells::argv_hover(&[]), None);
 }
