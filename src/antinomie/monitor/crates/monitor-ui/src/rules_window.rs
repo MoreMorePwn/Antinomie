@@ -194,7 +194,6 @@ impl Model {
             .show(ui, |ui| {
                 self.contents(ui, data_dir, outbound, detection);
             });
-        self.show_rule_windows(ui.ctx(), data_dir);
         self.requested.take()
     }
 

@@ -95,6 +95,9 @@ pub(super) fn render(
             egui::CentralPanel::default().show(root, |ui| {
                 let _ = model.page(ui, dir, outbound, &tools, &mut detection);
             });
+            // The app draws the spawned rule windows, whatever page shows.
+            let ctx = root.ctx().clone();
+            model.show_rule_windows(&ctx, dir);
         },
     );
     texts(&output)

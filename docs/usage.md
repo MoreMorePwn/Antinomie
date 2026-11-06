@@ -842,7 +842,7 @@ The network capture is the guest's own view on every route.
   text is decoded and scanned again (two levels deep); the **Inside** column says
   which. The same list opens as a window from **Core dumps > Strings**, where it also lists
   the binary `sockaddr_in` and `sockaddr_in6` structures in the core's memory.
-  In **Library > Detection rules**, a click on an installed rule (or **Open details**) opens its metadata and source text in a window of its own, one per rule, with the code on a padded block of the theme's code background. Core dump list problems of a run are reported to the activity log once each.
+  In **Library > Detection rules**, a click on an installed rule (or **Open details**) opens its metadata and source text in a window of its own, one per rule, with the code on a padded block of the theme's code background. These windows stay open when you switch pages until you close them. Core dump list problems of a run are reported to the activity log once each.
   Switch patterns off or add your own in **Library > Detection rules > Strings
   regex** (**Add patterns**: a name, a category, a regular expression that
   fills the rest of the row, and **Add**, all on one row); **Scan again** reads the change. An analysis that was not started

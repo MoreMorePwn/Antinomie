@@ -736,6 +736,8 @@ fn fills(f: &mut Fixture) -> (Texts, Vec<(egui::Color32, egui::Rect)>) {
                     .model
                     .page(ui, &f.dir, &mut f.outbound, &tools, &mut detection);
             });
+            let ctx = root.ctx().clone();
+            f.model.show_rule_windows(&ctx, &f.dir);
         },
     );
     let mut rects = Vec::new();
@@ -825,4 +827,34 @@ fn the_table_rules_stay_within_the_table_and_are_one_pixel_wide() {
         assert!(*width <= 1.0, "rule {width} wide");
         assert!(a.x >= 8.0 - reach && b.x <= 1092.0 + reach, "{a:?} {b:?}");
     }
+}
+
+#[test]
+fn a_rule_window_stays_drawn_when_the_rules_page_is_not() {
+    let mut f = Fixture::new("rule-window-stays");
+    f.pack("fixture", "yara", "rules.yar", YARA);
+    f.until("Alpha_Rule");
+    f.click("Alpha_Rule");
+    f.until("$a = \"alpha\"");
+    // Another page is showing: the app draws only the spawned windows.
+    let mut shown = String::new();
+    for _ in 0..3 {
+        let output = f.ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                ..Default::default()
+            },
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
+                    ui.label("Another page");
+                });
+                let ctx = root.ctx().clone();
+                f.model.show_rule_windows(&ctx, &f.dir);
+            },
+        );
+        shown = joined(&super::source_tests::texts(&output));
+    }
+    assert!(shown.contains("Another page"), "{shown}");
+    assert!(shown.contains("$a = \"alpha\""), "{shown}");
+    assert_eq!(f.model.rule_windows.len(), 1);
 }

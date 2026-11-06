@@ -99,6 +99,7 @@ impl MonitorApp {
         self.layout = layout;
         self.dialogs(ctx);
         self.data_windows.show(ctx);
+        self.rules_ui.show_rule_windows(ctx, &self.options.data_dir);
         self.file_drop_overlay(ctx);
         self.activity.ingest(ctx);
         crate::title_bar::resize(ctx);

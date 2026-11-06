@@ -42,8 +42,10 @@ impl RuleWindow {
 }
 
 impl Model {
-    /// Draws every open rule window; a closed one is dropped.
-    pub(super) fn show_rule_windows(&mut self, ctx: &egui::Context, data_dir: &Path) {
+    /// Draws every open rule window; a closed one is dropped. The app calls
+    /// this every frame, like its other spawned windows, so they stay up when
+    /// the page is left or closed.
+    pub(crate) fn show_rule_windows(&mut self, ctx: &egui::Context, data_dir: &Path) {
         let mut removal = None;
         let windows = std::mem::take(&mut self.rule_windows);
         let mut kept = Vec::new();
