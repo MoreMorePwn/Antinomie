@@ -8,6 +8,7 @@ use super::insight::{self, Candidate, Key as KeyFinding};
 use super::relations::{
     canvas,
     facts::facts_of,
+    fold,
     group::Rendered,
     model::{self, Graph, Interest},
 };
@@ -28,11 +29,12 @@ pub(in crate::triage) enum Mode {
 }
 
 /// The Full view: not made until it is first shown, and made off the UI
-/// thread when the graph is big.
-enum Full {
-    Unmade,
-    Making(BTreeSet<String>, mpsc::Receiver<Rendered>),
-    Made(BTreeSet<String>, Box<Rendered>),
+/// thread when the graph is big. The one shown stays on screen while the
+/// next is made.
+#[derive(Default)]
+struct Full {
+    made: Option<(BTreeSet<String>, Box<Rendered>)>,
+    making: Option<(BTreeSet<String>, mpsc::Receiver<Rendered>)>,
 }
 
 /// A graph with fewer nodes and edges than this lays out inside a frame.
@@ -45,6 +47,9 @@ pub(super) struct Built {
     compact: Rendered,
     compact_toggled: BTreeSet<String>,
     full: Full,
+    /// The Full view's open nodes (see `fold`), for the run: shared by the
+    /// box and the window, kept when the mode changes.
+    pub open: BTreeSet<String>,
     pub indicators: Indicators,
     pub key_total: usize,
     pub keys: Vec<KeyFinding>,
@@ -58,9 +63,8 @@ pub(in crate::triage) struct State {
     pub mode: Mode,
     pub view: canvas::View,
     pub full_view: canvas::View,
-    /// The groups the reader flipped from how a view starts (Compact shut,
-    /// Full open), one set per mode.
-    pub toggled: [BTreeSet<String>; 2],
+    /// The Compact view's groups the reader opened.
+    pub toggled: BTreeSet<String>,
     /// The Relationships window is open, with its own pan and zoom.
     pub window_open: bool,
     /// The run it was opened for; it closes when another run is shown.
@@ -117,6 +121,7 @@ impl Built {
         let facts = facts_of(scan);
         let graph = Graph::build(&facts);
         let compact = Rendered::compact(&graph, &BTreeSet::new(), PER_KIND);
+        let open = graph.default_open();
         let hits = digest::detections(&view.detection.results).unwrap_or_default();
         let geo = |endpoint: &str| -> (String, String) {
             scan.new_tabs
@@ -150,7 +155,8 @@ impl Built {
             graph: Arc::new(graph),
             compact,
             compact_toggled: BTreeSet::new(),
-            full: Full::Unmade,
+            full: Full::default(),
+            open,
             indicators,
             key_total,
             keys,
@@ -160,8 +166,9 @@ impl Built {
         }
     }
 
-    /// Make what `mode` shows ready for `toggled`: Compact at once, Full
-    /// when it is first shown, on a thread for a big graph.
+    /// Make what `mode` shows ready: Compact for `toggled` at once, Full for
+    /// the open nodes when it is first shown or they change; on a thread for
+    /// a big graph.
     pub(super) fn prepare(&mut self, mode: Mode, toggled: &BTreeSet<String>, ctx: &egui::Context) {
         match mode {
             Mode::Compact => {
@@ -170,41 +177,52 @@ impl Built {
                     self.compact_toggled = toggled.clone();
                 }
             }
-            Mode::Full => self.prepare_full(toggled, ctx),
+            Mode::Full => self.prepare_full(ctx),
         }
     }
 
-    fn prepare_full(&mut self, toggled: &BTreeSet<String>, ctx: &egui::Context) {
-        if let Full::Making(wanted, rx) = &self.full {
+    fn prepare_full(&mut self, ctx: &egui::Context) {
+        if let Some((wanted, rx)) = &self.full.making {
             match rx.try_recv() {
-                Ok(rendered) => self.full = Full::Made(wanted.clone(), Box::new(rendered)),
+                Ok(rendered) => {
+                    self.full.made = Some((wanted.clone(), Box::new(rendered)));
+                    self.full.making = None;
+                }
                 Err(mpsc::TryRecvError::Empty) => {
-                    if wanted == toggled {
+                    if *wanted == self.open {
                         ctx.request_repaint_after(std::time::Duration::from_millis(60));
                         return;
                     }
                 }
-                Err(mpsc::TryRecvError::Disconnected) => self.full = Full::Unmade,
+                Err(mpsc::TryRecvError::Disconnected) => self.full.making = None,
             }
         }
-        if matches!(&self.full, Full::Made(made, _) if made == toggled) {
-            return;
+        if let Some((made, rendered)) = &self.full.made {
+            if *made == self.open {
+                return;
+            }
+            // Only nodes opened or closed, no group: the grouped graph stays.
+            if !fold::groups_differ(made, &self.open) {
+                let next = rendered.refold(&self.open);
+                self.full.made = Some((self.open.clone(), Box::new(next)));
+                self.full.making = None;
+                return;
+            }
         }
         if self.graph.nodes.len() + self.graph.edges.len() <= MAKE_HERE {
-            self.full = Full::Made(
-                toggled.clone(),
-                Box::new(Rendered::full(&self.graph, toggled)),
-            );
+            let rendered = Rendered::full(&self.graph, &self.open);
+            self.full.made = Some((self.open.clone(), Box::new(rendered)));
+            self.full.making = None;
             return;
         }
-        let (graph, wanted, repaint) = (self.graph.clone(), toggled.clone(), ctx.clone());
+        let (graph, wanted, repaint) = (self.graph.clone(), self.open.clone(), ctx.clone());
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let rendered = Rendered::full(&graph, &wanted);
             let _ = tx.send(rendered);
             repaint.request_repaint();
         });
-        self.full = Full::Making(toggled.clone(), rx);
+        self.full.making = Some((self.open.clone(), rx));
         ctx.request_repaint_after(std::time::Duration::from_millis(60));
     }
 
@@ -212,11 +230,25 @@ impl Built {
     pub(super) fn rendered(&self, mode: Mode) -> Option<&Rendered> {
         match mode {
             Mode::Compact => Some(&self.compact),
-            Mode::Full => match &self.full {
-                Full::Made(_, rendered) => Some(&**rendered),
-                _ => None,
-            },
+            Mode::Full => self.full.made.as_ref().map(|(_, rendered)| &**rendered),
         }
+    }
+
+    /// Open the node `id` if it is closed, close it if it is open.
+    pub(super) fn flip(&mut self, id: &str) {
+        if !self.open.remove(id) {
+            self.open.insert(id.to_owned());
+        }
+    }
+
+    /// Open everything (the view still draws about 800 nodes).
+    pub(super) fn expand_all(&mut self) {
+        self.open = self.graph.expanded(super::relations::group::FULL_CAP);
+    }
+
+    /// Back to the root, the paths to the findings and what is under them.
+    pub(super) fn collapse_all(&mut self) {
+        self.open = self.graph.default_open();
     }
 }
 

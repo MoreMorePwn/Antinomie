@@ -604,32 +604,6 @@ impl Graph {
         }
         chosen.into_iter().collect()
     }
-
-    /// At most `cap` nodes, joined to the root: what is nearest the root (the
-    /// nodes come in breadth-first order from a view), after the nodes with a
-    /// finding and the chains that join them.
-    pub(in crate::triage) fn capped(&self, cap: usize) -> Vec<usize> {
-        if self.nodes.len() <= cap {
-            return (0..self.nodes.len()).collect();
-        }
-        let mut chosen: BTreeSet<usize> = BTreeSet::new();
-        let mut tiered: Vec<usize> = (0..self.nodes.len())
-            .filter(|&at| self.nodes[at].tier.is_some())
-            .collect();
-        tiered.sort_by_key(|&at| (std::cmp::Reverse(self.score(at)), at));
-        for at in tiered {
-            if chosen.len() >= cap / 4 {
-                break;
-            }
-            self.add_chain(at, &mut chosen);
-        }
-        let mut at = 0;
-        while chosen.len() < cap && at < self.nodes.len() {
-            chosen.insert(at);
-            at += 1;
-        }
-        chosen.into_iter().collect()
-    }
 }
 
 /// A process the Summary names for its findings or its argv.

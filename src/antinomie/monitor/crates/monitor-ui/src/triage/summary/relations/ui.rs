@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Relationships box of the Summary: the Compact view (the best of each
-//! kind) and the Full view (every group open, up to a cap), both in the box,
+//! kind) and the Full view (a tree you open, node by node), both in the box,
 //! and the same graph in a window of its own.
 use super::super::state::{Built, Mode, State};
 use super::super::{panels::boxed, Act};
@@ -28,28 +28,58 @@ pub(in crate::triage) fn node_act(kind: &NodeKind) -> Act {
     }
 }
 
-fn slot(mode: Mode) -> usize {
-    match mode {
-        Mode::Compact => 0,
-        Mode::Full => 1,
-    }
+/// What the buttons of the Full view ask for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum All {
+    Expand,
+    Collapse,
 }
 
-/// Compact | Full, Mermaid and, in the box, the button that opens the window.
-fn header(ui: &mut egui::Ui, mode: &mut Mode, built: &Built, pop_out: bool) -> bool {
+/// What the header asked for this frame.
+#[derive(Default)]
+struct Asked {
+    pop_out: bool,
+    all: Option<All>,
+}
+
+/// Compact | Full, in Full Expand all and Collapse all, Mermaid and, in the
+/// box, the button that opens the window.
+fn header(ui: &mut egui::Ui, mode: &mut Mode, built: &Built, pop_out: bool) -> Asked {
+    let mut asked = Asked::default();
     ui.selectable_value(mode, Mode::Compact, "Compact")
         .on_hover_text("The best 15 processes, files and endpoints, with what joins them");
     ui.selectable_value(mode, Mode::Full, "Full").on_hover_text(
-        "Every group open, up to about 800 nodes; click a group to shut it or to open one that did not fit",
+        "Every process as a tree you open: the arrow on a box opens or closes what is under it. It starts with the paths to the findings open",
     );
+    if *mode == Mode::Full {
+        if ui
+            .small_button("Expand all")
+            .on_hover_text(
+                "Open every node, up to about 800 boxes; the rest stays closed and is counted",
+            )
+            .clicked()
+        {
+            asked.all = Some(All::Expand);
+        }
+        if ui
+            .small_button("Collapse all")
+            .on_hover_text(
+                "Back to how Full starts: the root, the paths to the findings and what is under them",
+            )
+            .clicked()
+        {
+            asked.all = Some(All::Collapse);
+        }
+    }
     if let Some(rendered) = built.rendered(*mode) {
         crate::mermaid::button(ui, || chart::mermaid(&rendered.graph, &rendered.shown));
     }
-    pop_out
+    asked.pop_out = pop_out
         && ui
             .add(egui::Button::new(egui_phosphor::regular::ARROW_SQUARE_OUT).frame(false))
             .on_hover_text("Open the relationships in their own window")
-            .clicked()
+            .clicked();
+    asked
 }
 
 /// Where and how a graph is drawn.
@@ -61,8 +91,9 @@ struct Pane<'a> {
     salt: &'a str,
 }
 
-/// The note above the graph and the graph itself.
-fn graph(ui: &mut egui::Ui, built: &Built, pane: Pane<'_>, acts: &mut Vec<Act>) {
+/// The note above the graph and the graph itself. Says which node of the Full
+/// view to open or close, if one was clicked.
+fn graph(ui: &mut egui::Ui, built: &Built, pane: Pane<'_>, acts: &mut Vec<Act>) -> Option<String> {
     let Pane {
         mode,
         toggled,
@@ -88,7 +119,7 @@ fn graph(ui: &mut egui::Ui, built: &Built, pane: Pane<'_>, acts: &mut Vec<Act>) 
                 });
             },
         );
-        return;
+        return None;
     };
     let drawn = rendered.drawn;
     let total = rendered.total;
@@ -97,8 +128,14 @@ fn graph(ui: &mut egui::Ui, built: &Built, pane: Pane<'_>, acts: &mut Vec<Act>) 
         crate::values::thousands(drawn as u64),
         crate::values::thousands(total as u64),
     );
+    if mode == Mode::Full {
+        note.push_str(" The arrow on a box opens or closes what is under it.");
+    }
     if rendered.shut > 0 {
         note.push_str(" A stacked box stands for several; click it to open them.");
+    }
+    if rendered.capped {
+        note.push_str(" About 800 are drawn at most; close a node to see more elsewhere.");
     }
     note.push_str(" Drag to pan; Ctrl and the wheel zoom.");
     ui.label(RichText::new(note).small().color(theme::muted()));
@@ -109,17 +146,37 @@ fn graph(ui: &mut egui::Ui, built: &Built, pane: Pane<'_>, acts: &mut Vec<Act>) 
         &rendered.layout,
         view,
         height,
+        &rendered.folds,
     );
-    if let Some(node) = out.clicked {
+    let mut flip = None;
+    if let Some(node) = out.folded {
+        flip = Some(rendered.graph.nodes[node].kind.id());
+    } else if let Some(node) = out.clicked {
         match &rendered.graph.nodes[node].kind {
+            NodeKind::Group(info) if mode == Mode::Full => flip = Some(info.id.clone()),
             NodeKind::Group(info) => {
                 if !toggled.remove(&info.id) {
                     toggled.insert(info.id.clone());
                 }
-                ui.ctx().request_repaint();
             }
             kind => acts.push(node_act(kind)),
         }
+    }
+    if flip.is_some() {
+        ui.ctx().request_repaint();
+    }
+    flip
+}
+
+/// Apply what the controls asked for to the run's open nodes.
+fn apply(built: &mut Built, flip: Option<String>, all: Option<All>) {
+    match all {
+        Some(All::Expand) => built.expand_all(),
+        Some(All::Collapse) => built.collapse_all(),
+        None => {}
+    }
+    if let Some(id) = flip {
+        built.flip(&id);
     }
 }
 
@@ -137,17 +194,18 @@ pub(in crate::triage) fn show(ui: &mut egui::Ui, state: &mut State, acts: &mut V
         return;
     };
     let total = built.graph.nodes.len();
-    built.prepare(*mode, &toggled[slot(*mode)], ui.ctx());
+    built.prepare(*mode, toggled, ui.ctx());
     let now = std::cell::Cell::new(*mode);
-    let pop_out = std::cell::Cell::new(false);
-    let built = &*built;
+    let asked = std::cell::Cell::new(Asked::default());
+    let flip = std::cell::RefCell::new(None);
+    let shared = &*built;
     boxed(
         ui,
         "Relationships",
         acts,
         |ui, _| {
             let mut next = now.get();
-            pop_out.set(header(ui, &mut next, built, true));
+            asked.set(header(ui, &mut next, shared, true));
             now.set(next);
         },
         |ui, acts| {
@@ -162,20 +220,22 @@ pub(in crate::triage) fn show(ui: &mut egui::Ui, state: &mut State, acts: &mut V
             };
             let pane = Pane {
                 mode,
-                toggled: &mut toggled[slot(mode)],
+                toggled,
                 view,
                 height,
                 salt,
             };
-            graph(ui, built, pane, acts);
+            *flip.borrow_mut() = graph(ui, shared, pane, acts);
         },
     );
+    let asked = asked.take();
+    apply(built, flip.take(), asked.all);
     *mode = now.get();
-    *window_open |= pop_out.get();
+    *window_open |= asked.pop_out;
 }
 
 /// The same graph filling a window: its own pan and zoom, the mode and the
-/// open groups of the box.
+/// open nodes and groups of the box.
 pub(in crate::triage) fn show_window(ui: &mut egui::Ui, state: &mut State, acts: &mut Vec<Act>) {
     let State {
         built,
@@ -193,10 +253,10 @@ pub(in crate::triage) fn show_window(ui: &mut egui::Ui, state: &mut State, acts:
         ui.weak("No processes were recorded.");
         return;
     }
-    built.prepare(*mode, &toggled[slot(*mode)], ui.ctx());
-    let built = &*built;
+    built.prepare(*mode, toggled, ui.ctx());
+    let mut asked = Asked::default();
     ui.horizontal_wrapped(|ui| {
-        header(ui, mode, built, false);
+        asked = header(ui, mode, built, false);
     });
     ui.add_space(4.0);
     let (view, salt) = match *mode {
@@ -207,10 +267,11 @@ pub(in crate::triage) fn show_window(ui: &mut egui::Ui, state: &mut State, acts:
     let height = (ui.available_height() - 24.0).max(200.0);
     let pane = Pane {
         mode: *mode,
-        toggled: &mut toggled[slot(*mode)],
+        toggled,
         view,
         height,
         salt,
     };
-    graph(ui, built, pane, acts);
+    let flip = graph(ui, built, pane, acts);
+    apply(built, flip, asked.all);
 }

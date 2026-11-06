@@ -3,6 +3,7 @@
 //! with the buttons, ctrl and the wheel or a pinch, and a click on a node.
 //! Where the nodes sit is `layout`'s. It draws the graph and says what was
 //! clicked; it keeps no data of its own.
+use super::fold::Fold;
 use super::layout::Layout;
 use super::model::{EdgeKind, Graph, GroupInfo, NodeKind};
 use crate::theme;
@@ -23,7 +24,11 @@ const CURVES_FROM: f32 = 0.3;
 /// curve per member.
 const COMB_MIN: u32 = 20;
 /// Where the zoom bar sits: its size and its margin from the box's edge.
-const BAR: Vec2 = egui::vec2(196.0, 26.0);
+const BAR_HEIGHT: f32 = 26.0;
+/// The bar's padding, the same on every side.
+const BAR_PAD: f32 = 4.0;
+/// Between the bar's buttons.
+const BAR_GAP: f32 = 4.0;
 const BAR_MARGIN: f32 = 8.0;
 
 /// Pan and zoom: `offset` is where graph-space (0, 0) sits in the viewport.
@@ -33,6 +38,29 @@ pub(in crate::triage) struct View {
     pub zoom: f32,
     /// The graph has been fitted to the viewport once.
     pub fitted: bool,
+    /// A box that was opened or closed, to keep where it was on screen when
+    /// the graph is laid out again.
+    pin: Option<Pin>,
+}
+
+/// Where a node was on the screen (from the viewport's corner) when it was
+/// clicked, and which layout it was in.
+#[derive(Clone, Copy, Debug)]
+struct Pin {
+    node: u64,
+    generation: u64,
+    at: Vec2,
+    time: f64,
+}
+
+/// A pin older than this is dropped (seconds).
+const PIN_LIFE: f64 = 5.0;
+
+fn hash_of(id: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl Default for View {
@@ -41,6 +69,7 @@ impl Default for View {
             offset: Vec2::ZERO,
             zoom: 1.0,
             fitted: false,
+            pin: None,
         }
     }
 }
@@ -106,6 +135,13 @@ fn glyph(kind: &NodeKind) -> &'static str {
 #[derive(Default)]
 pub(in crate::triage) struct Outcome {
     pub clicked: Option<usize>,
+    /// The arrow of a box was clicked: open or close what is under it.
+    pub folded: Option<usize>,
+}
+
+/// The arrow's width on a box, at zoom `scale`.
+fn arrow_width(scale: f32) -> f32 {
+    22.0 * scale.clamp(0.7, 1.2)
 }
 
 /// Draw the graph in a viewport `height` tall. Ctrl and the wheel, or a
@@ -117,6 +153,7 @@ pub(in crate::triage) fn show(
     layout: &Layout,
     view: &mut View,
     height: f32,
+    folds: &[Fold],
 ) -> Outcome {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
@@ -138,8 +175,25 @@ pub(in crate::triage) fn show(
                 egui::vec2(viewport.x * 0.22, viewport.y * 0.3) - root.to_vec2() * READABLE;
         }
     }
+    if let Some(pin) = view.pin {
+        let now = ui.input(|i| i.time);
+        if now - pin.time > PIN_LIFE {
+            view.pin = None;
+        } else if layout.generation != pin.generation {
+            // The box that was clicked stays where it was.
+            let node = layout
+                .shown
+                .iter()
+                .find(|&&at| hash_of(&graph.nodes[at].kind.id()) == pin.node);
+            if let Some(at) = node.and_then(|&at| layout.get(at)) {
+                view.offset = pin.at - at.min.to_vec2() * view.zoom;
+            }
+            view.pin = None;
+        }
+    }
     if response.dragged() {
         view.offset += response.drag_delta();
+        view.pin = None;
     }
     if let Some(pointer) = response.hover_pos() {
         let (scroll, pinch, ctrl) =
@@ -165,7 +219,29 @@ pub(in crate::triage) fn show(
     let reach = rect.expand(24.0);
     let comb = |node: usize| matches!(&graph.nodes[node].kind, NodeKind::Group(info) if info.open && info.members > COMB_MIN);
     // The zoom bar's place: no node text is drawn under it.
-    let bar_size = egui::vec2(BAR.x.min(rect.width() - 2.0 * BAR_MARGIN), BAR.y);
+    // The bar hugs its buttons: Fit, +, a percentage as wide as "300%", and
+    // the minus, with the same padding left and right.
+    let button_font = egui::TextStyle::Button.resolve(ui.style());
+    let small_font = egui::TextStyle::Small.resolve(ui.style());
+    let text_width = |text: &str, font: &egui::FontId| {
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE)
+            .size()
+            .x
+    };
+    let button_pad = ui.spacing().button_padding.x * 2.0;
+    let gap = BAR_GAP;
+    let percent_width = text_width("300%", &small_font);
+    let inner = ["Fit", "+", "\u{2212}"]
+        .iter()
+        .map(|text| text_width(text, &button_font) + button_pad)
+        .sum::<f32>()
+        + percent_width
+        + 3.0 * gap;
+    let bar_size = egui::vec2(
+        (inner + 2.0 * BAR_PAD).min(rect.width() - 2.0 * BAR_MARGIN),
+        BAR_HEIGHT,
+    );
     let bar_rect = Rect::from_min_size(
         rect.right_top() + egui::vec2(-BAR_MARGIN - bar_size.x, BAR_MARGIN),
         bar_size,
@@ -256,6 +332,7 @@ pub(in crate::triage) fn show(
         .interact_pointer_pos()
         .or_else(|| response.hover_pos());
     let mut hovered = None;
+    let mut on_arrow = false;
     for &node in &layout.shown {
         let Some(world) = layout.get(node) else {
             continue;
@@ -269,6 +346,14 @@ pub(in crate::triage) fn show(
             && response.hovered();
         if over {
             hovered = Some(node);
+        }
+        let fold = folds.get(node).filter(|fold| fold.has_kids);
+        let arrow = Rect::from_min_max(
+            Pos2::new(screen.right() - arrow_width(scale), screen.top()),
+            screen.right_bottom(),
+        );
+        if over && fold.is_some() && scale >= TEXT_FROM {
+            on_arrow = pointer.is_some_and(|at| arrow.contains(at));
         }
         let line = item.tier.map_or_else(theme::line, tier_color);
         let fill = if over { theme::bg() } else { theme::panel() };
@@ -294,7 +379,38 @@ pub(in crate::triage) fn show(
         if scale < TEXT_FROM || screen.intersects(bar_rect.expand(2.0)) {
             continue;
         }
-        let inner = painter.with_clip_rect(screen.shrink(1.0).intersect(rect));
+        let mut text_box = screen.shrink(1.0);
+        if let Some(fold) = fold {
+            let small = egui::FontId::proportional((10.0 * scale.clamp(0.7, 1.3)).max(8.0));
+            let mut right = screen.right() - arrow_width(scale);
+            if fold.hidden > 0 {
+                let badge = painter.layout_no_wrap(
+                    format!("+{}", crate::values::thousands(u64::from(fold.hidden))),
+                    small,
+                    theme::muted(),
+                );
+                right -= badge.size().x + 4.0;
+                painter.galley(
+                    Pos2::new(right + 2.0, screen.center().y - badge.size().y / 2.0),
+                    badge,
+                    theme::muted(),
+                );
+            }
+            let glyph = if fold.open {
+                egui_phosphor::regular::CARET_DOWN
+            } else {
+                egui_phosphor::regular::CARET_RIGHT
+            };
+            let colour = if over && on_arrow {
+                theme::text()
+            } else {
+                theme::muted()
+            };
+            let galley = painter.layout_no_wrap(glyph.to_owned(), font.clone(), colour);
+            painter.galley(arrow.center() - galley.size() / 2.0, galley, colour);
+            text_box.max.x = right;
+        }
+        let inner = painter.with_clip_rect(text_box.intersect(rect));
         let mut x = screen.left() + 8.0 * scale.clamp(0.7, 1.2);
         if let Some(tier) = item.tier {
             inner.circle_filled(
@@ -312,11 +428,44 @@ pub(in crate::triage) fn show(
             theme::text(),
         );
     }
+    let mut folded = None;
     if response.clicked() {
-        clicked = hovered;
+        if on_arrow {
+            folded = hovered;
+        } else {
+            clicked = hovered;
+        }
+        // A box that opens or closes something stays where it is.
+        if let Some(node) = hovered.filter(|&node| {
+            folded.is_some() || matches!(graph.nodes[node].kind, NodeKind::Group(_))
+        }) {
+            if let Some(at) = layout.get(node) {
+                view.pin = Some(Pin {
+                    node: hash_of(&graph.nodes[node].kind.id()),
+                    generation: layout.generation,
+                    at: view.rect_to_screen(origin, at).min - origin,
+                    time: ui.input(|i| i.time),
+                });
+            }
+        }
     }
     if let Some(node) = hovered {
         response.clone().on_hover_ui_at_pointer(|ui| {
+            if on_arrow {
+                let fold = folds.get(node).copied().unwrap_or_default();
+                ui.label(RichText::new(&graph.nodes[node].label).strong());
+                ui.weak(if fold.open {
+                    "Click to close what is under it".to_owned()
+                } else if fold.hidden > 0 {
+                    format!(
+                        "Click to open the next level; {} nodes are under it",
+                        crate::values::thousands(u64::from(fold.hidden))
+                    )
+                } else {
+                    "Click to open the next level".to_owned()
+                });
+                return;
+            }
             ui.label(RichText::new(&graph.nodes[node].label).strong());
             if let Some(tier) = graph.nodes[node].tier {
                 ui.label(format!("Highest tier: {}", tier.tag().to_uppercase()));
@@ -353,13 +502,14 @@ pub(in crate::triage) fn show(
         Stroke::new(1.0, theme::line()),
         egui::StrokeKind::Inside,
     );
-    let bar = bar_rect.shrink2(egui::vec2(4.0, 0.0));
+    let bar = bar_rect.shrink2(egui::vec2(BAR_PAD, 0.0));
     let mut zoom_ui = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(bar)
             .layout(egui::Layout::right_to_left(egui::Align::Center)),
     );
     zoom_ui.set_clip_rect(visible);
+    zoom_ui.spacing_mut().item_spacing.x = BAR_GAP;
     if zoom_ui
         .small_button("Fit")
         .on_hover_text("Show the whole graph")
@@ -370,10 +520,13 @@ pub(in crate::triage) fn show(
     if zoom_ui.small_button("+").on_hover_text("Zoom in").clicked() {
         view.zoom_about(viewport / 2.0, 1.2);
     }
-    zoom_ui.label(
-        RichText::new(format!("{:.0}%", view.zoom * 100.0))
-            .small()
-            .color(theme::muted()),
+    zoom_ui.add_sized(
+        [percent_width, BAR_HEIGHT],
+        egui::Label::new(
+            RichText::new(format!("{:.0}%", view.zoom * 100.0))
+                .small()
+                .color(theme::muted()),
+        ),
     );
     if zoom_ui
         .small_button("\u{2212}")
@@ -382,7 +535,7 @@ pub(in crate::triage) fn show(
     {
         view.zoom_about(viewport / 2.0, 1.0 / 1.2);
     }
-    Outcome { clicked }
+    Outcome { clicked, folded }
 }
 
 /// The comb of an open group: per column of members one connector from the
@@ -508,7 +661,7 @@ mod tests {
                 egui::CentralPanel::default()
                     .frame(egui::Frame::NONE)
                     .show(root, |ui| {
-                        out = show(ui, egui::Id::new("c"), graph, layout, view, 300.0);
+                        out = show(ui, egui::Id::new("c"), graph, layout, view, 300.0, &[]);
                     });
             },
         );
@@ -634,7 +787,7 @@ mod tests {
         let ctx = egui::Context::default();
         theme::install(&ctx);
         let raw = Graph::build(&synthetic(300, 0));
-        let rendered = Rendered::full(&raw, &std::collections::BTreeSet::new());
+        let rendered = Rendered::full(&raw, &raw.expanded(super::super::group::FULL_CAP));
         let root = rendered.layout.root.expect("a root");
         assert_eq!(rendered.graph.nodes[root].kind, NodeKind::Process((1, 1)));
         let mut view = View::default();
@@ -671,7 +824,7 @@ mod tests {
             });
         }
         let raw = Graph::build(&facts);
-        let rendered = Rendered::full(&raw, &std::collections::BTreeSet::new());
+        let rendered = Rendered::full(&raw, &raw.expanded(super::super::group::FULL_CAP));
         let members = rendered
             .graph
             .nodes
@@ -685,6 +838,7 @@ mod tests {
             fitted: true,
             zoom: 0.4,
             offset: egui::vec2(10.0, 10.0),
+            ..View::default()
         };
         let out = ctx.run_ui(
             egui::RawInput {
@@ -702,6 +856,7 @@ mod tests {
                             &rendered.layout,
                             &mut view,
                             600.0,
+                            &[],
                         );
                     });
             },
@@ -715,5 +870,65 @@ mod tests {
         }
         let drawn: usize = out.shapes.iter().map(|s| curves(&s.shape)).sum();
         assert!(drawn < 25, "{drawn} curves for 40 members");
+    }
+
+    #[test]
+    fn the_zoom_bar_hugs_its_buttons_with_equal_padding_left_and_right() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let graph = Graph::build(&fixture());
+        let all: Vec<usize> = (0..graph.nodes.len()).collect();
+        let layout = Layout::of(&graph, &all);
+        let mut view = View::default();
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 500.0))),
+                ..Default::default()
+            },
+            |root| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(root, |ui| {
+                        show(
+                            ui,
+                            egui::Id::new("c"),
+                            &graph,
+                            &layout,
+                            &mut view,
+                            300.0,
+                            &[],
+                        );
+                    });
+            },
+        );
+        fn walk(shape: &egui::Shape, bars: &mut Vec<Rect>, texts: &mut Vec<(String, Rect)>) {
+            match shape {
+                egui::Shape::Rect(rect) if (rect.rect.height() - BAR_HEIGHT).abs() < 0.5 => {
+                    bars.push(rect.rect);
+                }
+                egui::Shape::Text(text) => {
+                    let rect = text.galley.rect.translate(text.pos.to_vec2());
+                    texts.push((text.galley.text().to_owned(), rect));
+                }
+                egui::Shape::Vec(all) => all.iter().for_each(|s| walk(s, bars, texts)),
+                _ => {}
+            }
+        }
+        let (mut bars, mut texts) = (Vec::new(), Vec::new());
+        for shape in &out.shapes {
+            walk(&shape.shape, &mut bars, &mut texts);
+        }
+        let bar = bars.first().copied().expect("the bar's background");
+        assert!(bar.width() < 180.0, "hugs its buttons: {bar:?}");
+        let text = |wanted: &str| {
+            texts
+                .iter()
+                .find(|(t, r)| t == wanted && bar.contains_rect(r.shrink(0.5)))
+                .map(|(_, r)| *r)
+                .unwrap_or_else(|| panic!("{wanted:?} in the bar"))
+        };
+        let (first, last) = (text("\u{2212}"), text("Fit"));
+        let (left, right) = (first.left() - bar.left(), bar.right() - last.right());
+        assert!((left - right).abs() < 2.0, "left {left}, right {right}");
     }
 }

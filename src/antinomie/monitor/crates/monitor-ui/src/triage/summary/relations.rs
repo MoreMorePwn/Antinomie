@@ -5,6 +5,7 @@
 pub(super) mod canvas;
 pub(super) mod chart;
 pub(super) mod facts;
+pub(super) mod fold;
 pub(super) mod group;
 pub(super) mod layout;
 pub(super) mod model;
