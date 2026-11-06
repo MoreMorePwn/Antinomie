@@ -575,7 +575,7 @@ pub struct ExecRequest {
     /// Take VM RAM after authoritative tree completion (not a process core).
     #[serde(default)]
     pub memory_dump_on_exit: bool,
-    /// Capture the native x86-64 root process group before its address space exits.
+    /// Capture the native root process group (and on an arm64 guest an AArch32 one) before its address space exits.
     #[serde(default)]
     pub core_dump_on_exit: bool,
     /// Stored-byte budget of the exit core, bytes. None is a run saved before

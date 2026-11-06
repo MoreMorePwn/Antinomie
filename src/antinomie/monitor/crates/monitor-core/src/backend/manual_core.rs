@@ -191,7 +191,7 @@ impl Owner {
             .map(|started| started.elapsed().as_millis() as u64)
             .into();
         value["policy"] =
-            "native x86-64; resident-only no-fault pages; Linux filtered mappings".into();
+            "native x86-64 or arm64 (AArch32 on arm64); resident-only no-fault pages; Linux filtered mappings".into();
         value["progress_limit"] =
             "in-progress metadata is a checkpoint prefix; final size/hash require the durable seal"
                 .into();

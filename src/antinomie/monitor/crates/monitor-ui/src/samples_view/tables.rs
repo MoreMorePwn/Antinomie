@@ -576,7 +576,7 @@ impl SamplesView {
                                 .on_disabled_hover_text(if runs_here {
                                     "Start the VM first"
                                 } else {
-                                    "Only x86-64 Linux programs and shell scripts run in the guests"
+                                    "Only x86-64 Linux programs and shell scripts can be sent from this page; arm64 and 32-bit ARM programs are not offered here yet"
                                 })
                                 .clicked()
                             {

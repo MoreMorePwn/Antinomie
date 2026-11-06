@@ -240,7 +240,7 @@ pub(crate) fn translate_classic_explained(bytes: &[u8], context: ClassicContext)
     output.push_str("\n\nPseudocode (A/X are unsigned 32-bit; M has 16 scratch words)\n");
     output.push_str(match context {
         ClassicContext::Socket => "Input: socket packet; packet loads use network byte order. Return 0 drops, otherwise retain up to the returned length.\n",
-        ClassicContext::Seccomp => "Input: native x86-64 seccomp_data; loads use native little endian. Returns select a seccomp action and 16-bit data.\n",
+        ClassicContext::Seccomp => "Input: seccomp_data of the program's own architecture (seccomp.arch names it); loads use native little endian. Returns select a seccomp action and 16-bit data.\n",
         ClassicContext::Unknown => "Input context unavailable; packet and seccomp field meanings are unresolved.\n",
     });
     let (words, _) = bytes.as_chunks::<8>();
@@ -723,6 +723,14 @@ pub(crate) fn command_name(event: &EventSummary) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_seccomp_note_does_not_claim_an_architecture() {
+        let bytes = [0x20, 0, 0, 0, 4, 0, 0, 0, 0x06, 0, 0, 0, 0, 0, 0xff, 0x7f];
+        let note = translate_classic_explained(&bytes, ClassicContext::Seccomp);
+        assert!(note.contains("the program's own architecture") && note.contains("seccomp.arch"));
+        assert!(!note.contains("native x86-64"));
+    }
 
     #[test]
     fn classic_context_changes_field_and_return_meaning_without_changing_captured_words() {

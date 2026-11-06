@@ -305,7 +305,7 @@ impl Transfer {
             "stored_bytes":self.status.as_ref().and_then(|status| status.stored),
             "allocated_size":self.allocated,"reason":self.reason,"copy_ms":self.copy_ms,
             "capture_timeout_ms":self.run.request.core_timeout_ms.unwrap_or(5000),"publication_generation":self.finish_generation,
-            "scope":"native Linux x86-64 root thread group; Linux filtered memory",
+            "scope":"native Linux root thread group (x86-64 or arm64 guest; AArch32 on arm64); Linux filtered memory",
             "deadline_limit":"guest page faults and thread rendezvous do not guarantee a strict wall-clock deadline",
             "progress_limit":"in-progress core.json is a checkpoint; stored_size/hash become authoritative after the final durable seal"})
     }
@@ -663,7 +663,8 @@ impl Session {
             return Err("guest process core stored more than its accepted reservation".into());
         }
         // The guest writes cores of its native 64-bit little-endian programs
-        // only (x86-64, aarch64): ET_CORE of the guest's own machine.
+        // (x86-64, aarch64) and, on an arm64 guest, AArch32 programs: ET_CORE of the
+        // guest's own machine or the ELF32 EM_ARM core.
         let machine = self.core_machine();
         if core.offset == 0
             && data.len() >= 20

@@ -579,7 +579,8 @@ The network capture is the guest's own view on every route.
   the capture cut, or whose length field cannot be right, is named instead of
   dropped. The trace filter reads decoded records (`records contains "name"`, or a
   plain word), and a trace row's menu copies the call's decoded records as JSON.
-  Only the x86-64 layouts are decoded for now.
+  Records are decoded on x86-64 and arm64 guests, and for ia32 and AArch32
+  programs where the compat inventory has a layout.
 - **Run History**: every run on the selected VM, including earlier boots, with
   its command line, user, status and exit code. The state is coloured (see
   *Run states* below). Double-click a run to open its

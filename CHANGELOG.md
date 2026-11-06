@@ -199,6 +199,8 @@ x86 programs by their own table.
   logins, auth.log and history end before the boot. Needs a base built by
   this release (stealth support `uptime`); older bases show a fresh boot.
 
+- **Texts no longer call the app x86-64 only.** The Core Dump on Exit and core-trigger hints, the Core view's import texts, the Samples page's refusal, the seccomp pseudocode note and the usage guide name the guests that now work (x86-64, arm64, and 32-bit ARM programs on arm64) instead of x86-64 alone; the README roadmap drops arm64. Memory analysis, capa and FLOSS, and the Samples page's Send and run still say they are x86-64 only, because they are.
+
 ### Guest
 
 - Patches 31-41 (shared ones compile out of x86-64, whose objects are

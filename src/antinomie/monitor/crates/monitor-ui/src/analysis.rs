@@ -146,7 +146,7 @@ fn capture_selection(
         core_enabled,
         egui::Checkbox::new(&mut request.core_dump_on_exit, "Core Dump on Exit"),
     )
-    .on_hover_text("Capture the launched root process before exit, including thread registers and selected memory. Linux x86-64; memory is filtered and bounded by the budget below, so captures may be partial. Some fatal exits, including SIGKILL, may leave register context unavailable. Thread synchronization and page faults may delay exit.")
+    .on_hover_text("Capture the launched root process before exit, including thread registers and selected memory. Native programs on x86-64 and arm64 guests, and 32-bit ARM programs on an arm64 guest (an ia32 or x32 program on an x86-64 guest gets no core); memory is filtered and bounded by the budget below, so captures may be partial. Some fatal exits, including SIGKILL, may leave register context unavailable. Thread synchronization and page faults may delay exit.")
     .on_disabled_hover_text(core_unavailable_reason(core_supported));
     let trigger_core = request.dump_trigger.as_ref().is_some_and(|plan| plan.core);
     if core_enabled && request.core_dump_on_exit {
@@ -295,7 +295,7 @@ fn trigger_selection(
             core_ok,
             egui::Checkbox::new(&mut plan.core, "Core of the process that triggered it"),
         )
-        .on_hover_text("A core of the process whose call matched, taken while it runs. Linux x86-64; bounded by the budget.")
+        .on_hover_text("A core of the process whose call matched, taken while it runs. Native programs on x86-64 and arm64 guests, and 32-bit ARM programs on an arm64 guest (not ia32 or x32 on an x86-64 guest); bounded by the budget.")
         .on_disabled_hover_text(core_unavailable_reason(core_ok));
         if !core_ok {
             plan.core = false;

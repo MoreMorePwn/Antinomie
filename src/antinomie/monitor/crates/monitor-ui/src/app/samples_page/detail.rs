@@ -643,7 +643,7 @@ impl SamplesPage {
             || kind == "elf"
                 && (record.arch.is_empty()
                     || antinomie_monitor_core::samples::arch_label(&record.arch) == "x86-64");
-        (!runs).then(|| "Only x86-64 Linux programs and shell scripts run in the guests".into())
+        (!runs).then(|| "Only x86-64 Linux programs and shell scripts can be sent from this page; arm64 and 32-bit ARM programs are not offered here yet".into())
     }
 }
 
