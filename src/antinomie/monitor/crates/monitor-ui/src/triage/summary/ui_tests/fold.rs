@@ -154,7 +154,7 @@ fn native_relations_fold_fixture() {
         "Antinomie relationships QA",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
-                .with_inner_size([1000.0, 1500.0])
+                .with_inner_size([1000.0, 1650.0])
                 .with_position([16.0, 16.0]),
             persist_window: false,
             event_loop_builder: Some(Box::new(|builder| {

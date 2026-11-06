@@ -77,11 +77,15 @@ impl Default for View {
 impl View {
     /// The whole graph in the viewport, never enlarged past 1.
     pub(in crate::triage) fn fit(&mut self, viewport: Vec2, bounds: Rect) {
-        let zoom = (viewport.x / bounds.width().max(1.0))
-            .min(viewport.y / bounds.height().max(1.0))
+        // The zoom bar sits at the top right: the graph is fitted below it.
+        let top = BAR_HEIGHT + 2.0 * BAR_MARGIN;
+        let room = egui::vec2(viewport.x, (viewport.y - top).max(1.0));
+        let zoom = (room.x / bounds.width().max(1.0))
+            .min(room.y / bounds.height().max(1.0))
             .clamp(MIN_ZOOM, 1.0);
         self.zoom = zoom;
-        self.offset = (viewport - bounds.size() * zoom) / 2.0 - bounds.min.to_vec2() * zoom;
+        self.offset = (room - bounds.size() * zoom) / 2.0 + egui::vec2(0.0, top)
+            - bounds.min.to_vec2() * zoom;
         self.fitted = true;
     }
 
@@ -872,6 +876,20 @@ mod tests {
         assert!(drawn < 25, "{drawn} curves for 40 members");
     }
 
+    fn walk(shape: &egui::Shape, bars: &mut Vec<Rect>, texts: &mut Vec<(String, Rect)>) {
+        match shape {
+            egui::Shape::Rect(rect) if (rect.rect.height() - BAR_HEIGHT).abs() < 0.5 => {
+                bars.push(rect.rect);
+            }
+            egui::Shape::Text(text) => {
+                let rect = text.galley.rect.translate(text.pos.to_vec2());
+                texts.push((text.galley.text().to_owned(), rect));
+            }
+            egui::Shape::Vec(all) => all.iter().for_each(|s| walk(s, bars, texts)),
+            _ => {}
+        }
+    }
+
     #[test]
     fn the_zoom_bar_hugs_its_buttons_with_equal_padding_left_and_right() {
         let ctx = egui::Context::default();
@@ -901,19 +919,6 @@ mod tests {
                     });
             },
         );
-        fn walk(shape: &egui::Shape, bars: &mut Vec<Rect>, texts: &mut Vec<(String, Rect)>) {
-            match shape {
-                egui::Shape::Rect(rect) if (rect.rect.height() - BAR_HEIGHT).abs() < 0.5 => {
-                    bars.push(rect.rect);
-                }
-                egui::Shape::Text(text) => {
-                    let rect = text.galley.rect.translate(text.pos.to_vec2());
-                    texts.push((text.galley.text().to_owned(), rect));
-                }
-                egui::Shape::Vec(all) => all.iter().for_each(|s| walk(s, bars, texts)),
-                _ => {}
-            }
-        }
         let (mut bars, mut texts) = (Vec::new(), Vec::new());
         for shape in &out.shapes {
             walk(&shape.shape, &mut bars, &mut texts);
@@ -930,5 +935,55 @@ mod tests {
         let (first, last) = (text("\u{2212}"), text("Fit"));
         let (left, right) = (first.left() - bar.left(), bar.right() - last.right());
         assert!((left - right).abs() < 2.0, "left {left}, right {right}");
+    }
+
+    #[test]
+    fn after_fit_no_node_is_under_the_zoom_bar() {
+        use super::super::group::Rendered;
+        use super::super::model::tests::synthetic;
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let raw = Graph::build(&synthetic(12, 0));
+        let rendered = Rendered::full(&raw, &raw.expanded(super::super::group::FULL_CAP));
+        let mut view = View::default();
+        let run = |view: &mut View| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 500.0))),
+                    ..Default::default()
+                },
+                |root| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(root, |ui| {
+                            show(
+                                ui,
+                                egui::Id::new("c"),
+                                &rendered.graph,
+                                &rendered.layout,
+                                view,
+                                300.0,
+                                &[],
+                            );
+                        });
+                },
+            )
+        };
+        // Fitted as the box opens, and again by "Fit".
+        for fit_again in [false, true] {
+            if fit_again {
+                view.fit(egui::vec2(800.0, 300.0), rendered.layout.bounds);
+            }
+            let out = run(&mut view);
+            let (mut bars, mut texts) = (Vec::new(), Vec::new());
+            for shape in &out.shapes {
+                walk(&shape.shape, &mut bars, &mut texts);
+            }
+            let bar = bars.first().copied().expect("the bar");
+            for &node in &rendered.layout.shown {
+                let at = view.rect_to_screen(Pos2::ZERO, rendered.layout.get(node).unwrap());
+                assert!(!at.intersects(bar), "{at:?} under the bar {bar:?}");
+            }
+        }
     }
 }
