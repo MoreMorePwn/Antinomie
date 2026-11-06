@@ -105,7 +105,7 @@ impl CoreView {
                         steps: &[
                             "Tick Core dump on exit when you run a program, or use Dump core \
                              on a running process.",
-                            "Or import a Linux x86-64 core made elsewhere.",
+                            "Or import a Linux x86-64, aarch64 or 32-bit ARM core made elsewhere.",
                             "Select the core in the list.",
                         ],
                     },

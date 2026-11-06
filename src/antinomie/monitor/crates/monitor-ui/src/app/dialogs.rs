@@ -145,6 +145,9 @@ impl MonitorApp {
                     curl: &self.options.curl,
                     running: self.running(),
                     vm_name: vm.as_ref().map(|vm| vm.name.as_str()),
+                    vm_arch: vm.as_ref().map(|vm| {
+                        crate::app::base_arch(&self.snapshot, vm.base_identity.as_deref())
+                    }),
                     network_warning: vm.as_ref().and_then(|vm| {
                         crate::route_ui::internet_warning(
                             vm.network(),

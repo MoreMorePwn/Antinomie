@@ -312,7 +312,7 @@ impl CoreView {
             .resizable(true)
             .default_width(480.0)
             .show(ctx, |ui| {
-                ui.add(egui::Label::new("Linux x86-64 ELF process core. The original file stays in place; reference metadata is saved with the selected VM.").wrap());
+                ui.add(egui::Label::new("Linux x86-64, aarch64 or 32-bit ARM ELF process core. The original file stays in place; reference metadata is saved with the selected VM.").wrap());
                 ui.label("Core file");
                 ui.add(egui::TextEdit::singleline(&mut self.source_path).desired_width(f32::INFINITY));
                 if ui.add_enabled(self.job.is_none(), egui::Button::new("Browse…")).clicked() {

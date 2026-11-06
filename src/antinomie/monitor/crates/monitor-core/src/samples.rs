@@ -9,6 +9,7 @@
 //! straight into the same kind of archive. A sample is only ever decrypted in
 //! memory, to check its SHA-256 and to stream it into a guest. It is never
 //! written to, unpacked on or run on the host.
+use crate::api::GuestArch;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -248,18 +249,102 @@ impl SampleInfo {
     pub fn is_script(&self) -> bool {
         matches!(self.file_type.to_ascii_lowercase().as_str(), "sh" | "bash")
     }
-    /// Runs in Antinomie's x86-64 guests: a shell script, an x86-64 ELF, or
-    /// an ELF whose architecture the source does not list (checked after
-    /// download).
-    pub fn may_run(&self) -> bool {
-        self.is_script()
-            || self.is_elf()
-                && self.file_arch.as_deref().is_none_or(|arch| {
-                    matches!(
-                        arch.to_ascii_lowercase().as_str(),
-                        "x86_64" | "amd64" | "x86-64"
-                    )
-                })
+    /// Runs in a guest of architecture `guest` (in some guest kind when None):
+    /// a shell script, or an ELF of the guest's architecture (see
+    /// [`run_verdict`]), or an ELF whose architecture the source does not list
+    /// (checked after download).
+    pub fn may_run_on(&self, guest: Option<GuestArch>) -> bool {
+        run_verdict(
+            self.is_script(),
+            self.is_elf(),
+            self.file_arch.as_deref(),
+            guest,
+        )
+        .is_ok()
+    }
+}
+
+/// The kind of VM that runs programs of the architecture `arch` (any spelling
+/// [`arch_label`] knows), as the VM's architecture is named: Run program
+/// accepts x86-64 and i386 programs on an x86-64 guest, AArch64 and 32-bit ARM
+/// ones on an arm64 guest.
+pub fn guest_kind(arch: &str) -> Option<&'static str> {
+    [GuestArch::X86_64, GuestArch::AARCH64]
+        .into_iter()
+        .find(|guest| guest.runs_elf_arch(arch) || guest.runs_elf_arch(&arch_label(arch)))
+        .map(|guest| {
+            if guest == GuestArch::X86_64 {
+                "x86-64"
+            } else {
+                "arm64"
+            }
+        })
+}
+
+fn with_article(label: &str) -> String {
+    let vowel = label
+        .chars()
+        .next()
+        .is_some_and(|c| "aeiouxAEIOUX".contains(c));
+    format!("{} {label}", if vowel { "an" } else { "a" })
+}
+
+/// Whether a sample can be sent into and run in a VM of architecture `guest`
+/// (any VM kind when None), or why not. The architecture rule is Run
+/// program's ([`GuestArch::elf_mismatch`]).
+pub fn run_verdict(
+    script: bool,
+    elf: bool,
+    arch: Option<&str>,
+    guest: Option<GuestArch>,
+) -> Result<(), String> {
+    if script {
+        return Ok(());
+    }
+    if !elf {
+        return Err("Not a Linux program or shell script: it cannot run in a VM".into());
+    }
+    let Some(arch) = arch.filter(|arch| !arch.is_empty()) else {
+        return Ok(());
+    };
+    let label = arch_label(arch);
+    let kind = guest_kind(arch);
+    match (guest, kind) {
+        (None, Some(_)) => Ok(()),
+        (None, None) => Err(format!(
+            "This is {} program; Antinomie's VMs are x86-64 and arm64",
+            with_article(&label)
+        )),
+        (Some(guest), _) if guest.runs_elf_arch(arch) || guest.runs_elf_arch(&label) => Ok(()),
+        (Some(guest), kind) => Err(format!(
+            "This is {} program; the selected VM is {}. {}",
+            with_article(&label),
+            guest.label(),
+            kind.map_or_else(
+                || "Antinomie has no VM for it.".to_owned(),
+                |kind| format!("Choose {} VM.", with_article(kind))
+            )
+        )),
+    }
+}
+
+/// What to say of a sample's fit with the selected VM (none selected: with the
+/// VM kinds that can run it).
+pub fn run_hover(script: bool, elf: bool, arch: Option<&str>, guest: Option<GuestArch>) -> String {
+    if script {
+        return "A shell script: runs in the guests through /bin/sh".into();
+    }
+    if let Err(why) = run_verdict(script, elf, arch, guest) {
+        return why;
+    }
+    match (guest, arch.filter(|arch| !arch.is_empty())) {
+        (Some(guest), _) => format!("Runs in the selected {} VM", guest.label()),
+        (None, Some(arch)) => format!(
+            "{} program: runs in {} VMs (select a VM to send it)",
+            arch_label(arch),
+            guest_kind(arch).unwrap_or("x86-64 and arm64")
+        ),
+        (None, None) => "Architecture not listed by the source; checked after download".into(),
     }
 }
 
@@ -789,7 +874,8 @@ pub fn save_source_key(data_dir: &Path, source: Source, key: &str) -> Result<(),
     crate::api_keys::set(data_dir, source_api_key(source), key)
 }
 
-/// Searches worth trying for samples that run in the x86-64 guests.
+/// Searches worth trying; pick the builds for the VM's architecture (x86-64
+/// for an x86-64 VM, AArch64 or ARM for an arm64 VM).
 pub const STARTERS: &[(&str, &str)] = &[
     (
         "XorDDoS",
@@ -799,9 +885,9 @@ pub const STARTERS: &[(&str, &str)] = &[
     ("BPFDoor", "passive backdoor using a BPF socket filter"),
     (
         "Mirai",
-        "IoT botnet; pick x86-64 builds, most are ARM or MIPS",
+        "IoT botnet; builds for x86-64, ARM and MIPS: pick one your VM runs (not MIPS)",
     ),
-    ("Gafgyt", "IoT DDoS botnet; pick x86-64 builds"),
+    ("Gafgyt", "IoT DDoS botnet; pick x86-64 or ARM builds"),
     ("Tsunami", "IRC DDoS bot (Kaiten)"),
     ("CoinMiner", "XMRig-based miners"),
 ];
@@ -857,7 +943,7 @@ mod tests {
             "first_seen":"2026-10-01 10:00:00","unknown":1}]}"#;
         let found = parse_reply(body).unwrap();
         assert_eq!(found.len(), 1);
-        assert!(found[0].tags.is_empty() && found[0].is_elf() && found[0].may_run());
+        assert!(found[0].tags.is_empty() && found[0].is_elf() && found[0].may_run_on(None));
         assert!(
             parse_reply(br#"{"query_status":"no_results"}"#)
                 .unwrap()
@@ -882,7 +968,7 @@ mod tests {
             file_arch: Some("ARM".into()),
             ..SampleInfo::default()
         };
-        assert!(!arm.may_run());
+        assert!(arm.may_run_on(None) && !arm.may_run_on(Some(GuestArch::X86_64)));
     }
 
     #[test]
@@ -995,15 +1081,46 @@ mod tests {
     }
 
     #[test]
-    fn shell_scripts_and_x86_64_programs_run_in_the_guests() {
+    fn programs_run_in_the_guest_of_their_architecture() {
         let sample = |kind: &str, arch: Option<&str>| SampleInfo {
             file_type: kind.into(),
             file_arch: arch.map(str::to_owned),
             ..SampleInfo::default()
         };
-        assert!(sample("sh", None).may_run() && sample("sh", None).is_script());
-        assert!(sample("elf", Some("X86_64")).may_run() && sample("elf", None).may_run());
-        assert!(!sample("elf", Some("ARM")).may_run() && !sample("exe", None).may_run());
+        let (x86, arm64) = (Some(GuestArch::X86_64), Some(GuestArch::AARCH64));
+        assert!(sample("sh", None).is_script());
+        for guest in [x86, arm64, None] {
+            assert!(sample("sh", None).may_run_on(guest) && sample("elf", None).may_run_on(guest));
+            assert!(!sample("exe", None).may_run_on(guest));
+        }
+        let aarch64 = sample("elf", Some("aarch64"));
+        assert!(!aarch64.may_run_on(x86) && aarch64.may_run_on(arm64) && aarch64.may_run_on(None));
+        assert!(sample("elf", Some("ARM")).may_run_on(arm64));
+        assert!(!sample("elf", Some("ARM")).may_run_on(x86));
+        assert!(sample("elf", Some("X86_64")).may_run_on(x86));
+        assert!(!sample("elf", Some("X86_64")).may_run_on(arm64));
+        assert!(sample("elf", Some("i386")).may_run_on(x86));
+        assert!(!sample("elf", Some("MIPS")).may_run_on(None));
+        assert!(!sample("elf", Some("MIPS")).may_run_on(x86));
+    }
+
+    #[test]
+    fn the_refusal_names_the_program_and_the_vm() {
+        let why = run_verdict(false, true, Some("AArch64"), Some(GuestArch::X86_64)).unwrap_err();
+        assert_eq!(
+            why,
+            "This is an AArch64 program; the selected VM is x86-64. Choose an arm64 VM."
+        );
+        let why = run_verdict(false, true, Some("x86_64"), Some(GuestArch::AARCH64)).unwrap_err();
+        assert!(
+            why.contains("an x86-64 program")
+                && why.contains("arm64")
+                && why.contains("Choose an x86-64 VM")
+        );
+        let why = run_verdict(false, true, Some("MIPS"), None).unwrap_err();
+        assert!(why.contains("a MIPS program") && why.contains("x86-64 and arm64"));
+        assert!(run_hover(false, true, Some("ARM"), None).contains("arm64 VMs"));
+        assert!(!run_hover(false, true, Some("ARM"), None).contains("not run"));
     }
 
     #[test]

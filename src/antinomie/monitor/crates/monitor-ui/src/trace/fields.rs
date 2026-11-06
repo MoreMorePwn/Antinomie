@@ -1053,7 +1053,7 @@ pub(crate) fn numeric_formats(value: u64, width: usize) -> Vec<(&'static str, St
                 .collect::<Vec<_>>()
                 .join(" "),
         ),
-        ("Byte order", "Little endian (x86-64)".into()),
+        ("Byte order", "Little endian".into()),
     ]
 }
 

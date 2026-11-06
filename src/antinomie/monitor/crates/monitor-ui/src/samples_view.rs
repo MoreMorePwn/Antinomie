@@ -60,6 +60,8 @@ pub(crate) struct SamplesContext<'a> {
     /// The selected VM is running: samples can be sent into it.
     pub running: bool,
     pub vm_name: Option<&'a str>,
+    /// The selected VM's base architecture (None: no VM selected).
+    pub vm_arch: Option<antinomie_monitor_core::GuestArch>,
     /// What to warn about when the selected VM's runs can reach the network
     /// (see [`crate::route_ui::internet_warning`]).
     pub network_warning: Option<String>,
@@ -894,6 +896,7 @@ mod tests {
                 curl: Path::new("curl"),
                 running: false,
                 vm_name: None,
+                vm_arch: None,
                 network_warning: warning,
                 font_size: 14.0,
             };
@@ -924,6 +927,7 @@ mod tests {
             curl: Path::new("curl"),
             running: false,
             vm_name: None,
+            vm_arch: None,
             network_warning: None,
             font_size: 14.0,
         };
@@ -960,6 +964,7 @@ mod tests {
             curl: Path::new("curl"),
             running: false,
             vm_name: None,
+            vm_arch: None,
             network_warning: None,
             font_size: 14.0,
         };
@@ -995,6 +1000,7 @@ mod tests {
             curl: Path::new("/usr/bin/curl"),
             running: false,
             vm_name: None,
+            vm_arch: None,
             network_warning: None,
             font_size: 14.0,
         };
@@ -1081,6 +1087,7 @@ mod tests {
                     curl: Path::new("curl"),
                     running: true,
                     vm_name: Some("Debian QA"),
+                    vm_arch: None,
                     network_warning: None,
                     font_size: 16.0,
                 };

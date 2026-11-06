@@ -93,7 +93,7 @@ impl CoreView {
                 .min_size(egui::vec2(ui.available_width(), 0.0)),
             )
             .on_hover_text(
-                "Reference a Linux x86-64 process core made elsewhere. The file stays where it is.",
+                "Reference a Linux x86-64, aarch64 or 32-bit ARM process core made elsewhere. The file stays where it is.",
             )
             .on_disabled_hover_text(
                 "Select a VM with a recording folder; wait for any current operation to finish.",

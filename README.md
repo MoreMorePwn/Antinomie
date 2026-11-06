@@ -467,7 +467,7 @@ Planned and undated:
 - **Headless mode**
 - **Docker-based web interface and API**
 - **Auto mode**: a sample in, a report out
-- **arm64** and **MIPS** guests
+- **MIPS** guests
 - **TLS decryption**
 - **In-memory unpacking detection**: catch and save code a sample decrypts or
   unpacks in memory
