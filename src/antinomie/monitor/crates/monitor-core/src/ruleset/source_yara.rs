@@ -119,24 +119,32 @@ pub(super) fn own_license(body: &str) -> Option<String> {
 
 /// The first of `keys` that the rule's meta sets to an actual license.
 pub(super) fn license_by_keys(body: &str, keys: &[&str]) -> Option<String> {
-    for line in body.lines() {
-        let line = line.trim_start();
-        let key_len = line
-            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .unwrap_or(line.len());
-        let (key, rest) = line.split_at(key_len);
-        if !keys.contains(&key) {
-            continue;
+    // A key is matched in any case; a line with the exact spelling wins.
+    for exact in [true, false] {
+        for line in body.lines() {
+            let line = line.trim_start();
+            let key_len = line
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(line.len());
+            let (key, rest) = line.split_at(key_len);
+            let listed = if exact {
+                keys.contains(&key)
+            } else {
+                keys.iter().any(|name| name.eq_ignore_ascii_case(key))
+            };
+            if !listed {
+                continue;
+            }
+            let Some(value) = rest.trim_start().strip_prefix('=') else {
+                continue;
+            };
+            let value = value.trim().trim_matches('"').trim();
+            let lower = value.to_ascii_lowercase();
+            if value.is_empty() || matches!(lower.as_str(), "n/a" | "none" | "unknown" | "-") {
+                return None;
+            }
+            return Some(value.to_owned());
         }
-        let Some(value) = rest.trim_start().strip_prefix('=') else {
-            continue;
-        };
-        let value = value.trim().trim_matches('"').trim();
-        let lower = value.to_ascii_lowercase();
-        if value.is_empty() || matches!(lower.as_str(), "n/a" | "none" | "unknown" | "-") {
-            return None;
-        }
-        return Some(value.to_owned());
     }
     None
 }

@@ -8,7 +8,7 @@ use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::widgets::{self, fit_table, TabItem, Tone};
 use antinomie_monitor_core::ruleset::{self, IndexedRule};
 use eframe::egui::{self, RichText};
-use std::{path::Path, sync::mpsc, thread};
+use std::path::Path;
 
 /// The two tabs inside an engine.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -769,57 +769,5 @@ impl Model {
         } else {
             "enabled"
         }
-    }
-
-    /// Opens a rule's details window (or brings the one it already has to
-    /// the front: one window per rule). `pack` or `group` is the set it is
-    /// in; the other is empty.
-    pub(super) fn open_rule(
-        &mut self,
-        data_dir: &Path,
-        engine: &str,
-        pack: &str,
-        group: &str,
-        rule: IndexedRule,
-    ) {
-        let set = if group.is_empty() {
-            format!("pack:{pack}")
-        } else {
-            format!("group:{group}")
-        };
-        let key = (set, rule.id.clone());
-        if let Some(open) = self.rule_windows.iter().find(|open| open.key == key) {
-            open.raise.set(true);
-            return;
-        }
-        let (tx, rx) = mpsc::channel();
-        let dir = data_dir.to_path_buf();
-        let (engine, pack, group) = (engine.to_owned(), pack.to_owned(), group.to_owned());
-        let source = rule.clone();
-        let started = {
-            let group = group.clone();
-            thread::Builder::new()
-                .name("rule-text".into())
-                .spawn(move || {
-                    let text = if group.is_empty() {
-                        ruleset::pack_rule_source(&dir, &engine, &pack, &source)
-                    } else {
-                        ruleset::group_rule_source(&dir, &group, &source)
-                    };
-                    let _ = tx.send(text);
-                })
-        };
-        let (rx, text) = match started {
-            Ok(_) => (Some(rx), None),
-            Err(error) => (None, Some(Err(error.to_string()))),
-        };
-        self.rule_windows.push(super::rule_window::RuleWindow {
-            key,
-            rule,
-            group,
-            text,
-            rx,
-            raise: std::cell::Cell::new(false),
-        });
     }
 }

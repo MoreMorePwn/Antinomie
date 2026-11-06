@@ -75,7 +75,13 @@ fn record(
                         _ => None,
                     })
                     .collect();
-                let meta = |name: &str| metadata.get(name).cloned().unwrap_or_default();
+                let find = |name: &str| {
+                    crate::ruleset::meta_get(
+                        metadata.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                        name,
+                    )
+                };
+                let meta = |name: &str| find(name).unwrap_or_default().to_owned();
                 let tags = rule
                     .tags()
                     .map(|tag| tag.identifier())
@@ -102,17 +108,13 @@ fn record(
                 report.findings.push(Finding {
                     rule_id,
                     title: rule.identifier().into(),
-                    severity: metadata
-                        .get("severity")
-                        .cloned()
-                        .unwrap_or_else(|| "indicator".into()),
+                    severity: find("severity").unwrap_or("indicator").to_owned(),
                     source: namespace.into(),
-                    license: metadata
-                        .get("license")
-                        .or_else(|| metadata.get("malpedia_license"))
-                        .or_else(|| metadata.get("yarahub_license"))
-                        .or_else(|| metadata.get(crate::ruleset::REPOSITORY_LICENSE_META))
-                        .cloned()
+                    license: find("license")
+                        .or_else(|| find("malpedia_license"))
+                        .or_else(|| find("yarahub_license"))
+                        .or_else(|| find(crate::ruleset::REPOSITORY_LICENSE_META))
+                        .map(str::to_owned)
                         .unwrap_or_else(|| {
                             if namespace == "antinomie" {
                                 "MIT".into()

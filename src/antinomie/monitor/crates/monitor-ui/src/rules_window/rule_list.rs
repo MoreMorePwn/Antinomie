@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The floating list of one rule set's rules (an installed pack or a custom
-//! group): the filter box, the count, the sortable table with its on/off
-//! boxes, and "Open details". One window per set, drawn by the app every
-//! frame like the rule detail windows, so it stays up across pages.
+//! The floating window of one rule set's rules (an installed pack or a custom
+//! group). The list is at its left: the filter box, the count, the sortable
+//! table with its on/off boxes. The selected rule's details are at its right
+//! (`rule_details`), with a divider between them. One window per set, drawn by
+//! the app every frame, so it stays up across pages.
 use super::{
     page::{severity_rank, severity_tone, ROW_PAD},
-    Done, Model,
+    rule_details, Done, Model,
 };
 use crate::{
     theme,
@@ -18,7 +19,7 @@ use antinomie_monitor_core::ruleset::{self, IndexedRule};
 use eframe::egui::{self, RichText};
 use std::{
     cell::Cell,
-    path::Path,
+    path::{Path, PathBuf},
     sync::mpsc::{self, Receiver},
     thread,
 };
@@ -26,6 +27,15 @@ use std::{
 /// What the sorted order was made for: the sort, the list's edits, the model's states.
 type OrderKey = (Option<(usize, bool)>, u64, u64);
 type Rows = Result<Vec<IndexedRule>, String>;
+
+/// The selected rule's source text, read in the background.
+struct Details {
+    /// The rule it was read for.
+    id: String,
+    /// `None` while it is read.
+    text: Option<Result<String, String>>,
+    rx: Option<Receiver<Result<String, String>>>,
+}
 
 pub(super) struct RuleList {
     /// The set: `pack:<id>` or `group:<id>`.
@@ -47,6 +57,8 @@ pub(super) struct RuleList {
     /// Changes whenever the filter or the rows do.
     edits: u64,
     selected: Option<usize>,
+    details: Option<Details>,
+    data_dir: PathBuf,
     pub raise: Cell<bool>,
 }
 
@@ -55,6 +67,8 @@ pub(super) struct RuleList {
 struct Asked {
     picked: Option<usize>,
     toggle: Option<(String, bool)>,
+    /// A rule to take out of the group.
+    remove: Option<String>,
 }
 
 impl RuleList {
@@ -84,6 +98,8 @@ impl RuleList {
             sorted_for: None,
             edits: 0,
             selected: None,
+            details: None,
+            data_dir: data_dir.to_path_buf(),
             raise: Cell::new(false),
         };
         list.read(data_dir, generation);
@@ -114,6 +130,21 @@ impl RuleList {
     }
 
     pub fn poll(&mut self) {
+        if let Some(details) = &mut self.details {
+            if let Some(rx) = &details.rx {
+                match rx.try_recv() {
+                    Ok(done) => {
+                        details.rx = None;
+                        details.text = Some(done);
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {}
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        details.rx = None;
+                        details.text = Some(Err("The rule could not be read".into()));
+                    }
+                }
+            }
+        }
         let Some(rx) = &self.rx else { return };
         let done = match rx.try_recv() {
             Ok(done) => done,
@@ -126,6 +157,7 @@ impl RuleList {
                 self.rows = rows;
                 self.error = None;
                 self.selected = None;
+                self.details = None;
                 self.apply_filter();
             }
             Err(error) => self.error = Some(error),
@@ -133,11 +165,48 @@ impl RuleList {
     }
 
     pub fn is_reading(&self) -> bool {
-        self.rx.is_some()
+        self.rx.is_some() || self.details.as_ref().is_some_and(|d| d.rx.is_some())
     }
 
     pub fn has_selection(&self) -> bool {
         self.selected.is_some_and(|index| index < self.rows.len())
+    }
+
+    /// Shows a rule in the details pane and reads its source text.
+    pub(super) fn select(&mut self, index: usize) {
+        let Some(rule) = self.rows.get(index).cloned() else {
+            return;
+        };
+        self.selected = Some(index);
+        if self.details.as_ref().is_some_and(|open| open.id == rule.id) {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let dir = self.data_dir.clone();
+        let (engine, pack, group) = (self.engine.clone(), self.pack.clone(), self.group.clone());
+        let id = rule.id.clone();
+        let started = thread::Builder::new()
+            .name("rule-text".into())
+            .spawn(move || {
+                let text = if group.is_empty() {
+                    ruleset::pack_rule_source(&dir, &engine, &pack, &rule)
+                } else {
+                    ruleset::group_rule_source(&dir, &group, &rule)
+                };
+                let _ = tx.send(text);
+            });
+        self.details = Some(match started {
+            Ok(_) => Details {
+                id,
+                text: None,
+                rx: Some(rx),
+            },
+            Err(error) => Details {
+                id,
+                text: Some(Err(error.to_string())),
+                rx: None,
+            },
+        });
     }
 
     pub(super) fn id(&self) -> egui::Id {
@@ -202,7 +271,7 @@ impl RuleList {
         self.sorted_for = Some(key);
     }
 
-    fn body(&mut self, ui: &mut egui::Ui, model: &Model) -> Asked {
+    fn list_pane(&mut self, ui: &mut egui::Ui, model: &Model) -> Asked {
         let mut asked = Asked::default();
         ui.horizontal_wrapped(|ui| {
             let response = ui.add(
@@ -221,16 +290,6 @@ impl RuleList {
                 ))
                 .color(theme::muted()),
             );
-            let selected = self.selected.filter(|index| *index < self.rows.len());
-            if ui
-                .add_enabled(selected.is_some(), egui::Button::new("Open details"))
-                .on_hover_text(
-                    "Opens the selected rule's metadata and source text in a window of its own. A click on a rule does the same.",
-                )
-                .clicked()
-            {
-                asked.picked = selected;
-            }
         });
         if let Some(error) = &self.error {
             crate::activity::error(ui, format!("The rules could not be read: {error}"));
@@ -240,7 +299,13 @@ impl RuleList {
             return asked;
         }
         self.order(ui.ctx(), model);
-        let height = ui.available_height().max(120.0);
+        // The table's header sits outside the body's scroll area: leave room
+        // for it, or the window grows by one header each frame.
+        let font = ui.text_style_height(&egui::TextStyle::Body);
+        let height = (ui.available_height()
+            - fit_table::header_height(font)
+            - ui.spacing().item_spacing.y * 3.0)
+            .max(80.0);
         self.table_of(ui, model, height, &mut asked);
         asked
     }
@@ -357,9 +422,10 @@ impl Model {
         ));
     }
 
-    /// Draws every open rule list; a closed one is dropped, and so is one
-    /// whose pack or group is gone.
-    pub(super) fn show_rule_lists(&mut self, ctx: &egui::Context, data_dir: &Path) {
+    /// Draws every open rules window; a closed one is dropped, and so is one
+    /// whose pack or group is gone. The app calls this every frame, so the
+    /// windows stay up when the page is left or closed.
+    pub(crate) fn show_rule_lists(&mut self, ctx: &egui::Context, data_dir: &Path) {
         let lists = std::mem::take(&mut self.rule_lists);
         let mut kept = Vec::new();
         let mut asked_by = Vec::new();
@@ -384,47 +450,112 @@ impl Model {
             crate::widgets::window(format!("Rules · {}", list.title))
                 .id(list.id())
                 .open(&mut open)
-                .default_pos(egui::pos2(area.left() + 16.0, area.top() + 112.0))
-                .default_size([
-                    (area.width() * 0.38).clamp(480.0, 640.0),
-                    (area.height() * 0.8).max(360.0),
+                .default_pos(egui::pos2(area.left() + 16.0, area.top() + 64.0))
+                .default_size(default_size(area))
+                .min_size([
+                    MIN_SIZE.x.min(area.width() - 24.0),
+                    MIN_SIZE.y.min(area.height() - 24.0),
                 ])
                 .resizable(true)
                 .show(ctx, |ui| {
-                    asked = list.body(ui, self);
+                    asked = list.panes(ui, self);
                 });
             if list.raise.replace(false) {
                 ctx.move_to_top(egui::LayerId::new(egui::Order::Middle, list.id()));
             }
             if let Some(index) = asked.picked {
-                list.selected = Some(index);
+                list.select(index);
             }
-            asked_by.push((list.key.clone(), asked));
+            asked_by.push((list.key.clone(), list.group.clone(), asked));
             if open {
                 kept.push(list);
             }
         }
         // Lists opened while these were drawn are kept too.
         kept.append(&mut self.rule_lists);
-        for (key, asked) in asked_by {
-            if let Some(index) = asked.picked {
-                if let Some(list) = kept.iter().find(|list| list.key == key) {
-                    if let Some(rule) = list.rows.get(index).cloned() {
-                        let (engine, pack, group) =
-                            (list.engine.clone(), list.pack.clone(), list.group.clone());
-                        self.open_rule(data_dir, &engine, &pack, &group, rule);
-                    }
-                }
-            }
+        for (key, group, asked) in asked_by {
             if let Some((id, on)) = asked.toggle {
                 let dir = data_dir.to_path_buf();
+                let key = key.clone();
                 self.spawn(move |_| {
                     ruleset::set_rule_enabled(&dir, &key, &id, on)?;
                     let registry = ruleset::load_registry(&dir)?;
                     Ok(Done::Registry(registry, format!("Updated rule {id}.")))
                 });
             }
+            if let Some(removed) = asked.remove {
+                self.remove_from_group(data_dir, group, removed);
+            }
         }
         self.rule_lists = kept;
+    }
+
+    fn remove_from_group(&mut self, data_dir: &Path, id: String, removed: String) {
+        let dir = data_dir.to_path_buf();
+        self.spawn(move |_| {
+            let revision = ruleset::revise_group(&dir, &id, None, std::slice::from_ref(&removed))?;
+            let registry = ruleset::load_registry(&dir)?;
+            Ok(Done::Registry(
+                registry,
+                format!("Removed a rule from {id} as revision {revision}."),
+            ))
+        });
+        self.rows_key.clear();
+    }
+}
+
+/// The smallest a rules window is resized to.
+pub(super) const MIN_SIZE: egui::Vec2 = egui::vec2(560.0, 320.0);
+
+/// What a rules window opens at: most of the content area, never more.
+pub(super) fn default_size(area: egui::Rect) -> egui::Vec2 {
+    egui::vec2(
+        (area.width() * 0.70).max(MIN_SIZE.x),
+        (area.height() * 0.75).max(MIN_SIZE.y),
+    )
+    .min(egui::vec2(area.width() - 24.0, area.height() - 24.0))
+}
+
+impl RuleList {
+    /// The window's contents: the list at the left, a draggable divider, and
+    /// the selected rule's details at the right. Each pane scrolls inside the
+    /// window, so neither makes it grow.
+    fn panes(&mut self, ui: &mut egui::Ui, model: &Model) -> Asked {
+        let width = ui.available_width();
+        let mut asked = Asked::default();
+        egui::Panel::left(self.id().with("list-pane"))
+            .resizable(true)
+            .frame(egui::Frame::new().inner_margin(egui::Margin {
+                right: 8,
+                ..Default::default()
+            }))
+            .default_size(width * 0.5)
+            .size_range(egui::Rangef::new(240.0, (width - 260.0).max(241.0)))
+            .show(ui, |ui| {
+                asked = self.list_pane(ui, model);
+            });
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().inner_margin(egui::Margin {
+                left: 8,
+                ..Default::default()
+            }))
+            .show(ui, |ui| {
+                let rule = self.selected.and_then(|index| self.rows.get(index));
+                let Some(rule) = rule else {
+                    ui.label(
+                        RichText::new("Select a rule on the left to see its details.")
+                            .color(theme::muted()),
+                    );
+                    return;
+                };
+                let state = model.state_in(&self.key, rule);
+                let text = self.details.as_ref().and_then(|d| d.text.as_ref());
+                let pane =
+                    rule_details::show(ui, rule, &self.engine, !self.group.is_empty(), state, text);
+                if pane.remove {
+                    asked.remove = Some(rule.id.clone());
+                }
+            });
+        asked
     }
 }

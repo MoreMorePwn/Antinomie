@@ -23,9 +23,11 @@ mod ioc;
 mod page;
 #[cfg(test)]
 mod page_tests;
+#[cfg(test)]
+mod qa_fixture;
 mod regex_tab;
+mod rule_details;
 mod rule_list;
-mod rule_window;
 #[cfg(test)]
 pub(crate) mod source_tests;
 mod sources;
@@ -88,9 +90,8 @@ pub(crate) struct Model {
     rows_key: String,
     /// Changes whenever a rule's state does: the open rule lists sort again.
     list_gen: u64,
-    /// The floating details windows, one per rule.
-    rule_windows: Vec<rule_window::RuleWindow>,
-    /// The floating rule lists, one per pack or group.
+    /// The floating rules windows, one per pack or group: the list and the
+    /// selected rule's details.
     rule_lists: Vec<rule_list::RuleList>,
     job: Option<Job>,
     group_name: String,
@@ -162,10 +163,7 @@ impl Model {
             self.changed |= !self.loaded;
             crate::activity::report(ctx, crate::activity::Level::Error, error);
         }
-        if self.job.is_some()
-            || self.rule_windows.iter().any(|open| open.rx.is_some())
-            || self.rule_lists.iter().any(|list| list.is_reading())
-        {
+        if self.job.is_some() || self.rule_lists.iter().any(|list| list.is_reading()) {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
@@ -196,9 +194,6 @@ impl Model {
     }
 
     fn poll(&mut self) {
-        for open in &mut self.rule_windows {
-            open.poll();
-        }
         for list in &mut self.rule_lists {
             list.poll();
         }

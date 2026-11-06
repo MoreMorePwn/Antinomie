@@ -38,6 +38,7 @@ mod source_yara;
 mod yara;
 
 pub(crate) use exclusions::selection_exclusion;
+pub use yara::meta_get;
 
 pub use self::{
     abusech::*, catalog::*, groups::*, index::*, packs::*, registry::*, requirements::*,
@@ -67,7 +68,7 @@ const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_MEMBERS: usize = 8_000;
 
 /// Current derived-index parser. Indexes from the defective YARA lexer are 0.
-pub const INDEX_PARSER: u32 = 2;
+pub const INDEX_PARSER: u32 = 3;
 
 #[cfg(test)]
 thread_local! {
@@ -184,6 +185,9 @@ pub struct IndexedRule {
     pub tags: Vec<String>,
     pub severity: String,
     pub license: String,
+    /// The rule's author, when it names one. Empty on indexes written before it was kept.
+    #[serde(default)]
+    pub author: String,
     pub source_url: String,
     pub condition: String,
     pub references: Vec<String>,

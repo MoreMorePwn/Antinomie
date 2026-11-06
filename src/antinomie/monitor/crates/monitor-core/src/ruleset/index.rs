@@ -66,6 +66,7 @@ fn build_index(root: &Path, engine: &str) -> Result<IndexFile, String> {
                 tags: Vec::new(),
                 severity: String::new(),
                 license: String::new(),
+                author: String::new(),
                 source_url: String::new(),
                 condition: String::new(),
                 references: Vec::new(),
