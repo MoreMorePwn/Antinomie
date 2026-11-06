@@ -129,8 +129,10 @@ fn data(preview: &str, volatile: &Volatile) -> String {
 
 /// Decoded members whose value changes on every run: inode numbers and file
 /// times, clock readings, the machine's uptime, load and free memory, a
-/// process's CPU time, the kernel's release and the host name. They are kept
-/// by name and lose their value (`st_mtime=<value>`).
+/// process's CPU time, the kernel's release and the host name, the CPU a
+/// thread ran on (rseq) and the registers a signal interrupted (a signal
+/// frame's `uc_mcontext`). They are kept by name and lose their value
+/// (`st_mtime=<value>`).
 fn is_volatile_member(name: &str) -> bool {
     const NAMES: &[&str] = &[
         "st_ino",
@@ -162,6 +164,9 @@ fn is_volatile_member(name: &str) -> bool {
         "f_fsid",
         "maxerror",
         "esterror",
+        "cpu_id_start",
+        "cpu_id",
+        "uc_mcontext",
     ];
     NAMES.contains(&name)
         || name.starts_with("ru_")
@@ -229,7 +234,8 @@ fn hide_volatile_members(text: &str) -> String {
 }
 
 /// Outputs of a call that read a clock or a timer: their value differs on
-/// every run, whatever its layout (`clock_gettime`'s `tp`).
+/// every run, whatever its layout (`clock_gettime`'s `tp`, the clock state
+/// adjtimex reads back, the time a timer or a wait had left).
 fn reads_clock(call: &str, argument: &str) -> bool {
     matches!(
         (call, argument),
@@ -239,7 +245,41 @@ fn reads_clock(call: &str, argument: &str) -> bool {
             | ("timer_gettime", "setting")
             | ("timerfd_gettime", "otmr")
             | ("time", "tloc")
+            | ("adjtimex", "txc_p")
+            | ("clock_adjtime", "tx")
+            | ("setitimer", "ovalue")
+            | ("ppoll", "tsp")
     )
+}
+
+/// Inputs that name a moment the program computed from the clock it read
+/// (an absolute deadline, the time it tries to set): the moment differs on
+/// every run, a relative timeout (`1 s`) does not.
+fn takes_clock_instant(call: &str, argument: &str) -> bool {
+    matches!(
+        (call, argument),
+        ("clock_nanosleep", "rqtp")
+            | ("futex", "utime")
+            | ("futex_wait", "timespec")
+            | ("futex_waitv", "timeout")
+            | ("clock_settime", "tp")
+            | ("settimeofday", "tv")
+    )
+}
+
+/// Whether the view shows `text` as a moment rather than a span: since the
+/// clock's start (`at 8.5 s`), a date (`2026-11-06 08:44:30.1 UTC`) or the
+/// raw seconds of one it could not show as a date (`{tv_sec=…, tv_usec=…}`).
+fn is_instant(text: &str) -> bool {
+    text.starts_with("at ") || text.ends_with(" UTC") || text.starts_with("{tv_sec=")
+}
+
+/// The argument a field key (`arg3.timeout`) belongs to.
+fn field_argument<'a>(view: &'a crate::render::CallView, key: &str) -> Option<&'a str> {
+    let index: usize = key.strip_prefix("arg")?.split('.').next()?.parse().ok()?;
+    view.arguments
+        .get(index)
+        .map(|argument| argument.name.as_str())
 }
 
 /// Calls whose result is a time or a tick count.
@@ -336,6 +376,11 @@ fn line(
             let shown = match &argument.data {
                 Some(_) if volatile => "<data>".to_owned(),
                 Some(_) if reads_clock(&view.name, &argument.name) => "<time>".to_owned(),
+                Some(preview)
+                    if takes_clock_instant(&view.name, &argument.name) && is_instant(preview) =>
+                {
+                    "<time>".to_owned()
+                }
                 Some(preview) if argument.decoded => decoded(preview, ids, false),
                 Some(preview) => data(preview, ids),
                 // In a case the fixture marks volatile, large numbers are
@@ -385,13 +430,19 @@ fn line(
             }
             if field["phase"].as_u64() == Some(1) && !volatile {
                 let typed = field["decoded"].as_bool() == Some(true);
+                let instant = field_argument(view, key)
+                    .is_some_and(|argument| takes_clock_instant(&view.name, argument));
                 format!(
                     "{key}:{status}:{}",
-                    field["preview"].as_str().map_or("?".into(), |p| if typed {
-                        decoded(p, ids, key.ends_with("pid"))
-                    } else {
-                        data(p, ids)
-                    })
+                    field["preview"]
+                        .as_str()
+                        .map_or("?".into(), |p| if instant && is_instant(p) {
+                            "<time>".to_owned()
+                        } else if typed {
+                            decoded(p, ids, key.ends_with("pid"))
+                        } else {
+                            data(p, ids)
+                        })
                 )
             } else {
                 format!("{key}:{status}")
@@ -812,5 +863,51 @@ mod tests {
         assert!(!super::reads_clock("clock_gettime", "which_clock"));
         assert!(!super::reads_clock("nanosleep", "rqtp"));
         assert!(super::returns_clock("times") && !super::returns_clock("getpid"));
+        // What adjtimex reads back, what a timer or a wait had left.
+        assert!(super::reads_clock("adjtimex", "txc_p"));
+        assert!(super::reads_clock("setitimer", "ovalue"));
+        assert!(!super::reads_clock("setitimer", "value"));
+        assert!(super::reads_clock("ppoll", "tsp"));
+    }
+
+    #[test]
+    fn moments_computed_from_the_clock_are_hidden_and_spans_kept() {
+        let ids = super::Volatile {
+            ids: Default::default(),
+            work_dir: None,
+            root_device: None,
+            work_device: None,
+        };
+        // The CPU a thread ran on, the registers a signal interrupted.
+        assert_eq!(
+            super::decoded(
+                "{cpu_id_start=3, cpu_id=3, rseq_cs=0, flags=0, node_id=0, mm_cid=0}",
+                &ids,
+                false
+            ),
+            "{cpu_id_start=<value>, cpu_id=<value>, rseq_cs=0, flags=0, node_id=0, mm_cid=0}"
+        );
+        assert_eq!(
+            super::decoded(
+                "{pretcode=0x401000, uc={uc_flags=0x6, uc_mcontext={r8=0x0, rdi=0x93, r...",
+                &ids,
+                false
+            ),
+            "{pretcode=<addr>, uc={uc_flags=0x6, uc_mcontext=<value>"
+        );
+        // Deadlines and set times by call and argument, when shown as a moment.
+        assert!(super::takes_clock_instant("futex_waitv", "timeout"));
+        assert!(super::takes_clock_instant("clock_settime", "tp"));
+        assert!(!super::takes_clock_instant("nanosleep", "rqtp"));
+        assert!(!super::takes_clock_instant("utimensat", "utimes"));
+        for moment in [
+            "at 8.595150967 s",
+            "2026-11-06 08:44:30.136543 UTC",
+            "{tv_sec=1793954670, tv_usec=2000000}",
+        ] {
+            assert!(super::is_instant(moment), "{moment}");
+        }
+        assert!(!super::is_instant("1 s"));
+        assert!(!super::is_instant("{it_interval=0 s, it_value=50 s}"));
     }
 }
