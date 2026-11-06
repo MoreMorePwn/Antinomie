@@ -206,6 +206,7 @@ fn draw_at(
                 };
                 show(view, ui, &input);
             });
+            view.show_relations_window(&root.ctx().clone());
         },
     )
 }
@@ -610,15 +611,15 @@ fn the_relationships_box_is_compact_or_full_and_has_no_timeline() {
     let count = |out: &egui::FullOutput| -> (usize, usize) {
         let (line, _) = texts(out)
             .into_iter()
-            .find(|(text, _)| text.contains(" nodes. Processes to the right"))
+            .find(|(text, _)| text.contains(" nodes. Each process"))
             .expect("the node count");
         let words: Vec<&str> = line.split_whitespace().collect();
         (words[0].parse().unwrap(), words[2].parse().unwrap())
     };
     let (shown, total) = count(&out);
     assert_eq!(total, 44, "43 processes and the injected-into pid 418");
-    // The root, fifteen of the children and what joins them.
-    assert!(shown < total && shown >= 16, "{shown} of {total}");
+    // The forty `ls` are one group, so the box shows few boxes.
+    assert!(shown < total && shown >= 4, "{shown} of {total}");
     // The base verbs on the edges.
     assert!(has(&out, "exec") && !has(&out, "execed") && !has(&out, "forked"));
     click(&ctx, &mut view, WIDE, find(&out, "Full").center());
@@ -630,10 +631,16 @@ fn the_relationships_box_is_compact_or_full_and_has_no_timeline() {
 }
 
 #[test]
-fn a_level_is_one_column_however_many_nodes_it_has() {
+fn a_wide_level_is_laid_out_in_lanes_when_its_group_is_open() {
     let (_files, mut view) = crowded(40, 0);
     let ctx = context(16.0);
     let out = settle(&ctx, &mut view, WIDE, None);
+    // Shut, the forty are one box.
+    assert!(
+        texts(&out).iter().any(|(t, _)| t.ends_with("ls \u{d7}40")),
+        "{:?}",
+        texts(&out)
+    );
     click(&ctx, &mut view, WIDE, find(&out, "Full").center());
     let out = settle(&ctx, &mut view, WIDE, None);
     let ls: Vec<egui::Rect> = texts(&out)
@@ -642,10 +649,145 @@ fn a_level_is_one_column_however_many_nodes_it_has() {
         .map(|(_, rect)| rect)
         .collect();
     assert!(ls.len() >= 6, "{} visible", ls.len());
+    let mut columns: Vec<i32> = ls.iter().map(|r| r.min.x as i32).collect();
+    columns.sort_unstable();
+    columns.dedup();
+    assert!(columns.len() > 1, "more than one lane: {ls:?}");
+}
+
+/// The clip rectangle and the place of the text `wanted`, as the page drew it.
+fn shape_of(out: &egui::FullOutput, wanted: &str) -> (egui::Rect, egui::Rect) {
+    try_shape(out, wanted).unwrap_or_else(|| panic!("{wanted:?} not drawn"))
+}
+
+fn try_shape(out: &egui::FullOutput, wanted: &str) -> Option<(egui::Rect, egui::Rect)> {
+    fn walk(shape: &egui::Shape, wanted: &str) -> Option<egui::Rect> {
+        match shape {
+            egui::Shape::Text(text) if text.galley.text().trim() == wanted => {
+                Some(text.visual_bounding_rect())
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| walk(shape, wanted)),
+            _ => None,
+        }
+    }
+    out.shapes
+        .iter()
+        .filter_map(|clipped| walk(&clipped.shape, wanted).map(|rect| (clipped.clip_rect, rect)))
+        .next_back()
+}
+
+#[test]
+fn the_zoom_controls_are_clipped_with_the_box_when_the_page_scrolls() {
+    let (_files, mut view) = fixture();
+    let ctx = context(16.0);
+    let size = egui::vec2(1280.0, 700.0);
+    let mut out = settle(&ctx, &mut view, size, None);
+    let (page, _) = shape_of(&out, "Key findings");
+    // Scroll the page past the box a little at a time; in every frame the
+    // controls that are drawn are clipped to the page.
+    let (mut seen, mut crossed) = (false, false);
+    for _ in 0..200 {
+        for control in ["Fit", "+", "\u{2212}", "100%"] {
+            if let Some((clip, rect)) = try_shape(&out, control) {
+                seen = true;
+                crossed |= rect.top() < page.top();
+                assert!(
+                    clip.top() >= page.top() - 0.5 && clip.bottom() <= page.bottom() + 0.5,
+                    "{control} at {rect:?} is clipped to {clip:?}, the page to {page:?}"
+                );
+            }
+        }
+        wheel(&ctx, &mut view, size, egui::pos2(300.0, 200.0), -15.0);
+        out = settle(&ctx, &mut view, size, None);
+    }
+    assert!(seen, "the controls were drawn at some point");
+    assert!(crossed, "the page scrolled past the top of the box");
+}
+
+#[test]
+fn the_open_in_window_button_opens_the_relationships_in_a_window() {
+    let (_files, mut view) = fixture();
+    view.scan_request.identity = Some(("vm".into(), "boot".into(), "run-a".into()));
+    let ctx = context(16.0);
+    let out = settle(&ctx, &mut view, WIDE, None);
+    let title = find(&out, "Relationships");
+    let button = texts(&out)
+        .into_iter()
+        .find(|(text, rect)| {
+            text == egui_phosphor::regular::ARROW_SQUARE_OUT
+                && (rect.center().y - title.center().y).abs() < 14.0
+        })
+        .map(|(_, rect)| rect)
+        .expect("the button in the box header");
+    let before = texts(&out).iter().filter(|(t, _)| t == "Compact").count();
+    assert!(!view.summary_state.window_open);
+    click(&ctx, &mut view, WIDE, button.center());
+    assert!(view.summary_state.window_open);
+    // A window animates in: time runs on.
+    let mut out = draw_at(&ctx, &mut view, WIDE, vec![], 3.0, None);
+    for n in 1..4 {
+        out = draw_at(
+            &ctx,
+            &mut view,
+            WIDE,
+            vec![],
+            3.0 + f64::from(n) * 0.05,
+            None,
+        );
+    }
+    let after = texts(&out).iter().filter(|(t, _)| t == "Compact").count();
+    assert_eq!(after, before + 1, "the window has the same controls");
+}
+
+/// The fixture with `count` more processes of different names below the root.
+fn sprawl(count: u32) -> (PacketSpool, TriageView) {
+    let (files, mut view) = fixture();
+    let scan = view.scan.as_mut().unwrap();
+    for n in 0..count {
+        let parent = if n < 30 { 1 } else { 1000 + (n - 30) / 4 };
+        let cookie = if n < 30 {
+            1
+        } else {
+            100 + u64::from((n - 30) / 4)
+        };
+        scan.process.push(node(
+            1000 + n,
+            100 + u64::from(n),
+            Some((if n < 30 { 401 } else { parent }, cookie)),
+            &format!("tool{n}"),
+            &["x"],
+            5_000_000 + u64::from(n),
+        ));
+    }
+    (files, view)
+}
+
+#[test]
+fn full_draws_a_big_run_instead_of_nothing() {
+    let (_files, mut view) = sprawl(2500);
+    let ctx = context(16.0);
+    let out = settle(&ctx, &mut view, WIDE, None);
+    click(&ctx, &mut view, WIDE, find(&out, "Full").center());
+    let mut out = settle(&ctx, &mut view, WIDE, None);
+    // A big graph is laid out on a thread: wait for it.
+    for _ in 0..250 {
+        if !has(&out, "Laying out\u{2026}") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        out = settle(&ctx, &mut view, WIDE, None);
+    }
+    assert!(!has(&out, "Laying out\u{2026}"), "never finished");
+    let (note, _) = starting(&out, "8").expect("the count line");
     assert!(
-        ls.iter().all(|r| (r.min.x - ls[0].min.x).abs() < 0.5),
-        "one column: {ls:?}"
+        note.contains(" of 2,5") && note.contains(" nodes."),
+        "{note}"
     );
+    let names = texts(&out)
+        .into_iter()
+        .filter(|(text, _)| text.contains(" tool"))
+        .count();
+    assert!(names >= 8, "{names} nodes drawn");
 }
 
 #[test]

@@ -598,6 +598,7 @@ impl TriageView {
     pub(crate) fn show_finding_windows(&mut self, ctx: &egui::Context) {
         self.detection.show_windows(ctx);
         self.show_graph_window(ctx);
+        self.show_relations_window(ctx);
         self.show_report_dialog(ctx);
     }
 

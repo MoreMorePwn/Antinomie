@@ -1,223 +1,466 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Where the Relationships graph's nodes sit, in graph space. The root is at
-//! the centre; each kind grows in its own direction from it: processes (and
-//! the processes they injected into or signalled) to the right, one column
-//! per level of the tree; files below, in a column under the process that
-//! wrote or ran them; network endpoints to the left. A level is one column
-//! however many nodes it has: the viewport pans and zooms over it.
-use super::model::{Graph, NodeKind};
+//! Where the Relationships graph's nodes sit, in graph space: a tidy tree.
+//! Each node's subtree has its own width and height, so siblings never pile
+//! into one global column. A process has the processes it started, the files
+//! it wrote or ran and the endpoints it contacted beside it, to its right;
+//! the root is at the top left. A node with many children lays them out in
+//! several lanes side by side, so a big run is a block, not a thin strip.
+use super::model::{EdgeKind, Graph, NodeKind};
 use eframe::egui::{self, Pos2, Rect, Vec2};
-use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const NODE: Vec2 = egui::vec2(188.0, 30.0);
-/// From the middle of a node to the middle of the next one down a column.
+/// From the middle of a node to the middle of the next one down.
 pub(super) const ROW: f32 = 64.0;
 /// From one column to the next.
 pub(super) const COLUMN: f32 = 260.0;
-/// Between the lowest process and the first file.
-const BAND: f32 = 60.0;
+/// The lane counts tried for a wide node.
+const LANES: [usize; 13] = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32];
 
-/// The way a kind of node grows from the root.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::triage) enum Side {
-    Right,
-    Below,
-    Left,
-}
-
-impl Side {
-    pub(in crate::triage) fn of(kind: &NodeKind) -> Self {
-        match kind {
-            NodeKind::Process(_) | NodeKind::Victim(_) => Self::Right,
-            NodeKind::File(_) => Self::Below,
-            NodeKind::Endpoint(_) => Self::Left,
-        }
-    }
-}
+const NONE: u32 = u32::MAX;
 
 /// Where each shown node sits.
 pub(in crate::triage) struct Layout {
-    pub at: BTreeMap<usize, Rect>,
+    rects: Vec<Rect>,
+    /// The shown nodes, in the order they were given.
+    pub shown: Vec<usize>,
     pub bounds: Rect,
+    /// The node the view opens on: the run's root.
+    pub root: Option<usize>,
 }
 
 impl Default for Layout {
     fn default() -> Self {
         Self {
-            at: BTreeMap::new(),
+            rects: Vec::new(),
+            shown: Vec::new(),
             bounds: Rect::from_min_size(Pos2::ZERO, Vec2::splat(1.0)),
+            root: None,
         }
     }
 }
 
-impl Layout {
-    pub(in crate::triage) fn of(graph: &Graph, shown: &[usize]) -> Self {
-        let side = |node: usize| Side::of(&graph.nodes[node].kind);
-        let shown_set: BTreeSet<usize> = shown.iter().copied().collect();
-        let right: Vec<usize> = shown
+/// How early a kind of child comes among its siblings.
+fn rank(kind: &NodeKind) -> u8 {
+    match kind {
+        NodeKind::Process(_) | NodeKind::Group(_) => 0,
+        NodeKind::Victim(_) => 1,
+        NodeKind::File(_) => 2,
+        NodeKind::Endpoint(_) => 3,
+    }
+}
+
+/// How firmly an edge makes its target a child of its source.
+fn strength(kind: EdgeKind) -> u8 {
+    match kind {
+        EdgeKind::Forked | EdgeKind::Execed | EdgeKind::Member => 0,
+        EdgeKind::Wrote | EdgeKind::Ran | EdgeKind::Connected => 1,
+        EdgeKind::Injected | EdgeKind::Signalled => 2,
+    }
+}
+
+/// The lanes for children of `heights` and `widths` (in columns): the lane
+/// count whose block is nearest a square, and each child's lane.
+fn lanes(heights: &[f32], widths: &[u32]) -> (usize, Vec<usize>) {
+    let count = heights.len();
+    let total: f32 = heights.iter().sum();
+    let assign = |lanes: usize| -> Vec<usize> {
+        let target = total / lanes as f32;
+        let mut before = 0.0;
+        heights
             .iter()
+            .map(|h| {
+                let lane = (((before + h / 2.0) / target) as usize).min(lanes - 1);
+                before += h;
+                lane
+            })
+            .collect()
+    };
+    if count < 2 {
+        return (1, vec![0; count]);
+    }
+    let mut best = (f32::MAX, 1, vec![0; count]);
+    for lanes in LANES.into_iter().filter(|&lanes| lanes <= count) {
+        let which = assign(lanes);
+        let mut lane_height = vec![0.0f32; lanes];
+        let mut lane_width = vec![0u32; lanes];
+        for (i, &lane) in which.iter().enumerate() {
+            lane_height[lane] += heights[i];
+            lane_width[lane] = lane_width[lane].max(widths[i]);
+        }
+        let wide = lane_width.iter().sum::<u32>() as f32 * COLUMN;
+        let high = lane_height.iter().copied().fold(0.0, f32::max);
+        let ratio = (high / wide).max(wide / high);
+        if ratio < best.0 * 0.75 {
+            best = (ratio, lanes, which);
+        }
+    }
+    (best.1, best.2)
+}
+
+impl Layout {
+    pub(in crate::triage) fn get(&self, node: usize) -> Option<Rect> {
+        self.rects
+            .get(node)
             .copied()
-            .filter(|&n| side(n) == Side::Right)
-            .collect();
-        let level = graph.levels(&right);
-        let mut at: BTreeMap<usize, Rect> = BTreeMap::new();
-        let mut row_of: BTreeMap<usize, f32> = BTreeMap::new();
-        // The node that leads to `node`, among the shown ones: its sort key.
-        let order = |nodes: &mut Vec<usize>, row_of: &BTreeMap<usize, f32>| {
-            nodes.sort_by(|a, b| {
-                let key = |n: &usize| {
-                    graph
-                        .edges
-                        .iter()
-                        .filter(|edge| edge.to == *n && shown_set.contains(&edge.from))
-                        .filter_map(|edge| row_of.get(&edge.from))
-                        .next()
-                        .copied()
-                        .unwrap_or(0.0)
-                };
-                key(a).total_cmp(&key(b)).then(a.cmp(b))
+            .filter(|rect| rect.is_positive())
+    }
+
+    #[cfg(test)]
+    pub(in crate::triage) fn len(&self) -> usize {
+        self.shown.len()
+    }
+
+    pub(in crate::triage) fn of(graph: &Graph, shown: &[usize]) -> Self {
+        let m = shown.len();
+        if m == 0 {
+            return Self::default();
+        }
+        let mut local = vec![NONE; graph.nodes.len()];
+        for (l, &node) in shown.iter().enumerate() {
+            local[node] = l as u32;
+        }
+        // Each node's parent among the shown ones: the strongest edge in.
+        let mut parent = vec![NONE; m];
+        for (l, &node) in shown.iter().enumerate() {
+            parent[l] = graph
+                .edges_in(node)
+                .filter(|edge| edge.from != node && local[edge.from] != NONE)
+                // A process is started by its parent; what it suffered from
+                // another is a cross edge, or the run's root would hang off
+                // the child that injected into it.
+                .filter(|edge| {
+                    strength(edge.kind) < 2
+                        || !matches!(
+                            graph.nodes[node].kind,
+                            NodeKind::Process(_) | NodeKind::Group(_)
+                        )
+                })
+                .min_by_key(|edge| (strength(edge.kind), edge.from))
+                .map_or(NONE, |edge| local[edge.from]);
+        }
+        let mut below: Vec<Vec<u32>> = vec![Vec::new(); m + 1];
+        let mut roots: Vec<u32> = Vec::new();
+        let main = graph.root();
+        for l in 0..m {
+            match parent[l] {
+                NONE => roots.push(l as u32),
+                p => below[p as usize].push(l as u32),
+            }
+        }
+        roots.sort_by_key(|&l| (shown[l as usize] != main, l));
+        let sort = |list: &mut Vec<u32>| {
+            list.sort_by_key(|&l| {
+                (
+                    rank(&graph.nodes[shown[l as usize]].kind),
+                    shown[l as usize],
+                )
             });
         };
-        let place = |at: &mut BTreeMap<usize, Rect>,
-                     row_of: &mut BTreeMap<usize, f32>,
-                     node: usize,
-                     x: f32,
-                     centre_y: f32| {
-            let rect = Rect::from_min_size(Pos2::new(x, centre_y - NODE.y / 2.0), NODE);
-            row_of.insert(node, centre_y);
-            at.insert(node, rect);
-        };
-
-        // Processes: one column per level, centred on the root's row.
-        let mut columns: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-        for &node in &right {
-            columns
-                .entry(level.get(&node).copied().unwrap_or(0))
-                .or_default()
-                .push(node);
-        }
-        for (&at_level, nodes) in &mut columns {
-            order(nodes, &row_of);
-            let height = (nodes.len().max(1) - 1) as f32 * ROW;
-            for (i, &node) in nodes.iter().enumerate() {
-                place(
-                    &mut at,
-                    &mut row_of,
-                    node,
-                    at_level as f32 * COLUMN,
-                    -height / 2.0 + i as f32 * ROW,
-                );
+        // The tree, breadth first, under a virtual top node that holds the
+        // roots. A node whose parent chain loops back on itself (injections)
+        // is a root of its own.
+        let top = m as u32;
+        let mut seen = vec![false; m];
+        let mut order: Vec<u32> = Vec::with_capacity(m + 1);
+        order.push(top);
+        let mut tree: Vec<Vec<u32>> = vec![Vec::new(); m + 1];
+        for start in roots.iter().copied().chain(0..top) {
+            if seen[start as usize] {
+                continue;
+            }
+            seen[start as usize] = true;
+            tree[top as usize].push(start);
+            let mut head = order.len();
+            order.push(start);
+            while head < order.len() {
+                let at = order[head] as usize;
+                head += 1;
+                let mut kids = std::mem::take(&mut below[at]);
+                sort(&mut kids);
+                for kid in kids {
+                    if !seen[kid as usize] {
+                        seen[kid as usize] = true;
+                        tree[at].push(kid);
+                        order.push(kid);
+                    }
+                }
             }
         }
-        let bottom = at.values().map(|r| r.bottom()).fold(NODE.y / 2.0, f32::max);
-
-        // Files: below, in the column of the process that leads to them.
-        let column_of = |node: usize| -> usize {
-            graph
-                .edges
-                .iter()
-                .filter(|edge| edge.to == node && shown_set.contains(&edge.from))
-                .find_map(|edge| level.get(&edge.from).copied())
-                .unwrap_or(0)
-        };
-        let mut below: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-        for &node in shown.iter().filter(|&&n| side(n) == Side::Below) {
-            below.entry(column_of(node)).or_default().push(node);
-        }
-        for (&at_level, nodes) in &mut below {
-            order(nodes, &row_of);
-            for (i, &node) in nodes.iter().enumerate() {
-                place(
-                    &mut at,
-                    &mut row_of,
-                    node,
-                    at_level as f32 * COLUMN,
-                    bottom + BAND + NODE.y / 2.0 + i as f32 * ROW,
+        // Bottom up: the size of each subtree and where its children go.
+        let mut width = vec![1u32; m + 1];
+        let mut high = vec![ROW; m + 1];
+        let mut centre = vec![ROW / 2.0; m + 1];
+        let mut dx = vec![0.0f32; m + 1];
+        let mut dy = vec![0.0f32; m + 1];
+        for &v in order.iter().rev() {
+            let v = v as usize;
+            let kids = &tree[v];
+            if kids.is_empty() {
+                continue;
+            }
+            let heights: Vec<f32> = kids.iter().map(|&k| high[k as usize]).collect();
+            let widths: Vec<u32> = kids.iter().map(|&k| width[k as usize]).collect();
+            let (count, which) = lanes(&heights, &widths);
+            let mut lane_width = vec![0u32; count];
+            for (i, &lane) in which.iter().enumerate() {
+                lane_width[lane] = lane_width[lane].max(widths[i]);
+            }
+            let mut lane_x = vec![0u32; count];
+            for lane in 1..count {
+                lane_x[lane] = lane_x[lane - 1] + lane_width[lane - 1];
+            }
+            let mut lane_y = vec![0.0f32; count];
+            for (i, &k) in kids.iter().enumerate() {
+                let lane = which[i];
+                dx[k as usize] = lane_x[lane] as f32 * COLUMN;
+                dy[k as usize] = lane_y[lane];
+                lane_y[lane] += heights[i];
+            }
+            let block = lane_y.iter().copied().fold(0.0, f32::max);
+            width[v] = 1 + lane_width.iter().sum::<u32>();
+            high[v] = block.max(ROW);
+            // Between the first and the last child, or half way down the block
+            // for lanes; but never far below the first child, so the root of a
+            // tall tree is near the top, where the view opens.
+            let first = centre[kids[0] as usize];
+            centre[v] = if count == 1 {
+                let (last_at, last) = (
+                    dy[kids[kids.len() - 1] as usize],
+                    kids[kids.len() - 1] as usize,
                 );
+                ((first + last_at + centre[last]) / 2.0).min(first + 3.0 * ROW)
+            } else {
+                (block / 2.0).min(first + 3.0 * ROW)
+            }
+            .clamp(ROW / 2.0, high[v] - ROW / 2.0);
+        }
+        // Top down: absolute places. The children of a node start one column
+        // right of it; the roots start at the left edge.
+        let mut x = vec![0.0f32; m + 1];
+        let mut y = vec![0.0f32; m + 1];
+        let mut rects = vec![Rect::NOTHING; graph.nodes.len()];
+        let mut bounds = Rect::NOTHING;
+        for &v in &order {
+            let v = v as usize;
+            let (base_x, base_y) = (x[v], y[v]);
+            let step = if v == m { 0.0 } else { COLUMN };
+            for &k in &tree[v] {
+                let k = k as usize;
+                x[k] = base_x + step + dx[k];
+                y[k] = base_y + dy[k];
+            }
+            if v < m {
+                let rect =
+                    Rect::from_min_size(Pos2::new(base_x, base_y + centre[v] - NODE.y / 2.0), NODE);
+                rects[shown[v]] = rect;
+                bounds = bounds.union(rect);
             }
         }
-
-        // Endpoints: one column to the left of the root.
-        let mut left: Vec<usize> = shown
-            .iter()
-            .copied()
-            .filter(|&n| side(n) == Side::Left)
-            .collect();
-        order(&mut left, &row_of);
-        let height = (left.len().max(1) - 1) as f32 * ROW;
-        for (i, &node) in left.iter().enumerate() {
-            place(
-                &mut at,
-                &mut row_of,
-                node,
-                -COLUMN,
-                -height / 2.0 + i as f32 * ROW,
-            );
+        Self {
+            rects,
+            shown: shown.to_vec(),
+            bounds: bounds.expand(24.0),
+            root: roots.first().map(|&l| shown[l as usize]),
         }
-        let bounds = at
-            .values()
-            .copied()
-            .reduce(|a, b| a.union(b))
-            .unwrap_or_else(|| Rect::from_min_size(Pos2::ZERO, Vec2::splat(1.0)))
-            .expand(24.0);
-        Self { at, bounds }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::model::{tests::fixture, Proc};
+    use super::super::group::Rendered;
+    use super::super::model::{
+        tests::{fixture, synthetic},
+        Proc,
+    };
     use super::*;
+    use std::collections::{BTreeSet, HashMap};
 
-    fn node_of(graph: &Graph, kind: NodeKind) -> usize {
-        graph.nodes.iter().position(|n| n.kind == kind).unwrap()
+    fn all(graph: &Graph) -> Vec<usize> {
+        (0..graph.nodes.len()).collect()
+    }
+
+    /// No two shown nodes overlap (by cells, so a big layout is quick).
+    fn assert_no_overlap(layout: &Layout) {
+        let mut cells: HashMap<(i32, i32), Vec<Rect>> = HashMap::new();
+        for &node in &layout.shown {
+            let rect = layout.get(node).expect("every shown node is placed");
+            for x in (rect.left() / 128.0).floor() as i32..=(rect.right() / 128.0).floor() as i32 {
+                for y in
+                    (rect.top() / 128.0).floor() as i32..=(rect.bottom() / 128.0).floor() as i32
+                {
+                    let cell = cells.entry((x, y)).or_default();
+                    for other in cell.iter() {
+                        assert!(!rect.intersects(*other), "{rect:?} overlaps {other:?}");
+                    }
+                    cell.push(rect);
+                }
+            }
+        }
+    }
+
+    fn aspect(layout: &Layout) -> f32 {
+        let size = layout.bounds.size();
+        (size.x / size.y).max(size.y / size.x)
     }
 
     #[test]
-    fn processes_grow_right_files_below_and_endpoints_left_without_overlap() {
+    fn a_small_run_is_a_tree_from_the_root_with_no_overlap() {
         let graph = Graph::build(&fixture());
-        let all: Vec<usize> = (0..graph.nodes.len()).collect();
-        let layout = Layout::of(&graph, &all);
-        assert_eq!(layout.at.len(), all.len());
-        let rects: Vec<Rect> = layout.at.values().copied().collect();
-        for (i, a) in rects.iter().enumerate() {
-            for b in &rects[i + 1..] {
-                assert!(!a.intersects(*b), "{a:?} overlaps {b:?}");
+        let layout = Layout::of(&graph, &all(&graph));
+        assert_eq!(layout.len(), graph.nodes.len());
+        assert_no_overlap(&layout);
+        let root = graph
+            .nodes
+            .iter()
+            .position(|n| n.kind == NodeKind::Process((401, 1)))
+            .unwrap();
+        assert_eq!(layout.root, Some(root));
+        let at = |n: usize| layout.get(n).unwrap();
+        // The root is the leftmost and the topmost-left of the processes; every
+        // node but it has its anchor to its left.
+        for node in 0..graph.nodes.len() {
+            if node == root {
+                assert!(layout
+                    .shown
+                    .iter()
+                    .all(|&n| at(n).left() >= at(root).left()));
+                continue;
             }
+            let anchor = graph.anchor(node).expect("joined");
+            assert!(
+                at(node).left() > at(anchor).left(),
+                "{node} right of {anchor}"
+            );
         }
-        let root = layout.at[&node_of(&graph, NodeKind::Process((401, 1)))];
-        for (node, rect) in &layout.at {
-            match Side::of(&graph.nodes[*node].kind) {
-                Side::Right if *node != 0 => assert!(rect.left() > root.left(), "{node}"),
-                Side::Below => assert!(rect.top() > root.bottom(), "file {node}"),
-                Side::Left => assert!(rect.right() < root.left(), "endpoint {node}"),
-                Side::Right => {}
-            }
-        }
-        assert!(layout.bounds.contains_rect(root));
+        assert!(layout.bounds.contains_rect(at(root)));
     }
 
     #[test]
-    fn a_wide_level_stays_one_column() {
+    fn a_process_that_was_injected_into_by_its_child_is_still_the_root() {
+        use super::super::model::Fact;
         let mut facts = fixture();
-        for n in 0..40u32 {
+        facts.findings.push(Fact {
+            tier: crate::triage::rules::Tier::High,
+            rule: "injection.proc_mem_write".into(),
+            object: "/proc/401/mem".into(),
+            pid: 420,
+            cookie: 4,
+        });
+        let graph = Graph::build(&facts);
+        let root = graph
+            .nodes
+            .iter()
+            .position(|n| n.kind == NodeKind::Process((401, 1)))
+            .unwrap();
+        assert_eq!(graph.root(), root);
+        let layout = Layout::of(&graph, &all(&graph));
+        assert_eq!(layout.root, Some(root));
+        let left = layout.get(root).unwrap().left();
+        assert!(layout
+            .shown
+            .iter()
+            .all(|&n| layout.get(n).unwrap().left() >= left));
+        assert_no_overlap(&layout);
+    }
+
+    #[test]
+    fn many_children_are_laid_out_in_lanes_not_one_column() {
+        let mut facts = fixture();
+        for n in 0..60u32 {
             facts.procs.push(Proc {
                 pid: 1000 + n,
                 cookie: 100 + u64::from(n),
                 parent: Some((401, 1)),
-                name: "ls".into(),
+                name: format!("ls{n}"),
                 ..Default::default()
             });
         }
         let graph = Graph::build(&facts);
-        let all: Vec<usize> = (0..graph.nodes.len()).collect();
-        let layout = Layout::of(&graph, &all);
+        let layout = Layout::of(&graph, &all(&graph));
+        assert_no_overlap(&layout);
         let ls: Vec<Rect> = (0..graph.nodes.len())
-            .filter(|&n| graph.nodes[n].label.starts_with("ls ("))
-            .map(|n| layout.at[&n])
+            .filter(|&n| graph.nodes[n].label.starts_with("ls"))
+            .map(|n| layout.get(n).unwrap())
             .collect();
-        assert_eq!(ls.len(), 40);
-        assert!(ls.iter().all(|r| r.left() == ls[0].left()), "one column");
-        assert!(layout.bounds.height() > 39.0 * ROW);
+        assert_eq!(ls.len(), 60);
+        let mut columns: Vec<i32> = ls.iter().map(|r| r.left() as i32).collect();
+        columns.sort_unstable();
+        columns.dedup();
+        assert!(columns.len() > 1, "more than one lane");
+        assert!(
+            layout.bounds.height() < 60.0 * ROW,
+            "shorter than one column"
+        );
+    }
+
+    #[test]
+    fn a_big_run_is_a_block_not_a_strip() {
+        let graph = Graph::build(&synthetic(1500, 5000));
+        assert!(graph.nodes.len() > 6000);
+        let layout = Layout::of(&graph, &all(&graph));
+        assert_no_overlap(&layout);
+        assert!(aspect(&layout) < 4.0, "{:?}", layout.bounds.size());
+        // The grouped view of the same run, and its capped Full.
+        let view = Rendered::compact(&graph, &BTreeSet::new(), 15);
+        assert_no_overlap(&view.layout);
+        assert!(
+            aspect(&view.layout) < 4.0,
+            "{:?}",
+            view.layout.bounds.size()
+        );
+        let full = Rendered::full(&graph, &BTreeSet::new());
+        assert_no_overlap(&full.layout);
+        assert!(
+            aspect(&full.layout) < 4.0,
+            "{:?}",
+            full.layout.bounds.size()
+        );
+    }
+
+    #[test]
+    fn a_deep_chain_and_a_loop_of_injections_are_placed() {
+        let mut facts = fixture();
+        let mut parent = (401, 1);
+        for n in 0..3000u32 {
+            let pid = 10_000 + n;
+            facts.procs.push(Proc {
+                pid,
+                cookie: u64::from(pid),
+                parent: Some(parent),
+                name: "chain".into(),
+                ..Default::default()
+            });
+            parent = (pid, u64::from(pid));
+        }
+        let graph = Graph::build(&facts);
+        let layout = Layout::of(&graph, &all(&graph));
+        assert_eq!(layout.len(), graph.nodes.len());
+        assert_no_overlap(&layout);
+    }
+
+    #[test]
+    fn ten_thousand_nodes_are_laid_out_in_well_under_a_tenth_of_a_second() {
+        let graph = Graph::build(&synthetic(2000, 8000));
+        assert!(graph.nodes.len() >= 10_000, "{}", graph.nodes.len());
+        let nodes = all(&graph);
+        let best = (0..3)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                let layout = Layout::of(&graph, &nodes);
+                assert_eq!(layout.len(), nodes.len());
+                started.elapsed()
+            })
+            .min()
+            .unwrap();
+        assert!(best.as_millis() < 100, "{best:?}");
+        // The grouped view of it, built and laid out, is as quick.
+        let started = std::time::Instant::now();
+        let full = Rendered::full(&graph, &BTreeSet::new());
+        assert!(full.layout.len() > 100);
+        assert!(
+            started.elapsed().as_millis() < 100,
+            "{:?}",
+            started.elapsed()
+        );
     }
 }

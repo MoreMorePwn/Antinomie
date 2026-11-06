@@ -3,15 +3,21 @@
 //! with the buttons, ctrl and the wheel or a pinch, and a click on a node.
 //! Where the nodes sit is `layout`'s. It draws the graph and says what was
 //! clicked; it keeps no data of its own.
-use super::layout::{Layout, NODE};
-use super::model::{EdgeKind, Graph, NodeKind};
+use super::layout::Layout;
+use super::model::{EdgeKind, Graph, GroupInfo, NodeKind};
 use crate::theme;
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Shape, Stroke, Vec2};
 
-const MIN_ZOOM: f32 = 0.15;
+const MIN_ZOOM: f32 = 0.05;
 const MAX_ZOOM: f32 = 3.0;
 /// The smallest size a graph opens at.
 const READABLE: f32 = 0.6;
+/// Below this zoom the names on nodes are not drawn.
+const TEXT_FROM: f32 = 0.4;
+/// Below this zoom edge labels and arrowheads are not drawn.
+const LABELS_FROM: f32 = 0.55;
+/// Below this zoom edges are straight lines.
+const CURVES_FROM: f32 = 0.3;
 
 /// Pan and zoom: `offset` is where graph-space (0, 0) sits in the viewport.
 #[derive(Clone, Copy, Debug)]
@@ -70,7 +76,7 @@ fn kind_color(kind: EdgeKind) -> Color32 {
         EdgeKind::Signalled => theme::warn(),
         EdgeKind::Connected => theme::good(),
         EdgeKind::Wrote | EdgeKind::Ran => theme::blue(),
-        EdgeKind::Forked | EdgeKind::Execed => theme::muted(),
+        EdgeKind::Forked | EdgeKind::Execed | EdgeKind::Member => theme::muted(),
     }
 }
 
@@ -84,6 +90,8 @@ fn glyph(kind: &NodeKind) -> &'static str {
         NodeKind::File(_) => egui_phosphor::regular::FILE,
         NodeKind::Endpoint(_) => egui_phosphor::regular::GLOBE,
         NodeKind::Victim(_) => egui_phosphor::regular::CROSSHAIR,
+        NodeKind::Group(GroupInfo { open: true, .. }) => egui_phosphor::regular::CARET_DOWN,
+        NodeKind::Group(_) => egui_phosphor::regular::STACK,
     }
 }
 
@@ -105,7 +113,9 @@ pub(in crate::triage) fn show(
 ) -> Outcome {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
-    let response = ui.interact(rect, id, Sense::click_and_drag());
+    // What shows is the box, and of the box what the page shows of it.
+    let visible = rect.intersect(ui.clip_rect());
+    let response = ui.interact(visible, id, Sense::click_and_drag());
     let viewport = rect.size();
     if !view.fitted && viewport.x > 1.0 {
         view.fit(viewport, layout.bounds);
@@ -113,7 +123,12 @@ pub(in crate::triage) fn show(
         // at, on the root; "Fit" shows all of it.
         if view.zoom < READABLE {
             view.zoom = READABLE;
-            view.offset = viewport / 2.0 - egui::vec2(NODE.x / 2.0, 0.0) * READABLE;
+            let root = layout
+                .root
+                .and_then(|node| layout.get(node))
+                .map_or(Pos2::ZERO, |at| at.center());
+            view.offset =
+                egui::vec2(viewport.x * 0.22, viewport.y * 0.3) - root.to_vec2() * READABLE;
         }
     }
     if response.dragged() {
@@ -129,7 +144,7 @@ pub(in crate::triage) fn show(
             view.zoom_about(pivot, (scroll * 0.0015).exp());
         }
     }
-    let painter = ui.painter_at(rect);
+    let painter = ui.painter().with_clip_rect(rect);
     painter.rect_filled(rect, 4.0, theme::panel());
     painter.rect_stroke(
         rect,
@@ -140,14 +155,19 @@ pub(in crate::triage) fn show(
     let origin = rect.min;
     let scale = view.zoom;
     let font = egui::FontId::proportional((12.0 * scale.clamp(0.7, 1.3)).max(8.0));
+    let reach = rect.expand(24.0);
     for edge in &graph.edges {
-        let (Some(from), Some(to)) = (layout.at.get(&edge.from), layout.at.get(&edge.to)) else {
+        let (Some(from), Some(to)) = (layout.get(edge.from), layout.get(edge.to)) else {
             continue;
         };
         let (from, to) = (
-            view.rect_to_screen(origin, *from),
-            view.rect_to_screen(origin, *to),
+            view.rect_to_screen(origin, from),
+            view.rect_to_screen(origin, to),
         );
+        // Out of the box, however long the edge: nothing to draw.
+        if !from.union(to).intersects(reach) {
+            continue;
+        }
         // Right of the root: along the row; left of it: back along the row;
         // below: down the column.
         let (a, b, away) = if to.left() >= from.right() {
@@ -159,21 +179,30 @@ pub(in crate::triage) fn show(
         } else {
             (from.center_top(), to.center_bottom(), egui::vec2(0.0, -1.0))
         };
-        let reach = if away.x != 0.0 {
+        let color = kind_color(edge.kind);
+        let member = edge.kind == EdgeKind::Member;
+        let stroke = Stroke::new(if member { 1.0 } else { 1.3 }, color);
+        if scale < CURVES_FROM {
+            painter.line_segment([a, b], stroke);
+            continue;
+        }
+        let span = if away.x != 0.0 {
             (b.x - a.x).abs()
         } else {
             (b.y - a.y).abs()
         };
-        let bend = away * (reach * 0.5).max(20.0 * scale);
-        let color = kind_color(edge.kind);
+        let bend = away * (span * 0.5).max(20.0 * scale);
         painter.add(Shape::CubicBezier(
             egui::epaint::CubicBezierShape::from_points_stroke(
                 [a, a + bend, b - bend, b],
                 false,
                 Color32::TRANSPARENT,
-                Stroke::new(1.3, color),
+                stroke,
             ),
         ));
+        if member {
+            continue;
+        }
         let back = -away;
         let side = egui::vec2(-back.y, back.x);
         let tip = 7.0 * scale.clamp(0.6, 1.3);
@@ -186,7 +215,7 @@ pub(in crate::triage) fn show(
             color,
             Stroke::NONE,
         ));
-        if scale >= 0.55 {
+        if scale >= LABELS_FROM {
             let text = if edge.count > 1 {
                 format!("{} \u{d7}{}", edge.kind.label(), edge.count)
             } else {
@@ -204,8 +233,11 @@ pub(in crate::triage) fn show(
         .interact_pointer_pos()
         .or_else(|| response.hover_pos());
     let mut hovered = None;
-    for (&node, world) in &layout.at {
-        let screen = view.rect_to_screen(origin, *world);
+    for &node in &layout.shown {
+        let Some(world) = layout.get(node) else {
+            continue;
+        };
+        let screen = view.rect_to_screen(origin, world);
         if !screen.intersects(rect) {
             continue;
         }
@@ -215,13 +247,29 @@ pub(in crate::triage) fn show(
             hovered = Some(node);
         }
         let line = item.tier.map_or_else(theme::line, tier_color);
-        painter.rect_filled(screen, 5.0, if over { theme::bg() } else { theme::panel() });
+        let fill = if over { theme::bg() } else { theme::panel() };
+        if let NodeKind::Group(info) = &item.kind {
+            // A stack: the outline of a second box behind the first.
+            if !info.open {
+                let behind = screen.translate(egui::vec2(4.0, 4.0) * scale.clamp(0.4, 1.0));
+                painter.rect_stroke(
+                    behind,
+                    5.0,
+                    Stroke::new(1.0, line),
+                    egui::StrokeKind::Inside,
+                );
+            }
+        }
+        painter.rect_filled(screen, 5.0, fill);
         painter.rect_stroke(
             screen,
             5.0,
             Stroke::new(if item.tier.is_some() { 1.8 } else { 1.0 }, line),
             egui::StrokeKind::Inside,
         );
+        if scale < TEXT_FROM {
+            continue;
+        }
         let inner = painter.with_clip_rect(screen.shrink(1.0).intersect(rect));
         let mut x = screen.left() + 8.0 * scale.clamp(0.7, 1.2);
         if let Some(tier) = item.tier {
@@ -249,11 +297,31 @@ pub(in crate::triage) fn show(
             if let Some(tier) = graph.nodes[node].tier {
                 ui.label(format!("Highest tier: {}", tier.tag().to_uppercase()));
             }
-            ui.weak("Click to open its details");
+            if let NodeKind::Group(info) = &graph.nodes[node].kind {
+                for name in &info.sample {
+                    ui.label(name);
+                }
+                if info.members as usize > info.sample.len() {
+                    ui.weak(format!(
+                        "and {} more",
+                        crate::values::thousands(
+                            u64::from(info.members) - info.sample.len() as u64
+                        )
+                    ));
+                }
+                ui.weak(if info.open {
+                    "Click to close the group"
+                } else {
+                    "Click to open the group"
+                });
+            } else {
+                ui.weak("Click to open its details");
+            }
         });
     }
     // The zoom bar, from the top right corner inwards, so it stays in the box
-    // however narrow the box is.
+    // however narrow the box is. It is clipped to the box and to the page's
+    // own view, so a page scrolled past the box does not carry it along.
     let bar = Rect::from_min_max(
         rect.left_top() + egui::vec2(6.0, 6.0),
         rect.right_top() + egui::vec2(-6.0, 30.0),
@@ -263,7 +331,7 @@ pub(in crate::triage) fn show(
             .max_rect(bar)
             .layout(egui::Layout::right_to_left(egui::Align::Center)),
     );
-    zoom_ui.set_clip_rect(rect);
+    zoom_ui.set_clip_rect(visible);
     if zoom_ui
         .small_button("Fit")
         .on_hover_text("Show the whole graph")
@@ -367,9 +435,10 @@ mod tests {
         assert!(view.fitted);
         // A spot in the viewport no node covers.
         let nodes: Vec<Rect> = layout
-            .at
-            .values()
-            .map(|r| view.rect_to_screen(Pos2::ZERO, *r))
+            .shown
+            .iter()
+            .filter_map(|&n| layout.get(n))
+            .map(|r| view.rect_to_screen(Pos2::ZERO, r))
             .collect();
         let spot = (0..30)
             .flat_map(|y| {
@@ -427,7 +496,9 @@ mod tests {
             view.offset
         );
         // A click on the root node.
-        let centre = view.rect_to_screen(Pos2::ZERO, layout.at[&0]).center();
+        let centre = view
+            .rect_to_screen(Pos2::ZERO, layout.get(0).unwrap())
+            .center();
         frame(
             &ctx,
             &graph,
@@ -453,5 +524,34 @@ mod tests {
             1.2,
         );
         assert_eq!(out.clicked, Some(0));
+    }
+
+    #[test]
+    fn a_big_graph_opens_on_its_root_and_at_a_readable_size() {
+        use super::super::group::Rendered;
+        use super::super::model::tests::synthetic;
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let raw = Graph::build(&synthetic(300, 0));
+        let rendered = Rendered::full(&raw, &std::collections::BTreeSet::new());
+        let root = rendered.layout.root.expect("a root");
+        assert_eq!(rendered.graph.nodes[root].kind, NodeKind::Process((1, 1)));
+        let mut view = View::default();
+        frame(
+            &ctx,
+            &rendered.graph,
+            &rendered.layout,
+            &mut view,
+            vec![],
+            0.0,
+        );
+        assert!(view.fitted);
+        assert!(view.zoom >= READABLE - 1e-3, "{}", view.zoom);
+        let at = view.rect_to_screen(Pos2::ZERO, rendered.layout.get(root).unwrap());
+        let viewport = Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 300.0));
+        assert!(
+            viewport.contains_rect(at),
+            "the root {at:?} is in the box {viewport:?}"
+        );
     }
 }
