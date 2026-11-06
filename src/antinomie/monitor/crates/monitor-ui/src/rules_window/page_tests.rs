@@ -107,51 +107,7 @@ impl Fixture {
 
     /// A hosted-archive pack, built by Python's tarfile.
     fn pack(&self, id: &str, engine: &str, file: &str, text: &str) {
-        let source = self.dir.join(format!("{id}.src"));
-        std::fs::write(&source, text).unwrap();
-        let archive = self.dir.join(format!("{id}.tar.gz"));
-        let script = r#"
-import gzip, io, sys, tarfile
-source, destination, member = sys.argv[1:4]
-data = open(source, "rb").read()
-raw = io.BytesIO()
-with tarfile.open(fileobj=raw, mode="w", format=tarfile.GNU_FORMAT) as tar:
-    info = tarfile.TarInfo(member)
-    info.size = len(data)
-    info.mtime = 0
-    info.mode = 0o644
-    tar.addfile(info, io.BytesIO(data))
-with open(destination, "wb") as output:
-    with gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as compressed:
-        compressed.write(raw.getvalue())
-"#;
-        let status = std::process::Command::new("python3")
-            .args(["-c", script])
-            .args([&source, &archive])
-            .arg(file)
-            .status()
-            .unwrap();
-        assert!(status.success());
-        let bytes = std::fs::read(&archive).unwrap();
-        let entry = ruleset::PackEntry {
-            id: id.into(),
-            engine: engine.into(),
-            name: format!("Fixture {id}"),
-            version: "1".into(),
-            upstream_revision: "r1".into(),
-            upstream_url: "https://example.invalid/".into(),
-            download_url: "https://example.invalid/p.tar.gz".into(),
-            sha256: antinomie_monitor_core::storage::sha256_hex(&bytes),
-            size: bytes.len() as u64,
-            app: ">=0.6.2".into(),
-            engine_requirement: "YARA-X 1.21".into(),
-            rules: 2,
-            helpers: 0,
-            license: "MIT".into(),
-            evidence: vec!["sample".into()],
-            limits: Vec::new(),
-        };
-        ruleset::install_archive(&self.dir, &entry, &bytes).unwrap();
+        super::source_tests::install_fixture_pack(&self.dir, id, engine, file, text);
     }
 }
 
@@ -168,6 +124,44 @@ fn top_of(shown: &[(String, egui::Rect, egui::Rect)], text: &str) -> f32 {
         .unwrap_or_else(|| panic!("no {text}"))
         .1
         .top()
+}
+
+/// The page's "Rules" button: the open-in-window icon, then the word.
+fn rules_button(shown: &[(String, egui::Rect, egui::Rect)]) -> Option<egui::Rect> {
+    shown
+        .iter()
+        .find(|(text, _, _)| {
+            text.ends_with(" Rules") && text.starts_with(egui_phosphor::regular::ARROW_SQUARE_OUT)
+        })
+        .map(|shown| shown.1)
+}
+
+impl Fixture {
+    /// Press the page's "Rules" button.
+    fn open_list(&mut self) {
+        let start = std::time::Instant::now();
+        loop {
+            self.settle();
+            let shown = self.frame();
+            if let Some(button) = rules_button(&shown) {
+                click(
+                    &self.ctx,
+                    &mut self.model,
+                    &self.dir,
+                    SIZE,
+                    &mut self.outbound,
+                    button.center(),
+                );
+                return;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "no Rules button: {}",
+                joined(&shown)
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
 }
 
 #[test]
@@ -201,10 +195,17 @@ fn a_pack_lists_all_its_rules_and_a_rule_shows_its_details_and_source() {
     let mut f = Fixture::new("pack");
     f.pack("fixture", "yara", "rules.yar", YARA);
     // The pack is the first set of the engine: it is selected and its rules
-    // are read without a click.
-    let shown = f.until("Alpha_Rule");
+    // are counted without a click; they are listed in a window of their own.
+    let shown = f.until("2 rules");
     let text = joined(&shown);
     assert!(text.contains("Fixture fixture"), "{text}");
+    assert!(
+        !text.contains("Alpha_Rule"),
+        "the page has no inline rule table: {text}"
+    );
+    f.open_list();
+    let shown = f.until("Alpha_Rule");
+    let text = joined(&shown);
     assert!(
         text.contains("Zeta_Rule") && text.contains("2 rules"),
         "{text}"
@@ -248,11 +249,15 @@ fn custom_groups_list_ids_and_sigma_rules_too() {
         "title: Odd shell\nid: 11111111-1111-1111-1111-111111111111\nlogsource:\n  product: linux\n  category: process_creation\ndetection:\n  selection:\n    Image: /bin/sh\n  condition: selection\nlevel: high\n",
     );
     f.click("IDS");
+    f.open_list();
     f.until("Second beacon");
     f.click("Second beacon");
     let text = joined(&f.until("sid:1002"));
     assert!(!text.contains("sid:1001;"), "{text}");
+    // The IDS list sits over the page's buttons: close it first.
+    f.model.rule_lists.clear();
     f.click("Sigma");
+    f.open_list();
     f.until("Odd shell");
     f.click("Odd shell");
     let text = joined(&f.until("condition: selection"));
@@ -574,7 +579,7 @@ fn native_rules_pack_fixture() {
 }
 
 #[test]
-fn a_pack_rule_table_holds_still_frame_after_frame() {
+fn a_pack_rule_list_holds_still_frame_after_frame() {
     // Item 21: the rule table of a chosen pack shrank and grew by a few
     // points every frame. Long rule names and file names, at a fractional
     // text size, in a narrow and a wide window: no header may move.
@@ -594,8 +599,9 @@ fn a_pack_rule_table_holds_still_frame_after_frame() {
             "a_rather_long_file_name_for_the_rules.yar",
             &rules,
         );
-        f.until("Number_00");
         let size = egui::vec2(width, 1000.0);
+        f.open_list();
+        f.until("Number_00");
         let mut first: Option<Vec<f32>> = None;
         for frame in 0..100 {
             let shown = render(
@@ -751,6 +757,7 @@ fn fills(f: &mut Fixture) -> (Texts, Vec<(egui::Color32, egui::Rect)>) {
 fn clicking_a_rule_opens_its_own_window_and_the_code_sits_on_a_filled_block() {
     let mut f = Fixture::new("rule-window");
     f.pack("fixture", "yara", "rules.yar", YARA);
+    f.open_list();
     f.until("Alpha_Rule");
     f.click("Alpha_Rule");
     f.until("$a = \"alpha\"");
@@ -782,9 +789,10 @@ fn clicking_a_rule_opens_its_own_window_and_the_code_sits_on_a_filled_block() {
 }
 
 #[test]
-fn the_table_rules_stay_within_the_table_and_are_one_pixel_wide() {
+fn the_list_rules_stay_within_its_window_and_are_one_pixel_wide() {
     let mut f = Fixture::new("rules-lines");
     f.pack("fixture", "yara", "rules.yar", YARA);
+    f.open_list();
     f.until("Alpha_Rule");
     f.settle();
     let mut detection = antinomie_monitor_core::analysis::detection::Settings::default();
@@ -800,6 +808,8 @@ fn the_table_rules_stay_within_the_table_and_are_one_pixel_wide() {
                     .model
                     .page(ui, &f.dir, &mut f.outbound, &tools, &mut detection);
             });
+            let ctx = root.ctx().clone();
+            f.model.show_rule_windows(&ctx, &f.dir);
         },
     );
     fn walk(shape: &egui::epaint::Shape, out: &mut Vec<(egui::Pos2, egui::Pos2, f32)>) {
@@ -811,21 +821,28 @@ fn the_table_rules_stay_within_the_table_and_are_one_pixel_wide() {
             _ => {}
         }
     }
+    let window = f
+        .ctx
+        .memory(|memory| memory.area_rect(f.model.rule_lists[0].id()))
+        .expect("the list window is placed");
     let mut lines = Vec::new();
     for shape in &output.shapes {
         walk(&shape.shape, &mut lines);
     }
     let rules: Vec<_> = lines
         .iter()
-        .filter(|(a, b, _)| a.y == b.y && b.x - a.x > 100.0)
+        .filter(|(a, b, _)| a.y == b.y && b.x - a.x > 100.0 && window.contains(*a))
         .collect();
     assert!(!rules.is_empty());
-    // The page is 1100 wide with an 8 point margin; a header cell reaches
-    // half of the theme's column spacing past the table and no more.
+    // A header cell reaches half of the theme's column spacing past the table
+    // and no more; the table stays inside its window.
     let reach = f.ctx.global_style().spacing.item_spacing.x / 2.0 + 0.01;
     for (a, b, width) in &rules {
         assert!(*width <= 1.0, "rule {width} wide");
-        assert!(a.x >= 8.0 - reach && b.x <= 1092.0 + reach, "{a:?} {b:?}");
+        assert!(
+            a.x >= window.left() - reach && b.x <= window.right() + reach,
+            "{a:?} {b:?} in {window:?}"
+        );
     }
 }
 
@@ -833,6 +850,7 @@ fn the_table_rules_stay_within_the_table_and_are_one_pixel_wide() {
 fn a_rule_window_stays_drawn_when_the_rules_page_is_not() {
     let mut f = Fixture::new("rule-window-stays");
     f.pack("fixture", "yara", "rules.yar", YARA);
+    f.open_list();
     f.until("Alpha_Rule");
     f.click("Alpha_Rule");
     f.until("$a = \"alpha\"");
@@ -856,5 +874,69 @@ fn a_rule_window_stays_drawn_when_the_rules_page_is_not() {
     }
     assert!(shown.contains("Another page"), "{shown}");
     assert!(shown.contains("$a = \"alpha\""), "{shown}");
+    assert!(
+        shown.contains("Zeta_Rule"),
+        "the rule list stays too: {shown}"
+    );
     assert_eq!(f.model.rule_windows.len(), 1);
+    assert_eq!(f.model.rule_lists.len(), 1);
+}
+
+#[test]
+fn the_page_has_only_the_pack_details_and_a_rules_button_left_of_export_manifest() {
+    let mut f = Fixture::new("button");
+    f.pack("fixture", "yara", "rules.yar", YARA);
+    f.until("2 rules");
+    f.settle();
+    let shown = f.frame();
+    let text = joined(&shown);
+    // No inline rule table: no rule names, no filter box, no table headers.
+    for gone in [
+        "Alpha_Rule",
+        "Zeta_Rule",
+        "filter e.g. credential",
+        "Severity",
+        "Open details",
+    ] {
+        assert!(!text.contains(gone), "{gone} is still on the page: {text}");
+    }
+    assert!(f.model.rule_lists.is_empty());
+    let button = rules_button(&shown).expect("a Rules button");
+    let export = shown
+        .iter()
+        .find(|(text, _, _)| text == "Export manifest")
+        .expect("Export manifest")
+        .1;
+    assert!(button.right() < export.left(), "{button:?} {export:?}");
+    assert!(
+        (button.center().y - export.center().y).abs() < 4.0,
+        "same row: {button:?} {export:?}"
+    );
+}
+
+#[test]
+fn the_rules_button_opens_one_list_window_per_pack_with_a_filter_and_a_count() {
+    let mut f = Fixture::new("list");
+    f.ctx
+        .all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+    f.pack("fixture", "yara", "rules.yar", YARA);
+    f.open_list();
+    let shown = f.until("Alpha_Rule");
+    let text = joined(&shown);
+    assert_eq!(f.model.rule_lists.len(), 1);
+    assert!(text.contains("Rules · Fixture fixture"), "{text}");
+    assert!(text.contains("2 of 2 rules"), "{text}");
+    assert!(text.contains("filter e.g. credential"), "{text}");
+    assert!(text.contains("Open details"), "{text}");
+    assert!(text.contains("Zeta_Rule"), "{text}");
+    // The button again brings the window forward; it is still one.
+    f.open_list();
+    f.frame();
+    assert_eq!(f.model.rule_lists.len(), 1);
+    // The filter narrows the list and the count follows.
+    f.model.rule_lists[0].filter = "alpha".into();
+    let shown = f.frame();
+    let text = joined(&shown);
+    assert!(text.contains("1 of 2 rules"), "{text}");
+    assert!(!text.contains("Zeta_Rule"), "{text}");
 }

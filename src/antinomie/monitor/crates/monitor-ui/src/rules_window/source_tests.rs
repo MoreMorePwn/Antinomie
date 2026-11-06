@@ -74,6 +74,55 @@ pub(crate) fn catalog_value() -> (serde_json::Value, Vec<u8>) {
     (value, archive)
 }
 
+/// A pack installed from a small archive built by Python's tarfile, with no network.
+pub(crate) fn install_fixture_pack(dir: &Path, id: &str, engine: &str, file: &str, text: &str) {
+    let source = dir.join(format!("{id}.src"));
+    std::fs::write(&source, text).unwrap();
+    let archive = dir.join(format!("{id}.tar.gz"));
+    let script = r#"
+import gzip, io, sys, tarfile
+source, destination, member = sys.argv[1:4]
+data = open(source, "rb").read()
+raw = io.BytesIO()
+with tarfile.open(fileobj=raw, mode="w", format=tarfile.GNU_FORMAT) as tar:
+    info = tarfile.TarInfo(member)
+    info.size = len(data)
+    info.mtime = 0
+    info.mode = 0o644
+    tar.addfile(info, io.BytesIO(data))
+with open(destination, "wb") as output:
+    with gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as compressed:
+        compressed.write(raw.getvalue())
+"#;
+    let status = std::process::Command::new("python3")
+        .args(["-c", script])
+        .args([&source, &archive])
+        .arg(file)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let bytes = std::fs::read(&archive).unwrap();
+    let entry = ruleset::PackEntry {
+        id: id.into(),
+        engine: engine.into(),
+        name: format!("Fixture {id}"),
+        version: "1".into(),
+        upstream_revision: "r1".into(),
+        upstream_url: "https://example.invalid/".into(),
+        download_url: "https://example.invalid/p.tar.gz".into(),
+        sha256: antinomie_monitor_core::storage::sha256_hex(&bytes),
+        size: bytes.len() as u64,
+        app: ">=0.6.2".into(),
+        engine_requirement: "YARA-X 1.21".into(),
+        rules: 2,
+        helpers: 0,
+        license: "MIT".into(),
+        evidence: vec!["sample".into()],
+        limits: Vec::new(),
+    };
+    ruleset::install_archive(dir, &entry, &bytes).unwrap();
+}
+
 pub(super) fn render(
     ctx: &egui::Context,
     model: &mut Model,

@@ -46,20 +46,28 @@ impl Model {
     /// this every frame, like its other spawned windows, so they stay up when
     /// the page is left or closed.
     pub(crate) fn show_rule_windows(&mut self, ctx: &egui::Context, data_dir: &Path) {
+        self.show_rule_lists(ctx, data_dir);
         let mut removal = None;
         let windows = std::mem::take(&mut self.rule_windows);
         let mut kept = Vec::new();
         for window in windows {
             let mut open = true;
-            let state = self.state_of(&window.rule);
+            let state = self.state_in(&window.key.0, &window.rule);
             let area = crate::title_bar::content_rect(ctx);
+            // At the right of the area: the rule list opens at its left and
+            // stays clickable beside the details.
+            let size = egui::vec2(
+                (area.width() * 0.5).clamp(480.0, 760.0),
+                (area.height() * 0.8).max(360.0),
+            );
             crate::widgets::window(format!("Rule · {}", window.rule.name))
                 .id(window.id())
                 .open(&mut open)
-                .default_size([
-                    (area.width() * 0.5).clamp(480.0, 760.0),
-                    (area.height() * 0.8).max(360.0),
-                ])
+                .default_pos(egui::pos2(
+                    (area.right() - size.x - 16.0).max(area.left() + 16.0),
+                    area.top() + 112.0,
+                ))
+                .default_size(size)
                 .resizable(true)
                 .show(ctx, |ui| {
                     if body(ui, &window, state) {
