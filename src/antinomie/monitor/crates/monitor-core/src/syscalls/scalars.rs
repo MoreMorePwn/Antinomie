@@ -365,13 +365,11 @@ pub(super) fn name(
         ("fanotify_mark", 3) if compat(table) => return None,
         ("lsm_get_self_attr" | "lsm_set_self_attr", 0) => one(value, LSM_ATTR),
         ("lsm_get_self_attr" | "lsm_set_self_attr", 3) => bits(value, LSM_FLAGS),
-        ("access", 1) | ("faccessat" | "faccessat2", 2) => {
-            if value & 7 == 0 {
-                "F_OK".into()
-            } else {
-                bits(value & 0xffff_ffff, ACCESS)
-            }
-        }
+        // F_OK is mode 0 only; bits beyond R_OK/W_OK/X_OK stay visible in hex.
+        ("access", 1) | ("faccessat" | "faccessat2", 2) => match value & 0xffff_ffff {
+            0 => "F_OK".into(),
+            mode => bits(mode, ACCESS),
+        },
         ("mq_open", 1) => open_flags(table, value),
         ("socket", 2) => socket_protocol(args[0], value)?,
         ("set_mempolicy", 0) | ("mbind", 2) => mempolicy(value),
@@ -501,6 +499,25 @@ mod tests {
         args[1] = 6;
         assert_eq!(shown("access", 1, args).unwrap(), "R_OK|W_OK");
         assert_eq!(shown("access", 1, [0; 6]).unwrap(), "F_OK");
+        // Other bits are never F_OK: they stay in hex, beside any named bit.
+        assert_eq!(shown("access", 1, [0, 0x80, 0, 0, 0, 0]).unwrap(), "0x80");
+        assert_eq!(
+            shown("access", 1, [0, 0x84, 0, 0, 0, 0]).unwrap(),
+            "R_OK|0x80"
+        );
+        for call in ["faccessat", "faccessat2"] {
+            assert_eq!(shown(call, 2, [0; 6]).unwrap(), "F_OK", "{call}");
+            assert_eq!(
+                shown(call, 2, [0, 0, 0x80, 0, 0, 0]).unwrap(),
+                "0x80",
+                "{call}"
+            );
+            assert_eq!(
+                shown(call, 2, [0, 0, 0x85, 0, 0, 0]).unwrap(),
+                "R_OK|X_OK|0x80",
+                "{call}"
+            );
+        }
         assert_eq!(
             shown("setitimer", 0, [2, 0, 0, 0, 0, 0]).unwrap(),
             "ITIMER_PROF"

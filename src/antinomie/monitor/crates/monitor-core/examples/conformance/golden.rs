@@ -47,6 +47,19 @@ fn normal(text: &str, volatile: &Volatile, pidish: bool) -> String {
     if looks_like_address(text) {
         return "<addr>".into();
     }
+    normal_value(text, volatile, pidish)
+}
+
+/// Whether an argument of this kind (the syscall table's, as the render
+/// reports it) may hold an address: a pointer, or an argument the table does
+/// not describe. A flag, mask, selector or number never does, whatever its
+/// size (statx's `STATX__RESERVED` mask `0x80000000`).
+fn holds_address(kind: &str) -> bool {
+    matches!(kind, "pointer" | "unknown")
+}
+
+/// [`normal`] for a value that is not an address.
+fn normal_value(text: &str, volatile: &Volatile, pidish: bool) -> String {
     // A process or thread number other than 0 and -1, whoever it names.
     if pidish && text.parse::<i64>().is_ok_and(|id| id > 0) {
         return "<pid>".into();
@@ -396,13 +409,16 @@ fn line(
                 None if work_device(&argument.name, &argument.text, ids).is_some() => {
                     "<work-dev>".to_owned()
                 }
-                None => normal(
-                    &argument.text,
-                    ids,
-                    ["pid", "tid", "tgid", "pgid", "pgrp", "sid"]
+                None => {
+                    let pidish = ["pid", "tid", "tgid", "pgid", "pgrp", "sid"]
                         .iter()
-                        .any(|name| argument.name.contains(name)),
-                ),
+                        .any(|name| argument.name.contains(name));
+                    if holds_address(&argument.kind) {
+                        normal(&argument.text, ids, pidish)
+                    } else {
+                        normal_value(&argument.text, ids, pidish)
+                    }
+                }
             };
             format!("{}={shown}", argument.name)
         })
@@ -783,6 +799,14 @@ mod tests {
         );
         assert_eq!(super::normal("\"/dev/vda\"", &ids, false), "\"/dev/vda\"");
         assert_eq!(super::normal("0x7ffe00001000", &ids, false), "<addr>");
+        // Only an argument that may hold an address becomes `<addr>`: a mask
+        // such as statx's STATX__RESERVED keeps its value.
+        assert!(super::holds_address("pointer") && super::holds_address("unknown"));
+        for kind in ["flags", "selector", "number"] {
+            assert!(!super::holds_address(kind), "{kind}");
+        }
+        assert_eq!(super::normal_value("0x80000000", &ids, false), "0x80000000");
+        assert_eq!(super::normal("0x80000000", &ids, false), "<addr>");
         assert_eq!(super::normal("1234", &ids, true), "<pid>");
         assert_eq!(super::normal("-1", &ids, true), "-1");
         assert_eq!(
@@ -868,6 +892,54 @@ mod tests {
         assert!(super::reads_clock("setitimer", "ovalue"));
         assert!(!super::reads_clock("setitimer", "value"));
         assert!(super::reads_clock("ppoll", "tsp"));
+    }
+
+    #[test]
+    fn a_mask_argument_keeps_its_value_and_a_pointer_becomes_addr() {
+        let ids = super::Volatile {
+            ids: Default::default(),
+            work_dir: None,
+            root_device: None,
+            work_device: None,
+        };
+        let argument = |name: &str, text: &str, kind: &str| {
+            serde_json::json!({"name": name, "text": text, "raw": null, "data": null,
+                "decoded": false, "kind": kind, "value": text})
+        };
+        let view: crate::render::CallView = serde_json::from_value(serde_json::json!({
+            "key": [1, 2, 3], "nr": 332, "name": "statx", "tid": 1, "entry_ns": null,
+            "cells": [], "info": "", "result": "EINVAL", "fields": [], "warnings": [],
+            "fallbacks": [],
+            "arguments": [
+                argument("dfd", "AT_FDCWD", "selector"),
+                argument("flags", "AT_STATX_SYNC_AS_STAT", "flags"),
+                argument("mask", "0x80000000", "flags"),
+                argument("buffer", "0x7ffc12345678", "pointer"),
+            ],
+        }))
+        .unwrap();
+        let case = crate::judge::CaseResult {
+            label: "statx.reserved_mask".into(),
+            seq: 1,
+            nr: 332,
+            name: "statx".into(),
+            matched: None,
+            args_ok: true,
+            ret_ok: true,
+            data_ok: true,
+            async_ok: None,
+            file_ok: None,
+            success: true,
+            data_args: Vec::new(),
+            why: None,
+            problems: Vec::new(),
+            gaps: Vec::new(),
+        };
+        assert_eq!(
+            super::line(&case, false, &view, &ids),
+            "statx.reserved_mask | statx(dfd=AT_FDCWD, flags=AT_STATX_SYNC_AS_STAT, \
+             mask=0x80000000, buffer=<addr>) = EINVAL |"
+        );
     }
 
     #[test]
