@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Summary's Key findings, Indicators and one-line rows.
 use super::indicators::SHOWN;
+use super::rows::{self, Part};
 use super::state::Built;
 use super::{header::dot, Act, Destination};
 use crate::theme;
@@ -29,8 +30,10 @@ pub(super) fn boxed(
 
 /// Rows of Key findings listed before "Show more".
 const KEY_SHOWN: usize = super::insight::KEY_ROWS;
-/// The height of the list when it shows every finding.
-const KEY_LIST_HEIGHT: f32 = 380.0;
+/// Findings the "Show more" box shows at once: each is two lines, so two.
+const KEY_BOX_ROWS: usize = 2;
+/// Indicator rows the "Show N more" box shows at once.
+const BOX_ROWS: usize = 2;
 
 pub(super) fn key_findings(
     ui: &mut egui::Ui,
@@ -57,32 +60,32 @@ pub(super) fn key_findings(
             if built.keys.is_empty() {
                 ui.weak("No findings of LOW or above.");
             }
-            let more = built.keys.len() > KEY_SHOWN;
-            if *open && more {
-                egui::ScrollArea::vertical()
-                    .id_salt("summary-keys")
-                    .max_height(KEY_LIST_HEIGHT)
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        for key in &built.keys {
-                            key_row(ui, scan, start, key, acts);
-                        }
-                    });
-            } else {
-                for key in built.keys.iter().take(KEY_SHOWN) {
-                    key_row(ui, scan, start, key, acts);
-                }
+            for key in built.keys.iter().take(KEY_SHOWN) {
+                key_row(ui, scan, start, key, acts);
             }
-            if more {
+            let rest = built.keys.len().saturating_sub(KEY_SHOWN);
+            if *open && rest > 0 {
+                // A finding is two lines: a title row and its description.
+                let row = ui.text_style_height(&egui::TextStyle::Body)
+                    + ui.text_style_height(&egui::TextStyle::Small)
+                    + 6.0
+                    + 2.0 * ui.spacing().item_spacing.y;
+                rows::inset(ui, "summary-keys", KEY_BOX_ROWS as f32 * row, |ui| {
+                    for key in &built.keys[KEY_SHOWN..] {
+                        key_row(ui, scan, start, key, acts);
+                    }
+                });
+            }
+            if rest > 0 {
                 ui.add_space(4.0);
                 let label = if *open {
                     "Show less".to_owned()
                 } else {
-                    format!("Show more ({})", built.keys.len() - KEY_SHOWN)
+                    format!("Show more ({rest})")
                 };
                 if ui
                     .button(label)
-                    .on_hover_text("List every finding in a scrolling list")
+                    .on_hover_text("List the other findings in a small box that scrolls")
                     .clicked()
                 {
                     *open = !*open;
@@ -201,8 +204,9 @@ fn node_name(scan: &ArchiveScan, pid: u32, cookie: u64, exe: &str) -> String {
         .unwrap_or_else(|| process_cells::file_name(exe).to_owned())
 }
 
-/// One kind of indicator as a branch of the tree: the first few, each a link
-/// to its view, and "Show N more" for the rest in a scrolling list.
+/// One kind of indicator as a branch of the tree: the first few, each
+/// a clickable item for its view, and "Show N more" for the rest in a small
+/// box that scrolls.
 fn category(
     ui: &mut egui::Ui,
     title: &str,
@@ -230,20 +234,17 @@ fn category(
                 }
             });
         };
-        if *more {
-            egui::ScrollArea::vertical()
-                .id_salt(("summary-indicators-list", title))
-                .max_height(240.0)
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    for at in 0..total {
-                        row(ui, at);
-                    }
-                });
-        } else {
-            for at in 0..total.min(SHOWN) {
-                row(ui, at);
-            }
+        for at in 0..total.min(SHOWN) {
+            row(ui, at);
+        }
+        if *more && total > SHOWN {
+            let height =
+                BOX_ROWS as f32 * (ui.spacing().interact_size.y + ui.spacing().item_spacing.y);
+            rows::inset(ui, ("summary-indicators-list", title), height, |ui| {
+                for at in SHOWN..total {
+                    row(ui, at);
+                }
+            });
         }
         if total > SHOWN {
             let label = if *more {
@@ -319,14 +320,11 @@ pub(super) fn indicators(
                 |ui, at| {
                     let row = &found.endpoints[at];
                     let place = super::indicators::Indicators::place(row);
-                    let text = if place.is_empty() {
-                        row.endpoint.clone()
-                    } else {
-                        format!("{} ({place})", row.endpoint)
-                    };
-                    ui.link(text)
-                        .on_hover_text("Open the Endpoints tab")
-                        .clicked()
+                    let mut parts = vec![Part::Value(&row.endpoint)];
+                    if !place.is_empty() {
+                        parts.push(Part::Note(&place));
+                    }
+                    rows::item(ui, &parts, "Open the Endpoints tab")
                 },
             );
             category(
@@ -337,9 +335,11 @@ pub(super) fn indicators(
                 Destination::Dns,
                 acts,
                 |ui, at| {
-                    ui.link(&found.domains[at])
-                        .on_hover_text("Open the Domains tab")
-                        .clicked()
+                    rows::item(
+                        ui,
+                        &[Part::Value(&found.domains[at])],
+                        "Open the Domains tab",
+                    )
                 },
             );
             category(
@@ -349,11 +349,7 @@ pub(super) fn indicators(
                 urls,
                 Destination::Http,
                 acts,
-                |ui, at| {
-                    ui.link(&found.urls[at])
-                        .on_hover_text("Open the URLs tab")
-                        .clicked()
-                },
+                |ui, at| rows::item(ui, &[Part::Value(&found.urls[at])], "Open the URLs tab"),
             );
             category(
                 ui,
@@ -364,17 +360,17 @@ pub(super) fn indicators(
                 acts,
                 |ui, at| {
                     let row = &found.files[at];
-                    let text = if row.sha256.is_empty() {
-                        format!("{} ({})", row.path, row.kind)
+                    let hash = super::sample::short_hash(&row.sha256);
+                    let mut parts = vec![Part::Value(&row.path), Part::Note(row.kind)];
+                    if !row.sha256.is_empty() {
+                        parts.push(Part::Note(&hash));
+                    }
+                    let hint = if row.sha256.is_empty() {
+                        "Open the Executed files tab".to_owned()
                     } else {
-                        format!(
-                            "{} ({}) {}",
-                            row.path,
-                            row.kind,
-                            super::sample::short_hash(&row.sha256)
-                        )
+                        format!("SHA-256 {}. Open the Executed files tab.", row.sha256)
                     };
-                    ui.link(text).on_hover_text(row.sha256.clone()).clicked()
+                    rows::item(ui, &parts, &hint)
                 },
             );
             if let Some(text) = status.as_ref() {
@@ -416,14 +412,13 @@ pub(super) fn attack_row(ui: &mut egui::Ui, total: usize, details: &[attack::Det
         return;
     }
     line(ui, &format!("MITRE ATT&CK ({total})"), |ui| {
-        let counts: Vec<String> = tactic_counts(details)
-            .iter()
-            .map(|(name, n)| format!("{name} {n}"))
+        let counts: Vec<(String, &str, bool)> = tactic_counts(details)
+            .into_iter()
+            .map(|(name, n)| (n.to_string(), name, false))
             .collect();
-        ui.label(RichText::new(counts.join(" \u{b7} ")).color(theme::muted()));
+        rows::figures(ui, &counts);
     });
 }
-
 pub(super) fn interest_row(
     ui: &mut egui::Ui,
     built: &Built,
@@ -444,27 +439,23 @@ pub(super) fn interest_row(
                     None => (theme::muted(), "argv".to_owned()),
                 };
                 ui.add(crate::widgets::dot::DotLabel::new(color, count).text_color(color));
-                if ui
-                    .link(&item.label)
-                    .on_hover_text("Open this process's details")
-                    .clicked()
-                {
+                if rows::item(
+                    ui,
+                    &[Part::Name(&item.label)],
+                    "Open this process's details",
+                ) {
                     acts.push(Act::Process(item.key));
                 }
             });
         }
-        if ui
-            .link(
-                RichText::new(format!(
-                    "of {} processes \u{b7} {} syscalls",
-                    scan.process.len(),
-                    scan.counts.calls
-                ))
-                .small(),
-            )
-            .on_hover_text("Open the Process tree")
-            .clicked()
-        {
+        let sections = [
+            ("of ".to_owned(), false),
+            (scan.process.len().to_string(), true),
+            (" processes \u{b7} ".to_owned(), false),
+            (scan.counts.calls.to_string(), true),
+            (" syscalls".to_owned(), false),
+        ];
+        if rows::counted_item(ui, &sections, "Open the Process tree") {
             acts.push(Act::Go(Destination::Tasks));
         }
     });
@@ -473,15 +464,14 @@ pub(super) fn interest_row(
 pub(super) fn files_row(ui: &mut egui::Ui, scan: &ArchiveScan, acts: &mut Vec<Act>) {
     let tab = |tab: FileTab| scan.counts.tabs[tab.slot() - 8];
     line(ui, "Files", |ui| {
-        ui.label(
-            RichText::new(format!(
-                "{} created \u{b7} {} executed \u{b7} {} deleted \u{b7} {} changed",
-                tab(FileTab::Created),
-                tab(FileTab::Executed),
-                tab(FileTab::Deleted),
-                scan.counts.changed
-            ))
-            .color(theme::muted()),
+        rows::figures(
+            ui,
+            &[
+                (tab(FileTab::Created).to_string(), "created", true),
+                (tab(FileTab::Executed).to_string(), "executed", true),
+                (tab(FileTab::Deleted).to_string(), "deleted", true),
+                (scan.counts.changed.to_string(), "changed", true),
+            ],
         );
         if ui
             .link("\u{2192}")
@@ -502,12 +492,13 @@ pub(super) fn network_row(ui: &mut egui::Ui, scan: &ArchiveScan, acts: &mut Vec<
             );
         } else {
             let endpoints = scan.new_tabs.endpoints.len() as u64 + scan.new_tabs.endpoints_omitted;
-            ui.label(
-                RichText::new(format!(
-                    "{endpoints} endpoints \u{b7} {} DNS \u{b7} {} HTTP",
-                    scan.counts.dns, scan.counts.http
-                ))
-                .color(theme::muted()),
+            rows::figures(
+                ui,
+                &[
+                    (endpoints.to_string(), "endpoints", true),
+                    (scan.counts.dns.to_string(), "DNS", true),
+                    (scan.counts.http.to_string(), "HTTP", true),
+                ],
             );
         }
         if ui
