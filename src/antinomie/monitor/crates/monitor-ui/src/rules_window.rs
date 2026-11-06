@@ -24,6 +24,7 @@ mod page;
 #[cfg(test)]
 mod page_tests;
 mod regex_tab;
+mod rule_list;
 mod rule_window;
 #[cfg(test)]
 pub(crate) mod source_tests;
@@ -67,12 +68,9 @@ pub(crate) struct Model {
     requested: Option<RulesAction>,
     loaded: bool,
     engine: String,
-    filter: String,
-    applied: String,
     catalog: Option<Catalog>,
     registry: Registry,
     rows: Vec<IndexedRule>,
-    visible: Vec<usize>,
     pack_id: String,
     group_id: String,
     status: String,
@@ -83,20 +81,17 @@ pub(crate) struct Model {
     /// The status text of a download that was asked for while downloads are
     /// off. It shows in red where it happened and is not an error.
     blocked: Option<String>,
-    detail: Option<usize>,
     tab: Tab,
     /// The catalog pack whose details show, by id.
     catalog_pick: String,
     /// The set `rows` were read for; empty while none are.
     rows_key: String,
-    /// `visible` in the order the rules table header chose, and what that
-    /// order was made for (sort, `list_gen`).
-    sorted: Vec<usize>,
-    sorted_for: Option<(Option<(usize, bool)>, u64)>,
-    /// Changes whenever the filter, the rules or their states do.
+    /// Changes whenever a rule's state does: the open rule lists sort again.
     list_gen: u64,
     /// The floating details windows, one per rule.
     rule_windows: Vec<rule_window::RuleWindow>,
+    /// The floating rule lists, one per pack or group.
+    rule_lists: Vec<rule_list::RuleList>,
     job: Option<Job>,
     group_name: String,
     import_path: String,
@@ -167,7 +162,10 @@ impl Model {
             self.changed |= !self.loaded;
             crate::activity::report(ctx, crate::activity::Level::Error, error);
         }
-        if self.job.is_some() || self.rule_windows.iter().any(|open| open.rx.is_some()) {
+        if self.job.is_some()
+            || self.rule_windows.iter().any(|open| open.rx.is_some())
+            || self.rule_lists.iter().any(|list| list.is_reading())
+        {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
@@ -201,6 +199,9 @@ impl Model {
         for open in &mut self.rule_windows {
             open.poll();
         }
+        for list in &mut self.rule_lists {
+            list.poll();
+        }
         let finished = self.job.as_ref().and_then(|job| match job.rx.try_recv() {
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
@@ -225,8 +226,6 @@ impl Model {
                 Ok(Done::Rules(key, rows)) => {
                     self.rows = rows;
                     self.rows_key = key;
-                    self.apply_filter();
-                    self.detail = None;
                     self.status = format!("Indexed {} rules.", self.rows.len());
                     self.status_done = Some(self.status.clone());
                 }
@@ -284,30 +283,6 @@ impl Model {
                 }
             }
         }
-    }
-
-    fn apply_filter(&mut self) {
-        self.applied = self.filter.clone();
-        let needle = self.filter.to_ascii_lowercase();
-        self.visible = self
-            .rows
-            .iter()
-            .enumerate()
-            .filter(|(_, rule)| {
-                needle.is_empty()
-                    || rule.id.to_ascii_lowercase().contains(&needle)
-                    || rule.name.to_ascii_lowercase().contains(&needle)
-                    || rule.file.to_ascii_lowercase().contains(&needle)
-                    || rule.severity.to_ascii_lowercase().contains(&needle)
-                    || rule
-                        .tags
-                        .iter()
-                        .any(|tag| tag.to_ascii_lowercase().contains(&needle))
-                    || rule.reason.to_ascii_lowercase().contains(&needle)
-            })
-            .map(|(index, _)| index)
-            .collect();
-        self.list_gen += 1;
     }
 
     /// Whether the selected engine can scan, and how to repair it if not.
@@ -477,10 +452,10 @@ impl Model {
         }
     }
 
-    fn rule_disabled(&self, rule: &IndexedRule) -> bool {
+    fn rule_disabled(&self, key: &str, rule: &IndexedRule) -> bool {
         self.registry
             .disabled
-            .get(&self.rule_key())
+            .get(key)
             .is_some_and(|ids| ids.contains(&rule.id))
     }
 

@@ -366,8 +366,6 @@ impl Model {
         let id = id.to_owned();
         self.choices.remove(&id);
         self.rows.clear();
-        self.visible.clear();
-        self.detail = None;
         self.spawn(move |_| {
             ruleset::remove_pack(&dir, &id)?;
             Ok(Done::Message(format!(

@@ -30,6 +30,7 @@ mod main_window_ui;
 mod memory_probe;
 mod network;
 mod pending;
+mod rules_list;
 mod rules_startup;
 mod run_kill;
 mod run_selection;
