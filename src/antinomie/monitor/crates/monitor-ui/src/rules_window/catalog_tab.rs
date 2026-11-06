@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Catalog tab of the Detection rules page: the packs on offer for the
 //! engine and the details of the selected one. Nothing here fetches a rule.
-use super::{
-    page::{CELL_PAD, ROW_PAD},
-    theme, Model,
-};
+use super::{page::ROW_PAD, theme, Model};
 use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::widgets::{self, fit_table, Tone};
 use antinomie_monitor_core::ruleset;
@@ -46,7 +43,6 @@ impl Model {
         let row_height = fit_table::row_height(font) + ROW_PAD;
         let height = row_height * (offers.len().min(6) as f32 + 1.5) + 8.0;
         ui.scope(|ui| {
-            ui.spacing_mut().item_spacing.x += CELL_PAD;
             FitBuilder::new(ui)
                 .id_salt("rules_catalog")
                 .sense(egui::Sense::click())
@@ -156,8 +152,6 @@ impl Model {
                 self.archive_entry(ui, data_dir, outbound, &entry);
             }
         });
-        ui.add_space(4.0);
-        theme::section(ui, "Rules");
     }
 
     /// Installed, an update of an installed pack, or only on offer.

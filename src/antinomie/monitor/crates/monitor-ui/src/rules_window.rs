@@ -24,11 +24,12 @@ mod page;
 #[cfg(test)]
 mod page_tests;
 mod regex_tab;
+mod rule_window;
 #[cfg(test)]
 pub(crate) mod source_tests;
 mod sources;
 
-use page::{RuleText, Tab};
+use page::Tab;
 
 /// A window or page the Detection rules page asks the app to open, to repair an engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,8 +95,8 @@ pub(crate) struct Model {
     sorted_for: Option<(Option<(usize, bool)>, u64)>,
     /// Changes whenever the filter, the rules or their states do.
     list_gen: u64,
-    rule_text: Option<RuleText>,
-    rule_text_rx: Option<Receiver<Result<String, String>>>,
+    /// The floating details windows, one per rule.
+    rule_windows: Vec<rule_window::RuleWindow>,
     job: Option<Job>,
     group_name: String,
     import_path: String,
@@ -166,7 +167,7 @@ impl Model {
             self.changed |= !self.loaded;
             crate::activity::report(ctx, crate::activity::Level::Error, error);
         }
-        if self.job.is_some() || self.rule_text_rx.is_some() {
+        if self.job.is_some() || self.rule_windows.iter().any(|open| open.rx.is_some()) {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
@@ -193,25 +194,13 @@ impl Model {
             .show(ui, |ui| {
                 self.contents(ui, data_dir, outbound, detection);
             });
+        self.show_rule_windows(ui.ctx(), data_dir);
         self.requested.take()
     }
 
     fn poll(&mut self) {
-        if let Some(done) = self
-            .rule_text_rx
-            .as_ref()
-            .and_then(|rx| match rx.try_recv() {
-                Ok(result) => Some(result),
-                Err(mpsc::TryRecvError::Empty) => None,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    Some(Err("The rule could not be read".into()))
-                }
-            })
-        {
-            self.rule_text_rx = None;
-            if let Some(shown) = &mut self.rule_text {
-                shown.text = Some(done);
-            }
+        for open in &mut self.rule_windows {
+            open.poll();
         }
         let finished = self.job.as_ref().and_then(|job| match job.rx.try_recv() {
             Ok(result) => Some(result),
@@ -239,7 +228,6 @@ impl Model {
                     self.rows_key = key;
                     self.apply_filter();
                     self.detail = None;
-                    self.rule_text = None;
                     self.status = format!("Indexed {} rules.", self.rows.len());
                     self.status_done = Some(self.status.clone());
                 }

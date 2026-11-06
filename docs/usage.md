@@ -458,7 +458,7 @@ The network capture is the guest's own view on every route.
   its command line, user, status and exit code. The state is coloured (see
   *Run states* below). Double-click a run to open its
   Triage view. Select a trace entry to inspect its recorded call details.
-  The table spans the pane. A run's details list **Analysis enabled** as a tree:
+  The table spans the pane. A run's process tree scrolls inside its own box, which stops short of the details' scroll bar so the two never overlap. A run's details list **Analysis enabled** as a tree:
   the static analysis with its checks below it, then the capture options; a check
   that produced no result, or a capture that was deleted or failed, is greyed.
   In a process's Details, **Show its calls** opens **Syscall Trace**
@@ -705,7 +705,7 @@ The network capture is the guest's own view on every route.
   choice is saved. A card shows the rule's title, severity tag and hit count, the
   description, the rule pack and every author, and the MITRE tags. **Details…**
   opens the rule: description, then the evidence locations as a scrollable
-  table, the rule's metadata and its text (wrapped by default). The page scrolls
+  table (the full width of the window, twelve rows or more before it scrolls, a long location wraps and shows in full), the rule's metadata and its text (wrapped by default). The page scrolls
   when a section grows. An empty result says how many inputs were not scanned
   and why. For IDS, "Rule packs: N rules" counts every rule in the enabled
   packs and the coverage line counts what Suricata loaded; hover it for the
@@ -842,6 +842,7 @@ The network capture is the guest's own view on every route.
   text is decoded and scanned again (two levels deep); the **Inside** column says
   which. The same list opens as a window from **Core dumps > Strings**, where it also lists
   the binary `sockaddr_in` and `sockaddr_in6` structures in the core's memory.
+  In **Library > Detection rules**, a click on an installed rule (or **Open details**) opens its metadata and source text in a window of its own, one per rule, with the code on a padded block of the theme's code background. Core dump list problems of a run are reported to the activity log once each.
   Switch patterns off or add your own in **Library > Detection rules > Strings
   regex** (**Add patterns**: a name, a category, a regular expression that
   fills the rest of the row, and **Add**, all on one row); **Scan again** reads the change. An analysis that was not started

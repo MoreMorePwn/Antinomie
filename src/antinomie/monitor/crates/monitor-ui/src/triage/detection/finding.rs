@@ -263,6 +263,13 @@ pub(super) fn journal_focus(engine: Engine, finding: &Finding, index: usize) -> 
     }
 }
 
+/// How tall the evidence table grows before it scrolls: twelve rows, or
+/// more in a tall pane (about half of what the pane shows).
+pub(super) fn evidence_height(ui: &egui::Ui) -> f32 {
+    let row = ui.spacing().interact_size.y.max(18.0) + 4.0;
+    (row * 13.0).max(ui.clip_rect().height() * 0.5)
+}
+
 /// Every retained location of a finding, each one a button. Returns the one
 /// clicked this frame. A Sigma location also opens the journal event.
 pub(super) fn evidence_list(
@@ -286,18 +293,34 @@ pub(super) fn evidence_list(
         .iter()
         .enumerate()
         .any(|(index, _)| journal_focus(engine, finding, index).is_some());
+    let spacing = 14.0;
+    let number_width = 34.0;
+    let journal_width = if journal { 170.0 } else { 0.0 };
+    let gutter = crate::details_scroll::bar_gutter(ui);
+    // The location takes what the number and the journal button leave of the
+    // pane, so a long path wraps in full instead of being cut.
+    let columns = if journal { 3.0 } else { 2.0 };
+    let location_width =
+        (ui.available_width() - gutter - number_width - journal_width - spacing * columns)
+            .max(160.0);
+    let table_width = ui.available_width() - gutter;
     egui::ScrollArea::vertical()
         .id_salt(salt)
         .max_height(max_height)
         .auto_shrink([false, true])
         .show(ui, |ui| {
+            ui.set_min_width(table_width);
             egui::Grid::new(("detection-evidence-table", finding.rule_id.as_str()))
                 .num_columns(if journal { 3 } else { 2 })
                 .striped(true)
-                .spacing([14.0, 4.0])
+                .min_col_width(number_width)
+                .spacing([spacing, 4.0])
                 .show(ui, |ui| {
                     ui.label(RichText::new("#").small().color(theme::muted()));
-                    ui.label(RichText::new("Location").small().color(theme::muted()));
+                    ui.add_sized(
+                        [location_width, 0.0],
+                        egui::Label::new(RichText::new("Location").small().color(theme::muted())),
+                    );
                     if journal {
                         ui.label(RichText::new("Journal").small().color(theme::muted()));
                     }
@@ -305,12 +328,23 @@ pub(super) fn evidence_list(
                     for (index, evidence) in finding.evidence.iter().enumerate() {
                         let focus = journal_focus(engine, finding, index);
                         ui.label(RichText::new((index + 1).to_string()).color(theme::muted()));
-                        if ui
-                            .add(egui::Button::new(evidence_label(evidence)).wrap())
-                            .clicked()
-                        {
-                            selected = Some(Pick::Source(evidence.clone()));
-                        }
+                        let label = evidence_label(evidence);
+                        ui.scope(|ui| {
+                            ui.set_width(location_width);
+                            let response = ui
+                                .add(
+                                    egui::Label::new(
+                                        RichText::new(&label).color(ui.visuals().hyperlink_color),
+                                    )
+                                    .wrap()
+                                    .sense(egui::Sense::click()),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .on_hover_text(&label);
+                            if response.clicked() {
+                                selected = Some(Pick::Source(evidence.clone()));
+                            }
+                        });
                         match &focus {
                             Some(Focus::Event(event)) => {
                                 let button = ui
@@ -527,9 +561,13 @@ fn finding_body(
                 ui,
                 &format!("Evidence locations ({})", finding.evidence.len()),
             );
-            if let Some(pick) =
-                evidence_list(ui, report.engine, finding, "detection-finding-hits", 240.0)
-            {
+            if let Some(pick) = evidence_list(
+                ui,
+                report.engine,
+                finding,
+                "detection-finding-hits",
+                evidence_height(ui),
+            ) {
                 clicked = Some(pick);
             }
             byte_preview(ui, preview, loading, finding);
@@ -929,5 +967,46 @@ mod tests {
         // The first column of the table is the location number.
         assert!(y.contains_key("Location"), "{:?}", y.keys());
         assert!(at("Evidence locations (2)") < at("rule sample_rule"));
+    }
+
+    #[test]
+    fn the_evidence_table_uses_the_pane_width_and_shows_twelve_rows_before_scrolling() {
+        let mut view = View::default();
+        let long = "a-rather-long-sample-name-that-used-to-be-cut-off-in-the-table.bin";
+        let evidence = (0..40)
+            .map(|index| Evidence::Bytes {
+                path: PathBuf::from(long),
+                offset: Some(index),
+                address: None,
+                report_id: None,
+                block: None,
+            })
+            .collect();
+        let finding = super::super::tests::finding("sample_rule", "Sample rule", evidence);
+        view.results[0] = Some(Ok(super::super::tests::report(vec![finding])));
+        view.open_window(WindowKey {
+            engine: 0,
+            rule_id: "sample_rule".into(),
+            title: "Sample rule".into(),
+        });
+        let ctx = egui::Context::default();
+        let shapes = frames(&ctx, 4, |root| {
+            let ctx = &root.ctx().clone();
+            view.show_windows(ctx)
+        });
+        let mut rows = Vec::new();
+        for shape in &shapes {
+            super::super::tests::each_galley_rect(&shape.shape, &mut |text, rect| {
+                if text.contains("open bytes at") {
+                    rows.push((text.to_owned(), rect));
+                }
+            });
+        }
+        assert!(rows.len() >= 12, "only {} rows drawn", rows.len());
+        let (text, rect) = &rows[0];
+        assert!(text.starts_with(long), "{text}");
+        let line = ctx.global_style().spacing.interact_size.y;
+        assert!(rect.height() < line * 1.6, "wrapped: {rect:?}");
+        assert!(rect.width() > 400.0, "location column too narrow: {rect:?}");
     }
 }

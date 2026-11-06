@@ -20,14 +20,6 @@ pub(super) enum Tab {
     Abusech,
 }
 
-/// The source text of the rule shown in the details.
-pub(super) struct RuleText {
-    /// The rule set and rule it was read for.
-    pub key: (String, String),
-    /// `None` while it is read.
-    pub text: Option<Result<String, String>>,
-}
-
 /// An installed pack or custom group, as the table lists it.
 struct SetRow {
     id: String,
@@ -40,10 +32,10 @@ struct SetRow {
 
 /// Room above and below the status lines under the toolbar.
 const NOTICE_GAP: f32 = 6.0;
-/// Extra row height and column spacing of the pack and rule tables, so the
-/// text has room around it.
+/// Extra row height of the pack and rule tables, so the text has room around
+/// it. The column spacing stays the theme's: a wider one made each cell's
+/// fill and the header rule stick out past the table by half of it.
 pub(super) const ROW_PAD: f32 = 8.0;
-pub(super) const CELL_PAD: f32 = 8.0;
 
 fn severity_rank(severity: &str) -> u8 {
     match severity {
@@ -56,7 +48,7 @@ fn severity_rank(severity: &str) -> u8 {
     }
 }
 
-fn severity_tone(severity: &str) -> Tone {
+pub(super) fn severity_tone(severity: &str) -> Tone {
     match severity_rank(severity) {
         4 | 5 => Tone::Error,
         3 => Tone::Warn,
@@ -218,7 +210,6 @@ impl Model {
         self.visible.clear();
         self.rows_key.clear();
         self.detail = None;
-        self.rule_text = None;
         self.list_gen += 1;
     }
 
@@ -456,7 +447,6 @@ impl Model {
         };
         let height = row_height * (rows.len().min(5) as f32 + 1.5) + 8.0;
         ui.scope(|ui| {
-            ui.spacing_mut().item_spacing.x += CELL_PAD;
             FitBuilder::new(ui)
                 .id_salt("rules_sets")
                 .sense(egui::Sense::click())
@@ -808,45 +798,28 @@ impl Model {
                 ))
                 .color(theme::muted()),
             );
+            let selected = self.detail.filter(|index| *index < self.rows.len());
+            if ui
+                .add_enabled(selected.is_some(), egui::Button::new("Open details"))
+                .on_hover_text(
+                    "Opens the selected rule's metadata and source text in a window of its own. A click on a rule does the same.",
+                )
+                .clicked()
+            {
+                if let Some(index) = selected {
+                    self.pick_rule(index, data_dir);
+                }
+            }
         });
         if self.rows_key != self.rule_key() {
             theme::loading(ui, "Reading the rules…");
             return;
         }
         self.rule_order(ui.ctx());
-        let total = ui.available_width();
-        let gap = 12.0;
-        // Side by side only when the table keeps room for its five columns
-        // and a readable rule name; otherwise the details go under it.
-        let wide = total >= 1000.0;
-        let left = if wide { (total - gap) * 0.56 } else { total };
         let height = (ui.clip_rect().bottom() - ui.cursor().top()).clamp(240.0, 640.0);
         let mut picked = None;
         let mut toggle = None;
-        ui.horizontal_top(|ui| {
-            ui.allocate_ui_with_layout(
-                egui::vec2(left, height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    ui.set_width(left);
-                    self.rules_table(ui, height, &mut picked, &mut toggle);
-                },
-            );
-            if wide {
-                ui.add_space(gap);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(total - left - gap, height),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        ui.set_width(total - left - gap);
-                        self.rule_detail(ui, height, data_dir);
-                    },
-                );
-            }
-        });
-        if !wide {
-            self.rule_detail(ui, 320.0, data_dir);
-        }
+        self.rules_table(ui, height, &mut picked, &mut toggle);
         if let Some(index) = picked {
             self.pick_rule(index, data_dir);
         }
@@ -877,7 +850,6 @@ impl Model {
         ui.scope(|ui| {
             let width = ui.available_width();
             ui.set_max_width(width);
-            ui.spacing_mut().item_spacing.x += CELL_PAD;
             FitBuilder::new(ui)
                 .id_salt("rules_list")
                 .sense(egui::Sense::click())
@@ -949,150 +921,48 @@ impl Model {
         });
     }
 
+    /// Selects a rule and opens its details window (or brings the one it
+    /// already has to the front: one window per rule).
     fn pick_rule(&mut self, index: usize, data_dir: &Path) {
         self.detail = Some(index);
         let Some(rule) = self.rows.get(index).cloned() else {
             return;
         };
         let key = (self.rule_key(), rule.id.clone());
+        if let Some(open) = self.rule_windows.iter().find(|open| open.key == key) {
+            open.raise.set(true);
+            return;
+        }
         let (tx, rx) = mpsc::channel();
-        self.rule_text = Some(RuleText { key, text: None });
-        self.rule_text_rx = Some(rx);
         let dir = data_dir.to_path_buf();
         let engine = self.engine.clone();
         let (pack, group) = (self.pack_id.clone(), self.group_id.clone());
+        let source = rule.clone();
         let started = thread::Builder::new()
             .name("rule-text".into())
             .spawn(move || {
                 let text = if group.is_empty() {
-                    ruleset::pack_rule_source(&dir, &engine, &pack, &rule)
+                    ruleset::pack_rule_source(&dir, &engine, &pack, &source)
                 } else {
-                    ruleset::group_rule_source(&dir, &group, &rule)
+                    ruleset::group_rule_source(&dir, &group, &source)
                 };
                 let _ = tx.send(text);
             });
-        if let Err(error) = started {
-            if let Some(shown) = &mut self.rule_text {
-                shown.text = Some(Err(error.to_string()));
-            }
-        }
+        let (rx, text) = match started {
+            Ok(_) => (Some(rx), None),
+            Err(error) => (None, Some(Err(error.to_string()))),
+        };
+        self.rule_windows.push(super::rule_window::RuleWindow {
+            key,
+            rule,
+            group: self.group_id.clone(),
+            text,
+            rx,
+            raise: std::cell::Cell::new(false),
+        });
     }
 
-    fn rule_detail(&mut self, ui: &mut egui::Ui, height: f32, data_dir: &Path) {
-        let Some(rule) = self.detail.and_then(|index| self.rows.get(index)).cloned() else {
-            ui.weak("Select a rule.");
-            return;
-        };
-        let state = self.rule_state(&rule);
-        let mut remove = false;
-        egui::ScrollArea::vertical()
-            .id_salt("rule-detail")
-            .max_height(height)
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                ui.add(
-                    egui::Label::new(RichText::new(&rule.name).strong().color(theme::heading()))
-                        .wrap(),
-                );
-                ui.horizontal_wrapped(|ui| {
-                    if !rule.severity.is_empty() {
-                        widgets::chip(ui, &rule.severity, severity_tone(&rule.severity));
-                    }
-                    widgets::chip(
-                        ui,
-                        state,
-                        match state {
-                            "enabled" => Tone::Good,
-                            "incompatible" => Tone::Warn,
-                            _ => Tone::Neutral,
-                        },
-                    );
-                    if rule.helper {
-                        widgets::chip(ui, "helper", Tone::Neutral);
-                    }
-                });
-                let tags = rule.tags.join(", ");
-                let evidence = rule.evidence.join(", ");
-                let references = rule.references.join(", ");
-                let depends = rule.depends_on.join(", ");
-                for (label, value) in [
-                    ("Id", rule.id.as_str()),
-                    ("File", rule.file.as_str()),
-                    ("License", rule.license.as_str()),
-                    ("Source", rule.source_url.as_str()),
-                    ("Description", rule.condition.as_str()),
-                    ("Tags", tags.as_str()),
-                    ("Evidence", evidence.as_str()),
-                    ("References", references.as_str()),
-                    ("Uses rules", depends.as_str()),
-                    (
-                        "Compatibility",
-                        if rule.compatible {
-                            "compatible"
-                        } else {
-                            rule.reason.as_str()
-                        },
-                    ),
-                ] {
-                    if !value.is_empty() {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(format!("{label}: {value}")).color(theme::text()),
-                            )
-                            .wrap(),
-                        );
-                    }
-                }
-                if !self.group_id.is_empty() && ui.button("Remove from group").clicked() {
-                    remove = true;
-                }
-                theme::section(ui, "Source text");
-                match self
-                    .rule_text
-                    .as_ref()
-                    .filter(|shown| shown.key == (self.rule_key(), rule.id.clone()))
-                {
-                    Some(RuleText {
-                        text: Some(Ok(text)),
-                        ..
-                    }) => {
-                        if ui.small_button("Copy").clicked() {
-                            ui.ctx().copy_text(text.clone());
-                        }
-                        let mut shown = text.as_str();
-                        ui.add(
-                            egui::TextEdit::multiline(&mut shown)
-                                .code_editor()
-                                .desired_width(f32::INFINITY),
-                        );
-                    }
-                    Some(RuleText {
-                        text: Some(Err(error)),
-                        ..
-                    }) => {
-                        crate::activity::error(
-                            ui,
-                            format!("The rule text could not be read: {error}"),
-                        );
-                    }
-                    _ => {
-                        theme::loading(ui, "Reading the rule…");
-                    }
-                }
-            });
-        if remove {
-            let dir = data_dir.to_path_buf();
-            let id = self.group_id.clone();
-            let removed = rule.id.clone();
-            self.spawn(move |_| {
-                let revision = ruleset::revise_group(&dir, &id, None, &[removed])?;
-                let registry = ruleset::load_registry(&dir)?;
-                Ok(Done::Registry(
-                    registry,
-                    format!("Removed a rule from {id} as revision {revision}."),
-                ))
-            });
-            self.rows_key.clear();
-        }
+    pub(super) fn state_of(&self, rule: &IndexedRule) -> &'static str {
+        self.rule_state(rule)
     }
 }
