@@ -1403,13 +1403,29 @@ Multi-arch plan cards MA-19 and the Debian half of MA-15. No contract change.
   Debian's (after patch 45's arm64 entry, above). Checks on both bases:
   quick tier groups (user 1911, root 129, threads 2241 cases) and the matrix
   (318 slots) pass; `debug-check a32` passes; `snapshot-uefi` passes on the
-  Debian base (8 min 21 s, AAVMF and its variable store). The goldens are not
-  re-blessed: every BusyBox difference is one of the cases whose x86-64
-  rendering changed too (newer host decoding: `<bytes>` decoded, flag
-  names), and every further Debian difference renders exactly as the aarch64
-  BusyBox golden does (`aarch64/debian-minimal` predates revision 21's ioctl
-  captures and cases, and the fixture's `PR_SET_NAME` address). None comes
-  from arm64 or Debian behaviour.
+  Debian base (8 min 21 s, AAVMF and its variable store). Every golden
+  difference was newer host decoding (`<bytes>` decoded, flag names), the
+  same cases as on x86-64, and on Debian the revision-21 cases
+  `aarch64/debian-minimal` predated (ioctl captures, the fixture's
+  `PR_SET_NAME` address); none came from arm64 or Debian behaviour. The
+  goldens were re-blessed with the x86-64 ones (below).
+* **Final revision-21 x86-64 bases on the final series** (2026-11-06,
+  `bases/0.9.0-r21-20261105/busybox` and `debian-minimal`, series 9d955a7b).
+  Rebuilt after patch 45's arm64 change: the object code is the earlier
+  bases' (series 2c43fb98) but for the source ID. BusyBox: every instruction
+  identical; Debian Minimal: Debian's ABI check and BTF identical to Debian's,
+  and every instruction identical but for 436 that address 275 read-only
+  objects that moved down 32 bytes because the compressed configuration (which
+  holds the source ID) is 35 bytes shorter. One kallsyms name changed with
+  recorder.c's line numbers (`__initcall__kmod_recorder__*_3176_ant_recorder_init4`).
+  The goldens of all four final bases (x86-64 and aarch64, BusyBox and Debian
+  Minimal) were re-blessed from quick-tier runs on them after a review of
+  every difference: newer host decoding, the revision-21 ioctl and fixture
+  cases, and the run-dependent values the golden files now hide (above). Not
+  blessed: `access.bad_mode` (the view shows `access`'s mode `0x80` as `F_OK`:
+  `syscalls/scalars.rs` names `F_OK` whenever the three access bits are clear)
+  and `statx.reserved_mask` (the view's `0x80000000` reads as an address to
+  the golden normaliser, `<addr>`).
 * **Build kit.** `monitor-core/build.rs` `KIT_FILES` carries every repository
   file the kit's scripts read (0.8.0: the kconfig fragments per architecture,
   the BTF and ABI checks, Debian's x86-64 module-signing certificate), and
@@ -1940,7 +1956,15 @@ load's `insn_cnt` and an attach's `attach_bpf_fd` from them (before, it looked
 for fields of those names, which the guest never sends), so an attach of a
 program loaded earlier in the run is named. The conformance render marks a
 decoded field (`decoded`), and the golden files keep it, normalising only the
-addresses, kernel handles and the IDs of members named for a process or thread.
+addresses, kernel handles and the IDs of members named for a process or thread,
+and hiding what a rerun changes: members such as inode numbers, file times,
+`maxerror`, an rseq area's `cpu_id_start`/`cpu_id` and a signal frame's
+`uc_mcontext` (`<value>`), clock readings and the time a timer or a wait had
+left (`adjtimex`'s `txc_p`, `setitimer`'s `ovalue`, `ppoll`'s `tsp`: `<time>`),
+and a moment the program computed from the clock (an absolute futex,
+`futex_waitv` or `clock_nanosleep` deadline, the time `clock_settime` and
+`settimeofday` try to set) when the view shows it as a moment (`<time>`); a
+relative timeout and a fixed date (utimensat's) are kept.
 
 Filter keywords (`captured-layout-members.json`, `scripts/generate-filter-layouts.py`):
 every branch of `union bpf_attr` is now qualified by the commands that read it
