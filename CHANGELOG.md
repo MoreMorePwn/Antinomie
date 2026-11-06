@@ -14,6 +14,14 @@ x86 programs by their own table.
 
 ### Host
 
+- **Clock model for the boot age.** A new Clock model setting in a VM's Device
+  profile (Auto, Always running, Suspend) chooses whether the boot age steps
+  both guest clocks or only CLOCK_BOOTTIME. Auto picks Suspend on Debian bases,
+  so systemd's watchdogs no longer kill journald, udevd and logind at the first
+  launch of a server or cloud profile; elsewhere it keeps server and cloud
+  always running and desktop and laptop suspended. Still visible names the cost
+  of the model in use. Saved profiles load as Auto.
+
 - **Base builds survive a slow snapshot.debian.org.** Pinned packages (the
   kernel packages, the initrd's programs, the toolchain chroot's packages)
   come from the Debian mirror you set in the build wizard (new hint text),

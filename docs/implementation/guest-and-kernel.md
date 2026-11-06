@@ -1317,9 +1317,15 @@ kernel of every Debian base. Measured on the final Debian Minimal base
   programs' CLOCK_MONOTONIC jump by the age at the first launch, so systemd
   finds journald's and udevd's watchdog pings (WatchdogSec=3min) days old and
   kills both with SIGABRT ("Watchdog timeout (limit 3min)!" in the journal,
-  `NRestarts=1`); they restart at once. The suspend model (desktop, laptop)
-  does not move CLOCK_MONOTONIC and has none of it. BusyBox bases have no
-  systemd.
+  `NRestarts=1`); they restart at once, and logind drops its sessions. The
+  suspend model does not move CLOCK_MONOTONIC and has none of it. BusyBox bases
+  have no systemd. **Resolved by the clock model setting (2026-11-06):** the
+  profile's `clock_model` (`Auto`, `Continuous`, `Suspend`) resolves `Auto` to
+  `suspend` on a base that runs Debian's modules, whatever the machine kind
+  (`StealthProfile::resolved_clock`), so the default has no kills. Choosing
+  `Continuous` on a Debian base brings them back, and the giveaways say so; a
+  server profile on `suspend` shows CLOCK_BOOTTIME ahead of CLOCK_MONOTONIC.
+  The guest side is unchanged (revision 21).
 
 ### arm64 qualification, limits and Debian arm64 Minimal (0.9.0)
 

@@ -1163,12 +1163,25 @@ a boot age when its preset is chosen (`StealthProfile.boot_age_s`,
 cloud 3 days to 120 days; Transparent 0), kept for the VM's life; `vm.rs` passes
 `antinomie_boot_age=SECONDS:MODEL` to a base listing `uptime` (from
 `CONFIG_ANTINOMIE_BOOT_AGE`); another base falls back to a fresh boot. The clock
-model follows the machine (user decision 2026-11-05):
+model is a per-VM setting (`StealthProfile.clock_model`: `Auto`, `Continuous`,
+`Suspend`; serde default `Auto`; user decision 2026-11-06). The age range follows
+the machine (`BootAge::of`); the model is `StealthProfile::resolved_clock(debian)`,
+with `debian` = `Bundle::runs_debian_modules()` (the Device profile window and the
+summary take it from the base's guest profile). An explicit choice wins. `Auto`:
 
-| Kind | Model | After the first launch |
+| Base and kind | Model | After the first launch |
 |---|---|---|
-| desktop, laptop | `suspend`: it booted N ago and slept for part of it | CLOCK_BOOTTIME and uptime large, CLOCK_MONOTONIC smaller |
-| server, cloud | `continuous`: up without a break for N | CLOCK_MONOTONIC = CLOCK_BOOTTIME, both carrying the age |
+| Debian (systemd), any kind | `suspend`: it booted N ago and slept for part of it | CLOCK_BOOTTIME and uptime large, CLOCK_MONOTONIC smaller |
+| BusyBox, desktop or laptop | `suspend` | the same |
+| BusyBox, server or cloud | `continuous`: up without a break for N | CLOCK_MONOTONIC = CLOCK_BOOTTIME, both carrying the age |
+
+Auto picks `suspend` on Debian because the continuous step makes systemd's
+watchdogs kill journald, udevd and logind at the first launch (see the Debian
+gap in guest-and-kernel.md). The giveaways name the cost of the resolved model:
+a server or cloud profile on `suspend` is "a server that slept for most of its
+uptime" (CLOCK_BOOTTIME ahead of CLOCK_MONOTONIC by the age), and `continuous`
+chosen on a Debian base lists the watchdog kills. The window's "Clock model" combo
+shows what Auto resolves to ("Auto (Suspend)").
 
 **Mechanism** (`kernel/antinomie/uptime.c`). The guest boots the age in the
 past and reaches the present at the host's first EXEC command, after the boot's
