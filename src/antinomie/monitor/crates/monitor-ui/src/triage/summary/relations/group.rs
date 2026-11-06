@@ -5,15 +5,17 @@
 //! one folder become one node ("/tmp/x/ · 1,240 files written"). A node with
 //! a finding is never grouped. A group is open or shut; an open group stays
 //! as a node with its members beside it, so a click can shut it again.
+use super::fold::{Fold, Folded};
 use super::layout::Layout;
 use super::model::{Edge, EdgeKind, Graph, GroupInfo, GroupWhat, Node, NodeKind};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 
 /// Siblings that ran one image are grouped from this many.
 pub(super) const PROCESS_GROUP_MIN: usize = 3;
 /// Files one process wrote into one folder are grouped from this many.
 pub(super) const FILE_GROUP_MIN: usize = 3;
-/// The Full view draws about this many nodes.
+/// The Full view draws about this many nodes, however much is open.
 pub(in crate::triage) const FULL_CAP: usize = 800;
 /// Members listed in a group's tooltip.
 const SAMPLE: usize = 8;
@@ -30,7 +32,7 @@ pub(in crate::triage) struct Policy {
 
 /// A graph as drawn, with its layout.
 pub(in crate::triage) struct Rendered {
-    pub graph: Graph,
+    pub graph: Arc<Graph>,
     pub shown: Vec<usize>,
     pub layout: Layout,
     /// Nodes of the raw graph.
@@ -40,6 +42,11 @@ pub(in crate::triage) struct Rendered {
     pub drawn: usize,
     /// Groups that are shut among the shown nodes.
     pub shut: usize,
+    /// For the Full view, per node of `graph`: its arrow and the count of
+    /// nodes it hides. Empty in Compact.
+    pub folds: Vec<Fold>,
+    /// More was open than the cap lets be drawn.
+    pub capped: bool,
 }
 
 impl Rendered {
@@ -56,22 +63,39 @@ impl Rendered {
         };
         let graph = raw.view(toggled, policy);
         let shown = graph.compact(per_kind);
-        Self::of(raw, graph, shown)
+        Self::of(raw.nodes.len(), Arc::new(graph), shown)
     }
 
-    /// Every group open, up to about `FULL_CAP` nodes. `toggled` holds the
-    /// groups the reader has flipped from that.
-    pub(in crate::triage) fn full(raw: &Graph, toggled: &BTreeSet<String>) -> Self {
+    /// The Full view: a tree of the nodes in `open` (see `fold`), with the
+    /// repeat groups in `open` unstacked. At most about `FULL_CAP` nodes.
+    pub(in crate::triage) fn full(raw: &Graph, open: &BTreeSet<String>) -> Self {
         let policy = Policy {
-            all: true,
-            budget: FULL_CAP,
+            all: false,
+            budget: 0,
         };
-        let graph = raw.view(toggled, policy);
-        let shown = graph.capped(FULL_CAP);
-        Self::of(raw, graph, shown)
+        let graph = raw.view_with(open, policy, Some(raw.needed()));
+        Self::folded(raw.nodes.len(), Arc::new(graph), open)
     }
 
-    fn of(raw: &Graph, graph: Graph, shown: Vec<usize>) -> Self {
+    /// The Full view of the same groups with another open set: the grouped
+    /// graph is kept, only what shows and where it sits is made again.
+    pub(in crate::triage) fn refold(&self, open: &BTreeSet<String>) -> Self {
+        Self::folded(self.total, self.graph.clone(), open)
+    }
+
+    fn folded(total: usize, graph: Arc<Graph>, open: &BTreeSet<String>) -> Self {
+        let Folded {
+            shown,
+            folds,
+            capped,
+        } = graph.fold(open, FULL_CAP);
+        let mut made = Self::of(total, graph, shown);
+        made.folds = folds;
+        made.capped = capped;
+        made
+    }
+
+    fn of(total: usize, graph: Arc<Graph>, shown: Vec<usize>) -> Self {
         let layout = Layout::of(&graph, &shown);
         let shut = shown
             .iter()
@@ -83,11 +107,13 @@ impl Rendered {
             .count();
         Self {
             drawn: shown.len() - open,
-            total: raw.nodes.len(),
+            total,
             graph,
             shown,
             layout,
             shut,
+            folds: Vec::new(),
+            capped: false,
         }
     }
 }
@@ -108,6 +134,10 @@ struct Builder<'a> {
     owned: Vec<bool>,
     edges: BTreeMap<(usize, usize, EdgeKind), u32>,
     queue: VecDeque<(usize, Vec<usize>)>,
+    /// For the Full view: `toggled` is the set of open groups, and the
+    /// processes marked here (with a finding, or on the way to one) are never
+    /// grouped, so a finding is never inside a stack.
+    keep: Option<Vec<bool>>,
 }
 
 impl Builder<'_> {
@@ -127,6 +157,9 @@ impl Builder<'_> {
     /// Whether the group `id` of `members` is open: the policy's choice,
     /// flipped by the reader.
     fn open(&self, id: &str, members: usize) -> bool {
+        if self.keep.is_some() && !self.policy.all {
+            return self.toggled.contains(id);
+        }
         let by_policy = self.policy.all && self.out.nodes.len() + members <= self.policy.budget;
         by_policy != self.toggled.contains(id)
     }
@@ -191,6 +224,7 @@ impl Builder<'_> {
         let mut bucket: BTreeMap<&str, usize> = BTreeMap::new();
         for &(kid, e) in &kids {
             let groupable = self.plain(kid)
+                && !self.keep.as_ref().is_some_and(|keep| keep[kid])
                 && !raw
                     .edges_in(kid)
                     .any(|edge| matches!(edge.kind, EdgeKind::Injected | EdgeKind::Signalled));
@@ -344,6 +378,16 @@ impl Graph {
     /// opens them. The nodes come in breadth-first order from the roots, so
     /// the first `n` of them are joined to each other. `self` is a raw graph.
     pub(in crate::triage) fn view(&self, toggled: &BTreeSet<String>, policy: Policy) -> Graph {
+        self.view_with(toggled, policy, None)
+    }
+
+    /// `view`, or with `keep` the Full view's: `toggled` the open groups.
+    pub(super) fn view_with(
+        &self,
+        toggled: &BTreeSet<String>,
+        policy: Policy,
+        keep: Option<Vec<bool>>,
+    ) -> Graph {
         let n = self.nodes.len();
         let mut b = Builder {
             raw: self,
@@ -354,6 +398,7 @@ impl Graph {
             owned: vec![false; self.edges.len()],
             edges: BTreeMap::new(),
             queue: VecDeque::new(),
+            keep,
         };
         let roots: Vec<usize> = (0..n)
             .filter(|&at| {
@@ -665,7 +710,7 @@ mod tests {
                 view.nodes[at].label
             );
         }
-        let full = Rendered::full(&raw, &BTreeSet::new());
+        let full = Rendered::full(&raw, &raw.expanded(FULL_CAP));
         assert!(full.layout.len() <= FULL_CAP + 8, "{}", full.layout.len());
         assert!(full.layout.len() > FULL_CAP / 2);
         // The nodes with findings are among them.

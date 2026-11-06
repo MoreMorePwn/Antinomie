@@ -26,7 +26,12 @@ pub(in crate::triage) struct Layout {
     pub bounds: Rect,
     /// The node the view opens on: the run's root.
     pub root: Option<usize>,
+    /// Which layout this is: a new one has a new number, so a view can tell
+    /// that the nodes moved.
+    pub generation: u64,
 }
+
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl Default for Layout {
     fn default() -> Self {
@@ -35,6 +40,7 @@ impl Default for Layout {
             shown: Vec::new(),
             bounds: Rect::from_min_size(Pos2::ZERO, Vec2::splat(1.0)),
             root: None,
+            generation: 0,
         }
     }
 }
@@ -56,6 +62,30 @@ fn strength(kind: EdgeKind) -> u8 {
         EdgeKind::Wrote | EdgeKind::Ran | EdgeKind::Connected => 1,
         EdgeKind::Injected | EdgeKind::Signalled => 2,
     }
+}
+
+/// The node `node` hangs from in the tree: the strongest edge in from a node
+/// `allowed` accepts.
+pub(super) fn tree_parent(
+    graph: &Graph,
+    node: usize,
+    allowed: &dyn Fn(usize) -> bool,
+) -> Option<usize> {
+    graph
+        .edges_in(node)
+        .filter(|edge| edge.from != node && allowed(edge.from))
+        // A process is started by its parent; what it suffered from
+        // another is a cross edge, or the run's root would hang off
+        // the child that injected into it.
+        .filter(|edge| {
+            strength(edge.kind) < 2
+                || !matches!(
+                    graph.nodes[node].kind,
+                    NodeKind::Process(_) | NodeKind::Group(_)
+                )
+        })
+        .min_by_key(|edge| (strength(edge.kind), edge.from))
+        .map(|edge| edge.from)
 }
 
 /// The lanes for children of `heights` and `widths` (in columns): the lane
@@ -122,21 +152,8 @@ impl Layout {
         // Each node's parent among the shown ones: the strongest edge in.
         let mut parent = vec![NONE; m];
         for (l, &node) in shown.iter().enumerate() {
-            parent[l] = graph
-                .edges_in(node)
-                .filter(|edge| edge.from != node && local[edge.from] != NONE)
-                // A process is started by its parent; what it suffered from
-                // another is a cross edge, or the run's root would hang off
-                // the child that injected into it.
-                .filter(|edge| {
-                    strength(edge.kind) < 2
-                        || !matches!(
-                            graph.nodes[node].kind,
-                            NodeKind::Process(_) | NodeKind::Group(_)
-                        )
-                })
-                .min_by_key(|edge| (strength(edge.kind), edge.from))
-                .map_or(NONE, |edge| local[edge.from]);
+            parent[l] = tree_parent(graph, node, &|from| local[from] != NONE)
+                .map_or(NONE, |from| local[from]);
         }
         let mut below: Vec<Vec<u32>> = vec![Vec::new(); m + 1];
         let mut roots: Vec<u32> = Vec::new();
@@ -261,6 +278,7 @@ impl Layout {
             shown: shown.to_vec(),
             bounds: bounds.expand(24.0),
             root: roots.first().map(|&l| shown[l as usize]),
+            generation: GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
 }
@@ -408,7 +426,7 @@ mod tests {
             "{:?}",
             view.layout.bounds.size()
         );
-        let full = Rendered::full(&graph, &BTreeSet::new());
+        let full = Rendered::full(&graph, &graph.expanded(super::super::group::FULL_CAP));
         assert_no_overlap(&full.layout);
         assert!(
             aspect(&full.layout) < 4.0,
@@ -455,7 +473,7 @@ mod tests {
         assert!(best.as_millis() < 100, "{best:?}");
         // The grouped view of it, built and laid out, is as quick.
         let started = std::time::Instant::now();
-        let full = Rendered::full(&graph, &BTreeSet::new());
+        let full = Rendered::full(&graph, &graph.expanded(super::super::group::FULL_CAP));
         assert!(full.layout.len() > 100);
         assert!(
             started.elapsed().as_millis() < 100,

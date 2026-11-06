@@ -717,6 +717,16 @@ fn the_relationships_box_is_compact_or_full_and_has_no_timeline() {
     assert!(has(&out, "exec") && !has(&out, "execed") && !has(&out, "forked"));
     click(&ctx, &mut view, WIDE, find(&out, "Full").center());
     let out = settle(&ctx, &mut view, WIDE, None);
+    // Full starts closed: the root and what is under it.
+    assert!(count(&out).0 < 44, "{:?}", count(&out));
+    click(&ctx, &mut view, WIDE, find(&out, "Expand all").center());
+    let out = settle(&ctx, &mut view, WIDE, None);
+    assert_eq!(count(&out), (44, 44));
+    // Compact and back keeps what was opened.
+    click(&ctx, &mut view, WIDE, find(&out, "Compact").center());
+    let out = settle(&ctx, &mut view, WIDE, None);
+    click(&ctx, &mut view, WIDE, find(&out, "Full").center());
+    let out = settle(&ctx, &mut view, WIDE, None);
     assert_eq!(count(&out), (44, 44));
     click(&ctx, &mut view, WIDE, find(&out, "Compact").center());
     let out = settle(&ctx, &mut view, WIDE, None);
@@ -735,6 +745,11 @@ fn a_wide_level_is_laid_out_in_lanes_when_its_group_is_open() {
         texts(&out)
     );
     click(&ctx, &mut view, WIDE, find(&out, "Full").center());
+    let out = settle(&ctx, &mut view, WIDE, None);
+    click(&ctx, &mut view, WIDE, find(&out, "Expand all").center());
+    let out = settle(&ctx, &mut view, WIDE, None);
+    // The view was fitted to the closed graph: fit it to the open one.
+    click(&ctx, &mut view, WIDE, find(&out, "Fit").center());
     let out = settle(&ctx, &mut view, WIDE, None);
     let ls: Vec<egui::Rect> = texts(&out)
         .into_iter()
@@ -871,9 +886,19 @@ fn full_draws_a_big_run_instead_of_nothing() {
         out = settle(&ctx, &mut view, WIDE, None);
     }
     assert!(!has(&out, "Laying out\u{2026}"), "never finished");
+    // Opened, a big run still draws about 800 nodes, and says so.
+    click(&ctx, &mut view, WIDE, find(&out, "Expand all").center());
+    let mut out = settle(&ctx, &mut view, WIDE, None);
+    for _ in 0..250 {
+        if starting(&out, "8").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        out = settle(&ctx, &mut view, WIDE, None);
+    }
     let (note, _) = starting(&out, "8").expect("the count line");
     assert!(
-        note.contains(" of 2,5") && note.contains(" nodes."),
+        note.contains(" of 2,5") && note.contains(" nodes.") && note.contains("About 800"),
         "{note}"
     );
     let names = texts(&out)
@@ -1228,3 +1253,5 @@ fn the_one_line_rows_have_strong_numbers_and_muted_words() {
     // The three rows read the same: number (text colour) against word (muted).
     assert_ne!(theme::text(), theme::muted());
 }
+
+mod fold;

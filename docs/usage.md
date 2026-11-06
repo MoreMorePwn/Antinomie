@@ -670,11 +670,18 @@ The network capture is the guest's own view on every route.
   wrote into one folder are one box (`/tmp/x/ · 1,240 files written`); a click on
   a stacked box opens it and a click on its header shuts it, and a node with a
   finding is never grouped; **Compact** shows the 15 best of each kind (a group
-  counts as one) and what joins them, **Full** opens every group up to about 800
-  nodes and says how many it shows; **Laying out…** shows while a big run is
+  counts as one) and what joins them, **Full** is a tree you open: it
+  starts with the root, the path to every node with a finding and what is under those
+  nodes, and every other process is closed; a box with something under it has an arrow
+  (▸ closed, ▾ open) and a muted **+N** for the nodes hidden under it, a click on the
+  arrow opens or closes the next level (the box stays where it is on the screen), a
+  click on the box itself opens its details; **Expand all** opens everything (about 800
+  boxes are drawn at most, and the note says so) and **Collapse all** goes back to how
+  Full starts; the open boxes are kept for the run, also when you switch to Compact and
+  in the window; **Laying out…** shows while a big run is
   placed; the icon beside **Mermaid** opens the graph in a window of its own with the
   same controls; drag the background to pan, Ctrl and the wheel or the
-  buttons to zoom, the plain wheel scrolls the page; click a node to open it,
+  buttons (a small bar that fits its buttons) to zoom, the plain wheel scrolls the page; click a node to open it,
   **Mermaid** to copy what is shown; edges read fork, exec, write, run, connect, inject, signal),
   then one line each for **MITRE ATT&CK**, **Processes of interest**, **Files** and
   **Network**, the folded **MITRE ATT&CK techniques** list, the **Detection engines**,
