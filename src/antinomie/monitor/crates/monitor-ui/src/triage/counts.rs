@@ -43,6 +43,46 @@ impl Count {
     }
 }
 
+impl Count {
+    /// The label with a count over 99 shortened to "99+", for a tab title.
+    pub(super) fn capped_label(self) -> String {
+        match self {
+            Self::Ready(count) if count > 99 => "99+".into(),
+            other => other.label(),
+        }
+    }
+
+    /// The full wording for a hover text: "120 matched", "not scanned".
+    fn named(self) -> String {
+        match self {
+            Self::Pending => "updating".into(),
+            Self::Unavailable => "no count".into(),
+            Self::Ready(_) | Self::Shown { .. } => format!("{} matched", self.label()),
+        }
+    }
+}
+
+/// The Detection tab: "Detection 3 · 0 · 99+", the matched rules of YARA, IDS
+/// and Sigma in the badge style of the IOC tab, each capped at "99+". It has
+/// no badge until an engine has a count.
+pub(super) fn detection_tab(counts: [Count; 3]) -> TabItem {
+    let item = TabItem::new("Detection");
+    if counts.iter().all(|count| *count == Count::Unavailable) {
+        return item;
+    }
+    let any = counts
+        .iter()
+        .any(|count| matches!(count, Count::Ready(found) if *found > 0));
+    let text = counts.map(Count::capped_label).join(" · ");
+    let tone = if any { Tone::Accent } else { Tone::Neutral };
+    item.badge(text, tone).tooltip(format!(
+        "Matched rules: YARA {} · IDS {} · Sigma {}",
+        counts[0].named(),
+        counts[1].named(),
+        counts[2].named()
+    ))
+}
+
 /// One navigation unit: a thin-bordered tab with a count badge. Call it
 /// inside `widgets::tab_row`.
 pub(super) fn tab(
@@ -213,3 +253,58 @@ impl TriageView {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod detection_tab_tests {
+    use super::*;
+
+    fn painted(counts: [Count; 3]) -> String {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut texts = Vec::new();
+        let output = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| {
+                widgets::tab_row(ui, |ui| {
+                    widgets::tab(ui, false, &detection_tab(counts));
+                });
+            });
+        });
+        fn walk(shape: &egui::epaint::Shape, texts: &mut Vec<String>) {
+            match shape {
+                egui::epaint::Shape::Text(text) => texts.push(text.galley.text().to_owned()),
+                egui::epaint::Shape::Vec(shapes) => {
+                    shapes.iter().for_each(|shape| walk(shape, texts));
+                }
+                _ => {}
+            }
+        }
+        for shape in &output.shapes {
+            walk(&shape.shape, &mut texts);
+        }
+        texts.join("|")
+    }
+
+    #[test]
+    fn the_detection_tab_counts_each_engine_capped_at_99_plus() {
+        let text = painted([Count::Ready(3), Count::Ready(0), Count::Ready(99)]);
+        assert!(
+            text.contains("Detection") && text.contains("3 · 0 · 99"),
+            "{text}"
+        );
+        let text = painted([Count::Ready(100), Count::Pending, Count::Unavailable]);
+        assert!(text.contains("99+ · … · —"), "{text}");
+        assert!(!text.contains("100"), "{text}");
+    }
+
+    #[test]
+    fn the_hover_names_each_engine_and_an_unscanned_run_has_no_badge() {
+        let item = detection_tab([Count::Ready(120), Count::Ready(1), Count::Unavailable]);
+        let tip = item.tooltip.unwrap();
+        assert!(tip.contains("YARA 120 matched"), "{tip}");
+        assert!(
+            tip.contains("IDS 1 matched") && tip.contains("Sigma no count"),
+            "{tip}"
+        );
+        assert!(detection_tab([Count::Unavailable; 3]).badge.is_none());
+    }
+}

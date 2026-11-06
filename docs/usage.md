@@ -732,8 +732,18 @@ The network capture is the guest's own view on every route.
   table (the full width of the window, twelve rows or more before it scrolls, a long location wraps and shows in full), the rule's metadata and its text (wrapped by default). The page scrolls
   when a section grows. An empty result says how many inputs were not scanned
   and why. For IDS, "Rule packs: N rules" counts every rule in the enabled
-  packs and the coverage line counts what Suricata loaded; hover it for the
-  difference. A scan that starts by itself and fails never replaces the result
+  packs and the grey "N rules loaded" text at the right end of that line counts
+  what Suricata loaded; hover it for the difference.
+  The **Scan** and **Result** buttons, the matched-rule count, the state and the
+  "objects · rules evaluated" text sit at the right of the **Scanned inputs**
+  heading (below it in a narrow window). Hover that heading for the note on how
+  Sigma events are converted from the syscall trace, or on the IDS reading the
+  VM-wide capture so its matches name no process. The match filter shares the
+  **Sort by** row. A Sigma or IDS result with rules that did not apply has its
+  toggle ("Show the N rules not applicable") as the title line, the counts under
+  it and the list under them. The **Detection** tab of the Triage strip shows
+  the matched rules of YARA, IDS and Sigma as "x · y · z", each capped at 99+;
+  hover it for the engines by name. A scan that starts by itself and fails never replaces the result
   on screen, and no scan starts by itself while an engine tool has not answered.
 - **Triage › Summary** also names the run's root process from the launch request
   when the recording's launch record cannot (the program and arguments the run

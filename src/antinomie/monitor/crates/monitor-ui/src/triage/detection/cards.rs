@@ -20,18 +20,16 @@ pub(super) fn match_cards(
     report: &Report,
     table_id: &str,
     rows: &[Vec<Cell>],
-    sort: &mut MatchSort,
+    sort: MatchSort,
 ) -> Option<WindowKey> {
     if report.findings.is_empty() {
         return None;
     }
-    presentation::heading(ui, "Matches", "");
-    sort_picker(ui, sort);
     if rows.is_empty() {
         ui.weak("No matches.");
         return None;
     }
-    let order = sorted(report, rows, *sort);
+    let order = sorted(report, rows, sort);
     let rows: Vec<&Vec<Cell>> = order.into_iter().map(|index| &rows[index]).collect();
     let mut opened = None;
     egui::ScrollArea::vertical()
@@ -53,9 +51,10 @@ pub(super) fn match_cards(
     opened
 }
 
-/// The sort menu under the Matches heading. The choice is kept in Settings.
-fn sort_picker(ui: &mut egui::Ui, sort: &mut MatchSort) {
-    ui.horizontal(|ui| {
+/// "Sort by" and its menu, drawn inline on the row the table filter shares.
+/// The choice is kept in Settings.
+pub(super) fn sort_picker(ui: &mut egui::Ui, sort: &mut MatchSort) {
+    {
         ui.label(RichText::new("Sort by").color(theme::muted()));
         egui::ComboBox::from_id_salt("detection-match-sort")
             .selected_text(sort.label())
@@ -70,8 +69,7 @@ fn sort_picker(ui: &mut egui::Ui, sort: &mut MatchSort) {
                  First hit sorts by where the first hit was recorded (journal event, call or packet order); \
                  matches without a position come last.",
             );
-    });
-    ui.add_space(4.0);
+    }
 }
 
 /// Severity on one scale: named levels and Suricata's numbers (1 is highest).
@@ -410,13 +408,7 @@ mod tests {
         let ctx = egui::Context::default();
         let shapes = frames(&ctx, 2, |root| {
             egui::CentralPanel::default().show(root, |ui| {
-                let _ = match_cards(
-                    ui,
-                    report,
-                    TABLES[0],
-                    &view.rows[0],
-                    &mut MatchSort::default(),
-                );
+                let _ = match_cards(ui, report, TABLES[0], &view.rows[0], MatchSort::default());
             });
         });
         let joined = rendered_text(&shapes);
@@ -446,13 +438,7 @@ mod tests {
         let ctx = egui::Context::default();
         let shapes = frames(&ctx, 2, |root| {
             egui::CentralPanel::default().show(root, |ui| {
-                let _ = match_cards(
-                    ui,
-                    report,
-                    TABLES[0],
-                    &view.rows[0],
-                    &mut MatchSort::default(),
-                );
+                let _ = match_cards(ui, report, TABLES[0], &view.rows[0], MatchSort::default());
             });
         });
         let mut longest_rows = 0;
@@ -504,13 +490,9 @@ mod tests {
                 },
                 |root| {
                     egui::CentralPanel::default().show(root, |ui| {
-                        if let Some(key) = match_cards(
-                            ui,
-                            report,
-                            TABLES[0],
-                            &view.rows[0],
-                            &mut MatchSort::default(),
-                        ) {
+                        if let Some(key) =
+                            match_cards(ui, report, TABLES[0], &view.rows[0], MatchSort::default())
+                        {
                             opened = Some(key);
                         }
                     });
@@ -615,13 +597,14 @@ mod tests {
     }
 
     #[test]
-    fn the_sort_menu_is_under_the_heading_and_the_order_is_drawn() {
+    fn the_sort_menu_is_drawn_and_the_order_follows_it() {
         let (report, rows) = sorting_report();
         let ctx = egui::Context::default();
         let mut sort = MatchSort::Hits;
         let shapes = frames(&ctx, 2, |root| {
             egui::CentralPanel::default().show(root, |ui| {
-                let _ = match_cards(ui, &report, TABLES[0], &rows, &mut sort);
+                ui.horizontal(|ui| sort_picker(ui, &mut sort));
+                let _ = match_cards(ui, &report, TABLES[0], &rows, sort);
             });
         });
         let mut y = std::collections::HashMap::new();
@@ -630,7 +613,7 @@ mod tests {
                 y.entry(text.to_owned()).or_insert(rect.min.y);
             });
         }
-        assert!(y["Matches"] < y["Sort by"], "{:?}", y.keys());
+        assert!(y.contains_key("Sort by"), "{:?}", y.keys());
         assert!(y.contains_key("Hit count"), "{:?}", y.keys());
         assert!(y["Zeta loader"] < y["Mid runner"]);
         assert!(y["Mid runner"] < y["alpha injector"]);
@@ -650,7 +633,7 @@ mod tests {
         let ctx = egui::Context::default();
         let shapes = frames(&ctx, 2, |root| {
             egui::CentralPanel::default().show(root, |ui| {
-                let _ = match_cards(ui, report, TABLES[0], &view.rows[0], &mut MatchSort::Risk);
+                let _ = match_cards(ui, report, TABLES[0], &view.rows[0], MatchSort::Risk);
             });
         });
         let mut at = std::collections::HashMap::new();
