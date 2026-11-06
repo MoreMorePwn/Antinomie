@@ -23,6 +23,19 @@ pub(super) const STORED_WIDTHS: [(f32, f32); 5] = [
     (180.0, 80.0),
     (90.0, 70.0),
 ];
+/// Room for the Downloaded table's rows: at least `STORED_MIN_ROWS`, and one
+/// more row for each row's height the window's largest size has beyond
+/// 800 points. It depends on the window's largest size, not on a frame's
+/// leftovers, so it never changes from frame to frame.
+pub(super) const STORED_MIN_ROWS: f32 = 5.0;
+
+pub(super) fn stored_list_height(row: f32, gap: f32, largest_height: f32) -> f32 {
+    // Each row is followed by the table's row gap.
+    let row = row + gap;
+    let spare = ((largest_height - 800.0).max(0.0) / row).floor();
+    row * (STORED_MIN_ROWS + spare)
+}
+
 pub(super) const STORED_LAST: f32 = 380.0;
 
 impl SamplesView {

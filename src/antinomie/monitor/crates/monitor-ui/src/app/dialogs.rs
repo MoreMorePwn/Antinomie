@@ -2,6 +2,9 @@
 //! Modal dialogs and dialog layout helpers.
 use super::*;
 
+/// The "Don't ask me again" tick of the no-snapshot question, until it closes.
+const DONT_ASK_NO_SNAPSHOT: &str = "start_no_snapshot_dont_ask";
+
 impl MonitorApp {
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
         crate::evidence::dialogs(ctx);
@@ -437,6 +440,12 @@ impl MonitorApp {
                     "Quit",
                     true,
                 ),
+                Confirm::StartWithoutSnapshot(_) => (
+                    "No snapshot to restore",
+                    "This VM has no snapshot, so there is nothing to restore after the run: whatever the program changes stays in the VM's disk. Take a snapshot first in Snapshots (toolbar or the VM's Overview) to return to this state later.",
+                    "Start anyway",
+                    false,
+                ),
                 Confirm::DebugKill => (
                     "Detach and kill",
                     "Detach the debugger and end the debugged process with SIGKILL? Its state is lost; the VM keeps running.",
@@ -475,6 +484,13 @@ impl MonitorApp {
                     if let Confirm::Clipboard { text, .. } = confirm {
                         ui.label(format!("{} keys to type", text.key_count));
                     }
+                    if matches!(confirm, Confirm::StartWithoutSnapshot(_)) {
+                        let id = egui::Id::new(DONT_ASK_NO_SNAPSHOT);
+                        let mut dont_ask = ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
+                        ui.checkbox(&mut dont_ask, "Don't ask me again")
+                            .on_hover_text("Start will not ask again for any VM. Settings > Notifications turns the question back on.");
+                        ui.data_mut(|data| data.insert_temp(id, dont_ask));
+                    }
                     if matches!(confirm, Confirm::Quit) {
                         let lines = self.quit_lines();
                         if lines.is_empty() {
@@ -512,6 +528,10 @@ impl MonitorApp {
                                     && self.snapshot.memory_dump.is_none()
                             }
                             Confirm::Quit => true,
+                            Confirm::StartWithoutSnapshot(vm_id) => {
+                                self.snapshot.active_vm.is_none()
+                                    && self.selected.as_ref() == Some(vm_id)
+                            }
                             Confirm::DebugKill => self
                                 .snapshot
                                 .debug
@@ -555,6 +575,13 @@ impl MonitorApp {
                         Confirm::Upload(intent) => self.submit_upload(intent, true),
                         Confirm::Clipboard { intent, text } => self.submit_clipboard(intent, text),
                         Confirm::DebugKill => self.send(Command::DebugDetach { kill: true }),
+                        Confirm::StartWithoutSnapshot(vm_id) => {
+                            let id = egui::Id::new(DONT_ASK_NO_SNAPSHOT);
+                            if ctx.data(|data| data.get_temp::<bool>(id)).unwrap_or(false) {
+                                self.settings.warn_no_snapshot = false;
+                            }
+                            self.send(Command::Start { vm_id });
+                        }
                         Confirm::Quit => {
                             self.quit_confirmed = true;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -564,6 +591,9 @@ impl MonitorApp {
             }
             if cancel {
                 self.confirm = None;
+            }
+            if self.confirm.is_none() {
+                ctx.data_mut(|data| data.remove_temp::<bool>(egui::Id::new(DONT_ASK_NO_SNAPSHOT)));
             }
         }
     }

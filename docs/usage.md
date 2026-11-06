@@ -296,11 +296,19 @@ Core strings and saved memory-analysis results also offer direct page entry;
 packet history already has it, and specimen Content supports a byte-offset jump.
 
 1. Select the VM and press **Start VM**. Only one VM runs at a time, and its
-   network is disconnected by default.
+   network is disconnected by default. A VM with no snapshot asks first: there
+   is nothing to restore after the run, so what the program changes stays in the
+   VM's disk (take one in **Snapshots**). **Start anyway** starts it; **Don't ask
+   me again** turns the question off, and **Settings > Notifications > Start**
+   turns it back on.
 2. **Upload file** copies a program from the host (**Host file**) to a path in
    the guest (**Guest path**).
 3. **Run program** runs it. Set the **Executable**, **Arguments**,
-   **Working directory** and **Environment**. Each launch gets its own terminal
+   **Working directory** and **Environment**. **User** is Root, Normal user
+   (1000), Nobody (65534, the unprivileged account every system has) or a custom
+   UID and GID. Under **Triggers**, **Dump when suspicious activity is seen** has
+   a **Minimum tier** of Low, Medium or High: the first finding at that tier or
+   above takes the dump. Each launch gets its own terminal
    window for input and output.
    On a VM with a desktop base, **Run in** picks where the program runs:
    **App terminal** (the default), **Guest desktop** (the program joins the
@@ -995,7 +1003,10 @@ root exited while children live on, shows **Running** in every list and keeps it
 **Library > Samples** (sidebar) lists every sample across runs and VMs with its
 origins and tags; opening one shows the sample window with the tabs **Summary**,
 **Runs**, **IOCs**, **Custody log** and **Notes**. **Export report…** in its header
-is described in [the sample report guide](sample-report.md).
+is described in [the sample report guide](sample-report.md). The **Runs** list
+fills the window's width: **Arguments** takes the spare width (a long command
+line is cut, the whole of it is on hover) and **Tree status**, **Root exit** and
+**VM** keep a width that fits their usual values.
 
 - **Summary** holds the identity, the **Static analysis** section (each check on a
   line: name, state chip, what it found, **Open**, and the notice to the right of
@@ -1170,7 +1181,8 @@ it is installed the system's copy is used, and the row offers **Install**).
 **Install all missing** still skips a tool the system has, so installing the own
 copy of such a tool is always your click. The choice is saved per tool.
 **Notifications** has **Toast for live HIGH findings** (off) and **Toast
-when a run finishes** (on). A failed **Open folder** or **Open file** raises an
+when a run finishes** (on), and **Start** (on): the question before starting a
+VM that has no snapshot. A failed **Open folder** or **Open file** raises an
 error toast and an **Activity** row.
 
 Layout at narrow windows: a tab bar whose tabs do not fit uses short names
@@ -1183,7 +1195,8 @@ area. Double-click a divider, or right-click it and choose **Fit columns**, to f
 the box again. The dragged widths are kept per table for the session.
 
 The sample **Download** window (**Tools > Download malware samples…**) keeps its
-size while it loads: the results area and the Downloaded list have fixed heights,
+size while it loads: the results area and the Downloaded list have fixed heights
+(the Downloaded list shows at least five rows, and more in a taller window),
 the status is one line, and it scrolls inside when the screen is small.
 
 A MalwareBazaar lookup by hash reads every field on its own: MalwareBazaar sends

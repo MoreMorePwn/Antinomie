@@ -586,6 +586,17 @@ impl MonitorApp {
                 );
             });
             ui.end_row();
+            ui.label("Start");
+            ui.vertical(|ui| {
+                ui.checkbox(
+                    &mut self.settings.warn_no_snapshot,
+                    "Warn before starting a VM with no snapshot",
+                )
+                .on_hover_text(
+                    "Start asks first when the VM has no snapshot, because then nothing can restore the disk and what the program changes stays in it. Turned off by Don't ask me again in that question; turn it back on here. Applies at once.",
+                );
+            });
+            ui.end_row();
         });
     }
 

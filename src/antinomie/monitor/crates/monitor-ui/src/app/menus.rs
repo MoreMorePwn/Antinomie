@@ -324,6 +324,9 @@ impl MonitorApp {
             if spinner {
                 theme::spinner(ui);
             }
+            // The toolbar's own spacing is 4 points; the name is a different
+            // thing from the state beside it, so they get a wider gap.
+            ui.add_space(STATUS_GAP);
         }
         let font = egui::TextStyle::Body.resolve(ui.style());
         let label = ui
@@ -437,6 +440,9 @@ impl MonitorApp {
         }
     }
 }
+
+/// Extra gap between the VM state word (and its spinner) and the VM name.
+pub(super) const STATUS_GAP: f32 = 10.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum ToolAction {

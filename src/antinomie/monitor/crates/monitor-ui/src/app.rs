@@ -199,6 +199,9 @@ struct Settings {
     toast_high_findings: bool,
     /// Toast when a run ends ("Run 3 finished"). On by default.
     toast_run_finished: bool,
+    /// Start on a VM with no snapshot asks first (Settings > Notifications).
+    /// The question's "Don't ask me again" turns it off. On by default.
+    warn_no_snapshot: bool,
     /// The size the activity graph's window opened at last, in points.
     graph_window: [f32; 2],
     /// How the activity graph spaces findings along its time axis.
@@ -329,6 +332,7 @@ impl Default for Settings {
             vm_screen_closed: false,
             toast_high_findings: false,
             toast_run_finished: true,
+            warn_no_snapshot: true,
             graph_window: crate::triage::GRAPH_WINDOW_SIZE,
             graph_spacing: Default::default(),
             report_export: Default::default(),
@@ -359,6 +363,9 @@ enum Confirm {
     },
     /// Detach the debugger and kill the debugged process.
     DebugKill,
+    /// Start a VM that has no snapshot: what the program changes stays in
+    /// its disk. Holds the VM's id.
+    StartWithoutSnapshot(String),
     /// Quit while jobs run: the list shows what would stop.
     Quit,
 }
