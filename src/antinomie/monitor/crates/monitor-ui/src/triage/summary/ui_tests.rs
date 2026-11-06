@@ -3,6 +3,7 @@
 //! clicks that leave it, and the layout at the largest text.
 use super::*;
 use crate::app::tests::texts;
+use antinomie_monitor_core::mitre::Tactic;
 use antinomie_monitor_core::{
     AnalysisEntry, AnalysisKind, AnalysisReport, AnalysisSection, AnalysisSectionState,
     AnalysisState,
@@ -525,8 +526,66 @@ fn a_click_on_a_cut_description_shows_all_of_it_and_another_folds_it() {
     assert_eq!(again, cut);
 }
 
+/// The colour a text was drawn in (its first section's).
+fn colour(out: &egui::FullOutput, wanted: &str) -> egui::Color32 {
+    format_of(out, wanted).color
+}
+
+fn format_of(out: &egui::FullOutput, wanted: &str) -> egui::text::TextFormat {
+    fn walk(shape: &egui::Shape, wanted: &str, found: &mut Option<egui::text::TextFormat>) {
+        match shape {
+            egui::Shape::Text(text) if text.galley.text().trim() == wanted => {
+                found.get_or_insert_with(|| text.galley.job.sections[0].format.clone());
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, wanted, found)),
+            _ => {}
+        }
+    }
+    let mut found = None;
+    for shape in &out.shapes {
+        walk(&shape.shape, wanted, &mut found);
+    }
+    found.unwrap_or_else(|| panic!("{wanted:?} not drawn in {:?}", texts(out)))
+}
+
+/// Every filled rectangle: its place and its fill.
+fn rects(out: &egui::FullOutput) -> Vec<(egui::Rect, egui::Color32)> {
+    fn walk(shape: &egui::Shape, found: &mut Vec<(egui::Rect, egui::Color32)>) {
+        match shape {
+            egui::Shape::Rect(rect) => found.push((rect.rect, rect.fill)),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, found)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    for shape in &out.shapes {
+        walk(&shape.shape, &mut found);
+    }
+    found
+}
+
+/// The "Show more" boxes: the rectangles with the inset fill.
+fn insets(out: &egui::FullOutput) -> Vec<egui::Rect> {
+    rects(out)
+        .into_iter()
+        .filter(|(_, fill)| *fill == rows::inset_fill())
+        .map(|(rect, _)| rect)
+        .collect()
+}
+
+/// A scroll bar inside `inset`: a narrow rectangle at its right edge.
+fn has_scroll_bar(out: &egui::FullOutput, inset: egui::Rect) -> bool {
+    rects(out).into_iter().any(|(rect, _)| {
+        rect.width() >= 3.0
+            && rect.width() <= 16.0
+            && rect.height() >= 8.0
+            && inset.contains_rect(rect)
+            && inset.right() - rect.right() <= 10.0
+    })
+}
+
 #[test]
-fn show_more_lists_every_finding_in_a_scrolling_list_and_show_less_folds_it() {
+fn show_more_puts_the_other_findings_in_a_two_row_box_with_a_visible_scroll_bar() {
     let (_files, mut view) = crowded(0, 12);
     let ctx = context(16.0);
     let size = egui::vec2(1280.0, 1600.0);
@@ -534,26 +593,40 @@ fn show_more_lists_every_finding_in_a_scrolling_list_and_show_less_folds_it() {
     let first = rules::rule_title("execution.dropped_exec");
     assert!(has(&out, "Show more (14)"), "{:?}", texts(&out));
     assert!(!has(&out, "discovery.extra05"));
+    assert!(insets(&out).is_empty(), "closed: no box");
     click(&ctx, &mut view, size, find(&out, "Show more (14)").center());
     let out = settle(&ctx, &mut view, size, None);
     assert!(has(&out, "Show less"));
-    let before = find(&out, first).min.y;
-    // The list holds more than it shows: the last row is below the cut.
+    // The first six stay where they were; the box is below them.
+    assert!(has(&out, first));
+    let boxes = insets(&out);
+    assert_eq!(boxes.len(), 1, "{boxes:?}");
+    let inset = boxes[0];
+    assert!(inset.top() > find(&out, first).bottom());
+    // About two findings tall (each is a title row and a description line),
+    // not the 14 that wait in it, and not the old 380 px list.
+    assert!(inset.height() > 60.0 && inset.height() < 150.0, "{inset:?}");
+    assert!(has_scroll_bar(&out, inset), "the bar is always drawn");
     assert!(!has(&out, "discovery.extra11"), "{:?}", texts(&out));
-    wheel(&ctx, &mut view, size, find(&out, first).center(), -400.0);
+    let before = find(&out, rules::rule_title("discovery.system_info")).min.y;
+    wheel(&ctx, &mut view, size, inset.center(), -400.0);
     let out = settle(&ctx, &mut view, size, None);
     let moved = texts(&out)
         .into_iter()
-        .find(|(text, _)| text == first)
+        .find(|(text, _)| text == rules::rule_title("discovery.system_info"))
         .map(|(_, rect)| rect.min.y);
     assert!(
         moved.is_none_or(|y| y < before - 20.0),
         "{moved:?} {before}"
     );
-    assert!(has(&out, "discovery.extra11"), "scrolled to the end");
+    assert_eq!(
+        insets(&out)[0].size(),
+        inset.size(),
+        "the box keeps its size"
+    );
     click(&ctx, &mut view, size, find(&out, "Show less").center());
     let out = settle(&ctx, &mut view, size, None);
-    assert!(has(&out, "Show more (14)"));
+    assert!(has(&out, "Show more (14)") && insets(&out).is_empty());
 }
 
 fn with_indicators(view: &mut TriageView) {
@@ -587,6 +660,14 @@ fn indicators_are_a_tree_with_show_more_and_the_dataset_line_in_its_header() {
     click(&ctx, &mut view, WIDE, find(&out, "Show 2 more").center());
     let out = settle(&ctx, &mut view, WIDE, None);
     assert!(has(&out, "10.1.1.5:443") && has(&out, "Show fewer"));
+    // The first five are where they were; the other two are in a framed box
+    // of two rows with its scroll bar drawn.
+    assert!(has(&out, "10.1.1.3:443") && has(&out, "10.1.1.4:443"));
+    let boxes = insets(&out);
+    assert_eq!(boxes.len(), 1, "{boxes:?}");
+    assert!(boxes[0].top() > find(&out, "10.1.1.3:443").bottom());
+    assert!(boxes[0].height() < 3.0 * 30.0, "{:?}", boxes[0]);
+    assert!(has_scroll_bar(&out, boxes[0]));
     // "x of y indicators matched" sits in the Indicators header row.
     let (line, rect) = starting(&out, "0 of ").expect("the dataset line");
     assert!(line.contains("indicators matched"), "{line}");
@@ -776,4 +857,185 @@ fn the_layout_holds_at_the_largest_text_in_a_small_window() {
             assert!(has(&out, title), "{title} at {font} pt");
         }
     }
+}
+
+/// The Summary with crowded Key findings and Indicators, for screenshots
+/// under Xvfb. `ANTINOMIE_QA_OPEN=1` opens every "Show more" box.
+#[test]
+#[ignore = "requires owned isolated X11; Summary screenshot fixture"]
+fn native_summary_boxes_fixture() {
+    use winit::platform::x11::EventLoopBuilderExtX11;
+    struct Fixture {
+        view: TriageView,
+        deadline: std::time::Instant,
+        _files: PacketSpool,
+    }
+    impl eframe::App for Fixture {
+        fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+            let ctx = root.ctx().clone();
+            egui::CentralPanel::default().show(root, |ui| {
+                let input = TriageInput::empty();
+                show(&mut self.view, ui, &input);
+            });
+            if std::time::Instant::now() > self.deadline {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+    let (files, mut view) = crowded(0, 12);
+    with_indicators(&mut view);
+    view.section = Section::Summary;
+    if std::env::var_os("ANTINOMIE_QA_OPEN").is_some() {
+        view.summary_state.keys_open = true;
+        view.summary_state.more = [true; 4];
+    }
+    eframe::run_native(
+        "Antinomie summary QA",
+        eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_inner_size([1000.0, 2500.0])
+                .with_position([16.0, 16.0]),
+            persist_window: false,
+            event_loop_builder: Some(Box::new(|builder| {
+                builder.with_x11();
+                builder.with_any_thread(true);
+            })),
+            ..Default::default()
+        },
+        Box::new(move |cc| {
+            theme::install(&cc.egui_ctx);
+            theme::text_size(&cc.egui_ctx, theme::qa_text_size(15.0));
+            Ok(Box::new(Fixture {
+                view,
+                deadline: std::time::Instant::now() + std::time::Duration::from_secs(8),
+                _files: files,
+            }))
+        }),
+    )
+    .unwrap();
+}
+
+#[test]
+fn indicator_parts_have_their_own_colours_and_a_hover_shows_they_click() {
+    let (_files, mut view) = fixture();
+    with_indicators(&mut view);
+    let ctx = context(16.0);
+    let out = settle(&ctx, &mut view, WIDE, None);
+    let link = ctx.global_style().visuals.hyperlink_color;
+    let accent = theme::palette().accent;
+    for value in [
+        "45.9.148.9:80",
+        "pool.minexmr.com",
+        "http://45.9.148.9/hook.so",
+        "/tmp/.x/kdevtmpfsi",
+    ] {
+        let format = format_of(&out, value);
+        assert_eq!(format.color, theme::text(), "{value}");
+        assert!(![link, accent].contains(&format.color), "{value}");
+        assert_eq!(
+            format.font_id.family,
+            egui::FontFamily::Monospace,
+            "{value}"
+        );
+        assert_eq!(format.underline, egui::Stroke::NONE, "{value} at rest");
+    }
+    // The place, the type and the hash are secondary: muted.
+    for note in ["NL \u{b7} AS49870 Alsycon", "executable"] {
+        if has(&out, note) {
+            assert_eq!(colour(&out, note), theme::muted(), "{note}");
+        }
+    }
+    assert_eq!(colour(&out, "executable"), theme::muted());
+    assert_eq!(colour(&out, "Endpoints (7)"), theme::heading());
+    // Hover: underline and the pointing hand.
+    let at = find(&out, "pool.minexmr.com").center();
+    let mut out = settle(&ctx, &mut view, WIDE, None);
+    for n in 0..3 {
+        out = draw_at(
+            &ctx,
+            &mut view,
+            WIDE,
+            vec![egui::Event::PointerMoved(at)],
+            2.0 + f64::from(n) * 0.02,
+            None,
+        );
+    }
+    assert_ne!(
+        format_of(&out, "pool.minexmr.com").underline,
+        egui::Stroke::NONE
+    );
+    assert_eq!(
+        out.platform_output.cursor_icon,
+        egui::CursorIcon::PointingHand
+    );
+}
+
+/// The coloured sections of the first drawn text that contains `needle`:
+/// each piece of text with its colour.
+fn sections_of(out: &egui::FullOutput, needle: &str) -> Vec<(String, egui::Color32)> {
+    fn walk(shape: &egui::Shape, needle: &str, found: &mut Vec<(String, egui::Color32)>) {
+        match shape {
+            egui::Shape::Text(text) if found.is_empty() && text.galley.text().contains(needle) => {
+                let all = text.galley.text();
+                for section in &text.galley.job.sections {
+                    found.push((
+                        all[section.byte_range.start.0..section.byte_range.end.0].to_owned(),
+                        section.format.color,
+                    ));
+                }
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, needle, found)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    for shape in &out.shapes {
+        walk(&shape.shape, needle, &mut found);
+    }
+    assert!(
+        !found.is_empty(),
+        "{needle:?} not drawn in {:?}",
+        texts(out)
+    );
+    found
+}
+
+/// Numbers are in the text colour, every other word muted, and there are
+/// at least `numbers` of them.
+fn numbers_strong_words_muted(out: &egui::FullOutput, needle: &str, numbers: usize) {
+    let mut seen = 0;
+    for (text, color) in sections_of(out, needle) {
+        let word = text.trim().trim_matches('\u{b7}').trim();
+        if word.is_empty() {
+            continue;
+        }
+        if word.parse::<u64>().is_ok() {
+            assert_eq!(color, theme::text(), "{word} in {needle}");
+            seen += 1;
+        } else {
+            assert_eq!(color, theme::muted(), "{word} in {needle}");
+        }
+    }
+    assert!(seen >= numbers, "{needle}: {seen} numbers");
+}
+
+#[test]
+fn the_one_line_rows_have_strong_numbers_and_muted_words() {
+    let (_files, mut view) = fixture();
+    view.scan.as_mut().unwrap().counts.http = 4;
+    view.scan.as_mut().unwrap().network_counts = Some((641, 2, 3));
+    let ctx = context(16.0);
+    let out = settle(&ctx, &mut view, WIDE, None);
+    numbers_strong_words_muted(&out, "created", 4);
+    numbers_strong_words_muted(&out, "HTTP", 3);
+    numbers_strong_words_muted(&out, "syscalls", 2);
+    let tactic = Tactic::ALL
+        .into_iter()
+        .map(|tactic| tactic.name())
+        .find(|name| texts(&out).iter().any(|(t, _)| t.starts_with(name)))
+        .expect("a tactic row");
+    numbers_strong_words_muted(&out, tactic, 1);
+    // The three rows read the same: number (text colour) against word (muted).
+    assert_ne!(theme::text(), theme::muted());
 }

@@ -9,6 +9,7 @@ mod insight;
 mod panels;
 mod relations;
 mod report;
+mod rows;
 mod rule_text;
 mod sample;
 mod state;
