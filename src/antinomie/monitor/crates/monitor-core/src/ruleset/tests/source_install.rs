@@ -808,6 +808,59 @@ fn the_rule_file_filter_keeps_allowed_licenses_and_drops_duplicates_and_broken_r
     let _ = fs::remove_dir_all(dir);
 }
 
+/// Writes what the rule-files filter kept and compiles it the way an
+/// installed pack is compiled (one namespace per file).
+fn compile_kept(dir: &Path, outcome: &YaraForgeOutcome) -> Result<(), String> {
+    for file in &outcome.files {
+        let path = dir.join(&file.path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, &file.text).unwrap();
+    }
+    super::super::index::compile_yara_tree(dir)
+}
+
+#[test]
+fn a_rule_using_a_module_its_own_file_never_imports_is_dropped_not_fatal() {
+    // YARA-X keeps imports per namespace. The second file uses `hash` without
+    // importing it; checked in one shared namespace it would borrow the first
+    // file's import and then fail the whole install (YARAhub's
+    // RBI_Malicious_DLL.yar on 2026-11-06).
+    let with_import = format!(
+        "import \"hash\"\n{}",
+        hub_rule("A_Hash", Some("CC0 1.0"), "$a and hash.md5(0, 1) == \"0\"")
+    );
+    let without_import = hub_rule("B_Hash", Some("CC0 1.0"), "$a and hash.md5(0, 1) == \"0\"");
+    let files = vec![
+        ("a_hash.yar".to_owned(), with_import),
+        ("b_hash.yar".to_owned(), without_import),
+    ];
+    let filter = YaraRuleFilesFilter {
+        license_keys: vec!["yarahub_license".into()],
+        allowed_licenses: vec!["CC0 1.0".into()],
+        exclude_files: Vec::new(),
+    };
+    let outcome = filter_yara_rule_files(&files, &filter, &AtomicBool::new(false)).unwrap();
+    assert_eq!(outcome.report.kept, 1, "{:?}", outcome.report.examples);
+    let kept: Vec<&str> = outcome
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
+    assert_eq!(kept, ["a_hash.yar"]);
+    assert!(
+        outcome
+            .report
+            .dropped
+            .iter()
+            .any(|(reason, count)| reason.contains("does not compile") && *count == 1),
+        "{:?}",
+        outcome.report.dropped
+    );
+    let dir = temp_dir("hub-namespace");
+    compile_kept(&dir, &outcome).expect("what the filter kept installs");
+    let _ = fs::remove_dir_all(dir);
+}
+
 fn catalog_json_of(pack: &SourcePack) -> Value {
     serde_json::json!({"schema": 2, "packs": [pack]})
 }
@@ -846,6 +899,9 @@ fn a_real_yarahub_snapshot_compiles_with_the_catalog_filter() {
         ));
     }
     let outcome = filter_yara_rule_files(&files, filter, &no_cancel()).unwrap();
+    let dir = temp_dir("hub-real");
+    compile_kept(&dir, &outcome).expect("the kept rules compile as installed");
+    let _ = fs::remove_dir_all(&dir);
     println!("files {}", files.len());
     println!("kept {}", outcome.report.kept);
     for (reason, count) in &outcome.report.dropped {

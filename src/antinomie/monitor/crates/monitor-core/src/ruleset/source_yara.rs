@@ -201,25 +201,33 @@ fn slug_of(name: &str) -> String {
 /// to one namespace, so a rule that needs a dropped rule fails too.
 fn mark_uncompilable(imports: &[String], candidates: &mut [Candidate], cancel: &AtomicBool) {
     let header = imports.join("\n");
-    mark_uncompilable_with(candidates, cancel, |_| header.clone());
+    mark_uncompilable_with(candidates, cancel, |_| ("check".to_owned(), header.clone()));
 }
 
-/// As [`mark_uncompilable`], with the import lines each candidate is checked
-/// under chosen by its position (one file's own imports, so a module YARA-X
-/// lacks only fails the rules that import it).
+/// As [`mark_uncompilable`], with the namespace and the import lines each
+/// candidate is checked under chosen by its position. A file of a rule-files
+/// pack gets a namespace of its own, as the installed pack does: YARA-X keeps
+/// imports per namespace, so a rule that uses a module its own file never
+/// imports fails here as it would on install, instead of borrowing another
+/// file's import.
 fn mark_uncompilable_with(
     candidates: &mut [Candidate],
     cancel: &AtomicBool,
-    header_of: impl Fn(usize) -> String,
+    header_of: impl Fn(usize) -> (String, String),
 ) {
     let mut compiler = yara_x::Compiler::new();
     compiler.relaxed_re_syntax(true);
-    compiler.new_namespace("check");
+    let mut namespace: Option<String> = None;
     for (index, candidate) in candidates.iter_mut().enumerate() {
         if index % 64 == 0 && cancel.load(Ordering::Relaxed) {
             return;
         }
-        let source = format!("{}\n{}\n", header_of(index), candidate.text);
+        let (wanted, header) = header_of(index);
+        if namespace.as_deref() != Some(wanted.as_str()) {
+            compiler.new_namespace(&wanted);
+            namespace = Some(wanted);
+        }
+        let source = format!("{header}\n{}\n", candidate.text);
         let code = yara_x::SourceCode::from(source.as_str());
         if let Err(error) = compiler.add_source(code) {
             candidate.failure = Some(first_line(&error.to_string()));
@@ -462,11 +470,13 @@ pub(super) fn filter_yara_rule_files(
             groups.push((path, file_imports, first..candidates.len()));
         }
     }
-    let headers: Vec<String> = {
-        let mut headers = vec![String::new(); candidates.len()];
-        for (_, file_imports, range) in &groups {
+    // Each candidate is checked in its own file's namespace, under that
+    // file's own imports, as the installed pack compiles it.
+    let headers: Vec<(String, String)> = {
+        let mut headers = vec![(String::new(), String::new()); candidates.len()];
+        for (path, file_imports, range) in &groups {
             for header in &mut headers[range.clone()] {
-                *header = file_imports.join("\n");
+                *header = ((*path).to_owned(), file_imports.join("\n"));
             }
         }
         headers
