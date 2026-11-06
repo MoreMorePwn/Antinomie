@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Detection rules page in the real app frame, at the size of a small
-//! screen: the pack's "Rules" button opens the list window, and a click on a
-//! rule in it opens the rule's details window. A pack's rules once sat in a
+//! screen: the pack's "Rules" button opens the rules window, and a click on a
+//! rule in its list shows the rule's details in the same window's right pane. A pack's rules once sat in a
 //! table at the foot of the page, which a small window squeezed to its header
 //! row, so no rule could be clicked.
 use super::*;
@@ -105,7 +105,7 @@ fn click_on(app: &mut MonitorApp, ctx: &egui::Context, label: &str) {
 }
 
 #[test]
-fn a_rule_of_a_pack_opens_its_details_window_in_the_app_at_a_small_size() {
+fn a_rule_of_a_pack_shows_its_details_beside_the_list_in_the_app_at_a_small_size() {
     let root = std::env::temp_dir().join(format!("ant-rules-list-app-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
@@ -136,12 +136,20 @@ fn a_rule_of_a_pack_opens_its_details_window_in_the_app_at_a_small_size() {
         list.contains("Zeta_Rule") && list.contains("2 of 2 rules"),
         "{list}"
     );
-    assert!(!list.contains("Source text"), "{list}");
-    // A click on a rule opens its own details window above the page.
+    assert!(list.contains("Rules \u{b7} Fixture fixture"), "{list}");
+    // A click on a rule shows its details in the same window's right pane:
+    // no second window opens.
     click_on(&mut app, &ctx, "Alpha_Rule");
     let details = until(&mut app, &ctx, "$a = \"alpha\"");
-    assert!(details.contains("Rule · Alpha_Rule"), "{details}");
+    assert!(
+        !details.contains("Rule \u{b7} Alpha_Rule"),
+        "no separate window: {details}"
+    );
     assert!(details.contains("Source text"), "{details}");
-    assert!(details.contains("Description: the alpha rule"), "{details}");
+    assert!(details.contains("the alpha rule"), "{details}");
+    assert!(
+        details.contains("Rules \u{b7} Fixture fixture"),
+        "{details}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
