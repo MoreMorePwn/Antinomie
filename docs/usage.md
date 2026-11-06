@@ -1176,6 +1176,23 @@ The sample **Download** window (**Tools > Download malware samples…**) keeps i
 size while it loads: the results area and the Downloaded list have fixed heights,
 the status is one line, and it scrolls inside when the screen is small.
 
+A MalwareBazaar lookup by hash reads every field on its own: MalwareBazaar sends
+`null` for what it does not know (the last-seen time, the imphash, a comment, a
+YARA rule's author) and puts vendor facts in several shapes, and none of that
+fails the lookup. A missing value shows as "—". Hover the Family cell of a
+result that came from a hash lookup to see its tags, the ClamAV signature names
+and the family Triage named.
+
+### Dump when suspicious activity is seen
+
+In **Run program > Triggers**, a core that cannot be taken because the process
+is gone is not an attempt: it is counted as skipped, noted in the run's notes
+with the reason, and the next match may still dump. The guest's refusal is
+explained in plain words ("The process had already exited, or had started over
+...") with its raw state and status in brackets. When the process is still
+running under a new identity (a thread of it called exec, which replaces the
+main thread's start time), the host asks once more for that process.
+
 ### Country and organization of addresses (GeoIP)
 
 **Tools > Settings > Network lookup** decides how the public destination

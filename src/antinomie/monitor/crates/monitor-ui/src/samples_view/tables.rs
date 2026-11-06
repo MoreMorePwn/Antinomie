@@ -248,10 +248,13 @@ impl SamplesView {
                         }
                     });
                     row.col(|ui| {
-                        ui.label(
-                            RichText::new(sample.signature.as_deref().unwrap_or("-"))
+                        let family = ui.label(
+                            RichText::new(sample.signature.as_deref().unwrap_or("—"))
                                 .color(theme::value(ValueKind::Name)),
                         );
+                        if let Some(text) = sample.partner_text() {
+                            family.on_hover_text(text);
+                        }
                     });
                     row.col(|ui| {
                         // A hash alone is not a file type. SHA-1 rows stay unlabeled

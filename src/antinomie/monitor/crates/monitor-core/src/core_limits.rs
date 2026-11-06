@@ -184,6 +184,8 @@ pub enum CoreReasonCode {
     /// A snapshot, stop or reconnect boundary sealed the transfer.
     Sealed,
     Unsupported,
+    /// The process had already exited, or no longer matched the request.
+    ProcessGone,
 }
 
 impl CoreReasonCode {
@@ -204,6 +206,7 @@ impl CoreReasonCode {
             Self::HostWrite => "host write",
             Self::Sealed => "sealed",
             Self::Unsupported => "unsupported",
+            Self::ProcessGone => "process gone",
         }
     }
 }
@@ -317,6 +320,66 @@ pub fn guest_reason(outcome: &CoreOutcome) -> Option<CoreReason> {
             format!("the guest stopped writing the core (error {errno})"),
         ),
     })
+}
+
+/// The guest's `-ESRCH`: no such process.
+const ESRCH: i32 = 3;
+
+/// Whether a terminal guest status says the process was not there to capture:
+/// it had exited, or it no longer matched the identity the request named.
+pub fn process_gone(state: u32, status: i32) -> bool {
+    state == 5 && status == -ESRCH
+}
+
+/// Why a core that took nothing (guest state 5 unavailable, 6 canceled) was
+/// not taken, in plain words, with the raw state and status kept at the end.
+pub fn no_core_reason(state: u32, status: i32) -> CoreReason {
+    let (code, plain) = if state == 6 {
+        (
+            CoreReasonCode::Canceled,
+            "The core was canceled, so none was taken".to_string(),
+        )
+    } else {
+        match -status {
+            3 => (
+                CoreReasonCode::ProcessGone,
+                "The process had already exited, or had started over (a new program image or a replaced main thread), so no core was taken".to_string(),
+            ),
+            11 => (
+                CoreReasonCode::Interrupted,
+                "The process kept changing (threads starting or exiting), so no core could be taken".to_string(),
+            ),
+            95 => (
+                CoreReasonCode::Unsupported,
+                "The process could not be paused for a core: it was stopped, held by a debugger, or has more threads than the guest allows".to_string(),
+            ),
+            16 => (
+                CoreReasonCode::Unsupported,
+                "The guest was already taking another core, so none was taken".to_string(),
+            ),
+            4 => (
+                CoreReasonCode::Interrupted,
+                "A signal reached the process while the core was being taken, so none was taken".to_string(),
+            ),
+            110 => (
+                CoreReasonCode::Deadline,
+                "The guest ran out of time before the core was taken".to_string(),
+            ),
+            12 => (
+                CoreReasonCode::GuestMemory,
+                "The guest ran out of memory before the core was taken".to_string(),
+            ),
+            errno => (
+                CoreReasonCode::Writer,
+                format!("The guest could not take a core (error {errno})"),
+            ),
+        }
+    };
+    CoreReason::new(
+        code,
+        Some(status),
+        format!("{plain} (guest state {state}, status {status})."),
+    )
 }
 
 #[cfg(test)]
@@ -435,5 +498,39 @@ mod tests {
         })
         .unwrap();
         assert_eq!(old.code, CoreReasonCode::Writer);
+    }
+
+    #[test]
+    fn a_core_that_took_nothing_reads_in_plain_words() {
+        let gone = no_core_reason(5, -3);
+        assert_eq!(gone.code, CoreReasonCode::ProcessGone);
+        assert!(gone.text.starts_with("The process had already exited"));
+        assert!(gone.text.ends_with("(guest state 5, status -3)."));
+        assert!(process_gone(5, -3) && !process_gone(5, -95) && !process_gone(4, -3));
+        for (state, status, code, words) in [
+            (6, 0, CoreReasonCode::Canceled, "canceled"),
+            (5, -11, CoreReasonCode::Interrupted, "kept changing"),
+            (5, -95, CoreReasonCode::Unsupported, "held by a debugger"),
+            (
+                5,
+                -16,
+                CoreReasonCode::Unsupported,
+                "already taking another core",
+            ),
+            (5, -4, CoreReasonCode::Interrupted, "A signal"),
+            (5, -110, CoreReasonCode::Deadline, "ran out of time"),
+            (5, -12, CoreReasonCode::GuestMemory, "ran out of memory"),
+            (5, -77, CoreReasonCode::Writer, "error 77"),
+        ] {
+            let reason = no_core_reason(state, status);
+            assert_eq!(reason.code, code);
+            assert!(reason.text.contains(words), "{}", reason.text);
+            assert!(
+                reason
+                    .text
+                    .contains(&format!("state {state}, status {status}"))
+            );
+            assert!(!reason.text.contains("unavailable/canceled"));
+        }
     }
 }

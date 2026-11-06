@@ -1,0 +1,149 @@
+{
+  "query_status": "ok",
+  "data": [
+    {
+      "sha256_hash": "dcafcf1e34c55497ff3f71f2bdfc25107613762aab2a228708885035b65fc3b2",
+      "sha3_384_hash": "f7bba236ff4b5272957c971152070687d55a846e2a2fe9db2f3d3e4fbff804f937886d0f00d92be1dfc1f3ea029cc057",
+      "sha1_hash": "deaf81890515fcb50724798d38be5dc24da36cd3",
+      "md5_hash": "36bdf08934b660ca48a1fa6fa38c21e8",
+      "first_seen": "2026-11-06 13:35:04",
+      "last_seen": null,
+      "file_name": "na",
+      "file_size": 1288875,
+      "file_type_mime": "application/x-executable",
+      "file_type": "elf",
+      "file_format": "ELF",
+      "file_arch": "X86_64",
+      "reporter": "abuse_ch",
+      "origin_country": "DE",
+      "anonymous": 0,
+      "signature": "Mirai",
+      "imphash": null,
+      "tlsh": "T17A556BBBF2A770BCC167D030478BCBA2AC35B4B501212D7B61C4A9763D62DE11766B27",
+      "telfhash": "t10ad1bb700bf635b061dbca20f343f1754d3214ba65f439e42662be88ef95e414c6e52b",
+      "gimphash": null,
+      "ssdeep": "24576:S7PjxB4gb5n8X1zaP7axA+d+a4TIucpWETPjkjcSJ:SDjxB4m5n8XlaPWi+d+a4TjxQP43",
+      "magika": "elf",
+      "dhash_icon": null,
+      "trid": [
+        "50.1% (.) ELF Executable and Linkable format (Linux) (4022/12)"
+      ],
+      "comment": null,
+      "archive_pw": null,
+      "tags": [
+        "elf",
+        "Mirai",
+        "Prometei"
+      ],
+      "code_sign": null,
+      "delivery_method": "web_download",
+      "intelligence": {
+        "clamav": [
+          "Unix.Trojan.Prometei-10045451-0",
+          "Unix.Trojan.Prometei-10045459-0"
+        ],
+        "downloads": "66",
+        "uploads": "1",
+        "mail": null
+      },
+      "file_information": [
+        {
+          "context": "URLhaus",
+          "value": "https://urlhaus.abuse.ch/url/4017855/"
+        }
+      ],
+      "ole_information": [],
+      "yara_rules": [
+        {
+          "rule_name": "CP_Script_Inject_Detector",
+          "author": "DiegoAnalytics",
+          "description": "Detects attempts to inject code into another process across PE, ELF, Mach-O binaries",
+          "reference": null
+        },
+        {
+          "rule_name": "F01_s1ckrule",
+          "author": "s1ckb017",
+          "description": null,
+          "reference": null
+        },
+        {
+          "rule_name": "Linux_Hacktool_Flooder_f454ec10",
+          "author": "Elastic Security",
+          "description": null,
+          "reference": "0297e1ad6e180af85256a175183102776212d324a2ce0c4f32e8a44a2e2e9dad"
+        },
+        {
+          "rule_name": "malwareelf55503",
+          "author": null,
+          "description": null,
+          "reference": null
+        }
+      ],
+      "vendor_intel": {
+        "CERT-PL_MWDB": {
+          "detection": "mirai",
+          "link": "https://mwdb.cert.pl/sample/dcafcf1e34c55497ff3f71f2bdfc25107613762aab2a228708885035b65fc3b2/"
+        },
+        "YOROI_YOMI": {
+          "detection": "Legit File",
+          "score": "0.20"
+        },
+        "Intezer": {
+          "verdict": "suspicious",
+          "family_name": null,
+          "analysis_url": "https://analyze.intezer.com/analyses/ab0b94ac-c9c1-4132-b5a2-e96deab56350?utm_source=MalwareBazaar"
+        },
+        "Triage": {
+          "malware_family": "prometei_elf",
+          "score": "10",
+          "link": "https://tria.ge/reports/261106-qvskcscz3p/",
+          "tags": [
+            "family:prometei_elf",
+            "botnet",
+            "discovery",
+            "linux",
+            "miner",
+            "persistence",
+            "privilege_escalation"
+          ],
+          "signatures": [
+            {
+              "signature": "Family: Prometei",
+              "score": "10"
+            },
+            {
+              "signature": "Prometei payload",
+              "score": "10"
+            },
+            {
+              "signature": "Deletes itself",
+              "score": "7"
+            }
+          ],
+          "malware_config": []
+        },
+        "ReversingLabs": {
+          "threat_name": "Linux.Trojan.Prometei",
+          "status": "MALICIOUS",
+          "first_seen": "2026-11-06 13:35:27",
+          "scanner_count": "36",
+          "scanner_match": "14",
+          "scanner_percent": "38.89"
+        },
+        "Spamhaus_HBL": [
+          {
+            "detection": "suspicious",
+            "link": "https://www.spamhaus.org/hbl/"
+          }
+        ],
+        "FileScan-IO": {
+          "verdict": "NO_THREAT",
+          "threatlevel": "0.25",
+          "confidence": "1.0",
+          "report_link": "https://www.filescan.io/uploads/6aedd792aa214a89fc2b68fb/reports/a0285b9b-25a9-4d88-98b1-21bec3756330/overview"
+        }
+      },
+      "comments": null
+    }
+  ]
+}

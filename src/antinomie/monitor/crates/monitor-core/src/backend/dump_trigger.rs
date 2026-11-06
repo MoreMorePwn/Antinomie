@@ -5,9 +5,20 @@
 use super::worker_guest::GUEST_REPLY_TIMEOUT;
 use super::*;
 use crate::dump_trigger::{LiveFinding, RECORDS_MAX, TriggerDump, TriggerLog, TriggerRecord};
+use crate::observation::GuestProcessIdentity;
 
 /// Free disk space that must remain after a memory dump, bytes.
 const DISK_RESERVE: u64 = 1 << 30;
+
+/// A trigger core the guest refused because its process was not there.
+struct GoneCore {
+    cookie: u64,
+    finding: LiveFinding,
+    target: GuestProcessIdentity,
+    run_id: String,
+    root_pid: u32,
+    limits: (Option<u32>, Option<u32>),
+}
 
 fn failed(error: impl Into<String>) -> TriggerDump {
     TriggerDump {
@@ -15,6 +26,15 @@ fn failed(error: impl Into<String>) -> TriggerDump {
         error: Some(error.into()),
         ..TriggerDump::default()
     }
+}
+
+/// A core that cannot be taken because the process is gone is not an attempt:
+/// its record goes, so the run's budget is kept, and it counts as skipped.
+fn drop_unattempted(log: &mut TriggerLog, index: Option<usize>) {
+    if let Some(index) = index {
+        log.records.remove(index);
+    }
+    log.skipped += 1;
 }
 
 impl Worker {
@@ -88,7 +108,7 @@ impl Worker {
                 run.summary.request.core_max_size,
                 run.summary.request.core_timeout_ms,
             );
-            let (core, gone) = self.queue_trigger_core(pid, &run_id, root_pid, request);
+            let (core, gone) = self.queue_trigger_core(pid, &run_id, root_pid, request, None);
             if gone && !plan.memory {
                 // Nothing can be taken from a process that is gone: not an
                 // attempt, so the budget is kept for the next match.
@@ -181,6 +201,7 @@ impl Worker {
         run_id: &str,
         root_pid: u32,
         (max_size, timeout_ms): (Option<u32>, Option<u32>),
+        refused: Option<&GuestProcessIdentity>,
     ) -> (TriggerDump, bool) {
         let Some(session) = self.session.as_mut() else {
             return (failed("the VM is stopped"), false);
@@ -205,6 +226,10 @@ impl Worker {
                 true,
             );
         };
+        if refused == Some(&process.identity) {
+            // The guest already said no to exactly this process.
+            return (failed(crate::core_limits::no_core_reason(5, -3).text), true);
+        }
         let request = ProcessCoreRequest {
             vm_id: session.vm.id.clone(),
             target: process.identity.clone(),
@@ -283,6 +308,7 @@ impl Worker {
         };
         let mut start_memory = Vec::new();
         let mut changed = Vec::new();
+        let mut gone = Vec::new();
         let self_dump = self
             .snapshot
             .memory_dump
@@ -323,6 +349,24 @@ impl Worker {
                             .map(|reason| reason.text.clone())
                             .or_else(|| summary.issue.clone());
                         touched = true;
+                        if state == RunArtifactState::Failed
+                            && record.memory.is_none()
+                            && summary.reason.as_ref().is_some_and(|reason| {
+                                reason.code == crate::core_limits::CoreReasonCode::ProcessGone
+                            })
+                        {
+                            gone.push(GoneCore {
+                                cookie: *cookie,
+                                finding: record.finding.clone(),
+                                target: summary.target.clone(),
+                                run_id: run.summary.id.clone(),
+                                root_pid: run.summary.pid,
+                                limits: (
+                                    run.summary.request.core_max_size,
+                                    run.summary.request.core_timeout_ms,
+                                ),
+                            });
+                        }
                     }
                 }
                 if let Some(memory) = record.memory.as_mut()
@@ -381,6 +425,54 @@ impl Worker {
                 }
             });
         }
+        for core in gone {
+            self.retry_or_skip_core(core);
+        }
+    }
+
+    /// The guest found no such process for a trigger's core. When the process
+    /// is still there under a new identity (it started over), ask again for
+    /// that one; otherwise the process is gone: the trigger is not an attempt,
+    /// so its record is dropped, a note says why and the next match may dump.
+    fn retry_or_skip_core(&mut self, gone: GoneCore) {
+        let GoneCore {
+            cookie,
+            finding,
+            target,
+            run_id,
+            root_pid,
+            limits,
+        } = gone;
+        let (core, still_gone) =
+            self.queue_trigger_core(finding.pid, &run_id, root_pid, limits, Some(&target));
+        let Some(run) = self
+            .session
+            .as_mut()
+            .and_then(|session| session.runs.get_mut(&cookie))
+        else {
+            return;
+        };
+        let log = run.summary.triggers.get_or_insert_with(TriggerLog::default);
+        let found = log
+            .records
+            .iter()
+            .position(|record| record.finding == finding && record.memory.is_none());
+        if !still_gone {
+            if let Some(record) = found.and_then(|index| log.records.get_mut(index)) {
+                record.core = Some(core);
+            }
+            self.save_trigger(cookie, |_| {});
+            return;
+        }
+        let why = core.error.unwrap_or_default();
+        drop_unattempted(log, found);
+        run.add_note(format!(
+            "Dump skipped for {} ({}, process {}): {why}",
+            finding.rule,
+            finding.tier.label(),
+            finding.pid
+        ));
+        self.save_trigger(cookie, |_| {});
     }
 
     /// A memory dump ended: record it where a trigger asked for it.
@@ -411,5 +503,50 @@ impl Worker {
         for cookie in cookies {
             self.save_trigger(cookie, |_| {});
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(pid: u32) -> TriggerRecord {
+        TriggerRecord {
+            at_ms: 1,
+            finding: LiveFinding {
+                rule: "persistence.binary_replace".into(),
+                summary: String::new(),
+                tier: crate::dump_trigger::TriggerTier::default(),
+                pid,
+                tid: pid,
+                task_cookie: 0,
+                stream_id: 0,
+                call_id: 0,
+                guest_ns: 0,
+                syscall: String::new(),
+            },
+            memory: None,
+            core: Some(failed("gone")),
+        }
+    }
+
+    #[test]
+    fn a_core_refused_for_a_missing_process_is_skipped_and_keeps_the_budget() {
+        let mut log = TriggerLog::default();
+        log.records.push(record(1160));
+        let max_dumps = 1usize;
+        assert!(log.records.len() >= max_dumps);
+        drop_unattempted(&mut log, Some(0));
+        assert!(log.records.is_empty());
+        assert_eq!(log.skipped, 1);
+        // The next match finds room again.
+        assert!(log.records.len() < max_dumps);
+    }
+
+    #[test]
+    fn the_guest_refusal_of_a_missing_process_reads_as_gone() {
+        let reason = crate::core_limits::no_core_reason(5, -3);
+        assert_eq!(reason.code, crate::core_limits::CoreReasonCode::ProcessGone);
+        assert!(crate::core_limits::process_gone(5, -3));
     }
 }

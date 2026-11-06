@@ -570,10 +570,11 @@ impl Session {
                 return Ok(());
             }
             if state >= 5 {
-                return Err(format!(
-                    "guest core unavailable or canceled (state {state}, status {})",
-                    core.status.as_ref().map_or(0, |status| status.status)
-                ));
+                return Err(crate::core_limits::no_core_reason(
+                    state,
+                    core.status.as_ref().map_or(0, |status| status.status),
+                )
+                .text);
             }
             owner.summary.core_state = RunArtifactState::InProgress;
             queue_artifacts(owner)?;

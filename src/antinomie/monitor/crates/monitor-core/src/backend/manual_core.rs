@@ -119,6 +119,14 @@ impl Owner {
             self.summary.reason = Some(CoreReason::new(code, errno, text));
         }
     }
+    /// The guest ended with no core (state 5 or 6): say why in plain words,
+    /// keeping the raw state and status at the end.
+    fn finish_without_core(&mut self, state: u32, status: i32) {
+        let reason = crate::core_limits::no_core_reason(state, status);
+        let text = reason.text.clone();
+        self.summary.reason.get_or_insert(reason);
+        self.finish(RunArtifactState::Failed, text);
+    }
     /// A terminal guest status is being copied to the host.
     pub(super) fn transferring(&self) -> bool {
         !self.done
@@ -624,13 +632,7 @@ impl Session {
             return Ok(());
         }
         if matches!(status.state, 5 | 6) {
-            owner.finish(
-                RunArtifactState::Failed,
-                format!(
-                    "manual guest capture unavailable/canceled (state {}, status {})",
-                    status.state, status.status
-                ),
-            );
+            owner.finish_without_core(status.state, status.status);
             return Ok(());
         }
         owner.summary.phase = ProcessCorePhase::Transfer;
@@ -1087,6 +1089,25 @@ mod tests {
         invalid.max_size = 64 << 20;
         invalid.timeout_ms = 60_001;
         assert!(control::core_capture(&invalid, [11, 12]).is_err());
+    }
+    #[test]
+    fn a_core_the_guest_could_not_take_is_explained_in_plain_words() {
+        let mut owner = Owner::new(
+            request(),
+            std::env::temp_dir().join("unused-manual-refusal"),
+            "capture".into(),
+        );
+        owner.finish_without_core(5, -3);
+        let issue = owner.summary.issue.clone().unwrap();
+        assert!(
+            issue.starts_with("The process had already exited"),
+            "{issue}"
+        );
+        assert!(issue.contains("guest state 5, status -3"));
+        assert!(!issue.contains("unavailable/canceled"));
+        let reason = owner.summary.reason.as_ref().unwrap();
+        assert_eq!(reason.code, crate::core_limits::CoreReasonCode::ProcessGone);
+        assert_eq!(reason.errno, Some(-3));
     }
     #[test]
     fn only_explicit_lookup_esrch_proves_absence() {
