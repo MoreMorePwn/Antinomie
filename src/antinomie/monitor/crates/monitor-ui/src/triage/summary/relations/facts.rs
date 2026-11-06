@@ -24,6 +24,29 @@ fn number(values: &[(&'static str, RowValue)], key: &str) -> u64 {
         .map_or(0, |number| number.clamp(0, i128::from(u64::MAX)) as u64)
 }
 
+/// The process's name: the recorded one; when that is empty or "?", the file
+/// name of the last image it ran, else of its argv[0].
+fn recorded_name(node: &crate::triage::ProcessNode) -> String {
+    let name = process_cells::file_name(&node.comm);
+    if !name.is_empty() && name != "?" {
+        return name.to_owned();
+    }
+    node.record
+        .execs
+        .last()
+        .map(|(image, _)| process_cells::file_name(image))
+        .or_else(|| {
+            node.exec_history
+                .last()
+                .map(|image| process_cells::file_name(image))
+        })
+        .filter(|name| !name.is_empty() && *name != "?")
+        .or_else(|| node.argv.first().map(|arg| process_cells::file_name(arg)))
+        .filter(|name| !name.is_empty() && *name != "?")
+        .unwrap_or("")
+        .to_owned()
+}
+
 pub(in crate::triage) fn facts_of(scan: &ArchiveScan) -> Facts {
     let mut facts = Facts::default();
     for node in scan.process.iter().filter(|node| !node.thread) {
@@ -31,7 +54,7 @@ pub(in crate::triage) fn facts_of(scan: &ArchiveScan) -> Facts {
             pid: node.pid,
             cookie: node.cookie,
             parent: node.parent.map(|parent| (parent.pid, parent.cookie)),
-            name: process_cells::file_name(&node.comm).to_owned(),
+            name: recorded_name(node),
             mismatch: !node.forked
                 && process_cells::argv0_mismatch(&node.comm, &node.argv).is_some(),
             execs: node.record.execs.clone(),

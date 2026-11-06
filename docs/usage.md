@@ -662,12 +662,20 @@ The network capture is the guest's own view on every route.
   rows that scrolls, with its scroll bar always drawn; the one-line rows (MITRE
   ATT&CK, Processes of interest, Files, Network) show numbers strong and words muted; **Copy all** and **Export**, which writes JSON to the run's `ioc`
   folder; the header says how many indicators matched the IOC datasets), **Relationships**
-  (a process, file, endpoint and injection graph with the root in the middle:
-  processes grow to the right, files below, network endpoints to the left, one
-  column per level; **Compact** shows the 15 best of each kind and what joins them,
-  **Full** every node; drag the background to pan, Ctrl and the wheel or the
+  (a process, file, endpoint and injection graph laid out as a tree from the root
+  at the top left: each process has the processes it started, the files it wrote or
+  ran and the endpoints it contacted to its right, and a process with many children
+  spreads them over several lanes; children of one parent that ran the same image
+  and have no finding are one stacked box (`ps ×120`), and the files one process
+  wrote into one folder are one box (`/tmp/x/ · 1,240 files written`); a click on
+  a stacked box opens it and a click on its header shuts it, and a node with a
+  finding is never grouped; **Compact** shows the 15 best of each kind (a group
+  counts as one) and what joins them, **Full** opens every group up to about 800
+  nodes and says how many it shows; **Laying out…** shows while a big run is
+  placed; the icon beside **Mermaid** opens the graph in a window of its own with the
+  same controls; drag the background to pan, Ctrl and the wheel or the
   buttons to zoom, the plain wheel scrolls the page; click a node to open it,
-  **Mermaid** to copy; edges read fork, exec, write, run, connect, inject, signal),
+  **Mermaid** to copy what is shown; edges read fork, exec, write, run, connect, inject, signal),
   then one line each for **MITRE ATT&CK**, **Processes of interest**, **Files** and
   **Network**, the folded **MITRE ATT&CK techniques** list, the **Detection engines**,
   the notes and the run's last screenshot. The Summary states observations only: no

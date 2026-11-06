@@ -1109,6 +1109,10 @@ fn native_graph_view_fixture() {
     };
     view.section = section;
     view.process = process;
+    // ANTINOMIE_QA_MODE = full: the Summary's Relationships box in its Full view.
+    if var("ANTINOMIE_QA_MODE") == "full" {
+        view.summary_state.mode = super::super::summary::SummaryMode::Full;
+    }
     view.history_tab = scene == "perfile";
     if scene == "perfile" {
         view.file_history

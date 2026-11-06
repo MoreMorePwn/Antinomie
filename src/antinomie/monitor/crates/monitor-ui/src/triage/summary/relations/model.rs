@@ -4,7 +4,7 @@
 //! into or signalled, joined by what happened between them. Built from plain
 //! facts so it is tested without a recording; `facts` reads them from the scan.
 use super::super::super::rules::Tier;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// A task's identity: its pid and the recording's stable cookie.
 pub(in crate::triage) type Key = (u32, u64);
@@ -66,6 +66,68 @@ pub(in crate::triage) enum NodeKind {
     Endpoint(String),
     /// A process that was injected into or signalled but is not in the run.
     Victim(u32),
+    /// Several processes or files shown as one (see `group`).
+    Group(GroupInfo),
+}
+
+/// What a group node stands for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::triage) enum GroupWhat {
+    /// Children of one parent that ran the same image.
+    Processes,
+    /// Files one process wrote into one folder.
+    Files,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::triage) struct GroupInfo {
+    /// Stable: made from the parent's identity and the image or folder.
+    pub id: String,
+    pub what: GroupWhat,
+    pub members: u32,
+    /// Its members are drawn beside it.
+    pub open: bool,
+    /// The labels of the first few members, for the tooltip.
+    pub sample: Vec<String>,
+}
+
+/// What a node is, for the Compact view's "best of each kind".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::triage) enum Family {
+    Process,
+    Victim,
+    File,
+    Endpoint,
+}
+
+impl NodeKind {
+    /// Stable between builds: the same run gives the same text.
+    pub(in crate::triage) fn id(&self) -> String {
+        match self {
+            Self::Process((pid, cookie)) => format!("p:{pid}:{cookie}"),
+            Self::File(path) => format!("f:{path}"),
+            Self::Endpoint(endpoint) => format!("e:{endpoint}"),
+            Self::Victim(pid) => format!("v:{pid}"),
+            Self::Group(info) => info.id.clone(),
+        }
+    }
+
+    pub(in crate::triage) fn family(&self) -> Family {
+        match self {
+            Self::Process(_)
+            | Self::Group(GroupInfo {
+                what: GroupWhat::Processes,
+                ..
+            }) => Family::Process,
+            Self::Victim(_) => Family::Victim,
+            Self::File(_)
+            | Self::Group(GroupInfo {
+                what: GroupWhat::Files,
+                ..
+            }) => Family::File,
+            Self::Endpoint(_) => Family::Endpoint,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -78,6 +140,8 @@ pub(in crate::triage) struct Node {
     pub warn: bool,
     /// Findings that involve it.
     pub findings: u32,
+    /// For a process: the image it ran, by which siblings are grouped.
+    pub image: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -89,6 +153,8 @@ pub(in crate::triage) enum EdgeKind {
     Connected,
     Injected,
     Signalled,
+    /// From a group to what it holds, when it is open.
+    Member,
 }
 
 impl EdgeKind {
@@ -101,6 +167,7 @@ impl EdgeKind {
             Self::Connected => "connect",
             Self::Injected => "inject",
             Self::Signalled => "signal",
+            Self::Member => "member",
         }
     }
 }
@@ -117,6 +184,9 @@ pub(in crate::triage) struct Edge {
 pub(in crate::triage) struct Graph {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    /// Per node, the indices of the edges that leave and enter it.
+    pub out: Vec<Vec<u32>>,
+    pub inc: Vec<Vec<u32>>,
 }
 
 /// Rules whose object names a process the run acted on.
@@ -160,7 +230,35 @@ fn process_label(proc: &Proc) -> String {
     format!("{name} ({})", proc.pid)
 }
 
+/// The image a process ran, by which siblings are told apart.
+fn image_of(proc: &Proc) -> String {
+    proc.execs
+        .last()
+        .map(|(image, _)| image.clone())
+        .unwrap_or_else(|| proc.name.clone())
+}
+
 impl Graph {
+    /// Fill `out` and `inc` from `edges`.
+    pub(in crate::triage) fn index(&mut self) {
+        self.out = vec![Vec::new(); self.nodes.len()];
+        self.inc = vec![Vec::new(); self.nodes.len()];
+        for (at, edge) in self.edges.iter().enumerate() {
+            self.out[edge.from].push(at as u32);
+            self.inc[edge.to].push(at as u32);
+        }
+    }
+
+    /// The edges that enter `node`.
+    pub(in crate::triage) fn edges_in(&self, node: usize) -> impl Iterator<Item = &Edge> {
+        self.inc[node].iter().map(|&at| &self.edges[at as usize])
+    }
+
+    /// The edges that leave `node`.
+    pub(in crate::triage) fn edges_out(&self, node: usize) -> impl Iterator<Item = &Edge> {
+        self.out[node].iter().map(|&at| &self.edges[at as usize])
+    }
+
     pub(in crate::triage) fn build(facts: &Facts) -> Self {
         let mut graph = Graph::default();
         let mut index: BTreeMap<String, usize> = BTreeMap::new();
@@ -174,6 +272,7 @@ impl Graph {
                 tier: None,
                 warn: proc.mismatch,
                 findings: 0,
+                image: image_of(proc),
             });
             by_key.insert((proc.pid, proc.cookie), at);
             by_pid.entry(proc.pid).or_insert(at);
@@ -208,6 +307,20 @@ impl Graph {
                 edge(parent, child, kind);
             }
         }
+        // The processes that ran each image, for "ran" edges.
+        let mut ran_by: HashMap<&str, Vec<usize>> = HashMap::new();
+        for proc in &facts.procs {
+            let Some(&at) = by_key.get(&(proc.pid, proc.cookie)) else {
+                continue;
+            };
+            let mut seen: Vec<&str> = Vec::new();
+            for (image, _) in &proc.execs {
+                if !seen.contains(&image.as_str()) {
+                    seen.push(image);
+                    ran_by.entry(image).or_default().push(at);
+                }
+            }
+        }
         // Files: the ones written or run, by path.
         let mut node_of = |graph: &mut Graph, kind: NodeKind, label: String| -> usize {
             let id = match &kind {
@@ -215,6 +328,7 @@ impl Graph {
                 NodeKind::Endpoint(endpoint) => format!("e:{endpoint}"),
                 NodeKind::Victim(pid) => format!("v:{pid}"),
                 NodeKind::Process(key) => format!("p:{}:{}", key.0, key.1),
+                NodeKind::Group(info) => info.id.clone(),
             };
             *index.entry(id).or_insert_with(|| {
                 graph.nodes.push(Node {
@@ -223,6 +337,7 @@ impl Graph {
                     tier: None,
                     warn: false,
                     findings: 0,
+                    image: String::new(),
                 });
                 graph.nodes.len() - 1
             })
@@ -250,12 +365,8 @@ impl Graph {
                 }
             }
             // A process whose image this file is ran it.
-            for proc in &facts.procs {
-                if proc.execs.iter().any(|(image, _)| *image == file.path) {
-                    if let Some(&from) = by_key.get(&(proc.pid, proc.cookie)) {
-                        edge(from, at, EdgeKind::Ran);
-                    }
-                }
+            for &from in ran_by.get(file.path.as_str()).into_iter().flatten() {
+                edge(from, at, EdgeKind::Ran);
             }
         }
         for endpoint in &facts.endpoints {
@@ -308,51 +419,86 @@ impl Graph {
                 count,
             })
             .collect();
+        graph.index();
         graph.tiers(facts, &by_key);
         graph
     }
 
     /// Mark the nodes the findings involve with their highest tier.
     fn tiers(&mut self, facts: &Facts, by_key: &BTreeMap<Key, usize>) {
-        let mark = |nodes: &mut Vec<Node>, at: usize, tier: Tier| {
-            tier_max(&mut nodes[at].tier, tier);
-            nodes[at].findings += 1;
-        };
+        let mut marks: Vec<(usize, Tier)> = Vec::new();
+        // What a finding's object can name: a file path, an address, a pid.
+        let mut files: HashMap<&str, usize> = HashMap::new();
+        let mut hosts: HashMap<&str, Vec<usize>> = HashMap::new();
+        let mut pids: HashMap<u32, Vec<usize>> = HashMap::new();
+        for (at, node) in self.nodes.iter().enumerate() {
+            match &node.kind {
+                NodeKind::File(path) => {
+                    files.insert(path, at);
+                }
+                NodeKind::Endpoint(endpoint) => {
+                    let ip = endpoint.rsplit_once(':').map_or(endpoint.as_str(), |p| p.0);
+                    hosts.entry(ip).or_default().push(at);
+                }
+                NodeKind::Victim(pid) | NodeKind::Process((pid, _)) => {
+                    pids.entry(*pid).or_default().push(at);
+                }
+                NodeKind::Group(_) => {}
+            }
+        }
         for finding in &facts.findings {
             if finding.tier == Tier::Info {
                 continue;
             }
-            if let Some(&at) = by_key.get(&(finding.pid, finding.cookie)) {
-                mark(&mut self.nodes, at, finding.tier);
+            let actor = by_key.get(&(finding.pid, finding.cookie)).copied();
+            if let Some(at) = actor {
+                marks.push((at, finding.tier));
             }
-            let target = target_pid(&finding.object)
-                .filter(|_| INJECTION_RULES.contains(&finding.rule.as_str()));
-            for at in 0..self.nodes.len() {
-                let hit = match &self.nodes[at].kind {
-                    NodeKind::File(path) => !finding.object.is_empty() && finding.object == *path,
-                    NodeKind::Endpoint(endpoint) => {
-                        let ip = endpoint.rsplit_once(':').map_or(endpoint.as_str(), |p| p.0);
-                        !finding.object.is_empty() && finding.object.contains(ip)
+            let mut hit: Vec<usize> = Vec::new();
+            if !finding.object.is_empty() {
+                hit.extend(files.get(finding.object.as_str()));
+                if !hosts.is_empty() {
+                    let mut seen: Vec<&str> = Vec::new();
+                    for token in finding
+                        .object
+                        .split(|c: char| !(c.is_ascii_alphanumeric() || ".:-".contains(c)))
+                    {
+                        let bare = token.rsplit_once(':').map_or(token, |p| p.0);
+                        for key in [token, bare] {
+                            if !seen.contains(&key) {
+                                seen.push(key);
+                                hit.extend(hosts.get(key).into_iter().flatten());
+                            }
+                        }
                     }
-                    NodeKind::Victim(pid) => target == Some(*pid),
-                    NodeKind::Process((pid, _)) => {
-                        target == Some(*pid)
-                            && by_key.get(&(finding.pid, finding.cookie)) != Some(&at)
-                    }
-                };
-                if hit {
-                    mark(&mut self.nodes, at, finding.tier);
                 }
             }
+            if let Some(target) = target_pid(&finding.object)
+                .filter(|_| INJECTION_RULES.contains(&finding.rule.as_str()))
+            {
+                for &at in pids.get(&target).into_iter().flatten() {
+                    if actor != Some(at) {
+                        hit.push(at);
+                    }
+                }
+            }
+            hit.sort_unstable();
+            hit.dedup();
+            for at in hit {
+                marks.push((at, finding.tier));
+            }
+        }
+        drop((files, hosts, pids));
+        for (at, tier) in marks {
+            tier_max(&mut self.nodes[at].tier, tier);
+            self.nodes[at].findings += 1;
         }
     }
 
     /// The node that connects `node` to the rest: the process that started,
     /// wrote, contacted or acted on it. A parent comes before an injector.
     pub(in crate::triage) fn anchor(&self, node: usize) -> Option<usize> {
-        self.edges
-            .iter()
-            .filter(|edge| edge.to == node)
+        self.edges_in(node)
             .min_by_key(|edge| {
                 (
                     matches!(edge.kind, EdgeKind::Injected | EdgeKind::Signalled),
@@ -362,11 +508,15 @@ impl Graph {
             .map(|edge| edge.from)
     }
 
-    /// The first process with no anchor: the run's root.
+    /// The first process nothing started: the run's root. (A process another
+    /// injected into has an anchor, but it was not started by it.)
     pub(in crate::triage) fn root(&self) -> usize {
         (0..self.nodes.len())
             .find(|&at| {
-                matches!(self.nodes[at].kind, NodeKind::Process(_)) && self.anchor(at).is_none()
+                matches!(self.nodes[at].kind, NodeKind::Process(_))
+                    && !self
+                        .edges_in(at)
+                        .any(|edge| matches!(edge.kind, EdgeKind::Forked | EdgeKind::Execed))
             })
             .unwrap_or(0)
     }
@@ -380,17 +530,13 @@ impl Graph {
             Some(Tier::Low) => 2000,
             Some(Tier::Info) | None => 0,
         };
-        let kind = match item.kind {
-            NodeKind::Process(_) => 300,
-            NodeKind::Victim(_) => 250,
-            NodeKind::Endpoint(_) => 200,
-            NodeKind::File(_) => 150,
+        let kind = match item.kind.family() {
+            Family::Process => 300,
+            Family::Victim => 250,
+            Family::Endpoint => 200,
+            Family::File => 150,
         };
-        let degree = self
-            .edges
-            .iter()
-            .filter(|edge| edge.from == node || edge.to == node)
-            .count() as i64;
+        let degree = (self.out[node].len() + self.inc[node].len()) as i64;
         tier + kind
             + i64::from(item.findings.min(50)) * 4
             + degree * 10
@@ -398,11 +544,11 @@ impl Graph {
     }
 
     /// `node` and the chain of anchors that joins it to the root.
-    fn add_chain(&self, node: usize, chosen: &mut BTreeSet<usize>) {
+    pub(in crate::triage) fn add_chain(&self, node: usize, chosen: &mut BTreeSet<usize>) {
         let mut next = Some(node);
         let mut guard = 0;
         while let Some(at) = next {
-            if !chosen.insert(at) || guard > 64 {
+            if !chosen.insert(at) || guard > 4096 {
                 break;
             }
             next = self.anchor(at);
@@ -411,9 +557,10 @@ impl Graph {
     }
 
     /// The nodes of the Compact view: the root, the `per_kind` best
-    /// processes, files and endpoints (by `score`), and the processes the run
-    /// injected into or signalled, each with the chain that joins it to the
-    /// root. Processes the chains pull in come on top of the `per_kind`.
+    /// processes, files and endpoints (by `score`; a group counts as one
+    /// node), and the processes the run injected into or signalled, each with
+    /// the chain that joins it to the root. Processes the chains pull in come
+    /// on top of the `per_kind`. What an open group holds is shown with it.
     pub(in crate::triage) fn compact(&self, per_kind: usize) -> Vec<usize> {
         if self.nodes.is_empty() {
             return Vec::new();
@@ -426,55 +573,62 @@ impl Graph {
             all.truncate(per_kind);
             all
         };
-        let kind = |at: usize| &self.nodes[at].kind;
+        let family = |at: usize| self.nodes[at].kind.family();
         let victim = |at: usize| {
-            matches!(kind(at), NodeKind::Victim(_))
-                || self.edges.iter().any(|edge| {
-                    edge.to == at
-                        && matches!(kind(at), NodeKind::Process(_))
-                        && edge.kind == EdgeKind::Injected
-                })
+            family(at) == Family::Victim
+                || (family(at) == Family::Process
+                    && self
+                        .edges_in(at)
+                        .any(|edge| edge.kind == EdgeKind::Injected))
         };
         let picks = [
-            best(&|at| matches!(kind(at), NodeKind::Process(_))),
+            best(&|at| family(at) == Family::Process),
             best(&victim),
-            best(&|at| matches!(kind(at), NodeKind::File(_))),
-            best(&|at| matches!(kind(at), NodeKind::Endpoint(_))),
+            best(&|at| family(at) == Family::File),
+            best(&|at| family(at) == Family::Endpoint),
         ];
         for node in picks.into_iter().flatten() {
             self.add_chain(node, &mut chosen);
         }
+        let opened: Vec<usize> = chosen
+            .iter()
+            .copied()
+            .filter(|&at| matches!(&self.nodes[at].kind, NodeKind::Group(info) if info.open))
+            .collect();
+        for group in opened {
+            for edge in self.edges_out(group) {
+                if edge.kind == EdgeKind::Member {
+                    chosen.insert(edge.to);
+                }
+            }
+        }
         chosen.into_iter().collect()
     }
 
-    /// The level of each node from the left: the root is 0, what a process
-    /// did is one right of it.
-    pub(in crate::triage) fn levels(&self, shown: &[usize]) -> BTreeMap<usize, usize> {
-        let shown: BTreeSet<usize> = shown.iter().copied().collect();
-        let mut level: BTreeMap<usize, usize> = BTreeMap::new();
-        for _ in 0..shown.len() + 1 {
-            let mut changed = false;
-            for &at in &shown {
-                let wanted = match self
-                    .edges
-                    .iter()
-                    .find(|edge| edge.to == at && shown.contains(&edge.from) && edge.from != at)
-                {
-                    Some(edge) => level.get(&edge.from).map_or(0, |l| l + 1),
-                    None => 0,
-                };
-                if level.get(&at) != Some(&wanted)
-                    && level.get(&at).is_none_or(|have| wanted > *have)
-                {
-                    level.insert(at, wanted);
-                    changed = true;
-                }
-            }
-            if !changed {
+    /// At most `cap` nodes, joined to the root: what is nearest the root (the
+    /// nodes come in breadth-first order from a view), after the nodes with a
+    /// finding and the chains that join them.
+    pub(in crate::triage) fn capped(&self, cap: usize) -> Vec<usize> {
+        if self.nodes.len() <= cap {
+            return (0..self.nodes.len()).collect();
+        }
+        let mut chosen: BTreeSet<usize> = BTreeSet::new();
+        let mut tiered: Vec<usize> = (0..self.nodes.len())
+            .filter(|&at| self.nodes[at].tier.is_some())
+            .collect();
+        tiered.sort_by_key(|&at| (std::cmp::Reverse(self.score(at)), at));
+        for at in tiered {
+            if chosen.len() >= cap / 4 {
                 break;
             }
+            self.add_chain(at, &mut chosen);
         }
-        level
+        let mut at = 0;
+        while chosen.len() < cap && at < self.nodes.len() {
+            chosen.insert(at);
+            at += 1;
+        }
+        chosen.into_iter().collect()
     }
 }
 
@@ -491,16 +645,20 @@ pub(in crate::triage) struct Interest {
 /// The processes with the most findings (by tier, then count), and those whose
 /// argv does not match the image, at most `limit`.
 pub(in crate::triage) fn interest(facts: &Facts, limit: usize) -> Vec<Interest> {
+    let mut tiers: HashMap<Key, Vec<Tier>> = HashMap::new();
+    for finding in facts.findings.iter().filter(|f| f.tier != Tier::Info) {
+        tiers
+            .entry((finding.pid, finding.cookie))
+            .or_default()
+            .push(finding.tier);
+    }
     let mut out: Vec<Interest> = facts
         .procs
         .iter()
         .filter_map(|proc| {
-            let mine: Vec<Tier> = facts
-                .findings
-                .iter()
-                .filter(|f| (f.pid, f.cookie) == (proc.pid, proc.cookie) && f.tier != Tier::Info)
-                .map(|f| f.tier)
-                .collect();
+            let mine: &[Tier] = tiers
+                .get(&(proc.pid, proc.cookie))
+                .map_or(&[], Vec::as_slice);
             (!mine.is_empty() || proc.mismatch).then(|| Interest {
                 key: (proc.pid, proc.cookie),
                 label: process_label(proc),
@@ -586,6 +744,45 @@ pub(super) mod tests {
                 process: Some((430, 6)),
             }],
         }
+    }
+
+    /// A big run: one root, `processes` below it in a tree whose images
+    /// repeat, and `files` written into forty folders; every 97th process has
+    /// a finding.
+    pub(in crate::triage) fn synthetic(processes: usize, files: usize) -> Facts {
+        let mut facts = Facts::default();
+        facts.procs.push(proc(1, 1, None, "demo-all"));
+        for i in 0..processes {
+            let parent = if i < 30 { 0 } else { (i - 30) / 8 };
+            let parent = &facts.procs[parent];
+            let parent = (parent.pid, parent.cookie);
+            let mut child = proc(
+                100 + i as u32,
+                100 + i as u64,
+                Some(parent),
+                &format!("tool{}", i % 2),
+            );
+            child.execs = vec![(format!("/usr/bin/tool{}", i % 2), 1)];
+            facts.procs.push(child);
+            if i % 97 == 0 {
+                facts.findings.push(Fact {
+                    tier: Tier::Medium,
+                    rule: "execution.temp_exec".into(),
+                    object: format!("/tmp/x{i}"),
+                    pid: 100 + i as u32,
+                    cookie: 100 + i as u64,
+                });
+            }
+        }
+        for j in 0..files {
+            let writer = &facts.procs[1 + (j / 4) % processes.max(1)];
+            facts.files.push(FileFact {
+                path: format!("/tmp/d{}/f{j}", (j / 4) % 40),
+                roles: vec!["created".into()],
+                process: Some((writer.pid, writer.cookie)),
+            });
+        }
+        facts
     }
 
     fn at(graph: &Graph, kind: NodeKind) -> usize {
@@ -688,11 +885,12 @@ pub(super) mod tests {
             EdgeKind::Connected,
             EdgeKind::Injected,
             EdgeKind::Signalled,
+            EdgeKind::Member,
         ];
         let labels: Vec<_> = all.iter().map(|kind| kind.label()).collect();
         assert_eq!(
             labels,
-            ["fork", "exec", "write", "run", "connect", "inject", "signal"]
+            ["fork", "exec", "write", "run", "connect", "inject", "signal", "member"]
         );
     }
 
@@ -771,17 +969,6 @@ pub(super) mod tests {
         // A small graph is shown whole.
         let small = Graph::build(&fixture());
         assert_eq!(small.compact(15).len(), small.nodes.len());
-    }
-
-    #[test]
-    fn levels_run_left_to_right_from_the_root() {
-        let graph = Graph::build(&fixture());
-        let all: Vec<usize> = (0..graph.nodes.len()).collect();
-        let level = graph.levels(&all);
-        let l = |kind| level[&at(&graph, kind)];
-        assert_eq!(l(NodeKind::Process((401, 1))), 0);
-        assert_eq!(l(NodeKind::Process((420, 4))), 1);
-        assert_eq!(l(NodeKind::Process((430, 6))), 2);
     }
 
     #[test]

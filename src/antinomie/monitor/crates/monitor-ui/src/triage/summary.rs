@@ -15,6 +15,8 @@ mod sample;
 mod state;
 mod thumb;
 
+#[cfg(test)]
+pub(super) use state::Mode as SummaryMode;
 pub(super) use state::State as SummaryState;
 
 /// What the app knows about the run that Triage does not read from the
@@ -76,54 +78,59 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, input: &TriageInput
         }
     }
     if let Some(destination) = destination {
-        match destination {
-            Destination::Tasks => {
-                view.section = Section::Process;
-                view.process = ProcessTab::Tree;
-            }
-            Destination::Findings => {
-                view.section = Section::Process;
-                view.process = ProcessTab::Suspicious;
-            }
-            Destination::Graph => {
-                view.section = Section::Process;
-                view.process = ProcessTab::Graph;
-                view.clear_finding_filters(ui.ctx());
-            }
-            Destination::Changed => {
-                view.section = Section::Files;
-                view.files = FileTab::Changed;
-                view.history_tab = false;
-                view.by_file = false;
-            }
-            Destination::Executed => {
-                view.section = Section::Files;
-                view.files = FileTab::Executed;
-                view.history_tab = false;
-                view.by_file = false;
-            }
-            Destination::Ips => {
-                view.section = Section::Network;
-                view.new_tab = NewTab::Endpoints;
-            }
-            Destination::Http => {
-                view.section = Section::Network;
-                view.new_tab = NewTab::Urls;
-            }
-            Destination::Dns => {
-                view.section = Section::Network;
-                view.new_tab = NewTab::Domains;
-            }
-            Destination::Ioc => view.section = Section::Ioc,
-            Destination::Detection(engine) => {
-                view.section = Section::Detection;
-                view.detection.selected = engine;
-            }
-        }
+        view.go_to(ui.ctx(), destination);
     }
 }
 
 impl TriageView {
+    /// Open the section a Summary click leads to.
+    fn go_to(&mut self, ctx: &egui::Context, destination: Destination) {
+        match destination {
+            Destination::Tasks => {
+                self.section = Section::Process;
+                self.process = ProcessTab::Tree;
+            }
+            Destination::Findings => {
+                self.section = Section::Process;
+                self.process = ProcessTab::Suspicious;
+            }
+            Destination::Graph => {
+                self.section = Section::Process;
+                self.process = ProcessTab::Graph;
+                self.clear_finding_filters(ctx);
+            }
+            Destination::Changed => {
+                self.section = Section::Files;
+                self.files = FileTab::Changed;
+                self.history_tab = false;
+                self.by_file = false;
+            }
+            Destination::Executed => {
+                self.section = Section::Files;
+                self.files = FileTab::Executed;
+                self.history_tab = false;
+                self.by_file = false;
+            }
+            Destination::Ips => {
+                self.section = Section::Network;
+                self.new_tab = NewTab::Endpoints;
+            }
+            Destination::Http => {
+                self.section = Section::Network;
+                self.new_tab = NewTab::Urls;
+            }
+            Destination::Dns => {
+                self.section = Section::Network;
+                self.new_tab = NewTab::Domains;
+            }
+            Destination::Ioc => self.section = Section::Ioc,
+            Destination::Detection(engine) => {
+                self.section = Section::Detection;
+                self.detection.selected = engine;
+            }
+        }
+    }
+
     /// Carry out a click of the Summary that needs the whole view.
     fn apply_act(&mut self, ctx: &egui::Context, act: Act, destination: &mut Option<Destination>) {
         match act {

@@ -1,17 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Relationships graph as Mermaid text, for "Mermaid" in the box.
-use super::model::{Graph, NodeKind};
+use super::model::Graph;
 
 /// `graph` as a left-to-right flowchart: a node's id comes from its identity,
 /// so the same run gives the same text. `shown` limits it to those nodes.
 pub(in crate::triage) fn mermaid(graph: &Graph, shown: &[usize]) -> String {
     let mut chart = crate::mermaid::Flowchart::new("LR");
-    let key = |at: usize| match &graph.nodes[at].kind {
-        NodeKind::Process((pid, cookie)) => format!("p:{pid}:{cookie}"),
-        NodeKind::File(path) => format!("f:{path}"),
-        NodeKind::Endpoint(endpoint) => format!("e:{endpoint}"),
-        NodeKind::Victim(pid) => format!("v:{pid}"),
-    };
+    let key = |at: usize| graph.nodes[at].kind.id();
+    let keep: std::collections::HashSet<usize> = shown.iter().copied().collect();
     for &at in shown {
         let node = &graph.nodes[at];
         let mut label = node.label.clone();
@@ -21,7 +17,7 @@ pub(in crate::triage) fn mermaid(graph: &Graph, shown: &[usize]) -> String {
         chart.node(&key(at), &label);
     }
     for edge in &graph.edges {
-        if shown.contains(&edge.from) && shown.contains(&edge.to) {
+        if keep.contains(&edge.from) && keep.contains(&edge.to) {
             let label = if edge.count > 1 {
                 format!("{} \u{d7}{}", edge.kind.label(), edge.count)
             } else {
