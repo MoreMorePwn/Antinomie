@@ -109,7 +109,7 @@ impl Source {
     }
 
     /// `len` bytes from `skip` in, `len` at most [`READ_CHUNK`].
-    pub(crate) fn read(&self, skip: u64, len: u64) -> Result<Vec<u8>, ReadError> {
+    pub fn read(&self, skip: u64, len: u64) -> Result<Vec<u8>, ReadError> {
         match self {
             Source::Inline(bytes) => usize::try_from(skip)
                 .ok()

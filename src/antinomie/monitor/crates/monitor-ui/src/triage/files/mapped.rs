@@ -169,7 +169,7 @@ impl Change {
         if record.carried < len {
             self.gaps.insert(UNCOPIED_GAP);
         } else if (copied.len() as u64) < len {
-            self.note_short_capture(budget.call, len, copied.len() as u64);
+            self.note_short_capture("mapped write", budget.call, len, copied.len() as u64);
         }
         if record.unlisted > 0 || record.lost > 0 {
             self.gaps.insert(UNLISTED_GAP);
