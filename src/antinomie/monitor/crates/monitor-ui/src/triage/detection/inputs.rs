@@ -238,7 +238,7 @@ pub(super) fn target(input: &ScannedInput) -> Option<Route> {
 }
 
 /// The width a pane needs to hold the scan controls beside Scanned inputs.
-const STATUS_BESIDE_WIDTH: f32 = 1000.0;
+const STATUS_BESIDE_WIDTH: f32 = 920.0;
 
 /// The hover text of the Scanned inputs heading: what it does, then the
 /// engine's fixed caveat, which is not drawn as a line of its own.
