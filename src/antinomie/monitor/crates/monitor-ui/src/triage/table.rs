@@ -72,9 +72,7 @@ pub(super) fn column_widths<'a>(
         .map(|(index, header)| {
             let (minimum, maximum) = match *header {
                 "Endpoint" | "Endpoints" => (360.0_f32, 900.0_f32),
-                "Path" | "URI" | "Hostname" | "Transferred / content" | "Argv" | "Command line" => {
-                    (250.0, 650.0)
-                }
+                "Path" | "URI" | "Hostname" | "Transferred / content" | "Argv" => (250.0, 650.0),
                 "Time" | "First seen" | "Last seen" => (230.0, 500.0),
                 "Behaviour" => (170.0, 260.0),
                 "Target" => (220.0, 560.0),

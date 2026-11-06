@@ -167,6 +167,57 @@ pub(super) fn mismatch_text(argv0: &str, exe: &str) -> String {
 }
 
 /// "sh → busybox → demo-all": the file name of each image the task ran.
+/// The gap that stands for an argument that was not captured whole.
+const GAP: &str = "\u{2026}";
+
+/// One argument as a shell would need it written: bare when it has only
+/// plain characters, else in single quotes; the gap stays as it is.
+pub(super) fn shell_quote(argument: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c);
+    if argument == GAP || (!argument.is_empty() && argument.chars().all(plain)) {
+        argument.to_owned()
+    } else {
+        format!("'{}'", argument.replace('\'', "'\\''"))
+    }
+}
+
+/// The Argv cell: every argument shell-quoted, so one with a space stays one.
+pub(super) fn argv_line(argv: &[String]) -> String {
+    argv.iter()
+        .map(|argument| shell_quote(argument))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The Argv hover: `argv[i] = value` per argument, then the count and how
+/// many were cut short. Past `LISTED` arguments the rest is counted.
+pub(super) fn argv_hover(argv: &[String]) -> Option<String> {
+    const LISTED: usize = 40;
+    if argv.is_empty() {
+        return None;
+    }
+    let mut text = argv
+        .iter()
+        .enumerate()
+        .take(LISTED)
+        .map(|(at, argument)| format!("argv[{at}] = {argument}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if argv.len() > LISTED {
+        text.push_str(&format!("\n\u{2026} and {} more", argv.len() - LISTED));
+    }
+    let cut = argv.iter().filter(|argument| *argument == GAP).count();
+    text.push_str(&format!(
+        "\n{} argument{}",
+        argv.len(),
+        if argv.len() == 1 { "" } else { "s" }
+    ));
+    if cut > 0 {
+        text.push_str(&format!(", {cut} cut short (\u{2026}: not captured whole)"));
+    }
+    Some(text)
+}
+
 pub(super) fn exec_chain(images: &[String]) -> String {
     let mut names: Vec<&str> = Vec::new();
     for image in images {

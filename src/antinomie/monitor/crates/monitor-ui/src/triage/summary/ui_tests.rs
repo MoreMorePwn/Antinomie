@@ -1156,11 +1156,21 @@ fn indicator_parts_have_their_own_colours_and_a_hover_shows_they_click() {
         }
     }
     assert_eq!(colour(&out, "executable"), theme::muted());
-    // The branch titles are plain strong text, not the link or accent blue.
-    for title in ["Endpoints (7)", "DNS names (1)", "URLs (2)", "Files (1)"] {
+    // The branch titles have a colour of their own: not the text colour, not
+    // the link or heading blue, and a different one for each category.
+    let mut seen = Vec::new();
+    for (at, title) in ["Endpoints (7)", "DNS names (1)", "URLs (2)", "Files (1)"]
+        .into_iter()
+        .enumerate()
+    {
         let c = colour(&out, title);
-        assert_eq!(c, theme::text(), "{title}");
-        assert!(![link, accent, theme::heading()].contains(&c), "{title}");
+        assert_eq!(c, theme::category(at), "{title}");
+        assert!(
+            ![link, accent, theme::heading(), theme::text()].contains(&c),
+            "{title}"
+        );
+        assert!(!seen.contains(&c), "{title}");
+        seen.push(c);
     }
     // Hover: underline and the pointing hand.
     let at = find(&out, "pool.minexmr.com").center();
@@ -1255,3 +1265,4 @@ fn the_one_line_rows_have_strong_numbers_and_muted_words() {
 }
 
 mod fold;
+mod scroll;

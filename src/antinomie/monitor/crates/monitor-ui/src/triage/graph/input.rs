@@ -82,6 +82,11 @@ pub(super) struct Layout {
 }
 
 impl Layout {
+    /// How far the lane list can be scrolled.
+    pub(super) fn max_scroll(&self) -> f32 {
+        (self.rows.lanes.len() as f32 * self.frame.m.lane_h - self.frame.lanes.height()).max(0.0)
+    }
+
     pub(super) fn new(whole: Rect, state: &State, index: &GraphIndex) -> Self {
         let categories: Vec<usize> = (0..13)
             .filter(|bit| index.categories & (1 << bit) != 0)

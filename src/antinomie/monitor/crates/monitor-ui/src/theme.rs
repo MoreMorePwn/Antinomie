@@ -214,6 +214,15 @@ pub fn tree_branch(level: usize) -> Color32 {
     palette().tree[level % TREE_COLOR_COUNT]
 }
 
+/// The colour of indicator category `index` (Endpoints, DNS names, URLs,
+/// Files): orange, purple, yellow and green, none of them the text colour or
+/// the blue of headings and links, and each readable in the dark and the
+/// light theme.
+pub fn category(index: usize) -> Color32 {
+    let palette = palette();
+    [palette.string, palette.pointer, palette.name, palette.good][index % 4]
+}
+
 /// What a value is, for its syntax color.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueKind {

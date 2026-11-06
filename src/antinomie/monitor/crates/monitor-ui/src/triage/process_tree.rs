@@ -37,7 +37,10 @@ pub(super) fn process_rows(
         .iter()
         .map(|node| {
             let ended = node.state.starts_with("task exit");
-            let command = cell(node.argv.join(" "), theme::text(), false);
+            let mut command = cell(process_cells::argv_line(&node.argv), theme::text(), false);
+            if let Some(hover) = process_cells::argv_hover(&node.argv) {
+                tip(&mut command, hover);
+            }
             let mut findings = cell(
                 suspicious
                     .get(&(node.cookie, node.pid))
@@ -195,7 +198,7 @@ pub(super) fn process_rows(
 /// The Process tree's columns, in order.
 pub(super) const PROCESS_HEADERS: [&str; 9] = [
     "Process",
-    "Command line",
+    "Argv",
     "Findings",
     "User ID",
     "Started",

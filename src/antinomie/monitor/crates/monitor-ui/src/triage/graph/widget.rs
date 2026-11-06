@@ -157,11 +157,17 @@ fn handle(
             let delta = -f64::from(scroll.x) * frame.u_per_px();
             state.window = Some(view::panned(window_of(state, index), delta, bounds));
         }
-        if scroll.y != 0.0 {
+        // The wheel scrolls the lanes only while they can still scroll that
+        // way; at the end (or with every lane in view) it is left to the page
+        // the graph sits in.
+        let up = scroll.y > 0.0 && layout.scroll > 0.0;
+        let down = scroll.y < 0.0 && layout.scroll < layout.max_scroll();
+        if up || down {
             state.scroll = layout.scroll - scroll.y;
+            ui.input_mut(|i| i.smooth_scroll_delta.y = 0.0);
         }
-        if scroll != Vec2::ZERO {
-            ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+        if scroll.x != 0.0 {
+            ui.input_mut(|i| i.smooth_scroll_delta.x = 0.0);
         }
     }
     if response.drag_started() || response.clicked() {
