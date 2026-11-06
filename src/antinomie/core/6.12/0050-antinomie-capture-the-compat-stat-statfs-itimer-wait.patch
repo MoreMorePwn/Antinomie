@@ -1,4 +1,4 @@
-From c3eb27cfda9dbfd850fb4bbb0a3b8084e7008b4c Mon Sep 17 00:00:00 2001
+From 4f6e4b25626a15546dab53431a79fdf6c83a2c55 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Thu, 5 Nov 2026 02:02:57 +0700
 Subject: [PATCH] antinomie: capture the compat stat, statfs, itimer, waitid
@@ -29,7 +29,7 @@ Contract revision 21.
  1 file changed, 280 insertions(+), 4 deletions(-)
 
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
-index 9ef0a57f1..251c383c4 100644
+index 268f5d09f..b64137e07 100644
 --- a/kernel/antinomie/recorder.c
 +++ b/kernel/antinomie/recorder.c
 @@ -33,6 +33,12 @@

@@ -25,6 +25,15 @@ Description: antinomie: record who sent the signal that ended a task
  lifecycle.signal.oom and the kernel's line as lifecycle.kernel_log. The
  lifecycle.task_exit field stays first and unchanged.
  .
+ On arm64 get_signal() calls the hook through an entry that takes the
+ siginfo without const (ant_fatal_signal_hook()): the const kernel_siginfo
+ in the hook's declaration put that type into kernel/signal.c's types before
+ Debian's arm64 build meets it further down the file, and pahole numbers
+ types in the order it meets them, so thirteen pointer types after it were
+ renumbered and the stock arm64 kernel's BTF was no longer Debian's
+ (check-kernel-abi: "same structures, other bytes"). x86-64 calls the hook
+ itself; its objects are unchanged.
+ .
  Contract revision 21.
 Author: MikiMiku <jonathanirvinjo@gmail.com>
 Origin: project
@@ -33,7 +42,7 @@ Last-Update: 2026-11-04
 
 ---
 diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
-index eb3a584b5..9e9387fbb 100644
+index eb3a584b5..612ba19aa 100644
 --- a/include/linux/antinomie_monitor.h
 +++ b/include/linux/antinomie_monitor.h
 @@ -170,6 +170,14 @@ bool ant_monitor_core_pending(struct task_struct *task);
@@ -64,6 +73,24 @@ index eb3a584b5..9e9387fbb 100644
  static inline void ant_monitor_release(struct task_struct *task) {}
  static inline void ant_monitor_async_begin(const void *slot, u8 system, u32 opcode,
  					   u64 user_data, u32 flags, const void *descriptor,
+@@ -397,4 +411,17 @@ bool ant_monitor_exit_code(int wait_status);
+ #else
+ #define ant_core_exit_code(code) ant_monitor_core_exit(code, NULL)
+ #endif
++
++/*
++ * get_signal()'s fatal-signal hook: on arm64 an entry that takes the
++ * siginfo without const, so that kernel/signal.c's types do not meet a const
++ * kernel_siginfo before Debian's arm64 build does (further down that file),
++ * which would renumber the BTF types after it. x86-64 calls the hook itself.
++ */
++#if defined(CONFIG_ANTINOMIE) && defined(CONFIG_ARM64)
++void ant_monitor_fatal_signal_entry(int sig, struct kernel_siginfo *info);
++#define ant_fatal_signal_hook(sig, info) ant_monitor_fatal_signal_entry(sig, info)
++#else
++#define ant_fatal_signal_hook(sig, info) ant_monitor_fatal_signal(sig, info)
++#endif
+ #endif
 diff --git a/kernel/antinomie/control_wire.h b/kernel/antinomie/control_wire.h
 index 30543699f..ea9cb41d6 100644
 --- a/kernel/antinomie/control_wire.h
@@ -81,7 +108,7 @@ index 30543699f..ea9cb41d6 100644
  #define ANTC_HEADER_SIZE 8
  #define ANTC_UPLOAD_BEGIN 0x1001
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
-index ae0e128de..90cfac442 100644
+index ae0e128de..d9075a4c4 100644
 --- a/kernel/antinomie/recorder.c
 +++ b/kernel/antinomie/recorder.c
 @@ -1732,19 +1732,28 @@ void ant_monitor_exit(struct pt_regs *regs)
@@ -118,7 +145,7 @@ index ae0e128de..90cfac442 100644
  	ctx->busy = true;
  	put_unaligned_le64(value, scalar);
  	event_begin(ctx, 3, 0);
-@@ -2104,12 +2113,188 @@ void ant_monitor_exec(struct file *file, bool interpreter)
+@@ -2104,12 +2113,196 @@ void ant_monitor_exec(struct file *file, bool interpreter)
  		ant_hash_exec(file, interpreter);
  }
  
@@ -201,6 +228,14 @@ index ae0e128de..90cfac442 100644
 +	if (!fatal->signo)
 +		fatal_note(fatal, sig, info, current, ANT_FATAL_DELIVERED);
 +}
++
++#ifdef CONFIG_ARM64
++/* kernel/signal.c's entry on arm64 (ant_fatal_signal_hook() in antinomie_monitor.h). */
++void ant_monitor_fatal_signal_entry(int sig, struct kernel_siginfo *info)
++{
++	ant_monitor_fatal_signal(sig, info);
++}
++#endif
 +
 +/* The OOM killer has sent its SIGKILL to the victim's group (SI_KERNEL, at
 + * the send) and logged the kill; the record keeps that line. The victim's
@@ -353,7 +388,7 @@ index 375b0d87b..0f7a6bf11 100644
  	atomic64_t packet_seq;
  	bool root_process;
 diff --git a/kernel/signal.c b/kernel/signal.c
-index cc8aee82b..84b8fce6d 100644
+index cc8aee82b..1b7c1363e 100644
 --- a/kernel/signal.c
 +++ b/kernel/signal.c
 @@ -1190,6 +1190,7 @@ static int __send_signal_locked(int sig, struct kernel_siginfo *info,
@@ -368,7 +403,7 @@ index cc8aee82b..84b8fce6d 100644
  			continue;
  		}
  
-+		ant_monitor_fatal_signal(signr, &ksig->info);
++		ant_fatal_signal_hook(signr, &ksig->info);
  	fatal:
  		spin_unlock_irq(&sighand->siglock);
  		if (unlikely(cgroup_task_frozen(current)))

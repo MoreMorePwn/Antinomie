@@ -1,8 +1,8 @@
-From ad9a3e94849ae9d01a246ab0e033e8eaec4be5f9 Mon Sep 17 00:00:00 2001
+From 1820101b8718194853de1bac6100a60a727556bd Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Thu, 5 Nov 2026 22:31:12 +0700
-Subject: [PATCH 52/53] antinomie: show a desktop or laptop machine's devices
- for QEMU's
+Subject: [PATCH] antinomie: show a desktop or laptop machine's devices for
+ QEMU's
 
 A desktop or laptop machine profile gives the VM a real machine's
 firmware strings, but programs still read QEMU's own devices: the Bochs

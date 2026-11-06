@@ -1,8 +1,8 @@
-From 81fd90fd12967bfc3f38da66c736feb2ffabba80 Mon Sep 17 00:00:00 2001
+From 0c46b35d412a6ea472139282fd0b2e061529bcbf Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Thu, 5 Nov 2026 23:20:25 +0700
-Subject: [PATCH 53/53] antinomie: boot the guest its boot age ago and step to
- the present at the first launch
+Subject: [PATCH] antinomie: boot the guest its boot age ago and step to the
+ present at the first launch
 
 A freshly started guest shows minutes of uptime; a machine in use has been
 up for hours (a desktop or laptop) or days to months (a server). The host

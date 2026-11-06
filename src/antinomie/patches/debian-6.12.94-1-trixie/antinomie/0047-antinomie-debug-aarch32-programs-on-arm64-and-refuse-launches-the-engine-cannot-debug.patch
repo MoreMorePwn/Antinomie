@@ -41,7 +41,7 @@ index bbe293842..05c742467 100644
  	send_user_sigtrap(TRAP_BRKPT);
  	return true;
 diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
-index 9e9387fbb..f2cd6ccf6 100644
+index 612ba19aa..f56c92221 100644
 --- a/include/linux/antinomie_monitor.h
 +++ b/include/linux/antinomie_monitor.h
 @@ -82,6 +82,7 @@ static inline bool ant_monitor_syscall_step(struct pt_regs *regs)

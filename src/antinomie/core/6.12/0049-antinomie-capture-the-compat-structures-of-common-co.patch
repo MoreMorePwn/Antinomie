@@ -1,4 +1,4 @@
-From 9a106e535116ef89ddbf76bab26965595c7d3980 Mon Sep 17 00:00:00 2001
+From 8a2b2643e89ab6e56b33adfc2bdc698aa72fdc0e Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Wed, 4 Nov 2026 22:00:45 +0700
 Subject: [PATCH] antinomie: capture the compat structures of common compat
@@ -37,7 +37,7 @@ index a39fe073d..9de274a8c 100644
  #define ANTC_HEADER_SIZE 8
  #define ANTC_UPLOAD_BEGIN 0x1001
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
-index a00c5616a..9ef0a57f1 100644
+index 28e6fb536..268f5d09f 100644
 --- a/kernel/antinomie/recorder.c
 +++ b/kernel/antinomie/recorder.c
 @@ -1018,6 +1018,153 @@ static void compat_entry(struct ant_task *ctx)

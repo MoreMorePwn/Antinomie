@@ -26,7 +26,7 @@ Last-Update: 2026-11-05
 
 ---
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
-index 9ef0a57f1..251c383c4 100644
+index 268f5d09f..b64137e07 100644
 --- a/kernel/antinomie/recorder.c
 +++ b/kernel/antinomie/recorder.c
 @@ -33,6 +33,12 @@

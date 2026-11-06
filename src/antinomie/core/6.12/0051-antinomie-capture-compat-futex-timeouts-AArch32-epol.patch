@@ -1,4 +1,4 @@
-From 9a19440fed6a3a35e10764737604c720bc134c10 Mon Sep 17 00:00:00 2001
+From 1c54fefb5e862dd9a15a2d35249e9dabe9f7ba1e Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Thu, 5 Nov 2026 22:11:48 +0700
 Subject: [PATCH] antinomie: capture compat futex timeouts, AArch32 epoll waits
@@ -38,7 +38,7 @@ Contract revision 21.
  1 file changed, 248 insertions(+), 1 deletion(-)
 
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
-index 251c383c4..9a043c9d6 100644
+index b64137e07..9e4f9d1a6 100644
 --- a/kernel/antinomie/recorder.c
 +++ b/kernel/antinomie/recorder.c
 @@ -32,8 +32,15 @@

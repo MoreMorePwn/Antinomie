@@ -1,4 +1,4 @@
-From ece7fa81fe6fd337a7df37a8c4cb18bc3fd6dd1d Mon Sep 17 00:00:00 2001
+From 7b74e54c0a1b50327367dc356d0b017135018532 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Wed, 4 Nov 2026 22:00:29 +0700
 Subject: [PATCH] antinomie: capture ioctl arguments by their size, name more
@@ -66,7 +66,7 @@ index 383f7b976..28977d74f 100644
  	}
  	if (!output) {
 diff --git a/kernel/antinomie/recorder.c b/kernel/antinomie/recorder.c
-index 90cfac442..a00c5616a 100644
+index d9075a4c4..28e6fb536 100644
 --- a/kernel/antinomie/recorder.c
 +++ b/kernel/antinomie/recorder.c
 @@ -23,6 +23,11 @@

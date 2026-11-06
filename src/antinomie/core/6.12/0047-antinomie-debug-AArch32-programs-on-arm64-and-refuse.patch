@@ -1,4 +1,4 @@
-From 05ccd4cbe0636fa9d98d5caa10ec358412b84284 Mon Sep 17 00:00:00 2001
+From 70f530166f99d39ae0cd1aae0f97423844a6ffd5 Mon Sep 17 00:00:00 2001
 From: MikiMiku <jonathanirvinjo@gmail.com>
 Date: Wed, 4 Nov 2026 22:00:08 +0700
 Subject: [PATCH] antinomie: debug AArch32 programs on arm64, and refuse
@@ -50,7 +50,7 @@ index bbe293842..05c742467 100644
  	send_user_sigtrap(TRAP_BRKPT);
  	return true;
 diff --git a/include/linux/antinomie_monitor.h b/include/linux/antinomie_monitor.h
-index 9e9387fbb..f2cd6ccf6 100644
+index 612ba19aa..f56c92221 100644
 --- a/include/linux/antinomie_monitor.h
 +++ b/include/linux/antinomie_monitor.h
 @@ -82,6 +82,7 @@ static inline bool ant_monitor_syscall_step(struct pt_regs *regs)

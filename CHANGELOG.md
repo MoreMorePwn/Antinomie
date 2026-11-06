@@ -244,7 +244,10 @@ x86 programs by their own table.
   starts the group exit (`kernel/signal.c`) or at the delivery of a fatal
   signal, marked by the OOM killer with its log line (`mm/oom_kill.c`), and
   written into the task-exit record (`lifecycle.signal.*`,
-  `lifecycle.kernel_log`).
+  `lifecycle.kernel_log`). On arm64 `get_signal()` calls the hook through an
+  entry that takes the siginfo without const, so the stock arm64 kernel's BTF
+  stays Debian's type for type (the const pointer had renumbered 13 types);
+  x86-64's objects are unchanged.
 - Patch 51 (contract revision 21): compat programs' futex timeouts (time32),
   AArch32's epoll_wait and epoll_pwait events, and the SysV IPC control
   records of msgctl, semctl and shmctl (directly and through ia32's `ipc()`;
