@@ -32,7 +32,7 @@ pub(in crate::triage) enum Mode {
 enum Full {
     Unmade,
     Making(BTreeSet<String>, mpsc::Receiver<Rendered>),
-    Made(BTreeSet<String>, Rendered),
+    Made(BTreeSet<String>, Box<Rendered>),
 }
 
 /// A graph with fewer nodes and edges than this lays out inside a frame.
@@ -177,7 +177,7 @@ impl Built {
     fn prepare_full(&mut self, toggled: &BTreeSet<String>, ctx: &egui::Context) {
         if let Full::Making(wanted, rx) = &self.full {
             match rx.try_recv() {
-                Ok(rendered) => self.full = Full::Made(wanted.clone(), rendered),
+                Ok(rendered) => self.full = Full::Made(wanted.clone(), Box::new(rendered)),
                 Err(mpsc::TryRecvError::Empty) => {
                     if wanted == toggled {
                         ctx.request_repaint_after(std::time::Duration::from_millis(60));
@@ -191,7 +191,10 @@ impl Built {
             return;
         }
         if self.graph.nodes.len() + self.graph.edges.len() <= MAKE_HERE {
-            self.full = Full::Made(toggled.clone(), Rendered::full(&self.graph, toggled));
+            self.full = Full::Made(
+                toggled.clone(),
+                Box::new(Rendered::full(&self.graph, toggled)),
+            );
             return;
         }
         let (graph, wanted, repaint) = (self.graph.clone(), toggled.clone(), ctx.clone());
@@ -210,7 +213,7 @@ impl Built {
         match mode {
             Mode::Compact => Some(&self.compact),
             Mode::Full => match &self.full {
-                Full::Made(_, rendered) => Some(rendered),
+                Full::Made(_, rendered) => Some(&**rendered),
                 _ => None,
             },
         }

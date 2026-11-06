@@ -18,6 +18,13 @@ const TEXT_FROM: f32 = 0.4;
 const LABELS_FROM: f32 = 0.55;
 /// Below this zoom edges are straight lines.
 const CURVES_FROM: f32 = 0.3;
+/// An open group with more members than this is joined to them by a comb: a
+/// trunk beside each column of members with a short stub to each, not one
+/// curve per member.
+const COMB_MIN: u32 = 20;
+/// Where the zoom bar sits: its size and its margin from the box's edge.
+const BAR: Vec2 = egui::vec2(196.0, 26.0);
+const BAR_MARGIN: f32 = 8.0;
 
 /// Pan and zoom: `offset` is where graph-space (0, 0) sits in the viewport.
 #[derive(Clone, Copy, Debug)]
@@ -156,7 +163,18 @@ pub(in crate::triage) fn show(
     let scale = view.zoom;
     let font = egui::FontId::proportional((12.0 * scale.clamp(0.7, 1.3)).max(8.0));
     let reach = rect.expand(24.0);
+    let comb = |node: usize| matches!(&graph.nodes[node].kind, NodeKind::Group(info) if info.open && info.members > COMB_MIN);
+    // The zoom bar's place: no node text is drawn under it.
+    let bar_size = egui::vec2(BAR.x.min(rect.width() - 2.0 * BAR_MARGIN), BAR.y);
+    let bar_rect = Rect::from_min_size(
+        rect.right_top() + egui::vec2(-BAR_MARGIN - bar_size.x, BAR_MARGIN),
+        bar_size,
+    );
     for edge in &graph.edges {
+        // What a comb draws below; a member with a finding is drawn as any.
+        if edge.kind == EdgeKind::Member && comb(edge.from) && graph.nodes[edge.to].tier.is_none() {
+            continue;
+        }
         let (Some(from), Some(to)) = (layout.get(edge.from), layout.get(edge.to)) else {
             continue;
         };
@@ -228,6 +246,11 @@ pub(in crate::triage) fn show(
             painter.galley(pill.center() - galley.size() / 2.0, galley, color);
         }
     }
+    for &node in &layout.shown {
+        if comb(node) {
+            draw_comb(&painter, graph, layout, view, rect, node);
+        }
+    }
     let mut clicked = None;
     let pointer = response
         .interact_pointer_pos()
@@ -242,7 +265,8 @@ pub(in crate::triage) fn show(
             continue;
         }
         let item = &graph.nodes[node];
-        let over = pointer.is_some_and(|at| screen.contains(at)) && response.hovered();
+        let over = pointer.is_some_and(|at| screen.contains(at) && !bar_rect.contains(at))
+            && response.hovered();
         if over {
             hovered = Some(node);
         }
@@ -267,7 +291,7 @@ pub(in crate::triage) fn show(
             Stroke::new(if item.tier.is_some() { 1.8 } else { 1.0 }, line),
             egui::StrokeKind::Inside,
         );
-        if scale < TEXT_FROM {
+        if scale < TEXT_FROM || screen.intersects(bar_rect.expand(2.0)) {
             continue;
         }
         let inner = painter.with_clip_rect(screen.shrink(1.0).intersect(rect));
@@ -319,13 +343,17 @@ pub(in crate::triage) fn show(
             }
         });
     }
-    // The zoom bar, from the top right corner inwards, so it stays in the box
-    // however narrow the box is. It is clipped to the box and to the page's
-    // own view, so a page scrolled past the box does not carry it along.
-    let bar = Rect::from_min_max(
-        rect.left_top() + egui::vec2(6.0, 6.0),
-        rect.right_top() + egui::vec2(-6.0, 30.0),
+    // The zoom bar: on a background of its own, a margin in from the corner,
+    // clipped to the box and to the page's own view, so a page scrolled past
+    // the box does not carry it along.
+    painter.rect_filled(bar_rect, 6.0, theme::panel());
+    painter.rect_stroke(
+        bar_rect,
+        6.0,
+        Stroke::new(1.0, theme::line()),
+        egui::StrokeKind::Inside,
     );
+    let bar = bar_rect.shrink2(egui::vec2(4.0, 0.0));
     let mut zoom_ui = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(bar)
@@ -355,6 +383,79 @@ pub(in crate::triage) fn show(
         view.zoom_about(viewport / 2.0, 1.0 / 1.2);
     }
     Outcome { clicked }
+}
+
+/// The comb of an open group: per column of members one connector from the
+/// group, one trunk beside the column and a stub to each member in view.
+fn draw_comb(
+    painter: &egui::Painter,
+    graph: &Graph,
+    layout: &Layout,
+    view: &View,
+    rect: Rect,
+    group: usize,
+) {
+    let Some(parent) = layout.get(group) else {
+        return;
+    };
+    let from = view.rect_to_screen(rect.min, parent).right_center();
+    let stroke = Stroke::new(1.0, kind_color(EdgeKind::Member));
+    let scale = view.zoom;
+    let mut columns: std::collections::BTreeMap<i32, Vec<Rect>> = std::collections::BTreeMap::new();
+    for edge in graph.edges_out(group) {
+        if edge.kind != EdgeKind::Member || graph.nodes[edge.to].tier.is_some() {
+            continue;
+        }
+        if let Some(at) = layout.get(edge.to) {
+            columns.entry(at.left() as i32).or_default().push(at);
+        }
+    }
+    let reach = rect.expand(24.0);
+    for members in columns.values_mut() {
+        members.sort_by(|a, b| a.top().total_cmp(&b.top()));
+        let screen: Vec<Rect> = members
+            .iter()
+            .map(|at| view.rect_to_screen(rect.min, *at))
+            .collect();
+        let trunk = screen[0].left() - 14.0 * scale.clamp(0.3, 1.0);
+        let (top, bottom) = (screen[0].center().y, screen[screen.len() - 1].center().y);
+        let wide = Rect::from_two_pos(from, egui::pos2(trunk, top));
+        if wide.intersects(reach) {
+            let bend = ((trunk - from.x) * 0.5).max(10.0 * scale);
+            painter.add(Shape::CubicBezier(
+                egui::epaint::CubicBezierShape::from_points_stroke(
+                    [
+                        from,
+                        from + egui::vec2(bend, 0.0),
+                        egui::pos2(trunk - bend, top),
+                        egui::pos2(trunk, top),
+                    ],
+                    false,
+                    Color32::TRANSPARENT,
+                    stroke,
+                ),
+            ));
+        }
+        if trunk < reach.left() || trunk > reach.right() {
+            continue;
+        }
+        painter.line_segment(
+            [
+                egui::pos2(trunk, top.max(reach.top())),
+                egui::pos2(trunk, bottom.min(reach.bottom())),
+            ],
+            stroke,
+        );
+        // Only the members in view get a stub.
+        let first = screen.partition_point(|at| at.bottom() < reach.top());
+        for at in screen[first..]
+            .iter()
+            .take_while(|at| at.top() <= reach.bottom())
+        {
+            let y = at.center().y;
+            painter.line_segment([egui::pos2(trunk, y), egui::pos2(at.left(), y)], stroke);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -553,5 +654,66 @@ mod tests {
             viewport.contains_rect(at),
             "the root {at:?} is in the box {viewport:?}"
         );
+    }
+
+    #[test]
+    fn a_big_open_group_is_joined_to_its_members_by_a_comb_not_a_curve_each() {
+        use super::super::group::Rendered;
+        use super::super::model::Proc;
+        let mut facts = fixture();
+        for n in 0..40u32 {
+            facts.procs.push(Proc {
+                pid: 1000 + n,
+                cookie: 100 + u64::from(n),
+                parent: Some((401, 1)),
+                name: "ls".into(),
+                ..Default::default()
+            });
+        }
+        let raw = Graph::build(&facts);
+        let rendered = Rendered::full(&raw, &std::collections::BTreeSet::new());
+        let members = rendered
+            .graph
+            .nodes
+            .iter()
+            .filter(|n| n.label.starts_with("ls ("))
+            .count();
+        assert_eq!(members, 40);
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut view = View {
+            fitted: true,
+            zoom: 0.4,
+            offset: egui::vec2(10.0, 10.0),
+        };
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 700.0))),
+                ..Default::default()
+            },
+            |root| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(root, |ui| {
+                        show(
+                            ui,
+                            egui::Id::new("c"),
+                            &rendered.graph,
+                            &rendered.layout,
+                            &mut view,
+                            600.0,
+                        );
+                    });
+            },
+        );
+        fn curves(shape: &egui::Shape) -> usize {
+            match shape {
+                egui::Shape::CubicBezier(_) => 1,
+                egui::Shape::Vec(all) => all.iter().map(curves).sum(),
+                _ => 0,
+            }
+        }
+        let drawn: usize = out.shapes.iter().map(|s| curves(&s.shape)).sum();
+        assert!(drawn < 25, "{drawn} curves for 40 members");
     }
 }

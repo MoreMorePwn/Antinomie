@@ -141,8 +141,8 @@ impl Layout {
         let mut below: Vec<Vec<u32>> = vec![Vec::new(); m + 1];
         let mut roots: Vec<u32> = Vec::new();
         let main = graph.root();
-        for l in 0..m {
-            match parent[l] {
+        for (l, &up) in parent.iter().enumerate() {
+            match up {
                 NONE => roots.push(l as u32),
                 p => below[p as usize].push(l as u32),
             }

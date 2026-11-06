@@ -791,6 +791,32 @@ fn full_draws_a_big_run_instead_of_nothing() {
 }
 
 #[test]
+fn a_process_with_no_recorded_name_is_named_by_its_image() {
+    let (_files, mut view) = fixture();
+    let scan = view.scan.as_mut().unwrap();
+    for n in 0..30u32 {
+        let mut task = node(
+            1000 + n,
+            100 + u64::from(n),
+            Some((401, 1)),
+            "?",
+            &["ps", "aux"],
+            5_000_000,
+        );
+        task.comm = "?".into();
+        scan.process.push(task);
+    }
+    let ctx = context(16.0);
+    let out = settle(&ctx, &mut view, WIDE, None);
+    assert!(
+        texts(&out).iter().any(|(t, _)| t.ends_with("ps \u{d7}30")),
+        "{:?}",
+        texts(&out)
+    );
+    assert!(!texts(&out).iter().any(|(t, _)| t.contains("? (")));
+}
+
+#[test]
 fn the_zoom_controls_stay_inside_the_box_at_every_width() {
     for width in [420.0, 800.0, 1280.0] {
         let (_files, mut view) = fixture();
