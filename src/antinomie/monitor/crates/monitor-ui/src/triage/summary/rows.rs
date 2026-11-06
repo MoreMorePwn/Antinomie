@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The small pieces the Summary's boxes are made of: a clickable item whose
 //! parts have their own colours, a figure (a strong number and a muted word)
-//! and the inset box that holds the rows past the first few.
+//! and the scrolling list that replaces the first few rows.
 use crate::theme;
 use eframe::egui::{self, RichText};
 
@@ -92,33 +92,41 @@ pub(super) fn figures(ui: &mut egui::Ui, figures: &[(String, &str, bool)]) {
     ui.add(egui::Label::new(text).selectable(false));
 }
 
-/// The fill of the inset box: the box's own, a little darker.
-pub(super) fn inset_fill() -> egui::Color32 {
-    let darker = if theme::is_light() { 0.05 } else { 0.35 };
-    theme::bg().lerp_to_gamma(egui::Color32::BLACK, darker)
-}
-
-/// A small framed box of `height` that scrolls inside, with its scroll bar
-/// always drawn at its right edge so it shows there is more.
-pub(super) fn inset<R>(
+/// A list that shows its first rows and, once `open`, turns into one scroll
+/// area with every row, as tall as the first rows were (measured while the
+/// list is shut, `fallback` before that), with its scroll bar always drawn
+/// at the right edge. `row` draws row `at` of `total`; `shown` rows show
+/// while the list is shut.
+pub(super) fn scroll_list(
     ui: &mut egui::Ui,
     id: impl std::hash::Hash + std::fmt::Debug,
-    height: f32,
-    body: impl FnOnce(&mut egui::Ui) -> R,
+    open: bool,
+    fallback: f32,
+    (shown, total): (usize, usize),
+    mut row: impl FnMut(&mut egui::Ui, usize),
 ) {
-    egui::Frame::new()
-        .fill(inset_fill())
-        .stroke(egui::Stroke::new(1.0, theme::line_soft()))
-        .corner_radius(4)
-        .inner_margin(egui::Margin::symmetric(6, 2))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
-            egui::ScrollArea::vertical()
-                .id_salt(id)
-                .max_height(height)
-                .auto_shrink([false, true])
-                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-                .show(ui, body);
-        });
+    let key = ui.id().with(("summary-list-height", &id));
+    if !open {
+        let height = ui
+            .scope(|ui| (0..shown.min(total)).for_each(|at| row(ui, at)))
+            .response
+            .rect
+            .height();
+        ui.data_mut(|data| data.insert_temp(key, height));
+        return;
+    }
+    let height = ui
+        .data(|data| data.get_temp::<f32>(key))
+        .filter(|height| *height > 0.0)
+        .unwrap_or(fallback);
+    ui.scope(|ui| {
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+        egui::ScrollArea::vertical()
+            .id_salt(id)
+            .max_height(height)
+            .min_scrolled_height(height)
+            .auto_shrink([false, false])
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+            .show(ui, |ui| (0..total).for_each(|at| row(ui, at)));
+    });
 }

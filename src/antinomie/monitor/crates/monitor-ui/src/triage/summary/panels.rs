@@ -30,10 +30,6 @@ pub(super) fn boxed(
 
 /// Rows of Key findings listed before "Show more".
 const KEY_SHOWN: usize = super::insight::KEY_ROWS;
-/// Findings the "Show more" box shows at once: each is two lines, so two.
-const KEY_BOX_ROWS: usize = 2;
-/// Indicator rows the "Show N more" box shows at once.
-const BOX_ROWS: usize = 2;
 
 pub(super) fn key_findings(
     ui: &mut egui::Ui,
@@ -60,22 +56,20 @@ pub(super) fn key_findings(
             if built.keys.is_empty() {
                 ui.weak("No findings of LOW or above.");
             }
-            for key in built.keys.iter().take(KEY_SHOWN) {
-                key_row(ui, scan, start, key, acts);
-            }
             let rest = built.keys.len().saturating_sub(KEY_SHOWN);
-            if *open && rest > 0 {
-                // A finding is two lines: a title row and its description.
-                let row = ui.text_style_height(&egui::TextStyle::Body)
-                    + ui.text_style_height(&egui::TextStyle::Small)
-                    + 6.0
-                    + 2.0 * ui.spacing().item_spacing.y;
-                rows::inset(ui, "summary-keys", KEY_BOX_ROWS as f32 * row, |ui| {
-                    for key in &built.keys[KEY_SHOWN..] {
-                        key_row(ui, scan, start, key, acts);
-                    }
-                });
-            }
+            // A finding is two lines: a title row and its description.
+            let row = ui.text_style_height(&egui::TextStyle::Body)
+                + ui.text_style_height(&egui::TextStyle::Small)
+                + 6.0
+                + 2.0 * ui.spacing().item_spacing.y;
+            rows::scroll_list(
+                ui,
+                "summary-keys",
+                *open && rest > 0,
+                KEY_SHOWN as f32 * row,
+                (KEY_SHOWN, built.keys.len()),
+                |ui, at| key_row(ui, scan, start, &built.keys[at], acts),
+            );
             if rest > 0 {
                 ui.add_space(4.0);
                 let label = if *open {
@@ -85,7 +79,7 @@ pub(super) fn key_findings(
                 };
                 if ui
                     .button(label)
-                    .on_hover_text("List the other findings in a small box that scrolls")
+                    .on_hover_text("List every finding in the same space, with a scroll bar")
                     .clicked()
                 {
                     *open = !*open;
@@ -205,8 +199,8 @@ fn node_name(scan: &ArchiveScan, pid: u32, cookie: u64, exe: &str) -> String {
 }
 
 /// One kind of indicator as a branch of the tree: the first few, each
-/// a clickable item for its view, and "Show N more" for the rest in a small
-/// box that scrolls.
+/// a clickable item for its view, and "Show N more" to turn them into one
+/// scroll area with all of them.
 fn category(
     ui: &mut egui::Ui,
     title: &str,
@@ -219,44 +213,57 @@ fn category(
     if total == 0 {
         return;
     }
-    egui::CollapsingHeader::new(
-        RichText::new(format!("{title} ({total})"))
-            .strong()
-            .color(theme::heading()),
-    )
-    .id_salt(("summary-indicators", title))
-    .default_open(true)
-    .show(ui, |ui| {
-        let mut row = |ui: &mut egui::Ui, at: usize| {
-            ui.horizontal(|ui| {
-                if item(ui, at) {
-                    acts.push(Act::Go(destination));
-                }
-            });
+    // The title in the text colour (strong), its count muted: not a link.
+    let mut head = egui::text::LayoutJob::default();
+    for (text, color) in [
+        (title.to_owned(), theme::text()),
+        (format!(" ({total})"), theme::muted()),
+    ] {
+        let rich = RichText::new(text).color(color);
+        let rich = if color == theme::text() {
+            rich.strong()
+        } else {
+            rich
         };
-        for at in 0..total.min(SHOWN) {
-            row(ui, at);
-        }
-        if *more && total > SHOWN {
-            let height =
-                BOX_ROWS as f32 * (ui.spacing().interact_size.y + ui.spacing().item_spacing.y);
-            rows::inset(ui, ("summary-indicators-list", title), height, |ui| {
-                for at in SHOWN..total {
-                    row(ui, at);
-                }
-            });
-        }
-        if total > SHOWN {
-            let label = if *more {
-                "Show fewer".to_owned()
-            } else {
-                format!("Show {} more", total - SHOWN)
+        rich.append_to(
+            &mut head,
+            ui.style(),
+            egui::FontSelection::Default,
+            egui::Align::Center,
+        );
+    }
+    egui::CollapsingHeader::new(egui::WidgetText::from(head))
+        .id_salt(("summary-indicators", title))
+        .default_open(true)
+        .show(ui, |ui| {
+            let mut row = |ui: &mut egui::Ui, at: usize| {
+                ui.horizontal(|ui| {
+                    if item(ui, at) {
+                        acts.push(Act::Go(destination));
+                    }
+                });
             };
-            if crate::widgets::link(ui, label).clicked() {
-                *more = !*more;
+            let height =
+                SHOWN as f32 * (ui.spacing().interact_size.y + ui.spacing().item_spacing.y);
+            rows::scroll_list(
+                ui,
+                ("summary-indicators-list", title),
+                *more && total > SHOWN,
+                height,
+                (SHOWN, total),
+                |ui, at| row(ui, at),
+            );
+            if total > SHOWN {
+                let label = if *more {
+                    "Show fewer".to_owned()
+                } else {
+                    format!("Show {} more", total - SHOWN)
+                };
+                if crate::widgets::link(ui, label).clicked() {
+                    *more = !*more;
+                }
             }
-        }
-    });
+        });
 }
 
 pub(super) fn indicators(
