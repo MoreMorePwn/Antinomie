@@ -235,8 +235,7 @@ impl MonitorApp {
         vm_section(ui, "Display and emulation");
         form_grid("vm_display", ui).show(ui, |ui| {
             let kvm_problem = app.kvm_problem();
-            let arch = selected_base(&app.snapshot, app.draft.base_identity.as_deref())
-                .map_or_else(Default::default, |base| base.arch);
+            let arch = base_arch(&app.snapshot, app.draft.base_identity.as_deref());
             launch_options(ui, &mut app.draft.launch, kvm_problem.as_deref(), arch);
             let fallbacks = app.draft_stealth_fallbacks();
             super::stealth::preset_row(
@@ -440,7 +439,7 @@ impl MonitorApp {
         );
         let selected = selected_base(&self.snapshot, self.draft.base_identity.as_deref());
         let current = selected.map(|base| base.id.clone());
-        let arch = selected.map_or_else(Default::default, |base| base.arch);
+        let arch = selected.map_or_else(Default::default, BaseSummary::arch);
         let mut fit = super::stealth::Fit::new(
             &self.draft.stealth,
             base,

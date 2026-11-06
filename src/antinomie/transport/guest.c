@@ -2,6 +2,7 @@
 #include <linux/antinomie.h>
 #include <linux/cpu.h>
 #include <linux/delay.h>
+#include <linux/hrtimer.h>
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/jiffies.h>
@@ -12,6 +13,7 @@
 #include <linux/rcupdate.h>
 #include <linux/rwsem.h>
 #include <linux/slab.h>
+#include <linux/wait.h>
 #include <linux/workqueue.h>
 #include "queue.h"
 #include "process_core.h"
@@ -84,6 +86,8 @@ struct ant_cpu {
 };
 /* One per CPU, used with preemption off. A sender that must wait for room
  * takes a turn (next_ticket) and stays on its CPU until serving reaches it.
+ * Senders waiting for their turn sleep on turns; the sender that ends its
+ * turn wakes the one whose turn is next.
  * Allocated at setup (alloc_percpu), not in the static per-CPU section: a
  * static one would move every later per-CPU variable of the kernel (their
  * offsets are in its BTF).
@@ -92,6 +96,13 @@ struct ant_producer {
 	u64 head, cached_tail, attempted, dropped, waits, wait_ns;
 	u32 index, next_ticket, serving;
 	bool fault;
+	struct wait_queue_head turns;
+};
+
+/* A sender asleep until its turn (ticket) on its CPU's ring. */
+struct ant_turn {
+	struct wait_queue_entry entry;
+	u32 ticket;
 };
 static struct ant_producer __percpu *producers;
 static struct ant_cpu *cpus;
@@ -204,6 +215,37 @@ u32 ant_ring_size(void)
 	return ring_size;
 }
 
+/* Wakes only the sender whose ticket is *key: the others keep sleeping. */
+static int ant_turn_wake(struct wait_queue_entry *entry, unsigned int mode, int sync, void *key)
+{
+	struct ant_turn *turn = container_of(entry, struct ant_turn, entry);
+
+	if (turn->ticket != *(u32 *)key)
+		return 0;
+	return default_wake_function(entry, mode, sync, key);
+}
+
+/* Sleep until it is ticket's turn on this CPU's ring. The sender before it
+ * wakes it as its turn ends; the timeout only bounds a wake-up that never
+ * comes. Called with migration disabled and preemption enabled, so p stays
+ * this CPU's and only tasks on this CPU change p->serving.
+ */
+static void ant_wait_turn(struct ant_producer *p, u32 ticket)
+{
+	struct ant_turn turn = { .ticket = ticket };
+	ktime_t timeout = NSEC_PER_MSEC;
+
+	/* As DEFINE_WAIT_FUNC: prepare_to_wait queues an entry whose list
+	 * is empty, so the list must be initialised. */
+	init_waitqueue_func_entry(&turn.entry, ant_turn_wake);
+	INIT_LIST_HEAD(&turn.entry.entry);
+	turn.entry.private = current;
+	prepare_to_wait(&p->turns, &turn.entry, TASK_UNINTERRUPTIBLE);
+	if (READ_ONCE(p->serving) != ticket)
+		schedule_hrtimeout_range(&timeout, 100 * NSEC_PER_USEC, HRTIMER_MODE_REL);
+	finish_wait(&p->turns, &turn.entry);
+}
+
 int ant_send(const void *data, size_t payload_len)
 {
 	struct ant_producer *p;
@@ -211,7 +253,7 @@ int ant_send(const void *data, size_t payload_len)
 	struct ant_message msg = { .payload_len = payload_len };
 	u64 waited_from = 0, progress_at = 0, tail = 0, now;
 	u32 wait_us, ticket = 0;
-	bool may_sleep, queued = false;
+	bool may_sleep, spin_long, queued = false;
 	int error;
 
 	if (!in_task()) return -EWOULDBLOCK;
@@ -226,7 +268,16 @@ int ant_send(const void *data, size_t payload_len)
 		error = -EPROTO;
 		goto drop;
 	}
+#ifdef CONFIG_PREEMPT_COUNT
 	may_sleep = preempt_count() == 1 && !irqs_disabled() && !rcu_preempt_depth();
+	spin_long = false;
+#else
+	/* Without a preemption count (arm64's voluntary preemption) a held
+	 * spinlock is invisible, so no sender sleeps; one with interrupts on
+	 * still waits the whole send wait, spinning, while the host reads. */
+	may_sleep = false;
+	spin_long = !irqs_disabled();
+#endif
 	for (;;) {
 		/* Room freed while senders wait is theirs, in turn: a sender that
 		 * may sleep and finds others waiting queues behind them instead of
@@ -248,7 +299,7 @@ int ant_send(const void *data, size_t payload_len)
 		 * and other tasks keep running; one in atomic context spins, and
 		 * only briefly. */
 		wait_us = min_t(u32, W32_READ(&control->send_wait_us), ANT_SEND_WAIT_MAX_US);
-		if (!may_sleep)
+		if (!may_sleep && !spin_long)
 			wait_us = min_t(u32, wait_us, ANT_SEND_ATOMIC_WAIT_US);
 		now = local_clock();
 		if (!waited_from) {
@@ -276,11 +327,17 @@ int ant_send(const void *data, size_t payload_len)
 				queued = true;
 				migrate_disable();
 			}
-			/* Only our own preempt_disable is held. */
+			/* Only our own preempt_disable is held. Waiting for the
+			 * turn sleeps until the sender before ends its turn;
+			 * waiting in it for room polls the ring, which the host
+			 * empties without telling the guest. */
 			MOV_ONCE(&q->attempted, p->attempted);
 			MOV_ONCE(&q->waits, p->waits);
 			preempt_enable();
-			usleep_range(50, 100);
+			if (ticket != p->serving)
+				ant_wait_turn(p, ticket);
+			else
+				usleep_range(50, 100);
 			preempt_disable();
 			if (p->fault) {
 				error = -EPROTO;
@@ -290,8 +347,16 @@ int ant_send(const void *data, size_t payload_len)
 		}
 		cpu_relax();
 	}
-	if (queued)
-		p->serving++;
+	if (queued) {
+		/* Hand the turn on at once: before, the next sender found it
+		 * only when its own sleep ended, so a ring that had filled once
+		 * kept its senders queued and took one packet per 50 to 100 us
+		 * on each CPU, however fast the host read. */
+		u32 next = ++p->serving;
+
+		if (next != p->next_ticket)
+			__wake_up(&p->turns, TASK_NORMAL, 0, &next);
+	}
 	if (waited_from) {
 		p->wait_ns += local_clock() - waited_from;
 		MOV_ONCE(&q->waits, p->waits);
@@ -548,6 +613,7 @@ retry:
 		W32_SET(&directory[index].data_size, ring_size);
 		W32_SET(&directory[index].cpu_id, cpu);
 		per_cpu_ptr(producers, cpu)->index = index++;
+		init_waitqueue_head(&per_cpu_ptr(producers, cpu)->turns);
 	}
 	/*
 	 * This worker only polls host commands. It is not a reclaim path,

@@ -77,7 +77,7 @@ use antinomie_monitor_core::{
     TransportSettings, VmAcceleration, VmConfig, VmCpuModel, VmLaunchOptions, VmScreen, VmState,
     APP_REVISION, APP_VERSION,
 };
-pub(crate) use bases::selected_base;
+pub(crate) use bases::{base_arch, selected_base};
 pub(crate) use capture::core_capture_status;
 use eframe::egui::{self, RichText};
 pub(crate) use keys::tab_shortcut;

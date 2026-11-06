@@ -112,6 +112,10 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/report"
           "$RUNNER_TEMP/report/bin/pip" install --quiet jsonschema stix2 stix2-patterns
           "$RUNNER_TEMP/report/bin/python" tests/monitor/test-report-export.py
+      - name: Transport and control copies match the kernel series
+        # The host's copies of the kernel's transport and control files are
+        # compared with what the canonical patch series produces.
+        run: tests/monitor/check-contracts.sh
       - name: Behaviour samples carry no product name
         run: tests/monitor/check-sample-branding.sh
       - name: Shell scripts

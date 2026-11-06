@@ -107,6 +107,16 @@ impl Worker {
         }
         self.snapshot.active_vm = None;
         self.snapshot.state = VmState::Starting;
+        // The old QEMU has stopped: put the checkpoint's UEFI variables back
+        // before the restored guest (or the rebooted one) reads them.
+        if let Err(error) = snapshots::restore_efi_vars(&self.options, &vm, &prepared) {
+            let cleanup = snapshots::cancel_restore(&self.options, &vm, &prepared);
+            self.snapshot.state = VmState::Stopped;
+            return Err(format!(
+                "snapshot restore failed: {error}; cleanup {:?}",
+                cleanup.err()
+            ));
+        }
         let recovery = (|| -> Result<Option<Session>, String> {
             if !resume {
                 snapshots::commit_restore(&self.options, &vm, &prepared)?;

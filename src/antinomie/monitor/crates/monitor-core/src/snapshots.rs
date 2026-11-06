@@ -18,6 +18,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+mod efi_vars;
 pub(crate) mod run_layer;
 
 const MAX_NODES: usize = 256;
@@ -34,6 +35,9 @@ struct Record {
     memory_sha256: Option<String>,
     compatibility: Option<String>,
     host_checkpoint: Option<Value>,
+    /// The VM's UEFI variable store at this checkpoint, if it had one.
+    #[serde(default)]
+    efi_vars: Vec<efi_vars::EfiVars>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Manifest {
@@ -72,6 +76,7 @@ pub(crate) struct PreparedRestore {
     pub active_disk: PathBuf,
     pub memory_path: Option<PathBuf>,
     pub compatibility: Option<String>,
+    efi_vars: Vec<efi_vars::EfiVars>,
 }
 
 fn regular(path: &Path) -> Result<fs::Metadata, String> {
@@ -160,6 +165,15 @@ fn load(directory: &Path, vm: &VmConfig) -> Result<Manifest, String> {
         owned(directory, &node.disk)?;
         if let Some(memory) = &node.memory {
             owned_path(directory, memory)?;
+        }
+        for vars in &node.efi_vars {
+            if !efi_vars::valid_name(&vars.name)
+                || vars.artifact
+                    != Path::new("snapshots").join(format!("{}.{}", node.checkpoint.id, vars.name))
+                || owned_path(directory, &vars.artifact).is_err()
+            {
+                return Err("snapshot UEFI variable store artifact is invalid".into());
+            }
         }
         if (node.checkpoint.mode == VmSnapshotMode::Full) != node.memory.is_some() {
             return Err("snapshot mode/artifacts disagree".into());
@@ -480,6 +494,7 @@ pub(crate) fn prepare_take(
         memory_sha256: None,
         compatibility: None,
         host_checkpoint: None,
+        efi_vars: Vec::new(),
     };
     atomic_json(
         &directory.join(JOURNAL),
@@ -537,6 +552,9 @@ pub(crate) fn commit_take(
         prepared.record.checkpoint.memory_size = meta.len();
         sync_directory(path.parent().ok_or("memory artifact has no parent")?)?;
     }
+    // The guest is paused (full) or stopped here, so the store is what a
+    // restore must give back.
+    prepared.record.efi_vars = efi_vars::save(&directory, &prepared.id)?;
     prepared.record.compatibility = compatibility;
     prepared.record.host_checkpoint = host_checkpoint;
     prepared.record.checkpoint.disk_size =
@@ -613,6 +631,9 @@ pub(crate) fn prepare_restore(
             return Err("saved memory state checksum/size differs; current VM retained".into());
         }
     }
+    for vars in &record.efi_vars {
+        efi_vars::verify(&directory, vars)?;
+    }
     let active_disk = make_child(options, &directory, &owned(&directory, &record.disk)?)?;
     atomic_json(
         &directory.join(JOURNAL),
@@ -633,7 +654,21 @@ pub(crate) fn prepare_restore(
         active_disk: directory.join(active_disk),
         memory_path,
         compatibility: record.compatibility.clone(),
+        efi_vars: record.efi_vars.clone(),
     })
+}
+/// Write the checkpoint's UEFI variable store over the VM's, when it saved
+/// one. Call it once the VM's QEMU has stopped and before the next one starts.
+pub(crate) fn restore_efi_vars(
+    options: &BackendOptions,
+    vm: &VmConfig,
+    prepared: &PreparedRestore,
+) -> Result<(), String> {
+    let directory = vm_dir(options, &vm.id)?;
+    prepared
+        .efi_vars
+        .iter()
+        .try_for_each(|vars| efi_vars::restore(&directory, vars))
 }
 /// Finish the stopped boot's automatic layer, then validate the restore target
 /// before saving or replacing the current working state.
@@ -660,6 +695,9 @@ pub(crate) fn preflight_restore(
         &owned(&directory, &record.disk)?,
         bundle.vm_disk(),
     )?;
+    for vars in &record.efi_vars {
+        efi_vars::verify(&directory, vars)?;
+    }
     if !boot_from_disk && record.checkpoint.mode == VmSnapshotMode::Full {
         let path = owned(
             &directory,
@@ -800,19 +838,31 @@ pub(crate) fn deletion_paths(
         }
         let path = entry.path();
         regular(&path)?;
-        let stem = path
-            .file_stem()
+        let file = path
+            .file_name()
             .and_then(|value| value.to_str())
             .ok_or("invalid snapshot artifact name")?;
+        // `<id>.efi-vars*.fd` is a checkpoint's UEFI variable store.
+        let vars_name = file
+            .split_once('.')
+            .filter(|(_, name)| efi_vars::valid_name(name));
+        let stem = match vars_name {
+            Some((id, _)) => id,
+            None => path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .ok_or("invalid snapshot artifact name")?,
+        };
         if stem.is_empty()
             || stem.len() > 128
             || !stem
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
-            || !matches!(
-                path.extension().and_then(|value| value.to_str()),
-                Some("qcow2" | "state")
-            )
+            || (vars_name.is_none()
+                && !matches!(
+                    path.extension().and_then(|value| value.to_str()),
+                    Some("qcow2" | "state")
+                ))
         {
             return Err("unrecognized file in snapshot directory; files retained".into());
         }
@@ -1358,5 +1408,45 @@ mod tests {
         let restore = prepare_restore(&fixture.options, &fixture.vm, &descendant.id, true).unwrap();
         commit_restore(&fixture.options, &fixture.vm, &restore).unwrap();
         fixture.read(&active_disk(&fixture.options, &fixture.vm).unwrap(), 34);
+    }
+    #[test]
+    fn a_snapshot_saves_and_restores_the_uefi_variable_stores() {
+        // x86 OVMF and arm64 AAVMF stores sit in the VM folder under their own names.
+        let fixture = Fixture::new();
+        let x86 = fixture.directory.join("efi-vars.fd");
+        let arm = fixture.directory.join("efi-vars-aarch64.fd");
+        fs::write(&x86, b"x86 vars A").unwrap();
+        fs::write(&arm, b"arm vars A").unwrap();
+        let first = fixture.take("With vars");
+        fs::write(&x86, b"x86 vars B").unwrap();
+        fs::remove_file(&arm).unwrap();
+        let second = fixture.take("Changed vars");
+        let manifest = load(&fixture.directory, &fixture.vm).unwrap();
+        let saved = |id: &str| {
+            manifest
+                .nodes
+                .iter()
+                .find(|node| node.checkpoint.id == id)
+                .unwrap()
+                .efi_vars
+                .len()
+        };
+        assert_eq!((saved(&first.id), saved(&second.id)), (2, 1));
+        // Restoring the first brings both stores back, byte for byte.
+        let restore = prepare_restore(&fixture.options, &fixture.vm, &first.id, true).unwrap();
+        restore_efi_vars(&fixture.options, &fixture.vm, &restore).unwrap();
+        commit_restore(&fixture.options, &fixture.vm, &restore).unwrap();
+        assert_eq!(fs::read(&x86).unwrap(), b"x86 vars A");
+        assert_eq!(fs::read(&arm).unwrap(), b"arm vars A");
+        // A changed copy is part of the identity: the restore is refused.
+        let copy = fixture
+            .directory
+            .join(format!("snapshots/{}.efi-vars.fd", second.id));
+        fs::write(&copy, b"tampered").unwrap();
+        assert!(preflight_restore(&fixture.options, &fixture.vm, &second.id, true).is_err());
+        assert!(prepare_restore(&fixture.options, &fixture.vm, &second.id, true).is_err());
+        assert!(!fixture.directory.join(JOURNAL).exists());
+        // Whole-VM deletion still recognises the copies as owned.
+        assert!(deletion_paths(&fixture.options, &fixture.vm, &fixture.base).is_ok());
     }
 }

@@ -52,7 +52,7 @@ pub(super) fn show(ui: &mut egui::Ui, vm: &VmConfig, snapshot: &Snapshot) {
         antinomie_monitor_core::stealth::HostSupport::cached(),
     );
     let base = crate::app::selected_base(snapshot, vm.base_identity.as_deref());
-    let arch = base.map_or_else(Default::default, |base| base.arch);
+    let arch = crate::app::base_arch(snapshot, vm.base_identity.as_deref());
     let giveaways = vm.stealth.giveaways_for(arch, vm.launch.fast_emulation);
     // An arm64 VM shows the arm64 machine its profile presents.
     let shown = antinomie_monitor_core::stealth::arm64::shown_profile(
