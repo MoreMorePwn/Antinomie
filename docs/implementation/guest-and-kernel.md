@@ -1027,7 +1027,8 @@ on this host (it records neither). An older host refuses a revision-21 base.
 ### AArch32 programs on arm64 guests: cores and the debugger, guest side (0.9.0, contract revision 21)
 
 Multi-arch card MA-33b, guest part (the host's ELF32 core reader, ARM and Thumb
-disassembly and the ARM debugger layer come later, without a new revision).
+disassembly and the ARM debugger layer followed without a new revision; see
+`docs/usage.md`, 32-bit ARM programs on an arm64 guest).
 
 * **ELF32 cores (patch 46).** An AArch32 task's core was refused (-EOPNOTSUPP).
   The recorder's exit and manual cores already run the task's own binary
@@ -1057,10 +1058,22 @@ disassembly and the ARM debugger layer come later, without a new revision).
   its entry stop; ATTACH (ADOPT) answers -EOPNOTSUPP and retires it, and so does
   any later command of a session adopted before the exec (DETACH answers 0).
   It never blocks a new session.
-* **Host.** This host only accepts the new flag bits (debug CAPS, CORE_CAPS,
-  core status 0x100 in place of 2); it does not read ELF32 cores or debug
-  AArch32 programs yet. `debug-check a32` drives the engine directly on
-  `tests/monitor/aarch32-debug-fixture.c` (A32 and Thumb functions).
+* **Host.** The host reads the new flag bits (debug CAPS, CORE_CAPS, core
+  status 0x100 in place of 2), opens ELF32 EM_ARM cores (`core_dump.rs`, also
+  as a transferred guest core) and debugs AArch32 programs with the `arm`
+  target description. `debug-check a32 BUNDLE DIR FIXTURE` checks all three on
+  `tests/monitor/aarch32-debug-fixture.c` (A32 and Thumb functions, built with
+  `arm-linux-gnueabihf-gcc -static`): the engine itself (CAPS AARCH32, compat
+  NT_PRSTATUS, an A32 and a Thumb breakpoint, a step from each), a
+  gdb-multiarch session through the RSP server (ARM and Thumb breakpoints by
+  symbol, stepi) and the `crash` mode's ELF32 exit core in the core reader
+  (registers, VFP, mappings, files, auxv, ARM or Thumb disassembly at the pc).
+* **Checked on the final revision-21 bases** (2026-11-06): `PASS a32` on
+  BusyBox arm64 and on Debian 13 arm64 Minimal (SIGSEGV core: EM_ARM, one
+  thread, 8 and 10 mappings, the fixture among 3 files, pc 0x105c8 in Thumb
+  state disassembled). The first BusyBox arm64 run failed only the last step:
+  its kernel lacked `CORE_DUMP_DEFAULT_ELF_HEADERS` (arm64's defconfig), so
+  the core had no code at the pc; the minimal profile now enables it.
 
 ### Capture gaps of the decode audit (0.9.0, contract revision 21)
 
@@ -1166,7 +1179,10 @@ revision 20 is unchanged; one breakpoint kind is new within it (below).
   engine is called from `do_el0_brk64()` and `do_el0_softstep()`
   (`debug-monitors.c`) and `syscall_trace_exit()` (`ptrace.c`). Register sets:
   NT_PRSTATUS (`user_pt_regs`, 272 bytes), NT_PRFPREG (`user_fpsimd_state`,
-  528) and NT_ARM_TLS (8). An AArch32 program is refused at attach.
+  528) and NT_ARM_TLS (8). An AArch32 program is debugged with its compat
+  register sets on a base of revision 21 ("AArch32 programs on arm64
+  guests: cores and the debugger" above); a base of revision 20 refuses it at
+  attach.
 * **Stops before the access.** arm64 takes breakpoint and watchpoint
   exceptions before the instruction or its access completes, so a watch stop
   reports the accessing instruction (on x86 the one after it), and resuming
@@ -1210,7 +1226,8 @@ revision 20 is unchanged; one breakpoint kind is new within it (below).
   repeated string instruction), the smc fixture rewrites `mov w0, #v`, the
   anti-debug probe counts the enabled NT_ARM_HW_BREAK/WATCH slots of a traced
   child and looks for BRK, not INT3, in its code.
-* **Not supported.** AArch32 programs on an arm64 guest are not debugged.
+* **AArch32.** 32-bit ARM programs on an arm64 guest are debugged on a base of
+  revision 21 (MA-33b); on older bases Debug says that the guest cannot.
 
 ### arm64 device profiles (0.9.0)
 
@@ -1375,6 +1392,22 @@ Multi-arch plan cards MA-19 and the Debian half of MA-15. No contract change.
   that VM; the profile phase keeps the firmware (it toggles the hypervisor
   bit), and the variable store must exist after the first boot and after every
   restore.
+* **Final revision-21 arm64 bases** (2026-11-06, series 0001-0053,
+  `bases/0.9.0-r21-20261105/busybox-arm64` and `debian-minimal-arm64`). The
+  Debian arm64 Minimal base is built in the QEMU builder (this PC has no
+  qemu-aarch64 binfmt handler, so no container build), its stock kernel by the
+  same script and toolchain in the pinned container builder and taken from
+  the kernel cache: exports, traceable functions and BTF identical to
+  Debian's (after patch 45's arm64 entry, above). Checks on both bases:
+  quick tier groups (user 1911, root 129, threads 2241 cases) and the matrix
+  (318 slots) pass; `debug-check a32` passes; `snapshot-uefi` passes on the
+  Debian base (8 min 21 s, AAVMF and its variable store). The goldens are not
+  re-blessed: every BusyBox difference is one of the cases whose x86-64
+  rendering changed too (newer host decoding: `<bytes>` decoded, flag
+  names), and every further Debian difference renders exactly as the aarch64
+  BusyBox golden does (`aarch64/debian-minimal` predates revision 21's ioctl
+  captures and cases, and the fixture's `PR_SET_NAME` address). None comes
+  from arm64 or Debian behaviour.
 * **Build kit.** `monitor-core/build.rs` `KIT_FILES` carries every repository
   file the kit's scripts read (0.8.0: the kconfig fragments per architecture,
   the BTF and ABI checks, Debian's x86-64 module-signing certificate), and
@@ -1396,8 +1429,12 @@ Multi-arch plan cards MA-19 and the Debian half of MA-15. No contract change.
   `__percpu_add_case_32`), kernel/exit.c's exit hooks take an int-only entry
   (no `const kernel_siginfo` among exit.c's types, which renumbered the types
   after it) and setup.c's device-tree bootargs helper lives in the recorder
-  (no `const device_node` among setup.c's types); on x86-64 the macros expand
-  to the hooks as before and the objects are unchanged. The ABI check reads an
+  (no `const device_node` among setup.c's types); revision 21's
+  `get_signal()` fatal-signal hook (patch 45) likewise goes through
+  `ant_fatal_signal_hook()`, an entry that takes the siginfo without const
+  (its const pointer had renumbered 13 pointer types of kernel/signal.c:
+  same structures, other bytes); on x86-64 the macros expand to the hooks as
+  before and the objects are unchanged. The ABI check reads an
   arm64 call site 8 bytes before its function (call ops), and a header inline
   GCC keeps out of line in several stock files (`__raw_spin_lock_irq`) is no
   recorder name clash.

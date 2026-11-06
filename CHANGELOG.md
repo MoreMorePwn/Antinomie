@@ -164,7 +164,10 @@ x86 programs by their own table.
   32-bit build needs `gcc -m32`: gcc-multilib and libc6-dev-i386).
   `snapshot-uefi` (full tier, Debian bases) runs the snapshot check on a VM of
   the server profile, booted through OVMF or AAVMF with its own variable store
-  (`snapshot-check --uefi`).
+  (`snapshot-check --uefi`). `debug-check a32` checks 32-bit ARM programs on an
+  arm64 base: the guest engine, a gdb-multiarch session with ARM and Thumb
+  breakpoints, and the ELF32 exit core opened and disassembled by the core
+  reader (`tests/monitor/aarch32-debug-fixture.c`).
 
 - **Stealth: guest facade for desktop and laptop profiles.** On a base built
   by this release a realistic desktop or laptop machine no longer shows QEMU's
