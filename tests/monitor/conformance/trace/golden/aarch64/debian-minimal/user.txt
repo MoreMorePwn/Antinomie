@@ -556,7 +556,7 @@ io_submit.pwrite | io_submit(ctx_id=<value>, nr=1, iocbpp=<data>) = <value> | ar
 io_submit.pwritev_and_pwrite | io_submit(ctx_id=<value>, nr=2, iocbpp=<data>) = <value> | arg2.iocbpp:complete arg2.iocbpp[0]:complete arg2.iocb[0]:complete arg2.iocb[0].iov:complete arg2.iocbpp[1]:complete arg2.iocb[1]:complete arg2.iocb[1].input:complete !1
 io_submit.zero_nr | io_submit(ctx_id=<value>, nr=0, iocbpp=<addr>) = <value> | arg2.iocbpp:complete
 io_uring_enter.async_cancel | io_uring_enter(fd=3, to_submit=1, min_complete=2, flags=IORING_ENTER_GETEVENTS|IORING_ENTER_EXT_ARG, argp=<data>, argsz=24) = <value> | arg4.ext_arg:complete arg4.timeout:complete !1
-io_uring_enter.bad_flags | io_uring_enter(fd=3, to_submit=0, min_complete=0, flags=<addr>, argp=NULL, argsz=0) = EINVAL |
+io_uring_enter.bad_flags | io_uring_enter(fd=3, to_submit=0, min_complete=0, flags=0x80000000, argp=NULL, argsz=0) = EINVAL |
 io_uring_enter.bad_opcode | io_uring_enter(fd=3, to_submit=1, min_complete=1, flags=IORING_ENTER_GETEVENTS|IORING_ENTER_EXT_ARG, argp=<data>, argsz=24) = <value> | arg4.ext_arg:complete arg4.timeout:complete !1
 io_uring_enter.badf | io_uring_enter(fd=999, to_submit=0, min_complete=0, flags=0x0, argp=NULL, argsz=0) = EBADF |
 io_uring_enter.close | io_uring_enter(fd=3, to_submit=1, min_complete=1, flags=IORING_ENTER_GETEVENTS|IORING_ENTER_EXT_ARG, argp=<data>, argsz=24) = <value> | arg4.ext_arg:complete arg4.timeout:complete !1
@@ -813,7 +813,7 @@ membarrier.register_sync_core | membarrier(cmd=MEMBARRIER_CMD_REGISTER_PRIVATE_E
 membarrier.rseq_cpu0 | membarrier(cmd=MEMBARRIER_CMD_PRIVATE_EXPEDITED_RSEQ, flags=MEMBARRIER_CMD_FLAG_CPU, cpu_id=0) = 0 |
 membarrier.sync_core | membarrier(cmd=MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE, flags=0x0, cpu_id=0) = 0 |
 membarrier.unknown | membarrier(cmd=Unknown command 0x100000, flags=0x0, cpu_id=0) = EINVAL |
-memfd_create.bad_flags | memfd_create(uname_ptr="ant-memfd", flags=<addr>) = EINVAL | arg0.path:complete:"ant-memfd"
+memfd_create.bad_flags | memfd_create(uname_ptr="ant-memfd", flags=0x80000000) = EINVAL | arg0.path:complete:"ant-memfd"
 memfd_create.long_name | memfd_create(uname_ptr=<addr>, flags=0x0) = EINVAL | arg0.path:invalid extent:uncaptured !3
 memfd_create.sealing | memfd_create(uname_ptr="ant-memfd", flags=MFD_CLOEXEC|MFD_ALLOW_SEALING) = 5 | arg0.path:complete:"ant-memfd"
 memfd_secret.bad_flags | memfd_secret(flags=0x1) = EINVAL |
@@ -868,7 +868,7 @@ mount.bind_unprivileged | mount(dev_name=".", dir_name="sys-mnt", type=NULL, fla
 mount.null_dir | mount(dev_name="none", dir_name=NULL, type="tmpfs", flags=0x0, data=NULL) = EFAULT | arg0.dev_name:complete:"none" arg1.dir_name:null pointer:uncaptured arg2.type:complete:"tmpfs"
 mount.real_device_unprivileged | mount(dev_name="/dev/vdb", dir_name="sys-mnt", type="ext4", flags=MS_RDONLY, data=NULL) = EPERM | arg0.dev_name:complete:"/dev/vdb" arg1.dir_name:complete:"sys-mnt" arg2.type:complete:"ext4"
 mount.tmpfs_options_unprivileged | mount(dev_name="ant-tmpfs", dir_name="sys-mnt", type="tmpfs", flags=MS_NOSUID|MS_NODEV, data="size=1m,mode=0700"...) = EPERM | arg0.dev_name:complete:"ant-tmpfs" arg1.dir_name:complete:"sys-mnt" arg2.type:complete:"tmpfs" arg4.data:complete:"size=1m,mode=0700"...
-mount_setattr.bad_flags | mount_setattr(dfd=AT_FDCWD, path=".", flags=<addr>, uattr={attr_set=MOUNT_ATTR_RDONLY, attr_clr=0, propagation=0, userns_fd=0}, usize=32) = EINVAL | arg1.path:complete:"." arg3.mount_attr:complete:{attr_set=MOUNT_ATTR_RDONLY, attr_clr=0, propagation=0, userns_fd=0}
+mount_setattr.bad_flags | mount_setattr(dfd=AT_FDCWD, path=".", flags=0x40000000, uattr={attr_set=MOUNT_ATTR_RDONLY, attr_clr=0, propagation=0, userns_fd=0}, usize=32) = EINVAL | arg1.path:complete:"." arg3.mount_attr:complete:{attr_set=MOUNT_ATTR_RDONLY, attr_clr=0, propagation=0, userns_fd=0}
 mount_setattr.small_size | mount_setattr(dfd=AT_FDCWD, path=".", flags=0x0, uattr=<addr>, usize=8) = EINVAL | arg1.path:complete:"." arg3.mount_attr:invalid extent:uncaptured !3
 mount_setattr.unprivileged | mount_setattr(dfd=AT_FDCWD, path=".", flags=0x0, uattr={attr_set=MOUNT_ATTR_RDONLY, attr_clr=0, propagation=0, userns_fd=0}, usize=32) = EPERM | arg1.path:complete:"." arg3.mount_attr:complete:{attr_set=MOUNT_ATTR_RDONLY, attr_clr=0, propagation=0, userns_fd=0}
 move_mount.unprivileged | move_mount(from_dfd=AT_FDCWD, from_path=".", to_dfd=AT_FDCWD, to_path=".", ms_flags=0x0) = EPERM | arg1.path:complete:"." arg3.path:complete:"."
@@ -1017,7 +1017,7 @@ nfsservctl.not_implemented | nfsservctl(first=0, second=0, third=0, fourth=0, fi
 open_by_handle_at.badf | open_by_handle_at(mountdirfd=999, handle=<data>, flags=O_RDONLY) = EBADF | handle.header:complete handle.bytes:complete
 open_by_handle_at.user_eperm | open_by_handle_at(mountdirfd=3, handle=<data>, flags=O_RDONLY) = EPERM | handle.header:complete handle.bytes:complete
 open_by_handle_at.zero_bytes | open_by_handle_at(mountdirfd=3, handle={handle_bytes=0, handle_type=FILEID_ROOT}, flags=O_RDONLY) = EPERM | handle.header:complete:{handle_bytes=0, handle_type=FILEID_ROOT} handle.bytes:invalid extent:uncaptured !3
-open_tree.bad_flags | open_tree(dfd=AT_FDCWD, path=".", flags=<addr>) = EINVAL | arg1.path:complete:"."
+open_tree.bad_flags | open_tree(dfd=AT_FDCWD, path=".", flags=0x40000000) = EINVAL | arg1.path:complete:"."
 open_tree.clone_unprivileged | open_tree(dfd=AT_FDCWD, path=".", flags=OPEN_TREE_CLONE|OPEN_TREE_CLOEXEC) = EPERM | arg1.path:complete:"."
 open_tree.plain | open_tree(dfd=AT_FDCWD, path=".", flags=OPEN_TREE_CLOEXEC) = 3 | arg1.path:complete:"."
 open_tree.recursive_without_clone | open_tree(dfd=AT_FDCWD, path=".", flags=0x8000) = EINVAL | arg1.path:complete:"."
@@ -1043,7 +1043,7 @@ openat2.resolve | openat2(dfd=AT_FDCWD, filename="io-at", how={flags=O_RDONLY|O_
 openat2.small_how | openat2(dfd=AT_FDCWD, filename="io-at", how=<addr>, size=8) = EINVAL | arg1.path:complete:"io-at" arg2.open_how:invalid extent:uncaptured !3
 openat2.unknown_resolve | openat2(dfd=AT_FDCWD, filename="io-at", how={flags=O_RDONLY, mode=0000, resolve=<addr>}, size=24) = EINVAL | arg1.path:complete:"io-at" arg2.open_how:complete:{flags=O_RDONLY, mode=0000, resolve=<addr>}
 perf_event_open.attr_fault | perf_event_open(attr_uptr=0x1, pid=0, cpu=-1, group_fd=-1, flags=0x0) = EFAULT | arg0.perf_event_attr:copy fault:uncaptured !3
-perf_event_open.bad_flags | perf_event_open(attr_uptr={type=PERF_TYPE_SOFTWARE, size=136, config=PERF_COUNT_SW_TASK_CLOCK, sample_type=0, read_format=0, flags=disabled|exclude_kernel|exclude_hv, precise_ip=arbitrary skid, bp_type=HW_BREAKPOINT_EMPTY, branch_sample_type=0x0, sample_regs_user=0x..., pid=0, cpu=-1, group_fd=-1, flags=<addr>) = EINVAL | arg0.perf_event_attr:complete:{type=PERF_TYPE_SOFTWARE, size=136, config=PERF_COUNT_SW_TASK_CLOCK, sample_type=0, read_format=0, flags=disabled|exclude_kernel|exclude_hv, precise_ip=arbitrary skid, bp_type=HW_BREAKPOINT_EMPTY, branch_sample_type=0x0, sample_regs_user=0x...
+perf_event_open.bad_flags | perf_event_open(attr_uptr={type=PERF_TYPE_SOFTWARE, size=136, config=PERF_COUNT_SW_TASK_CLOCK, sample_type=0, read_format=0, flags=disabled|exclude_kernel|exclude_hv, precise_ip=arbitrary skid, bp_type=HW_BREAKPOINT_EMPTY, branch_sample_type=0x0, sample_regs_user=0x..., pid=0, cpu=-1, group_fd=-1, flags=0x80000000) = EINVAL | arg0.perf_event_attr:complete:{type=PERF_TYPE_SOFTWARE, size=136, config=PERF_COUNT_SW_TASK_CLOCK, sample_type=0, read_format=0, flags=disabled|exclude_kernel|exclude_hv, precise_ip=arbitrary skid, bp_type=HW_BREAKPOINT_EMPTY, branch_sample_type=0x0, sample_regs_user=0x...
 perf_event_open.self_task_clock | perf_event_open(attr_uptr={type=PERF_TYPE_SOFTWARE, size=136, config=PERF_COUNT_SW_TASK_CLOCK, sample_type=0, read_format=0, flags=disabled|exclude_kernel|exclude_hv, precise_ip=arbitrary skid, bp_type=HW_BREAKPOINT_EMPTY, branch_sample_type=0x0, sample_regs_user=0x..., pid=0, cpu=-1, group_fd=-1, flags=PERF_FLAG_FD_CLOEXEC) = EACCES | arg0.perf_event_attr:complete:{type=PERF_TYPE_SOFTWARE, size=136, config=PERF_COUNT_SW_TASK_CLOCK, sample_type=0, read_format=0, flags=disabled|exclude_kernel|exclude_hv, precise_ip=arbitrary skid, bp_type=HW_BREAKPOINT_EMPTY, branch_sample_type=0x0, sample_regs_user=0x...
 perf_event_open.size_zero_bad_sample | perf_event_open(attr_uptr={type=PERF_TYPE_SOFTWARE, size=0, config=PERF_COUNT_SW_CPU_CLOCK, sample_type=<addr>, read_format=0, precise_ip=arbitrary skid, bp_type=HW_BREAKPOINT_EMPTY, ...}, pid=0, cpu=-1, group_fd=-1, flags=0x0) = EINVAL | arg0.perf_event_attr:complete:{type=PERF_TYPE_SOFTWARE, size=0, config=PERF_COUNT_SW_CPU_CLOCK, sample_type=<addr>, read_format=0, precise_ip=arbitrary skid, bp_type=HW_BREAKPOINT_EMPTY, ...}
 perf_event_open.small_size | perf_event_open(attr_uptr=136, pid=0, cpu=-1, group_fd=-1, flags=0x0) = E2BIG | arg0.perf_event_attr:invalid extent:uncaptured arg0.required_size:complete !3
@@ -1123,7 +1123,7 @@ pread64.negative | pread64(fd=3, buf=<addr>, count=6, pos=-1) = EINVAL |
 pread64.offset | pread64(fd=3, buf="PWRITE", count=6, pos=100) = 6 | arg1.data:complete file.position:complete
 pread64.pos_explicit | pread64(fd=3, buf="TINO", count=4, pos=2) = 4 | arg1.data:complete file.position:complete
 preadv.offset | preadv(fd=3, vec=[3 bytes at <addr>, 3 bytes at <addr>], vlen=2, pos_l=8, pos_h=0) = 6 | arg1.iov:complete:[3 bytes at <addr>, 3 bytes at <addr>] arg1.iov[0].data:complete arg1.iov[1].data:complete file.position:complete
-preadv2.bad_flags | preadv2(fd=3, vec=[3 bytes at <addr>, 3 bytes at <addr>], vlen=2, pos_l=0, pos_h=0, flags=<addr>) = EOPNOTSUPP | arg1.iov:complete:[3 bytes at <addr>, 3 bytes at <addr>]
+preadv2.bad_flags | preadv2(fd=3, vec=[3 bytes at <addr>, 3 bytes at <addr>], vlen=2, pos_l=0, pos_h=0, flags=0x80000000) = EOPNOTSUPP | arg1.iov:complete:[3 bytes at <addr>, 3 bytes at <addr>]
 preadv2.hipri | preadv2(fd=3, vec=[3 bytes at <addr>, 3 bytes at <addr>], vlen=2, pos_l=0, pos_h=0, flags=RWF_HIPRI) = 6 | arg1.iov:complete:[3 bytes at <addr>, 3 bytes at <addr>] arg1.iov[0].data:complete arg1.iov[1].data:complete file.position:complete
 prlimit64.bad_resource | prlimit64(pid=0, resource=Unknown resource 0x63, new_rlim=NULL, old_rlim=<addr>) = EINVAL | arg2.data:null pointer:uncaptured
 prlimit64.lower_soft | prlimit64(pid=0, resource=RLIMIT_NOFILE, new_rlim=<data>, old_rlim=<data>) = <value> | arg2.data:complete arg3.data:complete
@@ -1392,7 +1392,7 @@ seccomp.action_avail | seccomp(op=SECCOMP_GET_ACTION_AVAIL, flags=0x0, uargs=214
 seccomp.action_avail_bad_flags | seccomp(op=SECCOMP_GET_ACTION_AVAIL, flags=SECCOMP_FILTER_FLAG_TSYNC, uargs=305397760) = EINVAL | arg2.action:complete:305397760
 seccomp.action_unavailable | seccomp(op=SECCOMP_GET_ACTION_AVAIL, flags=0x0, uargs=305397760) = EOPNOTSUPP | arg2.action:complete:305397760
 seccomp.filter_allow_all | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=0x0, uargs={len=1, filter=<addr>}) = 0 | arg2.program:complete:{len=1, filter=<addr>} arg2.program.filter:complete:[ret #<addr> ; SECCOMP_RET_ALLOW]
-seccomp.filter_bad_flags | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=<addr>, uargs={len=1, filter=<addr>}) = EINVAL | arg2.program:complete:{len=1, filter=<addr>} arg2.program.filter:complete:[ret #<addr> ; SECCOMP_RET_ALLOW]
+seccomp.filter_bad_flags | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=0x80000000, uargs={len=1, filter=<addr>}) = EINVAL | arg2.program:complete:{len=1, filter=<addr>} arg2.program.filter:complete:[ret #<addr> ; SECCOMP_RET_ALLOW]
 seccomp.filter_empty | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=0x0, uargs={len=0, filter=<addr>}) = EINVAL | arg2.program:complete:{len=0, filter=<addr>} arg2.program.filter:invalid extent:uncaptured !3
 seccomp.filter_without_no_new_privs | seccomp(op=SECCOMP_SET_MODE_FILTER, flags=0x0, uargs={len=1, filter=<addr>}) = EACCES | arg2.program:complete:{len=1, filter=<addr>} arg2.program.filter:complete:[ret #<addr> ; SECCOMP_RET_ALLOW]
 seccomp.notif_sizes | seccomp(op=SECCOMP_GET_NOTIF_SIZES, flags=0x0, uargs={seccomp_notif=80, seccomp_notif_resp=24, seccomp_data=64}) = 0 | arg2.sizes:complete
@@ -1680,7 +1680,7 @@ statx.nofollow | statx(dfd=AT_FDCWD, path=<data>, flags=AT_STATX_SYNC_AS_STAT|AT
 statx.null_path | statx(dfd=3, path=NULL, flags=AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, mask=STATX_TYPE|STATX_MODE|STATX_NLINK|STATX_UID|STATX_GID|STATX_ATIME|STATX_MTIME|STATX_CTIME|STATX_INO|STATX_SIZE|STATX_BLOCKS, buffer=<data>) = <value> | arg1.path:null pointer arg4.data:complete
 statx.null_path_fdcwd | statx(dfd=AT_FDCWD, path=NULL, flags=AT_STATX_SYNC_AS_STAT|AT_EMPTY_PATH, mask=STATX_TYPE|STATX_MODE|STATX_NLINK|STATX_UID|STATX_GID|STATX_ATIME|STATX_MTIME|STATX_CTIME|STATX_INO|STATX_SIZE|STATX_BLOCKS, buffer=<addr>) = EFAULT | arg1.path:null pointer:uncaptured
 statx.null_path_no_flag | statx(dfd=3, path=NULL, flags=AT_STATX_SYNC_AS_STAT, mask=STATX_TYPE|STATX_MODE|STATX_NLINK|STATX_UID|STATX_GID|STATX_ATIME|STATX_MTIME|STATX_CTIME|STATX_INO|STATX_SIZE|STATX_BLOCKS, buffer=<addr>) = EFAULT | arg1.path:null pointer:uncaptured
-statx.reserved_mask | statx(dfd=AT_FDCWD, path="meta-file", flags=AT_STATX_SYNC_AS_STAT, mask=2147483648, buffer=<addr>) = EINVAL | arg1.path:complete:"meta-file"
+statx.reserved_mask | statx(dfd=AT_FDCWD, path="meta-file", flags=AT_STATX_SYNC_AS_STAT, mask=0x80000000, buffer=<addr>) = EINVAL | arg1.path:complete:"meta-file"
 statx.zero_mask | statx(dfd=AT_FDCWD, path=<data>, flags=AT_STATX_SYNC_AS_STAT, mask=0, buffer=<data>) = <value> | arg1.path:complete arg4.data:complete
 swapoff.unprivileged | swapoff(specialfile="sys-swap") = EPERM | arg0.path:complete:"sys-swap"
 swapon.bad_flags | swapon(specialfile="sys-swap", swap_flags=524288) = EINVAL | arg0.path:complete:"sys-swap"
@@ -1816,7 +1816,7 @@ vmsplice.too_many | vmsplice(fd=4, iov=<addr>, nr_segs=1025, flags=0x0) = EINVAL
 vmsplice.zero_segments | vmsplice(fd=4, iov=<addr>, nr_segs=0, flags=0x0) = 0 | arg1.iov:complete:uncaptured
 wait4.all_children | wait4(pid=<pid>, stat_addr=<data>, options=__WALL, ru=NULL) = <value> | arg1.data:complete arg3.data:null pointer
 wait4.any_child | wait4(pid=-1, stat_addr=<data>, options=0x0, ru=NULL) = <value> | arg1.data:complete arg3.data:null pointer
-wait4.bad_options | wait4(pid=-1, stat_addr=<addr>, options=<addr>, ru=NULL) = EINVAL |
+wait4.bad_options | wait4(pid=-1, stat_addr=<addr>, options=0x100000, ru=NULL) = EINVAL |
 wait4.fault_status | wait4(pid=<pid>, stat_addr=0x1, options=0x0, ru=NULL) = EFAULT |
 wait4.no_children | wait4(pid=-1, stat_addr=<addr>, options=WNOHANG, ru=NULL) = ECHILD |
 wait4.null_pointers | wait4(pid=<pid>, stat_addr=NULL, options=0x0, ru=NULL) = <value> | arg1.data:null pointer arg3.data:null pointer

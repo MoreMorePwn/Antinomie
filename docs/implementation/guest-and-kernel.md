@@ -1421,11 +1421,17 @@ Multi-arch plan cards MA-19 and the Debian half of MA-15. No contract change.
   The goldens of all four final bases (x86-64 and aarch64, BusyBox and Debian
   Minimal) were re-blessed from quick-tier runs on them after a review of
   every difference: newer host decoding, the revision-21 ioctl and fixture
-  cases, and the run-dependent values the golden files now hide (above). Not
-  blessed: `access.bad_mode` (the view shows `access`'s mode `0x80` as `F_OK`:
-  `syscalls/scalars.rs` names `F_OK` whenever the three access bits are clear)
-  and `statx.reserved_mask` (the view's `0x80000000` reads as an address to
-  the golden normaliser, `<addr>`).
+  cases, and the run-dependent values the golden files now hide (above).
+  Two fixes came with it: `access`, `faccessat` and `faccessat2` show
+  `F_OK` for mode 0 only and other bits in hex (`0x80`, `R_OK|0x80`; the
+  fixture's invalid mode had read as `F_OK`), and the golden files turn an
+  argument into `<addr>` only when the syscall table calls it a pointer, the
+  view shows it as an address (`address`: munmap's `addr`, `brk`, mprotect's
+  `start`, `unsigned long` in the table) or the table does not describe it;
+  flags, masks, selectors and other numbers keep their value
+  (`statx.reserved_mask`'s `0x80000000`, the fixtures' invalid flags).
+  Decoded structure members keep the textual rule (the render carries no
+  member types).
 * **Build kit.** `monitor-core/build.rs` `KIT_FILES` carries every repository
   file the kit's scripts read (0.8.0: the kconfig fragments per architecture,
   the BTF and ABI checks, Debian's x86-64 module-signing certificate), and

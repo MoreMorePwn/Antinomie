@@ -50,12 +50,14 @@ fn normal(text: &str, volatile: &Volatile, pidish: bool) -> String {
     normal_value(text, volatile, pidish)
 }
 
-/// Whether an argument of this kind (the syscall table's, as the render
-/// reports it) may hold an address: a pointer, or an argument the table does
-/// not describe. A flag, mask, selector or number never does, whatever its
-/// size (statx's `STATX__RESERVED` mask `0x80000000`).
+/// Whether an argument of this kind (as the render reports it) may hold an
+/// address: a pointer by the syscall table, a number the view shows as an
+/// address (`address`: munmap's `addr`, `brk`, mprotect's `start`), or an
+/// argument the table does not describe. A flag, mask, selector or other
+/// number never does, whatever its size (statx's `STATX__RESERVED` mask
+/// `0x80000000`).
 fn holds_address(kind: &str) -> bool {
-    matches!(kind, "pointer" | "unknown")
+    matches!(kind, "pointer" | "address" | "unknown")
 }
 
 /// [`normal`] for a value that is not an address.
@@ -801,7 +803,9 @@ mod tests {
         assert_eq!(super::normal("0x7ffe00001000", &ids, false), "<addr>");
         // Only an argument that may hold an address becomes `<addr>`: a mask
         // such as statx's STATX__RESERVED keeps its value.
-        assert!(super::holds_address("pointer") && super::holds_address("unknown"));
+        for kind in ["pointer", "address", "unknown"] {
+            assert!(super::holds_address(kind), "{kind}");
+        }
         for kind in ["flags", "selector", "number"] {
             assert!(!super::holds_address(kind), "{kind}");
         }

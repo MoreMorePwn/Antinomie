@@ -146,6 +146,13 @@ pub(crate) fn view(invocation: &InvocationSummary) -> CallView {
                 }
                 _ => {}
             }
+            // A number the view shows as an address (munmap's addr, brk,
+            // mprotect's start: `unsigned long` in the table).
+            let kind = if kind == "number" && matches!(shown.kind, ValueKind::Pointer) {
+                "address"
+            } else {
+                kind
+            };
             arguments.push(ArgumentView {
                 name: name.to_owned(),
                 text: shown.text,
