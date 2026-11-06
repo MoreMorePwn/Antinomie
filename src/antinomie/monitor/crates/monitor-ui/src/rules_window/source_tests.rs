@@ -146,7 +146,7 @@ pub(super) fn render(
             });
             // The app draws the spawned rule windows, whatever page shows.
             let ctx = root.ctx().clone();
-            model.show_rule_windows(&ctx, dir);
+            model.show_rule_lists(&ctx, dir);
         },
     );
     texts(&output)

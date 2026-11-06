@@ -490,7 +490,9 @@ impl Finding {
         let found = match engine {
             Engine::Yara => self.rule_text.lines().find_map(|line| {
                 let (key, value) = line.split_once('=')?;
-                matches!(key.trim(), "reference" | "reference_url" | "url")
+                ["reference", "reference_url", "url"]
+                    .iter()
+                    .any(|name| key.trim().eq_ignore_ascii_case(name))
                     .then(|| value.trim().trim_matches('"').trim().to_owned())
             }),
             Engine::Sigma => self

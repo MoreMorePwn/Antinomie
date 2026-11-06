@@ -108,10 +108,8 @@ pub(super) fn scan_at(section: &mut AnalysisSection, specimen: &[u8], directory:
             .filter_map(|(name, value)| meta_text(&value).map(|v| (name.to_owned(), v)))
             .collect();
         let meta = |key: &str| {
-            metadata
-                .iter()
-                .find(|(name, _)| name == key)
-                .map(|(_, value)| value.clone())
+            crate::ruleset::meta_get(metadata.iter().map(|(n, v)| (n.as_str(), v.as_str())), key)
+                .map(str::to_owned)
         };
         let mut first = None;
         let mut evidence = Vec::new();

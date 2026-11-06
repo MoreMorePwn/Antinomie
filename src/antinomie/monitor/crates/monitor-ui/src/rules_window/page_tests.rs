@@ -221,14 +221,15 @@ fn a_pack_lists_all_its_rules_and_a_rule_shows_its_details_and_source() {
     f.click("Rule");
     let shown = f.frame();
     assert!(top_of(&shown, "Zeta_Rule") < top_of(&shown, "Alpha_Rule"));
-    // A click on a rule opens its details window with the source text.
+    // A click on a rule shows its details beside the list, with the source text.
     assert!(!joined(&shown).contains("Source text"));
-    assert!(f.model.rule_windows.is_empty());
+    assert!(!f.model.rule_lists[0].has_selection());
     f.click("Alpha_Rule");
     let shown = f.until("$a = \"alpha\"");
     let text = joined(&shown);
-    assert!(text.contains("File: rules.yar"), "{text}");
-    assert!(text.contains("Description: the alpha rule"), "{text}");
+    for wanted in ["File", "rules.yar", "Description", "the alpha rule"] {
+        assert!(text.contains(wanted), "{wanted}: {text}");
+    }
     assert!(text.contains("Source text"), "{text}");
     assert!(!text.contains("$a = \"zeta\""), "only the chosen rule");
 }
@@ -743,7 +744,7 @@ fn fills(f: &mut Fixture) -> (Texts, Vec<(egui::Color32, egui::Rect)>) {
                     .page(ui, &f.dir, &mut f.outbound, &tools, &mut detection);
             });
             let ctx = root.ctx().clone();
-            f.model.show_rule_windows(&ctx, &f.dir);
+            f.model.show_rule_lists(&ctx, &f.dir);
         },
     );
     let mut rects = Vec::new();
@@ -754,18 +755,21 @@ fn fills(f: &mut Fixture) -> (Texts, Vec<(egui::Color32, egui::Rect)>) {
 }
 
 #[test]
-fn clicking_a_rule_opens_its_own_window_and_the_code_sits_on_a_filled_block() {
+fn clicking_a_rule_shows_it_in_the_same_window_and_the_code_sits_on_a_filled_block() {
     let mut f = Fixture::new("rule-window");
     f.pack("fixture", "yara", "rules.yar", YARA);
     f.open_list();
     f.until("Alpha_Rule");
     f.click("Alpha_Rule");
     f.until("$a = \"alpha\"");
-    assert_eq!(f.model.rule_windows.len(), 1);
-    // Another rule opens a second window; the same rule again does not.
+    assert_eq!(f.model.rule_lists.len(), 1);
+    // Another rule replaces the details in the same window: no second window.
     f.click("Zeta_Rule");
-    f.until("$a = \"zeta\"");
-    assert_eq!(f.model.rule_windows.len(), 2);
+    let shown = f.until("$a = \"zeta\"");
+    assert_eq!(f.model.rule_lists.len(), 1);
+    assert!(!joined(&shown).contains("$a = \"alpha\""));
+    f.click("Alpha_Rule");
+    f.until("$a = \"alpha\"");
     let (shown, rects) = fills(&mut f);
     let code = shown
         .iter()
@@ -795,21 +799,15 @@ fn the_list_rules_stay_within_its_window_and_are_one_pixel_wide() {
     f.open_list();
     f.until("Alpha_Rule");
     f.settle();
-    let mut detection = antinomie_monitor_core::analysis::detection::Settings::default();
-    let tools = ruleset::ToolConfig::default();
     let output = f.ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
             ..Default::default()
         },
         |root| {
-            egui::CentralPanel::default().show(root, |ui| {
-                let _ = f
-                    .model
-                    .page(ui, &f.dir, &mut f.outbound, &tools, &mut detection);
-            });
+            // Only the rules window: the page behind it has table lines too.
             let ctx = root.ctx().clone();
-            f.model.show_rule_windows(&ctx, &f.dir);
+            f.model.show_rule_lists(&ctx, &f.dir);
         },
     );
     fn walk(shape: &egui::epaint::Shape, out: &mut Vec<(egui::Pos2, egui::Pos2, f32)>) {
@@ -867,7 +865,7 @@ fn a_rule_window_stays_drawn_when_the_rules_page_is_not() {
                     ui.label("Another page");
                 });
                 let ctx = root.ctx().clone();
-                f.model.show_rule_windows(&ctx, &f.dir);
+                f.model.show_rule_lists(&ctx, &f.dir);
             },
         );
         shown = joined(&super::source_tests::texts(&output));
@@ -878,7 +876,6 @@ fn a_rule_window_stays_drawn_when_the_rules_page_is_not() {
         shown.contains("Zeta_Rule"),
         "the rule list stays too: {shown}"
     );
-    assert_eq!(f.model.rule_windows.len(), 1);
     assert_eq!(f.model.rule_lists.len(), 1);
 }
 
@@ -927,7 +924,7 @@ fn the_rules_button_opens_one_list_window_per_pack_with_a_filter_and_a_count() {
     assert!(text.contains("Rules · Fixture fixture"), "{text}");
     assert!(text.contains("2 of 2 rules"), "{text}");
     assert!(text.contains("filter e.g. credential"), "{text}");
-    assert!(text.contains("Open details"), "{text}");
+    assert!(!text.contains("Open details"), "{text}");
     assert!(text.contains("Zeta_Rule"), "{text}");
     // The button again brings the window forward; it is still one.
     f.open_list();
@@ -939,4 +936,120 @@ fn the_rules_button_opens_one_list_window_per_pack_with_a_filter_and_a_count() {
     let text = joined(&shown);
     assert!(text.contains("1 of 2 rules"), "{text}");
     assert!(!text.contains("Zeta_Rule"), "{text}");
+}
+
+const CAPITAL: &str = "rule Cap_Rule\n{\n  meta:\n    Description = \"capital desc\"\n    Author = \"Ann Analyst\"\n    License = \"MIT\"\n    reference = \"https://example.test/cap\"\n  strings:\n    $a = \"cap\"\n  condition:\n    $a\n}\n";
+
+fn window_rect(f: &Fixture) -> egui::Rect {
+    f.ctx
+        .memory(|memory| memory.area_rect(f.model.rule_lists[0].id()))
+        .expect("the rules window is placed")
+}
+
+#[test]
+fn the_details_sit_in_the_right_pane_of_the_same_window() {
+    let mut f = Fixture::new("right-pane");
+    f.pack("fixture", "yara", "rules.yar", YARA);
+    f.open_list();
+    let before = f.until("Alpha_Rule");
+    assert!(
+        joined(&before).contains("Select a rule"),
+        "{}",
+        joined(&before)
+    );
+    f.click("Alpha_Rule");
+    let shown = f.until("$a = \"alpha\"");
+    let window = window_rect(&f);
+    let find = |label: &str| {
+        shown
+            .iter()
+            .find(|(text, _, _)| text == label)
+            .unwrap_or_else(|| panic!("no {label}: {}", joined(&shown)))
+            .1
+    };
+    // The list stays at the left; the details start right of the divider.
+    assert!(find("Zeta_Rule").right() < window.center().x + 40.0);
+    for label in ["ID", "File", "Source text"] {
+        assert!(find(label).left() > window.center().x - 0.15 * window.width());
+        assert!(find(label).left() > find("Zeta_Rule").left() + 100.0);
+    }
+    assert_eq!(f.model.rule_lists.len(), 1, "no window of its own");
+}
+
+#[test]
+fn the_window_opens_within_the_content_area_and_does_not_grow() {
+    let mut f = Fixture::new("size");
+    f.pack("fixture", "yara", "rules.yar", YARA);
+    f.open_list();
+    f.until("Alpha_Rule");
+    f.click("Alpha_Rule");
+    f.until("$a = \"alpha\"");
+    for _ in 0..4 {
+        f.frame();
+    }
+    let area = crate::title_bar::content_rect(&f.ctx);
+    let first = window_rect(&f);
+    assert!(first.width() <= area.width(), "{first:?} in {area:?}");
+    assert!(first.height() <= area.height(), "{first:?} in {area:?}");
+    assert!(first.width() <= area.width() * 0.70 + 60.0, "{first:?}");
+    assert!(first.height() <= area.height() * 0.75 + 60.0, "{first:?}");
+    // Frames later it is the same size: a table that fed its height back to
+    // the window made it grow until it hit the edge.
+    for _ in 0..30 {
+        f.frame();
+    }
+    assert_eq!(window_rect(&f).size(), first.size());
+}
+
+#[test]
+fn the_details_grid_has_labels_with_room_between_rows_and_a_capital_description() {
+    let mut f = Fixture::new("grid");
+    f.pack("fixture", "yara", "rules.yar", CAPITAL);
+    f.open_list();
+    f.until("Cap_Rule");
+    f.click("Cap_Rule");
+    f.until("$a = \"cap\"");
+    // The grid sizes its columns from the frame before: let it settle.
+    for _ in 0..4 {
+        f.frame();
+    }
+    let shown = f.frame();
+    let window = window_rect(&f);
+    let at = |label: &str| {
+        shown
+            .iter()
+            .filter(|(text, rect, _)| text == label && window.contains(rect.min))
+            .map(|(_, rect, _)| *rect)
+            .max_by(|a, b| a.left().total_cmp(&b.left()))
+            .unwrap_or_else(|| panic!("no {label}: {}", joined(&shown)))
+    };
+    let labels = ["ID", "File", "Author", "License", "State"];
+    let labels: Vec<_> = labels
+        .iter()
+        .filter(|label| shown.iter().any(|(text, _, _)| text == *label))
+        .collect();
+    for needed in ["ID", "File", "Author", "License", "State"] {
+        assert!(labels.contains(&&needed), "{needed}: {}", joined(&shown));
+    }
+    let rows: Vec<_> = labels.iter().map(|label| at(label)).collect();
+    for pair in rows.windows(2) {
+        assert!(
+            (pair[0].left() - pair[1].left()).abs() < 1.0,
+            "one column {rows:?}"
+        );
+        assert!(
+            pair[1].top() - pair[0].bottom() >= super::rule_details::ROW_GAP - 1.0,
+            "{pair:?}\n{:?}",
+            shown
+                .iter()
+                .map(|(t, r, _)| format!("{t:?} {r:?}"))
+                .collect::<Vec<_>>()
+        );
+    }
+    // The capitalised key is the description; the value sits right of its label.
+    let text = joined(&shown);
+    assert!(text.contains("capital desc"), "{text}");
+    assert!(text.contains("Ann Analyst"), "{text}");
+    assert!(at("capital desc").left() > at("Description").right());
+    assert!(text.contains("https://example.test/cap"), "{text}");
 }
