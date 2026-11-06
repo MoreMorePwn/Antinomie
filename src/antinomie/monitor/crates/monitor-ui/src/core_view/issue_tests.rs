@@ -34,7 +34,7 @@ fn capture_issues_are_plain_lines_without_a_close_button() {
     let ctx = egui::Context::default();
     let mut view = CoreView::default();
     view.catalog_issues = vec!["Run a: broken".into(), "Run b: other".into()];
-    let mut frame = |view: &mut CoreView, n: u32, events: Vec<egui::Event>| {
+    let frame = |view: &mut CoreView, n: u32, events: Vec<egui::Event>| {
         ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
