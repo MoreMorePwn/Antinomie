@@ -117,3 +117,17 @@ fn the_wheel_over_a_closed_key_findings_list_scrolls_the_page() {
         "the page scrolled over the list"
     );
 }
+
+#[test]
+fn the_wheel_over_the_main_activity_graph_scrolls_the_page() {
+    let mut rig = Rig::new();
+    rig.size = egui::vec2(1280.0, 450.0);
+    let out = rig.bring("Main activity graph");
+    let title = find(&out, "Main activity graph");
+    let over = egui::pos2(600.0, title.max.y + 60.0);
+    let out = rig.spin(over, -40.0, egui::Modifiers::NONE);
+    assert!(
+        find(&out, "Main activity graph").min.y < title.min.y - 8.0,
+        "the page scrolled over the strip"
+    );
+}

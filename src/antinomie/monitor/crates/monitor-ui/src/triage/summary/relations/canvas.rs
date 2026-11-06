@@ -572,12 +572,16 @@ fn draw_trunks(
         if !span.intersects(reach) {
             continue;
         }
-        let tinted = line.tint.is_some();
-        let color = line.tint.unwrap_or_else(|| kind_color(EdgeKind::Forked));
-        painter.line_segment(
-            line.line,
-            Stroke::new(if tinted { 1.8 } else { 1.3 }, color),
-        );
+        let base = kind_color(EdgeKind::Forked);
+        // Stubs are the edges; trunk, rail and lead are thinner and fainter.
+        let (color, width) = match line.role {
+            trunk::Role::Stub => match line.tint {
+                Some(tint) => (tint, 1.8),
+                None => (base, 1.3),
+            },
+            _ => (base.gamma_multiply(0.55), 0.9),
+        };
+        painter.line_segment(line.line, Stroke::new(width, color));
         if line.stub_of.is_some() && scale >= CURVES_FROM {
             let b = line.line[1];
             let tip = 6.0 * scale.clamp(0.6, 1.3);

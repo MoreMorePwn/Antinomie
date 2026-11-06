@@ -63,15 +63,29 @@ pub(super) fn find(
         .collect()
 }
 
+/// What a segment is: the trunk beside a lane (first child to last), a stub
+/// to one child, or the rail and lead that join the lanes to the parent.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Role {
+    Trunk,
+    Stub,
+    Join,
+}
+
 /// A segment to draw, in screen space, and the colour of a child's stub.
 pub(super) struct Segment {
     pub line: [Pos2; 2],
-    /// The child this is the stub of; `None` for the trunk and its rail.
+    pub role: Role,
+    /// The child this is the stub of.
     pub stub_of: Option<usize>,
     pub tint: Option<Color32>,
 }
 
 /// The lines of one parent's trunks at the view's `zoom`, given `to_screen`.
+/// Each lane's trunk runs from its first child's stub to its last; the lanes
+/// are joined by a rail along the top of the room the children have, where no
+/// box can be, with a drop to each trunk, and the parent leads horizontally
+/// into the first lane's trunk.
 pub(super) fn segments(
     trunks: &Trunks,
     zoom: f32,
@@ -92,43 +106,43 @@ pub(super) fn segments(
     ))
     .top();
     let beside = BESIDE * zoom.clamp(0.3, 1.0);
+    let line = |a: Pos2, b: Pos2, role| Segment {
+        line: [a, b],
+        role,
+        stub_of: None,
+        tint: None,
+    };
     let mut out = Vec::new();
     let mut xs = Vec::new();
     for (index, members) in lanes.values_mut().enumerate() {
         members.sort_by(|a, b| a.0.top().total_cmp(&b.0.top()));
         let x = members[0].0.left() - beside;
         xs.push(x);
-        let mut bottom = members[members.len() - 1].0.center().y;
-        // The first lane's trunk is where the parent joins.
+        let first = members[0].0.center().y;
+        let (mut top, mut bottom) = (first, members[members.len() - 1].0.center().y);
+        // The parent joins the first lane's trunk.
         if index == 0 {
+            top = top.min(parent.y);
             bottom = bottom.max(parent.y);
         }
-        out.push(Segment {
-            line: [Pos2::new(x, rail), Pos2::new(x, bottom)],
-            stub_of: None,
-            tint: None,
-        });
+        out.push(line(Pos2::new(x, top), Pos2::new(x, bottom), Role::Trunk));
+        out.push(line(Pos2::new(x, rail), Pos2::new(x, top), Role::Join));
         for &(rect, node, tint) in members.iter() {
             let y = rect.center().y;
             out.push(Segment {
                 line: [Pos2::new(x, y), Pos2::new(rect.left(), y)],
+                role: Role::Stub,
                 stub_of: Some(node),
                 tint,
             });
         }
     }
-    out.push(Segment {
-        line: [parent, Pos2::new(xs[0], parent.y)],
-        stub_of: None,
-        tint: None,
-    });
-    if xs.len() > 1 {
-        out.push(Segment {
-            line: [Pos2::new(xs[0], rail), Pos2::new(xs[xs.len() - 1], rail)],
-            stub_of: None,
-            tint: None,
-        });
-    }
+    out.push(line(parent, Pos2::new(xs[0], parent.y), Role::Join));
+    out.push(line(
+        Pos2::new(xs[0], rail),
+        Pos2::new(xs[xs.len() - 1], rail),
+        Role::Join,
+    ));
     out
 }
 
@@ -195,7 +209,7 @@ mod tests {
                     // A stub touches only the box it ends at, and the lead
                     // only the parent.
                     let own = line.stub_of == Some(*node)
-                        || (line.stub_of.is_none() && rect_of(*node) == trunks[0].rect);
+                        || (line.role != Role::Stub && rect_of(*node) == trunks[0].rect);
                     if own {
                         continue;
                     }
@@ -206,6 +220,41 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn a_trunk_runs_only_over_the_span_of_its_children() {
+        let (graph, layout) = wide(30);
+        let trunks = find(&graph, &layout, |_| None);
+        for zoom in [1.0f32, 0.5] {
+            let lines = segments(&trunks[0], zoom, |r| {
+                Rect::from_min_max(r.min * zoom, r.max * zoom)
+            });
+            let margin = 64.0 * zoom;
+            let mut checked = 0;
+            for trunk in lines.iter().filter(|s| s.role == Role::Trunk) {
+                let x = trunk.line[0].x;
+                let ys: Vec<f32> = lines
+                    .iter()
+                    .filter(|s| s.role == Role::Stub && s.line[0].x == x)
+                    .map(|s| s.line[0].y)
+                    .collect();
+                let (low, high) = (
+                    ys.iter().copied().fold(f32::MAX, f32::min),
+                    ys.iter().copied().fold(f32::MIN, f32::max),
+                );
+                let (top, bottom) = (
+                    trunk.line[0].y.min(trunk.line[1].y),
+                    trunk.line[0].y.max(trunk.line[1].y),
+                );
+                assert!(
+                    top >= low - margin && bottom <= high + margin,
+                    "trunk {top}..{bottom} for children {low}..{high} at zoom {zoom}"
+                );
+                checked += 1;
+            }
+            assert!(checked >= 3, "a trunk for each lane");
         }
     }
 
