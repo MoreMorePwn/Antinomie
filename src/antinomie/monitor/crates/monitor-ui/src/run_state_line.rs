@@ -302,7 +302,7 @@ mod tests {
             assert!(ended_by_vm_stop(&run));
             assert_eq!(
                 describe(&run, end, Some(end), None),
-                "Ended by VM stop after 1 min · root exited 0 · 1 process still running"
+                "Ended by VM stop after 1 min 0 s · root exited 0 · 1 process still running"
             );
         }
         let many = with_live(RunState::Finalized, Some(WaitStatus::Exited { code: 3 }), 4);
@@ -346,7 +346,10 @@ mod tests {
             Some(WaitStatus::Exited { code: 0 }),
             1,
         );
-        assert_eq!(describe(&stopping, 0, None, None), "Stopping");
+        assert_eq!(
+            describe(&stopping, 1_700_000_005_000, None, None),
+            "Stopping · 5 s elapsed"
+        );
     }
 
     #[test]
