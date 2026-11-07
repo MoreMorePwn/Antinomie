@@ -315,12 +315,13 @@ fn archive_index_path(directory: &Path) -> Result<PathBuf, RecordingError> {
     Ok(cache_root.join(format!("{name}.sqlite")))
 }
 
-/// Layout of the cached packet index. 2: a lifecycle row's `task_exit` column
+/// Layout of the cached packet index. 3: the child task records of a fork or
+/// clone are kernel notes of their call. 2: a lifecycle row's `task_exit` column
 /// is a kind (see `async_page::LifecycleKind`), so credential and hash records
 /// can be read back with their call; an index built before is rebuilt. Every
 /// cursor row carries this number (`indexed.writer`): an older build that
 /// appends to the index rewrites the row without it, which forces a rebuild.
-const INDEX_VERSION: i64 = 2;
+const INDEX_VERSION: i64 = 3;
 
 /// Bytes of the archive indexed per transaction. A first index of a large
 /// archive commits at this pace, so a crash or a cancel keeps what was indexed

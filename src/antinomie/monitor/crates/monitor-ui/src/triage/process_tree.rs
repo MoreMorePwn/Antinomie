@@ -457,11 +457,16 @@ pub(super) fn observe_processes(
             }
         }
         observe_rename(nodes, key, invocation, event);
-        // The guest says which pid a fork, vfork or process-clone created, also
-        // when the call's own flags were not captured.
-        if let Some(child) = lifecycle_child(invocation) {
-            link_child(nodes, key, child);
-            continue;
+        // The guest says which task a fork, vfork or clone created, also when
+        // the call's own flags were not captured (a `clone3` keeps them in a
+        // struct): a new process is linked, a new thread is not a child.
+        match lifecycle_born(invocation, event.pid) {
+            Some(Born::Process(child)) => {
+                link_child(nodes, key, child);
+                continue;
+            }
+            Some(Born::Thread) => continue,
+            None => {}
         }
         let args = entry
             .and_then(|event| event.args)
@@ -808,24 +813,10 @@ fn spawn_kind(invocation: &InvocationSummary, name: &str, args: Option<[u64; 6]>
     }
 }
 
-/// `Some` when a captured field key contains both `clone_args` and `flags`
-/// and its bytes are a 4- or 8-byte little-endian integer. `None` means the
-/// recording has no usable flags, so the caller must not invent an edge.
+/// `Some` when the call's flags can be read. `None` means the recording has no
+/// usable flags, so the caller must not invent an edge.
 fn clone3_is_thread(invocation: &InvocationSummary) -> Option<bool> {
-    let field = invocation
-        .entry
-        .iter()
-        .chain(invocation.exit.iter())
-        .chain(invocation.async_events.iter())
-        .flat_map(|event| event.fields.iter())
-        .find(|field| field.key.contains("clone_args") && field.key.contains("flags"))?;
-    let bytes = trace::covered_preview(field);
-    let flags = match bytes.len() {
-        4 => u64::from(u32::from_le_bytes(bytes.try_into().ok()?)),
-        8 => u64::from_le_bytes(bytes.try_into().ok()?),
-        _ => return None,
-    };
-    Some(flags & CLONE_THREAD != 0)
+    Some(super::descriptors::clone3_flags(invocation)? & CLONE_THREAD != 0)
 }
 
 pub(super) fn program_name(
@@ -961,21 +952,34 @@ pub(super) fn process_tree_lines(invocations: &[InvocationSummary]) -> Vec<Strin
         .collect()
 }
 
-/// The pid a fork, vfork or process clone created, from the guest's own
-/// lifecycle record on the call.
-fn lifecycle_child(invocation: &InvocationSummary) -> Option<u32> {
-    invocation
-        .entry
-        .iter()
-        .chain(invocation.exit.iter())
-        .chain(invocation.async_events.iter())
-        .flat_map(|event| &event.fields)
-        .filter(|field| field.key == "lifecycle.child_tgid" && field.complete)
-        .find_map(|field| {
-            let bytes = trace::covered_preview(field);
-            let word = u64::from_le_bytes(bytes.get(..8)?.try_into().ok()?);
-            u32::try_from(word).ok().filter(|pid| *pid != 0)
-        })
+/// What a fork, vfork or clone made, as the guest's own child record says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Born {
+    /// A new process (its thread group id is its own id): the pid.
+    Process(u32),
+    /// A new thread of the caller's process.
+    Thread,
+}
+
+/// The child the guest recorded for a call (`lifecycle.child_tgid`, `_pid`),
+/// read without the call's flags, which `clone3` keeps in a struct that may not
+/// have been captured. `caller` is the thread group id of the calling task.
+pub(super) fn lifecycle_born(invocation: &InvocationSummary, caller: u32) -> Option<Born> {
+    let child = antinomie_monitor_core::kernel_notes::child_task(
+        invocation
+            .kernel_notes
+            .iter()
+            .chain(invocation.async_events.iter())
+            .chain(invocation.exit.iter())
+            .chain(invocation.entry.iter()),
+    )?;
+    if child.tgid == caller {
+        Some(Born::Thread)
+    } else if child.tgid == child.tid.unwrap_or(child.tgid) {
+        Some(Born::Process(child.tgid))
+    } else {
+        None
+    }
 }
 
 /// The arguments the exec was given: every string that was captured whole, a
