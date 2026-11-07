@@ -165,6 +165,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "antinomie-cli"
+version = "0.9.0"
+dependencies = [
+ "antinomie-monitor-core",
+ "antinomie-service",
+ "clap",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "antinomie-monitor-core"
 version = "0.9.0"
 dependencies = [
@@ -211,6 +222,15 @@ dependencies = [
  "serde_json",
  "vt100",
  "winit",
+]
+
+[[package]]
+name = "antinomie-service"
+version = "0.9.0"
+dependencies = [
+ "antinomie-monitor-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

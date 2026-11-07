@@ -1,0 +1,12 @@
+[package]
+name = "antinomie-service"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+authors.workspace = true
+description = "Job, event and query API of Antinomie's headless mode (UI-free)"
+
+[dependencies]
+antinomie-monitor-core = { path = "../monitor-core" }
+serde.workspace = true
+serde_json.workspace = true
