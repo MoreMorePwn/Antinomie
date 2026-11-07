@@ -218,7 +218,7 @@ impl MonitorApp {
         let rows = self.shortcut_rows(ctx);
         let mut open = true;
         let mut open_keyboard = false;
-        egui::Window::new("Keyboard shortcuts")
+        crate::widgets::capped(egui::Window::new("Keyboard shortcuts"), ctx)
             .id(egui::Id::new("keyboard_shortcuts"))
             .open(&mut open)
             .order(egui::Order::Foreground)

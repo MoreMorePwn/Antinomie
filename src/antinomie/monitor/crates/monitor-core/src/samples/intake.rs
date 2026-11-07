@@ -219,16 +219,29 @@ impl Library {
                 .unwrap_or_default()
                 .to_owned();
         }
-        let name = [&new.name, &new.origin.name, &info.file_name]
-            .into_iter()
-            .find(|text| !text.is_empty())
-            .cloned()
-            .unwrap_or_else(|| sha256[..12].to_owned());
         let file_type = if info.file_type.is_empty() {
             file_type.to_owned()
         } else {
             info.file_type.clone()
         };
+        let sha1 = hex(Sha1::digest(bytes));
+        let md5 = hex(md5::Md5::digest(bytes));
+        // The first name that says something; MalwareBazaar's "na" and a name
+        // that is only the file's own hash do not.
+        let name = [&new.name, &new.origin.name, &info.file_name]
+            .into_iter()
+            .find(|text| is_real_name(text, &[&sha256, &sha1, &md5]))
+            .cloned()
+            .unwrap_or_else(|| {
+                let kind = info
+                    .signature
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|family| !family.is_empty() && !family.eq_ignore_ascii_case("n/a"))
+                    .unwrap_or(&file_type);
+                let kind = if kind.is_empty() { "sample" } else { kind };
+                format!("{kind}-{}", &sha256[..12])
+            });
         let arch = arch
             .map(str::to_owned)
             .or(info.file_arch.clone())
@@ -246,8 +259,8 @@ impl Library {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                     params![
                         sha256,
-                        hex(Sha1::digest(bytes)),
-                        hex(md5::Md5::digest(bytes)),
+                        sha1,
+                        md5,
                         tlsh_of(bytes),
                         name,
                         new.description.trim(),
@@ -418,4 +431,21 @@ impl Library {
         }
         self.note(&sha256, "analyst", CustodyEvent::Removed)
     }
+}
+
+/// Whether `name` tells a person something: not empty, not a placeholder
+/// ("na", "unknown") and not just the file's hash, whole or cut short.
+fn is_real_name(name: &str, hashes: &[&str]) -> bool {
+    let name = name.trim();
+    let lower = name.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "" | "na" | "n/a" | "none" | "null" | "unknown" | "-" | "--"
+    ) {
+        return false;
+    }
+    // "<hex>" or "<hex>.ext", the hex being at least 8 digits of a hash.
+    let stem = lower.split('.').next().unwrap_or_default();
+    let hex_only = stem.len() >= 8 && stem.bytes().all(|byte| byte.is_ascii_hexdigit());
+    !(hex_only && hashes.iter().any(|hash| hash.starts_with(stem)))
 }

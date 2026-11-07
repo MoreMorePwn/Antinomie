@@ -32,6 +32,7 @@ mod network;
 mod pending;
 mod rules_list;
 mod rules_startup;
+mod run_in_vm_click;
 mod run_kill;
 mod run_selection;
 mod samples_custody;

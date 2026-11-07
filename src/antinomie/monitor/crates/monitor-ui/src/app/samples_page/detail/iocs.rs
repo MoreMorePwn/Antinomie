@@ -317,11 +317,13 @@ impl MonitorApp {
                 ],
                 &mut state.presence,
             );
-            ui.add(
+            let edit = ui.add(
                 egui::TextEdit::singleline(&mut state.search)
                     .hint_text(crate::theme::placeholder(ui, "Search value, path, process"))
+                    .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                     .desired_width(crate::theme::plain_edit_width(220.0)),
             );
+            crate::widgets::clear_button(ui, &edit, &mut state.search);
             for (label, flag, tip) in [
                 (
                     "Hide private and reserved",

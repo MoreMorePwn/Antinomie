@@ -306,9 +306,10 @@ packet history already has it, and specimen Content supports a byte-offset jump.
 3. **Run program** runs it. Set the **Executable**, **Arguments**,
    **Working directory** and **Environment**. **User** is Root, Normal user
    (1000), Nobody (65534, the unprivileged account every system has) or a custom
-   UID and GID. Under **Triggers**, **Dump when suspicious activity is seen** has
+   UID and GID. Under **Dumps**, **Dump when suspicious activity is seen** has
    a **Minimum tier** of Low, Medium or High: the first finding at that tier or
-   above takes the dump. Each launch gets its own terminal
+   above takes the dump. **Memory Dump on Exit** and **Core Dump on Exit** sit
+   below the trigger's options in the same section. Each launch gets its own terminal
    window for input and output.
    On a VM with a desktop base, **Run in** picks where the program runs:
    **App terminal** (the default), **Guest desktop** (the program joins the
@@ -994,10 +995,10 @@ state from one palette. The words always stay, so colour is never the only cue.
 |---|---|
 | Running, stopping, or still recording after the terminal was closed or the root exited | Blue |
 | Finished with exit 0 | Green |
-| Finished with another exit code | Neutral |
+| Finished with another exit code | Amber |
 | Stopped (by you) | Grey |
 | Ended at its time limit (a `timeout` program: exit 124, or the SIGTERM BusyBox's `timeout` re-raises) | Blue-grey (info) |
-| Crashed or killed by a signal (SIGSEGV and the like), or launch not confirmed | Amber |
+| Finished after a crash or a kill by a signal (SIGSEGV and the like), or launch not confirmed | Amber |
 | Failed to start, or interrupted | Red |
 | Recording incomplete (saving stopped part way) | Amber |
 
@@ -1063,6 +1064,16 @@ export is an **Exported** entry in the custody log (file, size, hash and result)
 
 ## 6. Keys, the command palette and Jobs
 
+**Filter and search boxes** (the Triage tables, the rules list, Samples, Run
+History, Detection, Settings and the others) show a small cross at the right
+edge while they hold text. A click on it, or Esc in the focused box, clears the
+text.
+
+**Spawned windows** (a rules window, a rule hit's Details, Relationships and
+the like) never grow past 80 % of the app's content area each way, and not
+below a small minimum. What does not fit scrolls inside the window: code scrolls
+sideways in its box, and long text wraps.
+
 Menus: **File**, **VM**, **Run**, **View**, **Tools** and **Help**; the menu bar's
 **Search** button at the right (with its key) opens the command palette. Menus and
 button tooltips show the keys, and a tab's tooltip shows its Ctrl+digit.
@@ -1108,7 +1119,7 @@ button, table or graph does not block the shortcuts.
 | Ctrl+1 to Ctrl+9 | Show the 1st to 9th tab of the work area, in the order the tab bar shows them (they follow a tab you dragged) |
 | Ctrl+J | Fold or open the lower bar (Details, Activity and Jobs); the arrow at the right end of its tab strip does the same |
 | Ctrl+Shift+D, Ctrl+Shift+A, Ctrl+Shift+J | Show Details, Activity, Jobs (the lower bar) |
-| Esc | Close the window on top (not while a field has the keyboard) |
+| Esc | Close the window on top (not while a field has the keyboard). In a filter or search box, Esc clears the text first |
 
 **Defaults for a 60 % keyboard.** Every default is a Ctrl or Ctrl+Shift chord on a
 letter, the comma or a digit, which a 60 % board has without a Fn layer. Three
@@ -1188,8 +1199,10 @@ it is installed the system's copy is used, and the row offers **Install**).
 **Install all missing** still skips a tool the system has, so installing the own
 copy of such a tool is always your click. The choice is saved per tool.
 **Notifications** has **Toast for live HIGH findings** (off) and **Toast
-when a run finishes** (on), and **Start** (on): the question before starting a
-VM that has no snapshot. A failed **Open folder** or **Open file** raises an
+when a run finishes** (on), **Start** (on): the question before starting a
+VM that has no snapshot, and **Ask before clearing Activity** (on): the question
+before **Clear** empties the Activity log. Both questions have **Don't ask me
+again**. A failed **Open folder** or **Open file** raises an
 error toast and an **Activity** row.
 
 Layout at narrow windows: a tab bar whose tabs do not fit uses short names
@@ -1215,7 +1228,7 @@ and the family Triage named.
 
 ### Dump when suspicious activity is seen
 
-In **Run program > Triggers**, a core that cannot be taken because the process
+In **Run program > Dumps**, a core that cannot be taken because the process
 is gone is not an attempt: it is counted as skipped, noted in the run's notes
 with the reason, and the next match may still dump. The guest's refusal is
 explained in plain words ("The process had already exited, or had started over

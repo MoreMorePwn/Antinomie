@@ -333,12 +333,17 @@ impl Viewer {
                         ui,
                         "Search category, field or value",
                     ))
+                    .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                     .desired_width(crate::theme::plain_edit_width(260.0)),
             );
+            // The cross empties the box and, when a search is applied, ends it.
+            let cleared = crate::widgets::clear_button(ui, &edit, &mut self.search);
             let entered =
                 edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
             if ui.button("Search").clicked() || entered {
                 search = Some(self.search.trim().to_owned());
+            } else if cleared && !self.applied.is_empty() {
+                search = Some(String::new());
             }
             if (!self.category.is_empty() || !self.applied.is_empty() || !self.search.is_empty())
                 && ui.button("Clear").clicked()

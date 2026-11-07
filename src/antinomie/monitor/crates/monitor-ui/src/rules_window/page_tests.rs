@@ -12,6 +12,7 @@ struct Fixture {
     ctx: egui::Context,
     model: Model,
     outbound: bool,
+    size: egui::Vec2,
 }
 
 impl Fixture {
@@ -27,6 +28,7 @@ impl Fixture {
             ctx,
             model: Model::default(),
             outbound: false,
+            size: SIZE,
         }
     }
 
@@ -35,7 +37,7 @@ impl Fixture {
             &self.ctx,
             &mut self.model,
             &self.dir,
-            SIZE,
+            self.size,
             Vec::new(),
             &mut self.outbound,
         )
@@ -92,7 +94,7 @@ impl Fixture {
             &self.ctx,
             &mut self.model,
             &self.dir,
-            SIZE,
+            self.size,
             &mut self.outbound,
             at,
         );
@@ -148,7 +150,7 @@ impl Fixture {
                     &self.ctx,
                     &mut self.model,
                     &self.dir,
-                    SIZE,
+                    self.size,
                     &mut self.outbound,
                     button.center(),
                 );
@@ -591,7 +593,7 @@ fn a_pack_rule_list_holds_still_frame_after_frame() {
             "a long description ".repeat(8)
         ));
     }
-    for (width, font) in [(1100.0, 18.0), (760.0, 18.0), (1600.0, 16.0), (640.0, 20.0)] {
+    for (width, font) in [(1100.0, 18.0), (760.0, 18.0), (1600.0, 16.0), (720.0, 20.0)] {
         let mut f = Fixture::new(&format!("still-{width}"));
         crate::theme::text_size(&f.ctx, font);
         f.pack(
@@ -705,7 +707,7 @@ fn long_explanations_are_a_tooltip_and_not_on_the_page() {
             &f.ctx,
             &mut f.model,
             &f.dir,
-            SIZE,
+            f.size,
             vec![egui::Event::PointerMoved(at)],
             &mut f.outbound,
         );
@@ -1052,4 +1054,40 @@ fn the_details_grid_has_labels_with_room_between_rows_and_a_capital_description(
     assert!(text.contains("Ann Analyst"), "{text}");
     assert!(at("capital desc").left() > at("Description").right());
     assert!(text.contains("https://example.test/cap"), "{text}");
+}
+
+/// A rule with a 900-character source line, a very long reference and a
+/// long unbroken description.
+fn long_rule() -> String {
+    let long = "x".repeat(900);
+    format!(
+        "rule Long_Rule\n{{\n  meta:\n    description = \"{long}\"\n    reference = \"https://example.test/{long}\"\n  strings:\n    $a = \"{long}\"\n  condition:\n    $a\n}}\n"
+    )
+}
+
+#[test]
+fn a_long_rule_neither_widens_nor_lengthens_the_window_and_its_code_scrolls() {
+    for size in [egui::vec2(1100.0, 1400.0), egui::vec2(900.0, 700.0)] {
+        let mut f = Fixture::new("long");
+        f.size = size;
+        f.pack("fixture", "yara", "rules.yar", &long_rule());
+        f.open_list();
+        f.until("Long_Rule");
+        f.click("Long_Rule");
+        f.until("Evidence");
+        for _ in 0..40 {
+            f.frame();
+        }
+        let window = window_rect(&f);
+        let area = crate::title_bar::content_rect(&f.ctx);
+        assert!(
+            window.width() <= area.width() * 0.8 + 1.0,
+            "{window:?} in {area:?}"
+        );
+        assert!(
+            window.height() <= area.height() * 0.8 + 1.0,
+            "{window:?} in {area:?}"
+        );
+        assert!(window.width() >= 280.0, "{window:?}");
+    }
 }

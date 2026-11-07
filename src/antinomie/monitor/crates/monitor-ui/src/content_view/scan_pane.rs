@@ -206,7 +206,7 @@ impl ScanPane {
         }
         let mut open = true;
         let mut chosen = None;
-        egui::Window::new(self.title())
+        crate::widgets::capped(egui::Window::new(self.title()), ctx)
             .id(egui::Id::new((salt, "content-scan", self.title())))
             .open(&mut open)
             .default_size(egui::vec2(560.0, 440.0) + crate::widgets::frame_extra(ctx))

@@ -480,11 +480,13 @@ impl Window {
 
     /// The body of the Filters section of the file list.
     fn filters(&mut self, ui: &mut egui::Ui) {
-        ui.add(
+        let edit = ui.add(
             egui::TextEdit::singleline(&mut self.filter)
                 .hint_text(crate::theme::placeholder(ui, "Filter by path"))
+                .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                 .desired_width(f32::INFINITY),
         );
+        crate::widgets::clear_button(ui, &edit, &mut self.filter);
         ui.horizontal_wrapped(|ui| {
             for (label, flag, hover) in [
                 ("Hide stdio", &mut self.hide_standard_io, "Hide stdin, stdout, stderr"),

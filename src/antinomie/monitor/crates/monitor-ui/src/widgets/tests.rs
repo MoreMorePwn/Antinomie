@@ -617,3 +617,103 @@ fn a_mitre_row_draws_its_tactic_dot_on_the_middle_of_its_text() {
         }
     }
 }
+
+fn key(key: egui::Key) -> Vec<egui::Event> {
+    vec![egui::Event::Key {
+        key,
+        physical_key: Some(key),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    }]
+}
+
+#[test]
+fn a_filter_box_shows_its_cross_only_with_text_and_the_cross_and_esc_clear_it() {
+    let ctx = context();
+    let size = egui::vec2(500.0, 120.0);
+    let text = std::cell::RefCell::new(String::new());
+    let mut draw = |root: &mut egui::Ui| {
+        egui::CentralPanel::default().show(root, |ui| {
+            let mut value = text.borrow_mut();
+            let edit = ui.add(
+                egui::TextEdit::singleline(&mut *value)
+                    .hint_text("Filter")
+                    .margin(clear_margin(crate::theme::TEXT_EDIT_MARGIN))
+                    .desired_width(300.0),
+            );
+            clear_button(ui, &edit, &mut value);
+        });
+    };
+    let cross = cross_glyph();
+    let shown = |output: &egui::FullOutput| text_rects(output).into_iter().any(|(t, _)| t == cross);
+    run(&ctx, vec![], size, &mut draw);
+    let output = run(&ctx, vec![], size, &mut draw);
+    assert!(!shown(&output), "an empty box has no cross");
+    // Typed text brings the cross.
+    *text.borrow_mut() = "evil".into();
+    let output = run(&ctx, vec![], size, &mut draw);
+    assert!(shown(&output), "a box with text has a cross");
+    let at = text_rects(&output)
+        .into_iter()
+        .find(|(t, _)| *t == cross)
+        .unwrap()
+        .1
+        .center();
+    // The cross sits inside the box's right edge.
+    assert!(at.x > 250.0 && at.x < 330.0, "{at:?}");
+    click(&ctx, at, size, &mut draw);
+    assert_eq!(*text.borrow(), "");
+    let output = run(&ctx, vec![], size, &mut draw);
+    assert!(!shown(&output));
+    // Esc in the focused box clears it too.
+    *text.borrow_mut() = "again".into();
+    let output = run(&ctx, vec![], size, &mut draw);
+    let hint_at = egui::pos2(100.0, at.y);
+    click(&ctx, hint_at, size, &mut draw);
+    let _ = output;
+    run(&ctx, vec![], size, &mut draw);
+    run(&ctx, key(egui::Key::Escape), size, &mut draw);
+    assert_eq!(*text.borrow(), "", "Esc cleared the focused box");
+}
+
+fn cross_glyph() -> &'static str {
+    egui_phosphor::regular::X
+}
+
+#[test]
+fn a_window_never_takes_more_than_four_fifths_of_the_area_whatever_its_content() {
+    for size in [egui::vec2(1400.0, 900.0), egui::vec2(700.0, 500.0)] {
+        let ctx = context();
+        let long = "word ".repeat(1000);
+        let mut rect = egui::Rect::NOTHING;
+        for _ in 0..6 {
+            run(&ctx, vec![], size, |root| {
+                let ctx = root.ctx().clone();
+                let shown = window("A wide window")
+                    .id(egui::Id::new("wide"))
+                    .show(&ctx, |ui| {
+                        // Long wrapped text above a long list in its own scroll area.
+                        ui.add(egui::Label::new(long.as_str()).wrap());
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            for line in 0..200 {
+                                ui.label(format!("line {line}"));
+                            }
+                        });
+                    });
+                if let Some(shown) = shown {
+                    rect = shown.response.rect;
+                }
+            });
+        }
+        let area = crate::title_bar::content_rect(&ctx);
+        assert!(
+            rect.width() <= area.width() * 0.8 + 1.0,
+            "{rect:?} in {area:?}"
+        );
+        // egui does not clip a window's content to its height: a body caps
+        // its own list with a scroll area (the rules window does); the
+        // width is what the window itself holds.
+        assert!(rect.width() >= 280.0, "{rect:?}");
+    }
+}

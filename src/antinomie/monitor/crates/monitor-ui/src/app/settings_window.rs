@@ -362,8 +362,10 @@ impl MonitorApp {
                     let mut filter: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
                     let edit = ui.add(
                         egui::TextEdit::singleline(&mut filter)
+                            .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                             .hint_text(crate::theme::placeholder(ui, "Filter zones")),
                     );
+                    crate::widgets::clear_button(ui, &edit, &mut filter);
                     if !edit.has_focus() && filter.is_empty() {
                         edit.request_focus();
                     }
@@ -594,6 +596,13 @@ impl MonitorApp {
                 )
                 .on_hover_text(
                     "Start asks first when the VM has no snapshot, because then nothing can restore the disk and what the program changes stays in it. Turned off by Don't ask me again in that question; turn it back on here. Applies at once.",
+                );
+                ui.checkbox(
+                    &mut self.settings.warn_clear_activity,
+                    "Ask before clearing Activity",
+                )
+                .on_hover_text(
+                    "Clear in Activity asks first, because the saved log cannot be brought back. Turned off by Don't ask me again in that question; turn it back on here. Applies at once.",
                 );
             });
             ui.end_row();

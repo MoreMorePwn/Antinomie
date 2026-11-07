@@ -18,6 +18,7 @@ fn native_rules_window_fixture() {
         model: Model,
         dir: std::path::PathBuf,
         select: bool,
+        filter: String,
         frame: u64,
         deadline: std::time::Instant,
     }
@@ -42,6 +43,11 @@ fn native_rules_window_fixture() {
                     list.select(1);
                 }
             }
+            if self.frame == 70 && !self.filter.is_empty() {
+                if let Some(list) = self.model.rule_lists.first_mut() {
+                    list.set_filter_for_test(&self.filter);
+                }
+            }
             self.model.show_rule_lists(&ctx, &self.dir);
             if std::time::Instant::now() > self.deadline {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -63,7 +69,16 @@ fn native_rules_window_fixture() {
     let dir = std::env::temp_dir().join(format!("ant-rules-qa-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    install_fixture_pack(&dir, "fixture", "yara", "rules.yar", RULES);
+    // ANTINOMIE_QA_LONG = 1 adds a rule with a very long source line and
+    // reference; ANTINOMIE_QA_FILTER types that text into the list's filter.
+    let rules = if var("ANTINOMIE_QA_LONG") == "1" {
+        let long = "x".repeat(900);
+        format!("{RULES}\nrule Long_Rule\n{{\n  meta:\n    description = \"{long}\"\n    reference = \"https://example.test/{long}\"\n  strings:\n    $a = \"{long}\"\n  condition:\n    $a\n}}\n")
+    } else {
+        RULES.to_owned()
+    };
+    install_fixture_pack(&dir, "fixture", "yara", "rules.yar", &rules);
+    let filter = var("ANTINOMIE_QA_FILTER");
     let select = var("ANTINOMIE_QA_SELECT") == "1";
     eframe::run_native(
         "Antinomie Rules QA",
@@ -83,6 +98,7 @@ fn native_rules_window_fixture() {
                 model: Model::default(),
                 dir,
                 select,
+                filter,
                 frame: 0,
                 deadline: std::time::Instant::now() + std::time::Duration::from_secs(seconds),
             }))

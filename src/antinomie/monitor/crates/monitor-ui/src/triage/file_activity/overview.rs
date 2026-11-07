@@ -261,11 +261,13 @@ impl Window {
             return;
         };
         ui.horizontal_wrapped(|ui| {
-            ui.add(
+            let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
                     .hint_text(theme::placeholder(ui, "Filter by path"))
+                    .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                     .desired_width(260.0),
             );
+            crate::widgets::clear_button(ui, &edit, &mut self.filter);
             for (label, flag, hover) in [
                 (
                     "Hide stdio",

@@ -157,7 +157,7 @@ impl Harness {
         self.time += 0.05;
         let output = self.ctx.run_ui(
             egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1300.0, 800.0))),
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1500.0, 1100.0))),
                 events,
                 time: Some(self.time),
                 ..Default::default()

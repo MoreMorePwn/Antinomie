@@ -238,6 +238,34 @@ fn native_ui_polish_fixture() {
                     .process(b"analyst@vm:~$ ./demo\r\nhello from the guest\r\nanalyst@vm:~$ ");
                 app.terminals.insert("term-shot".into(), terminal);
             }
+            // ANTINOMIE_QA_EXIT = 1: the second and third run end with exit 1
+            // and a signal, to show Finished in amber next to the green one.
+            if var("ANTINOMIE_QA_EXIT") == "1" {
+                for (at, root_exit) in [
+                    antinomie_monitor_core::WaitStatus::Exited { code: 0 },
+                    antinomie_monitor_core::WaitStatus::Exited { code: 1 },
+                    antinomie_monitor_core::WaitStatus::Signaled {
+                        signal: 9,
+                        core_dumped: false,
+                    },
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if let Some(run) = app.history.get_mut(at) {
+                        run.execution = Some(antinomie_monitor_core::RunExecution {
+                            generation: 1,
+                            live_task_count: 0,
+                            pending_async_count: 0,
+                            flags: 0,
+                            root_wait_status: None,
+                            root_exit: Some(root_exit),
+                            async_loss_count: 0,
+                            total_task_count: 1,
+                        });
+                    }
+                }
+            }
             app.settings.set_theme(theme_choice);
             app.settings.show_fps = var("ANTINOMIE_QA_FPS") == "1";
             theme::apply_theme(&cc.egui_ctx, theme_choice);
@@ -267,6 +295,7 @@ fn native_ui_polish_fixture() {
                 }
                 "rules" => app.open_library(crate::workspace::LibraryPage::Rules),
                 "about" => app.about_open = true,
+                "launch" => app.launch_open = true,
                 "perf" => app.performance.open = true,
                 "settings_analysis" => {
                     app.settings_open = true;

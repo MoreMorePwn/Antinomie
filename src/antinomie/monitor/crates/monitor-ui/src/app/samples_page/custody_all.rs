@@ -139,14 +139,16 @@ impl CustodyAll {
         ui.add_space(4.0);
         let mut changed = false;
         ui.horizontal_wrapped(|ui| {
-            ui.add(
+            let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.query)
                     .hint_text(crate::theme::placeholder(
                         ui,
                         "Sample, SHA-256, actor or detail",
                     ))
+                    .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                     .desired_width(crate::theme::plain_edit_width(300.0)),
             );
+            crate::widgets::clear_button(ui, &edit, &mut self.query);
             for (key, label) in KINDS {
                 let on = self.kinds.contains(key);
                 if widgets::toggle_chip(ui, label, on || self.kinds.is_empty(), None).clicked() {

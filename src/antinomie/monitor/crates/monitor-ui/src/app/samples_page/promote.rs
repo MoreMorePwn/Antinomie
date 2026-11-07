@@ -183,7 +183,7 @@ impl Promote {
         }
         let mut open = self.open;
         let mut start = false;
-        egui::Window::new("Add to Samples")
+        crate::widgets::capped(egui::Window::new("Add to Samples"), ctx)
             .id(egui::Id::new("sample_promote"))
             .open(&mut open)
             .collapsible(false)

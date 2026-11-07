@@ -694,3 +694,67 @@ fn parents_and_children_come_from_origins_that_name_a_parent() {
     assert_eq!(library.all_tags().unwrap()[&child].len(), 1);
     fs::remove_dir_all(root).unwrap();
 }
+
+/// The name a sample is kept under, for `new` and the bytes.
+fn name_of(label: &str, bytes: &[u8], new: NewSample) -> String {
+    let root = temp(label);
+    let mut library = Library::open(&root).unwrap();
+    let added = library.add_bytes(bytes, new).unwrap();
+    let name = library.get(&added.sha256).unwrap().unwrap().name;
+    let _ = fs::remove_dir_all(root);
+    name
+}
+
+#[test]
+fn an_unknown_or_hash_only_name_becomes_the_family_or_type_and_twelve_hex_digits() {
+    let bytes = elf();
+    let hash = sha(&bytes);
+    let twelve = &hash[..12];
+    let info = |file_name: &str, signature: Option<&str>| SampleInfo {
+        file_name: file_name.into(),
+        signature: signature.map(Into::into),
+        ..SampleInfo::default()
+    };
+    let download = |file_name: &str, signature: Option<&str>| NewSample {
+        name: file_name.into(),
+        origin: NewOrigin {
+            name: file_name.into(),
+            ..NewOrigin::default()
+        },
+        info: Some(info(file_name, signature)),
+        ..NewSample::default()
+    };
+    // MalwareBazaar's "na" with a family, and without one (the detected type).
+    assert_eq!(
+        name_of("na-family", &bytes, download("na", Some("Mirai"))),
+        format!("Mirai-{twelve}")
+    );
+    assert_eq!(
+        name_of("na-type", &bytes, download("na", None)),
+        format!("elf-{twelve}")
+    );
+    // A real name is kept as it is.
+    assert_eq!(
+        name_of("real", &bytes, download("dropper.elf", Some("Mirai"))),
+        "dropper.elf"
+    );
+    // A file added under its own full SHA-256 (with or without an extension)
+    // is as anonymous as no name.
+    for named in [hash.clone(), format!("{hash}.bin")] {
+        assert_eq!(
+            name_of(
+                "hashname",
+                &bytes,
+                NewSample {
+                    origin: NewOrigin {
+                        path: format!("/tmp/{named}"),
+                        ..NewOrigin::default()
+                    },
+                    ..NewSample::default()
+                }
+            ),
+            format!("elf-{twelve}"),
+            "{named}"
+        );
+    }
+}

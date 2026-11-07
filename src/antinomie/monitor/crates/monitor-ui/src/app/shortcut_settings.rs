@@ -94,11 +94,13 @@ impl MonitorApp {
             );
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.add(
+            let edit = ui.add(
                 widgets::text_field(&mut self.shortcut_ui.filter)
+                    .margin(crate::widgets::clear_margin(theme::TEXT_EDIT_MARGIN))
                     .hint_text(theme::placeholder(ui, "Find an action or a key"))
                     .desired_width(theme::edit_width(220.0)),
             );
+            crate::widgets::clear_button(ui, &edit, &mut self.shortcut_ui.filter);
             let any = !self.settings.shortcuts.is_empty();
             if ui
                 .add_enabled(any, egui::Button::new("Reset all"))

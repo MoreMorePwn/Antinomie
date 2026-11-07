@@ -57,15 +57,31 @@ pub(super) struct Asked {
     pub remove: bool,
 }
 
+/// A value as text that wraps even inside a word: a long reference or hash
+/// has no space to break at, and must not widen the window.
+fn wrapped(ui: &egui::Ui, text: &str, color: egui::Color32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::simple_singleline(
+        text.to_owned(),
+        egui::TextStyle::Body.resolve(ui.style()),
+        color,
+    );
+    job.wrap = egui::text::TextWrapping {
+        break_anywhere: true,
+        max_rows: usize::MAX,
+        ..Default::default()
+    };
+    job
+}
+
 /// One value cell: a link when it is a web address, wrapped text otherwise.
 fn value(ui: &mut egui::Ui, text: &str) {
     if text.starts_with("http://") || text.starts_with("https://") {
         ui.add(egui::Hyperlink::from_label_and_url(
-            RichText::new(text).color(theme::palette().accent),
+            wrapped(ui, text, theme::palette().accent),
             text,
         ));
     } else {
-        ui.add(egui::Label::new(RichText::new(text).color(theme::text())).wrap());
+        ui.add(egui::Label::new(wrapped(ui, text, theme::text())).wrap());
     }
 }
 
@@ -167,9 +183,17 @@ pub(super) fn code_block(ui: &mut egui::Ui, text: &str) {
         .inner_margin(egui::Margin::same(8))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.add(
-                egui::Label::new(RichText::new(text).monospace().color(theme::text()))
-                    .selectable(true),
-            );
+            // Long lines scroll sideways inside the box; they never widen
+            // the pane or the window.
+            egui::ScrollArea::horizontal()
+                .id_salt("rule-code")
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(RichText::new(text).monospace().color(theme::text()))
+                            .wrap_mode(egui::TextWrapMode::Extend)
+                            .selectable(true),
+                    );
+                });
         });
 }

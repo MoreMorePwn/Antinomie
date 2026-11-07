@@ -217,6 +217,12 @@ impl RuleList {
         format!("rules_list:{}", self.key)
     }
 
+    /// Types `text` into the filter box, for the screenshot fixture.
+    #[cfg(test)]
+    pub(super) fn set_filter_for_test(&mut self, text: &str) {
+        self.filter = text.to_owned();
+    }
+
     fn apply_filter(&mut self) {
         self.applied = self.filter.clone();
         let needle = self.filter.to_ascii_lowercase();
@@ -277,8 +283,10 @@ impl RuleList {
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
                     .desired_width(theme::plain_edit_width(260.0))
+                    .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                     .hint_text(theme::placeholder(ui, "filter e.g. credential")),
             );
+            crate::widgets::clear_button(ui, &response, &mut self.filter);
             if response.changed() || self.applied != self.filter {
                 self.apply_filter();
             }
@@ -453,8 +461,8 @@ impl Model {
                 .default_pos(egui::pos2(area.left() + 16.0, area.top() + 64.0))
                 .default_size(default_size(area))
                 .min_size([
-                    MIN_SIZE.x.min(area.width() - 24.0),
-                    MIN_SIZE.y.min(area.height() - 24.0),
+                    MIN_SIZE.x.min(crate::widgets::cap_size(area).x),
+                    MIN_SIZE.y.min(crate::widgets::cap_size(area).y),
                 ])
                 .resizable(true)
                 .show(ctx, |ui| {

@@ -131,8 +131,10 @@ impl Terminal {
         let field = ui.add(
             egui::TextEdit::singleline(&mut state.find)
                 .hint_text(crate::theme::placeholder(ui, "Find"))
+                .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                 .desired_width(crate::theme::plain_edit_width(140.0)),
         );
+        crate::widgets::clear_button(ui, &field, &mut state.find);
         self.refresh_matches();
         let state = &mut self.raw_view;
         let count = state.matches.len();

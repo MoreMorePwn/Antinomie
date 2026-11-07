@@ -177,8 +177,9 @@ fn state_tone(run: &RunSummary) -> Option<Tone> {
         RunState::Finished => match ending(run)? {
             Ending::Success => Some(Tone::Good),
             Ending::TimeLimit => Some(Tone::Info),
-            Ending::Signal { .. } => Some(Tone::Warn),
-            Ending::Exit(_) | Ending::Unknown | Ending::Stopped => Some(Tone::Neutral),
+            // Finished, but the program did not succeed: amber, as a crash is.
+            Ending::Signal { .. } | Ending::Exit(_) => Some(Tone::Warn),
+            Ending::Unknown | Ending::Stopped => Some(Tone::Neutral),
         },
     }
 }
@@ -246,6 +247,46 @@ mod tests {
             describe(&stopped, end, Some(end), None),
             "Stopped by the user after 3 min 52 s"
         );
+    }
+
+    #[test]
+    fn a_finished_run_that_did_not_exit_zero_is_amber_and_the_rest_keep_their_colours() {
+        let with_exit = |state, exit: Option<WaitStatus>| {
+            let mut run = finished();
+            run.state = state;
+            if let Some(execution) = run.execution.as_mut() {
+                execution.root_exit = exit;
+            }
+            color(&run)
+        };
+        let warn = crate::widgets::fg_or_muted(Some(Tone::Warn));
+        let good = crate::widgets::fg_or_muted(Some(Tone::Good));
+        assert_eq!(
+            with_exit(RunState::Finished, Some(WaitStatus::Exited { code: 0 })),
+            good
+        );
+        assert_eq!(
+            with_exit(RunState::Finished, Some(WaitStatus::Exited { code: 1 })),
+            warn
+        );
+        assert_eq!(
+            with_exit(
+                RunState::Finished,
+                Some(WaitStatus::Signaled {
+                    signal: 9,
+                    core_dumped: false
+                })
+            ),
+            warn
+        );
+        assert_ne!(good, warn);
+        // Failed and Interrupted keep theirs; Interrupted with exit 0 is not amber.
+        let error = crate::widgets::fg_or_muted(Some(Tone::Error));
+        assert_eq!(
+            with_exit(RunState::Interrupted, Some(WaitStatus::Exited { code: 1 })),
+            error
+        );
+        assert_eq!(with_exit(RunState::FailedToStart, None), error);
     }
 
     #[test]
