@@ -399,7 +399,7 @@ pub(in crate::app::samples_page) fn table(
                                 antinomie_monitor_core::byte_size::short_size,
                             ));
                         });
-                        row.col(|ui| availability_chip(ui, output));
+                        row.col(|ui| availability_chip(ui, output, table.run_label.is_some()));
                         row.col(|ui| {
                             let buttons = |ui: &mut egui::Ui| {
                                 artifact_buttons(
@@ -506,12 +506,16 @@ fn artifact_widths(ui: &mut egui::Ui, outputs: &[Output]) -> ([f32; 6], bool, f3
 }
 
 /// Where the artifact is now.
-fn availability_chip(ui: &mut egui::Ui, output: &Output) {
+fn availability_chip(ui: &mut egui::Ui, output: &Output, own_page: bool) {
     ui.horizontal(|ui| match &output.availability {
         Availability::InRun => {
             widgets::chip(
                 ui,
-                format!("In run {} folder", output.number),
+                if own_page {
+                    "In the run's folder".to_owned()
+                } else {
+                    format!("In run {} folder", output.number)
+                },
                 if output.state == "Complete" {
                     Tone::Good
                 } else {
