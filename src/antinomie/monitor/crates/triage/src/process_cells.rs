@@ -4,7 +4,7 @@
 use super::process_record::CredStep;
 
 /// The last component of a path.
-pub(super) fn file_name(path: &str) -> &str {
+pub fn file_name(path: &str) -> &str {
     path.rsplit('/')
         .find(|part| !part.is_empty())
         .unwrap_or(path)
@@ -12,7 +12,7 @@ pub(super) fn file_name(path: &str) -> &str {
 
 /// A task in a Files table: "name (412 \u{b7} 412)", the process and thread
 /// as bare numbers, as the Process tree shows them.
-pub(super) fn task_label(pid: u32, tid: u32, image: Option<&str>) -> String {
+pub fn task_label(pid: u32, tid: u32, image: Option<&str>) -> String {
     let name = match image {
         Some("?" | "") | None => "unknown",
         Some(image) => file_name(image),
@@ -21,7 +21,7 @@ pub(super) fn task_label(pid: u32, tid: u32, image: Option<&str>) -> String {
 }
 
 /// Applets BusyBox runs by the name it was called with.
-const APPLETS: &[&str] = &[
+pub const APPLETS: &[&str] = &[
     "ash",
     "awk",
     "base64",
@@ -104,7 +104,7 @@ const APPLETS: &[&str] = &[
 
 /// Names of one program under its aliases and versions: `python3.13` and
 /// `python3` are `python`; every shell is `sh`; `gawk` and `mawk` are `awk`.
-fn family(name: &str) -> String {
+pub fn family(name: &str) -> String {
     let name = name.to_ascii_lowercase();
     let mut base = name.as_str();
     // A version suffix: digits and dots after a letter, with an optional dash.
@@ -127,7 +127,7 @@ fn family(name: &str) -> String {
 /// The name a process gave itself in argv[0]: no path, no login-shell dash,
 /// and only its first word (daemons rewrite it to a title such as
 /// "nginx: master process").
-fn called(argv0: &str) -> &str {
+pub fn called(argv0: &str) -> &str {
     let word = argv0.split_whitespace().next().unwrap_or("");
     let word = word.trim_end_matches(':');
     file_name(word.trim_start_matches('-'))
@@ -135,7 +135,7 @@ fn called(argv0: &str) -> &str {
 
 /// What argv[0] says against the image the kernel loaded: `Some(argv0)` when
 /// the file names do not match and no known pairing explains it.
-pub(super) fn argv0_mismatch<'a>(exe: &str, argv: &'a [String]) -> Option<&'a str> {
+pub fn argv0_mismatch<'a>(exe: &str, argv: &'a [String]) -> Option<&'a str> {
     let argv0 = argv.first()?.as_str();
     if exe.is_empty() || exe == "?" || called(argv0).is_empty() {
         return None;
@@ -157,22 +157,22 @@ pub(super) fn argv0_mismatch<'a>(exe: &str, argv: &'a [String]) -> Option<&'a st
 }
 
 /// Whether a name is one BusyBox applets or common system tools answer to.
-pub(super) fn is_applet(name: &str) -> bool {
+pub fn is_applet(name: &str) -> bool {
     APPLETS.contains(&name)
 }
 
 /// The sentence for a mismatch.
-pub(super) fn mismatch_text(argv0: &str, exe: &str) -> String {
+pub fn mismatch_text(argv0: &str, exe: &str) -> String {
     format!("This process calls itself \"{argv0}\", but the kernel loaded {exe}.")
 }
 
 /// "sh → busybox → demo-all": the file name of each image the task ran.
 /// The gap that stands for an argument that was not captured whole.
-const GAP: &str = "\u{2026}";
+pub const GAP: &str = "\u{2026}";
 
 /// One argument as a shell would need it written: bare when it has only
 /// plain characters, else in single quotes; the gap stays as it is.
-pub(super) fn shell_quote(argument: &str) -> String {
+pub fn shell_quote(argument: &str) -> String {
     let plain = |c: char| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c);
     if argument == GAP || (!argument.is_empty() && argument.chars().all(plain)) {
         argument.to_owned()
@@ -182,7 +182,7 @@ pub(super) fn shell_quote(argument: &str) -> String {
 }
 
 /// The Argv cell: every argument shell-quoted, so one with a space stays one.
-pub(super) fn argv_line(argv: &[String]) -> String {
+pub fn argv_line(argv: &[String]) -> String {
     argv.iter()
         .map(|argument| shell_quote(argument))
         .collect::<Vec<_>>()
@@ -191,7 +191,7 @@ pub(super) fn argv_line(argv: &[String]) -> String {
 
 /// The Argv hover: `argv[i] = value` per argument, then the count and how
 /// many were cut short. Past `LISTED` arguments the rest is counted.
-pub(super) fn argv_hover(argv: &[String]) -> Option<String> {
+pub fn argv_hover(argv: &[String]) -> Option<String> {
     const LISTED: usize = 40;
     if argv.is_empty() {
         return None;
@@ -218,7 +218,7 @@ pub(super) fn argv_hover(argv: &[String]) -> Option<String> {
     Some(text)
 }
 
-pub(super) fn exec_chain(images: &[String]) -> String {
+pub fn exec_chain(images: &[String]) -> String {
     let mut names: Vec<&str> = Vec::new();
     for image in images {
         let name = file_name(image);
@@ -230,7 +230,7 @@ pub(super) fn exec_chain(images: &[String]) -> String {
 }
 
 /// "+1.204 s": where the task started, from the start of the run.
-pub(super) fn relative(ns: Option<u64>, start: Option<u64>) -> String {
+pub fn relative(ns: Option<u64>, start: Option<u64>) -> String {
     match (ns, start) {
         (Some(ns), Some(start)) => format!("+{:.3} s", ns.saturating_sub(start) as f64 / 1e9),
         _ => "\u{2014}".into(),
@@ -238,7 +238,7 @@ pub(super) fn relative(ns: Option<u64>, start: Option<u64>) -> String {
 }
 
 /// How long the task lived, or "running" when no exit was recorded.
-pub(super) fn lifetime(first: Option<u64>, last: Option<u64>, ended: bool) -> String {
+pub fn lifetime(first: Option<u64>, last: Option<u64>, ended: bool) -> String {
     if !ended {
         return "running".into();
     }
@@ -248,7 +248,7 @@ pub(super) fn lifetime(first: Option<u64>, last: Option<u64>, ended: bool) -> St
     duration(last.saturating_sub(first))
 }
 
-pub(super) fn duration(ns: u64) -> String {
+pub fn duration(ns: u64) -> String {
     let ms = ns / 1_000_000;
     match ns {
         0..=999_999 => format!("{} \u{b5}s", ns / 1000),
@@ -267,7 +267,7 @@ pub(super) fn duration(ns: u64) -> String {
 
 /// The task's state as a reader says it: "exit 0", "killed by SIGKILL (from
 /// pid 9)", "in read() at end".
-pub(super) fn outcome(state: &str, in_call: Option<&str>, killed_by: Option<u32>) -> String {
+pub fn outcome(state: &str, in_call: Option<&str>, killed_by: Option<u32>) -> String {
     if let Some(call) = in_call {
         return format!("in {call}() at end");
     }
@@ -292,7 +292,7 @@ pub(super) fn outcome(state: &str, in_call: Option<&str>, killed_by: Option<u32>
 }
 
 /// The user id of a task: "1000", or "1000 \u{2192} 0" when the effective id differs.
-pub(super) fn user(step: Option<&CredStep>) -> String {
+pub fn user(step: Option<&CredStep>) -> String {
     match step {
         None => "\u{2014}".into(),
         Some(step) if step.uid == step.euid => step.uid.to_string(),
@@ -301,7 +301,7 @@ pub(super) fn user(step: Option<&CredStep>) -> String {
 }
 
 /// The name of a user id, when it is one every Linux system has.
-fn known_user(id: u32) -> Option<&'static str> {
+pub fn known_user(id: u32) -> Option<&'static str> {
     match id {
         0 => Some("root"),
         65534 => Some("nobody"),
@@ -311,7 +311,7 @@ fn known_user(id: u32) -> Option<&'static str> {
 
 /// The hover of the User ID cell: the ids in words, and the name of each that
 /// is known.
-pub(super) fn user_hover(step: &CredStep) -> String {
+pub fn user_hover(step: &CredStep) -> String {
     let named = |id: u32| match known_user(id) {
         Some(name) => format!("{id} ({name})"),
         None => id.to_string(),
@@ -328,7 +328,7 @@ pub(super) fn user_hover(step: &CredStep) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     fn warns(exe: &str, argv: &[&str]) -> bool {
@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn the_user_is_an_id_and_the_name_is_on_hover() {
-        use crate::triage::process_record::CredStep;
+        use crate::process_record::CredStep;
         let step = |uid, euid| CredStep {
             ns: 0,
             uid,

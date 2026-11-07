@@ -11,26 +11,26 @@ use antinomie_monitor_core::kernel_notes::FileKey;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Bound on every table that grows with the run.
-const LIMIT: usize = 65_536;
-const WINDOW_ITEMS: usize = 8_192;
+pub const LIMIT: usize = 65_536;
+pub const WINDOW_ITEMS: usize = 8_192;
 
-const NS: u64 = 1_000_000_000;
-const MASS_DELETE: (u64, usize) = (30 * NS, 100);
-const RANSOM: (u64, usize) = (30 * NS, 20);
+pub const NS: u64 = 1_000_000_000;
+pub const MASS_DELETE: (u64, usize) = (30 * NS, 100);
+pub const RANSOM: (u64, usize) = (30 * NS, 20);
 /// Files rewritten in place and/or renamed to one new extension within 60 s.
-const MASS_REWRITE: (u64, usize) = (60 * NS, 10);
+pub const MASS_REWRITE: (u64, usize) = (60 * NS, 10);
 /// Renames to one extension that are enough alone, and with a rewrite.
-const MASS_RENAMES: (usize, usize) = (10, 5);
+pub const MASS_RENAMES: (usize, usize) = (10, 5);
 /// Files rewritten in place, with no rename, that are enough alone.
-const MASS_INPLACE: (usize, usize) = (100, 5);
-const FILE_SEARCH: (u64, usize) = (60 * NS, 200);
-const PROCESSES: usize = 10;
-const DOCUMENTS: usize = 50;
-const NOTE_DIRECTORIES: usize = 3;
+pub const MASS_INPLACE: (usize, usize) = (100, 5);
+pub const FILE_SEARCH: (u64, usize) = (60 * NS, 200);
+pub const PROCESSES: usize = 10;
+pub const DOCUMENTS: usize = 50;
+pub const NOTE_DIRECTORIES: usize = 3;
 
 /// Items seen within a span of time.
-pub(super) struct Window<T> {
-    items: VecDeque<(u64, T)>,
+pub struct Window<T> {
+    pub items: VecDeque<(u64, T)>,
 }
 
 impl<T> Default for Window<T> {
@@ -42,7 +42,7 @@ impl<T> Default for Window<T> {
 }
 
 impl<T: Ord + Clone> Window<T> {
-    pub(super) fn push(&mut self, now: u64, span: u64, item: T) {
+    pub fn push(&mut self, now: u64, span: u64, item: T) {
         while self
             .items
             .front()
@@ -56,19 +56,19 @@ impl<T: Ord + Clone> Window<T> {
         self.items.push_back((now, item));
     }
 
-    pub(super) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.items.len()
     }
 
     /// Items newer than `span` before `now`.
-    pub(super) fn items_since(&self, now: u64, span: u64) -> impl Iterator<Item = &T> {
+    pub fn items_since(&self, now: u64, span: u64) -> impl Iterator<Item = &T> {
         self.items
             .iter()
             .filter(move |(time, _)| now.saturating_sub(*time) <= span)
             .map(|(_, item)| item)
     }
 
-    pub(super) fn distinct(&self) -> usize {
+    pub fn distinct(&self) -> usize {
         self.items
             .iter()
             .map(|(_, item)| item)
@@ -76,14 +76,14 @@ impl<T: Ord + Clone> Window<T> {
             .len()
     }
 
-    pub(super) fn items(&self) -> impl Iterator<Item = &T> {
+    pub fn items(&self) -> impl Iterator<Item = &T> {
         self.items.iter().map(|(_, item)| item)
     }
 }
 
 /// What is true of one thread: its own first call, span and end.
 #[derive(Default)]
-pub(super) struct Thread {
+pub struct Thread {
     /// Whether the first call seen from the thread was an exec.
     pub first_exec: Option<bool>,
     pub first_ns: u64,
@@ -93,7 +93,7 @@ pub(super) struct Thread {
 
 /// Files the C library's name resolution reads on every lookup. Reading them
 /// again and again is a program resolving names, not looking at the machine.
-const RESOLVER_CONFIG: &[&str] = &[
+pub const RESOLVER_CONFIG: &[&str] = &[
     "/etc/resolv.conf",
     "/etc/hosts",
     "/etc/nsswitch.conf",
@@ -105,31 +105,31 @@ const RESOLVER_CONFIG: &[&str] = &[
 /// id): a program that spreads its work over worker threads is still one
 /// program. A flag that ends in `_done` means the rule already fired.
 #[derive(Default)]
-pub(super) struct Task {
+pub struct Task {
     pub ssh_hosts_read: bool,
     /// Under `/proc`: pids whose process files were opened.
     pub proc_pids: BTreeSet<u32>,
-    proc_done: bool,
+    pub proc_done: bool,
     /// Reads of the resolver's configuration (see `RESOLVER_CONFIG`).
-    resolver_reads: u32,
+    pub resolver_reads: u32,
     pub dirs: Window<String>,
-    search_done: bool,
-    documents: BTreeSet<String>,
-    sweep_done: bool,
+    pub search_done: bool,
+    pub documents: BTreeSet<String>,
+    pub sweep_done: bool,
     pub deleted: Window<String>,
-    delete_done: bool,
+    pub delete_done: bool,
     pub renamed: Window<(String, String)>,
-    ransom_done: bool,
+    pub ransom_done: bool,
     /// Files the run did not make that were written or cut in place.
-    rewrites: Window<String>,
+    pub rewrites: Window<String>,
     /// Source file and new extension of renames to a different extension.
-    moved: Window<(String, String)>,
-    mass_done: bool,
-    notes: BTreeMap<String, BTreeSet<String>>,
-    note_done: BTreeSet<String>,
-    passwd: bool,
-    group: bool,
-    user_done: bool,
+    pub moved: Window<(String, String)>,
+    pub mass_done: bool,
+    pub notes: BTreeMap<String, BTreeSet<String>>,
+    pub note_done: BTreeSet<String>,
+    pub passwd: bool,
+    pub group: bool,
+    pub user_done: bool,
     /// The task made a network call or wrote a file.
     pub active: bool,
     pub kills: Window<u32>,
@@ -157,7 +157,7 @@ pub(super) struct Task {
 impl Task {
     /// Whether the files rewritten and renamed lately add up to a ransomware
     /// pass: renamed to one new extension, or rewritten in place on a large scale.
-    fn mass_check(&mut self, now: u64, out: &mut Vec<Hit>) {
+    pub fn mass_check(&mut self, now: u64, out: &mut Vec<Hit>) {
         let total = self.rewrites.len() + self.moved.len();
         if total < MASS_REWRITE.1 || !total.is_multiple_of(2) {
             return;
@@ -168,7 +168,7 @@ impl Task {
         }
     }
 
-    fn mass_rewrite(&self, now: u64) -> Option<Hit> {
+    pub fn mass_rewrite(&self, now: u64) -> Option<Hit> {
         let span = MASS_REWRITE.0;
         let rewritten: BTreeSet<&String> = self.rewrites.items_since(now, span).collect();
         let mut by_extension: BTreeMap<&str, BTreeSet<&String>> = BTreeMap::new();
@@ -225,7 +225,7 @@ impl Task {
 
 /// A task that reached an address with its own calls.
 #[derive(Clone)]
-pub(super) struct Contact {
+pub struct Contact {
     pub cookie: u64,
     pub pid: u32,
     pub tid: u32,
@@ -233,7 +233,7 @@ pub(super) struct Contact {
 }
 
 impl Contact {
-    pub(super) fn of(cx: &Ctx) -> Self {
+    pub fn of(cx: &Ctx) -> Self {
         Self {
             cookie: cx.call.task_cookie,
             pid: cx.event.pid,
@@ -244,7 +244,7 @@ impl Contact {
 }
 
 #[derive(Default)]
-pub(super) struct State {
+pub struct State {
     /// Connections and executed programs for the IOC window.
     pub ioc: super::ioc::Log,
     /// Addresses the run's calls connected or sent to, with the first task to do so.
@@ -260,7 +260,7 @@ pub(super) struct State {
     pub cloud_profile: bool,
     pub written: BTreeSet<String>,
     /// Files the run made (a create the call classification saw).
-    created: BTreeSet<String>,
+    pub created: BTreeSet<String>,
     pub written_names: BTreeSet<String>,
     pub written_keys: BTreeSet<FileKey>,
     /// Files a compiler started by the run wrote.
@@ -269,10 +269,10 @@ pub(super) struct State {
     pub images: BTreeMap<String, BTreeSet<u64>>,
     pub image_keys: BTreeMap<FileKey, BTreeSet<u64>>,
     /// Per process, by thread group id.
-    tasks: BTreeMap<u64, Task>,
+    pub tasks: BTreeMap<u64, Task>,
     /// Per thread, by task cookie.
-    threads: BTreeMap<u64, Thread>,
-    overflow: Task,
+    pub threads: BTreeMap<u64, Thread>,
+    pub overflow: Task,
     /// Tasks of Antinomie itself, which the rules leave alone.
     pub app_tasks: BTreeSet<u64>,
     /// Tasks that entered a user namespace of their own.
@@ -285,7 +285,7 @@ pub(super) struct State {
 }
 
 impl State {
-    pub(super) fn task(&mut self, cx: &Ctx) -> &mut Task {
+    pub fn task(&mut self, cx: &Ctx) -> &mut Task {
         let process = u64::from(cx.event.pid);
         if self.tasks.len() >= LIMIT && !self.tasks.contains_key(&process) {
             return &mut self.overflow;
@@ -294,19 +294,19 @@ impl State {
     }
 
     /// A fresh state for a run whose program Static analysis found packed.
-    pub(super) fn with_packed(packed: Option<super::engine::PackedImage>) -> Self {
+    pub fn with_packed(packed: Option<super::engine::PackedImage>) -> Self {
         Self {
             packed,
             ..Self::default()
         }
     }
 
-    pub(super) fn threads(&self) -> &BTreeMap<u64, Thread> {
+    pub fn threads(&self) -> &BTreeMap<u64, Thread> {
         &self.threads
     }
 
     /// Bookkeeping after a call has been judged.
-    pub(super) fn track(&mut self, cx: &Ctx) {
+    pub fn track(&mut self, cx: &Ctx) {
         self.bpf.observe(cx.call);
         let time = cx.time();
         let root = cx.event.root_task_cookie;
@@ -359,7 +359,7 @@ impl State {
     }
 
     /// The call changed `path`: remember that the run wrote it.
-    pub(super) fn wrote(&mut self, cx: &Ctx, path: &str, touch: &Touch, out: &mut Vec<Hit>) {
+    pub fn wrote(&mut self, cx: &Ctx, path: &str, touch: &Touch, out: &mut Vec<Hit>) {
         if touch.op == Op::Created && self.created.len() < LIMIT {
             self.created.insert(path.to_owned());
         }
@@ -393,7 +393,7 @@ impl State {
     }
 
     /// A file was deleted or moved away.
-    pub(super) fn removed(&mut self, cx: &Ctx, path: &str, touch: &Touch, out: &mut Vec<Hit>) {
+    pub fn removed(&mut self, cx: &Ctx, path: &str, touch: &Touch, out: &mut Vec<Hit>) {
         let time = cx.time();
         let own = self
             .images
@@ -487,7 +487,7 @@ impl State {
     }
 
     /// A file was opened for reading, or read.
-    pub(super) fn read(&mut self, cx: &Ctx, path: &str, touch: &Touch, out: &mut Vec<Hit>) {
+    pub fn read(&mut self, cx: &Ctx, path: &str, touch: &Touch, out: &mut Vec<Hit>) {
         let task = self.task(cx);
         if touch.op != Op::Opened {
             return;
@@ -529,7 +529,7 @@ impl State {
     }
 
     /// A directory was listed.
-    pub(super) fn listing(&mut self, cx: &Ctx, path: &str, out: &mut Vec<Hit>) {
+    pub fn listing(&mut self, cx: &Ctx, path: &str, out: &mut Vec<Hit>) {
         let time = cx.time();
         let task = self.task(cx);
         if !task.search_done {
@@ -553,7 +553,7 @@ impl State {
     }
 
     /// Reads that tell a program about the machine.
-    pub(super) fn discovery(&mut self, cx: &Ctx, path: &str, touch: &Touch, out: &mut Vec<Hit>) {
+    pub fn discovery(&mut self, cx: &Ctx, path: &str, touch: &Touch, out: &mut Vec<Hit>) {
         if !matches!(touch.op, Op::Opened | Op::Read)
             || !cx.opens_for_read() && touch.op == Op::Opened
         {
@@ -632,7 +632,7 @@ impl State {
     }
 
     /// A file of this name was created: the same note in many directories is a ransom note.
-    pub(super) fn created(&mut self, cx: &Ctx, path: &str, out: &mut Vec<Hit>) {
+    pub fn created(&mut self, cx: &Ctx, path: &str, out: &mut Vec<Hit>) {
         let name = base(path);
         if matches!(
             name,
@@ -669,7 +669,7 @@ impl State {
 /// A CPU sysfs file a program reads to learn what the processor is. The
 /// counts and cache sizes the C library and runtimes read at startup
 /// (`online`, `possible`, `present`, `cpu*/cache/`) are not discovery.
-fn hardware_cpu_file(path: &str) -> bool {
+pub fn hardware_cpu_file(path: &str) -> bool {
     let Some(rest) = path.strip_prefix("/sys/devices/system/cpu/") else {
         return false;
     };
@@ -680,11 +680,11 @@ fn hardware_cpu_file(path: &str) -> bool {
         || rest.is_empty())
 }
 
-fn task_ended(cx: &Ctx) -> bool {
+pub fn task_ended(cx: &Ctx) -> bool {
     cx.call.task_exit.is_some() || matches!(cx.name, "exit" | "exit_group")
 }
 
-fn is_compiler(name: &str) -> bool {
+pub fn is_compiler(name: &str) -> bool {
     matches!(
         name,
         "gcc"
@@ -707,7 +707,7 @@ fn is_compiler(name: &str) -> bool {
 }
 
 /// The last extension of a file name, without the dot.
-fn extension(path: &str) -> String {
+pub fn extension(path: &str) -> String {
     base(path)
         .rsplit_once('.')
         .filter(|(stem, _)| !stem.is_empty())
@@ -715,7 +715,7 @@ fn extension(path: &str) -> String {
         .unwrap_or_default()
 }
 
-fn document(path: &str) -> bool {
+pub fn document(path: &str) -> bool {
     matches!(
         extension(path).to_ascii_lowercase().as_str(),
         "doc"

@@ -576,7 +576,7 @@ pub fn info_parts(invocation: &InvocationSummary) -> Vec<(String, Tone)> {
                 .join(", ")
         ));
     }
-    notes.extend(async_browse::partial_note(invocation));
+    notes.extend(partial_note(invocation));
     for event in invocation.entry.iter().chain(invocation.exit.iter()) {
         if !event.complete || !event.issues.is_empty() {
             let mut note = format!(
@@ -706,7 +706,7 @@ pub fn info(invocation: &InvocationSummary) -> String {
 
 /// The hover of an Info cell with record arrays: per array field its count
 /// and every record's short form, one per line.
-fn array_hover(invocation: &InvocationSummary) -> String {
+pub fn array_hover(invocation: &InvocationSummary) -> String {
     let call = representative(invocation)
         .and_then(|event| field_call(event.syscall_nr, call_args(invocation)));
     let mut blocks = Vec::new();
@@ -810,4 +810,29 @@ pub fn numeric_formats(value: u64, width: usize) -> Vec<(&'static str, String)> 
         ),
         ("Byte order", "Little endian".into()),
     ]
+}
+
+/// What a row says about its async observations when the preview is partial.
+pub fn partial_note(invocation: &InvocationSummary) -> Option<String> {
+    let omitted = invocation.async_omitted();
+    (omitted > 0).then(|| {
+        format!(
+            "{} of {} async observations shown",
+            grouped_count(invocation.async_events.len() as u64),
+            grouped_count(invocation.async_saved)
+        )
+    })
+}
+
+
+pub fn grouped_count(count: u64) -> String {
+    let digits = count.to_string();
+    let mut out = String::new();
+    for (at, digit) in digits.chars().enumerate() {
+        if at > 0 && (digits.len() - at) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
 }

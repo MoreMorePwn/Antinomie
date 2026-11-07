@@ -8,19 +8,19 @@ use antinomie_monitor_core::date::{civil_from_days, days_from_civil};
 use std::sync::{Arc, RwLock};
 
 /// The saved choice that means "follow the host".
-pub(crate) const AUTOMATIC: &str = "";
-const ZONEINFO: &str = "/usr/share/zoneinfo";
+pub const AUTOMATIC: &str = "";
+pub const ZONEINFO: &str = "/usr/share/zoneinfo";
 
-static ACTIVE: RwLock<Option<Arc<Zone>>> = RwLock::new(None);
+pub static ACTIVE: RwLock<Option<Arc<Zone>>> = RwLock::new(None);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Zone {
-    name: String,
-    rules: Rules,
+pub struct Zone {
+    pub name: String,
+    pub rules: Rules,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum Rules {
+pub enum Rules {
     Fixed(i32),
     Table {
         /// `(UTC second, index into types)`, ascending.
@@ -34,27 +34,27 @@ enum Rules {
 
 /// `std offset dst [offset],start,end`: offsets in seconds east of UTC.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Posix {
-    std: i32,
-    dst: Option<(i32, Rule, Rule)>,
+pub struct Posix {
+    pub std: i32,
+    pub dst: Option<(i32, Rule, Rule)>,
 }
 
 /// A transition date: month, week (5 = last), weekday (0 = Sunday), or a day
 /// of the year, and the local time of day in seconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Day {
+pub enum Day {
     Month(u32, u32, u32),
     Julian(u32),
     Zero(u32),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Rule {
-    day: Day,
-    time: i32,
+pub struct Rule {
+    pub day: Day,
+    pub time: i32,
 }
 
 impl Zone {
-    pub(crate) fn utc() -> Self {
+    pub fn utc() -> Self {
         Self {
             name: "UTC".into(),
             rules: Rules::Fixed(0),
@@ -62,7 +62,7 @@ impl Zone {
     }
 
     /// The zone called `name` (`Asia/Jakarta`, `UTC`, or a POSIX string).
-    pub(crate) fn named(name: &str) -> Option<Self> {
+    pub fn named(name: &str) -> Option<Self> {
         let name = name.trim().trim_start_matches(':');
         if name.is_empty() {
             return None;
@@ -87,7 +87,7 @@ impl Zone {
     }
 
     /// The host's zone: `TZ`, else `/etc/localtime`, else UTC.
-    pub(crate) fn detect() -> Self {
+    pub fn detect() -> Self {
         if let Ok(value) = std::env::var("TZ") {
             if let Some(zone) = Self::named(&value) {
                 return zone;
@@ -121,12 +121,12 @@ impl Zone {
         }
     }
 
-    pub(crate) fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         &self.name
     }
 
     /// Seconds east of UTC at the Unix second `seconds`.
-    pub(crate) fn offset(&self, seconds: i64) -> i32 {
+    pub fn offset(&self, seconds: i64) -> i32 {
         match &self.rules {
             Rules::Fixed(offset) => *offset,
             Rules::Posix(posix) => posix.offset(seconds),
@@ -152,7 +152,7 @@ impl Zone {
 }
 
 impl Posix {
-    fn offset(&self, seconds: i64) -> i32 {
+    pub fn offset(&self, seconds: i64) -> i32 {
         let Some((dst, start, end)) = &self.dst else {
             return self.std;
         };
@@ -173,7 +173,7 @@ impl Posix {
 }
 
 /// Midnight UTC of the day a rule names in `year`, as Unix seconds.
-fn date_seconds(year: i64, day: Day) -> i64 {
+pub fn date_seconds(year: i64, day: Day) -> i64 {
     let year = year as i32;
     let first_of = |month: u32| days_from_civil(year, month, 1).unwrap_or(0);
     let days = match day {
@@ -204,13 +204,13 @@ fn date_seconds(year: i64, day: Day) -> i64 {
     days * 86_400
 }
 
-fn be32(bytes: &[u8], at: usize) -> Option<u32> {
+pub fn be32(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
 }
 
 /// The version 2+ block of a TZif file, which carries 64-bit transition times
 /// and the POSIX footer.
-fn parse_tzif(bytes: &[u8]) -> Option<Rules> {
+pub fn parse_tzif(bytes: &[u8]) -> Option<Rules> {
     if bytes.get(..4)? != b"TZif" {
         return None;
     }
@@ -271,19 +271,19 @@ fn parse_tzif(bytes: &[u8]) -> Option<Rules> {
     })
 }
 
-struct Cursor<'a>(&'a str);
+pub struct Cursor<'a>(&'a str);
 impl Cursor<'_> {
-    fn peek(&self) -> Option<char> {
+    pub fn peek(&self) -> Option<char> {
         self.0.chars().next()
     }
-    fn eat(&mut self, expected: char) -> bool {
+    pub fn eat(&mut self, expected: char) -> bool {
         let found = self.peek() == Some(expected);
         if found {
             self.0 = &self.0[expected.len_utf8()..];
         }
         found
     }
-    fn name(&mut self) -> Option<()> {
+    pub fn name(&mut self) -> Option<()> {
         if self.eat('<') {
             let end = self.0.find('>')?;
             self.0 = &self.0[end + 1..];
@@ -299,7 +299,7 @@ impl Cursor<'_> {
         }
         Some(())
     }
-    fn number(&mut self) -> Option<u32> {
+    pub fn number(&mut self) -> Option<u32> {
         let end = self
             .0
             .find(|c: char| !c.is_ascii_digit())
@@ -309,7 +309,7 @@ impl Cursor<'_> {
         Some(value)
     }
     /// `[+-]hh[:mm[:ss]]` as seconds.
-    fn clock(&mut self) -> Option<i32> {
+    pub fn clock(&mut self) -> Option<i32> {
         let sign = if self.eat('-') {
             -1
         } else {
@@ -325,7 +325,7 @@ impl Cursor<'_> {
         }
         Some(sign * seconds)
     }
-    fn rule(&mut self) -> Option<Rule> {
+    pub fn rule(&mut self) -> Option<Rule> {
         let day = if self.eat('M') {
             let month = self.number()?;
             self.eat('.').then_some(())?;
@@ -346,7 +346,7 @@ impl Cursor<'_> {
     }
 }
 
-fn parse_posix(text: &str) -> Option<Posix> {
+pub fn parse_posix(text: &str) -> Option<Posix> {
     let mut cursor = Cursor(text);
     cursor.name()?;
     let std = -cursor.clock()?;
@@ -373,7 +373,7 @@ fn parse_posix(text: &str) -> Option<Posix> {
 }
 
 /// Every zone Settings offers: the system's zone files.
-pub(crate) fn choices() -> Vec<String> {
+pub fn choices() -> Vec<String> {
     let mut found = Vec::new();
     collect(std::path::Path::new(ZONEINFO), "", &mut found, 0);
     if found.is_empty() {
@@ -387,7 +387,7 @@ pub(crate) fn choices() -> Vec<String> {
     found
 }
 
-fn collect(dir: &std::path::Path, prefix: &str, out: &mut Vec<String>, depth: u32) {
+pub fn collect(dir: &std::path::Path, prefix: &str, out: &mut Vec<String>, depth: u32) {
     const SKIP: [&str; 6] = [
         "posix",
         "right",
@@ -419,7 +419,7 @@ fn collect(dir: &std::path::Path, prefix: &str, out: &mut Vec<String>, depth: u3
 
 /// The zone the app shows times in, from the saved choice: [`AUTOMATIC`], or
 /// a zone's name (a name this host cannot read falls back to automatic).
-pub(crate) fn choose(choice: &str) {
+pub fn choose(choice: &str) {
     let zone = Zone::named(choice)
         .filter(|_| choice != AUTOMATIC)
         .unwrap_or_else(Zone::detect);
@@ -427,7 +427,7 @@ pub(crate) fn choose(choice: &str) {
     antinomie_monitor_core::date::set_display_offset(offset_at);
 }
 
-pub(crate) fn active() -> Arc<Zone> {
+pub fn active() -> Arc<Zone> {
     if let Some(zone) = ACTIVE.read().unwrap_or_else(|e| e.into_inner()).clone() {
         return zone;
     }
@@ -436,6 +436,6 @@ pub(crate) fn active() -> Arc<Zone> {
 }
 
 /// Seconds east of UTC in the active zone at a Unix second.
-pub(crate) fn offset_at(seconds: i64) -> i32 {
+pub fn offset_at(seconds: i64) -> i32 {
     active().offset(seconds)
 }

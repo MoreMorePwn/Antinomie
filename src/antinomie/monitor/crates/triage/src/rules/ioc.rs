@@ -10,18 +10,18 @@ use super::{
     noise::{flag, Agg, Gaps},
     spec, Hit,
 };
-use crate::triage::*;
+use crate::*;
 use antinomie_monitor_core::kernel_notes::HashKind;
 use std::net::IpAddr;
 
 /// Most entries kept of each list.
-const LIMIT: usize = 50_000;
+pub const LIMIT: usize = 50_000;
 /// `connect` on a non-blocking socket starts the connection.
-const EINPROGRESS: i64 = -115;
+pub const EINPROGRESS: i64 = -115;
 
 /// One call that reached an address.
 #[derive(Clone, Debug)]
-pub(in crate::triage) struct Connection {
+pub struct Connection {
     pub ip: IpAddr,
     pub port: u16,
     pub udp: bool,
@@ -32,7 +32,7 @@ pub(in crate::triage) struct Connection {
 
 /// The task that made a call, and which call.
 #[derive(Clone, Debug, Default)]
-pub(in crate::triage) struct Who {
+pub struct Who {
     pub cookie: u64,
     pub pid: u32,
     pub image: Option<String>,
@@ -43,7 +43,7 @@ pub(in crate::triage) struct Who {
 
 /// A program the run started.
 #[derive(Clone, Debug)]
-pub(in crate::triage) struct Executed {
+pub struct Executed {
     pub path: String,
     /// SHA-256 as the guest recorded it; `None` with the reason in `why`.
     pub sha256: Option<String>,
@@ -52,14 +52,14 @@ pub(in crate::triage) struct Executed {
 }
 
 #[derive(Default)]
-pub(in crate::triage) struct Log {
+pub struct Log {
     pub connections: Vec<Connection>,
     pub executed: Vec<Executed>,
     /// Entries dropped past the limit.
     pub omitted: u64,
 }
 
-fn who(cx: &Ctx) -> Who {
+pub fn who(cx: &Ctx) -> Who {
     Who {
         cookie: cx.call.task_cookie,
         pid: cx.event.pid,
@@ -70,12 +70,12 @@ fn who(cx: &Ctx) -> Who {
     }
 }
 
-fn address(cx: &Ctx, argument: usize) -> Option<(IpAddr, u16)> {
+pub fn address(cx: &Ctx, argument: usize) -> Option<(IpAddr, u16)> {
     let found = cx.address(argument)?;
     Some((found.ip.parse().ok()?, found.port))
 }
 
-pub(super) fn observe(cx: &Ctx, log: &mut Log) {
+pub fn observe(cx: &Ctx, log: &mut Log) {
     match cx.name {
         "connect" => {
             let Some((ip, port)) = address(cx, 1) else {
@@ -155,7 +155,7 @@ pub(super) fn observe(cx: &Ctx, log: &mut Log) {
     }
 }
 
-fn push(log: &mut Log, connection: Connection) {
+pub fn push(log: &mut Log, connection: Connection) {
     if log.connections.len() >= LIMIT {
         log.omitted += 1;
     } else {
@@ -164,13 +164,13 @@ fn push(log: &mut Log, connection: Connection) {
 }
 
 /// How an IOC match is recorded as a finding.
-pub(in crate::triage) enum Evidence {
+pub enum Evidence {
     Packet { capture: String, frame: u64 },
     Call { stream: u64, call_id: u64 },
 }
 
 /// One dataset match to list among the findings.
-pub(in crate::triage) struct IocHit {
+pub struct IocHit {
     pub object: String,
     pub summary: String,
     pub detail: Vec<String>,
@@ -183,7 +183,7 @@ pub(in crate::triage) struct IocHit {
 
 impl Engine {
     /// What the run's calls left for the IOC window.
-    pub(in crate::triage) fn take_ioc(&mut self) -> Log {
+    pub fn take_ioc(&mut self) -> Log {
         std::mem::take(&mut self.state.ioc)
     }
 
@@ -193,7 +193,7 @@ impl Engine {
     /// of the run's canary values the gateway saw in what the guest sent
     /// out. The host saw them, not a task, so the rows are VM-wide. A use
     /// also lists the address it went to as an endpoint indicator.
-    pub(in crate::triage) fn cloud_report(
+    pub fn cloud_report(
         &mut self,
         report: &antinomie_monitor_core::route::MetadataReport,
         clock: Option<antinomie_monitor_core::HostClockAnchor>,
@@ -282,7 +282,7 @@ impl Engine {
     /// One row for something the host saw, not a task: VM-wide, from the
     /// gateway's report.
     /// The run's program died of a signal before its first recorded system call.
-    pub(in crate::triage) fn root_crash(
+    pub fn root_crash(
         &mut self,
         signal: &str,
         clock: Option<antinomie_monitor_core::HostClockAnchor>,
@@ -306,7 +306,7 @@ impl Engine {
         );
     }
 
-    fn host_row(
+    pub fn host_row(
         &mut self,
         rule: &'static str,
         object: String,
@@ -327,7 +327,7 @@ impl Engine {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn host_row_as(
+    pub fn host_row_as(
         &mut self,
         rule: &'static str,
         object: String,
@@ -394,7 +394,7 @@ impl Engine {
 
     /// List a dataset match as a `c2.ioc_match` finding, so it appears with the
     /// run's other detections.
-    pub(in crate::triage) fn ioc_match(&mut self, found: IocHit) {
+    pub fn ioc_match(&mut self, found: IocHit) {
         let Some(spec) = spec("c2.ioc_match") else {
             debug_assert!(false, "unclassified rule c2.ioc_match");
             return;
@@ -464,7 +464,7 @@ impl Engine {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::super::tests::support::*;
     use super::super::Options;
     use super::*;

@@ -7,19 +7,19 @@ use super::state::State;
 use super::{Hit, Tier};
 use antinomie_monitor_core::kernel_notes::{self, CredentialChange, Credentials};
 
-const PROT_WRITE: u64 = 2;
-const PROT_EXEC: u64 = 4;
-const CLONE_NEWUSER: u64 = 0x1000_0000;
-const NS: u64 = 1_000_000_000;
-const KILL_TARGETS: usize = 5;
-const KILL_SPAN: u64 = 30 * NS;
-const FORKS_PER_SECOND: usize = 200;
-const FORK_FAILURES: u32 = 20;
-const EAGAIN: i64 = -11;
+pub const PROT_WRITE: u64 = 2;
+pub const PROT_EXEC: u64 = 4;
+pub const CLONE_NEWUSER: u64 = 0x1000_0000;
+pub const NS: u64 = 1_000_000_000;
+pub const KILL_TARGETS: usize = 5;
+pub const KILL_SPAN: u64 = 30 * NS;
+pub const FORKS_PER_SECOND: usize = 200;
+pub const FORK_FAILURES: u32 = 20;
+pub const EAGAIN: i64 = -11;
 /// `CAP_SYS_MODULE` and `CAP_SYS_ADMIN`.
-const DANGEROUS_CAPS: u64 = (1 << 16) | (1 << 21);
+pub const DANGEROUS_CAPS: u64 = (1 << 16) | (1 << 21);
 
-pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     match cx.name {
         "mmap" | "mprotect" | "pkey_mprotect" => memory(cx, st, out),
         "ptrace" => ptrace(cx, out),
@@ -121,7 +121,7 @@ pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
 }
 
 /// A program loaded or attached through `bpf`, a link, a raw tracepoint or a perf event.
-fn bpf_program(cx: &Ctx, st: &State, out: &mut Vec<Hit>) {
+pub fn bpf_program(cx: &Ctx, st: &State, out: &mut Vec<Hit>) {
     if let Some(command) = attach::command_of(cx.event, cx.args) {
         let attach = attach::attach(cx.call, command, cx.args, &st.bpf);
         // A failed attach changed nothing: it is Info, and apart from a success.
@@ -149,7 +149,7 @@ fn bpf_program(cx: &Ctx, st: &State, out: &mut Vec<Hit>) {
 }
 
 /// `PROT_WRITE | PROT_EXEC`, and writable memory flipped to executable.
-fn memory(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn memory(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     let prot = cx.args[2];
     let rule = if cx.ok {
         "memory.rwx"
@@ -195,7 +195,7 @@ fn memory(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     }
 }
 
-fn ptrace(cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn ptrace(cx: &Ctx, out: &mut Vec<Hit>) {
     let request = cx.args[0];
     let pid = cx.args[1];
     let others = pid != u64::from(cx.event.pid) && pid != u64::from(cx.event.tid);
@@ -220,7 +220,7 @@ fn ptrace(cx: &Ctx, out: &mut Vec<Hit>) {
     }
 }
 
-fn parent_pid(cx: &Ctx) -> Option<u32> {
+pub fn parent_pid(cx: &Ctx) -> Option<u32> {
     cx.files
         .process_images
         .get(&TaskKey {
@@ -231,7 +231,7 @@ fn parent_pid(cx: &Ctx) -> Option<u32> {
         .map(|parent| parent.pid)
 }
 
-fn vm(cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn vm(cx: &Ctx, out: &mut Vec<Hit>) {
     let pid = cx.args[0];
     if pid == u64::from(cx.event.pid) || pid == u64::from(cx.event.tid) {
         return;
@@ -248,7 +248,7 @@ fn vm(cx: &Ctx, out: &mut Vec<Hit>) {
     ));
 }
 
-fn seccomp(_cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn seccomp(_cx: &Ctx, out: &mut Vec<Hit>) {
     out.push(Hit::new(
         "bpf.seccomp_filter",
         "seccomp",
@@ -256,7 +256,7 @@ fn seccomp(_cx: &Ctx, out: &mut Vec<Hit>) {
     ));
 }
 
-fn prctl(cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn prctl(cx: &Ctx, out: &mut Vec<Hit>) {
     match cx.args[0] {
         22 if cx.args[1] == 2 => seccomp(cx, out),
         4 if cx.args[1] == 0 => {
@@ -281,7 +281,7 @@ fn prctl(cx: &Ctx, out: &mut Vec<Hit>) {
 /// The process gave itself a new name: `prctl(PR_SET_NAME)` or a write to its
 /// `comm` file. LOW; MEDIUM when the name imitates a kernel thread or a daemon.
 /// An empty `name` is a name the recording did not capture.
-fn renamed(cx: &Ctx, name: &str, how: &str, imitates: bool, out: &mut Vec<Hit>) {
+pub fn renamed(cx: &Ctx, name: &str, how: &str, imitates: bool, out: &mut Vec<Hit>) {
     let shown = if name.is_empty() {
         "new name not recorded".to_owned()
     } else {
@@ -307,7 +307,7 @@ fn renamed(cx: &Ctx, name: &str, how: &str, imitates: bool, out: &mut Vec<Hit>) 
 
 /// A write to the task's own `comm` file renames it; one to `attr/` changes
 /// its security label.
-fn comm_write(cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn comm_write(cx: &Ctx, out: &mut Vec<Hit>) {
     if !cx.ok {
         return;
     }
@@ -343,7 +343,7 @@ fn comm_write(cx: &Ctx, out: &mut Vec<Hit>) {
 }
 
 /// `ioctl` calls that list the machine's interfaces, addresses and hardware address.
-fn network_ioctl(cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn network_ioctl(cx: &Ctx, out: &mut Vec<Hit>) {
     let what = match cx.args[1] {
         0x8912 => "SIOCGIFCONF: the list of interfaces",
         0x8913 => "SIOCGIFFLAGS: an interface's flags",
@@ -368,7 +368,7 @@ fn network_ioctl(cx: &Ctx, out: &mut Vec<Hit>) {
 
 /// A route-socket request for the machine's links, addresses or routes
 /// (`RTM_GETLINK`, `RTM_GETADDR`, `RTM_GETROUTE`), as `ip` and `getifaddrs` ask.
-fn netlink_query(cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn netlink_query(cx: &Ctx, out: &mut Vec<Hit>) {
     const AF_NETLINK: u64 = 16;
     if !cx.ok
         || cx
@@ -401,7 +401,7 @@ fn netlink_query(cx: &Ctx, out: &mut Vec<Hit>) {
 }
 
 /// A process named after a kernel thread or a system daemon.
-pub(super) fn masquerade(name: &str, image: &str, how: &str, out: &mut Vec<Hit>) {
+pub fn masquerade(name: &str, image: &str, how: &str, out: &mut Vec<Hit>) {
     if name.is_empty() {
         return;
     }
@@ -463,7 +463,7 @@ pub(super) fn masquerade(name: &str, image: &str, how: &str, out: &mut Vec<Hit>)
     }
 }
 
-fn user_namespace(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn user_namespace(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     st.userns.insert(cx.call.task_cookie);
     out.push(Hit::new(
         "privilege.userns",
@@ -472,7 +472,7 @@ fn user_namespace(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     ));
 }
 
-fn reboot(cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn reboot(cx: &Ctx, out: &mut Vec<Hit>) {
     let command = cx.args[2] as u32;
     let what = match command {
         0x0123_4567 => "RESTART",
@@ -486,7 +486,7 @@ fn reboot(cx: &Ctx, out: &mut Vec<Hit>) {
 }
 
 /// Many signals to processes that are not the run's own.
-fn kill(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn kill(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     // The process, thread group or descriptor the signal goes to, by role.
     let target = match cx.name {
         "tgkill" => cx.arg("tgid"),
@@ -519,7 +519,7 @@ fn kill(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
 }
 
 /// Process creation rate, and fork failures.
-fn forks(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn forks(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     if cx.name == "clone" && cx.arg("clone_flags") & 0x0001_0000 != 0 {
         return;
     }
@@ -547,7 +547,7 @@ fn forks(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
 }
 
 /// `splice` of a file into a pipe, remembered for a following write to the pipe.
-fn splice(cx: &Ctx, st: &mut State) {
+pub fn splice(cx: &Ctx, st: &mut State) {
     let Some(path) = cx.fd_path(cx.args[0]).map(str::to_owned) else {
         return;
     };
@@ -569,7 +569,7 @@ fn splice(cx: &Ctx, st: &mut State) {
     }
 }
 
-fn dirty_pipe(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn dirty_pipe(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     let fd = cx.args[0];
     let task = st.task(cx);
     if let Some(path) = task.spliced.remove(&fd) {
@@ -587,7 +587,7 @@ fn dirty_pipe(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
 }
 
 /// Credential records: gains, drops, setuid programs and root without a legitimate path.
-fn credentials(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn credentials(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     for creds in cx
         .call
         .kernel_notes
@@ -675,7 +675,7 @@ fn credentials(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     }
 }
 
-fn describe(before: &Credentials, after: &Credentials) -> String {
+pub fn describe(before: &Credentials, after: &Credentials) -> String {
     format!(
         "euid {} → {}; effective capabilities {:#x} → {:#x}",
         before.euid, after.euid, before.cap_effective, after.cap_effective

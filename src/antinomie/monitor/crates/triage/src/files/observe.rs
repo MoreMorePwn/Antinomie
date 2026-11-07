@@ -5,57 +5,57 @@ use antinomie_monitor_core::kernel_notes::{FileCopy, FilePosition};
 
 /// What one call is, as the descriptor tables read it.
 #[derive(Clone, Copy)]
-pub(super) struct CallFacts<'a> {
-    pub(super) name: &'a str,
-    pub(super) args: Option<[u64; 6]>,
-    pub(super) ret: Option<i64>,
-    pub(super) success: bool,
-    pub(super) owner: (u64, u32),
-    pub(super) descriptor: Option<(u64, u32, u64)>,
+pub struct CallFacts<'a> {
+    pub name: &'a str,
+    pub args: Option<[u64; 6]>,
+    pub ret: Option<i64>,
+    pub success: bool,
+    pub owner: (u64, u32),
+    pub descriptor: Option<(u64, u32, u64)>,
 }
 
 /// What the Read row of a call is built from.
 #[derive(Clone, Copy)]
-pub(super) struct ReadRow<'a> {
-    pub(super) files: &'a FdState,
-    pub(super) call: &'a InvocationSummary,
-    pub(super) event: &'a EventSummary,
-    pub(super) name: &'a str,
-    pub(super) ret: Option<i64>,
-    pub(super) success: bool,
-    pub(super) size: u64,
+pub struct ReadRow<'a> {
+    pub files: &'a FdState,
+    pub call: &'a InvocationSummary,
+    pub event: &'a EventSummary,
+    pub name: &'a str,
+    pub ret: Option<i64>,
+    pub success: bool,
+    pub size: u64,
 }
 
 /// What a call did to its file, once its name and offset are settled.
-pub(super) struct Observed<'a> {
-    pub(super) files: &'a FdState,
-    pub(super) call: &'a InvocationSummary,
-    pub(super) event: &'a EventSummary,
-    pub(super) hits: &'a [Hit],
-    pub(super) name: &'a str,
-    pub(super) args: Option<[u64; 6]>,
-    pub(super) ret: Option<i64>,
-    pub(super) success: bool,
-    pub(super) reading: bool,
-    pub(super) writing: bool,
-    pub(super) failed: bool,
-    pub(super) changed: bool,
-    pub(super) identity: Option<FileId>,
-    pub(super) description: Option<u64>,
-    pub(super) offset: Option<u64>,
-    pub(super) size: u64,
-    pub(super) bytes: &'a CapturedPayload,
-    pub(super) copied: &'a CapturedPayload,
-    pub(super) explicit: bool,
-    pub(super) kernel_position: Option<FilePosition>,
-    pub(super) copy: Option<FileCopy>,
-    pub(super) path_known: bool,
+pub struct Observed<'a> {
+    pub files: &'a FdState,
+    pub call: &'a InvocationSummary,
+    pub event: &'a EventSummary,
+    pub hits: &'a [Hit],
+    pub name: &'a str,
+    pub args: Option<[u64; 6]>,
+    pub ret: Option<i64>,
+    pub success: bool,
+    pub reading: bool,
+    pub writing: bool,
+    pub failed: bool,
+    pub changed: bool,
+    pub identity: Option<FileId>,
+    pub description: Option<u64>,
+    pub offset: Option<u64>,
+    pub size: u64,
+    pub bytes: &'a CapturedPayload,
+    pub copied: &'a CapturedPayload,
+    pub explicit: bool,
+    pub kernel_position: Option<FilePosition>,
+    pub copy: Option<FileCopy>,
+    pub path_known: bool,
 }
 
 impl FileIndex {
     /// The descriptor tables after this call: the open file description it
     /// created and the one its descriptor leads to.
-    pub(super) fn track_descriptors(
+    pub fn track_descriptors(
         &mut self,
         files: &FdState,
         call: &InvocationSummary,
@@ -159,7 +159,7 @@ impl FileIndex {
     }
 
     /// Fold the call into the file's change: its names, operations, data and gaps.
-    pub(super) fn apply_change(&mut self, observed: &Observed<'_>, group: String, path: String) {
+    pub fn apply_change(&mut self, observed: &Observed<'_>, group: String, path: String) {
         let Observed {
             files,
             call,
@@ -436,7 +436,7 @@ impl FileIndex {
 
 /// One Read files row; `content` is None when the kernel moved the
 /// bytes itself and none were captured.
-pub(super) fn read_cells(
+pub fn read_cells(
     context: &ReadRow<'_>,
     path: &str,
     path_known: bool,

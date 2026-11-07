@@ -4,26 +4,26 @@ use super::*;
 
 /// The frame being read.
 #[derive(Clone, Copy)]
-pub(super) struct Frame<'a> {
-    pub(super) path: &'a Path,
-    pub(super) fields: &'a [String],
-    pub(super) frame: u64,
-    pub(super) time: Option<u64>,
-    pub(super) endpoints: &'a str,
-    pub(super) destination: &'a str,
-    pub(super) destination_port: &'a str,
+pub struct Frame<'a> {
+    pub path: &'a Path,
+    pub fields: &'a [String],
+    pub frame: u64,
+    pub time: Option<u64>,
+    pub endpoints: &'a str,
+    pub destination: &'a str,
+    pub destination_port: &'a str,
 }
 
 /// The spooled responses a request looks up, and the page the HTTP rows go to.
-pub(super) struct Spool<'a> {
-    pub(super) offsets: &'a mut std::fs::File,
-    pub(super) responses: &'a mut std::io::BufReader<std::fs::File>,
-    pub(super) http_query: &'a crate::query::Compiled,
-    pub(super) http_page: &'a mut sorting::Page<Vec<Cell>>,
+pub struct Spool<'a> {
+    pub offsets: &'a mut std::fs::File,
+    pub responses: &'a mut std::io::BufReader<std::fs::File>,
+    pub http_query: &'a crate::query::Compiled,
+    pub http_page: &'a mut sorting::Page<Vec<Cell>>,
 }
 
 /// The HTTP/1 requests of a frame, each with the response its link names.
-pub(super) fn http_requests(
+pub fn http_requests(
     frame_context: &Frame<'_>,
     inventory: &mut network::Inventory,
     spool: &mut Spool<'_>,
@@ -106,7 +106,7 @@ pub(super) fn http_requests(
 }
 
 /// The DNS queries of a frame, with the answers of the response it links.
-pub(super) fn dns_queries(
+pub fn dns_queries(
     frame_context: &Frame<'_>,
     inventory: &mut network::Inventory,
     spool: &mut Spool<'_>,
@@ -222,7 +222,7 @@ pub(super) fn dns_queries(
 }
 
 /// The cleartext HTTP/2 requests of a frame.
-pub(super) fn h2_requests(
+pub fn h2_requests(
     frame_context: &Frame<'_>,
     inventory: &mut network::Inventory,
     spool: &mut Spool<'_>,

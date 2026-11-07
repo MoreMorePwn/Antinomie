@@ -10,22 +10,22 @@
 use super::lanes::Lanes;
 use super::phases::{self, Phase, Span};
 use super::*;
-use crate::triage::rules::{Category, Tier};
+use crate::rules::{Category, Tier};
 
 /// Buckets the run is cut into at level 0 (at most).
-pub(in crate::triage) const L0_BUCKETS: u64 = 4096;
+pub const L0_BUCKETS: u64 = 4096;
 /// What a row adds to the severity curve, by [`Tier::index`]: HIGH, MEDIUM, LOW, INFO.
-pub(in crate::triage) const WEIGHTS: [u32; 4] = [10, 4, 1, 0];
+pub const WEIGHTS: [u32; 4] = [10, 4, 1, 0];
 /// "No tier" in a cell that holds nothing.
-pub(in crate::triage) const NO_TIER: u8 = 4;
+pub const NO_TIER: u8 = 4;
 /// A finding found in the capture and not tied to a call: drawn hollow.
-pub(in crate::triage) const HOLLOW: u8 = 1;
+pub const HOLLOW: u8 = 1;
 /// "No phase" in a record.
-pub(in crate::triage) const NO_PHASE: u8 = 255;
+pub const NO_PHASE: u8 = 255;
 
 /// One finding as the graph keeps it: 32 bytes (the design allows 48).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::triage) struct Record {
+pub struct Record {
     pub first_ns: u64,
     pub last_ns: u64,
     /// Occurrences folded into the row.
@@ -43,14 +43,14 @@ pub(in crate::triage) struct Record {
 }
 
 impl Record {
-    pub(in crate::triage) fn weight(&self) -> u32 {
+    pub fn weight(&self) -> u32 {
         WEIGHTS[usize::from(self.tier).min(3)]
     }
 }
 
 /// The findings of one `(lane, bucket)`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(in crate::triage) struct Cell {
+pub struct Cell {
     pub lane: u32,
     pub bucket: u32,
     /// Rows by [`Tier::index`].
@@ -66,7 +66,7 @@ pub(in crate::triage) struct Cell {
 }
 
 impl Cell {
-    pub(super) fn of(record: &Record, at: usize, bucket: u32) -> Self {
+    pub fn of(record: &Record, at: usize, bucket: u32) -> Self {
         let mut counts = [0; 4];
         counts[usize::from(record.tier).min(3)] = 1;
         Self {
@@ -80,7 +80,7 @@ impl Cell {
         }
     }
 
-    pub(super) fn add(&mut self, record: &Record) {
+    pub fn add(&mut self, record: &Record) {
         self.counts[usize::from(record.tier).min(3)] += 1;
         self.cats |= 1 << record.category;
         if record.tier < self.top {
@@ -89,7 +89,7 @@ impl Cell {
         }
     }
 
-    pub(super) fn merge(&mut self, other: &Cell) {
+    pub fn merge(&mut self, other: &Cell) {
         for (mine, theirs) in self.counts.iter_mut().zip(other.counts) {
             *mine += theirs;
         }
@@ -101,7 +101,7 @@ impl Cell {
         }
     }
 
-    pub(in crate::triage) fn total(&self) -> u32 {
+    pub fn total(&self) -> u32 {
         self.counts.iter().sum()
     }
 }
@@ -109,7 +109,7 @@ impl Cell {
 /// All lanes summed over one bucket: the severity curve, the heat strip and
 /// what the phases are read from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::triage) struct Bin {
+pub struct Bin {
     /// Rows by [`Tier::index`].
     pub tiers: [u32; 4],
     /// Rows by [`Category::index`], and the worst tier among them.
@@ -134,7 +134,7 @@ impl Default for Bin {
 }
 
 impl Bin {
-    pub(super) fn add(&mut self, record: &Record) {
+    pub fn add(&mut self, record: &Record) {
         self.tiers[usize::from(record.tier).min(3)] += 1;
         let category = usize::from(record.category).min(12);
         self.cats[category] += 1;
@@ -144,7 +144,7 @@ impl Bin {
         }
     }
 
-    fn merge(&mut self, other: &Bin) {
+    pub fn merge(&mut self, other: &Bin) {
         for index in 0..4 {
             self.tiers[index] += other.tiers[index];
         }
@@ -159,25 +159,25 @@ impl Bin {
     }
 
     /// The severity curve's height for one tier.
-    pub(in crate::triage) fn weight_of(&self, tier: usize) -> u32 {
+    pub fn weight_of(&self, tier: usize) -> u32 {
         self.tiers[tier] * WEIGHTS[tier]
     }
 
-    pub(in crate::triage) fn weight(&self) -> u32 {
+    pub fn weight(&self) -> u32 {
         (0..4).map(|tier| self.weight_of(tier)).sum()
     }
 }
 
 /// How the run is cut into buckets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::triage) struct Geometry {
+pub struct Geometry {
     pub origin: u64,
     pub end: u64,
     pub shift: u32,
 }
 
 impl Geometry {
-    pub(in crate::triage) fn new(origin: u64, end: u64) -> Self {
+    pub fn new(origin: u64, end: u64) -> Self {
         let end = end.max(origin);
         let span = end - origin;
         let mut shift = 0;
@@ -187,12 +187,12 @@ impl Geometry {
         Self { origin, end, shift }
     }
 
-    pub(in crate::triage) fn buckets(&self) -> usize {
+    pub fn buckets(&self) -> usize {
         ((self.end - self.origin) >> self.shift) as usize + 1
     }
 
     /// Levels from the base up to one bucket for the whole run.
-    pub(in crate::triage) fn levels(&self) -> usize {
+    pub fn levels(&self) -> usize {
         let mut buckets = self.buckets();
         let mut levels = 1;
         while buckets > 1 {
@@ -202,31 +202,31 @@ impl Geometry {
         levels
     }
 
-    pub(in crate::triage) fn bucket(&self, ns: u64) -> usize {
+    pub fn bucket(&self, ns: u64) -> usize {
         (((ns.saturating_sub(self.origin)) >> self.shift) as usize).min(self.buckets() - 1)
     }
 
     /// The width of a bucket of `level`, in ns.
-    pub(in crate::triage) fn width(&self, level: usize) -> f64 {
+    pub fn width(&self, level: usize) -> f64 {
         (1u64 << (self.shift + level as u32).min(62)) as f64
     }
 
     /// The first ns of `bucket` at `level`.
-    pub(in crate::triage) fn start(&self, level: usize, bucket: usize) -> f64 {
+    pub fn start(&self, level: usize, bucket: usize) -> f64 {
         self.origin as f64 + bucket as f64 * self.width(level)
     }
 }
 
 /// An arrow from the injector's marker to the target lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::triage) struct Injection {
+pub struct Injection {
     pub record: u32,
     pub target: u32,
 }
 
 /// The whole index of one view of the findings.
 #[derive(Default)]
-pub(in crate::triage) struct GraphIndex {
+pub struct GraphIndex {
     pub geometry: Option<Geometry>,
     pub lanes: Lanes,
     /// Sorted by `first_ns`.
@@ -260,27 +260,27 @@ pub(in crate::triage) struct GraphIndex {
 }
 
 impl GraphIndex {
-    pub(in crate::triage) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.records.is_empty()
     }
 
-    pub(in crate::triage) fn geometry(&self) -> Geometry {
+    pub fn geometry(&self) -> Geometry {
         self.geometry.unwrap_or(Geometry::new(0, 0))
     }
 
     /// The first and last ns of the whole run, processes included.
-    pub(in crate::triage) fn run_extent(&self) -> (u64, u64) {
+    pub fn run_extent(&self) -> (u64, u64) {
         self.run.unwrap_or_else(|| self.extent())
     }
 
     /// The first and last ns of the findings.
-    pub(in crate::triage) fn extent(&self) -> (u64, u64) {
+    pub fn extent(&self) -> (u64, u64) {
         let geometry = self.geometry();
         (geometry.origin, geometry.end)
     }
 
     /// The records whose `first_ns` is in `[from, to]`.
-    pub(in crate::triage) fn window(&self, from: f64, to: f64) -> std::ops::Range<usize> {
+    pub fn window(&self, from: f64, to: f64) -> std::ops::Range<usize> {
         let low = self
             .records
             .partition_point(|record| (record.first_ns as f64) < from);
@@ -293,7 +293,7 @@ impl GraphIndex {
     /// The kept level to draw from for a bucket of `level`: the coarsest kept
     /// one that is not coarser than asked. Returns its place in `cells` and
     /// its pyramid level.
-    pub(in crate::triage) fn kept_level(&self, level: usize) -> (usize, usize) {
+    pub fn kept_level(&self, level: usize) -> (usize, usize) {
         let slot = self
             .stored
             .partition_point(|kept| *kept <= level)
@@ -302,7 +302,7 @@ impl GraphIndex {
     }
 
     /// The cells of `lane` in kept level `slot` whose bucket is in `low..=high`.
-    pub(in crate::triage) fn lane_cells(
+    pub fn lane_cells(
         &self,
         slot: usize,
         lane: u32,
@@ -318,8 +318,8 @@ impl GraphIndex {
     }
 
     /// Bytes the index holds, for the memory budget.
-    #[cfg(test)]
-    pub(in crate::triage) fn bytes(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn bytes(&self) -> usize {
         let cells: usize = self.cells.iter().map(Vec::len).sum();
         let bins: usize = self.bins.iter().map(Vec::len).sum();
         self.records.len() * std::mem::size_of::<Record>()
@@ -330,7 +330,7 @@ impl GraphIndex {
     }
 
     /// The level whose buckets are at least `min_px` wide at `ns_per_px`.
-    pub(in crate::triage) fn level_for(&self, ns_per_px: f64, min_px: f64) -> usize {
+    pub fn level_for(&self, ns_per_px: f64, min_px: f64) -> usize {
         let geometry = self.geometry();
         let top = geometry.levels() - 1;
         (0..=top)
@@ -339,43 +339,43 @@ impl GraphIndex {
     }
 
     /// The first record of the row, if any.
-    pub(in crate::triage) fn first_with_key(&self, key: trace::InvocationKey) -> Option<usize> {
+    pub fn first_with_key(&self, key: trace::InvocationKey) -> Option<usize> {
         self.rows.iter().position(|row| row.key == key)
     }
 }
 
-fn next_id() -> u64 {
+pub fn next_id() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// An INFO match counted at a time, with the phase it belongs to.
-struct Counted {
-    ns: u64,
-    count: u32,
+pub struct Counted {
+    pub ns: u64,
+    pub count: u32,
 }
 
 /// Collects findings, then settles them into an index.
-pub(in crate::triage) struct Builder {
-    lanes: Lanes,
-    keep_lanes: bool,
+pub struct Builder {
+    pub lanes: Lanes,
+    pub keep_lanes: bool,
     /// Whether the compact records and the slots are kept: the Summary strip
     /// spaces its findings equally, as the graph does by default.
-    keep_records: bool,
-    records: Vec<Record>,
-    rows: Vec<Finding>,
-    keep_rows: bool,
+    pub keep_records: bool,
+    pub records: Vec<Record>,
+    pub rows: Vec<Finding>,
+    pub keep_rows: bool,
     /// For each record pushed from a row: the pid an injection reached.
-    targets: Vec<(u32, u32)>,
-    counted: Vec<Counted>,
-    unplaced: u64,
+    pub targets: Vec<(u32, u32)>,
+    pub counted: Vec<Counted>,
+    pub unplaced: u64,
     /// The time the lanes span, before any finding is added.
-    extent: Option<(u64, u64)>,
+    pub extent: Option<(u64, u64)>,
 }
 
 impl Builder {
     /// An index with lanes, and the rows kept so a marker can open its Details.
-    pub(in crate::triage) fn new(lanes: Lanes) -> Self {
+    pub fn new(lanes: Lanes) -> Self {
         let extent = lanes.extent();
         Self {
             lanes,
@@ -392,7 +392,7 @@ impl Builder {
     }
 
     /// Only the sums over time: the Summary strip has no lanes and no rows.
-    pub(in crate::triage) fn overview() -> Self {
+    pub fn overview() -> Self {
         let mut builder = Self::new(Lanes::default());
         builder.keep_lanes = false;
         builder.keep_rows = false;
@@ -400,13 +400,13 @@ impl Builder {
     }
 
     /// Keep the compact records only, as a benchmark of 120,000 findings does.
-    #[cfg(test)]
-    pub(in crate::triage) fn without_rows(mut self) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn without_rows(mut self) -> Self {
         self.keep_rows = false;
         self
     }
 
-    pub(in crate::triage) fn push(&mut self, finding: &Finding) {
+    pub fn push(&mut self, finding: &Finding) {
         let values = &finding.values;
         let text = |key: &str| {
             values.iter().find_map(|(name, value)| match value {
@@ -465,7 +465,7 @@ impl Builder {
     }
 
     /// One INFO match of an anti-analysis or discovery rule, counted at its time.
-    pub(in crate::triage) fn count_info(
+    pub fn count_info(
         &mut self,
         ns: u64,
         count: u32,
@@ -478,18 +478,18 @@ impl Builder {
     }
 
     /// Say that the record just pushed injected into `pid` (tests).
-    #[cfg(test)]
-    pub(in crate::triage) fn inject_into(&mut self, pid: u32) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn inject_into(&mut self, pid: u32) {
         self.targets.push((self.records.len() as u32 - 1, pid));
     }
 
     /// Push a record directly (benchmarks and tests).
-    #[cfg(test)]
-    pub(in crate::triage) fn push_record(&mut self, record: Record) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn push_record(&mut self, record: Record) {
         self.records.push(record);
     }
 
-    pub(in crate::triage) fn finish(mut self) -> GraphIndex {
+    pub fn finish(mut self) -> GraphIndex {
         let mut span: Option<(u64, u64)> = None;
         let mut widen = |from: u64, to: u64| {
             span = Some(span.map_or((from, to), |(lo, hi)| (lo.min(from), hi.max(to))));
@@ -607,7 +607,7 @@ impl Builder {
     }
 
     /// Put records (and the rows and injections tied to them) in time order.
-    fn sort(&mut self) {
+    pub fn sort(&mut self) {
         let mut order: Vec<u32> = (0..self.records.len() as u32).collect();
         order.sort_by_key(|at| (self.records[*at as usize].first_ns, *at));
         let mut inverse = vec![0u32; order.len()];
@@ -632,7 +632,7 @@ impl Builder {
 }
 
 /// The pid a rule of the Injection category acted on: its object reads `pid N ...`.
-fn injected_pid(object: &str) -> Option<u32> {
+pub fn injected_pid(object: &str) -> Option<u32> {
     object
         .strip_prefix("pid ")?
         .split(|c: char| !c.is_ascii_digit())
@@ -642,7 +642,7 @@ fn injected_pid(object: &str) -> Option<u32> {
 }
 
 /// Cells of every level, from records sorted by time.
-fn lane_cells(
+pub fn lane_cells(
     records: &[Record],
     geometry: &Geometry,
     lanes: usize,
@@ -709,7 +709,7 @@ fn lane_cells(
 /// How many cells each level holds, from the base level in one pass. A cell
 /// starts a new cell at every level up to the highest bit its bucket differs
 /// from the one before in, and at every level when its lane differs.
-fn level_counts(cells: &[Cell], levels: usize) -> Vec<usize> {
+pub fn level_counts(cells: &[Cell], levels: usize) -> Vec<usize> {
     let mut starts_to = vec![0usize; 33];
     let mut new_lanes = 0usize;
     let mut previous: Option<&Cell> = None;
@@ -729,7 +729,7 @@ fn level_counts(cells: &[Cell], levels: usize) -> Vec<usize> {
 }
 
 /// `cells` with their buckets halved `shift` times, equal ones merged.
-fn merge_up(cells: &[Cell], shift: u32) -> Vec<Cell> {
+pub fn merge_up(cells: &[Cell], shift: u32) -> Vec<Cell> {
     let mut above: Vec<Cell> = Vec::with_capacity(cells.len() / 2 + 1);
     for cell in cells {
         let mut cell = *cell;

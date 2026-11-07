@@ -31,51 +31,51 @@ use antinomie_monitor_core::{kernel_notes, FieldSummary};
 /// `io_uring_enter` and `io_submit` on x86-64: the calls that carry requests.
 /// `io_uring_setup`: the call that makes a ring.
 /// Most requests turned into calls per scan: the scan must stay bounded.
-pub(super) const REQUEST_LIMIT: usize = 100_000;
+pub const REQUEST_LIMIT: usize = 100_000;
 /// Observations read per archive page.
-const PAGE: usize = 256;
+pub const PAGE: usize = 256;
 
 /// `-1` as the offset of a request that uses the file position.
-const CURRENT_POSITION: u64 = u64::MAX;
+pub const CURRENT_POSITION: u64 = u64::MAX;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum System {
+pub enum System {
     IoUring,
     Aio,
 }
 
 /// Everything the guest recorded about one request.
-struct Request {
-    system: System,
-    opcode: u32,
+pub struct Request {
+    pub system: System,
+    pub opcode: u32,
     /// The submission entry or control block as written.
-    sqe: Vec<u8>,
-    first: EventSummary,
-    last_seq: u64,
-    done_ns: Option<u64>,
-    result: Option<i64>,
-    operands: Vec<FieldSummary>,
+    pub sqe: Vec<u8>,
+    pub first: EventSummary,
+    pub last_seq: u64,
+    pub done_ns: Option<u64>,
+    pub result: Option<i64>,
+    pub operands: Vec<FieldSummary>,
     /// The data the request moved, by its offset in the transfer: the guest
     /// publishes a transfer in stages (a vector read fills one segment after
     /// another).
-    input: Vec<(u64, FieldSummary)>,
-    output: Vec<(u64, FieldSummary)>,
-    complete: bool,
+    pub input: Vec<(u64, FieldSummary)>,
+    pub output: Vec<(u64, FieldSummary)>,
+    pub complete: bool,
 }
 
-fn scalar(event: &EventSummary, key: &str) -> Option<u64> {
+pub fn scalar(event: &EventSummary, key: &str) -> Option<u64> {
     let field = event.fields.iter().find(|field| field.key == key)?;
     Some(u64::from_le_bytes(field.preview.get(..8)?.try_into().ok()?))
 }
 
-fn text(event: &EventSummary, key: &str) -> Option<String> {
+pub fn text(event: &EventSummary, key: &str) -> Option<String> {
     let field = event.fields.iter().find(|field| field.key == key)?;
     let end = field.preview.iter().position(|byte| *byte == 0)?;
     String::from_utf8(field.preview[..end].to_vec()).ok()
 }
 
 /// The requests of `events`, in the order they were submitted.
-fn requests(events: &[EventSummary]) -> Vec<Request> {
+pub fn requests(events: &[EventSummary]) -> Vec<Request> {
     let mut found: Vec<Request> = Vec::new();
     let mut index = std::collections::BTreeMap::new();
     for event in events {
@@ -138,7 +138,7 @@ fn requests(events: &[EventSummary]) -> Vec<Request> {
 
 /// Keep one stage of a request's data per offset (the first that has bytes),
 /// at most 64 per request.
-fn stage(stages: &mut Vec<(u64, FieldSummary)>, offset: u64, field: &FieldSummary) {
+pub fn stage(stages: &mut Vec<(u64, FieldSummary)>, offset: u64, field: &FieldSummary) {
     if field.logical_len == Some(0) || stages.len() >= 64 {
         return;
     }
@@ -150,7 +150,7 @@ fn stage(stages: &mut Vec<(u64, FieldSummary)>, offset: u64, field: &FieldSummar
 /// The data of a request as the buffer of the call it stands for: one stage
 /// at offset 0 is `arg1.buf`; several are the segments `arg1.iov[N].data`, in
 /// order, up to the first stage that is missing (the rest stays unknown).
-fn buffer_fields(stages: &[(u64, FieldSummary)]) -> Vec<FieldSummary> {
+pub fn buffer_fields(stages: &[(u64, FieldSummary)]) -> Vec<FieldSummary> {
     let mut sorted: Vec<&(u64, FieldSummary)> = stages.iter().collect();
     sorted.sort_by_key(|(offset, _)| *offset);
     if let [(0, only)] = sorted.as_slice() {
@@ -178,10 +178,10 @@ fn buffer_fields(stages: &[(u64, FieldSummary)]) -> Vec<FieldSummary> {
     fields
 }
 
-fn byte(sqe: &[u8], at: usize) -> u64 {
+pub fn byte(sqe: &[u8], at: usize) -> u64 {
     sqe.get(at).copied().map_or(0, u64::from)
 }
-fn le<const N: usize>(sqe: &[u8], at: usize) -> u64 {
+pub fn le<const N: usize>(sqe: &[u8], at: usize) -> u64 {
     sqe.get(at..at + N).map_or(0, |bytes| {
         let mut wide = [0u8; 8];
         wide[..N].copy_from_slice(bytes);
@@ -189,32 +189,32 @@ fn le<const N: usize>(sqe: &[u8], at: usize) -> u64 {
     })
 }
 /// A descriptor argument as a system call carries it: sign extended.
-fn descriptor(value: u64) -> u64 {
+pub fn descriptor(value: u64) -> u64 {
     i64::from(value as u32 as i32) as u64
 }
 
 /// The system call a request stands for.
-struct Equivalent {
-    nr: u64,
-    name: &'static str,
-    args: [u64; 6],
+pub struct Equivalent {
+    pub nr: u64,
+    pub name: &'static str,
+    pub args: [u64; 6],
     /// `(argument index, operand)` of every path the call names.
-    paths: Vec<(usize, &'static str)>,
+    pub paths: Vec<(usize, &'static str)>,
     /// The request's data is a `buf` argument: written (entry) or read (exit).
-    writes: bool,
-    reads: bool,
+    pub writes: bool,
+    pub reads: bool,
     /// An open that installs the file in the ring's registered table: its
     /// result is a slot of that table (or 0), never a descriptor of the process.
-    direct: bool,
+    pub direct: bool,
     /// The extended attribute value the request set (argument 2).
-    value: bool,
+    pub value: bool,
 }
 
 impl Equivalent {
-    fn new(name: &'static str, args: [u64; 6]) -> Self {
+    pub fn new(name: &'static str, args: [u64; 6]) -> Self {
         Self::numbered(syscalls::number(name).unwrap_or(u64::MAX), name, args)
     }
-    fn numbered(nr: u64, name: &'static str, args: [u64; 6]) -> Self {
+    pub fn numbered(nr: u64, name: &'static str, args: [u64; 6]) -> Self {
         Self {
             nr,
             name,
@@ -226,19 +226,19 @@ impl Equivalent {
             value: false,
         }
     }
-    fn path(mut self, index: usize, operand: &'static str) -> Self {
+    pub fn path(mut self, index: usize, operand: &'static str) -> Self {
         self.paths.push((index, operand));
         self
     }
 }
 
 /// `IORING_FSYNC_DATASYNC`: the request is an `fdatasync`.
-const FSYNC_DATASYNC: u64 = 1;
+pub const FSYNC_DATASYNC: u64 = 1;
 /// `SPLICE_F_FD_IN_FIXED`: the input of a splice is a registered descriptor.
-const SPLICE_FD_IN_FIXED: u64 = 1 << 31;
+pub const SPLICE_FD_IN_FIXED: u64 = 1 << 31;
 
 /// Positioned or sequential data transfer of a descriptor.
-fn transfer(sqe: &[u8], write: bool, vector: bool, offset: u64) -> Equivalent {
+pub fn transfer(sqe: &[u8], write: bool, vector: bool, offset: u64) -> Equivalent {
     let fd = if byte(sqe, 1) & 1 != 0 {
         u64::MAX
     } else {
@@ -267,7 +267,7 @@ fn transfer(sqe: &[u8], write: bool, vector: bool, offset: u64) -> Equivalent {
     call
 }
 
-fn uring(request: &Request) -> Option<Equivalent> {
+pub fn uring(request: &Request) -> Option<Equivalent> {
     let sqe = &request.sqe;
     let off = le::<8>(sqe, 8);
     let addr = le::<8>(sqe, 16);
@@ -337,7 +337,7 @@ fn uring(request: &Request) -> Option<Equivalent> {
     Some(call)
 }
 
-fn aio(request: &Request) -> Option<Equivalent> {
+pub fn aio(request: &Request) -> Option<Equivalent> {
     let sqe = &request.sqe;
     let fd = le::<4>(sqe, 20);
     let buffer = le::<8>(sqe, 24);
@@ -358,11 +358,11 @@ fn aio(request: &Request) -> Option<Equivalent> {
 
 /// The field that tells a call was an asynchronous request: the system that
 /// carried it. Syscalls the guest traced never have it.
-const VIA_KEY: &str = "async.system";
+pub const VIA_KEY: &str = "async.system";
 /// The field that marks an open into the ring's registered file table.
-const DIRECT_KEY: &str = "async.direct_descriptor";
+pub const DIRECT_KEY: &str = "async.direct_descriptor";
 
-fn via_field(system: System) -> FieldSummary {
+pub fn via_field(system: System) -> FieldSummary {
     let label: &[u8] = match system {
         System::IoUring => b"io_uring\0",
         System::Aio => b"AIO\0",
@@ -389,7 +389,7 @@ fn via_field(system: System) -> FieldSummary {
 /// registered table: its result names no descriptor of the process, so it
 /// must not be tracked as one. Later requests on that slot reach the file
 /// through the identity the guest recorded for them.
-pub(super) fn direct_descriptor(call: &InvocationSummary) -> bool {
+pub fn direct_descriptor(call: &InvocationSummary) -> bool {
     call.entry
         .as_ref()
         .is_some_and(|entry| entry.fields.iter().any(|field| field.key == DIRECT_KEY))
@@ -397,7 +397,7 @@ pub(super) fn direct_descriptor(call: &InvocationSummary) -> bool {
 
 /// `io_uring` or `AIO` for a call that stands for an asynchronous request, and
 /// `None` for a system call the guest traced itself.
-pub(super) fn via(call: &InvocationSummary) -> Option<&'static str> {
+pub fn via(call: &InvocationSummary) -> Option<&'static str> {
     let field = call
         .entry
         .as_ref()?
@@ -411,7 +411,7 @@ pub(super) fn via(call: &InvocationSummary) -> Option<&'static str> {
     }
 }
 
-fn captured(key: String, layout: &str, source: &FieldSummary) -> FieldSummary {
+pub fn captured(key: String, layout: &str, source: &FieldSummary) -> FieldSummary {
     FieldSummary {
         key,
         layout: layout.into(),
@@ -419,7 +419,7 @@ fn captured(key: String, layout: &str, source: &FieldSummary) -> FieldSummary {
     }
 }
 
-fn event_for(
+pub fn event_for(
     parent: &EventSummary,
     request: &Request,
     equivalent: &Equivalent,
@@ -458,7 +458,7 @@ fn event_for(
 /// The equivalent call's id on the ABI of the call that carried the request
 /// (an arm64 ring's openat is arm64's openat), x86-64's when that table has
 /// no such call; x86-64 runs keep the ids they always had.
-fn id_on_abi_of(parent: u64, equivalent: &Equivalent) -> u64 {
+pub fn id_on_abi_of(parent: u64, equivalent: &Equivalent) -> u64 {
     match syscalls::table_of(parent) {
         Some(table) if table.abi != syscalls::Abi::X86_64 => table
             .number(equivalent.name)
@@ -468,7 +468,7 @@ fn id_on_abi_of(parent: u64, equivalent: &Equivalent) -> u64 {
 }
 
 /// The identity record of a request, as the note a call would carry.
-fn identity_note(parent: &EventSummary, request: &Request) -> Option<EventSummary> {
+pub fn identity_note(parent: &EventSummary, request: &Request) -> Option<EventSummary> {
     let field = request
         .operands
         .iter()
@@ -489,7 +489,7 @@ fn identity_note(parent: &EventSummary, request: &Request) -> Option<EventSummar
 }
 
 /// The call a request stands for, or `None` for one that touches no file.
-fn call_for(parent: &InvocationSummary, request: &Request) -> Option<InvocationSummary> {
+pub fn call_for(parent: &InvocationSummary, request: &Request) -> Option<InvocationSummary> {
     let template = trace::representative(parent)?;
     let equivalent = match request.system {
         System::IoUring => uring(request)?,
@@ -562,14 +562,14 @@ fn call_for(parent: &InvocationSummary, request: &Request) -> Option<InvocationS
 }
 
 /// Whether the call is one that carries requests.
-fn submits(call: &InvocationSummary) -> bool {
+pub fn submits(call: &InvocationSummary) -> bool {
     trace::representative(call)
         .is_some_and(|event| matches!(event.syscall_name.as_str(), "io_uring_enter" | "io_submit"))
 }
 
 /// The calls the requests of `events` stand for, with the submitting call's
 /// identity.
-pub(super) fn calls(parent: &InvocationSummary, events: &[EventSummary]) -> Vec<InvocationSummary> {
+pub fn calls(parent: &InvocationSummary, events: &[EventSummary]) -> Vec<InvocationSummary> {
     if !submits(parent) {
         return Vec::new();
     }
@@ -587,17 +587,17 @@ pub(super) fn calls(parent: &InvocationSummary, events: &[EventSummary]) -> Vec<
 /// evidence: the `io_uring_setup`), each at the time of its first record. The
 /// scan holds them until the calls it walks reach that time.
 #[derive(Default)]
-pub(super) struct Attributed {
+pub struct Attributed {
     /// Tasks whose attributed requests were read: stream and task cookie.
-    read: std::collections::BTreeSet<(u64, u64)>,
+    pub read: std::collections::BTreeSet<(u64, u64)>,
     /// Calls not yet due, by segment, time and the order they were read.
-    waiting: std::collections::BTreeMap<(usize, u64, u64), InvocationSummary>,
-    order: u64,
+    pub waiting: std::collections::BTreeMap<(usize, u64, u64), InvocationSummary>,
+    pub order: u64,
 }
 
 impl Attributed {
     /// After `setup` made a ring: read every request attributed to its task.
-    pub(super) fn read(
+    pub fn read(
         &mut self,
         recording: &antinomie_monitor_core::recording::Recording,
         segment: usize,
@@ -647,7 +647,7 @@ impl Attributed {
     }
 
     /// Hold the calls the attributed `events` of `setup`'s task stand for.
-    pub(super) fn hold(
+    pub fn hold(
         &mut self,
         segment: usize,
         setup: &InvocationSummary,
@@ -670,7 +670,7 @@ impl Attributed {
 
     /// The calls due before `call` of `segment`: all of an earlier segment,
     /// and those of this one recorded no later than the call.
-    pub(super) fn due(
+    pub fn due(
         &mut self,
         segment: usize,
         call: &InvocationSummary,
@@ -685,7 +685,7 @@ impl Attributed {
     }
 
     /// The calls still held when the walk ended, with their segment.
-    pub(super) fn rest(&mut self) -> Vec<(usize, InvocationSummary)> {
+    pub fn rest(&mut self) -> Vec<(usize, InvocationSummary)> {
         std::mem::take(&mut self.waiting)
             .into_iter()
             .map(|((segment, _, _), call)| (segment, call))
@@ -695,7 +695,7 @@ impl Attributed {
 
 /// What reading the observations of a call left out.
 #[derive(Default)]
-pub(super) struct Reach {
+pub struct Reach {
     /// Requests turned into calls.
     pub requests: usize,
     /// Calls whose observations could not all be read.
@@ -705,7 +705,7 @@ pub(super) struct Reach {
 
 /// Every file request of one call: the preview it carries, and the pages after
 /// it when the call has more saved observations than the preview holds.
-pub(super) fn expand(
+pub fn expand(
     recording: &antinomie_monitor_core::recording::Recording,
     parent: &InvocationSummary,
     reach: &mut Reach,
@@ -747,7 +747,7 @@ pub(super) fn expand(
     }
     let calls = calls(parent, &events);
     reach.requests += calls.len();
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     if std::env::var_os("ANTINOMIE_URING_DUMP").is_some() {
         for call in &calls {
             let entry = call.entry.as_ref().unwrap();

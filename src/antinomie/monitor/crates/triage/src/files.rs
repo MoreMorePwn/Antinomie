@@ -10,135 +10,134 @@ use super::*;
 use antinomie_monitor_core::kernel_notes::{FileHash, FileId, FileIdKind, FileKey, HashKind};
 use std::collections::{BTreeMap, BTreeSet};
 
-mod change;
-mod copies;
-mod ioc;
-mod mapped;
-mod observe;
-mod order;
-mod shape;
-mod view;
+pub mod change;
+pub mod copies;
+pub mod ioc;
+pub mod mapped;
+pub mod observe;
+pub mod order;
+pub mod shape;
+pub mod view;
 
-pub(super) use ioc::IocFile;
+pub use ioc::IocFile;
 
-const READ_NAMES: &[&str] = &["read", "pread64", "readv", "preadv", "preadv2"];
-const TRACKED_FILES: usize = 8192;
-mod bytes;
+pub const READ_NAMES: &[&str] = &["read", "pread64", "readv", "preadv", "preadv2"];
+pub const TRACKED_FILES: usize = 8192;
+pub mod bytes;
 #[cfg(test)]
-mod payload_tests;
-mod retention;
+pub mod payload_tests;
+pub mod retention;
 use bytes::ByteStore;
 use observe::{read_cells, CallFacts, Observed, ReadRow};
-pub(super) use retention::{GapNote, Retention, DEFAULT_FILE_MIB, DEFAULT_RUN_MIB};
-pub(super) use view::{gap_note, OPEN_REBUILD_LIMIT};
-const TIMELINE_ROWS: usize = 1024;
-const TOTAL_OPERATIONS: usize = 32768;
+pub use retention::{GapNote, Retention, DEFAULT_FILE_MIB, DEFAULT_RUN_MIB};
+pub const TIMELINE_ROWS: usize = 1024;
+pub const TOTAL_OPERATIONS: usize = 32768;
 
 #[derive(Clone)]
-pub(super) struct Operation {
-    time: u64,
-    call: u64,
-    key: trace::InvocationKey,
-    name: String,
-    process: String,
-    result: String,
+pub struct Operation {
+    pub time: u64,
+    pub call: u64,
+    pub key: trace::InvocationKey,
+    pub name: String,
+    pub process: String,
+    pub result: String,
 }
 
 #[derive(Clone, Default)]
-pub(super) struct Change {
+pub struct Change {
     pub path: String,
-    path_known: bool,
-    standard_io: bool,
-    process_image: Option<String>,
+    pub path_known: bool,
+    pub standard_io: bool,
+    pub process_image: Option<String>,
     pub call: u64,
-    key: trace::InvocationKey,
-    known_diff_count: Option<usize>,
-    first_ns: u64,
-    pid: u32,
-    tid: u32,
-    original: ByteStore,
-    final_data: ByteStore,
+    pub key: trace::InvocationKey,
+    pub known_diff_count: Option<usize>,
+    pub first_ns: u64,
+    pub pid: u32,
+    pub tid: u32,
+    pub original: ByteStore,
+    pub final_data: ByteStore,
     /// The first call that met a retention limit.
-    limit_hit: Option<retention::LimitHit>,
+    pub limit_hit: Option<retention::LimitHit>,
     /// Calls whose captured buffer was shorter than what they moved.
-    short_capture: Option<retention::ShortCapture>,
-    original_size: Option<u64>,
-    final_size: Option<u64>,
-    modified: bool,
-    changes: bool,
-    deleted: bool,
-    gaps: BTreeSet<&'static str>,
-    operations: Vec<Operation>,
+    pub short_capture: Option<retention::ShortCapture>,
+    pub original_size: Option<u64>,
+    pub final_size: Option<u64>,
+    pub modified: bool,
+    pub changes: bool,
+    pub deleted: bool,
+    pub gaps: BTreeSet<&'static str>,
+    pub operations: Vec<Operation>,
     /// What happened to the file, in order; a repeat is counted, not listed again.
-    lifecycle: Vec<(String, u32)>,
-    lifecycle_cut: bool,
-    categories: BTreeSet<&'static str>,
+    pub lifecycle: Vec<(String, u32)>,
+    pub lifecycle_cut: bool,
+    pub categories: BTreeSet<&'static str>,
     /// A call proved the file new (`O_EXCL`, `mkdir`, `O_TMPFILE`); without
     /// one, "created" is only inferred from the path not being seen before.
-    create_certain: bool,
+    pub create_certain: bool,
     /// The size the file already had when this run opened it with `O_CREAT`:
     /// the guest's hash at close held bytes the run never wrote, so the open
     /// created nothing.
-    existed: Option<u64>,
+    pub existed: Option<u64>,
     /// Change attempts the kernel refused. They are not changes.
-    failed: u32,
+    pub failed: u32,
     /// Last mode a successful chmod set, to tell a new `+x` from a repeat.
-    mode: Option<u64>,
-    locations: Vec<Location>,
-    access: Option<Access>,
+    pub mode: Option<u64>,
+    pub locations: Vec<Location>,
+    pub access: Option<Access>,
     /// The file the guest identified, once a call named it.
-    identity: Option<FileKey>,
+    pub identity: Option<FileKey>,
     /// Other names the same file was seen under (renames, hard links), in order.
-    names: Vec<String>,
+    pub names: Vec<String>,
     /// Hard links the inode had after the last call that reported them.
-    links: Option<u32>,
+    pub links: Option<u32>,
     /// The guest's latest hash of the file: taken after its last writer closed
     /// it, or just before it was deleted.
-    hash: Option<FileHash>,
+    pub hash: Option<FileHash>,
     /// Recording segment of the file's latest operation; a later one after a
     /// transport reconnect puts the boundary in its story.
-    segment: usize,
+    pub segment: usize,
     /// Recent numbered writes, `(start, end, write order)` (files/order.rs).
-    applied: Vec<(u64, u64, u64)>,
+    pub applied: Vec<(u64, u64, u64)>,
 }
 
-const PATH_GAP: &str =
+pub const PATH_GAP: &str =
     "File path unavailable; these operations cannot be assigned to a named file.";
 
 /// Distinct lifecycle steps kept per file.
-const LIFECYCLE_STEPS: usize = 64;
+pub const LIFECYCLE_STEPS: usize = 64;
 
 #[derive(Default)]
-pub(super) struct FileIndex {
-    changes: BTreeMap<String, Change>,
+pub struct FileIndex {
+    pub changes: BTreeMap<String, Change>,
     /// Descriptor owner, fd -> shared open-file description; dup shares offsets.
-    descriptors: BTreeMap<(u64, u32, u64), u64>,
-    descriptions: BTreeMap<u64, (Option<u64>, bool)>,
-    next_description: u64,
+    pub descriptors: BTreeMap<(u64, u32, u64), u64>,
+    pub descriptions: BTreeMap<u64, (Option<u64>, bool)>,
+    pub next_description: u64,
     /// Identified file → the group of its changes, whatever name it came by.
-    by_identity: BTreeMap<FileKey, String>,
+    pub by_identity: BTreeMap<FileKey, String>,
     /// Open-file description → the group of the identified file it was opened
     /// on, so a write through a descriptor reaches the file whatever name the
     /// descriptor was opened by.
-    description_group: BTreeMap<u64, String>,
+    pub description_group: BTreeMap<u64, String>,
     /// Group → the identified file it holds, to tell a name that a new file
     /// took over from the file that held it.
-    group_identity: BTreeMap<String, FileKey>,
+    pub group_identity: BTreeMap<String, FileKey>,
     /// Names the file of a group was reached by, not yet put in its entry.
-    aliases: BTreeMap<String, Vec<String>>,
-    next_split: u64,
-    retained_octets: usize,
-    retention: Retention,
-    operation_count: usize,
+    pub aliases: BTreeMap<String, Vec<String>>,
+    pub next_split: u64,
+    pub retained_octets: usize,
+    pub retention: Retention,
+    pub operation_count: usize,
     pub omitted_files: u64,
     /// Recording segment being read (0 for the first).
-    segment: usize,
+    pub segment: usize,
     /// What each call did to each file the run touched, for the File activity
     /// window.
-    activity: file_activity::Builder,
+    pub activity: file_activity::Builder,
     /// Directory and object names shared by the extents of a field.
-    interned: file_content::Interned,
-    kernel_revision: Option<u32>,
+    pub interned: file_content::Interned,
+    pub kernel_revision: Option<u32>,
 }
 
 impl FileIndex {
@@ -152,7 +151,7 @@ impl FileIndex {
         self.retention = retention;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn observe(
         &mut self,
         files: &FdState,
@@ -497,7 +496,7 @@ impl FileIndex {
     /// The group of the changes to the file `key`. A name already seen for the
     /// same file joins it. A name that now holds another file starts its own
     /// group and the file it held keeps its history under a private key.
-    fn route(
+    pub fn route(
         &mut self,
         key: FileKey,
         group: String,
@@ -537,7 +536,7 @@ impl FileIndex {
         group
     }
     /// Tell the File activity index about a call on a file.
-    fn note_activity(
+    pub fn note_activity(
         &mut self,
         files: &FdState,
         call: &InvocationSummary,
@@ -582,7 +581,7 @@ impl FileIndex {
             shape,
         });
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn finish(self) -> Vec<Change> {
         self.finish_all().0
     }
@@ -641,7 +640,7 @@ impl FileIndex {
 }
 
 /// The descriptor a sendfile, copy_file_range or splice reads from.
-pub(super) fn transfer_source(name: &str, args: Option<[u64; 6]>) -> Option<u64> {
+pub fn transfer_source(name: &str, args: Option<[u64; 6]>) -> Option<u64> {
     let args = args?;
     match name {
         "sendfile" => Some(args[1]),
@@ -652,14 +651,14 @@ pub(super) fn transfer_source(name: &str, args: Option<[u64; 6]>) -> Option<u64>
     }
 }
 
-fn unavailable_descriptor(fd: Option<u64>) -> String {
+pub fn unavailable_descriptor(fd: Option<u64>) -> String {
     fd.and_then(crate::values::standard_fd_name)
         .map(str::to_owned)
         .or_else(|| fd.map(|fd| format!("fd {fd}")))
         .unwrap_or_else(|| "fd unavailable".into())
 }
 
-pub(super) fn result_label(ret: Option<i64>) -> String {
+pub fn result_label(ret: Option<i64>) -> String {
     match ret {
         Some(ret) if ret >= 0 => format!("Success ({ret})"),
         Some(ret) => format!("Failed ({ret})"),
@@ -667,7 +666,7 @@ pub(super) fn result_label(ret: Option<i64>) -> String {
     }
 }
 
-pub(super) fn change_operation(call: &InvocationSummary, event: &EventSummary) -> bool {
+pub fn change_operation(call: &InvocationSummary, event: &EventSummary) -> bool {
     let name = event.syscall_name.as_str();
     // mmap records a mapping, not a write. msync is the observed write-back.
     CHANGE_NAMES.contains(&name)
@@ -678,17 +677,17 @@ pub(super) fn change_operation(call: &InvocationSummary, event: &EventSummary) -
 
 /// ioctl FICLONE and FICLONERANGE: the destination descriptor's contents are
 /// replaced by a shared extent of the source, without a write.
-pub(super) const FICLONE: u64 = 0x4004_9409;
-pub(super) const FICLONERANGE: u64 = 0x4020_940d;
+pub const FICLONE: u64 = 0x4004_9409;
+pub const FICLONERANGE: u64 = 0x4020_940d;
 
-pub(super) fn reflink(name: &str, args: Option<[u64; 6]>) -> bool {
+pub fn reflink(name: &str, args: Option<[u64; 6]>) -> bool {
     name == "ioctl" && args.is_some_and(|args| matches!(args[1], FICLONE | FICLONERANGE))
 }
 
-pub(super) fn number(values: &[(&str, RowValue)], key: &str) -> Option<u64> {
+pub fn number(values: &[(&str, RowValue)], key: &str) -> Option<u64> {
     number_signed(values, key).and_then(|number| u64::try_from(number).ok())
 }
-fn number_signed(values: &[(&str, RowValue)], key: &str) -> Option<i128> {
+pub fn number_signed(values: &[(&str, RowValue)], key: &str) -> Option<i128> {
     values.iter().find_map(|(name, value)| {
         if *name == key {
             if let RowValue::Number(value) = value {
@@ -703,9 +702,9 @@ fn number_signed(values: &[(&str, RowValue)], key: &str) -> Option<i128> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
-    use crate::triage::tests::{call, captured, path_call};
+    use crate::tests::{call, captured, path_call};
     use std::path::PathBuf;
 
     fn operation(

@@ -4,11 +4,11 @@
 //! is "unknown".
 
 /// Octets of a file's start the type is read from.
-pub(super) const HEAD: usize = 64;
+pub const HEAD: usize = 64;
 
 /// "ELF", "script", "archive", "config", "text", "data" or "unknown" for the
 /// first bytes `head` of the file at `path`.
-pub(super) fn of(head: &[u8], path: &str) -> &'static str {
+pub fn of(head: &[u8], path: &str) -> &'static str {
     if head.is_empty() {
         return "unknown";
     }
@@ -49,7 +49,7 @@ pub(super) fn of(head: &[u8], path: &str) -> &'static str {
 }
 
 /// Whether the path is where, or named as, a configuration file.
-fn configuration(path: &str) -> bool {
+pub fn configuration(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     let extension = name.rsplit_once('.').map(|(_, extension)| extension);
     path.starts_with("/etc/")
@@ -75,7 +75,7 @@ fn configuration(path: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::of;
 
     #[test]

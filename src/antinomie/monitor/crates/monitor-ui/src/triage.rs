@@ -7,13 +7,23 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::{
-    bpf,
-    query::{self, FieldSpec, RowValue},
-    theme, trace,
-};
+use crate::{bpf, query::{self, FieldSpec, RowValue}, theme, trace};
 use antinomie_monitor_core::{syscalls, EventSummary, InvocationSummary};
 use eframe::egui::{self, RichText};
+
+// The scan, the activity rules and the other models are in `antinomie_triage`;
+// every module of it is named here as it was when the modules were this
+// crate's, so that the views below reach them as before.
+pub(crate) use antinomie_triage::family;
+#[allow(unused_imports)]
+use antinomie_triage::*;
+use antinomie_triage::{
+    archive_scan, async_files, auditd_events, bpf_attach, descriptors, file_category,
+    file_content, file_events, file_location, file_type, file_visibility, files, findings, geoip_fill,
+    ioc_scan, kernel_records, lineage_index, live_judge, network_index, normalized, pcap_scan, process_cells,
+    process_env, process_record, rules, run_end, segments, sigma_events,
+};
+
 /// Where a row of Detection > Scanned inputs opens.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum OpenInput {
@@ -28,75 +38,42 @@ pub(crate) enum OpenInput {
 /// Temp-data key a clicked input is left under for the app.
 pub(crate) const OPEN_INPUT: &str = "triage-open-input";
 
-mod archive_scan;
-mod async_files;
 mod attack;
-mod auditd_events;
-mod bpf_attach;
 mod bpf_fields;
 mod bpf_notes;
+mod change_view;
+use change_view::ChangeView;
 mod counts;
-mod descriptors;
 mod details;
 mod detection;
 mod digest;
-pub(crate) mod family;
 mod file_activity;
-mod file_category;
-#[cfg(test)]
-mod file_category_tests;
-mod file_content;
-mod file_events;
-mod file_location;
 mod file_shown;
-#[cfg(test)]
-mod file_shown_tests;
 mod file_tabs;
-mod file_type;
-mod file_visibility;
 pub(crate) const DEFAULT_REBUILD_FILE_MIB: u32 = files::DEFAULT_FILE_MIB;
 pub(crate) const DEFAULT_REBUILD_RUN_MIB: u32 = files::DEFAULT_RUN_MIB;
-mod files;
 mod finding_bar;
 mod finding_cells;
 mod finding_details;
-mod findings;
-mod geoip_fill;
 mod graph;
-mod live_judge;
 pub(crate) use graph::Spacing as GraphSpacing;
 pub(crate) const GRAPH_WINDOW_SIZE: [f32; 2] = graph::DEFAULT_SIZE;
 #[cfg(test)]
 mod idle_tests;
-mod ioc_scan;
 mod ioc_view;
 pub(crate) use ioc_view::{count_tab as ioc_count_tab, source_tone_of as ioc_source_tone};
-mod kernel_records;
-mod lineage_index;
 mod net_tabs;
 mod network;
-mod network_index;
-mod normalized;
-mod pcap_scan;
 mod presentation;
-mod process_cells;
 mod process_details;
-mod process_env;
 mod process_mermaid;
-mod process_record;
 mod process_tree;
-#[cfg(test)]
-mod process_tree_tests;
 mod properties;
 mod refresh;
 #[cfg(test)]
 mod refresh_tests;
 mod report_export;
-mod rules;
-mod run_end;
 
-/// The system calls the suspicious-activity rules read: what the recorder keeps
-/// once the recording quota is nearly full.
 /// Where the app leaves the selected run's dump-trigger log for Triage, and
 /// where Triage leaves a request to open the Memory or Core dumps tab.
 pub(crate) const TRIGGER_LOG: &str = "run-trigger-log";
@@ -109,27 +86,21 @@ pub(crate) fn register_live_judge() {
 pub(crate) fn watched_calls() -> Vec<String> {
     rules::watched_calls()
 }
-mod segments;
-mod sigma_events;
-#[cfg(test)]
-mod sigma_events_tests;
 mod sorting;
-pub(crate) use sorting::{current as sort_current, header as sort_header, Spec as SortSpec};
+pub(crate) use antinomie_triage::sorting::Spec as SortSpec;
+pub(crate) use sorting::{current as sort_current, header as sort_header};
 mod summary;
 mod table;
-pub(crate) mod tone;
-pub(crate) use tone::{Tone, ValueKind};
-#[cfg(test)]
-mod tracer_qa;
-#[cfg(test)]
-mod uring_qa;
 #[cfg(test)]
 mod workload_qa;
+pub(crate) use antinomie_triage::tone;
+pub(crate) use tone::{Tone, ValueKind};
 use self::{
     archive_scan::*, bpf_attach::BpfFds, bpf_notes::*, descriptors::*, file_category::FILE_FIELDS,
     file_events::*, findings::*, pcap_scan::*, process_tree::*, refresh::*, table::*,
 };
-pub(crate) use network::AddressLookup;
+pub(crate) use antinomie_triage::network::AddressLookup;
+pub(crate) use antinomie_triage::{TriageInput, PAGE_ROWS_RANGE, STORED_ROWS};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -297,6 +268,18 @@ impl TriageView {
     }
 }
 
+/// The colour of a cell's text in the theme that is active now, whichever
+/// one the row was indexed in.
+trait CellColor {
+    fn color(&self) -> egui::Color32;
+}
+
+impl CellColor for Cell {
+    fn color(&self) -> egui::Color32 {
+        theme::tone(self.tone)
+    }
+}
+
 impl Default for TriageView {
     fn default() -> Self {
         Self {
@@ -355,65 +338,6 @@ impl Default for TriageView {
             report: report_export::Dialog::default(),
             summary_state: Default::default(),
             run_facts: Default::default(),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct TriageInput<'a> {
-    pub analysis: Option<&'a antinomie_monitor_core::AnalysisReport>,
-    pub invocations: &'a [InvocationSummary],
-    pub vm_id: Option<&'a str>,
-    pub boot_id: Option<&'a str>,
-    pub run_id: Option<&'a str>,
-    /// Saved recording directory. `None` for a live session or a single loaded page.
-    pub archive: Option<&'a Path>,
-    /// Pcap that belongs to this run. Absent means no packet index, not another capture.
-    pub pcap: Option<&'a Path>,
-    /// The pcap is still being written. The index reads the bytes present now.
-    pub pcap_open: bool,
-    pub clock_anchor: Option<antinomie_monitor_core::HostClockAnchor>,
-    pub started_ms: Option<u64>,
-    pub root_cookie: u64,
-    pub run_finished: bool,
-    /// The selected recording belongs to the currently running VM boot.
-    pub current_boot: bool,
-}
-
-impl<'a> TriageInput<'a> {
-    pub(crate) fn empty() -> Self {
-        Self {
-            analysis: None,
-            invocations: &[],
-            vm_id: None,
-            boot_id: None,
-            run_id: None,
-            archive: None,
-            pcap: None,
-            pcap_open: false,
-            clock_anchor: None,
-            started_ms: None,
-            root_cookie: 0,
-            run_finished: false,
-            current_boot: false,
-        }
-    }
-    #[cfg(test)]
-    fn page(invocations: &'a [InvocationSummary]) -> Self {
-        Self {
-            analysis: None,
-            invocations,
-            vm_id: None,
-            boot_id: None,
-            run_id: None,
-            archive: None,
-            pcap: None,
-            pcap_open: false,
-            clock_anchor: None,
-            started_ms: None,
-            root_cookie: 0,
-            run_finished: false,
-            current_boot: false,
         }
     }
 }
@@ -756,7 +680,7 @@ impl TriageView {
     /// A note on a changed file asked for the setting that raises a rebuild limit.
     pub(crate) fn take_open_rebuild_limit(&mut self, ctx: &egui::Context) -> bool {
         ctx.data_mut(|data| {
-            data.remove_temp::<bool>(egui::Id::new(files::OPEN_REBUILD_LIMIT))
+            data.remove_temp::<bool>(egui::Id::new(change_view::OPEN_REBUILD_LIMIT))
                 .unwrap_or(false)
         })
     }

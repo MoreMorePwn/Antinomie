@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The process table: threads, forked children, arguments and renames.
 use super::rules::tests::support::{creds, exec, exec_env, fork, sys, with_entry};
-use super::tests::{call, captured, path_call};
+use crate::tests::{call, captured, path_call};
 use super::*;
 
-const CLONE_NR: u64 = 56;
-const CLONE3_NR: u64 = 435;
+pub const CLONE_NR: u64 = 56;
+pub const CLONE3_NR: u64 = 435;
 
 /// The call as made by a task of `pid` with its own `tid` and `cookie`.
-fn as_task(mut row: InvocationSummary, pid: u32, tid: u32, cookie: u64) -> InvocationSummary {
+pub fn as_task(mut row: InvocationSummary, pid: u32, tid: u32, cookie: u64) -> InvocationSummary {
     row.task_cookie = cookie;
     for event in row.entry.iter_mut().chain(row.exit.iter_mut()) {
         event.pid = pid;
@@ -18,7 +18,7 @@ fn as_task(mut row: InvocationSummary, pid: u32, tid: u32, cookie: u64) -> Invoc
     row
 }
 
-fn node(nodes: &[ProcessNode], pid: u32, cookie: u64) -> &ProcessNode {
+pub fn node(nodes: &[ProcessNode], pid: u32, cookie: u64) -> &ProcessNode {
     nodes
         .iter()
         .find(|node| node.pid == pid && node.cookie == cookie)
@@ -26,7 +26,7 @@ fn node(nodes: &[ProcessNode], pid: u32, cookie: u64) -> &ProcessNode {
 }
 
 #[test]
-fn runtime_threads_sit_under_their_process_and_take_its_image() {
+pub fn runtime_threads_sit_under_their_process_and_take_its_image() {
     let mut main = exec(7, "/tmp/kaiji", &["kaiji", "-x"]);
     main = as_task(main, 7, 7, 70);
     let mut calls = vec![main];
@@ -57,7 +57,7 @@ fn runtime_threads_sit_under_their_process_and_take_its_image() {
 }
 
 #[test]
-fn two_pids_with_matching_tids_are_not_threads() {
+pub fn two_pids_with_matching_tids_are_not_threads() {
     let calls = vec![
         as_task(call(7, 1, "write", 0), 7, 7, 100),
         as_task(call(7, 1, "write", 0), 7, 7, 200),
@@ -67,7 +67,7 @@ fn two_pids_with_matching_tids_are_not_threads() {
 }
 
 #[test]
-fn a_forked_child_with_its_own_threads_is_still_linked_to_its_parent() {
+pub fn a_forked_child_with_its_own_threads_is_still_linked_to_its_parent() {
     // The child's threads were recorded before the parent's fork returned.
     let calls = vec![
         as_task(call(42, 1, "write", 0), 42, 42, 420),
@@ -84,7 +84,7 @@ fn a_forked_child_with_its_own_threads_is_still_linked_to_its_parent() {
 }
 
 #[test]
-fn a_forked_child_without_exec_keeps_its_parents_image() {
+pub fn a_forked_child_without_exec_keeps_its_parents_image() {
     let calls = vec![
         as_task(exec(1, "/tmp/mirai", &["mirai", "a"]), 1, 1, 10),
         as_task(fork(1, 5), 1, 1, 10),
@@ -98,7 +98,7 @@ fn a_forked_child_without_exec_keeps_its_parents_image() {
 }
 
 #[test]
-fn the_guests_child_record_links_a_clone3_whose_flags_were_not_captured() {
+pub fn the_guests_child_record_links_a_clone3_whose_flags_were_not_captured() {
     let mut spawn = as_task(
         sys(1, CLONE3_NR, "clone3", [0, 88, 0, 0, 0, 0], 9),
         1,
@@ -132,14 +132,14 @@ fn the_guests_child_record_links_a_clone3_whose_flags_were_not_captured() {
 }
 
 #[test]
-fn the_table_shows_the_arguments_the_exec_was_given() {
+pub fn the_table_shows_the_arguments_the_exec_was_given() {
     let nodes = process_nodes(&[exec(3, "/bin/sh", &["sh", "-c", "echo hi"])]);
     assert_eq!(nodes[0].argv, ["sh", "-c", "echo hi"]);
     let rows = process_rows(&nodes, None, &Suspicious::new());
     assert_eq!(rows[0][1].text, "sh -c 'echo hi'");
 }
 
-fn prctl_name(pid: u32, name: &str) -> InvocationSummary {
+pub fn prctl_name(pid: u32, name: &str) -> InvocationSummary {
     let mut bytes = name.as_bytes().to_vec();
     bytes.push(0);
     with_entry(
@@ -150,7 +150,7 @@ fn prctl_name(pid: u32, name: &str) -> InvocationSummary {
 }
 
 #[test]
-fn a_rename_is_shown_for_any_process_not_only_a_daemon_look_alike() {
+pub fn a_rename_is_shown_for_any_process_not_only_a_daemon_look_alike() {
     let nodes = process_nodes(&[exec(3, "/tmp/x", &["x"]), prctl_name(3, "httpd")]);
     assert_eq!(nodes[0].renames, ["httpd"]);
     let rows = process_rows(&nodes, None, &Suspicious::new());
@@ -165,7 +165,7 @@ fn a_rename_is_shown_for_any_process_not_only_a_daemon_look_alike() {
 }
 
 #[test]
-fn a_write_to_the_comm_file_is_a_rename() {
+pub fn a_write_to_the_comm_file_is_a_rename() {
     let open = path_call(3, 257, "openat", 5, "/proc/self/comm");
     let write = with_entry(
         sys(3, 1, "write", [5, 0x3000, 5, 0, 0, 0], 5),
@@ -181,14 +181,14 @@ fn a_write_to_the_comm_file_is_a_rename() {
     assert_eq!(nodes[0].renames, ["kdmtmpflush"]);
 }
 
-fn entry_only(mut row: InvocationSummary, at: u64) -> InvocationSummary {
+pub fn entry_only(mut row: InvocationSummary, at: u64) -> InvocationSummary {
     row.exit = None;
     row.entry.as_mut().unwrap().timestamp_ns = at;
     row
 }
 
 #[test]
-fn a_call_still_blocking_at_the_stop_is_shown_with_where_it_started() {
+pub fn a_call_still_blocking_at_the_stop_is_shown_with_where_it_started() {
     let blocked = entry_only(
         sys(3, 0, "read", [0, 0x1000, 33, 0, 0, 0], 0),
         2_000_000_000,
@@ -229,7 +229,7 @@ fn a_call_still_blocking_at_the_stop_is_shown_with_where_it_started() {
 }
 
 #[test]
-fn a_task_exit_record_with_its_sender_is_kept_on_the_node() {
+pub fn a_task_exit_record_with_its_sender_is_kept_on_the_node() {
     let mut killed = entry_only(sys(5, 0, "read", [0; 6], 0), 1);
     let mut end = killed.entry.clone().unwrap();
     end.phase = 3;
@@ -263,7 +263,7 @@ fn a_task_exit_record_with_its_sender_is_kept_on_the_node() {
 }
 
 #[test]
-fn the_columns_are_the_process_view_in_order() {
+pub fn the_columns_are_the_process_view_in_order() {
     assert_eq!(
         PROCESS_HEADERS,
         [
@@ -284,7 +284,7 @@ fn the_columns_are_the_process_view_in_order() {
 }
 
 #[test]
-fn a_process_is_named_by_its_executable_file_with_pid_and_tid() {
+pub fn a_process_is_named_by_its_executable_file_with_pid_and_tid() {
     let nodes = process_nodes(&[exec(412, "/tmp/demo-all", &["demo-all"])]);
     let rows = process_rows(&nodes, None, &Suspicious::new());
     assert!(rows[0][0].text.starts_with("demo-all (412 \u{b7} 412)"));
@@ -319,7 +319,7 @@ fn a_process_is_named_by_its_executable_file_with_pid_and_tid() {
 }
 
 #[test]
-fn a_fork_shows_the_parent_image_greyed_and_a_thread_its_pid_and_tid() {
+pub fn a_fork_shows_the_parent_image_greyed_and_a_thread_its_pid_and_tid() {
     let nodes = process_nodes(&[exec(1, "/bin/sh", &["sh"]), fork(1, 42)]);
     let rows = process_rows(&nodes, None, &Suspicious::new());
     let child = rows
@@ -327,7 +327,7 @@ fn a_fork_shows_the_parent_image_greyed_and_a_thread_its_pid_and_tid() {
         .find(|row| files::number(&row[0].values, "process.pid") == Some(42))
         .unwrap();
     assert_eq!(child[0].text, "sh (42 \u{b7} ?)  fork");
-    assert_eq!(child[0].color(), theme::muted());
+    assert_eq!(child[0].tone, Tone::Muted);
     assert!(cell_hover(0, &child[0], &child[0])
         .unwrap()
         .contains("Not exec'd yet"));
@@ -342,12 +342,12 @@ fn a_fork_shows_the_parent_image_greyed_and_a_thread_its_pid_and_tid() {
 }
 
 #[test]
-fn a_command_line_that_disagrees_with_the_image_has_no_warning_sign() {
+pub fn a_command_line_that_disagrees_with_the_image_has_no_warning_sign() {
     // The disagreement is a finding of Suspicious activity now (evasion.argv_masquerade).
     let nodes = process_nodes(&[exec(3, "/tmp/demo-all", &["ps", "aux"])]);
     let rows = process_rows(&nodes, None, &Suspicious::new());
     assert_eq!(rows[0][1].text, "ps aux");
-    assert_eq!(rows[0][1].color(), theme::text());
+    assert_eq!(rows[0][1].tone, Tone::Text);
     // The hover numbers the arguments and carries no warning sign.
     let hover = cell_hover(1, &rows[0][1], &rows[0][0]).unwrap();
     assert_eq!(hover, "argv[0] = ps\nargv[1] = aux\n2 arguments");
@@ -362,7 +362,7 @@ fn a_command_line_that_disagrees_with_the_image_has_no_warning_sign() {
 }
 
 #[test]
-fn the_exec_chain_the_environment_and_the_calls_are_kept_per_task() {
+pub fn the_exec_chain_the_environment_and_the_calls_are_kept_per_task() {
     let mut first = exec_env(3, "/bin/sh", &["sh"], &["PATH=/bin", "HOME=/root"]);
     first.entry.as_mut().unwrap().timestamp_ns = 1_000_000_000;
     let mut second = exec_env(
@@ -390,14 +390,14 @@ fn the_exec_chain_the_environment_and_the_calls_are_kept_per_task() {
 }
 
 #[test]
-fn a_fork_that_never_exec_s_has_its_parents_environment() {
+pub fn a_fork_that_never_exec_s_has_its_parents_environment() {
     let parent = exec_env(1, "/bin/sh", &["sh"], &["A=1"]);
     let nodes = process_nodes(&[parent, fork(1, 42)]);
     assert_eq!(node(&nodes, 42, 0).record.envp, ["A=1"]);
 }
 
 #[test]
-fn a_started_time_and_a_running_lifetime_read_from_the_run_start() {
+pub fn a_started_time_and_a_running_lifetime_read_from_the_run_start() {
     let mut early = exec(1, "/bin/sh", &["sh"]);
     early.entry.as_mut().unwrap().timestamp_ns = 5_000_000_000;
     early.exit.as_mut().unwrap().timestamp_ns = 5_000_000_000;
@@ -421,7 +421,7 @@ fn a_started_time_and_a_running_lifetime_read_from_the_run_start() {
 }
 
 #[test]
-fn a_fatal_signal_names_the_sender_only_when_a_kill_call_was_recorded() {
+pub fn a_fatal_signal_names_the_sender_only_when_a_kill_call_was_recorded() {
     let mut nodes = std::collections::BTreeMap::new();
     let key = |pid| TaskKey {
         pid,
@@ -447,7 +447,7 @@ fn a_fatal_signal_names_the_sender_only_when_a_kill_call_was_recorded() {
 }
 
 #[test]
-fn the_user_is_the_uid_or_uid_to_euid_from_the_credentials_the_run_recorded() {
+pub fn the_user_is_the_uid_or_uid_to_euid_from_the_credentials_the_run_recorded() {
     let mut start = exec(3, "/bin/su", &["su"]);
     start.kernel_notes.push(creds(
         [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000],
@@ -467,7 +467,7 @@ fn the_user_is_the_uid_or_uid_to_euid_from_the_credentials_the_run_recorded() {
 }
 
 #[test]
-fn the_argv_column_quotes_each_argument_and_the_hover_numbers_them() {
+pub fn the_argv_column_quotes_each_argument_and_the_hover_numbers_them() {
     let nodes = process_nodes(&[exec(3, "/bin/sh", &["sh", "-c", "curl x | sh"])]);
     let rows = process_rows(&nodes, None, &Suspicious::new());
     let cell = &rows[0][1];
@@ -491,7 +491,7 @@ fn the_argv_column_quotes_each_argument_and_the_hover_numbers_them() {
 /// A `vfork` child that execs at once is recorded before the parent's call
 /// returns, and the parent that made it is often not the process's main
 /// thread (Prometei, 2026-11-07; RotaJakiro, 2026-11-07).
-fn vfork_calls() -> Vec<InvocationSummary> {
+pub fn vfork_calls() -> Vec<InvocationSummary> {
     vec![
         as_task(exec(1160, "/tmp/p", &["p"]), 1160, 1160, 1),
         // Thread 1170 of process 1160 runs for a while.
@@ -512,7 +512,7 @@ fn vfork_calls() -> Vec<InvocationSummary> {
 }
 
 #[test]
-fn a_child_cloned_by_a_thread_hangs_under_the_process_not_the_thread() {
+pub fn a_child_cloned_by_a_thread_hangs_under_the_process_not_the_thread() {
     let nodes = process_nodes(&vfork_calls());
     let sh = node(&nodes, 1171, 12);
     let parent = sh.parent.expect("the sh has a parent");
@@ -530,7 +530,7 @@ fn a_child_cloned_by_a_thread_hangs_under_the_process_not_the_thread() {
 }
 
 #[test]
-fn the_settled_parents_name_the_process_for_a_child_seen_before_its_clone_returned() {
+pub fn the_settled_parents_name_the_process_for_a_child_seen_before_its_clone_returned() {
     let mut nodes = std::collections::BTreeMap::new();
     // Only the calls before the vfork returned: the sh has no parent yet.
     observe_processes(&mut nodes, &vfork_calls()[..3]);

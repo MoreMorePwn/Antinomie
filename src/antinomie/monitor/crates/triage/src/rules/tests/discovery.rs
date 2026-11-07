@@ -3,7 +3,7 @@ use super::support::*;
 use crate::query::RowValue;
 
 #[test]
-fn walking_the_process_list_is_low_after_ten_processes_or_with_ps() {
+pub fn walking_the_process_list_is_low_after_ten_processes_or_with_ps() {
     let mut calls = vec![open_read(1, "/proc", 3)];
     calls.push(sys(1, 217, "getdents64", [3, 0, 4096, 0, 0, 0], 512));
     for pid in 100..112 {
@@ -26,7 +26,7 @@ fn walking_the_process_list_is_low_after_ten_processes_or_with_ps() {
 }
 
 #[test]
-fn system_details_users_and_network_configuration_are_context() {
+pub fn system_details_users_and_network_configuration_are_context() {
     for path in [
         "/etc/os-release",
         "/proc/version",
@@ -107,7 +107,7 @@ fn system_details_users_and_network_configuration_are_context() {
 }
 
 #[test]
-fn a_sweep_of_directories_and_a_search_for_keys_is_low() {
+pub fn a_sweep_of_directories_and_a_search_for_keys_is_low() {
     let mut calls = Vec::new();
     for n in 0..250 {
         calls.push(open_read(1, &format!("/home/user/d{n}"), 3));
@@ -154,7 +154,7 @@ fn a_sweep_of_directories_and_a_search_for_keys_is_low() {
 }
 
 #[test]
-fn looking_for_security_software_is_medium_even_when_it_is_absent() {
+pub fn looking_for_security_software_is_medium_even_when_it_is_absent() {
     for path in [
         "/usr/local/aegis",
         "/etc/aliyun",
@@ -190,7 +190,7 @@ fn looking_for_security_software_is_medium_even_when_it_is_absent() {
 }
 
 #[test]
-fn many_hosts_or_ports_within_seconds_is_a_scan_and_failure_does_not_lower_it() {
+pub fn many_hosts_or_ports_within_seconds_is_a_scan_and_failure_does_not_lower_it() {
     let mut calls = vec![socket(1, 2, 1, 3)];
     for host in 1..=25u8 {
         let mut attempt = connect(1, 3, [198, 51, 100, host], 23);
@@ -221,7 +221,7 @@ fn many_hosts_or_ports_within_seconds_is_a_scan_and_failure_does_not_lower_it() 
 }
 
 #[test]
-fn a_dns_loop_reading_resolv_conf_again_and_again_is_flagged_once() {
+pub fn a_dns_loop_reading_resolv_conf_again_and_again_is_flagged_once() {
     let mut calls = Vec::new();
     for _ in 0..300 {
         calls.push(open_read(1, "/etc/resolv.conf", 3));
@@ -240,7 +240,7 @@ fn a_dns_loop_reading_resolv_conf_again_and_again_is_flagged_once() {
 }
 
 #[test]
-fn hardware_files_are_one_row_with_the_files_listed_and_startup_reads_are_not_discovery() {
+pub fn hardware_files_are_one_row_with_the_files_listed_and_startup_reads_are_not_discovery() {
     let out = run(vec![
         open_read(1, "/proc/cpuinfo", 3),
         open_read(1, "/sys/devices/system/cpu/cpu0/topology/core_id", 4),
@@ -280,7 +280,7 @@ fn hardware_files_are_one_row_with_the_files_listed_and_startup_reads_are_not_di
 }
 
 #[test]
-fn uname_the_system_call_is_kernel_discovery() {
+pub fn uname_the_system_call_is_kernel_discovery() {
     let out = run(vec![
         exec(1, "/tmp/x", &["x"]),
         sys(1, 63, "uname", [0x7000, 0, 0, 0, 0, 0], 0),
@@ -295,7 +295,7 @@ fn uname_the_system_call_is_kernel_discovery() {
 }
 
 #[test]
-fn interface_ioctls_and_route_queries_are_network_configuration() {
+pub fn interface_ioctls_and_route_queries_are_network_configuration() {
     for request in [0x8912u64, 0x8915, 0x8927, 0x891b, 0x8933] {
         let out = run(vec![
             socket(1, 2, 2, 3),

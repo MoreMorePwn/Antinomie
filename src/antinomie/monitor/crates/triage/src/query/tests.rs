@@ -2,7 +2,8 @@
 use super::*;
 use antinomie_monitor_core::{EventSummary, FieldSummary, InvocationSummary};
 
-const TABLE_FIELDS: &[FieldSpec<'static>] = &[
+
+pub const TABLE_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("name", "Displayed name"),
     FieldSpec::number("address", "Address"),
     FieldSpec::boolean("complete", "Completeness"),
@@ -10,7 +11,7 @@ const TABLE_FIELDS: &[FieldSpec<'static>] = &[
 ];
 
 #[test]
-fn typed_tables_preserve_unsigned_addresses_missing_values_and_string_case() {
+pub fn typed_tables_preserve_unsigned_addresses_missing_values_and_string_case() {
     let row = [
         ("name", RowValue::Text("Needs Review".into())),
         ("address", RowValue::Number(i128::from(u64::MAX))),
@@ -74,7 +75,7 @@ fn typed_tables_preserve_unsigned_addresses_missing_values_and_string_case() {
 }
 
 #[test]
-fn known_tag_completion_quotes_spaces_quotes_backslashes_and_unicode() {
+pub fn known_tag_completion_quotes_spaces_quotes_backslashes_and_unicode() {
     for tag in ["needs review", "a\"b", "a\\b", "révision", "and", "123"] {
         let source = "tag == ";
         let item = completions_with(source, source.len(), FilterScope::Record, &[tag.into()])
@@ -110,7 +111,7 @@ fn known_tag_completion_quotes_spaces_quotes_backslashes_and_unicode() {
 }
 
 #[test]
-fn completion_replaces_selection_and_does_not_offer_fields_as_values() {
+pub fn completion_replaces_selection_and_does_not_offer_fields_as_values() {
     let text = "syscall.num == 9 && args.pr || tid == 2";
     let start = text.find("args.pr").unwrap();
     let end = start + 7;
@@ -134,27 +135,7 @@ fn completion_replaces_selection_and_does_not_offer_fields_as_values() {
 }
 
 #[test]
-fn incomplete_table_drafts_keep_the_last_applied_filter() {
-    let ctx = egui::Context::default();
-    let row = [("address", RowValue::Number(9))];
-    for (draft, expected) in [
-        ("address == 9", true),
-        ("address ==", true),
-        ("address == 10", false),
-        ("address == 10 &&", false),
-        ("", true),
-    ] {
-        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
-            egui::CentralPanel::default().show(root, |ui| {
-                let compiled = applied_table(ui, draft, TABLE_FIELDS, "retention");
-                assert!(compiled.keep_table(&row) == expected, "{draft}");
-            });
-        });
-    }
-}
-
-#[test]
-fn oversized_recursive_expressions_are_rejected_before_parser_recursion() {
+pub fn oversized_recursive_expressions_are_rejected_before_parser_recursion() {
     for source in [
         format!("{}name{}", "(".repeat(65), ")".repeat(65)),
         format!("{}name", "!".repeat(257)),
@@ -171,15 +152,7 @@ fn oversized_recursive_expressions_are_rejected_before_parser_recursion() {
     assert!(compile_table(source, TABLE_FIELDS).error.is_none());
 }
 
-#[test]
-fn help_lists_schema_argument_names() {
-    assert!(guide_has("args.filename"));
-    assert!(guide_has("execve"));
-    assert!(guide_has("http.request.method"));
-    assert!(guide_has("dns.qry.name"));
-}
-
-fn call(nr: u64, name: &str, args: [u64; 6]) -> InvocationSummary {
+pub fn call(nr: u64, name: &str, args: [u64; 6]) -> InvocationSummary {
     InvocationSummary {
         stream_id: 1,
         task_cookie: 4,
@@ -212,7 +185,7 @@ fn call(nr: u64, name: &str, args: [u64; 6]) -> InvocationSummary {
 }
 
 #[test]
-fn call_id_matches_only_that_invocation() {
+pub fn call_id_matches_only_that_invocation() {
     let one = call(9, "mmap", [0, 4096, 7, 0, 2, 0]);
     assert_eq!(one.call_id, 1);
     assert!(compile_note("call.id == 5").error.is_none());
@@ -225,7 +198,7 @@ fn call_id_matches_only_that_invocation() {
 }
 
 #[test]
-fn comparisons_combine_syscall_number_and_named_argument() {
+pub fn comparisons_combine_syscall_number_and_named_argument() {
     let mmap = call(9, "mmap", [0, 4096, 7, 0, 2, 0]);
     assert!(matches("syscall.num == 9 && args.fd < 3", &mmap).unwrap());
     assert!(!matches("syscall.num == 9 && args.fd < 2", &mmap).unwrap());
@@ -235,7 +208,7 @@ fn comparisons_combine_syscall_number_and_named_argument() {
 }
 
 #[test]
-fn syscall_aliases_are_registered_and_resolve_schema_argument_spellings() {
+pub fn syscall_aliases_are_registered_and_resolve_schema_argument_spellings() {
     let mmap = call(9, "mmap", [0x1234, 4096, 7, 0, 2, 0]);
     for filter in [
         "syscall.number == 9",
@@ -258,7 +231,7 @@ fn syscall_aliases_are_registered_and_resolve_schema_argument_spellings() {
 }
 
 #[test]
-fn generated_captured_members_validate_complete_values_and_missing_ranges() {
+pub fn generated_captured_members_validate_complete_values_and_missing_ranges() {
     let mut invocation = call(437, "openat2", [u64::MAX - 99, 0x1000, 0x2000, 24, 0, 0]);
     let mut preview = Vec::new();
     for value in [7u64, 0o700, 0x1234] {
@@ -305,7 +278,7 @@ fn generated_captured_members_validate_complete_values_and_missing_ranges() {
 }
 
 #[test]
-fn process_provenance_requires_committed_exec_and_never_guesses_identity() {
+pub fn process_provenance_requires_committed_exec_and_never_guesses_identity() {
     let mut invocation = call(59, "execve", [0x1000, 0x2000, 0, 0, 0, 0]);
     invocation.entry.as_mut().unwrap().result = None;
     for (key, value) in [
@@ -349,7 +322,7 @@ fn process_provenance_requires_committed_exec_and_never_guesses_identity() {
 }
 
 #[test]
-fn ret_uses_exit_outcome_when_entry_result_is_absent() {
+pub fn ret_uses_exit_outcome_when_entry_result_is_absent() {
     let mut paired = call(9, "mmap", [0, 4096, 7, 0, 2, 0]);
     paired.entry.as_mut().unwrap().result = None;
     let mut exit = paired.entry.clone().unwrap();
@@ -374,7 +347,7 @@ fn ret_uses_exit_outcome_when_entry_result_is_absent() {
 }
 
 #[test]
-fn tag_does_not_match_path_text_stored_only_in_info() {
+pub fn tag_does_not_match_path_text_stored_only_in_info() {
     let mut row = call(2, "open", [0x1000, 0, 0, 0, 0, 0]);
     let path = b"/tmp/example\0";
     let captured = path.len() as u64;
@@ -416,7 +389,7 @@ fn tag_does_not_match_path_text_stored_only_in_info() {
 }
 
 #[test]
-fn typo_in_dotted_field_is_a_compile_error() {
+pub fn typo_in_dotted_field_is_a_compile_error() {
     let mmap = call(9, "mmap", [0, 4096, 7, 0, 2, 0]);
     let compiled = compile_note("syscall.typo == 9");
     assert!(compiled.error.is_some());
@@ -424,7 +397,7 @@ fn typo_in_dotted_field_is_a_compile_error() {
 }
 
 #[test]
-fn exists_set_mask_and_raw_slot() {
+pub fn exists_set_mask_and_raw_slot() {
     let mmap = call(9, "mmap", [0, 4096, 7, 0, 2, 0]);
     assert!(matches("exists ret", &mmap).unwrap());
     assert!(!matches("missing ret", &mmap).unwrap());
@@ -478,7 +451,7 @@ fn exists_set_mask_and_raw_slot() {
 }
 
 #[test]
-fn record_tags_come_from_annotations_not_from_the_path() {
+pub fn record_tags_come_from_annotations_not_from_the_path() {
     let labels = RecordLabels {
         id: "run-1",
         name: "sample",
@@ -503,7 +476,7 @@ fn record_tags_come_from_annotations_not_from_the_path() {
 }
 
 #[test]
-fn completions_keep_the_surrounding_clause_and_follow_the_registry() {
+pub fn completions_keep_the_surrounding_clause_and_follow_the_registry() {
     let text = "syscall.num == 9 && args.pr";
     let items = completions(text, text.len(), FilterScope::Syscall);
     let prot = items
@@ -560,221 +533,4 @@ fn completions_keep_the_surrounding_clause_and_follow_the_registry() {
         .all(|item| !item.insert.contains("exists")));
     let tags = completions_with("tag == mal", 10, FilterScope::Record, &["malware".into()]);
     assert!(tags.iter().any(|item| item.insert == "malware"));
-}
-
-#[test]
-#[ignore = "native X11 filter popup; stays open long enough to cover a 30s refresh"]
-fn native_filter_autocomplete() {
-    use std::time::{Duration, Instant};
-    use winit::platform::x11::EventLoopBuilderExtX11;
-    struct App {
-        syscall: String,
-        history: String,
-        packet: String,
-        frames: u64,
-        started: Instant,
-        deadline: Instant,
-        focused: bool,
-    }
-    impl eframe::App for App {
-        fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
-            let ctx = &root.ctx().clone();
-            self.frames += 1;
-            let elapsed = self.started.elapsed().as_secs();
-            egui::CentralPanel::default().show(root, |ui| {
-                ui.label(format!("refresh {elapsed}s · frame {}", self.frames));
-                ui.label("Syscall filter");
-                let syscall = crate::query::filter_edit(
-                    ui,
-                    &mut self.syscall,
-                    "Filter syscalls",
-                    ui.available_width(),
-                    FilterScope::Syscall,
-                );
-                ui.label("Run history filter");
-                let _ = crate::query::filter_edit(
-                    ui,
-                    &mut self.history,
-                    "Filter runs",
-                    ui.available_width(),
-                    FilterScope::Record,
-                );
-                ui.label("Packet filter");
-                let _ = crate::query::filter_edit(
-                    ui,
-                    &mut self.packet,
-                    "Filter packets",
-                    ui.available_width(),
-                    FilterScope::Packet,
-                );
-                if !self.focused {
-                    syscall.request_focus();
-                    self.focused = true;
-                }
-            });
-            let _ = std::fs::write(
-                "/tmp/antinomie-filter-refresh",
-                format!("{elapsed} {}\n", self.frames),
-            );
-            if Instant::now() >= self.deadline {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-            ctx.request_repaint_after(Duration::from_millis(100));
-        }
-    }
-    let wide = std::env::var_os("ANTINOMIE_FILTER_QA_WIDE").is_some();
-    let font = std::env::var("ANTINOMIE_FILTER_QA_FONT")
-        .ok()
-        .and_then(|value| value.parse::<f32>().ok())
-        .unwrap_or(if wide { 16.0 } else { 24.0 });
-    let seconds = std::env::var("ANTINOMIE_FILTER_QA_SECONDS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(35)
-        .clamp(1, 90);
-    eframe::run_native(
-        "Antinomie Filter QA",
-        eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_inner_size(if wide {
-                    [1100.0, 720.0]
-                } else {
-                    [420.0, 760.0]
-                })
-                .with_position([80.0, 60.0]),
-            persist_window: false,
-            event_loop_builder: Some(Box::new(|builder| {
-                builder.with_x11().with_any_thread(true);
-            })),
-            ..Default::default()
-        },
-        Box::new(move |cc| {
-            crate::theme::install(&cc.egui_ctx);
-            crate::theme::text_size(&cc.egui_ctx, font);
-            Ok(Box::new(App {
-                syscall: "syscall.num == 9 && args.pr".into(),
-                history: "entry.na".into(),
-                packet: "tcp.f".into(),
-                frames: 0,
-                started: Instant::now(),
-                deadline: Instant::now() + Duration::from_secs(seconds),
-                focused: false,
-            }))
-        }),
-    )
-    .unwrap();
-}
-
-/// Runs one filter-editor frame at a fixed time and returns the completion
-/// list's scroll offset (`None` while no popup is open).
-fn filter_frame(ctx: &egui::Context, text: &mut String, events: Vec<egui::Event>) -> Option<f32> {
-    let mut raw = egui::RawInput {
-        screen_rect: Some(egui::Rect::from_min_size(
-            egui::Pos2::ZERO,
-            egui::vec2(600.0, 600.0),
-        )),
-        events,
-        ..Default::default()
-    };
-    let frame = ctx.data_mut(|data| {
-        let frame: &mut u32 = data.get_temp_mut_or_default(egui::Id::new("test-frame"));
-        *frame += 1;
-        *frame
-    });
-    raw.time = Some(f64::from(frame) * 0.05);
-    let mut offset = None;
-    let _ = ctx.run_ui(raw, |root| {
-        egui::CentralPanel::default().show(root, |ui| {
-            let response = filter_edit(ui, text, "Filter", 300.0, FilterScope::Syscall);
-            if !response.has_focus() {
-                response.request_focus();
-            }
-            let id = ui.id().with(("filter-edit", "Filter")).with("offset");
-            offset = ui.data(|data| data.get_temp::<f32>(id));
-        });
-    });
-    offset
-}
-
-#[test]
-fn completion_list_keeps_the_scroll_position_the_user_chose() {
-    let ctx = egui::Context::default();
-    let mut text = String::new();
-    for _ in 0..3 {
-        filter_frame(&ctx, &mut text, Vec::new());
-    }
-    // Hover the popup (just below the editor) and wheel down.
-    let wheel = vec![
-        egui::Event::PointerMoved(egui::pos2(60.0, 80.0)),
-        egui::Event::MouseWheel {
-            phase: egui::TouchPhase::Move,
-            unit: egui::MouseWheelUnit::Point,
-            delta: egui::vec2(0.0, -400.0),
-            modifiers: egui::Modifiers::NONE,
-        },
-    ];
-    filter_frame(&ctx, &mut text, wheel);
-    let mut settled = 0.0;
-    for _ in 0..20 {
-        settled = filter_frame(&ctx, &mut text, Vec::new()).expect("popup is open");
-    }
-    assert!(settled > 5.0, "wheel scrolled the list down: {settled}");
-    for _ in 0..10 {
-        let offset = filter_frame(&ctx, &mut text, Vec::new()).expect("popup is open");
-        assert_eq!(offset, settled, "list jumped back by itself");
-    }
-}
-
-/// The texts and colors of one frame's text shapes.
-fn shown_texts(output: &egui::FullOutput) -> Vec<(String, egui::Color32)> {
-    fn collect(shape: &egui::Shape, texts: &mut Vec<(String, egui::Color32)>) {
-        match shape {
-            egui::Shape::Text(text) => {
-                let color = text
-                    .galley
-                    .job
-                    .sections
-                    .first()
-                    .map_or(egui::Color32::PLACEHOLDER, |section| section.format.color);
-                texts.push((text.galley.text().to_owned(), color));
-            }
-            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, texts)),
-            _ => {}
-        }
-    }
-    let mut texts = Vec::new();
-    for clipped in &output.shapes {
-        collect(&clipped.shape, &mut texts);
-    }
-    texts
-}
-
-#[test]
-fn empty_filter_boxes_show_a_muted_filter_e_g_placeholder() {
-    let ctx = egui::Context::default();
-    crate::theme::install(&ctx);
-    let mut text = String::new();
-    let mut table = String::new();
-    let output = ctx.run_ui(egui::RawInput::default(), |root| {
-        egui::CentralPanel::default().show(root, |ui| {
-            filter_edit(
-                ui,
-                &mut text,
-                "syscall == openat",
-                300.0,
-                FilterScope::Syscall,
-            );
-            filter_edit_fields(ui, &mut table, "name == nginx", 300.0, TABLE_FIELDS, &[]);
-        });
-    });
-    let shown = shown_texts(&output);
-    for placeholder in ["filter e.g. syscall == openat", "filter e.g. name == nginx"] {
-        let (_, color) = shown
-            .iter()
-            .find(|(text, _)| text == placeholder)
-            .unwrap_or_else(|| panic!("{placeholder} missing from {shown:?}"));
-        assert_eq!(*color, crate::theme::hint());
-        assert_ne!(*color, crate::theme::muted());
-    }
-    assert!(compile_note("syscall == openat").error.is_none());
 }

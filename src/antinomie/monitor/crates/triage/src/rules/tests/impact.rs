@@ -2,7 +2,7 @@
 use super::support::*;
 
 #[test]
-fn many_files_renamed_to_one_new_extension_is_a_ransomware_rewrite() {
+pub fn many_files_renamed_to_one_new_extension_is_a_ransomware_rewrite() {
     let renames: Calls = (0..25)
         .map(|n| {
             rename(
@@ -44,7 +44,7 @@ fn many_files_renamed_to_one_new_extension_is_a_ransomware_rewrite() {
 }
 
 #[test]
-fn the_same_note_in_three_directories_is_a_ransom_note() {
+pub fn the_same_note_in_three_directories_is_a_ransom_note() {
     let note = |dir: &str| open_write(1, &format!("{dir}/README_DECRYPT.txt"), 3);
     let out = run(vec![
         note("/home/user/a"),
@@ -69,7 +69,7 @@ fn the_same_note_in_three_directories_is_a_ransom_note() {
 }
 
 #[test]
-fn deleting_a_hundred_files_it_did_not_create_is_a_mass_delete() {
+pub fn deleting_a_hundred_files_it_did_not_create_is_a_mass_delete() {
     let deletes: Calls = (0..120)
         .map(|n| unlink(1, &format!("/home/user/dir{}/file{n}", n % 4)))
         .collect();
@@ -90,7 +90,7 @@ fn deleting_a_hundred_files_it_did_not_create_is_a_mass_delete() {
 }
 
 #[test]
-fn writing_a_disk_or_erasing_a_block_device_is_high() {
+pub fn writing_a_disk_or_erasing_a_block_device_is_high() {
     for path in [
         "/dev/sda",
         "/dev/vda1",
@@ -126,7 +126,7 @@ fn writing_a_disk_or_erasing_a_block_device_is_high() {
 }
 
 #[test]
-fn rebooting_or_replacing_the_kernel_is_high() {
+pub fn rebooting_or_replacing_the_kernel_is_high() {
     let reboot = |command: u64| {
         run(vec![sys(
             1,
@@ -181,7 +181,7 @@ fn rebooting_or_replacing_the_kernel_is_high() {
 }
 
 #[test]
-fn mining_is_found_in_arguments_names_and_stratum_traffic() {
+pub fn mining_is_found_in_arguments_names_and_stratum_traffic() {
     for argv in [
         vec![
             "xmrig",
@@ -250,7 +250,7 @@ fn mining_is_found_in_arguments_names_and_stratum_traffic() {
 }
 
 #[test]
-fn tuning_the_machine_for_mining_is_medium() {
+pub fn tuning_the_machine_for_mining_is_medium() {
     for path in [
         "/proc/sys/vm/nr_hugepages",
         "/sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages",
@@ -274,7 +274,7 @@ fn tuning_the_machine_for_mining_is_medium() {
 }
 
 #[test]
-fn a_runaway_fork_loop_is_medium_with_or_without_failures() {
+pub fn a_runaway_fork_loop_is_medium_with_or_without_failures() {
     let forks: Calls = (0..300u64)
         .map(|n| at(fork(1, 100 + n as i64), n * MS))
         .collect();
@@ -303,7 +303,7 @@ fn a_runaway_fork_loop_is_medium_with_or_without_failures() {
 }
 
 #[test]
-fn stopping_services_and_removing_recovery_are_medium() {
+pub fn stopping_services_and_removing_recovery_are_medium() {
     for script in [
         "systemctl stop mysql",
         "systemctl disable postgresql",
@@ -348,7 +348,7 @@ fn stopping_services_and_removing_recovery_are_medium() {
 }
 
 #[test]
-fn input_devices_the_screen_the_microphone_and_the_clipboard_are_collection() {
+pub fn input_devices_the_screen_the_microphone_and_the_clipboard_are_collection() {
     for (path, rule, expected) in [
         ("/dev/input/event3", "collection.keylog", "medium"),
         ("/dev/uinput", "collection.keylog", "medium"),
@@ -400,7 +400,7 @@ fn input_devices_the_screen_the_microphone_and_the_clipboard_are_collection() {
 }
 
 #[test]
-fn archiving_home_data_into_a_staging_directory_is_medium() {
+pub fn archiving_home_data_into_a_staging_directory_is_medium() {
     for argv in [
         vec!["tar", "czf", "/tmp/.a.tgz", "/home/user/Documents"],
         vec!["zip", "-r", "/dev/shm/x.zip", "/root/.ssh"],
@@ -433,7 +433,7 @@ fn archiving_home_data_into_a_staging_directory_is_medium() {
 
 /// A decoy datastore as a ransomware pass leaves it: each file opened without
 /// O_CREAT, overwritten, then renamed to one new extension.
-fn encrypt_in_place(count: u64, extension: &str, rename_them: bool) -> Calls {
+pub fn encrypt_in_place(count: u64, extension: &str, rename_them: bool) -> Calls {
     let mut calls: Calls = Vec::new();
     for n in 0..count {
         let path = format!("/srv/data/dir{}/record{n}.dat", n % 3);
@@ -449,7 +449,7 @@ fn encrypt_in_place(count: u64, extension: &str, rename_them: bool) -> Calls {
 }
 
 #[test]
-fn files_rewritten_in_place_and_renamed_to_one_extension_are_a_mass_rewrite() {
+pub fn files_rewritten_in_place_and_renamed_to_one_extension_are_a_mass_rewrite() {
     // Twelve files: below the 20 renames of impact.ransom_rewrite.
     let out = run(encrypt_in_place(12, "INC", true));
     assert_eq!(tier(&out, "impact.mass_rewrite").as_deref(), Some("high"));
@@ -469,7 +469,7 @@ fn files_rewritten_in_place_and_renamed_to_one_extension_are_a_mass_rewrite() {
 }
 
 #[test]
-fn ordinary_rewrites_and_renames_are_not_a_mass_rewrite() {
+pub fn ordinary_rewrites_and_renames_are_not_a_mass_rewrite() {
     // Five files encrypted: too few.
     assert!(!has(
         &run(encrypt_in_place(5, "INC", true)),
@@ -499,7 +499,7 @@ fn ordinary_rewrites_and_renames_are_not_a_mass_rewrite() {
 }
 
 /// The call as made by thread `tid` of process `pid`, with the thread's own cookie.
-fn as_thread(mut row: InvocationSummary, pid: u32, tid: u32) -> InvocationSummary {
+pub fn as_thread(mut row: InvocationSummary, pid: u32, tid: u32) -> InvocationSummary {
     row.task_cookie = u64::from(tid);
     for event in row.entry.iter_mut().chain(row.exit.iter_mut()) {
         event.pid = pid;
@@ -510,7 +510,7 @@ fn as_thread(mut row: InvocationSummary, pid: u32, tid: u32) -> InvocationSummar
 }
 
 /// Twelve renames to `.INC` shared out as 7/2/1/1/1 over five worker threads.
-fn thread_storm(pid_of: impl Fn(u32) -> u32) -> Calls {
+pub fn thread_storm(pid_of: impl Fn(u32) -> u32) -> Calls {
     let shares = [7, 2, 1, 1, 1];
     let mut calls: Calls = vec![exec(7, "/tmp/locker", &["locker"])];
     let mut n = 0;
@@ -530,7 +530,7 @@ fn thread_storm(pid_of: impl Fn(u32) -> u32) -> Calls {
 }
 
 #[test]
-fn renames_spread_over_the_threads_of_one_process_are_a_mass_rewrite() {
+pub fn renames_spread_over_the_threads_of_one_process_are_a_mass_rewrite() {
     // Every thread is below the threshold, the process as a whole is not.
     let out = run(thread_storm(|_| 7));
     assert_eq!(tier(&out, "impact.mass_rewrite").as_deref(), Some("high"));
@@ -544,7 +544,7 @@ fn renames_spread_over_the_threads_of_one_process_are_a_mass_rewrite() {
 }
 
 #[test]
-fn the_same_renames_by_five_separate_processes_are_not_summed() {
+pub fn the_same_renames_by_five_separate_processes_are_not_summed() {
     let out = run(thread_storm(|tid| tid));
     assert!(!has(&out, "impact.mass_rewrite"));
 }

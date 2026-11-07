@@ -4,7 +4,7 @@
 use super::rules::{view_keeps, Engine, Options, Output, View};
 use super::*;
 
-pub(super) fn call_args(invocation: &InvocationSummary) -> Option<[u64; 6]> {
+pub fn call_args(invocation: &InvocationSummary) -> Option<[u64; 6]> {
     invocation
         .entry
         .as_ref()
@@ -12,7 +12,7 @@ pub(super) fn call_args(invocation: &InvocationSummary) -> Option<[u64; 6]> {
         .or_else(|| invocation.exit.as_ref().and_then(|event| event.args))
 }
 
-pub(super) fn outcome(invocation: &InvocationSummary) -> String {
+pub fn outcome(invocation: &InvocationSummary) -> String {
     invocation
         .exit
         .as_ref()
@@ -27,11 +27,11 @@ pub(super) fn outcome(invocation: &InvocationSummary) -> String {
 }
 
 /// `setsockopt(fd, SOL_SOCKET, SO_ATTACH_FILTER)`. Another level with optname 26 is not a match.
-pub(super) fn classic_socket_filter(event: &EventSummary, args: [u64; 6]) -> bool {
+pub fn classic_socket_filter(event: &EventSummary, args: [u64; 6]) -> bool {
     event.syscall_name == "setsockopt" && args[1] == 1 && args[2] == 26
 }
 
-pub(super) fn filter_findings(rows: Vec<Finding>, filter: &str) -> Vec<Finding> {
+pub fn filter_findings(rows: Vec<Finding>, filter: &str) -> Vec<Finding> {
     let compiled = query::compile_table(filter, FINDING_FIELDS);
     rows.into_iter()
         .filter(|row| compiled.keep_table(&row.values))
@@ -40,7 +40,7 @@ pub(super) fn filter_findings(rows: Vec<Finding>, filter: &str) -> Vec<Finding> 
 
 /// The rows for calls held in memory, as the live view shows them: every tier
 /// the default view keeps, in time order.
-pub(super) fn suspicious_rows(invocations: &[InvocationSummary]) -> Vec<Finding> {
+pub fn suspicious_rows(invocations: &[InvocationSummary]) -> Vec<Finding> {
     suspicious_output(invocations, Options::default())
         .rows
         .into_iter()
@@ -50,7 +50,7 @@ pub(super) fn suspicious_rows(invocations: &[InvocationSummary]) -> Vec<Finding>
 
 /// Run the rules over calls in order, following the descriptor state the way
 /// the saved-recording scan does.
-pub(super) fn suspicious_output(invocations: &[InvocationSummary], options: Options) -> Output {
+pub fn suspicious_output(invocations: &[InvocationSummary], options: Options) -> Output {
     let mut files = FdState::default();
     let mut engine = Engine::new(options);
     let mut sets = std::collections::BTreeMap::new();

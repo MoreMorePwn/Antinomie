@@ -23,23 +23,23 @@ pub mod earlier;
 pub use earlier::{copy_boot, hash_read, resolve as resolve_earlier, ReadHashes};
 
 /// Files kept; the rest are counted.
-const FILES_MAX: usize = 4096;
+pub const FILES_MAX: usize = 4096;
 /// Events kept per file; the rest are counted.
-const EVENTS_PER_FILE: usize = 512;
+pub const EVENTS_PER_FILE: usize = 512;
 /// Events kept for the whole run.
-const EVENTS_MAX: usize = 100_000;
+pub const EVENTS_MAX: usize = 100_000;
 /// Octets of a transfer kept as its content preview.
-pub(super) const CONTENT_HEAD: usize = 64;
+pub const CONTENT_HEAD: usize = 64;
 /// Steps kept for the whole run; the rest are counted.
-const STEPS_MAX: usize = 400_000;
+pub const STEPS_MAX: usize = 400_000;
 /// Names a file was seen under, besides its first.
-const NAMES_MAX: usize = 16;
+pub const NAMES_MAX: usize = 16;
 /// Names followed to the file they lead to.
-const NAMES_TRACKED: usize = 65536;
+pub const NAMES_TRACKED: usize = 65536;
 
 /// What a call did to the file, the stage of its story.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Kind {
+pub enum Kind {
     Open,
     Create,
     Read,
@@ -56,7 +56,7 @@ pub(super) enum Kind {
 }
 
 impl Kind {
-    pub(super) fn verb(self) -> &'static str {
+    pub fn verb(self) -> &'static str {
         match self {
             Self::Open => "open",
             Self::Create => "create",
@@ -75,7 +75,7 @@ impl Kind {
     }
 
     /// Whether the call changes the file or its name.
-    pub(super) fn changes(self) -> bool {
+    pub fn changes(self) -> bool {
         matches!(
             self,
             Self::Create
@@ -91,7 +91,7 @@ impl Kind {
 
 /// One call on the file.
 #[derive(Clone, Debug)]
-pub(super) struct Event {
+pub struct Event {
     pub time: u64,
     pub key: trace::InvocationKey,
     /// Index into [`Activity::processes`].
@@ -124,7 +124,7 @@ pub(super) struct Event {
 
 /// A run of consecutive octets whose value the run changed.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ByteRun {
+pub struct ByteRun {
     pub offset: u64,
     /// `None` is an octet the run did not capture.
     pub before: Vec<Option<u8>>,
@@ -133,7 +133,7 @@ pub(super) struct ByteRun {
 
 /// A hash the guest took of the file.
 #[derive(Clone, Debug)]
-pub(super) struct HashNote {
+pub struct HashNote {
     pub time: u64,
     /// "closed after write" or "before delete": the only moments the guest
     /// hashes a file at (the exec image hash belongs to the process, not here).
@@ -147,7 +147,7 @@ pub(super) struct HashNote {
 
 /// What the change reconstruction knows of the file's contents.
 #[derive(Clone, Debug, Default)]
-pub(super) struct Contents {
+pub struct Contents {
     pub original_size: Option<u64>,
     pub final_size: Option<u64>,
     pub differing: usize,
@@ -159,7 +159,7 @@ pub(super) struct Contents {
 
 /// Everything the run did to one file.
 #[derive(Clone, Debug)]
-pub(super) struct FileActivity {
+pub struct FileActivity {
     pub path: String,
     pub path_known: bool,
     /// Other names the file was reached by (renames, links, descriptors).
@@ -200,7 +200,7 @@ pub(super) struct FileActivity {
 
 /// A file's bytes at the start of the run, and where to read them.
 #[derive(Clone, Debug)]
-pub(super) struct Earlier {
+pub struct Earlier {
     pub before: antinomie_monitor_core::file_before::Before,
     /// Where the bytes are read from; the File Reconstruction byte map
     /// (a later card) is its reader.
@@ -210,19 +210,19 @@ pub(super) struct Earlier {
 
 impl FileActivity {
     /// The file lies in a library directory (the Hide library toggle).
-    pub(super) fn library(&self) -> bool {
+    pub fn library(&self) -> bool {
         file_visibility::library_path(&self.path)
     }
 
     /// Whether any call changed the file or its name and succeeded.
-    pub(super) fn changed(&self) -> bool {
+    pub fn changed(&self) -> bool {
         self.events
             .iter()
             .any(|event| event.kind.changes() && event.success != Some(false))
     }
 
     /// "3 writes, 1 read, deleted": the stages in order of first appearance.
-    pub(super) fn summary(&self) -> String {
+    pub fn summary(&self) -> String {
         let mut counts: Vec<(Kind, usize)> = Vec::new();
         for event in &self.events {
             match counts.iter_mut().find(|(kind, _)| *kind == event.kind) {
@@ -246,7 +246,7 @@ impl FileActivity {
 
 /// The run's file activity.
 #[derive(Clone, Debug, Default)]
-pub(super) struct Activity {
+pub struct Activity {
     /// In order of the first call on each file.
     pub files: Vec<FileActivity>,
     /// Process id, thread id and image of whoever made the calls.
@@ -261,7 +261,7 @@ pub(super) struct Activity {
 }
 
 impl Activity {
-    pub(super) fn process_label(&self, index: u32) -> String {
+    pub fn process_label(&self, index: u32) -> String {
         match self.processes.get(index as usize) {
             Some((pid, tid, image)) => {
                 super::process_cells::task_label(*pid, *tid, image.as_deref())
@@ -272,7 +272,7 @@ impl Activity {
 }
 
 /// What the file index tells the activity of one file call.
-pub(super) struct Record<'a> {
+pub struct Record<'a> {
     /// The name the call reached the file by, or the unavailable-path mark.
     pub path: &'a str,
     pub path_known: bool,
@@ -294,7 +294,7 @@ pub(super) struct Record<'a> {
 
 /// A change to a file that is not a read or write of bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Shape {
+pub enum Shape {
     /// The file was cut or extended to this size (truncate, `O_TRUNC`).
     Resize(u64),
     /// A range reads back as zeros (punch hole, zero range).
@@ -306,7 +306,7 @@ pub(super) enum Shape {
 }
 
 /// A read or write, as far as the host can place it.
-pub(super) struct Transfer {
+pub struct Transfer {
     pub write: bool,
     pub offset: Option<u64>,
     pub len: u64,
@@ -325,7 +325,7 @@ pub(super) struct Transfer {
 
 /// Pages of a file written through a shared mapping, as the guest saw them
 /// at writeback or unmap (revision 18), for the file's history.
-pub(super) struct Mapped<'a> {
+pub struct Mapped<'a> {
     pub record: &'a FileMapped,
     /// The name the file index knows the file by, if any.
     pub path: Option<&'a str>,
@@ -342,23 +342,23 @@ pub(super) struct Mapped<'a> {
 /// guest recorded one, so its names join; where it did not, a name is a file
 /// until a rename or link gives the same file another.
 #[derive(Default)]
-pub(super) struct Builder {
-    files: BTreeMap<String, FileActivity>,
+pub struct Builder {
+    pub files: BTreeMap<String, FileActivity>,
     /// The file each name leads to now.
-    current: BTreeMap<String, String>,
-    processes: Vec<(u32, u32, Option<String>)>,
-    events: usize,
-    omitted_files: u64,
-    omitted_events: u64,
-    budget: Budget,
+    pub current: BTreeMap<String, String>,
+    pub processes: Vec<(u32, u32, Option<String>)>,
+    pub events: usize,
+    pub omitted_files: u64,
+    pub omitted_events: u64,
+    pub budget: Budget,
     /// Steps kept for the whole run.
-    steps: usize,
+    pub steps: usize,
     /// The recording segment being read.
-    segment: usize,
-    kernel_revision: Option<u32>,
+    pub segment: usize,
+    pub kernel_revision: Option<u32>,
 }
 
-fn kind_of(hits: &[Hit], name: &str, transfer: Option<&Transfer>) -> Kind {
+pub fn kind_of(hits: &[Hit], name: &str, transfer: Option<&Transfer>) -> Kind {
     let has = |category| hits.iter().any(|hit| hit.category == category);
     if has(Category::Deleted) {
         Kind::Delete
@@ -393,20 +393,20 @@ fn kind_of(hits: &[Hit], name: &str, transfer: Option<&Transfer>) -> Kind {
 
 impl Builder {
     /// The calls that follow come from recording segment `segment`.
-    pub(super) fn set_segment(&mut self, segment: usize) {
+    pub fn set_segment(&mut self, segment: usize) {
         self.segment = segment;
     }
 
     /// The caps on the write content kept (set before the first call).
-    pub(super) fn set_limits(&mut self, limits: Limits) {
+    pub fn set_limits(&mut self, limits: Limits) {
         self.budget = Budget::new(limits);
     }
 
-    pub(super) fn set_kernel_revision(&mut self, revision: Option<u32>) {
+    pub fn set_kernel_revision(&mut self, revision: Option<u32>) {
         self.kernel_revision = revision;
     }
 
-    fn process(&mut self, pid: u32, tid: u32, image: Option<&str>) -> u32 {
+    pub fn process(&mut self, pid: u32, tid: u32, image: Option<&str>) -> u32 {
         let key = (pid, tid, image.map(str::to_owned));
         if let Some(index) = self.processes.iter().position(|known| *known == key) {
             return index as u32;
@@ -418,7 +418,7 @@ impl Builder {
     /// The key of the file a record is about. Identity first; else the file
     /// the name leads to now; else the name; a call with no name is keyed by
     /// the task and descriptor.
-    fn key(&mut self, record: &Record<'_>) -> String {
+    pub fn key(&mut self, record: &Record<'_>) -> String {
         if let Some(id) = &record.identity {
             let key = format!("id:{}:{}:{}", id.key.dev, id.key.ino, id.key.generation);
             if record.path_known && self.current.len() < NAMES_TRACKED {
@@ -440,7 +440,7 @@ impl Builder {
         )
     }
 
-    pub(super) fn record(&mut self, record: Record<'_>) {
+    pub fn record(&mut self, record: Record<'_>) {
         let key = self.key(&record);
         let Record {
             path,
@@ -663,7 +663,7 @@ impl Builder {
 
     /// Pages written through a mapping: a write of the file in its history,
     /// placed as mapping ranges in its written content.
-    pub(super) fn mapped(&mut self, mapped: Mapped<'_>) {
+    pub fn mapped(&mut self, mapped: Mapped<'_>) {
         let record = mapped.record;
         let id = record.file;
         let key = format!("id:{}:{}:{}", id.dev, id.ino, id.generation);
@@ -769,7 +769,7 @@ impl Builder {
     }
 
     /// A hash the guest took of the file `identity`, or else the one at `path`.
-    pub(super) fn hash(
+    pub fn hash(
         &mut self,
         identity: Option<FileKey>,
         path: Option<&str>,
@@ -798,7 +798,7 @@ impl Builder {
 
     /// The files in order of first call. `contents` gives what the change
     /// reconstruction knows of a file.
-    pub(super) fn finish(
+    pub fn finish(
         self,
         mut contents: impl FnMut(&FileActivity) -> Option<Contents>,
     ) -> Activity {
@@ -821,6 +821,70 @@ impl Builder {
             written: self.budget.run,
             limits: self.budget.limits,
             kernel_revision: self.kernel_revision,
+        }
+    }
+}
+
+/// Which name a file renamed during the run is listed, searched and
+/// sorted by.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NameChoice {
+    /// The name it had last (`web01.vswp.INC`).
+    #[default]
+    Last,
+    /// The name it was first reached by (`web01.vswp`).
+    First,
+}
+
+impl NameChoice {
+    pub const ALL: [Self; 2] = [Self::Last, Self::First];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Last => "Last name",
+            Self::First => "First name",
+        }
+    }
+}
+
+impl FileActivity {
+    /// The file's SHA-256: the guest's hash of it, else the last one it took
+    /// in the run, else the starting disk's for a file the run only read.
+    pub fn sha256(&self) -> Option<String> {
+        use antinomie_monitor_core::file_before::StartHash;
+        self.contents
+            .hash
+            .as_ref()
+            .and_then(|hash| hash.sha256_hex())
+            .or_else(|| {
+                self.hashes
+                    .iter()
+                    .rev()
+                    .find_map(|note| note.sha256.clone())
+            })
+            .or_else(|| match &self.start_hash {
+                Some(StartHash::Hashed { sha256, .. }) => Some(sha256.clone()),
+                _ => None,
+            })
+    }
+
+    /// The name the file had after its last successful rename, if it was
+    /// renamed.
+    pub fn last_name(&self) -> Option<&str> {
+        self.events
+            .iter()
+            .filter(|event| event.kind == Kind::Rename && event.success != Some(false))
+            .filter_map(|event| event.other_path.as_deref())
+            .next_back()
+            .filter(|name| *name != self.path)
+    }
+
+    /// The name the list shows under `choice`, and the other one, if any.
+    pub fn names_by(&self, choice: NameChoice) -> (&str, Option<&str>) {
+        match (choice, self.last_name()) {
+            (NameChoice::Last, Some(last)) => (last, Some(self.path.as_str())),
+            (NameChoice::First, Some(last)) => (self.path.as_str(), Some(last)),
+            (_, None) => (self.path.as_str(), None),
         }
     }
 }

@@ -5,21 +5,21 @@ use super::bytes::ByteStore;
 use super::Change;
 use crate::trace;
 
-const MIB: usize = 1 << 20;
+pub const MIB: usize = 1 << 20;
 /// Most bytes of a transfer held at once while they are placed: a call's
 /// buffer is placed in pieces this size, not copied whole.
-const STORE_STEP: usize = 65_536;
+pub const STORE_STEP: usize = 65_536;
 
 /// The caps on the bytes rebuilt, in bytes: per file, and over every file of a
 /// run's view. Settings > Analysis limits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::triage) struct Retention {
+pub struct Retention {
     pub per_file: usize,
     pub per_run: usize,
 }
 
-pub(in crate::triage) const DEFAULT_FILE_MIB: u32 = 16;
-pub(in crate::triage) const DEFAULT_RUN_MIB: u32 = 256;
+pub const DEFAULT_FILE_MIB: u32 = 16;
+pub const DEFAULT_RUN_MIB: u32 = 256;
 
 impl Default for Retention {
     fn default() -> Self {
@@ -28,7 +28,7 @@ impl Default for Retention {
 }
 
 impl Retention {
-    pub(in crate::triage) fn from_mib(file: u32, run: u32) -> Self {
+    pub fn from_mib(file: u32, run: u32) -> Self {
         Self {
             per_file: file as usize * MIB,
             per_run: run as usize * MIB,
@@ -38,7 +38,7 @@ impl Retention {
 
 /// The bytes the run's files hold so far, against the caps, and the call that
 /// is being applied.
-pub(super) struct Budget<'a> {
+pub struct Budget<'a> {
     pub used: &'a mut usize,
     pub retention: Retention,
     pub call: trace::InvocationKey,
@@ -46,7 +46,7 @@ pub(super) struct Budget<'a> {
 
 /// Which cap stopped the rebuild, and where.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct LimitHit {
+pub struct LimitHit {
     pub run_wide: bool,
     pub call: trace::InvocationKey,
     pub kept: usize,
@@ -55,7 +55,7 @@ pub(super) struct LimitHit {
 
 /// A call whose captured buffer held fewer bytes than the call moved.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct ShortCapture {
+pub struct ShortCapture {
     pub what: &'static str,
     pub first: trace::InvocationKey,
     pub moved: u64,
@@ -65,7 +65,7 @@ pub(super) struct ShortCapture {
 
 /// One thing said about a file's rebuild, with where to go from it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::triage) struct GapNote {
+pub struct GapNote {
     pub text: String,
     /// The text is about a limit that Settings raises.
     pub limit: bool,
@@ -74,7 +74,7 @@ pub(in crate::triage) struct GapNote {
 }
 
 impl GapNote {
-    pub(in crate::triage) fn plain(text: &str) -> Self {
+    pub fn plain(text: &str) -> Self {
         Self {
             text: text.to_owned(),
             limit: false,
@@ -87,7 +87,7 @@ impl Change {
     /// Put the bytes of a transfer at `offset` (relative offset, value) in the
     /// rebuilt file, within the caps. With `original`, bytes not known before
     /// are also the file's first known contents.
-    pub(super) fn store(
+    pub fn store(
         &mut self,
         offset: u64,
         bytes: impl Iterator<Item = (u64, u8)>,
@@ -119,7 +119,7 @@ impl Change {
     }
 
     /// Whether all of `run` was kept; once a cap cuts it, nothing more fits.
-    fn store_run(
+    pub fn store_run(
         &mut self,
         start: u64,
         run: &[u8],
@@ -167,7 +167,7 @@ impl Change {
 
     /// A call (`what`: "write", "read"...) moved `moved` bytes and the
     /// recording captured `captured` of its buffer.
-    pub(super) fn note_short_capture(
+    pub fn note_short_capture(
         &mut self,
         what: &'static str,
         call: trace::InvocationKey,
@@ -189,7 +189,7 @@ impl Change {
     }
 
     /// Everything said about what is missing from this file's rebuild.
-    pub(super) fn gap_notes(&self) -> Vec<GapNote> {
+    pub fn gap_notes(&self) -> Vec<GapNote> {
         let mut notes: Vec<GapNote> = self.gaps.iter().map(|gap| GapNote::plain(gap)).collect();
         if let Some(hit) = &self.limit_hit {
             let (which, setting) = if hit.run_wide {

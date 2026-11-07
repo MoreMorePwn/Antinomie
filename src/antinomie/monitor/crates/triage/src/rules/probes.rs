@@ -13,20 +13,20 @@ use super::state::{State, Window};
 use super::{Hit, Tier};
 use std::collections::BTreeMap;
 
-const NS: u64 = 1_000_000_000;
+pub const NS: u64 = 1_000_000_000;
 /// How long after the last check the task is watched.
-const WATCH: u64 = 30 * NS;
+pub const WATCH: u64 = 30 * NS;
 /// An exit or a sleep this soon after a revealing answer looks like a reaction.
-const REACTION: u64 = 5 * NS;
+pub const REACTION: u64 = 5 * NS;
 /// Anything longer than this is "a sleep" for the follow-up summary.
-const SLEEP_NOTE: u64 = 5 * NS;
-const PROBE_LIMIT: usize = 256;
-const EVENT_LIMIT: usize = 512;
+pub const SLEEP_NOTE: u64 = 5 * NS;
+pub const PROBE_LIMIT: usize = 256;
+pub const EVENT_LIMIT: usize = 512;
 /// Time reads per second that make a timing loop.
-const TIMING_READS: usize = 32;
+pub const TIMING_READS: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum Class {
+pub enum Class {
     Dmi,
     Cpu,
     Storage,
@@ -39,7 +39,7 @@ pub(super) enum Class {
 }
 
 impl Class {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Dmi => "machine identity (DMI/SMBIOS)",
             Self::Cpu => "CPU",
@@ -54,7 +54,7 @@ impl Class {
     }
 
     /// What decides the answer, in the words of the Device profile window.
-    fn decided_by(self) -> &'static str {
+    pub fn decided_by(self) -> &'static str {
         match self {
             Self::Dmi => "Device profile › Machine identity (BIOS, system, board and chassis strings, serials, UUID).",
             Self::Cpu => "Device profile › CPU (hypervisor flag, KVM signature, model and brand).",
@@ -69,7 +69,7 @@ impl Class {
     }
 
     /// Checks of these classes are listed under the debugger or container rows.
-    fn row(self) -> &'static str {
+    pub fn row(self) -> &'static str {
         match self {
             Self::Debugger => "evasion.debugger_check",
             Self::Container => "evasion.container_check",
@@ -79,21 +79,21 @@ impl Class {
 }
 
 /// One check: what was looked at, and what came back.
-pub(super) struct Probe {
-    class: Class,
-    what: String,
-    via: &'static str,
-    key: (u64, u64, u64),
-    time: u64,
-    answer: Option<String>,
+pub struct Probe {
+    pub class: Class,
+    pub what: String,
+    pub via: &'static str,
+    pub key: (u64, u64, u64),
+    pub time: u64,
+    pub answer: Option<String>,
     /// The answer gives a VM, a container or a debugger away.
-    shows: Option<bool>,
-    count: u64,
-    gaps: Gaps,
+    pub shows: Option<bool>,
+    pub count: u64,
+    pub gaps: Gaps,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Event {
+pub enum Event {
     Network,
     Write,
     Spawn,
@@ -102,23 +102,23 @@ enum Event {
 }
 
 #[derive(Default)]
-pub(super) struct TaskProbes {
-    pid: u32,
-    tid: u32,
-    items: Vec<Probe>,
+pub struct TaskProbes {
+    pub pid: u32,
+    pub tid: u32,
+    pub items: Vec<Probe>,
     /// Descriptor → the check that waits for its first read.
-    pending: BTreeMap<u64, usize>,
-    network_before: u32,
-    writes_before: u32,
-    events: Vec<(u64, Event)>,
-    last: u64,
-    reads: Window<u64>,
-    timing_done: bool,
+    pub pending: BTreeMap<u64, usize>,
+    pub network_before: u32,
+    pub writes_before: u32,
+    pub events: Vec<(u64, Event)>,
+    pub last: u64,
+    pub reads: Window<u64>,
+    pub timing_done: bool,
 }
 
 #[derive(Default)]
-pub(super) struct Probes {
-    tasks: BTreeMap<u64, TaskProbes>,
+pub struct Probes {
+    pub tasks: BTreeMap<u64, TaskProbes>,
     /// Tasks that called `PTRACE_TRACEME` and have not exec'd since.
     pub traceme: std::collections::BTreeSet<u64>,
     /// Tasks whose `PTRACE_TRACEME` was followed by an exec: a debugger's child.
@@ -126,7 +126,7 @@ pub(super) struct Probes {
 }
 
 /// What a path says to a check, if it is one.
-fn classify(path: &str) -> Option<Class> {
+pub fn classify(path: &str) -> Option<Class> {
     let p = path;
     if p.starts_with("/sys/class/dmi/id/")
         || p.starts_with("/sys/devices/virtual/dmi/id/")
@@ -185,7 +185,7 @@ fn classify(path: &str) -> Option<Class> {
     }
 }
 
-const VM_WORDS: &[&str] = &[
+pub const VM_WORDS: &[&str] = &[
     "qemu",
     "kvm",
     "virtualbox",
@@ -208,18 +208,18 @@ const VM_WORDS: &[&str] = &[
     "vmw",
 ];
 
-fn mentions_vm(text: &str) -> bool {
+pub fn mentions_vm(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     VM_WORDS.iter().any(|word| lower.contains(word))
 }
 
-fn first_line(bytes: &[u8]) -> String {
+pub fn first_line(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
     let line = text.lines().next().unwrap_or("").trim().to_owned();
     shorten(&line, 90)
 }
 
-fn shorten(text: &str, limit: usize) -> String {
+pub fn shorten(text: &str, limit: usize) -> String {
     let mut shown: String = text.chars().take(limit).collect();
     if text.chars().count() > limit {
         shown.push('…');
@@ -228,7 +228,7 @@ fn shorten(text: &str, limit: usize) -> String {
 }
 
 /// What the bytes a check read say, and whether they would give a VM, container or debugger away.
-fn judge(class: Class, path: &str, bytes: &[u8], cloud: bool) -> (String, Option<bool>) {
+pub fn judge(class: Class, path: &str, bytes: &[u8], cloud: bool) -> (String, Option<bool>) {
     let text = String::from_utf8_lossy(bytes);
     match class {
         Class::Dmi => {
@@ -342,7 +342,7 @@ fn judge(class: Class, path: &str, bytes: &[u8], cloud: bool) -> (String, Option
 }
 
 /// How an existence check came out.
-fn existence(cx: &Ctx, class: Class) -> (String, Option<bool>) {
+pub fn existence(cx: &Ctx, class: Class) -> (String, Option<bool>) {
     let Some(ret) = cx.ret else {
         return ("no result recorded".into(), None);
     };
@@ -357,7 +357,7 @@ fn existence(cx: &Ctx, class: Class) -> (String, Option<bool>) {
 }
 
 impl TaskProbes {
-    fn record(&mut self, probe: Probe) -> usize {
+    pub fn record(&mut self, probe: Probe) -> usize {
         if let Some(index) = self.items.iter().position(|old| {
             old.class == probe.class && old.what == probe.what && old.via == probe.via
         }) {
@@ -379,7 +379,7 @@ impl TaskProbes {
     }
 }
 
-fn new_probe(cx: &Ctx, class: Class, what: &str, answer: Option<(String, Option<bool>)>) -> Probe {
+pub fn new_probe(cx: &Ctx, class: Class, what: &str, answer: Option<(String, Option<bool>)>) -> Probe {
     let (answer, shows) = answer.map_or((None, None), |(text, shows)| (Some(text), shows));
     let mut gaps = Gaps::default();
     gaps.add(cx.time());
@@ -396,7 +396,7 @@ fn new_probe(cx: &Ctx, class: Class, what: &str, answer: Option<(String, Option<
     }
 }
 
-fn probe_via(name: &str) -> &'static str {
+pub fn probe_via(name: &str) -> &'static str {
     match name {
         "open" | "openat" | "openat2" => "open",
         "stat" | "lstat" | "newfstatat" | "statx" | "fstat" => "stat",
@@ -414,7 +414,7 @@ fn probe_via(name: &str) -> &'static str {
 }
 
 /// The caller is a program of the base system, not one the run brought.
-fn system_program(cx: &Ctx) -> bool {
+pub fn system_program(cx: &Ctx) -> bool {
     cx.image.is_some_and(|image| {
         [
             "/usr/bin/",
@@ -429,7 +429,7 @@ fn system_program(cx: &Ctx) -> bool {
     })
 }
 
-fn task<'a>(st: &'a mut State, cx: &Ctx) -> &'a mut TaskProbes {
+pub fn task<'a>(st: &'a mut State, cx: &Ctx) -> &'a mut TaskProbes {
     let entry = st.probes.tasks.entry(cx.call.task_cookie).or_default();
     entry.pid = cx.event.pid;
     entry.tid = cx.event.tid;
@@ -437,7 +437,7 @@ fn task<'a>(st: &'a mut State, cx: &Ctx) -> &'a mut TaskProbes {
 }
 
 /// A file the call opened, read or looked up may be a check.
-pub(super) fn path(cx: &Ctx, st: &mut State, touch: &Touch, _out: &mut Vec<Hit>) {
+pub fn path(cx: &Ctx, st: &mut State, touch: &Touch, _out: &mut Vec<Hit>) {
     let own = proc_self(&touch.path, cx.event.pid);
     let Some(class) = classify(&own) else { return };
     let disk = |class: Class| {
@@ -505,7 +505,7 @@ pub(super) fn path(cx: &Ctx, st: &mut State, touch: &Touch, _out: &mut Vec<Hit>)
 }
 
 /// Calls that are checks without naming a file.
-pub(super) fn call(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn call(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     match cx.name {
         "ptrace" if cx.args[0] == 0 => {
             // PTRACE_TRACEME: -EPERM means something already traces this task.
@@ -607,7 +607,7 @@ pub(super) fn call(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
 }
 
 /// A program that runs a check for the task, such as `dmidecode` or `systemd-detect-virt`.
-pub(super) fn tool(cx: &Ctx, st: &mut State, name: &str, text: &str) {
+pub fn tool(cx: &Ctx, st: &mut State, name: &str, text: &str) {
     let class = match name {
         "dmidecode" => Class::Dmi,
         "lscpu" => Class::Cpu,
@@ -622,7 +622,7 @@ pub(super) fn tool(cx: &Ctx, st: &mut State, name: &str, text: &str) {
 }
 
 /// The task wrote a file.
-pub(super) fn note_write(cx: &Ctx, st: &mut State) {
+pub fn note_write(cx: &Ctx, st: &mut State) {
     let tp = st.probes.tasks.entry(cx.call.task_cookie).or_default();
     if tp.items.is_empty() {
         tp.writes_before += 1;
@@ -632,7 +632,7 @@ pub(super) fn note_write(cx: &Ctx, st: &mut State) {
 }
 
 /// Behaviour around the checks: network use, writes, new processes, sleeps and exit.
-pub(super) fn behaviour(cx: &Ctx, st: &mut State) {
+pub fn behaviour(cx: &Ctx, st: &mut State) {
     let time = cx.time();
     let event = match cx.name {
         "socket" | "connect" | "sendto" | "sendmsg" | "bind" | "listen" | "accept" => {
@@ -668,7 +668,7 @@ pub(super) fn behaviour(cx: &Ctx, st: &mut State) {
 }
 
 /// The requested sleep, in nanoseconds, of `nanosleep` and `clock_nanosleep`.
-pub(super) fn sleep_ns(cx: &Ctx) -> Option<u64> {
+pub fn sleep_ns(cx: &Ctx) -> Option<u64> {
     let argument = cx.argument("rqtp")?;
     let seconds = cx.word(argument, "", 0)?;
     let nanos = cx.word(argument, "", 8).unwrap_or(0);
@@ -680,7 +680,7 @@ pub(super) fn sleep_ns(cx: &Ctx) -> Option<u64> {
 }
 
 /// One row per task and kind of check, with the follow-up and the verdict.
-pub(super) fn rows(st: &State, files: &FdState) -> Vec<Agg> {
+pub fn rows(st: &State, files: &FdState) -> Vec<Agg> {
     let mut rows = Vec::new();
     for (cookie, tp) in &st.probes.tasks {
         if tp.items.is_empty() {
@@ -737,20 +737,20 @@ pub(super) fn rows(st: &State, files: &FdState) -> Vec<Agg> {
 }
 
 /// What the task did in the thirty seconds after its last check.
-struct Follow {
-    exited: Option<u64>,
-    network: u32,
-    writes: u32,
-    spawned: u32,
-    longest_sleep: u64,
-    sleep_at: Option<u64>,
-    network_before: u32,
-    writes_before: u32,
-    seconds_seen: bool,
+pub struct Follow {
+    pub exited: Option<u64>,
+    pub network: u32,
+    pub writes: u32,
+    pub spawned: u32,
+    pub longest_sleep: u64,
+    pub sleep_at: Option<u64>,
+    pub network_before: u32,
+    pub writes_before: u32,
+    pub seconds_seen: bool,
 }
 
 impl Follow {
-    fn describe(&self) -> String {
+    pub fn describe(&self) -> String {
         let mut parts = Vec::new();
         if let Some(delta) = self.exited {
             parts.push(format!(
@@ -795,7 +795,7 @@ impl Follow {
     }
 
     /// An exit or a long sleep right after a check that gave the VM away, with no work done.
-    fn reaction(&self, revealing: bool) -> Option<&'static str> {
+    pub fn reaction(&self, revealing: bool) -> Option<&'static str> {
         if !revealing || self.network + self.writes + self.spawned > 0 {
             return None;
         }
@@ -808,7 +808,7 @@ impl Follow {
     }
 }
 
-fn follow_up(tp: &TaskProbes) -> Follow {
+pub fn follow_up(tp: &TaskProbes) -> Follow {
     let last = tp.last;
     let mut follow = Follow {
         exited: None,
@@ -845,7 +845,7 @@ fn follow_up(tp: &TaskProbes) -> Follow {
     follow
 }
 
-fn base_row(
+pub fn base_row(
     rule: &'static str,
     cookie: u64,
     tp: &TaskProbes,
@@ -886,7 +886,7 @@ fn base_row(
     }
 }
 
-fn row(
+pub fn row(
     rule: &'static str,
     cookie: u64,
     tp: &TaskProbes,

@@ -2,16 +2,16 @@
 //! A call's whole captured buffer is placed in the rebuilt file, within the
 //! budgets only, and the short-capture note fires for a real short capture.
 use super::*;
-use crate::triage::tests::{call, captured, path_call};
+use crate::tests::{call, captured, path_call};
 use std::path::PathBuf;
 
-const SIZE: u64 = 1_286_144;
+pub const SIZE: u64 = 1_286_144;
 
-fn pattern(length: u64) -> Vec<u8> {
+pub fn pattern(length: u64) -> Vec<u8> {
     (0..length).map(|at| (at % 251) as u8).collect()
 }
 
-fn scratch(name: &str) -> PathBuf {
+pub fn scratch(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("ant-file-bytes-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("objects")).unwrap();
@@ -19,7 +19,7 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 /// A pwrite64 of `size` bytes whose buffer the recording kept `kept` of.
-fn pwrite(size: u64, kept: u64) -> InvocationSummary {
+pub fn pwrite(size: u64, kept: u64) -> InvocationSummary {
     let mut write = call(1, 18, "pwrite64", size as i64);
     write.call_id = 2;
     let entry = write.entry.as_mut().unwrap();
@@ -35,7 +35,7 @@ fn pwrite(size: u64, kept: u64) -> InvocationSummary {
     write
 }
 
-fn rebuild(directory: &Path, calls: &[InvocationSummary], retention: Retention) -> Change {
+pub fn rebuild(directory: &Path, calls: &[InvocationSummary], retention: Retention) -> Change {
     let mut index = FileIndex::default();
     index.set_retention(retention);
     let mut files = FdState::default();
@@ -49,7 +49,7 @@ fn rebuild(directory: &Path, calls: &[InvocationSummary], retention: Retention) 
     changes.remove(0)
 }
 
-fn open() -> InvocationSummary {
+pub fn open() -> InvocationSummary {
     let mut open = path_call(1, 2, "open", 3, "/tmp/file");
     open.call_id = 1;
     open.entry.as_mut().unwrap().args = Some([0, 0x41, 0, 0, 0, 0]);
@@ -57,7 +57,7 @@ fn open() -> InvocationSummary {
 }
 
 #[test]
-fn a_write_the_recording_holds_whole_is_rebuilt_whole_with_no_short_note() {
+pub fn a_write_the_recording_holds_whole_is_rebuilt_whole_with_no_short_note() {
     let root = scratch("whole");
     let data = pattern(SIZE);
     std::fs::write(root.join("objects/big.raw"), &data).unwrap();
@@ -71,7 +71,7 @@ fn a_write_the_recording_holds_whole_is_rebuilt_whole_with_no_short_note() {
 }
 
 #[test]
-fn a_buffer_the_recording_kept_only_64_kib_of_gets_the_corrected_note() {
+pub fn a_buffer_the_recording_kept_only_64_kib_of_gets_the_corrected_note() {
     let root = scratch("short");
     std::fs::write(root.join("objects/big.raw"), pattern(65_536)).unwrap();
     let change = rebuild(&root, &[open(), pwrite(SIZE, 65_536)], Retention::default());
@@ -89,7 +89,7 @@ fn a_buffer_the_recording_kept_only_64_kib_of_gets_the_corrected_note() {
 }
 
 #[test]
-fn the_per_file_budget_stops_the_rebuild_with_its_own_note_not_a_capture_note() {
+pub fn the_per_file_budget_stops_the_rebuild_with_its_own_note_not_a_capture_note() {
     let root = scratch("budget");
     std::fs::write(root.join("objects/big.raw"), pattern(SIZE)).unwrap();
     let change = rebuild(
@@ -113,7 +113,7 @@ fn the_per_file_budget_stops_the_rebuild_with_its_own_note_not_a_capture_note() 
 }
 
 #[test]
-fn an_unreadable_object_is_a_short_capture_not_a_silent_hole() {
+pub fn an_unreadable_object_is_a_short_capture_not_a_silent_hole() {
     let root = scratch("missing");
     // The record names 1.2 MiB, but the object file holds only 100 KiB.
     std::fs::write(root.join("objects/big.raw"), pattern(100_000)).unwrap();

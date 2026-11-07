@@ -6,18 +6,18 @@ use super::file_activity::Shape;
 use antinomie_monitor_core::kernel_notes::{CopyKind, FileCopy};
 
 /// The O_TRUNC bit of `open` flags.
-const O_TRUNC: u64 = 0x200;
+pub const O_TRUNC: u64 = 0x200;
 /// `mmap` protection and flag bits.
-const PROT_WRITE: u64 = 0x2;
-const MAP_TYPE: u64 = 0x3;
-const MAP_PRIVATE: u64 = 0x2;
-const MAP_ANONYMOUS: u64 = 0x20;
+pub const PROT_WRITE: u64 = 0x2;
+pub const MAP_TYPE: u64 = 0x3;
+pub const MAP_PRIVATE: u64 = 0x2;
+pub const MAP_ANONYMOUS: u64 = 0x20;
 
 /// The effect of call `name` that succeeded (`success`) and changed the file
 /// (`changed`). `copy` is the guest's record of an in-kernel copy or
 /// allocation; `flags` are an open's flags. A transfer the guest placed is
 /// not described here: its bytes are the file's writes.
-pub(super) fn of(
+pub fn of(
     name: &str,
     args: Option<[u64; 6]>,
     copy: &Option<FileCopy>,
@@ -28,7 +28,7 @@ pub(super) fn of(
     if !success {
         return None;
     }
-    if crate::triage::file_events::OPEN_NAMES.contains(&name)
+    if crate::file_events::OPEN_NAMES.contains(&name)
         && flags.is_some_and(|flags| flags & O_TRUNC != 0)
     {
         return Some(Shape::Resize(0));

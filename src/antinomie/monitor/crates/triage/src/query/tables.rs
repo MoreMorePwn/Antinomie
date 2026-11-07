@@ -6,7 +6,7 @@ use super::*;
 /// Hidden old spellings of a table's fields. They stay out of completion and
 /// the guide; a filter that uses one is rewritten to its canonical field, so
 /// filters saved or remembered under the old names still parse and match.
-pub(crate) struct Aliases<'a> {
+pub struct Aliases<'a> {
     /// `(old name, canonical name)`; applied only to a table that has the
     /// canonical field and not the old name as a field of its own.
     pub fields: &'a [(&'a str, &'a str)],
@@ -15,16 +15,16 @@ pub(crate) struct Aliases<'a> {
 }
 
 /// The one alias shared by every table built on `LABEL_FIELDS`.
-pub(crate) const LABEL_ALIASES: Aliases<'static> = Aliases {
+pub const LABEL_ALIASES: Aliases<'static> = Aliases {
     fields: &[("tags", "tag"), ("entry.tag", "tag")],
     value: |_, _| None,
 };
 
-pub(crate) fn compile_table(filter: &str, fields: &[FieldSpec<'_>]) -> Compiled {
+pub fn compile_table(filter: &str, fields: &[FieldSpec<'_>]) -> Compiled {
     compile_table_with(filter, fields, &LABEL_ALIASES)
 }
 
-fn rename_fields(value: &mut Value, fields: &[FieldSpec<'_>], aliases: &Aliases<'_>) {
+pub fn rename_fields(value: &mut Value, fields: &[FieldSpec<'_>], aliases: &Aliases<'_>) {
     match value {
         Value::Field(name) => {
             if fields
@@ -45,7 +45,7 @@ fn rename_fields(value: &mut Value, fields: &[FieldSpec<'_>], aliases: &Aliases<
     }
 }
 
-fn rename_expr(expr: &mut Expr, fields: &[FieldSpec<'_>], aliases: &Aliases<'_>) {
+pub fn rename_expr(expr: &mut Expr, fields: &[FieldSpec<'_>], aliases: &Aliases<'_>) {
     match expr {
         Expr::Not(inner) => rename_expr(inner, fields, aliases),
         Expr::And(left, right) | Expr::Or(left, right) => {
@@ -60,7 +60,7 @@ fn rename_expr(expr: &mut Expr, fields: &[FieldSpec<'_>], aliases: &Aliases<'_>)
 }
 
 /// Old values of a renamed field, once the field itself is canonical.
-fn update_values(expr: &mut Expr, aliases: &Aliases<'_>) {
+pub fn update_values(expr: &mut Expr, aliases: &Aliases<'_>) {
     let update = |left: &Value, right: &mut Value| {
         if let (Value::Field(name), Value::Text(text)) = (left, &mut *right) {
             if let Some(current) = (aliases.value)(name, text) {
@@ -80,7 +80,7 @@ fn update_values(expr: &mut Expr, aliases: &Aliases<'_>) {
     }
 }
 
-pub(crate) fn compile_table_with(
+pub fn compile_table_with(
     filter: &str,
     fields: &[FieldSpec<'_>],
     aliases: &Aliases<'_>,
@@ -127,7 +127,7 @@ pub(crate) fn compile_table_with(
     }
 }
 
-pub(crate) fn label_row(
+pub fn label_row(
     id: &str,
     name: &str,
     path: &str,
@@ -148,7 +148,7 @@ pub(crate) fn label_row(
     ]
 }
 
-fn table_kind<'a>(value: &Value, fields: &'a [FieldSpec<'_>]) -> Result<&'a str, String> {
+pub fn table_kind<'a>(value: &Value, fields: &'a [FieldSpec<'_>]) -> Result<&'a str, String> {
     match value {
         Value::Field(name) => fields
             .iter()
@@ -179,13 +179,13 @@ fn table_kind<'a>(value: &Value, fields: &'a [FieldSpec<'_>]) -> Result<&'a str,
     }
 }
 
-pub(super) fn literal(value: &mut Value) {
+pub fn literal(value: &mut Value) {
     if let Value::Field(name) = value {
         *value = Value::Text(name.clone());
     }
 }
 
-pub(super) fn validate_table(expr: &mut Expr, fields: &[FieldSpec<'_>]) -> Result<(), String> {
+pub fn validate_table(expr: &mut Expr, fields: &[FieldSpec<'_>]) -> Result<(), String> {
     match expr {
         Expr::Not(inner) => validate_table(inner, fields),
         Expr::And(left, right) | Expr::Or(left, right) => {
@@ -219,7 +219,7 @@ pub(super) fn validate_table(expr: &mut Expr, fields: &[FieldSpec<'_>]) -> Resul
     }
 }
 
-fn validate_literal(kind: &str, value: &Value) -> Result<(), String> {
+pub fn validate_literal(kind: &str, value: &Value) -> Result<(), String> {
     match (kind, value) {
         ("integer", Value::Number(_)) | ("text" | "text list" | "ip", Value::Text(_)) => Ok(()),
         ("boolean", Value::Text(value)) if value == "true" || value == "false" => Ok(()),

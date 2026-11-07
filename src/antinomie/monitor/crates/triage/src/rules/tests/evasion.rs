@@ -3,7 +3,7 @@ use super::super::{Options, PackedImage};
 use super::support::*;
 
 #[test]
-fn writable_and_executable_memory_is_high_with_or_without_read() {
+pub fn writable_and_executable_memory_is_high_with_or_without_read() {
     for prot in [7, 6] {
         let out = run(vec![mmap(1, prot, 0x22, 0x7000)]);
         let row = rows(&out, "memory.rwx");
@@ -32,7 +32,7 @@ fn writable_and_executable_memory_is_high_with_or_without_read() {
 }
 
 #[test]
-fn a_refused_request_keeps_its_own_row_and_a_jit_runtime_is_one_tier_down() {
+pub fn a_refused_request_keeps_its_own_row_and_a_jit_runtime_is_one_tier_down() {
     let refused = run(vec![mmap(1, 7, 0x22, -1)]);
     assert!(!has(&refused, "memory.rwx"));
     assert_eq!(
@@ -48,7 +48,7 @@ fn a_refused_request_keeps_its_own_row_and_a_jit_runtime_is_one_tier_down() {
 }
 
 #[test]
-fn memory_written_and_then_made_executable_is_medium() {
+pub fn memory_written_and_then_made_executable_is_medium() {
     let out = run(vec![
         mmap(1, 3, 0x22, 0x7000_0000),
         sys(1, 10, "mprotect", [0x7000_0000, 4096, 5, 0, 0, 0], 0),
@@ -73,7 +73,7 @@ fn memory_written_and_then_made_executable_is_medium() {
 }
 
 #[test]
-fn a_program_that_removes_its_own_file_while_running_is_self_deleting() {
+pub fn a_program_that_removes_its_own_file_while_running_is_self_deleting() {
     let out = run(vec![exec(1, "/tmp/.x", &["x"]), unlink(1, "/tmp/.x")]);
     let row = rows(&out, "evasion.self_delete");
     assert_eq!(row.len(), 1);
@@ -95,7 +95,7 @@ fn a_program_that_removes_its_own_file_while_running_is_self_deleting() {
 }
 
 #[test]
-fn clearing_logs_and_history_covers_files_the_ring_buffer_and_tools() {
+pub fn clearing_logs_and_history_covers_files_the_ring_buffer_and_tools() {
     for out in [
         run(vec![unlink(1, "/var/log/auth.log")]),
         run(vec![open_truncate(1, "/var/log/wtmp", 3)]),
@@ -141,7 +141,7 @@ fn clearing_logs_and_history_covers_files_the_ring_buffer_and_tools() {
 }
 
 #[test]
-fn turning_off_security_tools_the_firewall_and_audit() {
+pub fn turning_off_security_tools_the_firewall_and_audit() {
     for (script, rule) in [
         ("setenforce 0", "evasion.security_disable"),
         ("systemctl stop falcon-sensor", "evasion.security_disable"),
@@ -211,7 +211,7 @@ fn turning_off_security_tools_the_firewall_and_audit() {
 }
 
 #[test]
-fn a_process_named_like_a_kernel_thread_or_a_daemon() {
+pub fn a_process_named_like_a_kernel_thread_or_a_daemon() {
     let renamed = |name: &str| {
         run(vec![
             exec(1, "/tmp/x", &["x"]),
@@ -251,7 +251,7 @@ fn a_process_named_like_a_kernel_thread_or_a_daemon() {
 }
 
 #[test]
-fn file_times_set_on_purpose_are_medium_and_now_is_not() {
+pub fn file_times_set_on_purpose_are_medium_and_now_is_not() {
     let timespec = |sec: u64, nsec: u64| {
         let mut data = Vec::new();
         for (s, n) in [(sec, nsec), (sec, nsec)] {
@@ -282,12 +282,12 @@ fn file_times_set_on_purpose_are_medium_and_now_is_not() {
     assert!(!has(&run(vec![null]), "evasion.timestomp"));
 }
 
-fn path_call_for(name: &str, nr: u64, path: &str) -> InvocationSummary {
+pub fn path_call_for(name: &str, nr: u64, path: &str) -> InvocationSummary {
     with_path(call(1, nr, name, 0), "arg1.filename", path)
 }
 
 #[test]
-fn hidden_entries_immutable_files_hidden_processes_and_weakened_protections() {
+pub fn hidden_entries_immutable_files_hidden_processes_and_weakened_protections() {
     assert_eq!(
         tier(
             &run(vec![open_write(1, "/tmp/.hidden", 3)]),
@@ -409,7 +409,7 @@ fn hidden_entries_immutable_files_hidden_processes_and_weakened_protections() {
 }
 
 #[test]
-fn io_uring_and_seccomp_are_context() {
+pub fn io_uring_and_seccomp_are_context() {
     let out = run(vec![sys(1, 425, "io_uring_setup", [8, 0, 0, 0, 0, 0], 3)]);
     assert_eq!(
         tier(&out, "evasion.io_uring_usage").as_deref(),
@@ -426,7 +426,7 @@ fn io_uring_and_seccomp_are_context() {
 }
 
 #[test]
-fn killing_many_processes_it_did_not_start_is_a_kill_list() {
+pub fn killing_many_processes_it_did_not_start_is_a_kill_list() {
     let kills = |targets: &[u64]| {
         run(targets
             .iter()
@@ -453,7 +453,7 @@ fn killing_many_processes_it_did_not_start_is_a_kill_list() {
 }
 
 #[test]
-fn a_sleep_of_a_minute_before_any_work_is_medium_and_later_low() {
+pub fn a_sleep_of_a_minute_before_any_work_is_medium_and_later_low() {
     let sleep = |seconds: u64| {
         let mut data = seconds.to_le_bytes().to_vec();
         data.extend(0u64.to_le_bytes());
@@ -500,7 +500,7 @@ fn a_sleep_of_a_minute_before_any_work_is_medium_and_later_low() {
 }
 
 #[test]
-fn a_packed_program_is_flagged_when_the_run_starts_it_and_tiered_by_its_headers() {
+pub fn a_packed_program_is_flagged_when_the_run_starts_it_and_tiered_by_its_headers() {
     let packed = |modified| PackedImage {
         path: "/home/user/sample".into(),
         packer: "UPX".into(),
@@ -568,7 +568,7 @@ fn a_packed_program_is_flagged_when_the_run_starts_it_and_tiered_by_its_headers(
 }
 
 #[test]
-fn argv_naming_another_program_than_the_image_is_a_low_or_medium_finding() {
+pub fn argv_naming_another_program_than_the_image_is_a_low_or_medium_finding() {
     // The demo-all stand-in: the image is /tmp/demo-all, argv says "ps aux".
     let out = run(vec![exec(1, "/tmp/demo-all", &["ps", "aux"])]);
     let row = rows(&out, "evasion.argv_masquerade");
@@ -605,7 +605,7 @@ fn argv_naming_another_program_than_the_image_is_a_low_or_medium_finding() {
 }
 
 #[test]
-fn argv_that_is_not_a_disguise_raises_no_argv_finding() {
+pub fn argv_that_is_not_a_disguise_raises_no_argv_finding() {
     let none = |path: &str, argv: &[&str]| {
         !has(&run(vec![exec(1, path, argv)]), "evasion.argv_masquerade")
     };
@@ -627,7 +627,7 @@ fn argv_that_is_not_a_disguise_raises_no_argv_finding() {
     assert!(!has(&daemon, "evasion.argv_masquerade"));
 }
 
-fn prctl_name(name: Option<&str>) -> InvocationSummary {
+pub fn prctl_name(name: Option<&str>) -> InvocationSummary {
     let call = sys(1, 157, "prctl", [15, 0, 0, 0, 0, 0], 0);
     match name {
         Some(name) => with_path(call, "arg1.name", name),
@@ -636,7 +636,7 @@ fn prctl_name(name: Option<&str>) -> InvocationSummary {
 }
 
 #[test]
-fn a_process_that_renames_itself_is_low_and_an_imitation_is_medium() {
+pub fn a_process_that_renames_itself_is_low_and_an_imitation_is_medium() {
     let run_with = |calls: Vec<InvocationSummary>| {
         let mut all = vec![exec(1, "/tmp/x", &["x"])];
         all.extend(calls);
@@ -686,7 +686,7 @@ fn a_process_that_renames_itself_is_low_and_an_imitation_is_medium() {
 }
 
 #[test]
-fn a_write_to_the_own_comm_file_renames_the_process() {
+pub fn a_write_to_the_own_comm_file_renames_the_process() {
     for path in [
         "/proc/self/comm",
         "/proc/1/comm",
@@ -729,7 +729,7 @@ fn a_write_to_the_own_comm_file_renames_the_process() {
 }
 
 #[test]
-fn renaming_and_argv_zero_are_separate_findings_in_one_process() {
+pub fn renaming_and_argv_zero_are_separate_findings_in_one_process() {
     let out = run(vec![
         exec(1, "/tmp/x", &["/usr/bin/python3", "-c", "x"]),
         prctl_name(Some("python3")),

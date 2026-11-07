@@ -3,7 +3,7 @@
 use super::*;
 use antinomie_monitor_core::typed_fields;
 
-pub(super) fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
+pub fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
     let mut notes = Vec::new();
     // Program and perf event descriptors seen so far in this slice.
     let mut fds = BpfFds::default();
@@ -159,7 +159,7 @@ pub(super) fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
 
 /// One line of what happened, for the Observation column: the step and its
 /// result first, then the call and thread that made it.
-fn summary(event: &EventSummary, command: &str, outcome: &str, lifecycle: Option<&str>) -> String {
+pub fn summary(event: &EventSummary, command: &str, outcome: &str, lifecycle: Option<&str>) -> String {
     let mut text = lifecycle.map_or_else(|| format!("{command}: {outcome}"), str::to_owned);
     if let Some(first) = text.get_mut(0..1) {
         first.make_ascii_uppercase();
@@ -170,7 +170,7 @@ fn summary(event: &EventSummary, command: &str, outcome: &str, lifecycle: Option
     )
 }
 
-fn captured_integer(invocation: &InvocationSummary, member: &str) -> Option<u64> {
+pub fn captured_integer(invocation: &InvocationSummary, member: &str) -> Option<u64> {
     invocation
         .entry
         .iter()
@@ -189,7 +189,7 @@ fn captured_integer(invocation: &InvocationSummary, member: &str) -> Option<u64>
 }
 
 /// bpf's `union bpf_attr` as the call passed it (its first captured copy).
-fn attr_field(invocation: &InvocationSummary) -> Option<&antinomie_monitor_core::FieldSummary> {
+pub fn attr_field(invocation: &InvocationSummary) -> Option<&antinomie_monitor_core::FieldSummary> {
     invocation
         .entry
         .iter()
@@ -200,7 +200,7 @@ fn attr_field(invocation: &InvocationSummary) -> Option<&antinomie_monitor_core:
 
 /// A member of bpf's attr, read by the branch the call's command selects
 /// (`insn_cnt` of BPF_PROG_LOAD, `attach_bpf_fd` of BPF_PROG_ATTACH).
-fn attr_integer(
+pub fn attr_integer(
     invocation: &InvocationSummary,
     args: Option<[u64; 6]>,
     member: &str,
@@ -210,7 +210,7 @@ fn attr_integer(
 }
 
 /// The program descriptor an attach names.
-fn attach_fd(invocation: &InvocationSummary, args: Option<[u64; 6]>) -> Option<i64> {
+pub fn attach_fd(invocation: &InvocationSummary, args: Option<[u64; 6]>) -> Option<i64> {
     let fd = attr_integer(invocation, args, "attach_bpf_fd")
         .or_else(|| captured_integer(invocation, "attach_bpf_fd"))?;
     // A `__u32` holding an int descriptor.
@@ -218,7 +218,7 @@ fn attach_fd(invocation: &InvocationSummary, args: Option<[u64; 6]>) -> Option<i
 }
 
 /// The attr members of a bpf call, one per line, by its command.
-fn attributes(
+pub fn attributes(
     invocation: &InvocationSummary,
     event: &EventSummary,
     args: Option<[u64; 6]>,
@@ -235,7 +235,7 @@ fn attributes(
 
 /// `attach requested of fd N` when a recorded argument is a program fd from
 /// an earlier successful load in this slice. No fd is guessed from a pointer.
-fn attach_of_loaded(
+pub fn attach_of_loaded(
     command: &str,
     invocation: &InvocationSummary,
     args: Option<[u64; 6]>,
@@ -257,7 +257,7 @@ fn attach_of_loaded(
     })
 }
 
-fn bpf_lifecycle(command: &str, result: Option<i64>) -> Option<String> {
+pub fn bpf_lifecycle(command: &str, result: Option<i64>) -> Option<String> {
     let action = match command {
         "BPF_PROG_LOAD" => "load",
         "BPF_PROG_ATTACH" => "attach",
@@ -281,14 +281,14 @@ fn bpf_lifecycle(command: &str, result: Option<i64>) -> Option<String> {
     })
 }
 
-fn classic_image(command: &str) -> bool {
+pub fn classic_image(command: &str) -> bool {
     matches!(
         command,
         "SO_ATTACH_FILTER" | "SECCOMP_SET_MODE_FILTER" | "SECCOMP_MODE_FILTER"
     )
 }
 
-pub(super) fn bpf_command(event: &EventSummary, args: [u64; 6]) -> Option<&'static str> {
+pub fn bpf_command(event: &EventSummary, args: [u64; 6]) -> Option<&'static str> {
     if let Some(command) = bpf_attach::command_of(event, args) {
         return Some(command);
     }
@@ -321,7 +321,7 @@ pub(super) fn bpf_command(event: &EventSummary, args: [u64; 6]) -> Option<&'stat
 /// Exact captured instruction arrays. A buffer whose name merely contains
 /// `prog`, `buf` or `insns` is not a program image, and a short preview is
 /// not padded out to the declared length.
-fn instruction_image(invocation: &InvocationSummary, command: &str) -> Option<Vec<u8>> {
+pub fn instruction_image(invocation: &InvocationSummary, command: &str) -> Option<Vec<u8>> {
     let (key, layout) = match command {
         "BPF_PROG_LOAD" => ("arg1.attr.insns", "bpf_insn[]"),
         "SO_ATTACH_FILTER" => ("arg3.optval.filter", "sock_filter[]"),
@@ -339,11 +339,11 @@ fn instruction_image(invocation: &InvocationSummary, command: &str) -> Option<Ve
         .and_then(isolated_instructions)
 }
 
-fn layout_is(layout: &str, name: &str) -> bool {
+pub fn layout_is(layout: &str, name: &str) -> bool {
     typed_fields::layout_type(layout) == name
 }
 
-fn isolated_instructions(field: &antinomie_monitor_core::FieldSummary) -> Option<Vec<u8>> {
+pub fn isolated_instructions(field: &antinomie_monitor_core::FieldSummary) -> Option<Vec<u8>> {
     let logical = field.logical_len?;
     if !field.complete
         || logical == 0
@@ -362,34 +362,7 @@ fn isolated_instructions(field: &antinomie_monitor_core::FieldSummary) -> Option
     Some(bytes.to_vec())
 }
 
-pub(super) fn bpf_view(ui: &mut egui::Ui, input: &TriageInput<'_>, indexed: Option<&[BpfNote]>) {
-    let page_notes;
-    let notes = if let Some(notes) = indexed {
-        notes
-    } else {
-        page_notes = bpf_notes(input);
-        page_notes.as_slice()
-    };
-    if notes.is_empty() {
-        ui.colored_label(
-            theme::muted(),
-            "No bpf syscall, classic socket filter, or seccomp install was recorded.",
-        );
-        return;
-    }
-    let rows: Vec<_> = notes
-        .iter()
-        .map(|note| bpf_row(note, input.clock_anchor))
-        .collect();
-    table(
-        ui,
-        "triage-bpf",
-        &["Time", "Observation", "Outcome", "Evidence"],
-        &rows,
-    );
-}
-
-pub(super) fn bpf_row(
+pub fn bpf_row(
     note: &BpfNote,
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
 ) -> Vec<Cell> {
@@ -428,59 +401,4 @@ pub(super) fn bpf_row(
         ),
     ];
     row
-}
-
-pub(super) fn bpf_detail(
-    ui: &mut egui::Ui,
-    note: &BpfNote,
-    directory: Option<&Path>,
-    status: &mut String,
-    cx: &bpf_fields::Context,
-) {
-    if !status.is_empty() {
-        ui.label(status.as_str());
-    }
-    ui.label(theme::bold(ui, &note.heading));
-    if let Some(line) = &note.lifecycle {
-        ui.label(line);
-    }
-    if let Some(call) = note.loaded_by {
-        ui.label(format!(
-            "Program loaded in call {call}; this is its attach."
-        ));
-    }
-    if !note.attributes.is_empty() {
-        ui.label(theme::bold(ui, "Attributes"));
-        for line in &note.attributes {
-            ui.add(egui::Label::new(RichText::new(line).monospace()).wrap());
-        }
-    }
-    if note.translation.is_none() && note.dump.is_none() {
-        ui.weak("The instruction image was not isolated.");
-    }
-    // The captured identity as labelled fields; the export's JSON is for the file.
-    bpf_fields::show(ui, note, cx);
-    // The export's hex dump, after its JSON line, unless the dump is shown already.
-    let export_dump = note
-        .export
-        .as_deref()
-        .and_then(|export| export.split_once('\n'))
-        .map(|(_, dump)| dump.to_owned())
-        .filter(|_| note.dump.is_none());
-    for text in [&note.translation, &note.dump, &export_dump]
-        .into_iter()
-        .flatten()
-    {
-        ui.add(egui::Label::new(RichText::new(text).monospace()).wrap());
-    }
-    if let (Some(bytes), Some(directory)) = (&note.bytes, directory) {
-        if ui.button("Export binary and JSON").clicked() {
-            *status = match bpf::write_export(&directory.join("bpf"), bytes, &note.identity) {
-                Ok((binary, metadata)) => {
-                    format!("Wrote {} and {}", binary.display(), metadata.display())
-                }
-                Err(error) => error,
-            };
-        }
-    }
 }

@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 
 /// Runs of known bytes of one file. Runs never overlap; two runs may touch.
 #[derive(Clone, Default, Debug)]
-pub(super) struct ByteStore {
-    runs: BTreeMap<u64, Vec<u8>>,
-    len: usize,
+pub struct ByteStore {
+    pub runs: BTreeMap<u64, Vec<u8>>,
+    pub len: usize,
 }
 
 impl ByteStore {
@@ -16,7 +16,7 @@ impl ByteStore {
         self.len
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -27,8 +27,8 @@ impl ByteStore {
     }
 
     /// The run `at` lies in, with its start.
-    #[cfg(test)]
-    fn run_at(&self, at: u64) -> Option<(u64, &Vec<u8>)> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn run_at(&self, at: u64) -> Option<(u64, &Vec<u8>)> {
         self.runs
             .range(..=at)
             .next_back()
@@ -36,7 +36,7 @@ impl ByteStore {
             .map(|(start, run)| (*start, run))
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn get(&self, at: &u64) -> Option<&u8> {
         self.run_at(*at)
             .map(|(start, run)| &run[(*at - start) as usize])
@@ -155,19 +155,19 @@ impl ByteStore {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn keys(&self) -> impl Iterator<Item = u64> + '_ {
         self.iter().map(|(at, _)| at)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn values(&self) -> impl Iterator<Item = u8> + '_ {
         self.runs.values().flatten().copied()
     }
 }
 
 /// Offsets known in either store with what each holds, in offset order.
-pub(super) fn merged<'a>(
+pub fn merged<'a>(
     before: &'a ByteStore,
     after: &'a ByteStore,
 ) -> impl Iterator<Item = (u64, Option<&'a u8>, Option<&'a u8>)> + 'a {

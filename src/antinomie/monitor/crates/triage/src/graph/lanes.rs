@@ -5,10 +5,10 @@ use super::*;
 use std::collections::HashMap;
 
 /// Leaf siblings with the same image and arguments fold once there are this many.
-pub(in crate::triage) const FOLD_MIN: usize = 8;
+pub const FOLD_MIN: usize = 8;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(in crate::triage) struct Lane {
+pub struct Lane {
     pub cookie: u64,
     pub pid: u32,
     /// The program's name, or `pid N` when it has none.
@@ -26,18 +26,18 @@ pub(in crate::triage) struct Lane {
 }
 
 /// What leaf siblings must share to fold: parent, program and arguments.
-type Siblings<'a> = (Option<usize>, &'a str, &'a [String]);
+pub type Siblings<'a> = (Option<usize>, &'a str, &'a [String]);
 
 /// Lane 0 stands for findings with no process of the run: the capture's own.
 #[derive(Default)]
-pub(in crate::triage) struct Lanes {
+pub struct Lanes {
     pub list: Vec<Lane>,
-    lookup: HashMap<(u64, u32), u32>,
-    by_pid: HashMap<u32, Vec<u32>>,
+    pub lookup: HashMap<(u64, u32), u32>,
+    pub by_pid: HashMap<u32, Vec<u32>>,
 }
 
 impl Lanes {
-    pub(in crate::triage) fn from_processes(nodes: &[ProcessNode]) -> Self {
+    pub fn from_processes(nodes: &[ProcessNode]) -> Self {
         let mut lanes = Lanes::default();
         lanes.list.push(Lane {
             name: "VM-wide / not tied to a process".into(),
@@ -129,12 +129,12 @@ impl Lanes {
     }
 
     /// The lane of a process; lane 0 when the run has no such process.
-    pub(in crate::triage) fn lane_of(&self, cookie: u64, pid: u32) -> u32 {
+    pub fn lane_of(&self, cookie: u64, pid: u32) -> u32 {
         self.lookup.get(&(cookie, pid)).copied().unwrap_or(0)
     }
 
     /// The lane of `pid` that was alive at `ns`, else the latest one with that pid.
-    pub(in crate::triage) fn lane_for_pid(&self, pid: u32, ns: u64) -> Option<u32> {
+    pub fn lane_for_pid(&self, pid: u32, ns: u64) -> Option<u32> {
         let lanes = self.by_pid.get(&pid)?;
         lanes
             .iter()
@@ -147,7 +147,7 @@ impl Lanes {
     }
 
     /// The time the lanes span, when any of them has one.
-    pub(in crate::triage) fn extent(&self) -> Option<(u64, u64)> {
+    pub fn extent(&self) -> Option<(u64, u64)> {
         self.list
             .iter()
             .filter(|lane| lane.last_ns > 0)
@@ -156,7 +156,7 @@ impl Lanes {
     }
 
     /// The cookies of a lane and everything under it.
-    pub(in crate::triage) fn subtree_cookies(&self, lane: u32) -> Vec<u64> {
+    pub fn subtree_cookies(&self, lane: u32) -> Vec<u64> {
         let Some(root) = self.list.get(lane as usize) else {
             return Vec::new();
         };
@@ -171,13 +171,13 @@ impl Lanes {
     }
 }
 
-fn basename(name: &str) -> &str {
+pub fn basename(name: &str) -> &str {
     name.rsplit('/')
         .find(|part| !part.is_empty())
         .unwrap_or(name)
 }
 
-fn name(node: &ProcessNode) -> String {
+pub fn name(node: &ProcessNode) -> String {
     if node.comm == "?" {
         format!("pid {}", node.pid)
     } else {
@@ -187,7 +187,7 @@ fn name(node: &ProcessNode) -> String {
 
 impl Lane {
     /// The name on the lane: `sh 1202`, or `miner ×64` for folded siblings.
-    pub(in crate::triage) fn label(&self) -> String {
+    pub fn label(&self) -> String {
         match self.members {
             0 | 1 if self.name.starts_with("pid ") || self.pid == 0 => self.name.clone(),
             0 | 1 => format!("{} {}", self.name, self.pid),
@@ -197,7 +197,7 @@ impl Lane {
 }
 
 /// The rows of the lane list for the current collapse state.
-pub(in crate::triage) struct Rows {
+pub struct Rows {
     /// The lane drawn on each row, top to bottom.
     pub lanes: Vec<u32>,
     /// For every lane, the row it is drawn on or the row of the collapsed lane
@@ -206,7 +206,7 @@ pub(in crate::triage) struct Rows {
 }
 
 impl Rows {
-    pub(in crate::triage) fn build(
+    pub fn build(
         lanes: &Lanes,
         collapsed: &std::collections::BTreeSet<(u64, u32)>,
         lane0: bool,
@@ -239,7 +239,7 @@ impl Rows {
         }
     }
 
-    pub(in crate::triage) fn is_collapsed(&self, lanes: &Lanes, row: usize) -> bool {
+    pub fn is_collapsed(&self, lanes: &Lanes, row: usize) -> bool {
         self.lanes.get(row).is_some_and(|lane| {
             let lane = *lane as usize;
             lanes.list[lane].subtree_end as usize > lane + 1

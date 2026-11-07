@@ -9,7 +9,7 @@ use super::state::State;
 use super::tools::{self, Command};
 use super::Hit;
 
-pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     if !cx.is_exec() {
         return;
     }
@@ -57,7 +57,7 @@ pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     }
 }
 
-fn short(text: &str) -> String {
+pub fn short(text: &str) -> String {
     let mut shown: String = text.chars().take(200).collect();
     if text.chars().count() > 200 {
         shown.push('…');
@@ -66,7 +66,7 @@ fn short(text: &str) -> String {
 }
 
 /// `argc == 0`: the first pointer of the vector is NULL.
-fn empty_argv(cx: &Ctx) -> bool {
+pub fn empty_argv(cx: &Ctx) -> bool {
     let Some(argument) = cx.argument("argv") else {
         return false;
     };
@@ -80,7 +80,7 @@ fn empty_argv(cx: &Ctx) -> bool {
         .is_some_and(|field| trace::covered_preview(field).iter().all(|byte| *byte == 0))
 }
 
-fn interpreter(cx: &Ctx, path: &str, name: &str, line: &str, out: &mut Vec<Hit>) {
+pub fn interpreter(cx: &Ctx, path: &str, name: &str, line: &str, out: &mut Vec<Hit>) {
     let scripted = kernel_records::exec_image(cx.call)
         .and_then(|image| image.interpreter)
         .map(|text| {
@@ -121,7 +121,7 @@ fn interpreter(cx: &Ctx, path: &str, name: &str, line: &str, out: &mut Vec<Hit>)
 }
 
 /// The descriptor an exec path names, and the pid when it is not the caller's.
-fn descriptor_path(path: &str, own: u32) -> Option<(u64, Option<u32>)> {
+pub fn descriptor_path(path: &str, own: u32) -> Option<(u64, Option<u32>)> {
     if let Some(rest) = path.strip_prefix("/dev/fd/") {
         return rest.parse().ok().map(|fd| (fd, None));
     }
@@ -138,7 +138,7 @@ fn descriptor_path(path: &str, own: u32) -> Option<(u64, Option<u32>)> {
 }
 
 /// Exec of a file that has no name on disk: a memfd, a deleted or unnamed file.
-fn in_memory(cx: &Ctx, path: &str, out: &mut Vec<Hit>) {
+pub fn in_memory(cx: &Ctx, path: &str, out: &mut Vec<Hit>) {
     let owner = table_owner(cx.files, cx.call.task_cookie, cx.event.tid);
     let named = descriptor_path(path, cx.event.pid);
     let by_fd = if cx.name == "execveat" && cx.arg("flags") & 0x1000 != 0 {
@@ -189,7 +189,7 @@ fn in_memory(cx: &Ctx, path: &str, out: &mut Vec<Hit>) {
 }
 
 /// Exec of a file the run wrote, or a compiler's output.
-fn dropped(cx: &Ctx, st: &State, path: &str, out: &mut Vec<Hit>) {
+pub fn dropped(cx: &Ctx, st: &State, path: &str, out: &mut Vec<Hit>) {
     if st.sample.as_deref() == Some(path) {
         return;
     }
@@ -225,7 +225,7 @@ fn dropped(cx: &Ctx, st: &State, path: &str, out: &mut Vec<Hit>) {
 }
 
 /// Exec from a staging or hidden directory, other than the sample itself.
-fn staging(st: &State, path: &str, out: &mut Vec<Hit>) {
+pub fn staging(st: &State, path: &str, out: &mut Vec<Hit>) {
     if st.sample.as_deref() == Some(path) || descriptor_path(path, 0).is_some() {
         return;
     }
@@ -259,7 +259,7 @@ fn staging(st: &State, path: &str, out: &mut Vec<Hit>) {
 }
 
 /// `LD_PRELOAD` and its relatives, and history switches, in the new program's environment.
-fn environment(cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn environment(cx: &Ctx, out: &mut Vec<Hit>) {
     for var in cx.envp() {
         let Some((name, value)) = var.split_once('=') else {
             continue;
@@ -295,7 +295,7 @@ fn environment(cx: &Ctx, out: &mut Vec<Hit>) {
 
 /// A download that is run: a fetcher whose output goes to an interpreter, or
 /// is made executable and started.
-fn cradle(script: &str, out: &mut Vec<Hit>) {
+pub fn cradle(script: &str, out: &mut Vec<Hit>) {
     let lower = script.to_ascii_lowercase();
     let fetches = [
         "curl ",
@@ -330,7 +330,7 @@ fn cradle(script: &str, out: &mut Vec<Hit>) {
 }
 
 /// Rules that name a program and its arguments, whether exec'd or run by a shell.
-fn commands(cx: &Ctx, st: &mut State, cmd: &Command, via_shell: bool, out: &mut Vec<Hit>) {
+pub fn commands(cx: &Ctx, st: &mut State, cmd: &Command, via_shell: bool, out: &mut Vec<Hit>) {
     let name = cmd.name();
     if name.is_empty() {
         return;
@@ -530,7 +530,7 @@ fn commands(cx: &Ctx, st: &mut State, cmd: &Command, via_shell: bool, out: &mut 
 }
 
 /// `chattr +i`, `-a` and the like.
-fn changes_flags(cmd: &Command) -> bool {
+pub fn changes_flags(cmd: &Command) -> bool {
     cmd.args().iter().any(|arg| {
         arg.len() > 1
             && (arg.starts_with('+') || arg.starts_with('-'))
@@ -540,7 +540,7 @@ fn changes_flags(cmd: &Command) -> bool {
 }
 
 /// scp, rsync and sftp toward a remote destination, `curl -T` and `ssh host 'cat > file'`.
-fn remote_push(cmd: &Command) -> bool {
+pub fn remote_push(cmd: &Command) -> bool {
     let remote = |arg: &str| {
         !arg.starts_with('-')
             && arg.split_once(':').is_some_and(|(host, path)| {
@@ -564,7 +564,7 @@ fn remote_push(cmd: &Command) -> bool {
 }
 
 /// An archiver reading home or credential paths and writing into a staging directory.
-fn stages_archive(cmd: &Command) -> bool {
+pub fn stages_archive(cmd: &Command) -> bool {
     let name = cmd.name();
     let tool = matches!(
         name,

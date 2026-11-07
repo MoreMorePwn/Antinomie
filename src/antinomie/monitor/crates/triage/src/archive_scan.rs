@@ -2,10 +2,10 @@
 //! Background scans of a saved recording and the finding journal they write.
 use super::*;
 
-mod stages;
+pub mod stages;
 
 impl FindingJournal {
-    fn new(directory: &Path) -> Result<Self, String> {
+    pub fn new(directory: &Path) -> Result<Self, String> {
         use std::os::unix::fs::OpenOptionsExt;
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let temp = directory.join(format!(
@@ -26,7 +26,7 @@ impl FindingJournal {
             size: 0,
         })
     }
-    fn push(&mut self, finding: &Finding) -> Result<(), String> {
+    pub fn push(&mut self, finding: &Finding) -> Result<(), String> {
         use std::io::Write;
         let facts = finding
             .values
@@ -55,7 +55,7 @@ impl FindingJournal {
         self.size += row.len() as u64 + 1;
         Ok(())
     }
-    fn publish(&mut self) -> Result<(), String> {
+    pub fn publish(&mut self) -> Result<(), String> {
         self.file.sync_all().map_err(|error| error.to_string())?;
         std::fs::rename(&self.temp, &self.destination).map_err(|error| error.to_string())?;
         std::fs::File::open(
@@ -77,8 +77,8 @@ impl Drop for FindingJournal {
 /// Walk every saved invocation page. Display tables keep at most [`STORED_ROWS`]
 /// matches; the coverage line counts anything left out. Cancellation stops
 /// between pages and does not claim the recording was fully indexed.
-#[cfg(test)]
-pub(super) fn scan_archive(
+#[cfg(any(test, feature = "test-support"))]
+pub fn scan_archive(
     directory: &Path,
     pcap: Option<&Path>,
     pcap_open: bool,
@@ -97,7 +97,7 @@ pub(super) fn scan_archive(
     )
 }
 
-pub(super) fn scan_archive_query(
+pub fn scan_archive_query(
     directory: &Path,
     pcap: Option<&Path>,
     pcap_open: bool,
@@ -112,7 +112,7 @@ pub(super) fn scan_archive_query(
 
 /// Count the fields of this call the guest had no decoder for (status
 /// NO_DECODER), under the call's name, the field and, for `ioctl`, the request.
-fn note_schema_gaps(
+pub fn note_schema_gaps(
     gaps: &mut std::collections::BTreeMap<String, u64>,
     invocation: &InvocationSummary,
     event: &EventSummary,
@@ -142,14 +142,14 @@ fn note_schema_gaps(
 }
 
 /// A call that tried to make, change or run something and was refused.
-struct FailedStep {
-    text: String,
+pub struct FailedStep {
+    pub text: String,
 }
 
 /// Remember `invocation` as the run's last failing step when it is a refused
 /// create, write, delete, rename, link, permission change or exec. Reads and
 /// probes (a library search, a `stat`) fail all the time and say nothing.
-fn note_failed_step(
+pub fn note_failed_step(
     last: &mut Option<FailedStep>,
     files: &FdState,
     invocation: &InvocationSummary,
@@ -186,25 +186,25 @@ fn note_failed_step(
 }
 
 /// Said instead of a cause while the VM still holds the recording open.
-pub(super) const STILL_SAVING: &str =
+pub const STILL_SAVING: &str =
     "the recording is still being saved (its totals are written when the VM stops)";
 
 /// What the event index was built from, for saying why it may be partial.
-struct Source<'a> {
-    scan_complete: bool,
-    stable: bool,
-    issues: usize,
-    facts: Option<&'a antinomie_monitor_core::recording::RunFilterFacts>,
-    run_finished: bool,
+pub struct Source<'a> {
+    pub scan_complete: bool,
+    pub stable: bool,
+    pub issues: usize,
+    pub facts: Option<&'a antinomie_monitor_core::recording::RunFilterFacts>,
+    pub run_finished: bool,
     /// The VM boot that recorded the run is still up.
-    recording_open: bool,
-    capture_open: bool,
-    network_warning: Option<&'a str>,
+    pub recording_open: bool,
+    pub capture_open: bool,
+    pub network_warning: Option<&'a str>,
 }
 
 /// Why the run's events may be only part of what happened, in plain words;
 /// empty when the index is complete. The Sigma scan repeats these.
-fn incomplete_reasons(source: &Source<'_>) -> Vec<String> {
+pub fn incomplete_reasons(source: &Source<'_>) -> Vec<String> {
     let mut reasons = Vec::new();
     if !source.run_finished {
         reasons.push("the run was still recording".to_owned());
@@ -266,7 +266,7 @@ fn incomplete_reasons(source: &Source<'_>) -> Vec<String> {
 
 /// Whether the run's guest looked like a cloud instance (the machine record in
 /// `run.json` names a `cloud-` profile).
-fn cloud_profile(directory: &Path) -> bool {
+pub fn cloud_profile(directory: &Path) -> bool {
     std::fs::read(directory.join("run.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
@@ -279,7 +279,7 @@ fn cloud_profile(directory: &Path) -> bool {
 
 /// The signal that ended the run's program and whether it dumped core, from
 /// the run's `run.json` (`execution.root_exit`).
-fn root_exit_signal(directory: &Path) -> Option<String> {
+pub fn root_exit_signal(directory: &Path) -> Option<String> {
     let run: serde_json::Value =
         serde_json::from_slice(&std::fs::read(directory.join("run.json")).ok()?).ok()?;
     let status: antinomie_monitor_core::WaitStatus =
@@ -289,14 +289,14 @@ fn root_exit_signal(directory: &Path) -> Option<String> {
 
 /// The run status flags the guest reported, from the run's `run.json`
 /// (`execution.flags`); `None` when the file has none.
-fn execution_flags(directory: &Path) -> Option<u64> {
+pub fn execution_flags(directory: &Path) -> Option<u64> {
     let run: serde_json::Value =
         serde_json::from_slice(&std::fs::read(directory.join("run.json")).ok()?).ok()?;
     run.pointer("/execution/flags")?.as_u64()
 }
 
 /// The words for a fatal signal; `None` for a normal exit.
-pub(super) fn crash_text(status: &antinomie_monitor_core::WaitStatus) -> Option<String> {
+pub fn crash_text(status: &antinomie_monitor_core::WaitStatus) -> Option<String> {
     let antinomie_monitor_core::WaitStatus::Signaled {
         signal,
         core_dumped,
@@ -324,7 +324,7 @@ pub(super) fn crash_text(status: &antinomie_monitor_core::WaitStatus) -> Option<
 }
 
 #[cfg(test)]
-mod reason_tests {
+pub mod reason_tests {
     use super::*;
 
     fn source() -> Source<'static> {

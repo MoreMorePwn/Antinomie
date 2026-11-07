@@ -2,8 +2,8 @@
 //! File activity rows built from recorded calls.
 use super::*;
 
-#[cfg(test)]
-pub(super) fn file_rows(invocations: &[InvocationSummary], names: &[&str]) -> LimitedRows {
+#[cfg(any(test, feature = "test-support"))]
+pub fn file_rows(invocations: &[InvocationSummary], names: &[&str]) -> LimitedRows {
     let mut limited = LimitedRows {
         rows: Vec::new(),
         stopped_early: false,
@@ -32,8 +32,8 @@ pub(super) fn file_rows(invocations: &[InvocationSummary], names: &[&str]) -> Li
     limited
 }
 
-#[cfg(test)]
-pub(super) fn file_event_row(
+#[cfg(any(test, feature = "test-support"))]
+pub fn file_event_row(
     files: &FdState,
     invocation: &InvocationSummary,
     event: &EventSummary,
@@ -60,7 +60,7 @@ pub(super) fn file_event_row(
 
 /// The operation as a table shows it: the call's name, and the system that
 /// carried it when it was an io_uring or AIO request read as that call.
-pub(super) fn operation_label(call: &InvocationSummary, event: &EventSummary) -> String {
+pub fn operation_label(call: &InvocationSummary, event: &EventSummary) -> String {
     match async_files::via(call) {
         Some(system) => format!("{} ({system})", event.syscall_name),
         None => event.syscall_name.clone(),
@@ -68,7 +68,7 @@ pub(super) fn operation_label(call: &InvocationSummary, event: &EventSummary) ->
 }
 
 /// The row of one file call, without deciding whether its tab lists the call.
-pub(super) fn event_row(
+pub fn event_row(
     files: &FdState,
     invocation: &InvocationSummary,
     event: &EventSummary,
@@ -265,7 +265,7 @@ pub(super) fn event_row(
     row
 }
 
-pub(super) fn open_flags(invocation: &InvocationSummary, event: &EventSummary) -> Option<u64> {
+pub fn open_flags(invocation: &InvocationSummary, event: &EventSummary) -> Option<u64> {
     match event.syscall_name.as_str() {
         "creat" => Some(0x241),
         "open" => call_args(invocation).map(|args| args[1]),
@@ -283,9 +283,9 @@ pub(super) fn open_flags(invocation: &InvocationSummary, event: &EventSummary) -
     }
 }
 
-pub(super) const OPEN_NAMES: &[&str] = &["open", "openat", "openat2", "creat", "memfd_create"];
+pub const OPEN_NAMES: &[&str] = &["open", "openat", "openat2", "creat", "memfd_create"];
 
-pub(super) const CHANGE_NAMES: &[&str] = &[
+pub const CHANGE_NAMES: &[&str] = &[
     "write",
     "writev",
     "pwrite64",

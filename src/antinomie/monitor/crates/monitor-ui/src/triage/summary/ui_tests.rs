@@ -1282,7 +1282,7 @@ fn merlin_view() -> (PacketSpool, TriageView) {
         hits: Vec<antinomie_monitor_core::run_digest::DetectionHit>,
     }
     let runs: Vec<Run> =
-        serde_json::from_str(include_str!("../family_fixtures/runs.json")).unwrap();
+        serde_json::from_str(include_str!("../../../../triage/src/family_fixtures/runs.json")).unwrap();
     let hits = runs.into_iter().find(|r| r.run == "6d58d777").unwrap().hits;
     let (files, mut view) = fixture();
     let mut report = Report::empty(

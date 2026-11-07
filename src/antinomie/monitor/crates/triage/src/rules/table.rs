@@ -4,7 +4,7 @@
 //! strategy). A technique that ATT&CK lists under two tactics appears once.
 use super::{Category as C, Tier as T};
 
-pub(in crate::triage) struct Spec {
+pub struct Spec {
     pub id: &'static str,
     /// Bumped when a rule's trigger or tier changes.
     pub version: u16,
@@ -18,7 +18,7 @@ pub(in crate::triage) struct Spec {
     pub allow: &'static [&'static str],
 }
 
-const fn rule(
+pub const fn rule(
     id: &'static str,
     version: u16,
     tier: T,
@@ -37,18 +37,18 @@ const fn rule(
 }
 
 impl Spec {
-    const fn signal(mut self) -> Self {
+    pub const fn signal(mut self) -> Self {
         self.signal = true;
         self
     }
 
-    const fn allow(mut self, allow: &'static [&'static str]) -> Self {
+    pub const fn allow(mut self, allow: &'static [&'static str]) -> Self {
         self.allow = allow;
         self
     }
 
     /// The `Source` column: where the classification comes from.
-    pub(in crate::triage) fn source(&self, attack: &[&str]) -> String {
+    pub fn source(&self, attack: &[&str]) -> String {
         if attack.is_empty() {
             "Observed behaviour; no ATT&CK technique".into()
         } else {
@@ -57,12 +57,12 @@ impl Spec {
     }
 }
 
-pub(in crate::triage) fn spec(id: &str) -> Option<&'static Spec> {
+pub fn spec(id: &str) -> Option<&'static Spec> {
     SPECS.iter().find(|spec| spec.id == id)
 }
 
 /// Package managers and archive tools, which set times and replace system files on purpose.
-const PACKAGERS: &[&str] = &[
+pub const PACKAGERS: &[&str] = &[
     "dpkg",
     "apt",
     "apt-get",
@@ -81,7 +81,7 @@ const PACKAGERS: &[&str] = &[
     "unattended-upgr",
 ];
 /// Programs that read the credential stores for authentication.
-const AUTH: &[&str] = &[
+pub const AUTH: &[&str] = &[
     "unix_chkpwd",
     "passwd",
     "chpasswd",
@@ -102,7 +102,7 @@ const AUTH: &[&str] = &[
     "systemd-logind",
     "polkitd",
 ];
-const SSH_TOOLS: &[&str] = &[
+pub const SSH_TOOLS: &[&str] = &[
     "ssh",
     "ssh-agent",
     "ssh-add",
@@ -111,7 +111,7 @@ const SSH_TOOLS: &[&str] = &[
     "scp",
     "sftp",
 ];
-const JIT: &[&str] = &[
+pub const JIT: &[&str] = &[
     "java",
     "node",
     "nodejs",
@@ -124,7 +124,7 @@ const JIT: &[&str] = &[
     "qemu-system-x86_64",
 ];
 /// Programs that listen on the wire or ask for an address.
-const CAPTURE: &[&str] = &[
+pub const CAPTURE: &[&str] = &[
     "tcpdump",
     "tshark",
     "dumpcap",
@@ -137,17 +137,17 @@ const CAPTURE: &[&str] = &[
     "arping",
 ];
 /// Programs that rebuild the linker cache and library paths as their job.
-const LINKER: &[&str] = &[
+pub const LINKER: &[&str] = &[
     "ldconfig", "dpkg", "apt", "apt-get", "rpm", "dnf", "yum", "pacman", "apk",
 ];
-const SERVICES: &[&str] = &[
+pub const SERVICES: &[&str] = &[
     "systemd",
     "dbus-daemon",
     "dbus-broker-launch",
     "systemd-logind",
 ];
 
-pub(in crate::triage) const SPECS: &[Spec] = &[
+pub const SPECS: &[Spec] = &[
     // Execution
     rule("process.exec", 2, T::Info, C::Execution, &[]),
     rule("process.crashed_at_start", 1, T::Low, C::Execution, &[]),

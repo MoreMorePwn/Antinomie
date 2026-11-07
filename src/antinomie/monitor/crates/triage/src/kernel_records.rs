@@ -31,7 +31,7 @@ use antinomie_monitor_core::kernel_notes::{
 use std::collections::BTreeMap;
 
 /// Follow the credential records of one call. They apply from this call on.
-pub(super) fn observe(files: &mut FdState, call: &InvocationSummary) {
+pub fn observe(files: &mut FdState, call: &InvocationSummary) {
     for creds in call
         .kernel_notes
         .iter()
@@ -42,12 +42,12 @@ pub(super) fn observe(files: &mut FdState, call: &InvocationSummary) {
 }
 
 /// The credentials in effect after the call, when the guest recorded any.
-pub(super) fn credentials(files: &FdState, call: &InvocationSummary) -> Option<Credentials> {
+pub fn credentials(files: &FdState, call: &InvocationSummary) -> Option<Credentials> {
     files.journal.credentials(call.task_cookie)
 }
 
 /// The hash record of this call for `kind`, when one was recorded.
-pub(super) fn file_hash(call: &InvocationSummary, kind: HashKind) -> Option<FileHash> {
+pub fn file_hash(call: &InvocationSummary, kind: HashKind) -> Option<FileHash> {
     call.kernel_notes
         .iter()
         .filter_map(kernel_notes::file_hash)
@@ -56,7 +56,7 @@ pub(super) fn file_hash(call: &InvocationSummary, kind: HashKind) -> Option<File
 
 /// The hashes of files the run wrote that the guest took when their last
 /// writer closed them, attached to the call the closing task made last.
-pub(super) fn write_hashes(call: &InvocationSummary) -> impl Iterator<Item = FileHash> + '_ {
+pub fn write_hashes(call: &InvocationSummary) -> impl Iterator<Item = FileHash> + '_ {
     call.kernel_notes
         .iter()
         .filter_map(kernel_notes::file_hash)
@@ -65,24 +65,24 @@ pub(super) fn write_hashes(call: &InvocationSummary) -> impl Iterator<Item = Fil
 
 /// The identity of the file this call acted on, when the guest recorded one:
 /// from a note of the call, or from the operand of an io_uring request.
-pub(super) fn file_id(call: &InvocationSummary) -> Option<FileId> {
+pub fn file_id(call: &InvocationSummary) -> Option<FileId> {
     call.kernel_notes.iter().find_map(kernel_notes::file_id)
 }
 
 /// The image an exec of this call loaded and the interpreter it named.
-pub(super) fn exec_image(call: &InvocationSummary) -> Option<ExecImage> {
+pub fn exec_image(call: &InvocationSummary) -> Option<ExecImage> {
     call.kernel_notes.iter().find_map(kernel_notes::exec_image)
 }
 
 /// Where this read or write began in its file and what it moved, when the
 /// guest recorded it (revision 18): exact for a shared descriptor or an append.
-pub(super) fn file_position(call: &InvocationSummary) -> Option<FilePosition> {
+pub fn file_position(call: &InvocationSummary) -> Option<FilePosition> {
     call.exit.as_ref().and_then(kernel_notes::file_position)
 }
 
 /// What this sendfile, splice, copy_file_range, clone or fallocate moved or
 /// changed, when the guest recorded it (revision 18).
-pub(super) fn file_copy(call: &InvocationSummary) -> Option<FileCopy> {
+pub fn file_copy(call: &InvocationSummary) -> Option<FileCopy> {
     call.exit.as_ref().and_then(kernel_notes::file_copy)
 }
 
@@ -90,7 +90,7 @@ pub(super) fn file_copy(call: &InvocationSummary) -> Option<FileCopy> {
 /// dropped dirty (revision 18), each with the field holding its bytes: those
 /// published before the call's exit (`before_exit`), or after it (the
 /// address space dropped when the task exited).
-pub(super) fn file_mapped(
+pub fn file_mapped(
     call: &InvocationSummary,
     before_exit: bool,
 ) -> Vec<(FileMapped, Option<&FieldSummary>)> {
@@ -112,7 +112,7 @@ pub(super) fn file_mapped(
 }
 
 /// Sysmon `User` and `LogonId`.
-pub(super) fn sysmon_user(
+pub fn sysmon_user(
     fields: &mut BTreeMap<String, serde_json::Value>,
     creds: Option<&Credentials>,
     names: Option<&GuestNames>,
@@ -128,7 +128,7 @@ pub(super) fn sysmon_user(
 }
 
 /// Sysmon `Hashes`, or `HashSkipped` when the guest recorded none.
-pub(super) fn sysmon_hashes(
+pub fn sysmon_hashes(
     fields: &mut BTreeMap<String, serde_json::Value>,
     hash: Option<&FileHash>,
 ) {
@@ -147,7 +147,7 @@ pub(super) fn sysmon_hashes(
 /// The auditd credential fields. The kernel prints an unset login uid and
 /// session as 4294967295, so a kernel that tracks them reports that value and
 /// one that does not leaves both out.
-pub(super) fn audit_ids(
+pub fn audit_ids(
     fields: &mut BTreeMap<String, serde_json::Value>,
     creds: Option<&Credentials>,
     names: Option<&GuestNames>,
@@ -183,7 +183,7 @@ pub(super) fn audit_ids(
 
 /// auditd's interpreted id fields (`log_format = ENRICHED`): a name for each
 /// id, `unknown(N)` for an id with none and `unset` for the unset login uid.
-fn interpreted_ids(
+pub fn interpreted_ids(
     fields: &mut BTreeMap<String, serde_json::Value>,
     creds: &Credentials,
     names: &GuestNames,

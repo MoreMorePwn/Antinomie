@@ -12,14 +12,14 @@ use super::sigma_events::{self, Role};
 use super::*;
 use std::collections::BTreeMap;
 
-pub(super) struct Record {
+pub struct Record {
     pub fields: BTreeMap<String, serde_json::Value>,
     pub inferred: Vec<String>,
 }
 
 /// Syscalls that get a SYSCALL record: the ones auditd rules for this kind of
 /// telemetry watch. File calls are described by their PATH records instead.
-const AUDITED: &[&str] = &[
+pub const AUDITED: &[&str] = &[
     "execve",
     "execveat",
     "connect",
@@ -39,7 +39,7 @@ const AUDITED: &[&str] = &[
 ];
 
 /// Calls that name a file; each name becomes a PATH record.
-const PATH_CALLS: &[&str] = &[
+pub const PATH_CALLS: &[&str] = &[
     "open",
     "openat",
     "openat2",
@@ -70,16 +70,16 @@ const PATH_CALLS: &[&str] = &[
 ];
 
 /// Longest `comm` the kernel keeps.
-const COMM_LEN: usize = 15;
+pub const COMM_LEN: usize = 15;
 
 /// Longest `PROCTITLE` the kernel logs, in bytes of the NUL-joined argv.
-const PROCTITLE_LEN: usize = 128;
+pub const PROCTITLE_LEN: usize = 128;
 
-fn text(value: impl Into<String>) -> serde_json::Value {
+pub fn text(value: impl Into<String>) -> serde_json::Value {
     serde_json::Value::String(value.into())
 }
 
-fn record(kind: &str) -> Record {
+pub fn record(kind: &str) -> Record {
     Record {
         fields: BTreeMap::from([("type".to_owned(), text(kind))]),
         inferred: Vec::new(),
@@ -87,7 +87,7 @@ fn record(kind: &str) -> Record {
 }
 
 /// Records for one call. `image` is the executable the process last exec'd.
-pub(super) fn records(
+pub fn records(
     files: &FdState,
     call: &InvocationSummary,
     event: &EventSummary,
@@ -128,7 +128,7 @@ pub(super) fn records(
 
 /// The `CWD` record: the working directory, exact while it is still the launch
 /// directory and joined lexically after a `chdir`.
-fn cwd(files: &FdState, call: &InvocationSummary, event: &EventSummary) -> Option<Record> {
+pub fn cwd(files: &FdState, call: &InvocationSummary, event: &EventSummary) -> Option<Record> {
     let (directory, lexical) = sigma_events::current_directory(files, call, event)?;
     let mut found = record("CWD");
     found.fields.insert("cwd".into(), text(directory));
@@ -143,7 +143,7 @@ fn cwd(files: &FdState, call: &InvocationSummary, event: &EventSummary) -> Optio
 /// arguments; any other call the ones its process was last seen to start with.
 /// Without a complete argument vector there is no record: a partial one would
 /// be a different title.
-fn proctitle(files: &FdState, call: &InvocationSummary, event: &EventSummary) -> Option<Record> {
+pub fn proctitle(files: &FdState, call: &InvocationSummary, event: &EventSummary) -> Option<Record> {
     let arguments = if matches!(event.syscall_name.as_str(), "execve" | "execveat") {
         normalized::complete_argv(call, event)?
     } else {
@@ -164,7 +164,7 @@ fn proctitle(files: &FdState, call: &InvocationSummary, event: &EventSummary) ->
     Some(found)
 }
 
-fn syscall(
+pub fn syscall(
     files: &FdState,
     call: &InvocationSummary,
     event: &EventSummary,
@@ -207,7 +207,7 @@ fn syscall(
     found
 }
 
-fn execve(call: &InvocationSummary, event: &EventSummary) -> Option<Record> {
+pub fn execve(call: &InvocationSummary, event: &EventSummary) -> Option<Record> {
     let vector = normalized::argument_vector(call, event)?;
     let mut found = record("EXECVE");
     for (index, argument) in vector.arguments.iter().take(16).enumerate() {
@@ -223,7 +223,7 @@ fn execve(call: &InvocationSummary, event: &EventSummary) -> Option<Record> {
     (found.fields.len() > 1).then_some(found)
 }
 
-fn path_records(
+pub fn path_records(
     files: &FdState,
     call: &InvocationSummary,
     event: &EventSummary,

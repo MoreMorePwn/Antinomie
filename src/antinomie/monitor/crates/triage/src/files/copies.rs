@@ -7,17 +7,17 @@ use super::*;
 use antinomie_monitor_core::file_writes::Captured;
 use antinomie_monitor_core::kernel_notes::{CopyKind, FileCopy};
 
-const COPY_GAP: &str = "In-kernel copy from another file: the range it changed is known, its bytes come from that file and are not rebuilt here.";
-const CUT_GAP: &str =
+pub const COPY_GAP: &str = "In-kernel copy from another file: the range it changed is known, its bytes come from that file and are not rebuilt here.";
+pub const CUT_GAP: &str =
     "In-kernel copy from a pipe: the guest carried only part of the bytes it moved.";
-const SHIFT_GAP: &str =
+pub const SHIFT_GAP: &str =
     "Range collapsed or inserted (fallocate): the bytes after it moved and are not rebuilt.";
 
 impl Change {
     /// Apply `copy` to this file, its destination. `data` is what the guest
     /// carried (from the destination offset on). A destination without a
     /// position (a pipe, a socket) is not a file this index rebuilds.
-    pub(super) fn kernel_copy(
+    pub fn kernel_copy(
         &mut self,
         copy: &FileCopy,
         data: &CapturedPayload,
@@ -74,7 +74,7 @@ impl Change {
 
 /// The File activity entry of a copy into a file with positions: where it
 /// wrote, how much, and the first bytes when the guest carried them.
-pub(super) fn copy_transfer(
+pub fn copy_transfer(
     copy: &FileCopy,
     data: &CapturedPayload,
     known_size: Option<u64>,
@@ -106,13 +106,13 @@ impl FileIndex {
     /// write on a regular file or block device. A successful transfer (not a
     /// copy) whose exit came whole without one had no position to record: it
     /// went to a terminal, pipe or socket. `kernel_revision` is the base's.
-    pub(super) fn is_stream(&self, call: &InvocationSummary, position: bool) -> bool {
+    pub fn is_stream(&self, call: &InvocationSummary, position: bool) -> bool {
         !position
             && call.exit.as_ref().is_some_and(|exit| exit.complete)
             && self.kernel_revision.is_some_and(|revision| revision >= 18)
     }
 
-    pub(super) fn remember_alias(&mut self, group: &str, alias: Option<String>) {
+    pub fn remember_alias(&mut self, group: &str, alias: Option<String>) {
         if let Some(alias) = alias {
             let names = self.aliases.entry(group.to_owned()).or_default();
             if names.len() < 16 && !names.contains(&alias) {
@@ -121,7 +121,7 @@ impl FileIndex {
         }
     }
 
-    pub(super) fn bind_description(&mut self, description: u64, group: String) {
+    pub fn bind_description(&mut self, description: u64, group: String) {
         if self.description_group.len() < 65536 {
             self.description_group.insert(description, group);
         }

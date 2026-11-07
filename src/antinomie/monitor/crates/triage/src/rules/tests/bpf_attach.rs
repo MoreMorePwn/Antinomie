@@ -1,24 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Programs attached by a link, a raw tracepoint or a perf event, from load to attach.
 use super::support::*;
-use crate::triage::rules::Output;
-use crate::triage::{bpf_notes, BpfNote, TriageInput};
+use crate::rules::Output;
+use crate::{bpf_notes, BpfNote, TriageInput};
 
-const BPF: u64 = 321;
-const IOCTL: u64 = 16;
-const PERF_OPEN: u64 = 298;
-const SET_BPF: u64 = 0x4004_2408;
-const ATTR: &str = "linux-6.12.94/x86_64/bpf_attr";
+pub const BPF: u64 = 321;
+pub const IOCTL: u64 = 16;
+pub const PERF_OPEN: u64 = 298;
+pub const SET_BPF: u64 = 0x4004_2408;
+pub const ATTR: &str = "linux-6.12.94/x86_64/bpf_attr";
 
-fn put(attr: &mut [u8], at: usize, value: u64, width: usize) {
+pub fn put(attr: &mut [u8], at: usize, value: u64, width: usize) {
     attr[at..at + width].copy_from_slice(&value.to_le_bytes()[..width]);
 }
 
-fn load(fd: i64) -> InvocationSummary {
+pub fn load(fd: i64) -> InvocationSummary {
     sys(1, BPF, "bpf", [5, 0, 152, 0, 0, 0], fd)
 }
 
-fn attr_call(command: u64, attr: &[u8], result: i64) -> InvocationSummary {
+pub fn attr_call(command: u64, attr: &[u8], result: i64) -> InvocationSummary {
     let mut row = sys(1, BPF, "bpf", [command, 0, 152, 0, 0, 0], result);
     row.entry
         .as_mut()
@@ -28,7 +28,7 @@ fn attr_call(command: u64, attr: &[u8], result: i64) -> InvocationSummary {
     row
 }
 
-fn link(prog: u64, target: u64, kind: u64, result: i64) -> InvocationSummary {
+pub fn link(prog: u64, target: u64, kind: u64, result: i64) -> InvocationSummary {
     let mut attr = vec![0u8; 152];
     put(&mut attr, 0, prog, 4);
     put(&mut attr, 4, target, 4);
@@ -36,7 +36,7 @@ fn link(prog: u64, target: u64, kind: u64, result: i64) -> InvocationSummary {
     attr_call(28, &attr, result)
 }
 
-fn kprobe_multi(prog: u64, symbols: &[&str], result: i64) -> InvocationSummary {
+pub fn kprobe_multi(prog: u64, symbols: &[&str], result: i64) -> InvocationSummary {
     let mut attr = vec![0u8; 152];
     put(&mut attr, 0, prog, 4);
     put(&mut attr, 8, 42, 4);
@@ -54,7 +54,7 @@ fn kprobe_multi(prog: u64, symbols: &[&str], result: i64) -> InvocationSummary {
     row
 }
 
-fn raw_tracepoint(prog: u64, name: Option<&str>, result: i64) -> InvocationSummary {
+pub fn raw_tracepoint(prog: u64, name: Option<&str>, result: i64) -> InvocationSummary {
     let mut attr = vec![0u8; 152];
     put(
         &mut attr,
@@ -76,7 +76,7 @@ fn raw_tracepoint(prog: u64, name: Option<&str>, result: i64) -> InvocationSumma
     row
 }
 
-fn perf_open(kind: u32, config: u64, result: i64) -> InvocationSummary {
+pub fn perf_open(kind: u32, config: u64, result: i64) -> InvocationSummary {
     let mut attr = vec![0u8; 136];
     put(&mut attr, 0, u64::from(kind), 4);
     put(&mut attr, 4, 136, 4);
@@ -96,11 +96,11 @@ fn perf_open(kind: u32, config: u64, result: i64) -> InvocationSummary {
     row
 }
 
-fn set_bpf(perf_fd: u64, prog: u64, result: i64) -> InvocationSummary {
+pub fn set_bpf(perf_fd: u64, prog: u64, result: i64) -> InvocationSummary {
     sys(1, IOCTL, "ioctl", [perf_fd, SET_BPF, prog, 0, 0, 0], result)
 }
 
-fn notes_of(mut calls: Calls) -> Vec<BpfNote> {
+pub fn notes_of(mut calls: Calls) -> Vec<BpfNote> {
     for (at, row) in calls.iter_mut().enumerate() {
         for event in row.entry.iter_mut().chain(row.exit.iter_mut()) {
             event.call_id = at as u64 + 1;
@@ -110,7 +110,7 @@ fn notes_of(mut calls: Calls) -> Vec<BpfNote> {
     bpf_notes(&TriageInput::page(&calls))
 }
 
-fn finding(out: &Output) -> &Finding {
+pub fn finding(out: &Output) -> &Finding {
     let found: Vec<_> = rows(out, "bpf.program")
         .into_iter()
         .filter(|row| text(row, "finding.object") != "BPF_PROG_LOAD")
@@ -120,7 +120,7 @@ fn finding(out: &Output) -> &Finding {
 }
 
 #[test]
-fn a_kprobe_multi_link_of_a_loaded_program_is_high_and_tied_to_the_load() {
+pub fn a_kprobe_multi_link_of_a_loaded_program_is_high_and_tied_to_the_load() {
     let calls = vec![
         load(3),
         kprobe_multi(3, &["do_sys_openat2", "tcp_connect"], 4),
@@ -156,7 +156,7 @@ fn a_kprobe_multi_link_of_a_loaded_program_is_high_and_tied_to_the_load() {
 }
 
 #[test]
-fn link_tiers_follow_the_attach_type() {
+pub fn link_tiers_follow_the_attach_type() {
     let tier_of = |kind: u64| {
         let out = run(vec![load(3), link(3, 5, kind, 4)]);
         text(finding(&out), "finding.tier")
@@ -186,7 +186,7 @@ fn link_tiers_follow_the_attach_type() {
 }
 
 #[test]
-fn a_failed_link_is_info() {
+pub fn a_failed_link_is_info() {
     let calls = vec![load(3), kprobe_multi(3, &["vfs_read"], -1)];
     let notes = notes_of(calls.clone());
     assert_eq!(
@@ -198,7 +198,7 @@ fn a_failed_link_is_info() {
 }
 
 #[test]
-fn a_raw_tracepoint_is_high_with_its_name() {
+pub fn a_raw_tracepoint_is_high_with_its_name() {
     let calls = vec![load(3), raw_tracepoint(3, Some("sys_enter"), 5)];
     let notes = notes_of(calls.clone());
     assert_eq!(
@@ -224,7 +224,7 @@ fn a_raw_tracepoint_is_high_with_its_name() {
 }
 
 #[test]
-fn a_program_set_on_a_perf_event_is_tied_to_the_event_and_the_load() {
+pub fn a_program_set_on_a_perf_event_is_tied_to_the_event_and_the_load() {
     let calls = vec![load(3), perf_open(2, 77, 4), set_bpf(4, 3, 0)];
     let notes = notes_of(calls.clone());
     assert_eq!(notes.len(), 3);
@@ -260,7 +260,7 @@ fn a_program_set_on_a_perf_event_is_tied_to_the_event_and_the_load() {
 }
 
 #[test]
-fn a_closed_program_fd_is_no_longer_tied() {
+pub fn a_closed_program_fd_is_no_longer_tied() {
     let notes = notes_of(vec![
         load(3),
         sys(1, 3, "close", [3, 0, 0, 0, 0, 0], 0),

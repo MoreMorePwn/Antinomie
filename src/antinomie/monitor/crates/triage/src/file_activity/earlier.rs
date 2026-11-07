@@ -11,13 +11,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Files asked at most per run; the rest show "not looked up".
-pub(in crate::triage) const LOOKUP_LIMIT: usize = 300;
+pub const LOOKUP_LIMIT: usize = 300;
 
 /// Ask the starting disk about the changed files of `activity`. `segments`
 /// are the run's recording folders, oldest first; `executable` serves the
 /// disk reader (`None`: this program). With `copy`, the earlier bytes are
 /// read from the starting disk only and added to the boot's recording.
-pub(in crate::triage) fn resolve(
+pub fn resolve(
     activity: &mut Activity,
     segments: &[(PathBuf, String)],
     executable: Option<PathBuf>,
@@ -72,7 +72,7 @@ pub(in crate::triage) fn resolve(
 /// What hashing the read-only files from the starting disk did, for the
 /// IOC list's notes.
 #[derive(Clone, Debug, Default)]
-pub(in crate::triage) struct ReadHashes {
+pub struct ReadHashes {
     /// Files not hashed because of the count or total size cap.
     pub left_out: usize,
     /// Files hashed.
@@ -83,7 +83,7 @@ pub(in crate::triage) struct ReadHashes {
 
 /// Cached answers of the last runs: a refresh of a finished run's scan must
 /// not read the disk again for the same files.
-static HASHED: Mutex<Vec<(String, antinomie_monitor_core::file_before::StartHashed)>> =
+pub static HASHED: Mutex<Vec<(String, antinomie_monitor_core::file_before::StartHashed)>> =
     Mutex::new(Vec::new());
 
 /// Hash the files the run only read or ran from its starting disk, for the
@@ -93,7 +93,7 @@ static HASHED: Mutex<Vec<(String, antinomie_monitor_core::file_before::StartHash
 /// [`antinomie_monitor_core::file_before::START_HASH_TOTAL_CAP`] bytes in all.
 /// Programs the run executed come first, then other files outside the
 /// library directories. Runs in the scan's worker thread, never the UI's.
-pub(in crate::triage) fn hash_read(
+pub fn hash_read(
     activity: &mut Activity,
     segments: &[(PathBuf, String)],
     executable: Option<PathBuf>,
@@ -203,7 +203,7 @@ pub(in crate::triage) fn hash_read(
 }
 
 /// One line for the window: where the file's earlier bytes stand.
-pub(super) fn describe(earlier: &Earlier) -> String {
+pub fn describe(earlier: &Earlier) -> String {
     use antinomie_monitor_core::byte_size::file_size;
     match &earlier.before {
         Before::Created => {
@@ -251,7 +251,7 @@ pub(super) fn describe(earlier: &Earlier) -> String {
 /// reads each run of the boot as the window would and asks the starting disk
 /// about every changed file.
 pub fn copy_boot(job: &antinomie_monitor_core::file_before_store::Job) -> Result<(), String> {
-    use crate::triage::{archive_scan::scan_archive_query, ScanRequest};
+    use crate::{archive_scan::scan_archive_query, ScanRequest};
     use std::sync::{atomic::AtomicBool, Arc};
     let writer = Arc::new(Mutex::new(Writer::open(
         &job.boot_dir,

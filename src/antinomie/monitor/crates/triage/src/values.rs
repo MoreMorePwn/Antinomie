@@ -4,21 +4,21 @@
 //! (the number stays available on hover); captured strings without their
 //! terminating NUL. File sizes read as the exact byte count with a rounded
 //! 1024-based figure.
-use crate::theme::ValueKind;
+use crate::tone::ValueKind;
 use antinomie_monitor_core::{syscalls, WaitStatus};
 
 /// A value as the trace shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Shown {
-    pub(crate) text: String,
-    pub(crate) kind: ValueKind,
+pub struct Shown {
+    pub text: String,
+    pub kind: ValueKind,
     /// The plain number, when `text` names it instead (errors, AT_FDCWD,
     /// signals, decoded flags).
-    pub(crate) raw: Option<String>,
+    pub raw: Option<String>,
 }
 
 impl Shown {
-    fn new(text: impl Into<String>, kind: ValueKind) -> Self {
+    pub fn new(text: impl Into<String>, kind: ValueKind) -> Self {
         Self {
             text: text.into(),
             kind,
@@ -26,7 +26,7 @@ impl Shown {
         }
     }
 
-    fn named(text: impl Into<String>, kind: ValueKind, raw: impl Into<String>) -> Self {
+    pub fn named(text: impl Into<String>, kind: ValueKind, raw: impl Into<String>) -> Self {
         Self {
             text: text.into(),
             kind,
@@ -35,7 +35,7 @@ impl Shown {
     }
 
     /// Hover text: the shown value and, when it is a name, its number.
-    pub(crate) fn hover(&self) -> String {
+    pub fn hover(&self) -> String {
         match &self.raw {
             Some(raw) => format!("{} = {raw}", self.text),
             None => self.text.clone(),
@@ -43,11 +43,11 @@ impl Shown {
     }
 }
 
-pub(crate) use antinomie_monitor_core::errno::errno_name;
+pub use antinomie_monitor_core::errno::errno_name;
 use antinomie_monitor_core::errno::{ERRNO, KERNEL_ERRNO};
 
 /// The errno number of a symbolic name (`EACCES` is 13).
-pub(crate) fn errno_number(name: &str) -> Option<u64> {
+pub fn errno_number(name: &str) -> Option<u64> {
     ERRNO
         .iter()
         .position(|candidate| !candidate.is_empty() && *candidate == name)
@@ -62,7 +62,7 @@ pub(crate) fn errno_number(name: &str) -> Option<u64> {
 
 /// A failed call's result as an outcome reads: "failed (EACCES)", or the
 /// number when it has no name.
-pub(crate) fn failed_outcome(result: i64) -> String {
+pub fn failed_outcome(result: i64) -> String {
     match errno_name(result.unsigned_abs()) {
         Some(name) => format!("failed ({name})"),
         None => format!("failed ({result})"),
@@ -70,7 +70,7 @@ pub(crate) fn failed_outcome(result: i64) -> String {
 }
 
 /// The hover of an outcome cell "failed (EACCES)": the number and the words.
-pub(crate) fn outcome_hover(text: &str) -> Option<String> {
+pub fn outcome_hover(text: &str) -> Option<String> {
     let name = text.strip_prefix("failed (")?.strip_suffix(')')?;
     let number = errno_number(name)?;
     let words = errno_description(number).unwrap_or_default();
@@ -82,7 +82,7 @@ pub(crate) fn outcome_hover(text: &str) -> Option<String> {
 }
 
 /// What an errno means, in words ("No such file or directory").
-pub(crate) fn errno_description(errno: u64) -> Option<String> {
+pub fn errno_description(errno: u64) -> Option<String> {
     if let Some((.., text)) = KERNEL_ERRNO.iter().find(|(number, ..)| *number == errno) {
         return Some(format!("{text} (kernel internal)"));
     }
@@ -97,12 +97,12 @@ pub(crate) fn errno_description(errno: u64) -> Option<String> {
 }
 
 /// A raw syscall return that encodes an error (`-4095..=-1`).
-pub(crate) fn is_error(result: i64) -> bool {
+pub fn is_error(result: i64) -> bool {
     (-4095..0).contains(&result)
 }
 
 /// Syscalls whose successful return is an address.
-fn returns_address(nr: u64) -> bool {
+pub fn returns_address(nr: u64) -> bool {
     matches!(
         syscalls::known_name(nr),
         Some("mmap" | "brk" | "mremap" | "shmat")
@@ -111,7 +111,7 @@ fn returns_address(nr: u64) -> bool {
 
 /// A syscall return value by meaning: an error by name, an address in hex,
 /// anything else (counts, descriptors, PIDs) in decimal.
-pub(crate) fn result(nr: u64, result: i64) -> Shown {
+pub fn result(nr: u64, result: i64) -> Shown {
     if is_error(result) {
         let errno = result.unsigned_abs();
         return match errno_name(errno) {
@@ -126,7 +126,7 @@ pub(crate) fn result(nr: u64, result: i64) -> Shown {
 }
 
 /// Hover text of a return value: its number and, for an error, what it means.
-pub(crate) fn result_hover(nr: u64, value: i64) -> String {
+pub fn result_hover(nr: u64, value: i64) -> String {
     let shown = result(nr, value);
     if is_error(value) {
         let errno = value.unsigned_abs();
@@ -140,7 +140,7 @@ pub(crate) fn result_hover(nr: u64, value: i64) -> String {
 }
 
 /// How a task ended: "exit 1", or "killed by SIGKILL" with "(core dumped)".
-pub(crate) fn task_end(status: &WaitStatus) -> String {
+pub fn task_end(status: &WaitStatus) -> String {
     match *status {
         WaitStatus::Exited { code } => format!("exit {code}"),
         WaitStatus::Signaled {
@@ -157,7 +157,7 @@ pub(crate) fn task_end(status: &WaitStatus) -> String {
     }
 }
 
-const SIGNALS: [&str; 32] = [
+pub const SIGNALS: [&str; 32] = [
     "0",
     "SIGHUP",
     "SIGINT",
@@ -194,7 +194,7 @@ const SIGNALS: [&str; 32] = [
 
 /// How an argument's number reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Meaning {
+pub enum Meaning {
     Pointer,
     Flags,
     Hex,
@@ -207,7 +207,7 @@ enum Meaning {
     Unsigned,
 }
 
-fn meaning(nr: u64, index: usize) -> Meaning {
+pub fn meaning(nr: u64, index: usize) -> Meaning {
     let Some(info) = syscalls::syscall(nr) else {
         return Meaning::Unsigned;
     };
@@ -266,7 +266,7 @@ fn meaning(nr: u64, index: usize) -> Meaning {
 }
 
 /// Conventional role of a standard descriptor; its target can be redirected.
-pub(crate) fn standard_fd_name(fd: u64) -> Option<&'static str> {
+pub fn standard_fd_name(fd: u64) -> Option<&'static str> {
     match fd {
         0 => Some("stdin"),
         1 => Some("stdout"),
@@ -277,7 +277,7 @@ pub(crate) fn standard_fd_name(fd: u64) -> Option<&'static str> {
 
 /// Argument `index` of syscall `nr` by meaning. `args` gives the other
 /// arguments some values depend on (socket option names by level).
-pub(crate) fn argument(nr: u64, index: usize, args: &[u64; 6]) -> Shown {
+pub fn argument(nr: u64, index: usize, args: &[u64; 6]) -> Shown {
     let value = args[index];
     if let Some(name) = syscalls::selector_name(nr, index, args) {
         return Shown::named(name, ValueKind::Flags, format!("{value:#x}"));
@@ -312,7 +312,7 @@ pub(crate) fn argument(nr: u64, index: usize, args: &[u64; 6]) -> Shown {
 
 /// Decoded flag names joined with `|`; bits the schema cannot name follow
 /// in hex.
-fn flags(nr: u64, index: usize, value: u64) -> Shown {
+pub fn flags(nr: u64, index: usize, value: u64) -> Shown {
     let raw = format!("{value:#x}");
     let Some(decoded) = syscalls::argument_flags(nr, index, value) else {
         return Shown::new(raw, ValueKind::Flags);
@@ -329,7 +329,7 @@ fn flags(nr: u64, index: usize, value: u64) -> Shown {
 
 /// Captured bytes as a quoted string: printable text escaped, the trailing
 /// NUL terminators dropped (they end C strings, they are not content).
-pub(crate) fn quoted(data: &[u8]) -> String {
+pub fn quoted(data: &[u8]) -> String {
     let end = data
         .iter()
         .rposition(|byte| *byte != 0)
@@ -339,7 +339,7 @@ pub(crate) fn quoted(data: &[u8]) -> String {
 
 /// Every byte of a data buffer as a quoted string, zeros included:
 /// printable text as is, other bytes escaped.
-pub(crate) fn quoted_bytes(data: &[u8]) -> String {
+pub fn quoted_bytes(data: &[u8]) -> String {
     let mut text = String::with_capacity(data.len() + 2);
     text.push('"');
     for byte in data {
@@ -361,31 +361,31 @@ pub(crate) fn quoted_bytes(data: &[u8]) -> String {
 /// A captured `struct sockaddr` as an address (`10.0.2.3:53`, `[::1]:443`, a
 /// Unix socket path, a netlink, packet, vsock, ALG or CAN address, or
 /// `AF_UNSPEC`). None for other families or short data.
-pub(crate) fn sockaddr(data: &[u8]) -> Option<String> {
+pub fn sockaddr(data: &[u8]) -> Option<String> {
     antinomie_monitor_core::typed_fields::sockaddr(data, None)
 }
 
 /// A file's size as the exact byte count and, from 1024 bytes up, a rounded
 /// figure in 1024-based units: `16080 bytes (15.7 KiB)`.
-pub(crate) fn file_size(bytes: u64) -> String {
+pub fn file_size(bytes: u64) -> String {
     antinomie_monitor_core::byte_size::file_size(bytes)
 }
 
 /// A size for a table cell, a button or a one-line summary: the rounded
 /// figure only (`1.9 MiB`). Properties and records use [`file_size`], with the
 /// exact byte count; a short size carries it in its hover text.
-pub(crate) fn short_size(bytes: u64) -> String {
+pub fn short_size(bytes: u64) -> String {
     antinomie_monitor_core::byte_size::short_size(bytes)
 }
 
 /// A count with thousands separators: `1,024`. Every count shown in a label
 /// or a status line uses this.
-pub(crate) fn thousands(value: u64) -> String {
+pub fn thousands(value: u64) -> String {
     antinomie_monitor_core::analysis::detection::group_digits(value)
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     #[test]

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use super::support::*;
 
-fn tcp_to(ip: [u8; 4], port: u16) -> Calls {
+pub fn tcp_to(ip: [u8; 4], port: u16) -> Calls {
     vec![socket(1, 2, 1, 3), connect(1, 3, ip, port)]
 }
 
 #[test]
-fn a_socket_on_a_shells_input_and_output_is_a_reverse_shell() {
+pub fn a_socket_on_a_shells_input_and_output_is_a_reverse_shell() {
     let mut calls = tcp_to([203, 0, 113, 9], 4444);
     calls.extend([
         dup2(1, 3, 0),
@@ -38,7 +38,7 @@ fn a_socket_on_a_shells_input_and_output_is_a_reverse_shell() {
 }
 
 #[test]
-fn an_accepted_client_wired_to_a_shell_is_a_bind_shell() {
+pub fn an_accepted_client_wired_to_a_shell_is_a_bind_shell() {
     let mut calls = vec![
         socket(1, 2, 1, 3),
         sys(1, 49, "bind", [3, 0, 16, 0, 0, 0], 0),
@@ -61,7 +61,7 @@ fn an_accepted_client_wired_to_a_shell_is_a_bind_shell() {
 }
 
 #[test]
-fn listening_on_every_interface_is_medium_and_loopback_or_housekeeping_is_not() {
+pub fn listening_on_every_interface_is_medium_and_loopback_or_housekeeping_is_not() {
     let listen_on = |ip: [u8; 4], port: u16| {
         let bind = with_entry(
             sys(1, 49, "bind", [3, 0x1000, 16, 0, 0, 0], 0),
@@ -103,7 +103,7 @@ fn listening_on_every_interface_is_medium_and_loopback_or_housekeeping_is_not() 
 }
 
 #[test]
-fn raw_and_packet_sockets_are_medium() {
+pub fn raw_and_packet_sockets_are_medium() {
     assert_eq!(
         tier(&run(vec![socket(1, 17, 3, 3)]), "network.raw_socket").as_deref(),
         Some("medium")
@@ -121,7 +121,7 @@ fn raw_and_packet_sockets_are_medium() {
 }
 
 #[test]
-fn a_filter_on_a_packet_socket_is_a_magic_packet_backdoor() {
+pub fn a_filter_on_a_packet_socket_is_a_magic_packet_backdoor() {
     let attach = |fd: u64| sys(1, 54, "setsockopt", [fd, 1, 26, 0, 16, 0], 0);
     let out = run(vec![socket(1, 17, 3, 3), attach(3)]);
     assert_eq!(tier(&out, "c2.bpf_backdoor").as_deref(), Some("high"));
@@ -140,7 +140,7 @@ fn a_filter_on_a_packet_socket_is_a_magic_packet_backdoor() {
 }
 
 #[test]
-fn tor_irc_and_proxy_tools_are_medium() {
+pub fn tor_irc_and_proxy_tools_are_medium() {
     assert!(has(&run(tcp_to([127, 0, 0, 1], 9050)), "network.tor"));
     assert!(has(
         &run(vec![exec(1, "/usr/bin/tor", &["tor"])]),
@@ -182,7 +182,7 @@ fn tor_irc_and_proxy_tools_are_medium() {
 }
 
 #[test]
-fn an_elf_received_from_the_network_and_saved_is_high() {
+pub fn an_elf_received_from_the_network_and_saved_is_high() {
     let out = run(vec![
         socket(1, 2, 1, 3),
         connect(1, 3, [203, 0, 113, 9], 80),
@@ -202,7 +202,7 @@ fn an_elf_received_from_the_network_and_saved_is_high() {
 }
 
 #[test]
-fn a_file_sent_straight_to_a_socket_is_medium() {
+pub fn a_file_sent_straight_to_a_socket_is_medium() {
     let out = run(vec![
         socket(1, 2, 1, 3),
         connect(1, 3, [203, 0, 113, 9], 443),
@@ -224,7 +224,7 @@ fn a_file_sent_straight_to_a_socket_is_medium() {
 }
 
 #[test]
-fn ten_megabytes_or_ten_times_more_out_than_in_is_a_large_upload() {
+pub fn ten_megabytes_or_ten_times_more_out_than_in_is_a_large_upload() {
     let mut calls = tcp_to([203, 0, 113, 9], 443);
     for _ in 0..11 {
         calls.push(sys(1, 1, "write", [3, 0, 1_048_576, 0, 0, 0], 1_048_576));
@@ -253,7 +253,7 @@ fn ten_megabytes_or_ten_times_more_out_than_in_is_a_large_upload() {
 }
 
 #[test]
-fn a_thousand_packets_a_second_to_one_target_is_a_flood() {
+pub fn a_thousand_packets_a_second_to_one_target_is_a_flood() {
     let mut calls = vec![socket(1, 2, 2, 3), connect(1, 3, [198, 51, 100, 9], 80)];
     for n in 0..1200u64 {
         calls.push(at(
@@ -276,7 +276,7 @@ fn a_thousand_packets_a_second_to_one_target_is_a_flood() {
 }
 
 #[test]
-fn many_short_logins_to_ssh_and_telnet_ports_are_brute_force_even_when_refused() {
+pub fn many_short_logins_to_ssh_and_telnet_ports_are_brute_force_even_when_refused() {
     let mut calls = vec![socket(1, 2, 1, 3)];
     for n in 0..12u8 {
         let mut attempt = connect(
@@ -305,7 +305,7 @@ fn many_short_logins_to_ssh_and_telnet_ports_are_brute_force_even_when_refused()
 }
 
 #[test]
-fn commonly_attacked_service_ports_on_several_hosts_are_medium() {
+pub fn commonly_attacked_service_ports_on_several_hosts_are_medium() {
     let mut calls = vec![socket(1, 2, 1, 3)];
     for host in 1..=4u8 {
         calls.push(connect(1, 3, [198, 51, 100, host], 6379));
@@ -323,7 +323,7 @@ fn commonly_attacked_service_ports_on_several_hosts_are_medium() {
 }
 
 #[test]
-fn files_pushed_to_another_host_are_medium() {
+pub fn files_pushed_to_another_host_are_medium() {
     for argv in [
         vec!["scp", "/tmp/x", "root@10.0.0.7:/tmp/"],
         vec!["rsync", "-a", "/data/", "host:/backup"],

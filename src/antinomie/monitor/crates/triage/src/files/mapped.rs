@@ -8,13 +8,13 @@
 use super::*;
 use antinomie_monitor_core::kernel_notes::{FileMapped, MappedCause};
 
-const MAPPED_GAP: &str = "Written through a shared mapping: each page is known as it was when written back or unmapped; the stores in between are not seen.";
-const UNCOPIED_GAP: &str = "Pages written through a shared mapping that the guest did not copy (its per-call budget, or memory): their bytes are unknown.";
-const UNLISTED_GAP: &str = "A call wrote more pages through mappings than the guest lists: where the others were and what they held is unknown.";
+pub const MAPPED_GAP: &str = "Written through a shared mapping: each page is known as it was when written back or unmapped; the stores in between are not seen.";
+pub const UNCOPIED_GAP: &str = "Pages written through a shared mapping that the guest did not copy (its per-call budget, or memory): their bytes are unknown.";
+pub const UNLISTED_GAP: &str = "A call wrote more pages through mappings than the guest lists: where the others were and what they held is unknown.";
 
 /// An msync whose pages a revision-18 guest named, with their bytes: the
 /// records place them (the call itself names no file).
-pub(super) fn synced_named_pages(call: &InvocationSummary, name: &str) -> bool {
+pub fn synced_named_pages(call: &InvocationSummary, name: &str) -> bool {
     name == "msync" && !kernel_records::file_mapped(call, true).is_empty()
 }
 
@@ -118,7 +118,7 @@ impl FileIndex {
 
     /// The group of the file `record` names: the one its identity already
     /// leads to, or a new one for a file no call named.
-    fn mapped_group(&mut self, record: &FileMapped) -> String {
+    pub fn mapped_group(&mut self, record: &FileMapped) -> String {
         if let Some(known) = self.by_identity.get(&record.file) {
             return known.clone();
         }
@@ -133,7 +133,7 @@ impl Change {
     /// Lay the copied pages of `record` over what is known of the file. A
     /// write the file system applied after the copy (a higher write order)
     /// keeps its bytes.
-    fn apply_mapped(
+    pub fn apply_mapped(
         &mut self,
         record: &FileMapped,
         copied: &CapturedPayload,

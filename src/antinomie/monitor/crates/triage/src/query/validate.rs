@@ -2,8 +2,8 @@
 //! Compiling and checking a filter before it is applied.
 use super::*;
 
-#[cfg(test)]
-pub(crate) fn matches(filter: &str, invocation: &InvocationSummary) -> Result<bool, String> {
+#[cfg(any(test, feature = "test-support"))]
+pub fn matches(filter: &str, invocation: &InvocationSummary) -> Result<bool, String> {
     let compiled = compile_note(filter);
     if let Some(error) = compiled.error.clone() {
         return Err(error);
@@ -11,7 +11,7 @@ pub(crate) fn matches(filter: &str, invocation: &InvocationSummary) -> Result<bo
     Ok(compiled.keep(invocation))
 }
 
-pub(super) fn compiled(filter: &str, record: bool) -> Result<Mode, String> {
+pub fn compiled(filter: &str, record: bool) -> Result<Mode, String> {
     let filter = filter.trim();
     if filter.is_empty() {
         return Ok(Mode::All);
@@ -52,7 +52,7 @@ pub(super) fn compiled(filter: &str, record: bool) -> Result<Mode, String> {
     Ok(Mode::Expr(expr))
 }
 
-fn normalize_literals(expr: &mut Expr) {
+pub fn normalize_literals(expr: &mut Expr) {
     match expr {
         Expr::Cmp(_, _, right) => literal(right),
         Expr::Not(inner) => normalize_literals(inner),
@@ -64,7 +64,7 @@ fn normalize_literals(expr: &mut Expr) {
     }
 }
 
-fn check_fields(expr: &Expr, record: bool) -> Result<(), String> {
+pub fn check_fields(expr: &Expr, record: bool) -> Result<(), String> {
     match expr {
         Expr::Value(value) => require_field(value, record),
         Expr::Not(inner) => check_fields(inner, record),
@@ -90,7 +90,7 @@ fn check_fields(expr: &Expr, record: bool) -> Result<(), String> {
     }
 }
 
-fn check_value(value: &Value, record: bool) -> Result<(), String> {
+pub fn check_value(value: &Value, record: bool) -> Result<(), String> {
     match value {
         Value::Field(name) => {
             if record {
@@ -110,7 +110,7 @@ fn check_value(value: &Value, record: bool) -> Result<(), String> {
     }
 }
 
-fn require_field(value: &Value, record: bool) -> Result<(), String> {
+pub fn require_field(value: &Value, record: bool) -> Result<(), String> {
     match value {
         Value::Raw(_) if record => Err("args.raw is a syscall field".into()),
         Value::Raw(_) => Ok(()),
@@ -122,27 +122,27 @@ fn require_field(value: &Value, record: bool) -> Result<(), String> {
     }
 }
 
-fn known_record_field(name: &str) -> bool {
+pub fn known_record_field(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
         "tag" | "tags" | "entry.tag" | "entry.name" | "entry.id" | "entry.path" | "name"
     )
 }
 
-fn check_literal(value: &Value) -> Result<(), String> {
+pub fn check_literal(value: &Value) -> Result<(), String> {
     match value {
         Value::Number(_) | Value::Text(_) => Ok(()),
         _ => Err("Expected a number or quoted text in the set".into()),
     }
 }
 
-pub(super) fn unknown_field(name: &str) -> String {
+pub fn unknown_field(name: &str) -> String {
     format!(
         "Unknown filter field {name}. Fields: syscall.num, syscall.name, tid, pid, ret, info, tag, call.id, args.N, args.<name>"
     )
 }
 
-fn known_field(name: &str) -> bool {
+pub fn known_field(name: &str) -> bool {
     let key = name.to_ascii_lowercase();
     matches!(
         key.as_str(),
@@ -214,7 +214,7 @@ fn known_field(name: &str) -> bool {
     })
 }
 
-pub(super) fn is_expression(filter: &str) -> bool {
+pub fn is_expression(filter: &str) -> bool {
     filter.contains("==")
         || filter.contains("!=")
         || filter.contains("&&")
@@ -236,7 +236,7 @@ pub(super) fn is_expression(filter: &str) -> bool {
         || filter.split_whitespace().any(|word| word.contains('.'))
 }
 
-fn has_filter_word(filter: &str, word: &str) -> bool {
+pub fn has_filter_word(filter: &str, word: &str) -> bool {
     filter
         .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
         .any(|part| part.eq_ignore_ascii_case(word))

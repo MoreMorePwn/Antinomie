@@ -12,7 +12,7 @@ use antinomie_monitor_core::{
 };
 
 /// Classic and eBPF instructions are 8 octets: opcode, registers, offset, immediate.
-pub(crate) fn translate(bytes: &[u8]) -> String {
+pub fn translate(bytes: &[u8]) -> String {
     let (insns, tail) = bytes.as_chunks::<8>();
     if insns.is_empty() {
         return format!(
@@ -70,7 +70,7 @@ pub(crate) fn translate(bytes: &[u8]) -> String {
 
 /// Identity recorded on the invocation. Absent values stay absent.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct BpfIdentity {
+pub struct BpfIdentity {
     pub stream_id: u64,
     pub vm_id: Option<String>,
     pub boot_id: Option<String>,
@@ -93,7 +93,7 @@ pub(crate) struct BpfIdentity {
 
 /// JSON metadata and a hex dump of the exact captured bytes.
 /// A short tail is reported and is not extended with zero bytes.
-pub(crate) fn export_capture(bytes: &[u8], identity: &BpfIdentity) -> String {
+pub fn export_capture(bytes: &[u8], identity: &BpfIdentity) -> String {
     let hash = antinomie_monitor_core::storage::sha256_hex(bytes);
     let meta = serde_json::json!({
         "sha256": hash,
@@ -125,7 +125,7 @@ pub(crate) fn export_capture(bytes: &[u8], identity: &BpfIdentity) -> String {
 
 /// Write the captured bytes and a JSON sidecar. The binary is the recorded
 /// octets only; a short tail is not padded.
-pub(crate) fn write_export(
+pub fn write_export(
     directory: &Path,
     bytes: &[u8],
     identity: &BpfIdentity,
@@ -175,7 +175,7 @@ pub(crate) fn write_export(
     Ok((binary, metadata))
 }
 
-fn capture_partial(bytes: &[u8], identity: &BpfIdentity) -> bool {
+pub fn capture_partial(bytes: &[u8], identity: &BpfIdentity) -> bool {
     !bytes.len().is_multiple_of(8)
         || identity
             .declared_instruction_count
@@ -183,7 +183,7 @@ fn capture_partial(bytes: &[u8], identity: &BpfIdentity) -> bool {
         || !identity.capture_issues.is_empty()
 }
 
-fn write_new_export(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub fn write_new_export(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -201,7 +201,7 @@ fn write_new_export(path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// Classic `sock_filter`: little-endian `u16 code`, `u8 jt`, `u8 jf`, `u32 k`.
 /// A length that is not a multiple of 8 is reported as captured and is not
 /// completed with zero bytes.
-pub(crate) fn translate_classic(bytes: &[u8]) -> String {
+pub fn translate_classic(bytes: &[u8]) -> String {
     let instructions = bytes.len() / 8;
     let mut lines = vec![captured_header(bytes.len(), instructions)];
     let tail = bytes.len() % 8;
@@ -224,7 +224,7 @@ pub(crate) fn translate_classic(bytes: &[u8]) -> String {
 
 /// The same classic instruction offsets refer to different input structures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ClassicContext {
+pub enum ClassicContext {
     Socket,
     Seccomp,
     Unknown,
@@ -232,7 +232,7 @@ pub(crate) enum ClassicContext {
 
 /// Decode without executing. Each retained word has its exact bytes and an
 /// explanatory operation; context-dependent meanings are never guessed.
-pub(crate) fn translate_classic_explained(bytes: &[u8], context: ClassicContext) -> String {
+pub fn translate_classic_explained(bytes: &[u8], context: ClassicContext) -> String {
     let mut output = translate_classic(bytes);
     if bytes.len() < 8 {
         return output;
@@ -258,7 +258,7 @@ pub(crate) fn translate_classic_explained(bytes: &[u8], context: ClassicContext)
     output
 }
 
-fn classic_operation(
+pub fn classic_operation(
     code: u16,
     jt: u8,
     jf: u8,
@@ -400,7 +400,7 @@ fn classic_operation(
     }
 }
 
-fn classic_input(offset: u32, size: u32, context: ClassicContext) -> String {
+pub fn classic_input(offset: u32, size: u32, context: ClassicContext) -> String {
     match context {
         ClassicContext::Unknown => {
             format!("load_u{size}(input, {offset:#x}); field meaning unresolved")
@@ -451,7 +451,7 @@ fn classic_input(offset: u32, size: u32, context: ClassicContext) -> String {
 }
 
 /// Register operations annotate the disassembly; unknown instructions remain raw.
-pub(crate) fn translate_explained(bytes: &[u8]) -> String {
+pub fn translate_explained(bytes: &[u8]) -> String {
     let mut output = translate(bytes);
     output.push_str(
         "\n\nPseudocode (r1 is entry context; r10 is frame pointer; r0 is return value)\n",
@@ -510,7 +510,7 @@ pub(crate) fn translate_explained(bytes: &[u8]) -> String {
     output
 }
 
-fn ebpf_operation(
+pub fn ebpf_operation(
     op: u8,
     dst: u8,
     src: u8,
@@ -634,7 +634,7 @@ fn ebpf_operation(
 
 /// Exact captured bytes. Complete 8-octet words are the instruction count;
 /// a short tail is not filled with `00`.
-pub(crate) fn dump(bytes: &[u8]) -> String {
+pub fn dump(bytes: &[u8]) -> String {
     let header = captured_header(bytes.len(), bytes.len() / 8);
     if bytes.is_empty() {
         return header;
@@ -647,11 +647,11 @@ pub(crate) fn dump(bytes: &[u8]) -> String {
     format!("{header}\n{hex}")
 }
 
-fn captured_header(octets: usize, instructions: usize) -> String {
+pub fn captured_header(octets: usize, instructions: usize) -> String {
     format!("captured {octets} octets, {instructions} instructions")
 }
 
-fn classic_mnemonic(code: u16, jt: u8, jf: u8, k: u32, index: usize, len: usize) -> String {
+pub fn classic_mnemonic(code: u16, jt: u8, jf: u8, k: u32, index: usize, len: usize) -> String {
     let class_id = code & 7;
     let class = match class_id {
         0 => "ld",
@@ -690,7 +690,7 @@ fn classic_mnemonic(code: u16, jt: u8, jf: u8, k: u32, index: usize, len: usize)
 }
 
 /// `offset` is an instruction count from the next classic instruction.
-fn classic_landing(index: usize, offset: u32, len: usize) -> Option<u64> {
+pub fn classic_landing(index: usize, offset: u32, len: usize) -> Option<u64> {
     let target = (index as u64)
         .checked_add(1)?
         .checked_add(u64::from(offset))?;
@@ -702,7 +702,7 @@ fn classic_landing(index: usize, offset: u32, len: usize) -> Option<u64> {
 }
 
 /// BPF_PROG_LOAD and neighbouring bpf(2) commands, for the triage list.
-pub(crate) fn command_name(event: &EventSummary) -> Option<&'static str> {
+pub fn command_name(event: &EventSummary) -> Option<&'static str> {
     if event.syscall_name != "bpf" {
         return None;
     }
@@ -721,7 +721,7 @@ pub(crate) fn command_name(event: &EventSummary) -> Option<&'static str> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     #[test]

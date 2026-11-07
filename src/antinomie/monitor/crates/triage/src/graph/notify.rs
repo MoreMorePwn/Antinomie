@@ -18,7 +18,7 @@ pub struct HighRule {
 /// Collects HIGH rows by rule while a scan reads the engine's output.
 #[derive(Default)]
 pub struct HighRules {
-    rules: BTreeMap<String, HighRule>,
+    pub rules: BTreeMap<String, HighRule>,
 }
 
 impl HighRules {

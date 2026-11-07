@@ -2,7 +2,7 @@
 //! A process's environment against the one its parent had at its own exec.
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Change {
+pub enum Change {
     Same,
     Added,
     /// Changed; holds the parent's value.
@@ -11,20 +11,20 @@ pub(super) enum Change {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Line {
-    pub(super) name: String,
-    pub(super) value: String,
-    pub(super) change: Change,
+pub struct Line {
+    pub name: String,
+    pub value: String,
+    pub change: Change,
 }
 
 impl Line {
     /// The variable as the exec carried it.
-    pub(super) fn text(&self) -> String {
+    pub fn text(&self) -> String {
         format!("{}={}", self.name, self.value)
     }
 
     /// The marker shown before the variable.
-    pub(super) fn mark(&self) -> &'static str {
+    pub fn mark(&self) -> &'static str {
         match self.change {
             Change::Same => " ",
             Change::Added => "+",
@@ -34,14 +34,14 @@ impl Line {
     }
 }
 
-fn split(variable: &str) -> (&str, &str) {
+pub fn split(variable: &str) -> (&str, &str) {
     variable.split_once('=').unwrap_or((variable, ""))
 }
 
 /// The variables of `own` in their order, each marked against `parent`
 /// (`None`: nothing to compare with, all unchanged), then those only the
 /// parent had.
-pub(super) fn diff(parent: Option<&[String]>, own: &[String]) -> Vec<Line> {
+pub fn diff(parent: Option<&[String]>, own: &[String]) -> Vec<Line> {
     let Some(parent) = parent else {
         return own
             .iter()
@@ -89,7 +89,7 @@ pub(super) fn diff(parent: Option<&[String]>, own: &[String]) -> Vec<Line> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     fn env(items: &[&str]) -> Vec<String> {

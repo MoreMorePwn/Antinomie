@@ -2,17 +2,17 @@
 //! Recursive-descent parser for filter expressions.
 use super::*;
 
-pub(super) struct Parser {
-    pub(super) tokens: Vec<Token>,
-    pub(super) at: usize,
+pub struct Parser {
+    pub tokens: Vec<Token>,
+    pub at: usize,
 }
 
 impl Parser {
-    fn peek(&self) -> Option<&Token> {
+    pub fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.at)
     }
 
-    fn pop(&mut self) -> Result<Token, String> {
+    pub fn pop(&mut self) -> Result<Token, String> {
         let token = self
             .tokens
             .get(self.at)
@@ -22,7 +22,7 @@ impl Parser {
         Ok(token)
     }
 
-    pub(super) fn parse_or(&mut self) -> Result<Expr, String> {
+    pub fn parse_or(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_and()?;
         while matches!(self.peek(), Some(Token::Or)) {
             self.at += 1;
@@ -31,7 +31,7 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_and(&mut self) -> Result<Expr, String> {
+    pub fn parse_and(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_not()?;
         while matches!(self.peek(), Some(Token::And)) {
             self.at += 1;
@@ -40,7 +40,7 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_not(&mut self) -> Result<Expr, String> {
+    pub fn parse_not(&mut self) -> Result<Expr, String> {
         if matches!(self.peek(), Some(Token::Not)) {
             self.at += 1;
             return Ok(Expr::Not(Box::new(self.parse_not()?)));
@@ -48,7 +48,7 @@ impl Parser {
         self.parse_cmp()
     }
 
-    fn parse_cmp(&mut self) -> Result<Expr, String> {
+    pub fn parse_cmp(&mut self) -> Result<Expr, String> {
         if matches!(self.peek(), Some(Token::LParen)) {
             self.at += 1;
             let inner = self.parse_or()?;
@@ -122,7 +122,7 @@ impl Parser {
         Ok(Expr::Cmp(left, op, right))
     }
 
-    fn parse_set(&mut self) -> Result<Vec<Value>, String> {
+    pub fn parse_set(&mut self) -> Result<Vec<Value>, String> {
         if !matches!(self.pop()?, Token::LBrace) {
             return Err("Expected { after in".into());
         }
@@ -149,7 +149,7 @@ impl Parser {
         Ok(items)
     }
 
-    fn parse_set_item(&mut self) -> Result<Value, String> {
+    pub fn parse_set_item(&mut self) -> Result<Value, String> {
         match self.pop()? {
             Token::Number(number) => Ok(Value::Number(number)),
             Token::Text(text) => Ok(Value::Text(text)),
@@ -158,7 +158,7 @@ impl Parser {
         }
     }
 
-    fn parse_value(&mut self) -> Result<Value, String> {
+    pub fn parse_value(&mut self) -> Result<Value, String> {
         match self.pop()? {
             Token::Ident(name) if name == "lower" => {
                 if !matches!(self.pop()?, Token::LParen) {
@@ -189,7 +189,7 @@ impl Parser {
         }
     }
 
-    fn comparison(&self) -> Option<Cmp> {
+    pub fn comparison(&self) -> Option<Cmp> {
         match self.peek()? {
             Token::Eq => Some(Cmp::Eq),
             Token::Ne => Some(Cmp::Ne),
@@ -202,7 +202,7 @@ impl Parser {
         }
     }
 
-    fn parse_raw_slot(&mut self) -> Result<Value, String> {
+    pub fn parse_raw_slot(&mut self) -> Result<Value, String> {
         if !matches!(self.peek(), Some(Token::LBracket)) {
             return Err("args.raw needs an index from 0 through 5".into());
         }

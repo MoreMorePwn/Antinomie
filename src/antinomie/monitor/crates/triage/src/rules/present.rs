@@ -3,11 +3,11 @@
 //! span, process, technique and the notes a tier chip carries.
 use super::noise::{flag, pace, Agg};
 use super::Tier;
-use crate::triage::process_cells;
+use crate::process_cells;
 
 /// "succeeded", "3 of 5 failed" or "all failed". A row with no call result
 /// (a packet, a host report) has none to say.
-pub(in crate::triage) fn result_text(count: u64, failed: u64, known: bool) -> String {
+pub fn result_text(count: u64, failed: u64, known: bool) -> String {
     if !known {
         "\u{2014}".into()
     } else if failed == 0 {
@@ -20,7 +20,7 @@ pub(in crate::triage) fn result_text(count: u64, failed: u64, known: bool) -> St
 }
 
 /// "×12", or "×40 every ~5.0 s" for a row that repeats at a steady pace.
-pub(in crate::triage) fn count_text(count: u64, period: Option<u64>) -> String {
+pub fn count_text(count: u64, period: Option<u64>) -> String {
     match period.filter(|_| count > 1) {
         Some(period) => format!("\u{d7}{count} every ~{}", pace(period)),
         None => format!("\u{d7}{count}"),
@@ -28,7 +28,7 @@ pub(in crate::triage) fn count_text(count: u64, period: Option<u64>) -> String {
 }
 
 /// A moment as an offset from the start of the run: "+1.2 s", "+340 ms".
-pub(in crate::triage) fn offset(ns: u64, start: u64) -> String {
+pub fn offset(ns: u64, start: u64) -> String {
     let ns = ns.saturating_sub(start);
     if ns < 1_000_000_000 {
         format!("+{} ms", ns / 1_000_000)
@@ -39,7 +39,7 @@ pub(in crate::triage) fn offset(ns: u64, start: u64) -> String {
 
 /// "+1.2 s \u{2192} +9.8 s"; one moment when the row happened once or all
 /// at the same time. A row with no known time says so.
-pub(in crate::triage) fn when_text(first: u64, last: u64, start: Option<u64>) -> String {
+pub fn when_text(first: u64, last: u64, start: Option<u64>) -> String {
     let Some(start) = start.filter(|_| first != 0) else {
         return "\u{2014}".into();
     };
@@ -52,7 +52,7 @@ pub(in crate::triage) fn when_text(first: u64, last: u64, start: Option<u64>) ->
 }
 
 /// "sshd (418 \u{b7} 418)": the process and thread as the Process tree writes them.
-pub(in crate::triage) fn process_text(agg: &Agg) -> String {
+pub fn process_text(agg: &Agg) -> String {
     if agg.pid == 0 {
         return agg.process.clone();
     }
@@ -71,7 +71,7 @@ pub(in crate::triage) fn process_text(agg: &Agg) -> String {
 
 /// The technique chip of a row: "T1053.003 Cron", with the names of all its
 /// techniques for the hover. The ids that name a detection strategy are left out.
-pub(in crate::triage) fn technique(ids: &[&str]) -> (String, String) {
+pub fn technique(ids: &[&str]) -> (String, String) {
     let techniques: Vec<&&str> = ids
         .iter()
         .filter(|id| id.starts_with('T') && !id.starts_with("TA"))
@@ -99,7 +99,7 @@ pub(in crate::triage) fn technique(ids: &[&str]) -> (String, String) {
 }
 
 /// Why a tier is what it is, in one line: the rule's tier and what lowered it.
-pub(in crate::triage) fn why_short(agg: &Agg) -> String {
+pub fn why_short(agg: &Agg) -> String {
     let mut reasons = Vec::new();
     if agg.flags & flag::ALLOW != 0 {
         reasons.push("the program is on the rule's allow-list");
@@ -126,7 +126,7 @@ pub(in crate::triage) fn why_short(agg: &Agg) -> String {
 }
 
 /// Why the evidence of a row is limited, when it is.
-pub(in crate::triage) fn limited_reason(agg: &Agg) -> Option<&'static str> {
+pub fn limited_reason(agg: &Agg) -> Option<&'static str> {
     if agg.high_confidence {
         None
     } else if agg.packet.is_some() {
@@ -137,7 +137,7 @@ pub(in crate::triage) fn limited_reason(agg: &Agg) -> Option<&'static str> {
 }
 
 /// The hover of a tier chip: what the tier means and why this row has it.
-pub(in crate::triage) fn tier_hover(tier: Tier, why: &str, limited: Option<&str>) -> String {
+pub fn tier_hover(tier: Tier, why: &str, limited: Option<&str>) -> String {
     let mut text = format!("{}: {}\n\n{why}", tier.label(), tier.meaning());
     if let Some(limited) = limited {
         text.push_str(&format!("\n\n\u{2691} Limited confidence: {limited}"));
@@ -146,7 +146,7 @@ pub(in crate::triage) fn tier_hover(tier: Tier, why: &str, limited: Option<&str>
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     #[test]

@@ -2,13 +2,13 @@
 //! Field, operator and value completions for the filter editor.
 use super::*;
 
-#[cfg(test)]
-pub(crate) fn completions(text: &str, cursor: usize, scope: FilterScope) -> Vec<Completion> {
+#[cfg(any(test, feature = "test-support"))]
+pub fn completions(text: &str, cursor: usize, scope: FilterScope) -> Vec<Completion> {
     completions_with(text, cursor, scope, &[])
 }
 
-#[cfg(test)]
-pub(crate) fn completions_with(
+#[cfg(any(test, feature = "test-support"))]
+pub fn completions_with(
     text: &str,
     cursor: usize,
     scope: FilterScope,
@@ -17,8 +17,8 @@ pub(crate) fn completions_with(
     completions_fields(text, cursor, &fields_for(scope), known_values, None)
 }
 
-#[cfg(test)]
-pub(super) fn completions_fields(
+#[cfg(any(test, feature = "test-support"))]
+pub fn completions_fields(
     text: &str,
     cursor: usize,
     fields: &[FieldSpec<'_>],
@@ -35,7 +35,7 @@ pub(super) fn completions_fields(
     )
 }
 
-pub(super) fn completions_field_iter<'a>(
+pub fn completions_field_iter<'a>(
     text: &str,
     cursor: usize,
     fields: impl Iterator<Item = FieldSpec<'a>> + Clone,
@@ -217,7 +217,7 @@ pub(super) fn completions_field_iter<'a>(
     items
 }
 
-pub(super) fn quote_value(value: &str, force: bool) -> String {
+pub fn quote_value(value: &str, force: bool) -> String {
     let reserved = matches!(
         value.to_ascii_lowercase().as_str(),
         "and" | "or" | "not" | "exists" | "missing" | "contains" | "in"
@@ -245,14 +245,14 @@ pub(super) fn quote_value(value: &str, force: bool) -> String {
     )
 }
 
-pub(super) fn apply_completion(text: &mut String, item: &Completion) -> usize {
+pub fn apply_completion(text: &mut String, item: &Completion) -> usize {
     let start = item.start.min(text.len());
     let end = item.end.min(text.len()).max(start);
     text.replace_range(start..end, &item.insert);
     start + item.insert.len()
 }
 
-pub(super) fn fields_for(scope: FilterScope) -> Vec<FieldSpec<'static>> {
+pub fn fields_for(scope: FilterScope) -> Vec<FieldSpec<'static>> {
     match scope {
         FilterScope::Syscall => syscall_fields(),
         FilterScope::Table(fields) => fields.to_vec(),
@@ -293,7 +293,7 @@ pub(super) fn fields_for(scope: FilterScope) -> Vec<FieldSpec<'static>> {
                 detail: "Annotation name",
             },
         ],
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         FilterScope::Packet => vec![
             FieldSpec {
                 name: "ip.src",
@@ -424,7 +424,7 @@ pub(super) fn fields_for(scope: FilterScope) -> Vec<FieldSpec<'static>> {
     }
 }
 
-pub(super) fn syscall_fields() -> Vec<FieldSpec<'static>> {
+pub fn syscall_fields() -> Vec<FieldSpec<'static>> {
     let mut fields: Vec<FieldSpec<'static>> = KEYWORDS
         .iter()
         .filter(|(name, _, _)| {
@@ -501,7 +501,7 @@ pub(super) fn syscall_fields() -> Vec<FieldSpec<'static>> {
     fields
 }
 
-pub(super) fn schema_argument_fields() -> Vec<FieldSpec<'static>> {
+pub fn schema_argument_fields() -> Vec<FieldSpec<'static>> {
     use std::sync::OnceLock;
     static FIELDS: OnceLock<Vec<(String, String)>> = OnceLock::new();
     let stored = FIELDS.get_or_init(|| {
@@ -539,7 +539,7 @@ pub(super) fn schema_argument_fields() -> Vec<FieldSpec<'static>> {
         .collect()
 }
 
-pub(super) fn operators(kind: &str) -> &'static [(&'static str, &'static str)] {
+pub fn operators(kind: &str) -> &'static [(&'static str, &'static str)] {
     match kind {
         "text" | "text list" => &[
             ("==", "Equal"),
@@ -562,7 +562,7 @@ pub(super) fn operators(kind: &str) -> &'static [(&'static str, &'static str)] {
     }
 }
 
-fn packet_operators(kind: &str) -> &'static [(&'static str, &'static str)] {
+pub fn packet_operators(kind: &str) -> &'static [(&'static str, &'static str)] {
     if kind == "FT_PROTOCOL" {
         return &[("&&", "And"), ("||", "Or")];
     }
@@ -607,7 +607,7 @@ fn packet_operators(kind: &str) -> &'static [(&'static str, &'static str)] {
     ]
 }
 
-fn values_for(field: &str, prefix: &str, known_values: &[String]) -> Vec<(String, String)> {
+pub fn values_for(field: &str, prefix: &str, known_values: &[String]) -> Vec<(String, String)> {
     let needle = prefix.to_ascii_lowercase();
     let mut values = Vec::new();
     if matches!(

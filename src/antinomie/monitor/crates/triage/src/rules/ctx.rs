@@ -8,13 +8,13 @@ use antinomie_monitor_core::syscalls;
 use std::cell::OnceCell;
 
 /// A file a call acted on, by what it did to it.
-pub(super) struct Touch {
+pub struct Touch {
     pub op: Op,
     pub path: String,
     pub role: Role,
 }
 
-pub(super) struct Ctx<'a> {
+pub struct Ctx<'a> {
     pub call: &'a InvocationSummary,
     pub event: &'a EventSummary,
     pub files: &'a FdState,
@@ -31,13 +31,13 @@ pub(super) struct Ctx<'a> {
     pub via_async: bool,
     /// The program the calling task is running, as the trace named it.
     pub image: Option<&'a str>,
-    touches: OnceCell<Vec<Touch>>,
-    argv: OnceCell<Vec<String>>,
-    envp: OnceCell<Vec<String>>,
+    pub touches: OnceCell<Vec<Touch>>,
+    pub argv: OnceCell<Vec<String>>,
+    pub envp: OnceCell<Vec<String>>,
 }
 
 impl<'a> Ctx<'a> {
-    pub(super) fn new(
+    pub fn new(
         call: &'a InvocationSummary,
         event: &'a EventSummary,
         files: &'a FdState,
@@ -67,27 +67,27 @@ impl<'a> Ctx<'a> {
     }
 
     /// The program's file name.
-    pub(super) fn image_name(&self) -> &str {
+    pub fn image_name(&self) -> &str {
         self.image.map_or("", base)
     }
 
-    pub(super) fn is_exec(&self) -> bool {
+    pub fn is_exec(&self) -> bool {
         matches!(self.name, "execve" | "execveat")
     }
 
     /// Where the table puts a named argument of this call (`envp` of an exec,
     /// `clone_flags` of a clone), so a rule reads roles, not positions.
-    pub(super) fn argument(&self, argument: &str) -> Option<usize> {
+    pub fn argument(&self, argument: &str) -> Option<usize> {
         syscalls::native().argument(self.name, argument)
     }
 
     /// The value of a named argument, zero when the call has no such argument.
-    pub(super) fn arg(&self, argument: &str) -> u64 {
+    pub fn arg(&self, argument: &str) -> u64 {
         self.argument(argument).map_or(0, |index| self.args[index])
     }
 
     /// The path a descriptor argument refers to, if the run opened it.
-    pub(super) fn fd_path(&self, fd: u64) -> Option<&'a str> {
+    pub fn fd_path(&self, fd: u64) -> Option<&'a str> {
         let owner = table_owner(self.files, self.call.task_cookie, self.event.tid);
         self.files
             .opened
@@ -95,12 +95,12 @@ impl<'a> Ctx<'a> {
             .map(String::as_str)
     }
 
-    pub(super) fn socket(&self, fd: u64) -> Option<&'a sigma_events::Socket> {
+    pub fn socket(&self, fd: u64) -> Option<&'a sigma_events::Socket> {
         sigma_events::socket_at(self.files, self.call.task_cookie, self.event.tid, fd)
     }
 
     /// What the call did to which files, with the paths resolved.
-    pub(super) fn touches(&self) -> &[Touch] {
+    pub fn touches(&self) -> &[Touch] {
         self.touches.get_or_init(|| {
             let hits = file_category::classify(self.files, self.call, self.event);
             if hits.is_empty() {
@@ -129,23 +129,23 @@ impl<'a> Ctx<'a> {
         })
     }
 
-    pub(super) fn open_flags(&self) -> Option<u64> {
+    pub fn open_flags(&self) -> Option<u64> {
         open_flags(self.call, self.event)
     }
 
     /// The call opened or created a file in a way that can change it.
-    pub(super) fn opens_for_write(&self) -> bool {
+    pub fn opens_for_write(&self) -> bool {
         self.open_flags()
             .is_some_and(|flags| flags & 3 != 0 || flags & (0o100 | 0o1000 | 0o2000) != 0)
     }
 
     /// The call opened a file in a way that can read it.
-    pub(super) fn opens_for_read(&self) -> bool {
+    pub fn opens_for_read(&self) -> bool {
         self.open_flags().is_some_and(|flags| flags & 3 != 1)
     }
 
     /// Files this call changed: created, written, cut, or given a name.
-    pub(super) fn changes(&self) -> impl Iterator<Item = &Touch> {
+    pub fn changes(&self) -> impl Iterator<Item = &Touch> {
         self.touches().iter().filter(move |touch| match touch.op {
             Op::Created | Op::Written | Op::Truncated => true,
             Op::Opened => self.opens_for_write(),
@@ -155,7 +155,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// Files this call removed or moved away.
-    pub(super) fn removes(&self) -> impl Iterator<Item = &Touch> {
+    pub fn removes(&self) -> impl Iterator<Item = &Touch> {
         self.touches().iter().filter(|touch| match touch.op {
             Op::Deleted => true,
             Op::Renamed => touch.role == Role::Old,
@@ -164,7 +164,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// Files this call opened or read.
-    pub(super) fn reads(&self) -> impl Iterator<Item = &Touch> {
+    pub fn reads(&self) -> impl Iterator<Item = &Touch> {
         self.touches().iter().filter(move |touch| match touch.op {
             Op::Opened => self.opens_for_read(),
             Op::Read => true,
@@ -173,14 +173,14 @@ impl<'a> Ctx<'a> {
     }
 
     /// Files this call only looked at, or tried.
-    pub(super) fn looks(&self) -> impl Iterator<Item = &Touch> {
+    pub fn looks(&self) -> impl Iterator<Item = &Touch> {
         self.touches()
             .iter()
             .filter(|touch| matches!(touch.op, Op::Opened | Op::Probed | Op::Read | Op::Executed))
     }
 
     /// The path an exec named, resolved against the working directory when it can be.
-    pub(super) fn exec_path(&self) -> Option<String> {
+    pub fn exec_path(&self) -> Option<String> {
         if !self.is_exec() {
             return None;
         }
@@ -193,7 +193,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// The arguments of an exec that were captured whole.
-    pub(super) fn argv(&self) -> &[String] {
+    pub fn argv(&self) -> &[String] {
         self.argv.get_or_init(|| {
             normalized::argument_vector(self.call, self.event)
                 .map(|vector| vector.arguments.into_iter().flatten().collect())
@@ -202,7 +202,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// The environment strings of an exec that were captured whole.
-    pub(super) fn envp(&self) -> &[String] {
+    pub fn envp(&self) -> &[String] {
         self.envp.get_or_init(|| {
             if !self.is_exec() {
                 return Vec::new();
@@ -215,7 +215,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// The captured field of one argument, by field key suffix.
-    pub(super) fn field(
+    pub fn field(
         &self,
         argument: usize,
         suffix: &str,
@@ -232,14 +232,14 @@ impl<'a> Ctx<'a> {
     }
 
     /// The bytes captured for one argument's pointee.
-    pub(super) fn bytes(&self, argument: usize, suffix: &str) -> Option<&'a [u8]> {
+    pub fn bytes(&self, argument: usize, suffix: &str) -> Option<&'a [u8]> {
         self.field(argument, suffix)
             .map(trace::covered_preview)
             .filter(|bytes| !bytes.is_empty())
     }
 
     /// The text of a captured string argument.
-    pub(super) fn text(&self, argument: usize) -> Option<String> {
+    pub fn text(&self, argument: usize) -> Option<String> {
         let field = self.field(argument, "")?;
         let bytes = trace::covered_preview(field);
         let end = bytes
@@ -250,7 +250,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// A native-endian 64-bit word at `offset` of an argument's pointee.
-    pub(super) fn word(&self, argument: usize, suffix: &str, offset: usize) -> Option<u64> {
+    pub fn word(&self, argument: usize, suffix: &str, offset: usize) -> Option<u64> {
         let bytes = self.bytes(argument, suffix)?;
         Some(u64::from_le_bytes(
             bytes.get(offset..offset + 8)?.try_into().ok()?,
@@ -258,12 +258,12 @@ impl<'a> Ctx<'a> {
     }
 
     /// The socket address the call was given or got back.
-    pub(super) fn address(&self, argument: usize) -> Option<sigma_events::Address> {
+    pub fn address(&self, argument: usize) -> Option<sigma_events::Address> {
         sigma_events::address(self.call, self.name, argument)
     }
 
     /// The bytes a read returned or a write sent, as far as they were captured.
-    pub(super) fn payload(&self, reading: bool) -> Vec<u8> {
+    pub fn payload(&self, reading: bool) -> Vec<u8> {
         let size = self
             .ret
             .filter(|ret| *ret > 0)
@@ -287,25 +287,25 @@ impl<'a> Ctx<'a> {
     }
 
     /// Evidence the engine records for the first occurrence of a row.
-    pub(super) fn time(&self) -> u64 {
+    pub fn time(&self) -> u64 {
         self.event.timestamp_ns
     }
 }
 
 /// The last component of a path.
-pub(super) fn base(path: &str) -> &str {
+pub fn base(path: &str) -> &str {
     path.rsplit('/')
         .find(|part| !part.is_empty())
         .unwrap_or(path)
 }
 
 /// The directory of a path, without the trailing slash.
-pub(super) fn parent(path: &str) -> &str {
+pub fn parent(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(parent, _)| parent)
 }
 
 /// The strings of a pointer vector captured as `argN.string[i]`.
-pub(super) fn string_vector(call: &InvocationSummary, argument: usize) -> Vec<String> {
+pub fn string_vector(call: &InvocationSummary, argument: usize) -> Vec<String> {
     let fields: Vec<_> = call
         .entry
         .iter()
@@ -330,7 +330,7 @@ pub(super) fn string_vector(call: &InvocationSummary, argument: usize) -> Vec<St
 
 /// The path with `/proc/self`, `/proc/thread-self` and `/proc/<own pid>` folded
 /// together, so a program naming itself by pid is still itself.
-pub(super) fn proc_self(path: &str, pid: u32) -> String {
+pub fn proc_self(path: &str, pid: u32) -> String {
     let own = format!("/proc/{pid}/");
     if let Some(rest) = path.strip_prefix(&own) {
         format!("/proc/self/{rest}")
@@ -344,7 +344,7 @@ pub(super) fn proc_self(path: &str, pid: u32) -> String {
 }
 
 /// Whether the path is below one of the directories.
-pub(super) fn under(path: &str, directories: &[&str]) -> bool {
+pub fn under(path: &str, directories: &[&str]) -> bool {
     directories.iter().any(|directory| {
         path.strip_prefix(directory).is_some_and(|rest| {
             rest.is_empty() || rest.starts_with('/') || directory.ends_with('/')
@@ -353,7 +353,7 @@ pub(super) fn under(path: &str, directories: &[&str]) -> bool {
 }
 
 /// What follows the home directory in a path, whether the home is under /home or is /root.
-pub(super) fn home_relative(path: &str) -> Option<&str> {
+pub fn home_relative(path: &str) -> Option<&str> {
     if let Some(rest) = path.strip_prefix("/root/") {
         return Some(rest);
     }

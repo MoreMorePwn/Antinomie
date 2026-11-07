@@ -6,7 +6,7 @@
 //! is, not that anything bad happened to it.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum Location {
+pub enum Location {
     Persistence,
     Credentials,
     System,
@@ -19,7 +19,7 @@ pub(super) enum Location {
 
 impl Location {
     /// Stable filter value, as in `file.location == "persistence"`.
-    pub(super) fn tag(self) -> &'static str {
+    pub fn tag(self) -> &'static str {
         match self {
             Self::Persistence => "persistence",
             Self::Credentials => "credentials",
@@ -33,12 +33,12 @@ impl Location {
     }
 
     /// The classes a reader should look at first.
-    pub(super) fn flagged(self) -> bool {
+    pub fn flagged(self) -> bool {
         matches!(self, Self::Persistence | Self::Credentials | Self::Hidden)
     }
 
     /// The word of the small badge on a path in a table.
-    pub(super) fn badge(tag: &str) -> &str {
+    pub fn badge(tag: &str) -> &str {
         match tag {
             "temp" => "/tmp",
             "pseudo-fs" => "proc",
@@ -47,7 +47,7 @@ impl Location {
         }
     }
 
-    pub(super) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Persistence => "Persistence",
             Self::Credentials => "Credentials",
@@ -61,7 +61,7 @@ impl Location {
     }
 }
 
-enum Rule {
+pub enum Rule {
     /// The text starts with this, so `/etc/cron` covers `/etc/crontab` and `/etc/cron.d/x`.
     Prefix(&'static str),
     /// The directory itself or anything under it.
@@ -79,7 +79,7 @@ enum Rule {
 }
 
 impl Rule {
-    fn matches(&self, path: &str) -> bool {
+    pub fn matches(&self, path: &str) -> bool {
         let under = |dir: &str| {
             path == dir
                 || path
@@ -101,7 +101,7 @@ impl Rule {
 }
 
 /// Every rule, in one place. A path takes each class one of its rules matches.
-const RULES: &[(Location, Rule)] = &[
+pub const RULES: &[(Location, Rule)] = &[
     (Location::Persistence, Rule::Prefix("/etc/cron")),
     (Location::Persistence, Rule::Under("/var/spool/cron")),
     (Location::Persistence, Rule::Under("/etc/systemd")),
@@ -171,7 +171,7 @@ const RULES: &[(Location, Rule)] = &[
 
 /// The classes of one path. `own` holds the sample's own image paths.
 /// Memfd, relative and unresolved names get no class from the path rules.
-pub(super) fn classify(path: &str, own: &[String]) -> Vec<Location> {
+pub fn classify(path: &str, own: &[String]) -> Vec<Location> {
     let mut found = Vec::new();
     for (location, rule) in RULES {
         if !found.contains(location) && rule.matches(path) {
@@ -186,7 +186,7 @@ pub(super) fn classify(path: &str, own: &[String]) -> Vec<Location> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     fn tags(path: &str) -> Vec<&'static str> {

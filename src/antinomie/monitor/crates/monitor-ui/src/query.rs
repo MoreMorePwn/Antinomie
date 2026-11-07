@@ -17,3 +17,6 @@ pub(crate) use self::{
     row_menu::{note_cell, note_head, Extras as RowMenuExtras, NoteRun},
     tables::*,
 };
+
+#[cfg(test)]
+mod tests;

@@ -12,7 +12,7 @@
 //! and what Triage must then show, from the guest's records alone.
 use super::*;
 
-fn scan(directory: &Path) -> ArchiveScan {
+pub fn scan(directory: &Path) -> ArchiveScan {
     let run: antinomie_monitor_core::RunSummary =
         serde_json::from_slice(&std::fs::read(directory.join("run.json")).unwrap()).unwrap();
     let request = ScanRequest {
@@ -34,7 +34,7 @@ fn scan(directory: &Path) -> ArchiveScan {
 }
 
 /// The rows of a file tab, one text per row.
-fn rows(scan: &ArchiveScan, tab: FileTab) -> Vec<String> {
+pub fn rows(scan: &ArchiveScan, tab: FileTab) -> Vec<String> {
     let table: &[Vec<Cell>] = match tab {
         FileTab::Opened => &scan.opened,
         FileTab::Read => &scan.read,
@@ -53,15 +53,15 @@ fn rows(scan: &ArchiveScan, tab: FileTab) -> Vec<String> {
 }
 
 /// Every expectation that did not hold, so one run reports them all.
-static MISSED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+pub static MISSED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
-fn miss(message: String) {
+pub fn miss(message: String) {
     MISSED.lock().unwrap().push(message);
 }
 
 /// Each row that met an expectation is printed (`--nocapture`), so a run
 /// shows the rows Triage produced, not only that they matched.
-fn has(scan: &ArchiveScan, tab: FileTab, needles: &[&str]) {
+pub fn has(scan: &ArchiveScan, tab: FileTab, needles: &[&str]) {
     let found = rows(scan, tab);
     if let Some(row) = found
         .iter()
@@ -78,7 +78,7 @@ fn has(scan: &ArchiveScan, tab: FileTab, needles: &[&str]) {
 }
 
 /// io_uring file operations: each request is read as the call it stands for.
-fn check_files(uring: &ArchiveScan) {
+pub fn check_files(uring: &ArchiveScan) {
     has(
         uring,
         FileTab::Opened,
@@ -147,7 +147,7 @@ fn check_files(uring: &ArchiveScan) {
 
 /// OPENAT, vectors, registered buffers, a registered file and an open
 /// straight into the registered table.
-fn check_regfiles(registered: &ArchiveScan) {
+pub fn check_regfiles(registered: &ArchiveScan) {
     has(
         registered,
         FileTab::Opened,
@@ -208,7 +208,7 @@ fn check_regfiles(registered: &ArchiveScan) {
 }
 
 /// The same story with plain system calls, and a name reused by a new file.
-fn check_syncfiles(plain: &ArchiveScan) {
+pub fn check_syncfiles(plain: &ArchiveScan) {
     let changed = rows(plain, FileTab::Changed);
     let first: Vec<_> = changed
         .iter()
@@ -254,7 +254,7 @@ fn check_syncfiles(plain: &ArchiveScan) {
 }
 
 /// AIO.
-fn check_aio(aio: &ArchiveScan) {
+pub fn check_aio(aio: &ArchiveScan) {
     has(
         aio,
         FileTab::Written,
@@ -283,7 +283,7 @@ fn check_aio(aio: &ArchiveScan) {
 
 /// An SQPOLL ring: its kernel thread submitted the requests, which the
 /// guest attributes to the ring's creator with no call of its own.
-fn check_sqfiles(sqpoll: &ArchiveScan) {
+pub fn check_sqfiles(sqpoll: &ArchiveScan) {
     has(
         sqpoll,
         FileTab::Written,
@@ -297,7 +297,7 @@ fn check_sqfiles(sqpoll: &ArchiveScan) {
 }
 
 /// Sync, attribute, splice and directory requests, and a plain rmdir.
-fn check_morefiles(more: &ArchiveScan) {
+pub fn check_morefiles(more: &ArchiveScan) {
     has(
         more,
         FileTab::Attributes,
@@ -347,7 +347,7 @@ fn check_morefiles(more: &ArchiveScan) {
 }
 
 /// A script shows the interpreter its #! line named.
-fn check_script(script: &ArchiveScan) {
+pub fn check_script(script: &ArchiveScan) {
     has(
         script,
         FileTab::Executed,
@@ -356,7 +356,7 @@ fn check_script(script: &ArchiveScan) {
 }
 
 /// The workload module: its linked write/read pairs on async.dat.
-fn check_async_io(workload: &ArchiveScan) {
+pub fn check_async_io(workload: &ArchiveScan) {
     has(workload, FileTab::Written, &["(io_uring)", "async.dat"]);
     has(
         workload,
@@ -367,7 +367,7 @@ fn check_async_io(workload: &ArchiveScan) {
 
 #[test]
 #[ignore = "requires ANTINOMIE_URING_RUNS from `uring-check record`"]
-fn recorded_uring_triage() {
+pub fn recorded_uring_triage() {
     let runs = std::env::var("ANTINOMIE_URING_RUNS").expect("ANTINOMIE_URING_RUNS");
     let mut scans = std::collections::BTreeMap::new();
     for entry in runs.split(';').filter(|entry| !entry.is_empty()) {

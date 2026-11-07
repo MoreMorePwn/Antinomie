@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use super::support::*;
 
-const SYS_ADMIN: u64 = 1 << 21;
+pub const SYS_ADMIN: u64 = 1 << 21;
 /// The task starts as a user.
-fn start() -> InvocationSummary {
+pub fn start() -> InvocationSummary {
     with_notes(call(1, 39, "getpid", 1), vec![creds(USER, 0, 1)])
 }
 
 #[test]
-fn rights_gained_through_a_normal_path_are_medium() {
+pub fn rights_gained_through_a_normal_path_are_medium() {
     let by_setuid = with_notes(
         sys(1, 105, "setuid", [0; 6], 0),
         vec![creds(ROOT, SYS_ADMIN, 2)],
@@ -36,7 +36,7 @@ fn rights_gained_through_a_normal_path_are_medium() {
 }
 
 #[test]
-fn giving_up_rights_is_info_and_does_not_count() {
+pub fn giving_up_rights_is_info_and_does_not_count() {
     let drop = with_notes(
         sys(1, 105, "setuid", [1000, 0, 0, 0, 0, 0], 0),
         vec![creds(USER, 0, 2)],
@@ -51,7 +51,7 @@ fn giving_up_rights_is_info_and_does_not_count() {
 }
 
 #[test]
-fn a_setuid_program_is_low_and_in_a_staging_directory_medium() {
+pub fn a_setuid_program_is_low_and_in_a_staging_directory_medium() {
     let run_su = |path: &str| {
         run(vec![
             start(),
@@ -83,7 +83,7 @@ fn a_setuid_program_is_low_and_in_a_staging_directory_medium() {
 }
 
 #[test]
-fn root_during_a_call_that_does_not_change_credentials_is_a_kernel_exploit() {
+pub fn root_during_a_call_that_does_not_change_credentials_is_a_kernel_exploit() {
     let exploit = with_notes(
         sys(1, 16, "ioctl", [3, 0xdead, 0, 0, 0, 0], 0),
         vec![creds(ROOT, SYS_ADMIN, 10)],
@@ -122,7 +122,7 @@ fn root_during_a_call_that_does_not_change_credentials_is_a_kernel_exploit() {
 }
 
 #[test]
-fn a_new_user_namespace_is_not_a_kernel_exploit() {
+pub fn a_new_user_namespace_is_not_a_kernel_exploit() {
     // unshare(CLONE_NEWUSER) gives capabilities in the new namespace, recorded as Other.
     let unshare = with_notes(
         sys(1, 272, "unshare", [0x1000_0000, 0, 0, 0, 0, 0], 0),
@@ -158,7 +158,7 @@ fn a_new_user_namespace_is_not_a_kernel_exploit() {
 }
 
 #[test]
-fn pkexec_without_arguments_is_high() {
+pub fn pkexec_without_arguments_is_high() {
     let mut empty = exec(1, "/usr/bin/pkexec", &[]);
     empty
         .entry
@@ -184,7 +184,7 @@ fn pkexec_without_arguments_is_high() {
     ));
 }
 
-fn captured_pointer(value: u64) -> antinomie_monitor_core::FieldSummary {
+pub fn captured_pointer(value: u64) -> antinomie_monitor_core::FieldSummary {
     captured(
         "arg1.ptr[0]",
         "linux-6.12.94/x86_64/pointer",
@@ -193,7 +193,7 @@ fn captured_pointer(value: u64) -> antinomie_monitor_core::FieldSummary {
 }
 
 #[test]
-fn setuid_bits_and_file_capabilities_are_high() {
+pub fn setuid_bits_and_file_capabilities_are_high() {
     for mode in [0o4755, 0o2755, 0o6755] {
         let out = run(vec![chmod(1, "/tmp/sh", mode)]);
         assert_eq!(
@@ -221,7 +221,7 @@ fn setuid_bits_and_file_capabilities_are_high() {
 }
 
 #[test]
-fn kernel_helpers_that_run_as_root_are_high() {
+pub fn kernel_helpers_that_run_as_root_are_high() {
     for path in [
         "/proc/sys/kernel/core_pattern",
         "/proc/sys/kernel/modprobe",
@@ -243,7 +243,7 @@ fn kernel_helpers_that_run_as_root_are_high() {
 }
 
 #[test]
-fn reaching_the_host_from_a_container_is_medium() {
+pub fn reaching_the_host_from_a_container_is_medium() {
     assert_eq!(
         tier(
             &run(vec![exec(
@@ -292,7 +292,7 @@ fn reaching_the_host_from_a_container_is_medium() {
 }
 
 #[test]
-fn a_page_cache_overwrite_through_a_pipe_is_high() {
+pub fn a_page_cache_overwrite_through_a_pipe_is_high() {
     let out = run(vec![
         open_read(1, "/etc/passwd", 3),
         sys(1, 275, "splice", [3, 0, 5, 0, 4096, 0], 4096),
@@ -308,7 +308,7 @@ fn a_page_cache_overwrite_through_a_pipe_is_high() {
 }
 
 #[test]
-fn physical_and_kernel_memory_devices_are_high_for_any_access() {
+pub fn physical_and_kernel_memory_devices_are_high_for_any_access() {
     for path in ["/dev/mem", "/dev/kmem", "/dev/port", "/proc/kcore"] {
         for out in [
             run(vec![open_read(1, path, 3)]),
@@ -328,7 +328,7 @@ fn physical_and_kernel_memory_devices_are_high_for_any_access() {
 }
 
 #[test]
-fn loading_or_attaching_an_ebpf_program_is_medium_and_creating_a_map_is_not() {
+pub fn loading_or_attaching_an_ebpf_program_is_medium_and_creating_a_map_is_not() {
     for (command, expected) in [(5, true), (8, true), (9, true), (0, false), (1, false)] {
         let out = run(vec![sys(1, 321, "bpf", [command, 0, 0, 0, 0, 0], 3)]);
         assert_eq!(has(&out, "bpf.program"), expected, "command {command}");

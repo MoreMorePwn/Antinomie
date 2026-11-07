@@ -16,41 +16,41 @@ use super::*;
 use antinomie_monitor_core::fatal_signal::{self, FatalSignal};
 
 /// Signal calls kept for the explanation; the rest are counted.
-const SENT_LIMIT: usize = 512;
+pub const SENT_LIMIT: usize = 512;
 /// A tree that ended sooner than this was over before it could do much.
-const SHORT_TREE_NS: u64 = 10_000_000_000;
+pub const SHORT_TREE_NS: u64 = 10_000_000_000;
 /// `prctl` option that asks for a signal when the parent exits.
-const PR_SET_PDEATHSIG: u64 = 1;
+pub const PR_SET_PDEATHSIG: u64 = 1;
 /// Run-status flags (`protocol/run-status.md`).
-const STOP_REQUESTED: u64 = 4;
-const KILL_ESCALATED: u64 = 32;
+pub const STOP_REQUESTED: u64 = 4;
+pub const KILL_ESCALATED: u64 = 32;
 /// Tasks listed by name in a note.
-const LISTED: usize = 4;
+pub const LISTED: usize = 4;
 
 /// One recorded call that sent a signal.
-struct SignalCall {
-    time_ns: u64,
-    sender: u32,
-    call: &'static str,
+pub struct SignalCall {
+    pub time_ns: u64,
+    pub sender: u32,
+    pub call: &'static str,
     /// The pid (or tid) argument, and for `tgkill` the tid argument too.
-    targets: [i64; 2],
-    signal: u8,
+    pub targets: [i64; 2],
+    pub signal: u8,
 }
 
 /// What the scan saw of signals, for explaining how tasks ended.
 #[derive(Default)]
-pub(super) struct SignalNotes {
-    sent: Vec<SignalCall>,
-    omitted: u64,
+pub struct SignalNotes {
+    pub sent: Vec<SignalCall>,
+    pub omitted: u64,
     /// `(pid, signal)` of each `prctl(PR_SET_PDEATHSIG, signal)`.
-    parent_death: Vec<(u32, u8)>,
+    pub parent_death: Vec<(u32, u8)>,
     /// The run status flags from `run.json`; `None` for a run without them.
-    pub(super) run_flags: Option<u64>,
+    pub run_flags: Option<u64>,
 }
 
 impl SignalNotes {
     /// Remember `invocation` when it sends a signal or asks for a parent-death signal.
-    pub(super) fn observe(&mut self, invocation: &InvocationSummary, event: &EventSummary) {
+    pub fn observe(&mut self, invocation: &InvocationSummary, event: &EventSummary) {
         let name = event.syscall_name.as_str();
         if !matches!(
             name,
@@ -100,7 +100,7 @@ impl SignalNotes {
 }
 
 /// The signal name as `kill -l` spells it; the number for the rare ones.
-fn signal_name(signal: u8) -> String {
+pub fn signal_name(signal: u8) -> String {
     match signal {
         1 => "SIGHUP".into(),
         2 => "SIGINT".into(),
@@ -123,7 +123,7 @@ fn signal_name(signal: u8) -> String {
 }
 
 /// "pid 489 \"systemd\"": the name the task gave itself, else its program.
-fn who(node: &ProcessNode) -> String {
+pub fn who(node: &ProcessNode) -> String {
     let name = node
         .renames
         .last()
@@ -138,7 +138,7 @@ fn who(node: &ProcessNode) -> String {
     }
 }
 
-fn millis(ns: u64) -> String {
+pub fn millis(ns: u64) -> String {
     if ns < 1_000_000_000 {
         format!("{} ms", ns / 1_000_000)
     } else {
@@ -147,15 +147,15 @@ fn millis(ns: u64) -> String {
 }
 
 /// What the end of the run says.
-pub(super) struct RunEnd {
-    pub(super) text: String,
+pub struct RunEnd {
+    pub text: String,
     /// The whole tree ended within seconds (the report puts this note in its
     /// statement too).
-    pub(super) short_tree: bool,
+    pub short_tree: bool,
 }
 
 /// The note for a run whose tree ended at once, or whose tasks were killed by a signal.
-pub(super) fn run_end(scan: &ArchiveScan) -> Option<RunEnd> {
+pub fn run_end(scan: &ArchiveScan) -> Option<RunEnd> {
     let tasks: Vec<_> = scan.process.iter().filter(|node| !node.thread).collect();
     if tasks.is_empty() || scan.root_crash.is_some() {
         return None;
@@ -184,7 +184,7 @@ pub(super) fn run_end(scan: &ArchiveScan) -> Option<RunEnd> {
 /// step: ...": said when every process of the run exited within seconds, so a
 /// reader knows the short report is the sample's own doing (a failed install
 /// step, a check that told it to stop), not a lost recording.
-fn short_tree(scan: &ArchiveScan, tasks: &[&ProcessNode], first: u64) -> Option<String> {
+pub fn short_tree(scan: &ArchiveScan, tasks: &[&ProcessNode], first: u64) -> Option<String> {
     if !tasks.iter().all(|node| node.state.starts_with("task exit")) {
         return None;
     }
@@ -209,7 +209,7 @@ fn short_tree(scan: &ArchiveScan, tasks: &[&ProcessNode], first: u64) -> Option<
 }
 
 /// Which tasks died of a signal and, as far as the recording knows, why.
-fn killed_text(scan: &ArchiveScan, tasks: &[&ProcessNode], start: u64) -> Option<String> {
+pub fn killed_text(scan: &ArchiveScan, tasks: &[&ProcessNode], start: u64) -> Option<String> {
     // A process is killed when its first thread's exit says so, or when its other
     // threads' exits do (a group kill can leave the leader's own exit unrecorded).
     let ended: Vec<(&ProcessNode, u8, u64, Option<&FatalSignal>)> = tasks
@@ -356,7 +356,7 @@ fn killed_text(scan: &ArchiveScan, tasks: &[&ProcessNode], start: u64) -> Option
 /// out-of-memory killer with its log line, the kernel, or the sending task
 /// (named, and whether it is in the recorded tree). A recorded call by the
 /// same sender says more (the call and its time), so it is preferred.
-fn recorded(
+pub fn recorded(
     process: &[ProcessNode],
     notes: &SignalNotes,
     node: &ProcessNode,
@@ -429,7 +429,7 @@ fn recorded(
 }
 
 /// The recorded call that sent `signal` to `node`: "sent by pid 12 with kill at +40 ms".
-fn sender(notes: &SignalNotes, node: &ProcessNode, signal: u8, start: u64) -> Option<String> {
+pub fn sender(notes: &SignalNotes, node: &ProcessNode, signal: u8, start: u64) -> Option<String> {
     let call = sender_call(notes, node, signal)?;
     Some(format!(
         "sent by pid {} with {} at +{}",
@@ -440,7 +440,7 @@ fn sender(notes: &SignalNotes, node: &ProcessNode, signal: u8, start: u64) -> Op
 }
 
 /// A task that asked for the signal when its parent exits, whose parent had exited.
-fn parent_exit(
+pub fn parent_exit(
     scan: &ArchiveScan,
     notes: &SignalNotes,
     node: &ProcessNode,
@@ -465,7 +465,7 @@ fn parent_exit(
 }
 
 /// The first recorded call that sent `signal` to `node`.
-fn sender_call<'a>(
+pub fn sender_call<'a>(
     notes: &'a SignalNotes,
     node: &ProcessNode,
     signal: u8,
@@ -479,7 +479,7 @@ fn sender_call<'a>(
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use antinomie_monitor_core::fatal_signal::SignalSender;
 

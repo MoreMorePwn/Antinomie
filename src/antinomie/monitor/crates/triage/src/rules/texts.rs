@@ -4,7 +4,7 @@
 //! Summary and Suspicious activity read them through [`title`] and [`description`].
 
 /// `(rule id, title, description)`, in the order of the classification.
-pub(super) const TEXTS: &[(&str, &str, &str)] = &[
+pub const TEXTS: &[(&str, &str, &str)] = &[
     ("process.exec", "Program started", "A program was started with exec. This is neutral context: the command line says what ran, and the other rules judge what it then did."),
     ("process.crashed_at_start", "Crashed before first call", "The sample's program died of a signal before its first system call was recorded, so there was nothing to judge. It failed while loading or in its first instructions."),
     ("process.interpreter", "Interpreter or shell started", "A shell, Python, Node, Lua, Perl, Ruby, PHP, awk or similar interpreter was started, also when a script's #! line or busybox names it. Common in normal software; what it was told to run is what matters."),
@@ -150,7 +150,7 @@ pub(super) const TEXTS: &[(&str, &str, &str)] = &[
 
 /// The short title of a rule, for a table cell and a heading. An id the
 /// classification does not know comes back as it is.
-pub(in crate::triage) fn rule_title(id: &str) -> &str {
+pub fn rule_title(id: &str) -> &str {
     TEXTS
         .iter()
         .find(|(rule, _, _)| *rule == id)
@@ -159,7 +159,7 @@ pub(in crate::triage) fn rule_title(id: &str) -> &str {
 
 /// One or two sentences: what the rule saw and why it matters. Empty for an
 /// id the classification does not know.
-pub(in crate::triage) fn rule_description(id: &str) -> &str {
+pub fn rule_description(id: &str) -> &str {
     TEXTS
         .iter()
         .find(|(rule, _, _)| *rule == id)
@@ -167,7 +167,7 @@ pub(in crate::triage) fn rule_description(id: &str) -> &str {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::super::table::SPECS;
     use super::*;
 

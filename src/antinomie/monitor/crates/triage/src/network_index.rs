@@ -2,7 +2,7 @@
 //! Aggregate owned capture segments before applying filters, sorting and pages.
 use super::*;
 
-pub(super) fn collect(
+pub fn collect(
     directory: &Path,
     path: &Path,
     open: bool,
@@ -151,7 +151,7 @@ pub(super) fn collect(
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     #[test]
     fn owned_segments_keep_duplicate_frame_numbers_distinct_and_page_after_global_filtering() {
@@ -161,8 +161,8 @@ mod tests {
         let files = PacketSpool::new().unwrap();
         let first = files.directory.join("first.pcap");
         let second = files.directory.join("second.pcap");
-        std::fs::write(&first, super::super::tests::http_pcap()).unwrap();
-        std::fs::write(&second, super::super::tests::http_pcap()).unwrap();
+        std::fs::write(&first, crate::tests::http_pcap()).unwrap();
+        std::fs::write(&second, crate::tests::http_pcap()).unwrap();
         let artifacts = serde_json::json!({"run_id":"r","vm_id":"v","boot_id":"b","network_captures":[first,second],"network_state":"complete","memory_dump":null,"memory_state":"disabled","core_dump":null,"core_state":"disabled","issues":[]});
         std::fs::write(
             files.directory.join("artifacts.json"),

@@ -11,12 +11,12 @@ use antinomie_monitor_core::kernel_notes::FilePosition;
 
 /// Numbered writes remembered per file. Writes race only while they are in
 /// flight together, so a short window is enough.
-const APPLIED_KEPT: usize = 64;
+pub const APPLIED_KEPT: usize = 64;
 
 impl Change {
     /// The parts of the `len` bytes at `from` that writes applied after the
     /// one at `position` hold (none for a read, which has no order).
-    pub(super) fn newer(
+    pub fn newer(
         &self,
         position: Option<FilePosition>,
         from: u64,
@@ -30,7 +30,7 @@ impl Change {
     }
 
     /// The parts of `[from, to)` that writes applied after `order` hold.
-    pub(super) fn newer_than(&self, order: Option<u64>, from: u64, to: u64) -> Vec<(u64, u64)> {
+    pub fn newer_than(&self, order: Option<u64>, from: u64, to: u64) -> Vec<(u64, u64)> {
         let Some(order) = order else {
             return Vec::new();
         };
@@ -42,13 +42,13 @@ impl Change {
     }
 
     /// Remember the write at `position` of `len` bytes at `from`, when numbered.
-    pub(super) fn note_applied(&mut self, position: Option<FilePosition>, from: u64, len: u64) {
+    pub fn note_applied(&mut self, position: Option<FilePosition>, from: u64, len: u64) {
         let order = position.and_then(|p| p.order);
         self.note_order(order, from, from.saturating_add(len));
     }
 
     /// Remember a numbered write of `[from, to)`.
-    pub(super) fn note_order(&mut self, order: Option<u64>, from: u64, to: u64) {
+    pub fn note_order(&mut self, order: Option<u64>, from: u64, to: u64) {
         let Some(order) = order else {
             return;
         };
@@ -60,13 +60,13 @@ impl Change {
 }
 
 /// Whether `at` lies in one of `ranges`.
-pub(super) fn covered(ranges: &[(u64, u64)], at: u64) -> bool {
+pub fn covered(ranges: &[(u64, u64)], at: u64) -> bool {
     ranges.iter().any(|(start, end)| at >= *start && at < *end)
 }
 
 /// The bytes of a transfer at `offset` (relative offset, value) that no write
 /// applied after it holds.
-pub(super) fn outside<'a>(
+pub fn outside<'a>(
     newer: &'a [(u64, u64)],
     offset: u64,
     bytes: impl Iterator<Item = (u64, u8)> + 'a,

@@ -2,60 +2,60 @@
 //! Programs by name, and the words of a command: what the exec rules match on.
 
 /// A program and its arguments, from an argument vector or one command of a shell script.
-pub(super) struct Command {
-    words: Vec<String>,
+pub struct Command {
+    pub words: Vec<String>,
 }
 
 impl Command {
-    pub(super) fn new(words: Vec<&str>) -> Self {
+    pub fn new(words: Vec<&str>) -> Self {
         Self::from_words(&words.into_iter().map(str::to_owned).collect::<Vec<_>>())
     }
 
-    pub(super) fn from_words(words: &[String]) -> Self {
+    pub fn from_words(words: &[String]) -> Self {
         Self {
             words: words.to_vec(),
         }
     }
 
-    pub(super) fn words(&self) -> &[String] {
+    pub fn words(&self) -> &[String] {
         &self.words
     }
 
-    pub(super) fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         self.words.first().map_or("", |word| super::ctx::base(word))
     }
 
-    pub(super) fn args(&self) -> &[String] {
+    pub fn args(&self) -> &[String] {
         self.words.get(1..).unwrap_or_default()
     }
 
-    pub(super) fn text(&self) -> String {
+    pub fn text(&self) -> String {
         self.words.join(" ")
     }
 
-    pub(super) fn has(&self, word: &str) -> bool {
+    pub fn has(&self, word: &str) -> bool {
         self.args().iter().any(|arg| arg == word)
     }
 
-    pub(super) fn has_any(&self, words: &[&str]) -> bool {
+    pub fn has_any(&self, words: &[&str]) -> bool {
         words.iter().any(|word| self.has(word))
     }
 
     /// `first` directly followed by `second`.
-    pub(super) fn pair(&self, first: &str, second: &str) -> bool {
+    pub fn pair(&self, first: &str, second: &str) -> bool {
         self.args()
             .windows(2)
             .any(|pair| pair[0] == first && pair[1] == second)
     }
 
-    pub(super) fn starts_with_any(&self, prefixes: &[&str]) -> bool {
+    pub fn starts_with_any(&self, prefixes: &[&str]) -> bool {
         self.args()
             .iter()
             .any(|arg| prefixes.iter().any(|prefix| arg.starts_with(prefix)))
     }
 
     /// Arguments that are not options (a lone `-` is an operand).
-    pub(super) fn operands(&self) -> Vec<&str> {
+    pub fn operands(&self) -> Vec<&str> {
         self.args()
             .iter()
             .map(String::as_str)
@@ -64,7 +64,7 @@ impl Command {
     }
 
     /// Any operand names one of the services, with or without `.service`.
-    pub(super) fn services(&self, names: &[&str]) -> bool {
+    pub fn services(&self, names: &[&str]) -> bool {
         self.operands().iter().any(|operand| {
             let unit = operand.strip_suffix(".service").unwrap_or(operand);
             names
@@ -74,7 +74,7 @@ impl Command {
     }
 }
 
-pub(super) fn is_shell(name: &str) -> bool {
+pub fn is_shell(name: &str) -> bool {
     matches!(
         name,
         "sh" | "bash" | "dash" | "zsh" | "ash" | "ksh" | "mksh" | "csh" | "tcsh" | "fish" | "rbash"
@@ -82,7 +82,7 @@ pub(super) fn is_shell(name: &str) -> bool {
 }
 
 /// The ATT&CK ids of an interpreter or shell, if the name is one.
-pub(super) fn interpreter(name: &str) -> Option<&'static [&'static str]> {
+pub fn interpreter(name: &str) -> Option<&'static [&'static str]> {
     let versioned = |stem: &str| {
         name.strip_prefix(stem).is_some_and(|rest| {
             rest.chars()
@@ -112,7 +112,7 @@ pub(super) fn interpreter(name: &str) -> Option<&'static [&'static str]> {
 }
 
 /// The script a shell runs with `-c`, also through `busybox sh -c`.
-pub(super) fn shell_script(cmd: &Command) -> Option<String> {
+pub fn shell_script(cmd: &Command) -> Option<String> {
     let words = cmd.words();
     let start = usize::from(cmd.name() == "busybox");
     let name = super::ctx::base(words.get(start)?);
@@ -131,7 +131,7 @@ pub(super) fn shell_script(cmd: &Command) -> Option<String> {
 /// Split a script into commands at `;`, `&&`, `||`, `|`, `&` and newlines, and
 /// each into words, honouring simple quotes. Leading assignments and wrappers
 /// (`sudo`, `nohup`, `env`, `exec`, `time`, `setsid`) are dropped.
-pub(super) fn segments(script: &str) -> Vec<Vec<String>> {
+pub fn segments(script: &str) -> Vec<Vec<String>> {
     let mut commands = Vec::new();
     let mut words: Vec<String> = Vec::new();
     let mut word = String::new();
@@ -212,7 +212,7 @@ pub(super) fn segments(script: &str) -> Vec<Vec<String>> {
 }
 
 /// A pipe whose far end is an interpreter or shell.
-pub(super) fn pipes_into_interpreter(lower: &str) -> bool {
+pub fn pipes_into_interpreter(lower: &str) -> bool {
     lower.split('|').skip(1).any(|after| {
         let mut words = after
             .split_whitespace()
@@ -229,7 +229,7 @@ pub(super) fn pipes_into_interpreter(lower: &str) -> bool {
 }
 
 /// `find`/`locate` looking for keys, wallets, password files or documents.
-pub(super) fn searches_secrets(text: &str) -> bool {
+pub fn searches_secrets(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     [
         ".pem",
@@ -253,7 +253,7 @@ pub(super) fn searches_secrets(text: &str) -> bool {
 }
 
 /// `xclip -o`, `xsel -o`, `wl-paste`: reading the clipboard, not filling it.
-pub(super) fn reads_clipboard(name: &str, cmd: &Command) -> bool {
+pub fn reads_clipboard(name: &str, cmd: &Command) -> bool {
     match name {
         "wl-paste" => true,
         "xclip" => cmd.has_any(&["-o", "-out", "-output"]),
@@ -266,7 +266,7 @@ pub(super) fn reads_clipboard(name: &str, cmd: &Command) -> bool {
 }
 
 /// Mining pool arguments: a stratum URL or XMRig's donate level.
-pub(super) fn mining_arguments(cmd: &Command) -> bool {
+pub fn mining_arguments(cmd: &Command) -> bool {
     cmd.args().iter().any(|arg| {
         let lower = arg.to_ascii_lowercase();
         lower.starts_with("stratum+tcp://")

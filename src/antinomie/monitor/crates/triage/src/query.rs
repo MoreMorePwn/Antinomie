@@ -5,16 +5,17 @@ use crate::trace::{self, argument_name};
 use antinomie_monitor_core::{EventSummary, InvocationSummary};
 
 pub mod completion;
+pub mod editing;
 pub mod eval;
 pub mod lexer;
 pub mod parser;
 pub mod tables;
 pub mod validate;
 
-use self::{completion::*, eval::*, lexer::*, parser::*, validate::*};
-pub use self::tables::*;
+pub use self::{completion::*, eval::*, lexer::*, parser::*, validate::*};
+pub use self::{editing::*, tables::*};
 
-pub(crate) const HELP: &str = "\
+pub const HELP: &str = "\
 syscall.num  syscall.name  syscall\n\
 tid  pid  ret  result  cpu  task  cookie  call.id  call_id\n\
 info  tag\n\
@@ -32,7 +33,7 @@ tag and tags on a syscall row are missing unless that row has an annotation.
 On a run or result they match annotation.json, not path text.";
 
 /// Fields the syscall and record filters actually implement.
-const KEYWORDS: &[(&str, &str, &str)] = &[
+pub const KEYWORDS: &[(&str, &str, &str)] = &[
     ("event.id", "integer", "Recorded event sequence identity"),
     ("event.sequence", "integer", "Recorded event sequence"),
     ("event.time_ns", "integer", "Guest monotonic event timestamp in ns"),
@@ -98,19 +99,19 @@ const KEYWORDS: &[(&str, &str, &str)] = &[
     ("entry.path", "text", "Run executable or result path"),
 ];
 
-pub(crate) struct Compiled {
+pub struct Compiled {
     pub error: Option<String>,
-    mode: Mode,
+    pub mode: Mode,
 }
 
-enum Mode {
+pub enum Mode {
     All,
     Text(String),
     Expr(Expr),
 }
 
 impl Compiled {
-    pub(crate) fn keep(&self, invocation: &InvocationSummary) -> bool {
+    pub fn keep(&self, invocation: &InvocationSummary) -> bool {
         if self.error.is_some() {
             return false;
         }
@@ -135,8 +136,8 @@ impl Compiled {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn keep_record(&self, labels: &RecordLabels<'_>) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn keep_record(&self, labels: &RecordLabels<'_>) -> bool {
         if self.error.is_some() {
             return false;
         }
@@ -157,22 +158,22 @@ impl Compiled {
     }
 }
 
-pub(crate) fn compile_note(filter: &str) -> Compiled {
+pub fn compile_note(filter: &str) -> Compiled {
     compile_with(filter, false)
 }
 
 /// Run and result rows. `tag` is the annotation on that directory.
 /// An invalid expression is an error and is not a text search.
-#[cfg(test)]
-pub(crate) fn compile_record(filter: &str) -> Compiled {
+#[cfg(any(test, feature = "test-support"))]
+pub fn compile_record(filter: &str) -> Compiled {
     compile_with(filter, true)
 }
 
-pub(crate) fn structured(filter: &str) -> bool {
+pub fn structured(filter: &str) -> bool {
     is_expression(filter.trim())
 }
 
-fn compile_with(filter: &str, record: bool) -> Compiled {
+pub fn compile_with(filter: &str, record: bool) -> Compiled {
     match compiled(filter, record) {
         Ok(mode) => Compiled { error: None, mode },
         Err(error) => Compiled {
@@ -183,8 +184,8 @@ fn compile_with(filter: &str, record: bool) -> Compiled {
 }
 
 /// Labels stored beside a run or result. Tags do not come from path text.
-#[cfg(test)]
-pub(crate) struct RecordLabels<'a> {
+#[cfg(any(test, feature = "test-support"))]
+pub struct RecordLabels<'a> {
     pub id: &'a str,
     pub name: &'a str,
     pub path: &'a str,
@@ -193,7 +194,7 @@ pub(crate) struct RecordLabels<'a> {
 
 /// A table's displayed fields. The same registry validates filters and drives completion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct FieldSpec<'a> {
+pub struct FieldSpec<'a> {
     pub name: &'a str,
     pub kind: &'a str,
     pub detail: &'a str,
@@ -232,7 +233,7 @@ impl<'a> FieldSpec<'a> {
 
 /// Owned row values; an unavailable cell must use Missing, never a display placeholder.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) enum RowValue {
+pub enum RowValue {
     Number(i128),
     Text(String),
     Bool(bool),
@@ -242,10 +243,10 @@ pub(crate) enum RowValue {
 
 impl Compiled {
     /// An empty filter: every row is kept without looking at it.
-    pub(crate) fn keeps_everything(&self) -> bool {
+    pub fn keeps_everything(&self) -> bool {
         self.error.is_none() && matches!(self.mode, Mode::All)
     }
-    pub(crate) fn keep_table(&self, row: &[(&str, RowValue)]) -> bool {
+    pub fn keep_table(&self, row: &[(&str, RowValue)]) -> bool {
         if self.error.is_some() {
             return false;
         }
@@ -265,7 +266,7 @@ impl Compiled {
     }
 }
 
-pub(crate) const LABEL_FIELDS: &[FieldSpec<'static>] = &[
+pub const LABEL_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("entry.kind", "Evidence category"),
     FieldSpec::text("entry.id", "Recorded identity"),
     FieldSpec::text("entry.name", "Annotation name"),
@@ -280,7 +281,7 @@ pub(crate) const LABEL_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("run.id", "Associated run identity"),
 ];
 
-pub(crate) const CAPTURE_FIELDS: &[FieldSpec<'static>] = &[
+pub const CAPTURE_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("capture.kind", "Capture category"),
     FieldSpec::number(
         "capture.started_ms",
@@ -323,7 +324,7 @@ pub(crate) const CAPTURE_FIELDS: &[FieldSpec<'static>] = &[
     ),
 ];
 
-pub(crate) const ANALYSIS_FIELDS: &[FieldSpec<'static>] = &[
+pub const ANALYSIS_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("analysis.id", "Retained analysis identity"),
     FieldSpec::text("analysis.kind", "Analysis result category"),
     FieldSpec::tags("analysis.tool", "Tools recorded for this analysis"),
@@ -339,16 +340,16 @@ pub(crate) const ANALYSIS_FIELDS: &[FieldSpec<'static>] = &[
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FilterScope {
+pub enum FilterScope {
     Syscall,
     Record,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     Packet,
     Table(&'static [FieldSpec<'static>]),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Completion {
+pub struct Completion {
     pub start: usize,
     pub end: usize,
     pub insert: String,
@@ -356,4 +357,4 @@ pub(crate) struct Completion {
 }
 
 #[cfg(test)]
-mod tests;
+pub mod tests;

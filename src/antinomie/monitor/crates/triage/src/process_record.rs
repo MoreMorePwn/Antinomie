@@ -6,44 +6,44 @@ use super::*;
 use antinomie_monitor_core::kernel_notes::{self, CredentialChange, Credentials};
 
 /// Signals one task is remembered to have sent; the rest are not matched.
-const SENT_LIMIT: usize = 32;
+pub const SENT_LIMIT: usize = 32;
 /// Credential records kept per task.
-const CREDENTIAL_LIMIT: usize = 32;
+pub const CREDENTIAL_LIMIT: usize = 32;
 /// Execs kept with their times per task (the tree's history keeps its own cap).
-const EXEC_LIMIT: usize = 128;
+pub const EXEC_LIMIT: usize = 128;
 
 /// The ids of a task at one moment, as the kernel recorded them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct CredStep {
-    pub(super) ns: u64,
-    pub(super) uid: u32,
-    pub(super) euid: u32,
-    pub(super) gid: u32,
-    pub(super) egid: u32,
-    pub(super) change: CredentialChange,
+pub struct CredStep {
+    pub ns: u64,
+    pub uid: u32,
+    pub euid: u32,
+    pub gid: u32,
+    pub egid: u32,
+    pub change: CredentialChange,
 }
 
 #[derive(Clone, Default)]
-pub(super) struct ProcessRecord {
+pub struct ProcessRecord {
     /// The environment strings of the last exec that were captured whole.
-    pub(super) envp: Vec<String>,
+    pub envp: Vec<String>,
     /// Each exec's image and when it ran.
-    pub(super) execs: Vec<(String, u64)>,
+    pub execs: Vec<(String, u64)>,
     /// The credentials the guest recorded, each change once.
-    pub(super) creds: Vec<CredStep>,
+    pub creds: Vec<CredStep>,
     /// Set by a `chdir` of this task to an absolute path.
-    pub(super) cwd: Option<String>,
+    pub cwd: Option<String>,
     /// System calls the task made.
-    pub(super) calls: u64,
+    pub calls: u64,
     /// `(target, signal)` of each kill, tkill or tgkill this task made.
-    pub(super) sent: Vec<(i64, u8)>,
+    pub sent: Vec<(i64, u8)>,
     /// The process that sent the fatal signal, when a recorded call did.
-    pub(super) killed_by: Option<u32>,
+    pub killed_by: Option<u32>,
 }
 
 impl ProcessRecord {
     /// Take what one call of this task shows.
-    pub(super) fn observe(&mut self, invocation: &InvocationSummary, event: &EventSummary) {
+    pub fn observe(&mut self, invocation: &InvocationSummary, event: &EventSummary) {
         self.calls += 1;
         for creds in invocation
             .kernel_notes
@@ -75,13 +75,13 @@ impl ProcessRecord {
         }
     }
 
-    fn sent(&mut self, target: i64, signal: u64) {
+    pub fn sent(&mut self, target: i64, signal: u64) {
         if target > 0 && (1..=64).contains(&signal) && self.sent.len() < SENT_LIMIT {
             self.sent.push((target, signal as u8));
         }
     }
 
-    fn credentials(&mut self, ns: u64, creds: &Credentials) {
+    pub fn credentials(&mut self, ns: u64, creds: &Credentials) {
         let step = CredStep {
             ns,
             uid: creds.uid,
@@ -99,7 +99,7 @@ impl ProcessRecord {
     }
 
     /// A committed exec: its environment and image replace the old ones.
-    pub(super) fn exec(&mut self, image: Option<&str>, ns: u64, envp: Vec<String>) {
+    pub fn exec(&mut self, image: Option<&str>, ns: u64, envp: Vec<String>) {
         self.envp = envp;
         if let Some(image) = image {
             if self.execs.len() < EXEC_LIMIT {
@@ -110,7 +110,7 @@ impl ProcessRecord {
 }
 
 /// The environment strings an exec call carried that were captured whole.
-pub(super) fn exec_envp(invocation: &InvocationSummary, name: &str) -> Vec<String> {
+pub fn exec_envp(invocation: &InvocationSummary, name: &str) -> Vec<String> {
     let Some(argument) = syscalls::native().argument(name, "envp") else {
         return Vec::new();
     };
@@ -137,7 +137,7 @@ pub(super) fn exec_envp(invocation: &InvocationSummary, name: &str) -> Vec<Strin
 }
 
 /// Who sent each task its fatal signal, from the kill calls the run recorded.
-pub(super) fn match_killers(nodes: &mut std::collections::BTreeMap<TaskKey, TaskNode>) {
+pub fn match_killers(nodes: &mut std::collections::BTreeMap<TaskKey, TaskNode>) {
     let mut sent: Vec<(u32, i64, u8)> = Vec::new();
     for (key, node) in nodes.iter() {
         for (target, signal) in &node.record.sent {

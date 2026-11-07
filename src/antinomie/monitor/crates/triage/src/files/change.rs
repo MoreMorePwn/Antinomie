@@ -3,7 +3,7 @@
 use super::*;
 
 impl Change {
-    pub(super) fn diff_count(&self) -> usize {
+    pub fn diff_count(&self) -> usize {
         if let Some(count) = self.known_diff_count {
             return count;
         }
@@ -11,7 +11,7 @@ impl Change {
             .filter(|(offset, before, after)| self.byte_diff(*offset, *before, *after))
             .count()
     }
-    pub(super) fn byte_diff(&self, offset: u64, before: Option<&u8>, after: Option<&u8>) -> bool {
+    pub fn byte_diff(&self, offset: u64, before: Option<&u8>, after: Option<&u8>) -> bool {
         match (before, after) {
             (Some(a), Some(b)) => a != b,
             (None, Some(_)) => self.original_size.is_some_and(|size| offset >= size),
@@ -20,11 +20,11 @@ impl Change {
         }
     }
     /// Bytes of the file held, before and after.
-    pub(super) fn stored(&self) -> usize {
+    pub fn stored(&self) -> usize {
         self.original.len() + self.final_data.len()
     }
     /// Whether anything is known to be missing from what was rebuilt.
-    pub(super) fn has_gaps(&self) -> bool {
+    pub fn has_gaps(&self) -> bool {
         !self.gaps.is_empty() || self.limit_hit.is_some() || self.short_capture.is_some()
     }
     /// Whether the file has a change the kernel accepted, or one with no exit.
@@ -32,7 +32,7 @@ impl Change {
         self.changes
     }
     /// A write, cut, copy into the file or shared mapping of it succeeded.
-    pub(super) fn wrote(&self) -> bool {
+    pub fn wrote(&self) -> bool {
         ["Written", "Truncated / resized", "Copied", "Mapped"]
             .iter()
             .any(|name| self.categories.contains(name))
@@ -40,7 +40,7 @@ impl Change {
     /// The file was there before the run opened it with `O_CREAT`: it was not
     /// created. Drops the inferred creation, and the change if nothing else
     /// changed the file.
-    pub(super) fn settle(&mut self) {
+    pub fn settle(&mut self) {
         let Some(size) = self.existed else { return };
         self.categories.remove("Created");
         for (label, _) in &mut self.lifecycle {
@@ -58,7 +58,7 @@ impl Change {
             self.changes = false;
         }
     }
-    pub(super) fn step(&mut self, label: String) {
+    pub fn step(&mut self, label: String) {
         if let Some((last, count)) = self.lifecycle.last_mut() {
             if *last == label {
                 *count += 1;
@@ -106,7 +106,7 @@ impl Change {
     }
     /// Record what the guest said about the file this change describes: its
     /// identity, how many links it has left and a new name for it.
-    pub(super) fn note_identity(&mut self, id: FileId, name: Option<&str>) {
+    pub fn note_identity(&mut self, id: FileId, name: Option<&str>) {
         self.identity.get_or_insert(id.key);
         if !matches!(id.kind, FileIdKind::Issue | FileIdKind::Exec) {
             self.links = Some(id.nlink);
@@ -119,7 +119,7 @@ impl Change {
     }
     /// The guest hashed the file: it says what the file held then, or why it
     /// has no digest.
-    pub(super) fn record_hash(&mut self, hash: FileHash) {
+    pub fn record_hash(&mut self, hash: FileHash) {
         let wrote = self.wrote();
         if hash.kind == HashKind::Write
             && !wrote
@@ -144,7 +144,7 @@ impl Change {
     }
     /// A transport reconnect lies between this file's last operation and the
     /// next: the recording continues in another segment.
-    pub(super) fn cross_segment(&mut self, segment: usize, operation_count: &mut usize) {
+    pub fn cross_segment(&mut self, segment: usize, operation_count: &mut usize) {
         if segment <= self.segment {
             return;
         }
@@ -163,14 +163,14 @@ impl Change {
         }
     }
     /// A name the file was reached by that no rename or link of the run gave it.
-    pub(super) fn alias(&mut self, name: String) {
+    pub fn alias(&mut self, name: String) {
         if name != self.path && !self.names.contains(&name) && self.names.len() < 16 {
             self.step(format!("also seen as {name}"));
             self.names.push(name);
         }
     }
     /// A name the file was given by a rename or a hard link.
-    pub(super) fn add_name(&mut self, name: &str) {
+    pub fn add_name(&mut self, name: &str) {
         if name != self.path
             && !self.names.iter().any(|known| known == name)
             && self.names.len() < 16
@@ -181,7 +181,7 @@ impl Change {
     /// "3 writes · 4.1 KiB": the calls that wrote and the octets that differ
     /// from the file's first known content; "partial" when the run did not see
     /// all of it.
-    pub(super) fn count_label(&self) -> String {
+    pub fn count_label(&self) -> String {
         let writes = self
             .operations
             .iter()
@@ -206,7 +206,7 @@ impl Change {
         parts.join(" \u{b7} ")
     }
     /// The octets the run captured from the start of the file, for its type.
-    pub(super) fn head(&self) -> Vec<u8> {
+    pub fn head(&self) -> Vec<u8> {
         let from = |store: &ByteStore| {
             let mut head = Vec::new();
             for (at, byte) in store.iter() {

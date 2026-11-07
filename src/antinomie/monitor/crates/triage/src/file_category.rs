@@ -13,7 +13,7 @@ use super::*;
 use antinomie_monitor_core::kernel_notes::HashKind;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum Category {
+pub enum Category {
     Opened,
     Created,
     Read,
@@ -34,7 +34,7 @@ pub(super) enum Category {
 }
 
 impl Category {
-    pub(super) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Opened => "Opened",
             Self::Created => "Created",
@@ -57,7 +57,7 @@ impl Category {
     }
 
     /// The tab a category is listed under.
-    pub(super) fn tab(self) -> FileTab {
+    pub fn tab(self) -> FileTab {
         match self {
             Self::Opened => FileTab::Opened,
             Self::Created => FileTab::Created,
@@ -76,7 +76,7 @@ impl Category {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Hit {
+pub struct Hit {
     pub category: Category,
     /// Created: only the first sighting of the path says it is new. Renamed:
     /// the destination was seen earlier in the run, so the rename replaced it.
@@ -86,7 +86,7 @@ pub(super) struct Hit {
 }
 
 impl Hit {
-    pub(super) fn label(self) -> String {
+    pub fn label(self) -> String {
         if self.inferred && self.category == Category::Created {
             format!("{} (inferred)", self.category.label())
         } else {
@@ -96,14 +96,14 @@ impl Hit {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Outcome {
+pub enum Outcome {
     Succeeded,
     /// A kernel error, as the negative return.
     Failed(i64),
     NoExit,
 }
 
-pub(super) fn outcome(call: &InvocationSummary) -> Outcome {
+pub fn outcome(call: &InvocationSummary) -> Outcome {
     match call.exit.as_ref().and_then(|exit| exit.result) {
         None => Outcome::NoExit,
         Some(ret) if (-4095..0).contains(&ret) => Outcome::Failed(ret),
@@ -112,23 +112,23 @@ pub(super) fn outcome(call: &InvocationSummary) -> Outcome {
 }
 
 impl Outcome {
-    pub(super) fn failed(self) -> bool {
+    pub fn failed(self) -> bool {
         matches!(self, Self::Failed(_))
     }
-    pub(super) fn tag(self) -> &'static str {
+    pub fn tag(self) -> &'static str {
         match self {
             Self::Succeeded => "succeeded",
             Self::Failed(_) => "failed",
             Self::NoExit => "no exit",
         }
     }
-    pub(super) fn errno(self) -> Option<&'static str> {
+    pub fn errno(self) -> Option<&'static str> {
         match self {
             Self::Failed(ret) => crate::values::errno_name(ret.unsigned_abs()),
             _ => None,
         }
     }
-    pub(super) fn label(self) -> String {
+    pub fn label(self) -> String {
         match self {
             Self::Succeeded => "Succeeded".into(),
             Self::Failed(ret) => match self.errno() {
@@ -141,7 +141,7 @@ impl Outcome {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Access {
+pub enum Access {
     ByPath,
     ByDescriptor,
     /// A descriptor this run never saw opened, or no descriptor at all.
@@ -149,14 +149,14 @@ pub(super) enum Access {
 }
 
 impl Access {
-    pub(super) fn tag(self) -> &'static str {
+    pub fn tag(self) -> &'static str {
         match self {
             Self::ByPath => "path",
             Self::ByDescriptor => "descriptor",
             Self::Inherited => "inherited",
         }
     }
-    pub(super) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::ByPath => "By path",
             Self::ByDescriptor => "By descriptor",
@@ -165,7 +165,7 @@ impl Access {
     }
 }
 
-pub(super) fn access(files: &FdState, call: &InvocationSummary, event: &EventSummary) -> Access {
+pub fn access(files: &FdState, call: &InvocationSummary, event: &EventSummary) -> Access {
     if !path_list(call).is_empty() || event.syscall_name == "memfd_create" {
         return Access::ByPath;
     }
@@ -182,9 +182,9 @@ pub(super) fn access(files: &FdState, call: &InvocationSummary, event: &EventSum
     }
 }
 
-pub(super) const READS: &[&str] = &["read", "pread64", "readv", "preadv", "preadv2"];
-pub(super) const WRITES: &[&str] = &["write", "pwrite64", "writev", "pwritev", "pwritev2"];
-pub(super) const PROBES: &[&str] = &[
+pub const READS: &[&str] = &["read", "pread64", "readv", "preadv", "preadv2"];
+pub const WRITES: &[&str] = &["write", "pwrite64", "writev", "pwritev", "pwritev2"];
+pub const PROBES: &[&str] = &[
     "stat",
     "fstat",
     "lstat",
@@ -200,11 +200,11 @@ pub(super) const PROBES: &[&str] = &[
     "readlink",
     "readlinkat",
 ];
-const PROT_WRITE: u64 = 2;
-const PROT_EXEC: u64 = 4;
+pub const PROT_WRITE: u64 = 2;
+pub const PROT_EXEC: u64 = 4;
 
 /// Locking `fcntl` commands: GETLK, SETLK, SETLKW and the open-file-description forms.
-fn lock_command(command: u64) -> bool {
+pub fn lock_command(command: u64) -> bool {
     matches!(command, 5..=7 | 36..=38)
 }
 
@@ -212,7 +212,7 @@ fn lock_command(command: u64) -> bool {
 /// the call to have succeeded, because only success shows the file was made.
 /// Call before the call is tracked: the Created inference needs the path as
 /// it was before this call.
-pub(super) fn classify(
+pub fn classify(
     files: &FdState,
     call: &InvocationSummary,
     event: &EventSummary,
@@ -281,7 +281,7 @@ pub(super) fn classify(
 }
 
 /// A `chmod` or `fchmod` family call's mode.
-pub(super) fn mode_argument(call: &InvocationSummary, event: &EventSummary) -> Option<u64> {
+pub fn mode_argument(call: &InvocationSummary, event: &EventSummary) -> Option<u64> {
     let args = call_args(call)?;
     match event.syscall_name.as_str() {
         "chmod" | "fchmod" => Some(args[1] & 0o7777),
@@ -291,7 +291,7 @@ pub(super) fn mode_argument(call: &InvocationSummary, event: &EventSummary) -> O
 }
 
 /// Mode bits worth pointing out.
-pub(super) fn mode_flags(mode: u64) -> Vec<&'static str> {
+pub fn mode_flags(mode: u64) -> Vec<&'static str> {
     let mut flags = Vec::new();
     if mode & 0o4000 != 0 {
         flags.push("setuid");
@@ -309,7 +309,7 @@ pub(super) fn mode_flags(mode: u64) -> Vec<&'static str> {
 }
 
 /// `uid:gid` of a `chown` family call; `-1` leaves that id as it was.
-fn owner_text(call: &InvocationSummary, event: &EventSummary) -> Option<String> {
+pub fn owner_text(call: &InvocationSummary, event: &EventSummary) -> Option<String> {
     let args = call_args(call)?;
     let (user, group) = match event.syscall_name.as_str() {
         "chown" | "fchown" | "lchown" => (args[1], args[2]),
@@ -326,7 +326,7 @@ fn owner_text(call: &InvocationSummary, event: &EventSummary) -> Option<String> 
     Some(format!("owner {} group {}", id(user), id(group)))
 }
 
-fn flock_text(operation: u64) -> &'static str {
+pub fn flock_text(operation: u64) -> &'static str {
     match operation & 0xf {
         1 => "shared lock",
         2 => "exclusive lock",
@@ -337,12 +337,12 @@ fn flock_text(operation: u64) -> &'static str {
 
 /// What an exec of a script shows when the guest did not record which
 /// interpreter it named (a guest from before the exec image record).
-const SCRIPT_NOTE: &str = "script run through its interpreter, path not recorded";
+pub const SCRIPT_NOTE: &str = "script run through its interpreter, path not recorded";
 
 /// "script run through /bin/sh" and, when the file loaded is somewhere else
 /// (a symlink, a multi-call binary), where: "script run through /bin/sh (loaded
 /// /usr/bin/busybox)". `None` for a program that is not a script.
-fn script_note(call: &InvocationSummary) -> Option<String> {
+pub fn script_note(call: &InvocationSummary) -> Option<String> {
     let hash_says =
         kernel_records::file_hash(call, HashKind::Exec).is_some_and(|hash| hash.interpreter);
     let image = kernel_records::exec_image(call);
@@ -365,7 +365,7 @@ fn script_note(call: &InvocationSummary) -> Option<String> {
 }
 
 /// Words for a row's Detail column. Empty when the syscall name says it all.
-pub(super) fn detail(
+pub fn detail(
     files: &FdState,
     call: &InvocationSummary,
     event: &EventSummary,
@@ -524,7 +524,7 @@ pub(super) fn detail(
     }
 }
 
-fn ret_text(call: &InvocationSummary, what: &str) -> String {
+pub fn ret_text(call: &InvocationSummary, what: &str) -> String {
     match call.exit.as_ref().and_then(|exit| exit.result) {
         Some(ret) if ret >= 0 => format!("{ret} {what}"),
         _ => String::new(),
@@ -533,7 +533,7 @@ fn ret_text(call: &InvocationSummary, what: &str) -> String {
 
 /// The step a call adds to its file's lifecycle, when it is one worth telling.
 /// `mode` is the last mode a chmod set, to tell a new `+x` from a repeat.
-pub(super) fn step_label(
+pub fn step_label(
     files: &FdState,
     call: &InvocationSummary,
     event: &EventSummary,
@@ -616,7 +616,7 @@ pub(super) fn step_label(
 }
 
 /// The sample's own image paths: every image the root process ran.
-pub(super) fn own_images(files: &FdState) -> Vec<String> {
+pub fn own_images(files: &FdState) -> Vec<String> {
     let mut images = Vec::new();
     for node in files.process_images.values().filter(|node| node.root) {
         for image in node.exec_history.iter().chain([&node.comm]) {
@@ -629,7 +629,7 @@ pub(super) fn own_images(files: &FdState) -> Vec<String> {
 }
 
 /// The classes of every path a call names.
-pub(super) fn locations(
+pub fn locations(
     files: &FdState,
     call: &InvocationSummary,
     event: &EventSummary,
@@ -656,7 +656,7 @@ pub(super) fn locations(
     found
 }
 
-pub(super) fn location_text(found: &[Location]) -> String {
+pub fn location_text(found: &[Location]) -> String {
     if found.is_empty() {
         "—".into()
     } else {
@@ -670,7 +670,7 @@ pub(super) fn location_text(found: &[Location]) -> String {
 
 /// The Location cell: warn-coloured when the path is one a reader should look
 /// at first (hidden, persistence, credentials).
-pub(super) fn location_cell(found: &[Location]) -> Cell {
+pub fn location_cell(found: &[Location]) -> Cell {
     let color = if found.iter().any(|location| location.flagged()) {
         tone::warn()
     } else {
@@ -680,7 +680,7 @@ pub(super) fn location_cell(found: &[Location]) -> Cell {
 }
 
 /// Whether a row's `file.location` values include a flagged class.
-pub(super) fn row_flagged(values: &[(&str, RowValue)]) -> bool {
+pub fn row_flagged(values: &[(&str, RowValue)]) -> bool {
     values.iter().any(|(key, value)| match (*key, value) {
         ("file.location", RowValue::List(tags)) => tags
             .iter()
@@ -690,7 +690,7 @@ pub(super) fn row_flagged(values: &[(&str, RowValue)]) -> bool {
 }
 
 /// Values every file row carries for filters, besides its own fields.
-pub(super) fn cross_values(
+pub fn cross_values(
     outcome: Outcome,
     access: Access,
     locations: &[Location],
@@ -712,7 +712,7 @@ pub(super) fn cross_values(
 }
 
 /// Table columns of every operation tab.
-pub(super) const EVENT_HEADERS: &[&str] = &[
+pub const EVENT_HEADERS: &[&str] = &[
     "Time",
     "Category",
     "Operation",
@@ -726,7 +726,7 @@ pub(super) const EVENT_HEADERS: &[&str] = &[
 ];
 
 /// One operation-tab row. The first cell holds the filterable values.
-pub(super) fn category_row(
+pub fn category_row(
     files: &FdState,
     call: &InvocationSummary,
     event: &EventSummary,
@@ -802,7 +802,7 @@ pub(super) fn category_row(
 }
 
 /// Show guest time in the first column of rows that carry their raw time.
-pub(super) fn with_time(
+pub fn with_time(
     rows: &[Vec<Cell>],
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
 ) -> Vec<Vec<Cell>> {
@@ -815,7 +815,7 @@ pub(super) fn with_time(
 }
 
 /// Filterable fields of every file table.
-pub(super) const FILE_FIELDS: &[crate::query::FieldSpec<'static>] = &[
+pub const FILE_FIELDS: &[crate::query::FieldSpec<'static>] = &[
     crate::query::FieldSpec::text(
         "process.exe",
         "Captured executable active at this file operation",

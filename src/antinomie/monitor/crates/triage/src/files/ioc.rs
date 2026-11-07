@@ -5,7 +5,7 @@
 use super::*;
 
 /// What the IOC window needs of one changed file.
-pub(in crate::triage) struct IocFile {
+pub struct IocFile {
     pub path: String,
     /// `created`, `written at close`, `changed`, `deleted`.
     pub roles: Vec<&'static str>,
@@ -22,7 +22,7 @@ pub(in crate::triage) struct IocFile {
 
 impl Change {
     /// The file for the IOC window, or `None` for one with no usable path.
-    pub(in crate::triage) fn ioc_file(&self) -> Option<IocFile> {
+    pub fn ioc_file(&self) -> Option<IocFile> {
         if !self.path_known || !self.path.starts_with('/') || self.standard_io {
             return None;
         }
@@ -87,7 +87,7 @@ impl Change {
 impl Change {
     /// The file as the Samples window lists the files a sample wrote, or
     /// `None` for one the run did not change or with no usable path.
-    pub(in crate::triage) fn written_file(
+    pub fn written_file(
         &self,
     ) -> Option<antinomie_monitor_core::run_digest::WrittenFile> {
         if !self.changes || !self.path_known || !self.path.starts_with('/') || self.standard_io {

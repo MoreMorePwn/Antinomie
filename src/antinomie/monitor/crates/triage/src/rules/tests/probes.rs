@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Evasion category: every anti-analysis check, the answer the guest gave, and what the task did next.
 use super::support::*;
-use crate::triage::rules::Options;
+use crate::rules::Options;
 
 /// A task that opens a file, reads it and gets `answer`.
-fn probe(pid: u32, path: &str, fd: i64, answer: &[u8]) -> Calls {
+pub fn probe(pid: u32, path: &str, fd: i64, answer: &[u8]) -> Calls {
     vec![
         open_read(pid, path, fd),
         read(pid, fd as u64, answer),
@@ -12,12 +12,12 @@ fn probe(pid: u32, path: &str, fd: i64, answer: &[u8]) -> Calls {
     ]
 }
 
-fn detail(row: &Finding) -> Vec<String> {
+pub fn detail(row: &Finding) -> Vec<String> {
     list(row, "finding.detail")
 }
 
 #[test]
-fn one_check_is_info_and_two_kinds_of_vm_evidence_are_a_medium_sandbox_probe() {
+pub fn one_check_is_info_and_two_kinds_of_vm_evidence_are_a_medium_sandbox_probe() {
     let one = run(probe(1, "/sys/class/dmi/id/sys_vendor", 3, b"QEMU\n"));
     let row = rows(&one, "evasion.sandbox_probe");
     assert_eq!(row.len(), 1);
@@ -43,7 +43,7 @@ fn one_check_is_info_and_two_kinds_of_vm_evidence_are_a_medium_sandbox_probe() {
 }
 
 #[test]
-fn details_list_each_check_with_the_answer_and_what_decides_it() {
+pub fn details_list_each_check_with_the_answer_and_what_decides_it() {
     let mut calls = probe(1, "/sys/class/dmi/id/sys_vendor", 3, b"QEMU\n");
     calls.extend(probe(
         1,
@@ -94,7 +94,7 @@ fn details_list_each_check_with_the_answer_and_what_decides_it() {
 }
 
 #[test]
-fn hypervisor_cpu_flag_pci_vendors_clocksource_and_modules_are_judged() {
+pub fn hypervisor_cpu_flag_pci_vendors_clocksource_and_modules_are_judged() {
     let cpu = |flags: &str| {
         let out = run(probe(
             1,
@@ -154,7 +154,7 @@ fn hypervisor_cpu_flag_pci_vendors_clocksource_and_modules_are_judged() {
 }
 
 #[test]
-fn disk_models_and_vendor_strings_are_checks_too() {
+pub fn disk_models_and_vendor_strings_are_checks_too() {
     let out = run(probe(
         1,
         "/sys/block/sda/device/model",
@@ -178,7 +178,7 @@ fn disk_models_and_vendor_strings_are_checks_too() {
 }
 
 #[test]
-fn a_tool_that_inspects_the_machine_is_a_check_whose_output_is_not_captured() {
+pub fn a_tool_that_inspects_the_machine_is_a_check_whose_output_is_not_captured() {
     let out = run(vec![exec(
         1,
         "/usr/sbin/dmidecode",
@@ -200,7 +200,7 @@ fn a_tool_that_inspects_the_machine_is_a_check_whose_output_is_not_captured() {
 }
 
 #[test]
-fn tracer_pid_in_proc_self_status_is_a_debugger_check_with_the_value_it_read() {
+pub fn tracer_pid_in_proc_self_status_is_a_debugger_check_with_the_value_it_read() {
     let status = |tracer: u32| {
         let text = format!("Name:\tx\nUmask:\t0022\nState:\tR (running)\nTgid:\t1\nNgid:\t0\nPid:\t1\nPPid:\t0\nTracerPid:\t{tracer}\nUid:\t0\n");
         run(probe(1, "/proc/self/status", 3, text.as_bytes()))
@@ -234,7 +234,7 @@ fn tracer_pid_in_proc_self_status_is_a_debugger_check_with_the_value_it_read() {
 }
 
 #[test]
-fn ptrace_traceme_prctl_dumpable_and_a_sigtrap_handler_join_the_debugger_row() {
+pub fn ptrace_traceme_prctl_dumpable_and_a_sigtrap_handler_join_the_debugger_row() {
     let traceme = sys(1, 101, "ptrace", [0; 6], 0);
     let dumpable = sys(1, 157, "prctl", [3, 0, 0, 0, 0, 0], 1);
     let mut handler = 0x4000_1000u64.to_le_bytes().to_vec();
@@ -271,7 +271,7 @@ fn ptrace_traceme_prctl_dumpable_and_a_sigtrap_handler_join_the_debugger_row() {
 }
 
 #[test]
-fn container_markers_are_a_low_row_and_absence_is_the_answer() {
+pub fn container_markers_are_a_low_row_and_absence_is_the_answer() {
     let out = run(vec![
         stat(1, "/.dockerenv", -2),
         stat(1, "/run/.containerenv", -2),
@@ -298,7 +298,7 @@ fn container_markers_are_a_low_row_and_absence_is_the_answer() {
 }
 
 #[test]
-fn an_exit_right_after_a_revealing_answer_is_probe_then_exit() {
+pub fn an_exit_right_after_a_revealing_answer_is_probe_then_exit() {
     let mut calls = probe(1, "/sys/class/dmi/id/sys_vendor", 3, b"QEMU\n");
     calls.extend(probe(1, "/proc/cpuinfo", 4, b"flags\t: hypervisor\n"));
     calls.push(at(sys(1, 231, "exit_group", [0; 6], 0), 2 * SECOND));
@@ -321,7 +321,7 @@ fn an_exit_right_after_a_revealing_answer_is_probe_then_exit() {
 }
 
 #[test]
-fn work_after_the_checks_means_no_reaction() {
+pub fn work_after_the_checks_means_no_reaction() {
     let mut calls = probe(1, "/sys/class/dmi/id/sys_vendor", 3, b"QEMU\n");
     calls.extend(probe(1, "/proc/cpuinfo", 4, b"flags\t: hypervisor\n"));
     calls.push(at(socket(1, 2, 1, 5), 2 * SECOND));
@@ -337,7 +337,7 @@ fn work_after_the_checks_means_no_reaction() {
 }
 
 #[test]
-fn a_late_exit_or_a_check_that_shows_nothing_is_not_probe_then_exit() {
+pub fn a_late_exit_or_a_check_that_shows_nothing_is_not_probe_then_exit() {
     let mut late = probe(1, "/sys/class/dmi/id/sys_vendor", 3, b"QEMU\n");
     late.push(at(sys(1, 231, "exit_group", [0; 6], 0), 60 * SECOND));
     assert!(!has(&run(late), "evasion.probe_then_exit"));
@@ -347,7 +347,7 @@ fn a_late_exit_or_a_check_that_shows_nothing_is_not_probe_then_exit() {
 }
 
 #[test]
-fn a_task_that_stops_using_the_network_after_its_checks_is_reported_so() {
+pub fn a_task_that_stops_using_the_network_after_its_checks_is_reported_so() {
     let mut calls = vec![socket(1, 2, 1, 5), connect(1, 5, [203, 0, 113, 9], 443)];
     calls.extend(probe(1, "/sys/class/dmi/id/sys_vendor", 3, b"QEMU\n"));
     calls.push(at(
@@ -360,7 +360,7 @@ fn a_task_that_stops_using_the_network_after_its_checks_is_reported_so() {
 }
 
 #[test]
-fn a_long_sleep_after_a_revealing_check_is_a_reaction() {
+pub fn a_long_sleep_after_a_revealing_check_is_a_reaction() {
     let sleep = |seconds: u64| {
         let mut data = seconds.to_le_bytes().to_vec();
         data.extend(0u64.to_le_bytes());
@@ -379,7 +379,7 @@ fn a_long_sleep_after_a_revealing_check_is_a_reaction() {
 }
 
 #[test]
-fn a_loop_of_clock_reads_is_a_timing_check() {
+pub fn a_loop_of_clock_reads_is_a_timing_check() {
     let mut calls = Vec::new();
     for at_ms in 0..40u64 {
         calls.push(at(
@@ -405,7 +405,7 @@ fn a_loop_of_clock_reads_is_a_timing_check() {
 }
 
 #[test]
-fn sysinfo_uptime_and_the_mac_ioctl_are_read_from_their_buffers() {
+pub fn sysinfo_uptime_and_the_mac_ioctl_are_read_from_their_buffers() {
     let sysinfo = with_exit(
         sys(1, 99, "sysinfo", [0x1000, 0, 0, 0, 0, 0], 0),
         "arg0.data",
@@ -432,7 +432,7 @@ fn sysinfo_uptime_and_the_mac_ioctl_are_read_from_their_buffers() {
 }
 
 #[test]
-fn the_probe_rows_belong_to_the_evasion_category_filter() {
+pub fn the_probe_rows_belong_to_the_evasion_category_filter() {
     let mut calls = probe(1, "/sys/class/dmi/id/sys_vendor", 3, b"QEMU\n");
     calls.extend(probe(1, "/proc/cpuinfo", 4, b"flags\t: hypervisor\n"));
     let out = run(calls);
@@ -461,7 +461,7 @@ fn the_probe_rows_belong_to_the_evasion_category_filter() {
 }
 
 #[test]
-fn a_debuggers_child_calling_traceme_before_its_exec_is_not_a_check() {
+pub fn a_debuggers_child_calling_traceme_before_its_exec_is_not_a_check() {
     let out = run(vec![
         sys(1, 101, "ptrace", [0; 6], 0),
         exec(1, "/bin/true", &["true"]),
@@ -472,7 +472,7 @@ fn a_debuggers_child_calling_traceme_before_its_exec_is_not_a_check() {
     assert!(has(&alone, "evasion.traceme") && has(&alone, "evasion.debugger_check"));
 }
 
-fn sysinfo_up(seconds: u64) -> InvocationSummary {
+pub fn sysinfo_up(seconds: u64) -> InvocationSummary {
     with_exit(
         sys(1, 99, "sysinfo", [0x1000, 0, 0, 0, 0, 0], 0),
         "arg0.data",
@@ -481,7 +481,7 @@ fn sysinfo_up(seconds: u64) -> InvocationSummary {
 }
 
 #[test]
-fn a_cgroup_file_that_names_no_container_is_not_a_container_check_that_shows_it() {
+pub fn a_cgroup_file_that_names_no_container_is_not_a_container_check_that_shows_it() {
     // pgrep and pkill read /proc/<pid>/cgroup of every process; it always exists.
     let mut calls = vec![exec(1, "/usr/bin/pgrep", &["pgrep", "sshd"])];
     calls.extend(probe(
@@ -504,7 +504,7 @@ fn a_cgroup_file_that_names_no_container_is_not_a_container_check_that_shows_it(
 }
 
 #[test]
-fn coreutils_asking_sysinfo_is_not_a_check_but_a_sample_doing_so_is() {
+pub fn coreutils_asking_sysinfo_is_not_a_check_but_a_sample_doing_so_is() {
     let mut sort = vec![exec(1, "/usr/bin/sort", &["sort", "-u"]), sysinfo_up(45)];
     sort.push(at(sys(1, 231, "exit_group", [0; 6], 0), SECOND));
     let out = run(sort);
@@ -518,7 +518,7 @@ fn coreutils_asking_sysinfo_is_not_a_check_but_a_sample_doing_so_is() {
 }
 
 #[test]
-fn the_hypervisor_flag_is_expected_under_a_cloud_profile() {
+pub fn the_hypervisor_flag_is_expected_under_a_cloud_profile() {
     let mut calls = probe(
         1,
         "/proc/cpuinfo",

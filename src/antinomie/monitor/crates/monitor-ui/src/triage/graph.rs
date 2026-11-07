@@ -11,6 +11,7 @@ use super::*;
 
 mod input;
 mod legend;
+mod mermaid;
 mod watch;
 mod paint;
 mod ruler;
@@ -39,7 +40,7 @@ mod tests;
 mod window_tests;
 
 pub(crate) use antinomie_triage::graph::Spacing;
-use antinomie_triage::graph::{axis, filter, index, lanes, mermaid, notify, phases};
+use antinomie_triage::graph::{axis, filter, index, lanes, notify, phases};
 pub(super) use antinomie_triage::graph::{Builder, Collector, GraphIndex, GraphScan, HighRule, Lanes};
 pub(super) use strip::Strip;
 pub(super) use view::State;

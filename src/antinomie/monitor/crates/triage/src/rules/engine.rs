@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 /// What the scan asks of the engine.
 #[derive(Clone, Default)]
-pub(in crate::triage) struct Options {
+pub struct Options {
     /// Build INFO rows; their counts are kept either way.
     pub show_info: bool,
     /// A capture of the whole VM: only processes started during it are in scope.
@@ -24,7 +24,7 @@ pub(in crate::triage) struct Options {
 
 /// The packer verdict of the run's program, from its Static analysis.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::triage) struct PackedImage {
+pub struct PackedImage {
     /// The program's path as the run was asked to start it.
     pub path: String,
     pub packer: String,
@@ -36,7 +36,7 @@ pub(in crate::triage) struct PackedImage {
 
 impl PackedImage {
     /// The verdict of a report whose Unpacking found a packer.
-    pub(in crate::triage) fn of(report: &antinomie_monitor_core::AnalysisReport) -> Option<Self> {
+    pub fn of(report: &antinomie_monitor_core::AnalysisReport) -> Option<Self> {
         let verdict = antinomie_monitor_core::packer_verdict(report)?;
         Some(Self {
             path: report.source_path.clone(),
@@ -49,7 +49,7 @@ impl PackedImage {
 }
 
 /// The rows of a scan and what to count about them.
-pub(in crate::triage) struct Output {
+pub struct Output {
     /// Every row to list, hidden ones included; the view and the filter narrow them.
     pub rows: Vec<Finding>,
     /// Rows by tier (HIGH, MEDIUM, LOW) that are not hidden; INFO is the number of matches.
@@ -72,7 +72,7 @@ pub(in crate::triage) struct Output {
 }
 
 /// One INFO match kept as a count at a time, not as a row.
-pub(in crate::triage) struct InfoMark {
+pub struct InfoMark {
     pub ns: u64,
     pub count: u32,
     pub rule: &'static str,
@@ -81,32 +81,32 @@ pub(in crate::triage) struct InfoMark {
 
 /// Where the host uploads the resource collector of a base from before 0.7.0; the
 /// rest of the name is random for each launch.
-const COLLECTOR: &str = "/tmp/.antinomie-resource-";
+pub const COLLECTOR: &str = "/tmp/.antinomie-resource-";
 
 /// Rows held before the caps are applied; past it matches are only counted.
-const ROWS_HELD: usize = 200_000;
+pub const ROWS_HELD: usize = 200_000;
 
-pub(in crate::triage) struct Engine {
-    options: Options,
-    pub(super) aggs: Vec<Agg>,
+pub struct Engine {
+    pub options: Options,
+    pub aggs: Vec<Agg>,
     /// Rows for what the host saw (the cloud metadata service), which are
     /// not a task's and so are not scoped to the run's tree.
-    pub(super) host_aggs: Vec<Agg>,
-    pub(super) index: HashMap<(&'static str, u64, String), usize>,
-    pub(super) state: State,
+    pub host_aggs: Vec<Agg>,
+    pub index: HashMap<(&'static str, u64, String), usize>,
+    pub state: State,
     /// INFO matches that were counted without building a row.
-    info_matches: u64,
+    pub info_matches: u64,
     /// Matches past the bound on rows held; they are counted, not kept.
-    dropped: u64,
-    notes: Vec<String>,
+    pub dropped: u64,
+    pub notes: Vec<String>,
     /// Rows a live judge has not yet looked at, by index in `aggs`.
-    touched: Vec<usize>,
+    pub touched: Vec<usize>,
     /// The tier each row had when a live judge last reported it.
-    announced: HashMap<usize, Tier>,
+    pub announced: HashMap<usize, Tier>,
 }
 
 /// A row of a live run that is new, or raised to a higher tier.
-pub(in crate::triage) struct LiveRow {
+pub struct LiveRow {
     pub rule: &'static str,
     pub summary: String,
     pub tier: Tier,
@@ -122,7 +122,7 @@ pub(in crate::triage) struct LiveRow {
 impl Engine {
     /// The rows the last calls created or raised, with the tier the final
     /// pass would give them so far.
-    pub(in crate::triage) fn live_changes(&mut self) -> Vec<LiveRow> {
+    pub fn live_changes(&mut self) -> Vec<LiveRow> {
         let mut touched = std::mem::take(&mut self.touched);
         touched.sort_unstable();
         touched.dedup();
@@ -157,7 +157,7 @@ impl Engine {
         rows
     }
 
-    pub(in crate::triage) fn new(options: Options) -> Self {
+    pub fn new(options: Options) -> Self {
         let mut state = State::with_packed(options.packed.clone());
         state.cloud_profile = options.cloud_profile;
         Self {
@@ -176,7 +176,7 @@ impl Engine {
 
     /// Judge one call. `files` holds the state before the call; `via_async` marks
     /// a file request standing for an io_uring or AIO submission.
-    pub(in crate::triage) fn observe(
+    pub fn observe(
         &mut self,
         call: &InvocationSummary,
         files: &FdState,
@@ -207,7 +207,7 @@ impl Engine {
         self.state.track(&cx);
     }
 
-    fn record(&mut self, cx: &Ctx, hit: Hit) {
+    pub fn record(&mut self, cx: &Ctx, hit: Hit) {
         let Some(spec) = spec(hit.rule) else {
             debug_assert!(false, "unclassified rule {}", hit.rule);
             return;
@@ -284,7 +284,7 @@ impl Engine {
     }
 
     /// Judge one row of the capture. `clock` places the packet time on the guest's clock.
-    pub(in crate::triage) fn frame(
+    pub fn frame(
         &mut self,
         kind: FrameKind,
         values: &[(&'static str, RowValue)],
@@ -322,7 +322,7 @@ impl Engine {
         }
     }
 
-    fn record_frame(
+    pub fn record_frame(
         &mut self,
         hit: Hit,
         number: u64,
@@ -403,7 +403,7 @@ impl Engine {
     }
 
     /// Settle every row: scope, siblings, tiers, caps.
-    pub(in crate::triage) fn finish(mut self, files: &FdState) -> Output {
+    pub fn finish(mut self, files: &FdState) -> Output {
         let traced = self.state.probes.traced_exec.clone();
         let host_aggs = std::mem::take(&mut self.host_aggs);
         if let Some((hit, number, capture, time)) = self.state.frames.nxdomain_hit.take() {
@@ -501,7 +501,7 @@ impl Engine {
 }
 
 /// A capture of the whole VM: processes that were running before it began are out of scope.
-fn scope(aggs: &mut [Agg], state: &State, files: &FdState) {
+pub fn scope(aggs: &mut [Agg], state: &State, files: &FdState) {
     for agg in aggs {
         let task = TaskKey {
             pid: agg.pid,
@@ -526,6 +526,6 @@ fn scope(aggs: &mut [Agg], state: &State, files: &FdState) {
 }
 
 /// How a call ended, as the `Outcome` cell words it.
-fn outcome(call: &InvocationSummary) -> String {
+pub fn outcome(call: &InvocationSummary) -> String {
     findings::outcome(call)
 }

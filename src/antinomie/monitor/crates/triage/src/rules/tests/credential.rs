@@ -2,12 +2,12 @@
 use super::super::{Engine, Options};
 use super::support::*;
 
-fn read_file(path: &str) -> Calls {
+pub fn read_file(path: &str) -> Calls {
     vec![open_read(1, path, 3), read(1, 3, b"data\n")]
 }
 
 #[test]
-fn credential_stores_have_their_rules_and_tiers() {
+pub fn credential_stores_have_their_rules_and_tiers() {
     for (path, rule, expected) in [
         ("/etc/shadow", "credential.shadow_read", "high"),
         ("/etc/gshadow", "credential.shadow_read", "high"),
@@ -82,7 +82,7 @@ fn credential_stores_have_their_rules_and_tiers() {
 }
 
 #[test]
-fn near_misses_are_not_credential_reads() {
+pub fn near_misses_are_not_credential_reads() {
     for path in [
         "/root/.ssh/id_rsa.pub",
         "/root/.ssh/known_hosts",
@@ -109,7 +109,7 @@ fn near_misses_are_not_credential_reads() {
 }
 
 #[test]
-fn the_tool_that_owns_a_store_is_one_tier_down() {
+pub fn the_tool_that_owns_a_store_is_one_tier_down() {
     let mut calls = vec![exec(1, "/usr/bin/ssh", &["ssh", "host"])];
     calls.extend(read_file("/root/.ssh/id_rsa"));
     let out = run(calls);
@@ -124,7 +124,7 @@ fn the_tool_that_owns_a_store_is_one_tier_down() {
 }
 
 #[test]
-fn a_private_key_found_by_its_first_bytes_is_a_credential_read() {
+pub fn a_private_key_found_by_its_first_bytes_is_a_credential_read() {
     let out = run(vec![
         open_read(1, "/tmp/somefile", 3),
         read(1, 3, b"-----BEGIN OPENSSH PRIVATE KEY-----\nabc"),
@@ -138,7 +138,7 @@ fn a_private_key_found_by_its_first_bytes_is_a_credential_read() {
 }
 
 #[test]
-fn the_instance_metadata_service_is_high_even_when_nothing_answers() {
+pub fn the_instance_metadata_service_is_high_even_when_nothing_answers() {
     for ip in [
         [169, 254, 169, 254],
         [169, 254, 170, 2],
@@ -175,7 +175,7 @@ fn the_instance_metadata_service_is_high_even_when_nothing_answers() {
     ));
 }
 
-fn cloud_report() -> antinomie_monitor_core::route::MetadataReport {
+pub fn cloud_report() -> antinomie_monitor_core::route::MetadataReport {
     use antinomie_monitor_core::route::MetadataReport;
     let event = |kind: &str, detail: &str, endpoint: &str, ms| {
         serde_json::from_value(serde_json::json!({
@@ -218,7 +218,7 @@ fn cloud_report() -> antinomie_monitor_core::route::MetadataReport {
 }
 
 #[test]
-fn a_cloud_profiles_metadata_report_becomes_findings_and_an_endpoint() {
+pub fn a_cloud_profiles_metadata_report_becomes_findings_and_an_endpoint() {
     let mut engine = Engine::new(Options::default());
     engine.cloud_report(&cloud_report(), None);
     let log = engine.take_ioc();
@@ -256,7 +256,7 @@ fn a_cloud_profiles_metadata_report_becomes_findings_and_an_endpoint() {
 }
 
 #[test]
-fn many_documents_read_from_home_directories_is_a_local_sweep() {
+pub fn many_documents_read_from_home_directories_is_a_local_sweep() {
     let mut calls = Vec::new();
     for n in 0..60 {
         calls.push(open_read(
@@ -278,7 +278,7 @@ fn many_documents_read_from_home_directories_is_a_local_sweep() {
 }
 
 #[test]
-fn the_machines_known_hosts_then_ssh_is_a_worm_pattern() {
+pub fn the_machines_known_hosts_then_ssh_is_a_worm_pattern() {
     let out = run(vec![
         open_read(1, "/root/.ssh/known_hosts", 3),
         exec(

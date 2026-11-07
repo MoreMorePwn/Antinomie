@@ -142,44 +142,6 @@ fn row_extras(
     run.extras(reference)
 }
 
-pub(super) fn evidence_key(row: &[Cell]) -> String {
-    let identity = evidence_values_key(
-        row.first()
-            .map(|cell| cell.values.as_slice())
-            .unwrap_or_default(),
-    );
-    if identity.is_empty() {
-        row.iter()
-            .map(|cell| cell.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    } else {
-        identity
-    }
-}
-
-pub(super) fn evidence_values_key(values: &[(&str, RowValue)]) -> String {
-    values
-        .iter()
-        .filter(|(name, _)| {
-            matches!(
-                *name,
-                "event.id"
-                    | "stream.id"
-                    | "frame.number"
-                    | "dns.name"
-                    | "http.uri"
-                    | "process.cookie"
-                    | "finding.rule"
-                    | "finding.engine"
-                    | "capture.path"
-            )
-        })
-        .map(|(name, value)| format!("{name}:{value:?}"))
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
 pub(super) fn request_evidence_jump(ctx: &egui::Context, values: &[(&str, RowValue)]) {
     // A finding found in packets carries a frame and no call.
     let packet = values.iter().any(|(key, _)| *key == "capture.path");

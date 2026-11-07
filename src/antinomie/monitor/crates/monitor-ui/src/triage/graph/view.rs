@@ -16,8 +16,7 @@ pub(in crate::triage) const MIN_HEIGHT: f32 = 420.0;
 pub(super) const MIN_BUCKET_PX: f64 = 3.0;
 /// Individual findings are drawn when the window holds fewer than this.
 pub(super) const INDIVIDUAL_BELOW: usize = 5_000;
-/// The shortest window: one microsecond.
-pub(super) const MIN_SPAN_NS: f64 = 1_000.0;
+use super::axis::{fitted, fitted_findings, MIN_SPAN_NS};
 
 /// How tall each part is. The embedded and the windowed graph size their lanes
 /// and bands to the room they are given; the Summary strip is compact.
@@ -325,23 +324,6 @@ impl Frame {
         let row = ((y - self.lanes.top() + scroll) / self.m.lane_h).floor();
         (row >= 0.0 && (row as usize) < rows).then_some(row as usize)
     }
-}
-
-/// The window that shows the whole run, with a little room at both ends.
-pub(super) fn fitted(extent: (u64, u64)) -> (f64, f64) {
-    let (lo, hi) = (extent.0 as f64, extent.1 as f64);
-    let margin = ((hi - lo) * 0.01).max(MIN_SPAN_NS / 2.0);
-    (lo - margin, hi + margin)
-}
-
-/// The window a graph opens at: the findings with some room, however short
-/// their stretch of a long run is (a burst of a few milliseconds at the end of
-/// a minute is shown as the burst).
-pub(super) fn fitted_findings(findings: (u64, u64)) -> (f64, f64) {
-    let (lo, hi) = (findings.0 as f64, findings.1 as f64);
-    // A single finding has no stretch: half a millisecond either side.
-    let pad = ((hi - lo) * 0.06).max(500_000.0);
-    (lo - pad, hi + pad)
 }
 
 /// `window` zoomed by `factor` around `anchor`, kept inside `bounds`.

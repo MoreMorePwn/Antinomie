@@ -7,25 +7,25 @@ use super::rules::Tier;
 use super::*;
 
 /// `_IOW('$', 8, __u32)`.
-pub(super) const PERF_EVENT_IOC_SET_BPF: u64 = 0x4004_2408;
-const HELD: usize = 4096;
-const NAMES_SHOWN: usize = 4;
+pub const PERF_EVENT_IOC_SET_BPF: u64 = 0x4004_2408;
+pub const HELD: usize = 4096;
+pub const NAMES_SHOWN: usize = 4;
 
-pub(super) const LINK_CREATE: &str = "BPF_LINK_CREATE";
-pub(super) const RAW_TRACEPOINT_OPEN: &str = "BPF_RAW_TRACEPOINT_OPEN";
-pub(super) const SET_BPF: &str = "PERF_EVENT_IOC_SET_BPF";
-pub(super) const PERF_OPEN: &str = "PERF_EVENT_OPEN";
+pub const LINK_CREATE: &str = "BPF_LINK_CREATE";
+pub const RAW_TRACEPOINT_OPEN: &str = "BPF_RAW_TRACEPOINT_OPEN";
+pub const SET_BPF: &str = "PERF_EVENT_IOC_SET_BPF";
+pub const PERF_OPEN: &str = "PERF_EVENT_OPEN";
 
 /// What a `perf_event_open` asked for, as far as the recording captured it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct PerfEvent {
+pub struct PerfEvent {
     pub call_id: u64,
     pub kind: Option<u32>,
     pub config: Option<u64>,
 }
 
 impl PerfEvent {
-    pub(super) fn describe(&self) -> String {
+    pub fn describe(&self) -> String {
         match (self.kind, self.config) {
             (Some(2), Some(id)) => format!("tracepoint id {id} (name not resolved)"),
             (Some(0), config) => format!("hardware event config {}", hex(config)),
@@ -43,7 +43,7 @@ impl PerfEvent {
 
     /// A kernel tracepoint or a dynamic PMU (the kprobe and uprobe ones) hooks
     /// the whole kernel or every user of a binary.
-    fn tier(&self) -> Tier {
+    pub fn tier(&self) -> Tier {
         match self.kind {
             Some(2) => Tier::High,
             Some(kind) if kind >= 6 => Tier::High,
@@ -52,21 +52,21 @@ impl PerfEvent {
     }
 }
 
-fn hex(value: Option<u64>) -> String {
+pub fn hex(value: Option<u64>) -> String {
     value.map_or("not captured".into(), |value| format!("{value:#x}"))
 }
 
 /// Descriptors the trace has shown, per task: loaded programs and perf events.
 #[derive(Default)]
-pub(super) struct BpfFds {
-    programs: Vec<(u64, i64, u64)>,
-    perf: Vec<(u64, i64, PerfEvent)>,
+pub struct BpfFds {
+    pub programs: Vec<(u64, i64, u64)>,
+    pub perf: Vec<(u64, i64, PerfEvent)>,
 }
 
 impl BpfFds {
     /// Fold one finished call in. Call it after judging the call, so a call
     /// sees the descriptors that existed before it.
-    pub(super) fn observe(&mut self, invocation: &InvocationSummary) {
+    pub fn observe(&mut self, invocation: &InvocationSummary) {
         let Some(event) = trace::representative(invocation) else {
             return;
         };
@@ -115,14 +115,14 @@ impl BpfFds {
     }
 
     /// The call that loaded program fd `fd` in this task.
-    pub(super) fn program(&self, cookie: u64, fd: i64) -> Option<u64> {
+    pub fn program(&self, cookie: u64, fd: i64) -> Option<u64> {
         self.programs
             .iter()
             .find(|key| (key.0, key.1) == (cookie, fd))
             .map(|key| key.2)
     }
 
-    pub(super) fn perf(&self, cookie: u64, fd: i64) -> Option<&PerfEvent> {
+    pub fn perf(&self, cookie: u64, fd: i64) -> Option<&PerfEvent> {
         self.perf
             .iter()
             .find(|key| (key.0, key.1) == (cookie, fd))
@@ -131,7 +131,7 @@ impl BpfFds {
 }
 
 /// One attachment of a program, with what the recording says about it.
-pub(super) struct Attach {
+pub struct Attach {
     /// `kprobe_multi`, `raw tracepoint`, `perf event`, an attach type.
     pub kind: String,
     pub prog_fd: Option<i64>,
@@ -144,7 +144,7 @@ pub(super) struct Attach {
 
 impl Attach {
     /// The step as a sentence, for the lifecycle line and the Observation column.
-    pub(super) fn lifecycle(&self, result: Option<i64>) -> String {
+    pub fn lifecycle(&self, result: Option<i64>) -> String {
         let verb = match result {
             Some(ret) if ret >= 0 => format!("attached {}", self.kind),
             Some(ret) => format!("attach of {} failed ({ret})", self.kind),
@@ -153,7 +153,7 @@ impl Attach {
         format!("{verb} {}: {}", self.program(), self.target)
     }
 
-    pub(super) fn program(&self) -> String {
+    pub fn program(&self) -> String {
         match (self.prog_fd, self.loaded_by) {
             (Some(fd), Some(call)) => format!("of program fd {fd} (loaded in call {call})"),
             (Some(fd), None) => format!("of program fd {fd} (its load was not seen)"),
@@ -163,7 +163,7 @@ impl Attach {
 }
 
 /// Which attach command a call is, if any.
-pub(super) fn command_of(event: &EventSummary, args: [u64; 6]) -> Option<&'static str> {
+pub fn command_of(event: &EventSummary, args: [u64; 6]) -> Option<&'static str> {
     match event.syscall_name.as_str() {
         "bpf" => match args[0] {
             17 => Some(RAW_TRACEPOINT_OPEN),
@@ -175,7 +175,7 @@ pub(super) fn command_of(event: &EventSummary, args: [u64; 6]) -> Option<&'stati
     }
 }
 
-pub(super) fn attach(
+pub fn attach(
     invocation: &InvocationSummary,
     command: &'static str,
     args: [u64; 6],
@@ -256,7 +256,7 @@ pub(super) fn attach(
 }
 
 /// Name, tier and target text of a `BPF_LINK_CREATE` by its attach type.
-fn link_target(
+pub fn link_target(
     invocation: &InvocationSummary,
     attr: Option<&[u8]>,
     kind: u32,
@@ -352,11 +352,11 @@ fn link_target(
     }
 }
 
-fn cgroup_type(kind: u32) -> bool {
+pub fn cgroup_type(kind: u32) -> bool {
     matches!(kind, 0..=3 | 6 | 8..=15 | 18..=22 | 29..=32 | 34 | 49..=53)
 }
 
-fn attach_type(kind: u32) -> Option<&'static str> {
+pub fn attach_type(kind: u32) -> Option<&'static str> {
     const NAMES: [&str; 57] = [
         "cgroup_inet_ingress",
         "cgroup_inet_egress",
@@ -420,7 +420,7 @@ fn attach_type(kind: u32) -> Option<&'static str> {
 }
 
 /// `perf_event_open` as a table row: the type and config it asked for.
-pub(super) fn perf_open_text(invocation: &InvocationSummary, result: Option<i64>) -> String {
+pub fn perf_open_text(invocation: &InvocationSummary, result: Option<i64>) -> String {
     let attr = attr_bytes(invocation, "arg0.perf_event_attr");
     let event = PerfEvent {
         call_id: invocation.call_id,
@@ -438,7 +438,7 @@ pub(super) fn perf_open_text(invocation: &InvocationSummary, result: Option<i64>
 }
 
 /// The entry's captured bytes for `key`, when the field is a plain prefix.
-fn attr_bytes(invocation: &InvocationSummary, key: &str) -> Option<Vec<u8>> {
+pub fn attr_bytes(invocation: &InvocationSummary, key: &str) -> Option<Vec<u8>> {
     let field = invocation
         .entry
         .iter()
@@ -447,7 +447,7 @@ fn attr_bytes(invocation: &InvocationSummary, key: &str) -> Option<Vec<u8>> {
     Some(trace::covered_preview(field).to_vec())
 }
 
-fn string_field(invocation: &InvocationSummary, key: &str) -> Option<String> {
+pub fn string_field(invocation: &InvocationSummary, key: &str) -> Option<String> {
     let field = invocation
         .entry
         .iter()
@@ -461,10 +461,10 @@ fn string_field(invocation: &InvocationSummary, key: &str) -> Option<String> {
     (end > 0).then(|| String::from_utf8_lossy(&bytes[..end]).into_owned())
 }
 
-fn word(bytes: &[u8], at: usize) -> Option<u32> {
+pub fn word(bytes: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
 }
 
-fn wide(bytes: &[u8], at: usize) -> Option<u64> {
+pub fn wide(bytes: &[u8], at: usize) -> Option<u64> {
     Some(u64::from_le_bytes(bytes.get(at..at + 8)?.try_into().ok()?))
 }

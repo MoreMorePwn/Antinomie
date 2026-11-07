@@ -3,7 +3,7 @@
 use super::*;
 
 #[derive(Clone, Copy)]
-pub(super) enum Cmp {
+pub enum Cmp {
     Eq,
     Ne,
     Lt,
@@ -13,7 +13,7 @@ pub(super) enum Cmp {
     Contains,
 }
 
-pub(super) enum Expr {
+pub enum Expr {
     Value(Value),
     Not(Box<Expr>),
     And(Box<Expr>, Box<Expr>),
@@ -24,7 +24,7 @@ pub(super) enum Expr {
     In(Value, Vec<Value>),
 }
 
-pub(super) enum Value {
+pub enum Value {
     Field(String),
     Number(i128),
     Text(String),
@@ -33,7 +33,7 @@ pub(super) enum Value {
     Lower(Box<Value>),
 }
 
-pub(super) enum Resolved {
+pub enum Resolved {
     Number(i128),
     Text(String),
     List(Vec<String>),
@@ -42,7 +42,7 @@ pub(super) enum Resolved {
 }
 
 impl Expr {
-    pub(super) fn eval_table(&self, row: &[(&str, RowValue)]) -> bool {
+    pub fn eval_table(&self, row: &[(&str, RowValue)]) -> bool {
         match self {
             Self::Not(inner) => !inner.eval_table(row),
             Self::And(left, right) => left.eval_table(row) && right.eval_table(row),
@@ -71,7 +71,7 @@ impl Expr {
                 .any(|right| compare(Cmp::Eq, &left.resolve_table(row), &right.resolve_table(row))),
         }
     }
-    pub(super) fn eval(&self, invocation: &InvocationSummary) -> Result<bool, String> {
+    pub fn eval(&self, invocation: &InvocationSummary) -> Result<bool, String> {
         match self {
             Expr::Not(inner) => Ok(!inner.eval(invocation)?),
             Expr::And(left, right) => Ok(left.eval(invocation)? && right.eval(invocation)?),
@@ -96,8 +96,8 @@ impl Expr {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn eval_record(&self, labels: &RecordLabels<'_>) -> Result<bool, String> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn eval_record(&self, labels: &RecordLabels<'_>) -> Result<bool, String> {
         match self {
             Expr::Not(inner) => Ok(!inner.eval_record(labels)?),
             Expr::And(left, right) => Ok(left.eval_record(labels)? && right.eval_record(labels)?),
@@ -123,7 +123,7 @@ impl Expr {
     }
 }
 
-fn in_list(
+pub fn in_list(
     left: Resolved,
     items: &[Value],
     mut resolve: impl FnMut(&Value) -> Result<Resolved, String>,
@@ -139,7 +139,7 @@ fn in_list(
     Ok(false)
 }
 
-fn is_present(value: &Resolved) -> bool {
+pub fn is_present(value: &Resolved) -> bool {
     match value {
         Resolved::Number(_) => true,
         Resolved::Bool(_) => true,
@@ -150,7 +150,7 @@ fn is_present(value: &Resolved) -> bool {
 }
 
 impl Value {
-    fn resolve_table(&self, row: &[(&str, RowValue)]) -> Resolved {
+    pub fn resolve_table(&self, row: &[(&str, RowValue)]) -> Resolved {
         match self {
             Self::Number(number) => Resolved::Number(*number),
             Self::Text(text) => Resolved::Text(text.clone()),
@@ -175,7 +175,7 @@ impl Value {
             },
         }
     }
-    fn resolve(&self, invocation: &InvocationSummary) -> Result<Resolved, String> {
+    pub fn resolve(&self, invocation: &InvocationSummary) -> Result<Resolved, String> {
         match self {
             Self::Lower(inner) => Ok(lower_value(inner.resolve(invocation)?)),
             Value::Number(number) => Ok(Resolved::Number(*number)),
@@ -202,8 +202,8 @@ impl Value {
         }
     }
 
-    #[cfg(test)]
-    fn resolve_record(&self, labels: &RecordLabels<'_>) -> Result<Resolved, String> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn resolve_record(&self, labels: &RecordLabels<'_>) -> Result<Resolved, String> {
         match self {
             Self::Lower(inner) => Ok(lower_value(inner.resolve_record(labels)?)),
             Value::Number(number) => Ok(Resolved::Number(*number)),
@@ -218,7 +218,7 @@ impl Value {
     }
 }
 
-fn lower_value(value: Resolved) -> Resolved {
+pub fn lower_value(value: Resolved) -> Resolved {
     match value {
         Resolved::Text(text) => Resolved::Text(text.to_lowercase()),
         Resolved::List(values) => {
@@ -228,8 +228,8 @@ fn lower_value(value: Resolved) -> Resolved {
     }
 }
 
-#[cfg(test)]
-fn record_field(labels: &RecordLabels<'_>, name: &str) -> Result<Resolved, String> {
+#[cfg(any(test, feature = "test-support"))]
+pub fn record_field(labels: &RecordLabels<'_>, name: &str) -> Result<Resolved, String> {
     match name.to_ascii_lowercase().as_str() {
         "tag" | "tags" | "entry.tag" => Ok(if labels.tags.is_empty() {
             Resolved::Missing
@@ -249,7 +249,7 @@ fn record_field(labels: &RecordLabels<'_>, name: &str) -> Result<Resolved, Strin
     }
 }
 
-pub(super) fn compare(op: Cmp, left: &Resolved, right: &Resolved) -> bool {
+pub fn compare(op: Cmp, left: &Resolved, right: &Resolved) -> bool {
     match (left, right) {
         (Resolved::Missing, _) | (_, Resolved::Missing) => false,
         (Resolved::Bool(left), Resolved::Text(right)) => match op {
@@ -310,7 +310,7 @@ pub(super) fn compare(op: Cmp, left: &Resolved, right: &Resolved) -> bool {
 }
 
 /// Captured path text for one argument name. A pointer in `args` is not a path.
-fn captured_path(event: &EventSummary, names: &[&str]) -> Option<String> {
+pub fn captured_path(event: &EventSummary, names: &[&str]) -> Option<String> {
     for name in names {
         if let Some(text) = event.fields.iter().find_map(|field| {
             let key = field.key.rsplit('.').next().unwrap_or(field.key.as_str());
@@ -330,7 +330,7 @@ fn captured_path(event: &EventSummary, names: &[&str]) -> Option<String> {
     None
 }
 
-fn path_names(alias: &str, argument: &str) -> Option<&'static [&'static str]> {
+pub fn path_names(alias: &str, argument: &str) -> Option<&'static [&'static str]> {
     match alias {
         "path" | "filename" | "pathname" => Some(&["path", "filename", "pathname"]),
         "old_path" | "oldname" => Some(&["old_path", "oldname"]),
@@ -344,7 +344,7 @@ fn path_names(alias: &str, argument: &str) -> Option<&'static [&'static str]> {
     }
 }
 
-pub(super) fn field(invocation: &InvocationSummary, name: &str) -> Result<Resolved, String> {
+pub fn field(invocation: &InvocationSummary, name: &str) -> Result<Resolved, String> {
     let key = name.to_ascii_lowercase();
     if antinomie_monitor_core::filter_members::descriptor(&key).is_some() {
         use antinomie_monitor_core::filter_members::MemberValue;

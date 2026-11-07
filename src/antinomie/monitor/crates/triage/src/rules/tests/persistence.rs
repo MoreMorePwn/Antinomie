@@ -2,11 +2,11 @@
 use super::support::*;
 
 /// A program that writes `path`.
-fn writes(path: &str) -> Calls {
+pub fn writes(path: &str) -> Calls {
     vec![open_write(1, path, 3), write(1, 3, b"x"), close(1, 3)]
 }
 
-fn rule_for(path: &str) -> Vec<String> {
+pub fn rule_for(path: &str) -> Vec<String> {
     let out = run(writes(path));
     rules_of(&out)
         .into_iter()
@@ -19,7 +19,7 @@ fn rule_for(path: &str) -> Vec<String> {
 }
 
 #[test]
-fn every_persistence_path_has_its_rule_and_tier() {
+pub fn every_persistence_path_has_its_rule_and_tier() {
     for (path, rule, expected) in [
         ("/etc/cron.d/job", "persistence.cron", "high"),
         ("/etc/crontab", "persistence.cron", "high"),
@@ -125,7 +125,7 @@ fn every_persistence_path_has_its_rule_and_tier() {
 }
 
 #[test]
-fn rules_use_the_destination_of_a_rename_or_link_and_ignore_reads() {
+pub fn rules_use_the_destination_of_a_rename_or_link_and_ignore_reads() {
     let out = run(vec![rename(1, "/tmp/job", "/etc/cron.d/job")]);
     assert_eq!(tier(&out, "persistence.cron").as_deref(), Some("high"));
     let moved_away = run(vec![rename(1, "/etc/cron.d/job", "/tmp/job")]);
@@ -137,7 +137,7 @@ fn rules_use_the_destination_of_a_rename_or_link_and_ignore_reads() {
 }
 
 #[test]
-fn ordinary_configuration_is_low_and_the_specific_rules_do_not_double_count() {
+pub fn ordinary_configuration_is_low_and_the_specific_rules_do_not_double_count() {
     let out = run(writes("/etc/resolv.conf"));
     assert_eq!(
         tier(&out, "persistence.config_write").as_deref(),
@@ -153,7 +153,7 @@ fn ordinary_configuration_is_low_and_the_specific_rules_do_not_double_count() {
 }
 
 #[test]
-fn a_package_manager_writing_a_persistence_path_is_one_tier_down() {
+pub fn a_package_manager_writing_a_persistence_path_is_one_tier_down() {
     let mut calls = vec![exec(1, "/usr/bin/dpkg", &["dpkg", "-i", "x.deb"])];
     calls.extend(writes("/etc/cron.d/pkg"));
     let out = run(calls);
@@ -168,7 +168,7 @@ fn a_package_manager_writing_a_persistence_path_is_one_tier_down() {
 }
 
 #[test]
-fn a_system_program_written_over_is_high_unless_it_is_cache() {
+pub fn a_system_program_written_over_is_high_unless_it_is_cache() {
     for path in [
         "/usr/bin/ssh",
         "/lib/x86_64-linux-gnu/libkeyutils.so.1",
@@ -191,7 +191,7 @@ fn a_system_program_written_over_is_high_unless_it_is_cache() {
 }
 
 #[test]
-fn loading_a_kernel_module_is_high_and_a_refused_load_medium() {
+pub fn loading_a_kernel_module_is_high_and_a_refused_load_medium() {
     let image = sys(1, 175, "init_module", [0, 100, 0, 0, 0, 0], 0);
     assert_eq!(
         tier(&run(vec![image]), "persistence.module").as_deref(),
@@ -217,7 +217,7 @@ fn loading_a_kernel_module_is_high_and_a_refused_load_medium() {
 }
 
 #[test]
-fn crontab_with_a_file_or_a_pipe_and_at_jobs_are_exec_persistence() {
+pub fn crontab_with_a_file_or_a_pipe_and_at_jobs_are_exec_persistence() {
     for argv in [vec!["crontab", "/tmp/c"], vec!["crontab", "-"]] {
         assert_eq!(
             tier(
@@ -250,7 +250,7 @@ fn crontab_with_a_file_or_a_pipe_and_at_jobs_are_exec_persistence() {
 }
 
 #[test]
-fn enabling_a_unit_or_script_the_run_wrote_is_persistence() {
+pub fn enabling_a_unit_or_script_the_run_wrote_is_persistence() {
     let unit = run(vec![
         open_write(1, "/etc/systemd/system/evil.service", 3),
         exec(
@@ -282,7 +282,7 @@ fn enabling_a_unit_or_script_the_run_wrote_is_persistence() {
 }
 
 #[test]
-fn account_tools_with_an_operand_are_persistence() {
+pub fn account_tools_with_an_operand_are_persistence() {
     for argv in [
         vec!["useradd", "-o", "-u", "0", "evil"],
         vec!["usermod", "-aG", "sudo", "evil"],
@@ -306,7 +306,7 @@ fn account_tools_with_an_operand_are_persistence() {
 }
 
 #[test]
-fn the_account_tool_itself_writing_passwd_is_one_tier_down() {
+pub fn the_account_tool_itself_writing_passwd_is_one_tier_down() {
     let mut calls = vec![exec(1, "/usr/sbin/useradd", &["useradd", "x"])];
     calls.extend(writes("/etc/passwd"));
     let out = run(calls);
@@ -320,7 +320,7 @@ fn the_account_tool_itself_writing_passwd_is_one_tier_down() {
 }
 
 #[test]
-fn opening_a_config_file_for_writing_without_writing_is_not_a_change() {
+pub fn opening_a_config_file_for_writing_without_writing_is_not_a_change() {
     // The Prometei case: O_WRONLY|O_CREAT|O_APPEND on /etc/hosts, then close.
     let out = run(vec![open_write(1, "/etc/hosts", 3), close(1, 3)]);
     assert!(

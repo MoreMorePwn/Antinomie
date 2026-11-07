@@ -3,7 +3,7 @@
 use super::file_shown::{self, Notes};
 use super::*;
 
-fn headers_of(tab: FileTab, stored: &[&'static str]) -> Vec<&'static str> {
+pub fn headers_of(tab: FileTab, stored: &[&'static str]) -> Vec<&'static str> {
     file_tabs::shown_columns(tab.slot())
         .iter()
         .map(|&index| stored[index])
@@ -11,7 +11,7 @@ fn headers_of(tab: FileTab, stored: &[&'static str]) -> Vec<&'static str> {
 }
 
 #[test]
-fn each_files_table_draws_these_columns() {
+pub fn each_files_table_draws_these_columns() {
     use file_category::EVENT_HEADERS;
     assert_eq!(
         headers_of(FileTab::Opened, EVENT_HEADERS),
@@ -83,7 +83,7 @@ fn each_files_table_draws_these_columns() {
 }
 
 #[test]
-fn a_task_is_its_name_and_two_bare_numbers() {
+pub fn a_task_is_its_name_and_two_bare_numbers() {
     assert_eq!(
         process_cells::task_label(412, 412, Some("/tmp/x/dropper")),
         "dropper (412 \u{b7} 412)"
@@ -98,7 +98,7 @@ fn a_task_is_its_name_and_two_bare_numbers() {
     );
 }
 
-fn stored_row(path: &str, time_ns: u64) -> Vec<Cell> {
+pub fn stored_row(path: &str, time_ns: u64) -> Vec<Cell> {
     let mut row: Vec<Cell> = file_category::EVENT_HEADERS
         .iter()
         .map(|header| cell(*header, tone::text(), false))
@@ -122,7 +122,7 @@ fn stored_row(path: &str, time_ns: u64) -> Vec<Cell> {
 }
 
 #[test]
-fn a_path_is_only_the_path_and_its_tags_are_in_the_next_column() {
+pub fn a_path_is_only_the_path_and_its_tags_are_in_the_next_column() {
     let mut flagged = file_shown::Flags::new();
     let mut flag = |rule| file_shown::flag(&mut flagged, "/tmp/.x", rules::Tier::Medium, rule);
     flag("evasion.hidden_artifact");
@@ -196,7 +196,7 @@ fn a_path_is_only_the_path_and_its_tags_are_in_the_next_column() {
 }
 
 #[test]
-fn a_digest_is_cut_with_the_whole_one_on_hover() {
+pub fn a_digest_is_cut_with_the_whole_one_on_hover() {
     assert_eq!(
         file_shown::short_hash(&"ab".repeat(32)),
         "abababababab\u{2026}"
@@ -207,7 +207,7 @@ fn a_digest_is_cut_with_the_whole_one_on_hover() {
 }
 
 #[test]
-fn locations_have_a_short_badge_word() {
+pub fn locations_have_a_short_badge_word() {
     use file_location::{classify, Location};
     let tag = |path: &str| classify(path, &[]).first().map(|l| l.tag());
     assert_eq!(tag("/home/user/note"), Some("home"));

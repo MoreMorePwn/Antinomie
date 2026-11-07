@@ -5,19 +5,19 @@ use std::collections::{hash_map::DefaultHasher, BTreeMap};
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct Spec {
+pub struct Spec {
     pub column: usize,
     pub descending: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-enum Atom {
+pub enum Atom {
     Number(i128),
     Text(String),
     Missing,
 }
 
-fn value(value: &RowValue) -> Atom {
+pub fn value(value: &RowValue) -> Atom {
     match value {
         RowValue::Number(number) => Atom::Number(*number),
         RowValue::Bool(value) => Atom::Number(i128::from(*value)),
@@ -27,7 +27,7 @@ fn value(value: &RowValue) -> Atom {
     }
 }
 
-fn atom(header: &str, column: usize, row: &[Cell]) -> Atom {
+pub fn atom(header: &str, column: usize, row: &[Cell]) -> Atom {
     let fields = row
         .first()
         .map(|cell| cell.values.as_slice())
@@ -89,7 +89,7 @@ fn atom(header: &str, column: usize, row: &[Cell]) -> Atom {
     )
 }
 
-fn compare(a: &Atom, b: &Atom, descending: bool) -> std::cmp::Ordering {
+pub fn compare(a: &Atom, b: &Atom, descending: bool) -> std::cmp::Ordering {
     match (a, b) {
         (Atom::Missing, Atom::Missing) => std::cmp::Ordering::Equal,
         (Atom::Missing, _) => std::cmp::Ordering::Greater,
@@ -99,110 +99,7 @@ fn compare(a: &Atom, b: &Atom, descending: bool) -> std::cmp::Ordering {
     }
 }
 
-pub(crate) fn header(ui: &mut egui::Ui, table: &str, column: usize, title: &str) {
-    crate::query::note_head(ui, title);
-    crate::widgets::fit_table::head_bg(ui);
-    let id = egui::Id::new(("triage-sort", table));
-    let current = ui.ctx().data(|data| data.get_temp::<Spec>(id));
-    let arrow = current
-        .filter(|sort| sort.column == column)
-        .map_or("", |sort| if sort.descending { " ▼" } else { " ▲" });
-    let response = ui.add(
-        egui::Button::new(
-            RichText::new(format!("{title}{arrow}"))
-                .strong()
-                .color(theme::muted()),
-        )
-        .frame(false),
-    );
-    if response.clicked() {
-        // Ascending, then descending, then off: the recorded order again.
-        let request = match current.filter(|sort| sort.column == column) {
-            Some(sort) if sort.descending => None,
-            Some(_) => Some(Spec {
-                column,
-                descending: true,
-            }),
-            None => Some(Spec {
-                column,
-                descending: false,
-            }),
-        };
-        ui.ctx().data_mut(|data| {
-            match request {
-                Some(next) => {
-                    data.insert_temp(id, next);
-                }
-                None => {
-                    data.remove::<Spec>(id);
-                }
-            }
-            data.insert_temp(egui::Id::new(("triage-sort-request", table)), request);
-        });
-    }
-    response.context_menu(|ui| {
-        if ui.button("Recorded order").clicked() {
-            ui.ctx().data_mut(|data| {
-                data.remove::<Spec>(id);
-                data.insert_temp(egui::Id::new(("triage-sort-request", table)), None::<Spec>);
-            });
-            ui.close();
-        }
-    });
-}
-
-/// The order a table's header clicks chose, if any.
-pub(crate) fn current(ctx: &egui::Context, table: &str) -> Option<Spec> {
-    ctx.data(|data| data.get_temp::<Spec>(egui::Id::new(("triage-sort", table))))
-}
-
-pub(super) fn take_request(ctx: &egui::Context, table: &str) -> Option<Option<Spec>> {
-    ctx.data_mut(|data| data.remove_temp(egui::Id::new(("triage-sort-request", table))))
-}
-
-#[derive(Clone)]
-struct Order {
-    spec: Spec,
-    hash: u64,
-    indices: Arc<Vec<usize>>,
-}
-
-pub(super) fn order<'a>(
-    ctx: &egui::Context,
-    table: &str,
-    headers: &[&str],
-    rows: impl Iterator<Item = &'a [Cell]>,
-) -> Option<Arc<Vec<usize>>> {
-    let spec = ctx.data(|data| data.get_temp::<Spec>(egui::Id::new(("triage-sort", table))))?;
-    let header = headers.get(spec.column)?;
-    let keys: Vec<_> = rows.map(|row| atom(header, spec.column, row)).collect();
-    let mut hash = DefaultHasher::new();
-    keys.hash(&mut hash);
-    let hash = hash.finish();
-    let id = egui::Id::new(("triage-sort-order", table));
-    if let Some(cached) = ctx
-        .data(|data| data.get_temp::<Order>(id))
-        .filter(|cached| cached.spec == spec && cached.hash == hash)
-    {
-        return Some(cached.indices);
-    }
-    let mut indices: Vec<_> = (0..keys.len()).collect();
-    indices.sort_by(|a, b| compare(&keys[*a], &keys[*b], spec.descending));
-    let indices = Arc::new(indices);
-    ctx.data_mut(|data| {
-        data.insert_temp(
-            id,
-            Order {
-                spec,
-                hash,
-                indices: Arc::clone(&indices),
-            },
-        )
-    });
-    Some(indices)
-}
-
-pub(super) trait Row: Sized {
+pub trait Row: Sized {
     fn cells(&self) -> Vec<Cell>;
     fn from_cells(cells: Vec<Cell>) -> Result<Self, String>;
 }
@@ -247,23 +144,23 @@ impl Row for Finding {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-struct StoredCell {
-    text: String,
-    tone: Tone,
-    mono: bool,
-    values: Vec<(usize, RowValue)>,
+pub struct StoredCell {
+    pub text: String,
+    pub tone: Tone,
+    pub mono: bool,
+    pub values: Vec<(usize, RowValue)>,
 }
 
-struct Spool {
-    connection: rusqlite::Connection,
+pub struct Spool {
+    pub connection: rusqlite::Connection,
     // Connection drops before this directory and its temporary database.
-    _directory: PacketSpool,
-    names: Vec<&'static str>,
-    lookup: BTreeMap<&'static str, usize>,
+    pub _directory: PacketSpool,
+    pub names: Vec<&'static str>,
+    pub lookup: BTreeMap<&'static str, usize>,
 }
 
 impl Spool {
-    fn new(cancel: Arc<AtomicBool>) -> Result<Self, String> {
+    pub fn new(cancel: Arc<AtomicBool>) -> Result<Self, String> {
         let directory = PacketSpool::new()?;
         let mut connection = rusqlite::Connection::open(directory.directory.join("sort.sqlite"))
             .map_err(|error| error.to_string())?;
@@ -278,7 +175,7 @@ impl Spool {
             lookup: BTreeMap::new(),
         })
     }
-    fn push(&mut self, key: Atom, cells: Vec<Cell>) -> Result<(), String> {
+    pub fn push(&mut self, key: Atom, cells: Vec<Cell>) -> Result<(), String> {
         let stored: Vec<_> = cells
             .into_iter()
             .map(|cell| {
@@ -323,7 +220,7 @@ impl Spool {
             .map_err(|error| format!("triage sort spool (256 MiB limit): {error}"))?;
         Ok(())
     }
-    fn page<T: Row>(
+    pub fn page<T: Row>(
         &self,
         offset: usize,
         limit: usize,
@@ -381,16 +278,16 @@ impl Spool {
 }
 
 /// One query table; default order retains the original cheap bounded page.
-pub(super) struct Page<T> {
-    rows: Vec<T>,
-    spool: Option<Spool>,
-    sort: Option<Spec>,
-    index: usize,
-    offset: usize,
-    count: usize,
+pub struct Page<T> {
+    pub rows: Vec<T>,
+    pub spool: Option<Spool>,
+    pub sort: Option<Spec>,
+    pub index: usize,
+    pub offset: usize,
+    pub count: usize,
     /// Rows the page keeps.
-    limit: usize,
-    cancel: Arc<AtomicBool>,
+    pub limit: usize,
+    pub cancel: Arc<AtomicBool>,
 }
 
 impl<T: Row> Page<T> {
@@ -466,7 +363,7 @@ impl<T: Row> Page<T> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     #[test]
     fn sorts_before_pagination_and_retains_numeric_values_missing_last_and_identity() {
@@ -518,7 +415,7 @@ mod tests {
         });
         let cancel = Arc::new(AtomicBool::new(false));
         let mut page = Page::<Finding>::new(&request, 0, &cancel);
-        let mut call = super::super::tests::call(7, 9, "mmap", 0);
+        let mut call = crate::tests::call(7, 9, "mmap", 0);
         call.entry.as_mut().unwrap().args = Some([0, 4096, 7, 0, 0, 0]);
         call.call_id = u64::MAX;
         call.stream_id = 99;

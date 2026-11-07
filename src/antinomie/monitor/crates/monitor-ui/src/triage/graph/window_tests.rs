@@ -557,7 +557,7 @@ fn a_burst_at_the_end_of_a_long_run_opens_fitted_to_the_burst_and_run_shows_it_a
     assert!(index.geometry().width(0) < 5_000_000.0);
     // Run shows the whole minute, and the findings are a sliver at its end.
     let state = State {
-        window: Some(view::fitted(index.run_extent())),
+        window: Some(axis::fitted(index.run_extent())),
         ..State::default()
     };
     let whole = Layout::new(rect(1100.0, 640.0), &state, &index);

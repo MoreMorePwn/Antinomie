@@ -14,6 +14,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 rusqlite = { version = "0.41.0", features = ["hooks"] }
 rustix = { version = "1", features = ["fs", "process", "time"] }
 
+[features]
+# The fixtures the GUI crate's tests share with this crate's (`tests`).
+test-support = []
+
 [lints.clippy]
 # Moved from the GUI crate as written: edition 2024 asks for let chains, the
 # code is still formatted (see rustfmt.toml) the 2021 way.

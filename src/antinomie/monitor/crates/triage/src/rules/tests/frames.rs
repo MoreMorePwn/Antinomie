@@ -3,9 +3,9 @@
 use super::super::*;
 use super::support::*;
 
-type Values = Vec<(&'static str, RowValue)>;
+pub type Values = Vec<(&'static str, RowValue)>;
 
-fn base(frame: u64, time_us: u64) -> Values {
+pub fn base(frame: u64, time_us: u64) -> Values {
     vec![
         (
             "capture.path",
@@ -16,7 +16,7 @@ fn base(frame: u64, time_us: u64) -> Values {
     ]
 }
 
-fn dns(frame: u64, time_us: u64, name: &str, rcode: i128, answers: &[&str], kind: &str) -> Values {
+pub fn dns(frame: u64, time_us: u64, name: &str, rcode: i128, answers: &[&str], kind: &str) -> Values {
     let mut values = base(frame, time_us);
     values.extend([
         ("dns.name", RowValue::Text(name.into())),
@@ -30,7 +30,7 @@ fn dns(frame: u64, time_us: u64, name: &str, rcode: i128, answers: &[&str], kind
     values
 }
 
-fn http(frame: u64, time_us: u64, host: &str, uri: &str) -> Values {
+pub fn http(frame: u64, time_us: u64, host: &str, uri: &str) -> Values {
     let mut values = base(frame, time_us);
     values.extend([
         ("http.host", RowValue::Text(host.into())),
@@ -39,7 +39,7 @@ fn http(frame: u64, time_us: u64, host: &str, uri: &str) -> Values {
     values
 }
 
-fn session(
+pub fn session(
     frame: u64,
     time_us: u64,
     protocol: &str,
@@ -57,13 +57,13 @@ fn session(
     values
 }
 
-struct Capture {
-    engine: Engine,
-    files: FdState,
+pub struct Capture {
+    pub engine: Engine,
+    pub files: FdState,
 }
 
 impl Capture {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             engine: Engine::new(Options {
                 show_info: true,
@@ -74,7 +74,7 @@ impl Capture {
         }
     }
 
-    fn calls(mut self, calls: Calls) -> Self {
+    pub fn calls(mut self, calls: Calls) -> Self {
         for (at, mut call) in calls.into_iter().enumerate() {
             call.call_id = at as u64 + 1;
             self.engine.observe(&call, &self.files, None, false);
@@ -82,16 +82,16 @@ impl Capture {
         self
     }
 
-    fn frame(&mut self, kind: FrameKind, values: &Values, destination: &str, port: &str) {
+    pub fn frame(&mut self, kind: FrameKind, values: &Values, destination: &str, port: &str) {
         self.engine.frame(kind, values, destination, port, None);
     }
 
-    fn finish(self) -> Output {
+    pub fn finish(self) -> Output {
         self.engine.finish(&self.files)
     }
 }
 
-const NAMES: [&str; 12] = [
+pub const NAMES: [&str; 12] = [
     "xk3j9q2mzp8w.example",
     "q8w7e6r5t4y3.example",
     "zz91hd7fk20a.example",
@@ -107,7 +107,7 @@ const NAMES: [&str; 12] = [
 ];
 
 #[test]
-fn a_burst_of_failed_random_names_is_dga_only_when_a_resolver_answers_something() {
+pub fn a_burst_of_failed_random_names_is_dga_only_when_a_resolver_answers_something() {
     let burst = |answered: bool| {
         let mut capture = Capture::new();
         for (at, name) in NAMES.iter().enumerate() {
@@ -175,7 +175,7 @@ fn a_burst_of_failed_random_names_is_dga_only_when_a_resolver_answers_something(
 }
 
 #[test]
-fn a_task_that_talked_to_the_name_server_is_blamed_with_its_tier_kept() {
+pub fn a_task_that_talked_to_the_name_server_is_blamed_with_its_tier_kept() {
     let mut capture =
         Capture::new().calls(vec![socket(7, 2, 2, 3), connect(7, 3, [10, 0, 2, 3], 53)]);
     for (at, name) in NAMES.iter().enumerate() {
@@ -213,7 +213,7 @@ fn a_task_that_talked_to_the_name_server_is_blamed_with_its_tier_kept() {
 }
 
 #[test]
-fn long_labels_and_many_text_queries_are_a_tunnel() {
+pub fn long_labels_and_many_text_queries_are_a_tunnel() {
     let mut capture = Capture::new();
     let long = format!("{}.tunnel.example", "a".repeat(52));
     for at in 0..6 {
@@ -252,7 +252,7 @@ fn long_labels_and_many_text_queries_are_a_tunnel() {
 }
 
 #[test]
-fn paste_chat_and_file_drop_services_hidden_services_and_the_metadata_service() {
+pub fn paste_chat_and_file_drop_services_hidden_services_and_the_metadata_service() {
     let mut capture = Capture::new();
     capture.frame(
         FrameKind::Dns,
@@ -331,7 +331,7 @@ fn paste_chat_and_file_drop_services_hidden_services_and_the_metadata_service() 
 }
 
 #[test]
-fn an_address_in_the_host_header_and_a_known_protocol_on_an_odd_port() {
+pub fn an_address_in_the_host_header_and_a_known_protocol_on_an_odd_port() {
     let mut capture = Capture::new();
     capture.frame(
         FrameKind::Http,
@@ -385,7 +385,7 @@ fn an_address_in_the_host_header_and_a_known_protocol_on_an_odd_port() {
 }
 
 #[test]
-fn regular_requests_to_one_host_are_a_beacon_and_irregular_ones_are_not() {
+pub fn regular_requests_to_one_host_are_a_beacon_and_irregular_ones_are_not() {
     let mut steady = Capture::new();
     for at in 0..10u64 {
         steady.frame(
@@ -415,7 +415,7 @@ fn regular_requests_to_one_host_are_a_beacon_and_irregular_ones_are_not() {
 }
 
 #[test]
-fn frames_of_the_base_itself_are_skipped_and_counted() {
+pub fn frames_of_the_base_itself_are_skipped_and_counted() {
     let mut capture = Capture::new();
     capture.frame(
         FrameKind::Dns,
@@ -459,7 +459,7 @@ fn frames_of_the_base_itself_are_skipped_and_counted() {
 }
 
 #[test]
-fn a_packet_row_opens_its_frame_and_never_a_call() {
+pub fn a_packet_row_opens_its_frame_and_never_a_call() {
     let mut capture = Capture::new();
     capture.frame(
         FrameKind::Dns,

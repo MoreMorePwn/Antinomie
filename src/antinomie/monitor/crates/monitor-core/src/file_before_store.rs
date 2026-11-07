@@ -180,21 +180,36 @@ pub struct Job {
     pub boot_dir: PathBuf,
 }
 
-/// The flag that makes the app run the copy for one boot and exit, like the
-/// other worker programs (`--disk-reader`): the trace is read by the UI
-/// crate's file index, so the copy is its work, in a process of its own.
+/// The flag that makes a program run the copy for one boot and exit, like the
+/// other worker programs (`--disk-reader`): the trace is read by the Triage
+/// scan, so the copy is its work, in a process of its own. Every program that
+/// runs VMs serves it (see `antinomie_triage::copier::host_copier`).
 pub const COPY_FLAG: &str = "--copy-earlier-bytes";
 /// Longest the copy of one boot may take.
 const COPY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
-/// The program serving [`COPY_FLAG`]: `ANTINOMIE_COPIER` (test harnesses), or
-/// this program when it is the app.
+/// The program that serves [`COPY_FLAG`] for this process, registered at start
+/// by [`register_copier_host`].
+static COPIER_HOST: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Name this program as the one that serves [`COPY_FLAG`]: the GUI, the CLI
+/// or any other binary that records VM runs calls it once at start, after it
+/// has served the worker roles. Its role is chosen by the argument, not by the
+/// program's file name.
+pub fn register_copier_host() {
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = COPIER_HOST.set(exe);
+    }
+}
+
+/// The program serving [`COPY_FLAG`]: `ANTINOMIE_COPIER` (test harnesses and
+/// installs where another program serves it), else the program that
+/// registered itself.
 fn copier_executable() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("ANTINOMIE_COPIER") {
         return Some(path.into());
     }
-    let exe = std::env::current_exe().ok()?;
-    (exe.file_name()? == "antinomie-monitor").then_some(exe)
+    COPIER_HOST.get().cloned()
 }
 
 /// Serve [`COPY_FLAG`] in this process, if it was asked for: `copy` reads the

@@ -13,7 +13,6 @@ pub mod axis;
 pub mod filter;
 pub mod index;
 pub mod lanes;
-pub mod mermaid;
 pub mod notify;
 pub mod phases;
 
@@ -36,11 +35,11 @@ pub struct GraphScan {
 
 /// Feeds the rows of one scan into the index and the overview.
 pub struct Collector {
-    index: Builder,
-    overview: Builder,
-    high: notify::HighRules,
+    pub index: Builder,
+    pub overview: Builder,
+    pub high: notify::HighRules,
     /// Which rows the overview takes: the default view with the chips' INFO choice.
-    view: rules::View,
+    pub view: rules::View,
 }
 
 impl Collector {

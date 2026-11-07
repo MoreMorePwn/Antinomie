@@ -6,15 +6,15 @@ use super::super::{
     HEADERS, SHOWN,
 };
 use super::support::*;
-use crate::triage::files;
+use crate::files;
 
 /// A program that writes `path` once.
-fn writes(path: &str) -> Calls {
+pub fn writes(path: &str) -> Calls {
     vec![open_write(1, path, 3), write(1, 3, b"x"), close(1, 3)]
 }
 
 #[test]
-fn the_table_lays_out_eight_columns_and_keeps_the_rest_in_the_row() {
+pub fn the_table_lays_out_eight_columns_and_keeps_the_rest_in_the_row() {
     let shown: Vec<&str> = SHOWN.iter().map(|column| HEADERS[*column]).collect();
     assert_eq!(
         shown,
@@ -45,7 +45,7 @@ fn the_table_lays_out_eight_columns_and_keeps_the_rest_in_the_row() {
 }
 
 #[test]
-fn a_row_reads_in_plain_words() {
+pub fn a_row_reads_in_plain_words() {
     let out = run(writes("/etc/cron.d/job"));
     let row = rows(&out, "persistence.cron")[0];
     assert_eq!(row.cells[COL_TIER].text, "high");
@@ -68,7 +68,7 @@ fn a_row_reads_in_plain_words() {
 }
 
 #[test]
-fn the_behaviour_cell_names_the_rule_and_its_version_on_hover() {
+pub fn the_behaviour_cell_names_the_rule_and_its_version_on_hover() {
     let out = run(writes("/etc/cron.d/job"));
     let row = rows(&out, "persistence.cron")[0];
     let tip = row.cells[COL_BEHAVIOUR]
@@ -83,7 +83,7 @@ fn the_behaviour_cell_names_the_rule_and_its_version_on_hover() {
 }
 
 #[test]
-fn a_tier_chip_explains_the_tier_and_a_limited_row_says_why() {
+pub fn a_tier_chip_explains_the_tier_and_a_limited_row_says_why() {
     let out = run(writes("/etc/cron.d/job"));
     let row = rows(&out, "persistence.cron")[0];
     let tier = &row.cells[COL_TIER];
@@ -102,7 +102,7 @@ fn a_tier_chip_explains_the_tier_and_a_limited_row_says_why() {
 }
 
 #[test]
-fn a_failed_call_is_greyed_and_says_all_failed_and_why_the_tier_dropped() {
+pub fn a_failed_call_is_greyed_and_says_all_failed_and_why_the_tier_dropped() {
     let out = run(vec![open(1, "/etc/ld.so.preload", 1, -13)]);
     let row = rows(&out, "injection.ld_so_preload")[0];
     assert_eq!(row.cells[COL_RESULT].text, "all failed");
@@ -122,7 +122,7 @@ fn a_failed_call_is_greyed_and_says_all_failed_and_why_the_tier_dropped() {
 }
 
 #[test]
-fn repeats_fold_into_one_row_that_keeps_each_call_as_evidence() {
+pub fn repeats_fold_into_one_row_that_keeps_each_call_as_evidence() {
     let mut calls = Vec::new();
     for fd in 3..6 {
         calls.push(open_write(1, "/etc/cron.d/job", fd));
@@ -148,7 +148,7 @@ fn repeats_fold_into_one_row_that_keeps_each_call_as_evidence() {
 }
 
 #[test]
-fn rows_come_worst_tier_first_then_by_time() {
+pub fn rows_come_worst_tier_first_then_by_time() {
     let out = run(vec![
         exec(1, "/bin/bash", &["bash"]),
         open_write(1, "/etc/cron.d/job", 3),
@@ -175,7 +175,7 @@ fn rows_come_worst_tier_first_then_by_time() {
 }
 
 #[test]
-fn the_when_column_is_a_placeholder_until_the_run_start_is_known() {
+pub fn the_when_column_is_a_placeholder_until_the_run_start_is_known() {
     let out = run(writes("/etc/cron.d/job"));
     let row = rows(&out, "persistence.cron")[0];
     assert!(row.cells[COL_WHEN].text.starts_with('+'));

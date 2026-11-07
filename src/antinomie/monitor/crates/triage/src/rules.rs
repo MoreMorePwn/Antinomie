@@ -8,30 +8,30 @@
 //! observed, not that a sample is malicious.
 use super::*;
 
-mod calls;
-mod ctx;
-mod engine;
-mod evasion;
-mod exec;
-mod frames;
-pub(super) mod ioc;
-mod network;
-mod noise;
-mod paths;
-mod present;
-mod probes;
-mod process;
-mod rows;
-mod state;
-mod table;
-mod texts;
-mod tools;
+pub mod calls;
+pub mod ctx;
+pub mod engine;
+pub mod evasion;
+pub mod exec;
+pub mod frames;
+pub mod ioc;
+pub mod network;
+pub mod noise;
+pub mod paths;
+pub mod present;
+pub mod probes;
+pub mod process;
+pub mod rows;
+pub mod state;
+pub mod table;
+pub mod texts;
+pub mod tools;
 
-#[cfg(test)]
-pub(in crate::triage) mod tests;
+#[cfg(any(test, feature = "test-support"))]
+pub mod tests;
 
 /// Every hit the rules find in one call.
-fn collect_hits(cx: &ctx::Ctx, st: &mut state::State) -> Vec<Hit> {
+pub fn collect_hits(cx: &ctx::Ctx, st: &mut state::State) -> Vec<Hit> {
     let mut hits = Vec::new();
     paths::rules(cx, st, &mut hits);
     if !cx.via_async {
@@ -43,23 +43,23 @@ fn collect_hits(cx: &ctx::Ctx, st: &mut state::State) -> Vec<Hit> {
     hits
 }
 
-pub(super) use calls::watched as watched_calls;
-pub(super) use engine::{Engine, InfoMark, Options, Output, PackedImage};
-pub(super) use frames::{FrameKind, SUPPRESSION_VERSION};
-pub(in crate::triage) use present::{offset, when_text};
-#[cfg(test)]
-pub(super) use rows::COL_WHEN;
-pub(super) use rows::{
+pub use calls::watched as watched_calls;
+pub use engine::{Engine, InfoMark, Options, Output, PackedImage};
+pub use frames::{FrameKind, SUPPRESSION_VERSION};
+pub use present::{offset, when_text};
+#[cfg(any(test, feature = "test-support"))]
+pub use rows::COL_WHEN;
+pub use rows::{
     stamp, view_keeps, View, COL_ATTACK, COL_BEHAVIOUR, COL_COUNT, COL_PROCESS, COL_RESULT,
     COL_SUMMARY, COL_TARGET, COL_TIER, COL_TIME, HEADERS, LIMITED, SHOWN, TIP,
 };
-pub(super) use table::{spec, Spec};
-pub(in crate::triage) use texts::{rule_description, rule_title};
+pub use table::{spec, Spec};
+pub use texts::{rule_description, rule_title};
 
 /// How unusual a behaviour is for ordinary software. The weight is what the
 /// severity curve of the activity graph adds up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(super) enum Tier {
+pub enum Tier {
     Info,
     Low,
     Medium,
@@ -67,10 +67,10 @@ pub(super) enum Tier {
 }
 
 impl Tier {
-    pub(super) const ALL: [Tier; 4] = [Tier::High, Tier::Medium, Tier::Low, Tier::Info];
+    pub const ALL: [Tier; 4] = [Tier::High, Tier::Medium, Tier::Low, Tier::Info];
 
     /// The value of `finding.tier` and `finding.severity` in a filter.
-    pub(super) fn tag(self) -> &'static str {
+    pub fn tag(self) -> &'static str {
         match self {
             Self::Info => "info",
             Self::Low => "low",
@@ -80,12 +80,12 @@ impl Tier {
     }
 
     /// The tier a `finding.tier` value names.
-    pub(super) fn from_tag(tag: &str) -> Option<Self> {
+    pub fn from_tag(tag: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|tier| tier.tag() == tag)
     }
 
     /// The chip tone of the tier, matching the tier colours of the table.
-    pub(super) fn tone(self) -> Tone {
+    pub fn tone(self) -> Tone {
         match self {
             Self::High => Tone::Bad,
             Self::Medium => Tone::Warn,
@@ -95,7 +95,7 @@ impl Tier {
     }
 
     /// What the tier means, in the words every place that shows a tier uses.
-    pub(super) fn meaning(self) -> &'static str {
+    pub fn meaning(self) -> &'static str {
         match self {
             Self::High => "Something ordinary software essentially never does and that directly gives control, persistence or privilege. Look at these first.",
             Self::Medium => "Often malicious but with legitimate uses; needs context.",
@@ -105,7 +105,7 @@ impl Tier {
     }
 
     /// The name on a chip: "High".
-    pub(super) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::High => "High",
             Self::Medium => "Medium",
@@ -115,7 +115,7 @@ impl Tier {
     }
 
     /// The letter on a table chip: H, M, L or I.
-    pub(super) fn letter(self) -> &'static str {
+    pub fn letter(self) -> &'static str {
         match self {
             Self::High => "H",
             Self::Medium => "M",
@@ -125,7 +125,7 @@ impl Tier {
     }
 
     /// One tier lower; INFO stays INFO.
-    pub(super) fn down(self) -> Self {
+    pub fn down(self) -> Self {
         match self {
             Self::High => Self::Medium,
             Self::Medium => Self::Low,
@@ -133,7 +133,7 @@ impl Tier {
         }
     }
 
-    pub(super) fn index(self) -> usize {
+    pub fn index(self) -> usize {
         match self {
             Self::High => 0,
             Self::Medium => 1,
@@ -144,12 +144,12 @@ impl Tier {
 }
 
 /// What lowers a tier, for the legend, the tier chips and Details.
-pub(super) const CONTEXT_NOTE: &str = "Context lowers a tier by one: the program is on the rule's allow-list, every call failed, the process is outside the run's tree, or it was seen only on the network.";
+pub const CONTEXT_NOTE: &str = "Context lowers a tier by one: the program is on the rule's allow-list, every call failed, the process is outside the run's tree, or it was seen only on the network.";
 
 /// What a behaviour is for. The twelve ATT&CK-shaped groups of the brief, plus
 /// Exfiltration, which has nowhere else to go.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(super) enum Category {
+pub enum Category {
     Execution,
     Persistence,
     Privilege,
@@ -167,7 +167,7 @@ pub(super) enum Category {
 }
 
 impl Category {
-    pub(super) const ALL: [Category; 13] = [
+    pub const ALL: [Category; 13] = [
         Self::Execution,
         Self::Persistence,
         Self::Privilege,
@@ -184,7 +184,7 @@ impl Category {
     ];
 
     /// The place in [`Category::ALL`]: the chip's bit and the graph's heat row.
-    pub(super) fn index(self) -> usize {
+    pub fn index(self) -> usize {
         Self::ALL
             .iter()
             .position(|other| *other == self)
@@ -192,7 +192,7 @@ impl Category {
     }
 
     /// The value of `finding.category` in a filter.
-    pub(super) fn tag(self) -> &'static str {
+    pub fn tag(self) -> &'static str {
         match self {
             Self::Execution => "execution",
             Self::Persistence => "persistence",
@@ -210,7 +210,7 @@ impl Category {
         }
     }
 
-    pub(super) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Execution => "Execution",
             Self::Persistence => "Persistence",
@@ -229,7 +229,7 @@ impl Category {
     }
 
     /// The short chip text.
-    pub(super) fn chip(self) -> &'static str {
+    pub fn chip(self) -> &'static str {
         match self {
             Self::Privilege => "Privilege",
             Self::Evasion => "Evasion",
@@ -242,7 +242,7 @@ impl Category {
 }
 
 /// One match of a rule, before the pipeline has judged it.
-pub(super) struct Hit {
+pub struct Hit {
     pub rule: &'static str,
     /// What rows of this rule are folded by: a path, an endpoint, a target.
     pub object: String,
@@ -256,7 +256,7 @@ pub(super) struct Hit {
 }
 
 impl Hit {
-    pub(super) fn new(rule: &'static str, object: impl Into<String>, summary: String) -> Self {
+    pub fn new(rule: &'static str, object: impl Into<String>, summary: String) -> Self {
         Self {
             rule,
             object: object.into(),
@@ -267,17 +267,17 @@ impl Hit {
         }
     }
 
-    pub(super) fn tier(mut self, tier: Tier) -> Self {
+    pub fn tier(mut self, tier: Tier) -> Self {
         self.tier = Some(tier);
         self
     }
 
-    pub(super) fn attack(mut self, attack: &'static [&'static str]) -> Self {
+    pub fn attack(mut self, attack: &'static [&'static str]) -> Self {
         self.attack = Some(attack);
         self
     }
 
-    pub(super) fn detail(mut self, line: impl Into<String>) -> Self {
+    pub fn detail(mut self, line: impl Into<String>) -> Self {
         self.detail.push(line.into());
         self
     }

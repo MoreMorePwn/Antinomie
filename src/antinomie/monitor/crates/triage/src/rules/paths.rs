@@ -7,10 +7,10 @@ use super::ctx::{base, home_relative, proc_self, under, Ctx, Touch};
 use super::state::State;
 use super::Hit;
 
-type Matcher = fn(&str) -> bool;
+pub type Matcher = fn(&str) -> bool;
 
 /// Rules for a file that was created, written, cut, or given a name.
-const CHANGES: &[(&str, Matcher)] = &[
+pub const CHANGES: &[(&str, Matcher)] = &[
     ("persistence.at_job", |p| {
         under(
             p,
@@ -229,7 +229,7 @@ const CHANGES: &[(&str, Matcher)] = &[
 ];
 
 /// Rules for a file that was opened or read.
-const READS: &[(&str, Matcher)] = &[
+pub const READS: &[(&str, Matcher)] = &[
     ("credential.shadow_read", |p| {
         matches!(
             p,
@@ -323,7 +323,7 @@ const READS: &[(&str, Matcher)] = &[
 ];
 
 /// Paths of security agents and policies, probed even when they are absent.
-const SECURITY_PATHS: &[&str] = &[
+pub const SECURITY_PATHS: &[&str] = &[
     "/etc/aliyun",
     "/usr/local/aegis",
     "/usr/local/qcloud",
@@ -343,7 +343,7 @@ const SECURITY_PATHS: &[&str] = &[
     "/opt/Tanium",
 ];
 /// Operating-system hardening that ordinary tools also look at.
-const HARDENING_PATHS: &[&str] = &[
+pub const HARDENING_PATHS: &[&str] = &[
     "/sys/fs/selinux",
     "/etc/selinux",
     "/etc/apparmor.d",
@@ -351,7 +351,7 @@ const HARDENING_PATHS: &[&str] = &[
     "/etc/audit",
 ];
 
-fn is_block_device(path: &str) -> bool {
+pub fn is_block_device(path: &str) -> bool {
     let Some(name) = path.strip_prefix("/dev/") else {
         return false;
     };
@@ -362,7 +362,7 @@ fn is_block_device(path: &str) -> bool {
     .any(|prefix| name.starts_with(prefix) && name.len() > prefix.len() && !name.contains('/'))
 }
 
-pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     if cx.touches().is_empty() {
         other_calls(cx, st, out);
         return;
@@ -398,7 +398,7 @@ pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
 }
 
 /// Calls that name no file but still act on one through a descriptor.
-fn other_calls(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn other_calls(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     match cx.name {
         // sendfile(out, in), copy_file_range(in, _, out, ...), splice(in, _, out, ...)
         "sendfile" | "copy_file_range" | "splice" => {
@@ -456,7 +456,7 @@ fn other_calls(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     let _ = st;
 }
 
-fn mount(cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn mount(cx: &Ctx, out: &mut Vec<Hit>) {
     let target = cx.text(1).unwrap_or_default();
     let bind = cx.args[3] & 4096 != 0;
     let hides = bind
@@ -478,7 +478,7 @@ fn mount(cx: &Ctx, out: &mut Vec<Hit>) {
 }
 
 /// `ioctl(FS_IOC_SETFLAGS)`: the flags word is the pointee of the third argument.
-fn attributes(cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn attributes(cx: &Ctx, out: &mut Vec<Hit>) {
     let path = cx.fd_path(cx.args[0]).map(str::to_owned);
     let flags = cx
         .bytes(2, "")
@@ -511,7 +511,7 @@ fn attributes(cx: &Ctx, out: &mut Vec<Hit>) {
 }
 
 /// One file the call changed; true when a specific rule took it.
-fn changed(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) -> bool {
+pub fn changed(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) -> bool {
     let path = touch.path.as_str();
     let mut matched = false;
     for (rule, matches) in CHANGES {
@@ -574,14 +574,14 @@ fn changed(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) -> bool 
     matched || history_or_log(cx, touch, out)
 }
 
-fn via_pseudo(path: &str) -> bool {
+pub fn via_pseudo(path: &str) -> bool {
     path.starts_with("/proc/")
         || path.starts_with("/sys/")
         || path.starts_with("/dev/") && !path.starts_with("/dev/shm/")
 }
 
 /// A system program or library written over: a trojaned `sshd`, `ps` or library.
-fn system_file(cx: &Ctx, touch: &Touch) -> Option<Hit> {
+pub fn system_file(cx: &Ctx, touch: &Touch) -> Option<Hit> {
     let path = touch.path.as_str();
     let system = file_location::classify(path, &[]).contains(&file_location::Location::System);
     let noise =
@@ -603,7 +603,7 @@ fn system_file(cx: &Ctx, touch: &Touch) -> Option<Hit> {
 }
 
 /// A hidden file made where nothing hidden belongs.
-fn hidden_file(cx: &Ctx, touch: &Touch) -> Option<Hit> {
+pub fn hidden_file(cx: &Ctx, touch: &Touch) -> Option<Hit> {
     if touch.op != Op::Created {
         return None;
     }
@@ -651,7 +651,7 @@ fn hidden_file(cx: &Ctx, touch: &Touch) -> Option<Hit> {
 }
 
 /// `/proc/PID/mem`: opened for writing (injection) or reading (credential scraping).
-fn proc_mem(cx: &Ctx, touch: &Touch, writing: bool) -> Option<Hit> {
+pub fn proc_mem(cx: &Ctx, touch: &Touch, writing: bool) -> Option<Hit> {
     if touch.op != Op::Opened {
         return None;
     }
@@ -685,7 +685,7 @@ fn proc_mem(cx: &Ctx, touch: &Touch, writing: bool) -> Option<Hit> {
 }
 
 /// Deleting or cutting logs and history, and the files a run removes.
-fn history_or_log(cx: &Ctx, touch: &Touch, out: &mut Vec<Hit>) -> bool {
+pub fn history_or_log(cx: &Ctx, touch: &Touch, out: &mut Vec<Hit>) -> bool {
     let path = touch.path.as_str();
     let cutting = touch.op == Op::Truncated
         || (touch.op == Op::Opened && cx.open_flags().is_some_and(|flags| flags & 0o1000 != 0));
@@ -717,7 +717,7 @@ fn history_or_log(cx: &Ctx, touch: &Touch, out: &mut Vec<Hit>) -> bool {
     false
 }
 
-fn log_file(path: &str) -> bool {
+pub fn log_file(path: &str) -> bool {
     under(path, &["/var/log", "/run/log/journal"])
         || matches!(
             path,
@@ -726,7 +726,7 @@ fn log_file(path: &str) -> bool {
 }
 
 /// A file deleted or moved away.
-fn removed(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) {
+pub fn removed(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) {
     let path = touch.path.as_str();
     let history = matches!(
         base(path),
@@ -788,7 +788,7 @@ fn removed(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) {
 }
 
 /// A file opened for reading, or read through a descriptor.
-fn read(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) {
+pub fn read(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) {
     let path = touch.path.as_str();
     if touch.op == Op::Opened {
         if let Some(hit) = proc_mem(cx, touch, false) {
@@ -820,7 +820,7 @@ fn read(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) {
 }
 
 /// Probes for security software, and the classes of discovery reads.
-fn look(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) {
+pub fn look(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) {
     let path = touch.path.as_str();
     if touch.op == Op::Executed {
         return;
@@ -846,7 +846,7 @@ fn look(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) {
 }
 
 /// `chmod` and friends: an execute bit in a staging directory, a setuid bit anywhere.
-fn permissions(cx: &Ctx, touch: &Touch, out: &mut Vec<Hit>) {
+pub fn permissions(cx: &Ctx, touch: &Touch, out: &mut Vec<Hit>) {
     let Some(mode) = file_category::mode_argument(cx.call, cx.event) else {
         return;
     };
@@ -879,7 +879,7 @@ fn permissions(cx: &Ctx, touch: &Touch, out: &mut Vec<Hit>) {
 }
 
 /// Times set on purpose, not to "now".
-fn timestamps(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) {
+pub fn timestamps(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) {
     let explicit = match cx.name {
         // utime(path, times), utimes(path, times)
         "utime" | "utimes" => cx.args[1] != 0,
@@ -907,7 +907,7 @@ fn timestamps(cx: &Ctx, st: &mut State, touch: &Touch, out: &mut Vec<Hit>) {
 }
 
 /// `setxattr` of a file capability.
-fn xattr(cx: &Ctx, touch: &Touch, out: &mut Vec<Hit>) {
+pub fn xattr(cx: &Ctx, touch: &Touch, out: &mut Vec<Hit>) {
     let name = cx.text(1).unwrap_or_default();
     if name == "security.capability" {
         out.push(Hit::new(
@@ -919,7 +919,7 @@ fn xattr(cx: &Ctx, touch: &Touch, out: &mut Vec<Hit>) {
 }
 
 /// An executable mapping of a file the run wrote.
-fn mapped(cx: &Ctx, st: &State, touch: &Touch, out: &mut Vec<Hit>) {
+pub fn mapped(cx: &Ctx, st: &State, touch: &Touch, out: &mut Vec<Hit>) {
     if cx.args[2] & 4 != 0 && cx.name == "mmap" && st.written.contains(&touch.path) {
         out.push(Hit::new(
             "execution.dropped_library",
@@ -933,7 +933,7 @@ fn mapped(cx: &Ctx, st: &State, touch: &Touch, out: &mut Vec<Hit>) {
 }
 
 /// A write of ELF bytes into a memfd.
-fn elf_into_memfd(cx: &Ctx, _st: &State, out: &mut Vec<Hit>) {
+pub fn elf_into_memfd(cx: &Ctx, _st: &State, out: &mut Vec<Hit>) {
     let Some(fd) = cx
         .fd_path(cx.args[0])
         .filter(|path| path.starts_with("memfd:"))
@@ -950,7 +950,7 @@ fn elf_into_memfd(cx: &Ctx, _st: &State, out: &mut Vec<Hit>) {
 }
 
 /// Persistence-class writes that no specific rule took.
-fn fallback(cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn fallback(cx: &Ctx, out: &mut Vec<Hit>) {
     for touch in cx.changes() {
         let path = touch.path.as_str();
         if via_pseudo(path) {

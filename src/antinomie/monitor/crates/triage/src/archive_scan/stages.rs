@@ -7,68 +7,68 @@ use super::*;
 use antinomie_monitor_core::recording::{Recording, RunFilterFacts, RunSegment};
 
 /// What the scan holds between its phases.
-pub(super) struct Scan {
-    directory: std::path::PathBuf,
-    segments: Vec<RunSegment>,
-    stamp: String,
-    recordings: Vec<Recording>,
-    facts: Option<RunFilterFacts>,
-    clock_anchor: Option<antinomie_monitor_core::HostClockAnchor>,
-    started_ms: Option<u64>,
-    total: Option<u64>,
-    cookies: std::collections::BTreeMap<u32, u64>,
-    nodes: std::collections::BTreeMap<TaskKey, TaskNode>,
-    scoped_count: u64,
-    async_partial: u64,
-    async_omitted: u64,
-    seen: u64,
-    complete: bool,
-    issues: Vec<String>,
-    counts: normalized::Counts,
-    event_error: Option<String>,
-    source_key: Option<String>,
-    cached_events: Option<antinomie_monitor_core::analysis::detection::JournalSummary>,
-    event_journal: Option<antinomie_monitor_core::analysis::detection::EventJournal>,
-    journal: Option<FindingJournal>,
-    journal_error: Option<String>,
-    files: FdState,
-    engine: rules::Engine,
+pub struct Scan {
+    pub directory: std::path::PathBuf,
+    pub segments: Vec<RunSegment>,
+    pub stamp: String,
+    pub recordings: Vec<Recording>,
+    pub facts: Option<RunFilterFacts>,
+    pub clock_anchor: Option<antinomie_monitor_core::HostClockAnchor>,
+    pub started_ms: Option<u64>,
+    pub total: Option<u64>,
+    pub cookies: std::collections::BTreeMap<u32, u64>,
+    pub nodes: std::collections::BTreeMap<TaskKey, TaskNode>,
+    pub scoped_count: u64,
+    pub async_partial: u64,
+    pub async_omitted: u64,
+    pub seen: u64,
+    pub complete: bool,
+    pub issues: Vec<String>,
+    pub counts: normalized::Counts,
+    pub event_error: Option<String>,
+    pub source_key: Option<String>,
+    pub cached_events: Option<antinomie_monitor_core::analysis::detection::JournalSummary>,
+    pub event_journal: Option<antinomie_monitor_core::analysis::detection::EventJournal>,
+    pub journal: Option<FindingJournal>,
+    pub journal_error: Option<String>,
+    pub files: FdState,
+    pub engine: rules::Engine,
 }
 
 /// What the file phase hands on.
-pub(super) struct FileOut {
-    pub(super) pending: Vec<antinomie_monitor_core::analysis::detection::Event>,
-    read: Vec<Vec<Cell>>,
-    read_omitted: u64,
-    changed: Vec<Vec<Cell>>,
-    changed_omitted: u64,
-    opened: Vec<Vec<Cell>>,
-    opened_omitted: u64,
-    file_tabs: [FileRows; 8],
-    files_complete: bool,
-    omitted_files: u64,
-    activity: file_activity::Activity,
-    read_hashes: file_activity::ReadHashes,
-    written_files: Vec<antinomie_monitor_core::run_digest::WrittenFile>,
-    ioc_files: Vec<files::IocFile>,
-    file_changes: Vec<files::Change>,
-    bpf: Vec<BpfNote>,
-    bpf_omitted: u64,
-    last_failed: Option<FailedStep>,
-    signals: run_end::SignalNotes,
-    schema_gaps: std::collections::BTreeMap<String, u64>,
-    reach: async_files::Reach,
+pub struct FileOut {
+    pub pending: Vec<antinomie_monitor_core::analysis::detection::Event>,
+    pub read: Vec<Vec<Cell>>,
+    pub read_omitted: u64,
+    pub changed: Vec<Vec<Cell>>,
+    pub changed_omitted: u64,
+    pub opened: Vec<Vec<Cell>>,
+    pub opened_omitted: u64,
+    pub file_tabs: [FileRows; 8],
+    pub files_complete: bool,
+    pub omitted_files: u64,
+    pub activity: file_activity::Activity,
+    pub read_hashes: file_activity::ReadHashes,
+    pub written_files: Vec<antinomie_monitor_core::run_digest::WrittenFile>,
+    pub ioc_files: Vec<files::IocFile>,
+    pub file_changes: Vec<files::Change>,
+    pub bpf: Vec<BpfNote>,
+    pub bpf_omitted: u64,
+    pub last_failed: Option<FailedStep>,
+    pub signals: run_end::SignalNotes,
+    pub schema_gaps: std::collections::BTreeMap<String, u64>,
+    pub reach: async_files::Reach,
 }
 
 /// What the network phase hands on.
-pub(super) struct NetworkOut {
-    network: PacketIndex,
-    run_ended_ms: Option<u64>,
-    root_crash: Option<String>,
+pub struct NetworkOut {
+    pub network: PacketIndex,
+    pub run_ended_ms: Option<u64>,
+    pub root_crash: Option<String>,
 }
 
 /// The calls of the root being scanned, or of every task when there is none.
-fn in_scope(request: &ScanRequest) -> impl Fn(&&InvocationSummary) -> bool + '_ {
+pub fn in_scope(request: &ScanRequest) -> impl Fn(&&InvocationSummary) -> bool + '_ {
     |call: &&InvocationSummary| {
         request.root_cookie == 0
             || trace::representative(call)
@@ -78,7 +78,7 @@ fn in_scope(request: &ScanRequest) -> impl Fn(&&InvocationSummary) -> bool + '_ 
 }
 
 /// Open the recording: its segments, processes and launch, and the journals the scan writes.
-pub(super) fn open_scan(
+pub fn open_scan(
     directory: &Path,
     pcap: Option<&Path>,
     pcap_open: bool,
@@ -291,7 +291,7 @@ pub(super) fn open_scan(
 
 impl Scan {
     /// Walk the saved calls again for the files they touched.
-    pub(super) fn read_files(
+    pub fn read_files(
         &mut self,
         cancel: &Arc<AtomicBool>,
         request: &ScanRequest,
@@ -539,7 +539,7 @@ impl Scan {
     }
 
     /// Index the capture, then settle what the events and the metadata service saw.
-    pub(super) fn read_network(
+    pub fn read_network(
         &mut self,
         pending: &mut Vec<antinomie_monitor_core::analysis::detection::Event>,
         pcap: Option<&Path>,
@@ -707,7 +707,7 @@ impl Scan {
     }
 
     /// Match the indicators, list the findings and assemble the scan.
-    pub(super) fn finish(
+    pub fn finish(
         self,
         file_out: FileOut,
         network_out: NetworkOut,
@@ -818,16 +818,16 @@ impl Scan {
         counts.findings_capped = output.capped;
         let finding_notes = output.notes;
         let suspicious = output.tasks;
-        let mut flagged_paths = crate::triage::file_shown::Flags::new();
+        let mut flagged_paths = crate::file_shown::Flags::new();
         for finding in output.rows {
-            let tier = crate::triage::file_shown::text_of(&finding.values, "finding.tier")
+            let tier = crate::file_shown::text_of(&finding.values, "finding.tier")
                 .and_then(rules::Tier::from_tag)
                 .filter(|tier| *tier != rules::Tier::Info);
             if let Some(tier) = tier {
-                let text = |key| crate::triage::file_shown::text_of(&finding.values, key);
+                let text = |key| crate::file_shown::text_of(&finding.values, key);
                 if let Some(object) = text("finding.object") {
                     let rule = text("finding.rule").unwrap_or_default();
-                    crate::triage::file_shown::flag(&mut flagged_paths, object, tier, rule);
+                    crate::file_shown::flag(&mut flagged_paths, object, tier, rule);
                 }
             }
             if let Some(writer) = &mut journal {
@@ -968,7 +968,7 @@ impl Scan {
                 || network.coverage.contains("failed")
                 || network.network_warning.is_some()
                 || pcap_open,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             coverage,
             process,
             suspicious,

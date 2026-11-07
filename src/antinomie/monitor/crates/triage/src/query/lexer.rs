@@ -3,7 +3,7 @@
 use super::*;
 
 #[derive(Clone, Debug)]
-pub(super) enum Token {
+pub enum Token {
     Ident(String),
     Number(i128),
     Text(String),
@@ -30,11 +30,11 @@ pub(super) enum Token {
     Amp,
 }
 
-pub(super) fn tokenize(input: &str) -> Result<Vec<Token>, String> {
+pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
     tokenize_with_positions(input).map(|(tokens, _)| tokens)
 }
 
-pub(super) fn position_error(error: String, input: &str, offset: usize) -> String {
+pub fn position_error(error: String, input: &str, offset: usize) -> String {
     format!(
         "{error} at column {}",
         input[..floor_boundary(input, offset.min(input.len()))]
@@ -44,7 +44,7 @@ pub(super) fn position_error(error: String, input: &str, offset: usize) -> Strin
     )
 }
 
-pub(super) fn tokenize_with_positions(input: &str) -> Result<(Vec<Token>, Vec<usize>), String> {
+pub fn tokenize_with_positions(input: &str) -> Result<(Vec<Token>, Vec<usize>), String> {
     if input.len() > 64 * 1024 {
         return Err("Filter exceeds 64 KiB at column 1".into());
     }

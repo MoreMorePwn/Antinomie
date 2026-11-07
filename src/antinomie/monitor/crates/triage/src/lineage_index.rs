@@ -17,19 +17,19 @@ use antinomie_monitor_core::{
 use std::collections::BTreeMap;
 
 /// Shells and interpreters whose `-c` argument is a command line.
-const LAUNCHERS: &[&str] = &[
+pub const LAUNCHERS: &[&str] = &[
     "sh", "bash", "dash", "zsh", "ash", "ksh", "python", "python2", "python3", "perl", "ruby",
     "node",
 ];
 /// A command line longer than this is cut.
-const COMMAND_LIMIT: usize = 512;
+pub const COMMAND_LIMIT: usize = 512;
 
-fn base(path: &str) -> &str {
+pub fn base(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
 /// The image path a process ran, if the recording saw an absolute one.
-fn image(node: &ProcessNode) -> Option<&str> {
+pub fn image(node: &ProcessNode) -> Option<&str> {
     node.exec_history
         .iter()
         .map(String::as_str)
@@ -37,7 +37,7 @@ fn image(node: &ProcessNode) -> Option<&str> {
 }
 
 /// The command line of `argv` when it is a launcher run with `-c`.
-fn command(argv: &[String]) -> Option<String> {
+pub fn command(argv: &[String]) -> Option<String> {
     let program = base(argv.first()?);
     let name = program.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
     if !LAUNCHERS
@@ -53,7 +53,7 @@ fn command(argv: &[String]) -> Option<String> {
 
 /// Whether a written file is lineage: a script, a shared object or a file in
 /// a place droppers stage things, and not configuration.
-fn kept_when_written(path: &str) -> bool {
+pub fn kept_when_written(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     let name = base(&lower);
     if lower.starts_with("/etc/")
@@ -79,7 +79,7 @@ fn kept_when_written(path: &str) -> bool {
 }
 
 /// Build the index.
-pub(super) fn index(nodes: &[ProcessNode], ioc: Option<&ioc_scan::IocScan>) -> Lineage {
+pub fn index(nodes: &[ProcessNode], ioc: Option<&ioc_scan::IocScan>) -> Lineage {
     let mut out = Lineage::default();
     // Hashes the run knows for a path, from the IOC file list.
     let mut hashes: BTreeMap<&str, &str> = BTreeMap::new();
@@ -178,7 +178,7 @@ pub(super) fn index(nodes: &[ProcessNode], ioc: Option<&ioc_scan::IocScan>) -> L
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     fn node(pid: u32, parent: Option<u32>, image: &str, argv: &[&str]) -> ProcessNode {

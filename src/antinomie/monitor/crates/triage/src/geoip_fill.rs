@@ -18,15 +18,15 @@ use std::{
 
 /// Captures at most this large get the extra look-up; a larger capture gives
 /// the helper time on its own.
-pub(super) const SMALL_CAPTURE: u64 = 4 << 20;
+pub const SMALL_CAPTURE: u64 = 4 << 20;
 /// Destinations looked up at most, and packets in the throw-away capture.
-const MAX_ADDRESSES: usize = 64;
-const PACKETS: usize = 20_000;
+pub const MAX_ADDRESSES: usize = 64;
+pub const PACKETS: usize = 20_000;
 /// Ethernet frames (LINKTYPE_ETHERNET): the packet filter reads nothing else.
-const LINKTYPE_ETHERNET: u32 = 1;
-const ETHERNET: [u8; 12] = [0; 12];
+pub const LINKTYPE_ETHERNET: u32 = 1;
+pub const ETHERNET: [u8; 12] = [0; 12];
 
-fn packet(ip: IpAddr) -> Vec<u8> {
+pub fn packet(ip: IpAddr) -> Vec<u8> {
     let udp = [0u8, 53, 0, 53, 0, 8, 0, 0];
     match ip {
         IpAddr::V4(address) => {
@@ -48,7 +48,7 @@ fn packet(ip: IpAddr) -> Vec<u8> {
     }
 }
 
-fn write_capture(path: &std::path::Path, addresses: &[IpAddr]) -> std::io::Result<()> {
+pub fn write_capture(path: &std::path::Path, addresses: &[IpAddr]) -> std::io::Result<()> {
     let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
     out.write_all(&0xa1b2_c3d4u32.to_le_bytes())?;
     out.write_all(&[2, 0, 4, 0])?;
@@ -69,7 +69,7 @@ fn write_capture(path: &std::path::Path, addresses: &[IpAddr]) -> std::io::Resul
 
 /// Fill the country and organization of the public destinations of
 /// `inventory` that still have none.
-pub(super) fn fill(inventory: &mut Inventory, cancel: &Arc<AtomicBool>) -> Result<(), String> {
+pub fn fill(inventory: &mut Inventory, cancel: &Arc<AtomicBool>) -> Result<(), String> {
     if !antinomie_monitor_core::geoip::configured() {
         return Ok(());
     }
@@ -98,7 +98,7 @@ pub(super) fn fill(inventory: &mut Inventory, cancel: &Arc<AtomicBool>) -> Resul
     Ok(())
 }
 
-fn look_up(
+pub fn look_up(
     directory: &std::path::Path,
     addresses: &[IpAddr],
     cancel: &Arc<AtomicBool>,

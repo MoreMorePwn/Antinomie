@@ -6,21 +6,21 @@
 //! run, or lighter than [`MIN_WEIGHT`], is absorbed into a neighbour; at most
 //! eight remain. The band is a summary, never evidence.
 use super::index::Bin;
-use crate::triage::rules::Category;
+use crate::rules::Category;
 
 /// A span lighter than this is absorbed. The design set it to 5 for the 10/4/1
 /// weights: a lone MEDIUM (4) cannot form a phase, one HIGH can, and so can a
 /// MEDIUM with one LOW, two MEDIUMs or five LOWs.
-pub(in crate::triage) const MIN_WEIGHT: u32 = 5;
+pub const MIN_WEIGHT: u32 = 5;
 /// A recon span made of INFO matches only needs this many of them.
-pub(in crate::triage) const MIN_INFO: u32 = 20;
+pub const MIN_INFO: u32 = 20;
 /// Spans shorter than this share of the run are absorbed.
-const MIN_SHARE: f64 = 0.02;
+pub const MIN_SHARE: f64 = 0.02;
 /// Labelled spans at most.
-pub(in crate::triage) const MAX_SPANS: usize = 8;
+pub const MAX_SPANS: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::triage) enum Phase {
+pub enum Phase {
     Recon,
     Download,
     Persistence,
@@ -32,7 +32,7 @@ pub(in crate::triage) enum Phase {
 }
 
 impl Phase {
-    pub(in crate::triage) const ALL: [Phase; 8] = [
+    pub const ALL: [Phase; 8] = [
         Self::Recon,
         Self::Download,
         Self::Persistence,
@@ -43,14 +43,14 @@ impl Phase {
         Self::Impact,
     ];
 
-    pub(in crate::triage) fn index(self) -> usize {
+    pub fn index(self) -> usize {
         Self::ALL
             .iter()
             .position(|other| *other == self)
             .unwrap_or(0)
     }
 
-    pub(in crate::triage) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Recon => "recon",
             Self::Download => "download",
@@ -65,14 +65,14 @@ impl Phase {
 }
 
 /// Rules that bring code in from outside: Execution with ingress.
-const INGRESS: &[&str] = &[
+pub const INGRESS: &[&str] = &[
     "execution.download_cradle",
     "c2.elf_download",
     "execution.dropped_exec",
 ];
 
 /// The anti-analysis checks of the Evasion category.
-const ANTI_ANALYSIS: &[&str] = &[
+pub const ANTI_ANALYSIS: &[&str] = &[
     "evasion.sandbox_probe",
     "evasion.probe_then_exit",
     "evasion.traceme",
@@ -82,7 +82,7 @@ const ANTI_ANALYSIS: &[&str] = &[
 ];
 
 /// The phase a finding belongs to, if its category has one.
-pub(in crate::triage) fn phase_of(rule: &str, category: Category) -> Option<Phase> {
+pub fn phase_of(rule: &str, category: Category) -> Option<Phase> {
     if INGRESS.contains(&rule) {
         return Some(Phase::Download);
     }
@@ -101,7 +101,7 @@ pub(in crate::triage) fn phase_of(rule: &str, category: Category) -> Option<Phas
 
 /// One labelled stretch, in base buckets (both ends included).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::triage) struct Span {
+pub struct Span {
     pub phase: Phase,
     pub first: u32,
     pub last: u32,
@@ -110,13 +110,13 @@ pub(in crate::triage) struct Span {
 }
 
 impl Span {
-    fn width(&self) -> u32 {
+    pub fn width(&self) -> u32 {
         self.last - self.first + 1
     }
 
     /// Whether the span stands. A span with a neighbour must also be long
     /// enough; a lone one is not absorbed for its length, since it has nowhere to go.
-    fn holds(&self, run: u32, alone: bool) -> bool {
+    pub fn holds(&self, run: u32, alone: bool) -> bool {
         let long = alone || f64::from(self.width()) >= (MIN_SHARE * f64::from(run)).max(1.0);
         let heavy = self.weight >= MIN_WEIGHT
             || (self.phase == Phase::Recon && self.weight == 0 && self.info >= MIN_INFO);
@@ -125,7 +125,7 @@ impl Span {
 }
 
 /// The phase a bucket leans to: its heaviest, else recon by INFO count.
-fn lean(bin: &Bin) -> Option<(Phase, u32, u32)> {
+pub fn lean(bin: &Bin) -> Option<(Phase, u32, u32)> {
     let (at, weight) = bin
         .phase_weight
         .iter()
@@ -139,7 +139,7 @@ fn lean(bin: &Bin) -> Option<(Phase, u32, u32)> {
 }
 
 /// The phases of a run from its base buckets.
-pub(in crate::triage) fn detect(bins: &[Bin]) -> Vec<Span> {
+pub fn detect(bins: &[Bin]) -> Vec<Span> {
     let run = bins.len() as u32;
     let mut spans: Vec<Span> = Vec::new();
     for (at, bin) in bins.iter().enumerate() {
@@ -182,7 +182,7 @@ pub(in crate::triage) fn detect(bins: &[Bin]) -> Vec<Span> {
 }
 
 /// Give span `at` to its heavier neighbour, then merge equal neighbours.
-fn absorb(spans: &mut Vec<Span>, at: usize) {
+pub fn absorb(spans: &mut Vec<Span>, at: usize) {
     let span = spans.remove(at);
     let before = at.checked_sub(1);
     let after = (at < spans.len()).then_some(at);

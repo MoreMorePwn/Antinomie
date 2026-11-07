@@ -2,10 +2,10 @@
 //! Packet capture scans through TShark and the spool that bounds them.
 use super::*;
 
-mod frames;
+pub mod frames;
 use frames::{dns_queries, h2_requests, http_requests, Frame, Spool};
 
-pub(super) const TSHARK_FIELDS: &[&str] = &[
+pub const TSHARK_FIELDS: &[&str] = &[
     "frame.number",
     "frame.time_epoch",
     "ip.src",
@@ -64,28 +64,28 @@ pub(super) const TSHARK_FIELDS: &[&str] = &[
     "ipv6.geoip.dst_asnum",
 ];
 
-const F_PROTOCOL: usize = 36;
-const F_TLS_TYPE: usize = 37;
-const F_ALPN: usize = 38;
-const F_CIPHERS: usize = 39;
-const F_SSH_BANNER: usize = 41;
-const F_H2_METHOD: usize = 42;
-const F_H2_AUTHORITY: usize = 43;
-const F_H2_PATH: usize = 44;
-const F_JA3: usize = 45;
-const F_JA4: usize = 46;
-const F_JA3S: usize = 47;
-const F_CERT: usize = 48;
-const F_FRAME_LEN: usize = 49;
-const F_TLS_SUPPORTED: usize = 50;
+pub const F_PROTOCOL: usize = 36;
+pub const F_TLS_TYPE: usize = 37;
+pub const F_ALPN: usize = 38;
+pub const F_CIPHERS: usize = 39;
+pub const F_SSH_BANNER: usize = 41;
+pub const F_H2_METHOD: usize = 42;
+pub const F_H2_AUTHORITY: usize = 43;
+pub const F_H2_PATH: usize = 44;
+pub const F_JA3: usize = 45;
+pub const F_JA4: usize = 46;
+pub const F_JA3S: usize = 47;
+pub const F_CERT: usize = 48;
+pub const F_FRAME_LEN: usize = 49;
+pub const F_TLS_SUPPORTED: usize = 50;
 /// Columns older TShark releases lack (the TLS fingerprints and certificate).
-const FINGERPRINT_FIELDS: std::ops::Range<usize> = F_JA3..F_CERT + 1;
+pub const FINGERPRINT_FIELDS: std::ops::Range<usize> = F_JA3..F_CERT + 1;
 /// Columns of the GeoIP lookup, requested only when it is configured.
-const GEOIP_FIELDS: std::ops::Range<usize> = 31..35;
-const F_ASN: usize = 51;
-const GEOIP_ASN_FIELDS: std::ops::Range<usize> = F_ASN..F_ASN + 2;
+pub const GEOIP_FIELDS: std::ops::Range<usize> = 31..35;
+pub const F_ASN: usize = 51;
+pub const GEOIP_ASN_FIELDS: std::ops::Range<usize> = F_ASN..F_ASN + 2;
 
-pub(super) const SESSION_HEADERS: &[&str] = &[
+pub const SESSION_HEADERS: &[&str] = &[
     "Frame",
     "Time",
     "Endpoint",
@@ -98,13 +98,13 @@ pub(super) const SESSION_HEADERS: &[&str] = &[
 
 /// Which rows of a capture a callback is given.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum RowKind {
+pub enum RowKind {
     Http,
     Dns,
     Session,
 }
 
-pub(super) const HTTP_HEADERS: &[&str] = &[
+pub const HTTP_HEADERS: &[&str] = &[
     "Frame",
     "Time",
     "Endpoint",
@@ -115,7 +115,7 @@ pub(super) const HTTP_HEADERS: &[&str] = &[
     "Response frame",
 ];
 
-pub(super) const DNS_HEADERS: &[&str] = &[
+pub const DNS_HEADERS: &[&str] = &[
     "Frame",
     "Endpoint",
     "Qname",
@@ -126,7 +126,7 @@ pub(super) const DNS_HEADERS: &[&str] = &[
 ];
 
 impl PacketSpool {
-    pub(super) fn new() -> Result<Self, String> {
+    pub fn new() -> Result<Self, String> {
         use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let directory = std::env::temp_dir().join(format!(
@@ -160,7 +160,7 @@ impl PacketSpool {
         }
         result
     }
-    fn push(&mut self, line: &str) -> Result<(), String> {
+    pub fn push(&mut self, line: &str) -> Result<(), String> {
         use std::io::Write;
         let fields = tsv_fields(line)?;
         let frame = fields
@@ -192,7 +192,7 @@ impl Drop for PacketSpool {
     }
 }
 
-pub(super) fn tsv_fields(line: &str) -> Result<Vec<String>, String> {
+pub fn tsv_fields(line: &str) -> Result<Vec<String>, String> {
     let mut values = Vec::new();
     let mut value = String::new();
     let mut chars = line.trim_end_matches(['\r', '\n']).chars().peekable();
@@ -217,7 +217,7 @@ pub(super) fn tsv_fields(line: &str) -> Result<Vec<String>, String> {
     Ok(values)
 }
 
-pub(super) fn epoch_us(value: &str) -> Option<u64> {
+pub fn epoch_us(value: &str) -> Option<u64> {
     let (seconds, fraction) = value.split_once('.').unwrap_or((value, ""));
     let seconds = seconds.parse::<u64>().ok()?;
     if !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -232,7 +232,7 @@ pub(super) fn epoch_us(value: &str) -> Option<u64> {
         .checked_add(fraction.parse().ok()?)
 }
 
-fn spool_response(
+pub fn spool_response(
     frame: u64,
     offsets: &mut std::fs::File,
     rows: &mut std::io::BufReader<std::fs::File>,
@@ -273,7 +273,7 @@ fn spool_response(
     Ok(Vec::new())
 }
 
-pub(super) fn spool_packet_fields(
+pub fn spool_packet_fields(
     identity: &antinomie_monitor_core::packet_filter::CaptureIdentity,
     live: bool,
     cancel: &Arc<AtomicBool>,
@@ -347,8 +347,8 @@ pub(super) fn spool_packet_fields(
 /// TShark reassembles the complete saved PCAP or an owned complete-record live
 /// prefix. Output is disk-backed; response lookups use a fixed-size binary
 /// index and memory holds only one query page. Source PCAP is unchanged.
-#[cfg(test)]
-pub(super) fn scan_pcap_query(
+#[cfg(any(test, feature = "test-support"))]
+pub fn scan_pcap_query(
     path: &Path,
     pcap_open: bool,
     cancel: &Arc<AtomicBool>,
@@ -364,7 +364,7 @@ pub(super) fn scan_pcap_query(
     )
 }
 
-pub(super) fn scan_pcap_query_observed(
+pub fn scan_pcap_query_observed(
     path: &Path,
     pcap_open: bool,
     cancel: &Arc<AtomicBool>,
@@ -611,7 +611,7 @@ pub(super) fn scan_pcap_query_observed(
 
 /// "AS150895 EZ TECHNOLOGY COMPANY LIMITED": the organization of the AS
 /// database with the AS number it came with.
-pub(super) fn organization_with_asn(organization: &str, asn: &str) -> String {
+pub fn organization_with_asn(organization: &str, asn: &str) -> String {
     match (asn.is_empty(), organization.is_empty()) {
         (false, false) => format!("AS{asn} {organization}"),
         (false, true) => format!("AS{asn}"),
@@ -619,7 +619,7 @@ pub(super) fn organization_with_asn(organization: &str, asn: &str) -> String {
     }
 }
 
-pub(super) fn text_value(text: &str) -> RowValue {
+pub fn text_value(text: &str) -> RowValue {
     if text.is_empty() {
         RowValue::Missing
     } else {
@@ -629,7 +629,7 @@ pub(super) fn text_value(text: &str) -> RowValue {
 
 /// TShark releases format FT_BOOLEAN as textual True/False or numeric 1/0.
 /// An absent, malformed or mixed repeated field stays unknown.
-pub(super) fn tshark_boolean(text: &str) -> Option<bool> {
+pub fn tshark_boolean(text: &str) -> Option<bool> {
     let mut value = None;
     for item in text.split('\u{1f}') {
         let next = match item {
@@ -647,7 +647,7 @@ pub(super) fn tshark_boolean(text: &str) -> Option<bool> {
     value
 }
 
-fn parse_integer(text: &str) -> Option<i128> {
+pub fn parse_integer(text: &str) -> Option<i128> {
     if let Some(hex) = text.strip_prefix("0x") {
         i128::from_str_radix(hex, 16).ok()
     } else {
@@ -655,21 +655,21 @@ fn parse_integer(text: &str) -> Option<i128> {
     }
 }
 
-pub(super) struct HttpRequest<'a> {
-    frame: u64,
-    time: Option<u64>,
-    endpoints: &'a str,
-    method: &'a str,
-    host: &'a str,
-    uri: &'a str,
-    version: &'a str,
-    status: Option<u16>,
-    response_frames: &'a str,
+pub struct HttpRequest<'a> {
+    pub frame: u64,
+    pub time: Option<u64>,
+    pub endpoints: &'a str,
+    pub method: &'a str,
+    pub host: &'a str,
+    pub uri: &'a str,
+    pub version: &'a str,
+    pub status: Option<u16>,
+    pub response_frames: &'a str,
 }
 
 /// One HTTP request row. The protocol version stays a typed filter value and
 /// is not a display column.
-fn http_row(path: &Path, request: &HttpRequest<'_>) -> Vec<Cell> {
+pub fn http_row(path: &Path, request: &HttpRequest<'_>) -> Vec<Cell> {
     let time = request.time;
     let mut row = vec![
         cell(format!("#{}", request.frame), tone::text(), true),
@@ -720,7 +720,7 @@ fn http_row(path: &Path, request: &HttpRequest<'_>) -> Vec<Cell> {
 
 /// Session rows of one frame: a TLS or QUIC client or server hello, or an SSH
 /// banner. Everything shown is a value TShark printed.
-fn session_rows(
+pub fn session_rows(
     path: &Path,
     frame: u64,
     time: Option<u64>,
@@ -817,7 +817,7 @@ fn session_rows(
         .collect()
 }
 
-pub(super) fn walk_pages(
+pub fn walk_pages(
     recording: &antinomie_monitor_core::recording::Recording,
     cancel: &AtomicBool,
     mut each: impl FnMut(&[InvocationSummary]) -> Result<(), String>,
@@ -855,7 +855,7 @@ pub(super) fn walk_pages(
     }
 }
 
-pub(super) fn note_cookie_sets(
+pub fn note_cookie_sets(
     sets: &mut std::collections::BTreeMap<u32, std::collections::BTreeSet<u64>>,
     invocations: &[InvocationSummary],
 ) {
@@ -876,7 +876,7 @@ pub(super) fn note_cookie_sets(
     }
 }
 
-pub(super) fn resolve_cookies(
+pub fn resolve_cookies(
     sets: &std::collections::BTreeMap<u32, std::collections::BTreeSet<u64>>,
 ) -> std::collections::BTreeMap<u32, u64> {
     sets.iter()

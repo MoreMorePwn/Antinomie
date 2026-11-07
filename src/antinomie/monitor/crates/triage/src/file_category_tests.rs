@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use super::file_category::{self, Access, Category, Hit, Outcome};
 use super::*;
-use crate::triage::tests::{call, captured, path_call};
+use crate::tests::{call, captured, path_call};
 
-const O_WRONLY: u64 = 1;
-const O_CREAT: u64 = 0o100;
-const O_EXCL: u64 = 0o200;
-const O_TRUNC: u64 = 0o1000;
+pub const O_WRONLY: u64 = 1;
+pub const O_CREAT: u64 = 0o100;
+pub const O_EXCL: u64 = 0o200;
+pub const O_TRUNC: u64 = 0o1000;
 
 /// One call with its first-argument path and its arguments.
-fn op(nr: u64, name: &str, ret: i64, path: Option<&str>, args: [u64; 6]) -> InvocationSummary {
+pub fn op(nr: u64, name: &str, ret: i64, path: Option<&str>, args: [u64; 6]) -> InvocationSummary {
     let mut call = match path {
         Some(path) => path_call(1, nr, name, ret, path),
         None => call(1, nr, name, ret),
@@ -18,11 +18,11 @@ fn op(nr: u64, name: &str, ret: i64, path: Option<&str>, args: [u64; 6]) -> Invo
     call
 }
 
-fn open(path: &str, flags: u64, ret: i64) -> InvocationSummary {
+pub fn open(path: &str, flags: u64, ret: i64) -> InvocationSummary {
     op(2, "open", ret, Some(path), [0, flags, 0, 0, 0, 0])
 }
 
-fn categories(files: &FdState, call: &InvocationSummary) -> Vec<Category> {
+pub fn categories(files: &FdState, call: &InvocationSummary) -> Vec<Category> {
     let event = trace::representative(call).unwrap();
     file_category::classify(files, call, event)
         .into_iter()
@@ -30,13 +30,13 @@ fn categories(files: &FdState, call: &InvocationSummary) -> Vec<Category> {
         .collect()
 }
 
-fn hits(files: &FdState, call: &InvocationSummary) -> Vec<Hit> {
+pub fn hits(files: &FdState, call: &InvocationSummary) -> Vec<Hit> {
     let event = trace::representative(call).unwrap();
     file_category::classify(files, call, event)
 }
 
 /// What the scan does with one call: classify, then track it.
-fn step(files: &mut FdState, index: &mut files::FileIndex, call: &mut InvocationSummary, id: u64) {
+pub fn step(files: &mut FdState, index: &mut files::FileIndex, call: &mut InvocationSummary, id: u64) {
     call.call_id = id;
     for event in call.entry.iter_mut().chain(call.exit.iter_mut()) {
         event.call_id = id;
@@ -50,7 +50,7 @@ fn step(files: &mut FdState, index: &mut files::FileIndex, call: &mut Invocation
 }
 
 #[test]
-fn every_syscall_family_lands_in_its_category() {
+pub fn every_syscall_family_lands_in_its_category() {
     let files = FdState::default();
     let cases: Vec<(InvocationSummary, Vec<Category>)> = vec![
         (
@@ -229,7 +229,7 @@ fn every_syscall_family_lands_in_its_category() {
 }
 
 #[test]
-fn flags_decide_open_categories_and_mappings() {
+pub fn flags_decide_open_categories_and_mappings() {
     let files = FdState::default();
     // O_CREAT|O_TRUNC on an unseen path made the file: nothing was truncated.
     assert_eq!(
@@ -281,7 +281,7 @@ fn flags_decide_open_categories_and_mappings() {
 }
 
 #[test]
-fn created_is_inferred_only_when_the_path_was_not_seen() {
+pub fn created_is_inferred_only_when_the_path_was_not_seen() {
     let mut files = FdState::default();
     let new = open("/tmp/new", O_WRONLY | O_CREAT, 3);
     let created = |found: &[Hit]| {
@@ -325,7 +325,7 @@ fn created_is_inferred_only_when_the_path_was_not_seen() {
 }
 
 #[test]
-fn a_file_s_lifecycle_reads_as_a_sentence() {
+pub fn a_file_s_lifecycle_reads_as_a_sentence() {
     let mut files = FdState::default();
     let mut index = files::FileIndex::default();
     let path = "/tmp/payload";
@@ -367,7 +367,7 @@ fn a_file_s_lifecycle_reads_as_a_sentence() {
 }
 
 #[test]
-fn chmod_steps_tell_a_new_exec_bit_from_a_repeat_and_flag_setuid() {
+pub fn chmod_steps_tell_a_new_exec_bit_from_a_repeat_and_flag_setuid() {
     let mut files = FdState::default();
     let mut index = files::FileIndex::default();
     let mut calls = [
@@ -391,7 +391,7 @@ fn chmod_steps_tell_a_new_exec_bit_from_a_repeat_and_flag_setuid() {
 }
 
 #[test]
-fn failed_attempts_are_not_changes_and_stay_behind_the_toggle() {
+pub fn failed_attempts_are_not_changes_and_stay_behind_the_toggle() {
     let mut files = FdState::default();
     let mut index = files::FileIndex::default();
     let mut calls = [
@@ -435,7 +435,7 @@ fn failed_attempts_are_not_changes_and_stay_behind_the_toggle() {
     assert!(hidden.keeps(&real.row(None)));
 }
 
-fn sink_run(show_failed: bool) -> (normalized::Counts, FileRows, [FileRows; FILE_TABS]) {
+pub fn sink_run(show_failed: bool) -> (normalized::Counts, FileRows, [FileRows; FILE_TABS]) {
     let mut request = ScanRequest::default();
     request.file_visibility.show_failed = show_failed;
     let cancel = Arc::new(AtomicBool::new(false));
@@ -461,7 +461,7 @@ fn sink_run(show_failed: bool) -> (normalized::Counts, FileRows, [FileRows; FILE
 }
 
 #[test]
-fn counts_badges_and_pages_leave_failed_attempts_out_unless_shown() {
+pub fn counts_badges_and_pages_leave_failed_attempts_out_unless_shown() {
     let tab = |tab: FileTab| tab.slot() - 8;
     for show in [false, true] {
         let (counts, opened, tabs) = sink_run(show);
@@ -498,7 +498,7 @@ fn counts_badges_and_pages_leave_failed_attempts_out_unless_shown() {
 }
 
 #[test]
-fn filter_fields_match_rows_and_examples_compile() {
+pub fn filter_fields_match_rows_and_examples_compile() {
     for tab in FileTab::ALL {
         query::assert_example_compiles(tab.example(), FILE_FIELDS);
     }
@@ -567,7 +567,7 @@ fn filter_fields_match_rows_and_examples_compile() {
 }
 
 #[test]
-fn access_tells_path_descriptor_and_inherited_apart() {
+pub fn access_tells_path_descriptor_and_inherited_apart() {
     let mut files = FdState::default();
     let stat = op(4, "stat", 0, Some("/tmp/a"), [0; 6]);
     let event = trace::representative(&stat).unwrap();
@@ -590,7 +590,7 @@ fn access_tells_path_descriptor_and_inherited_apart() {
 }
 
 #[test]
-fn rename_detail_names_both_paths_and_an_overwritten_destination() {
+pub fn rename_detail_names_both_paths_and_an_overwritten_destination() {
     let mut files = FdState::default();
     let mut rename = op(82, "rename", 0, Some("/tmp/a"), [0; 6]);
     rename
@@ -622,7 +622,7 @@ fn rename_detail_names_both_paths_and_an_overwritten_destination() {
 }
 
 #[test]
-fn copy_detail_names_source_and_destination() {
+pub fn copy_detail_names_source_and_destination() {
     let mut files = FdState::default();
     for (path, fd) in [("/etc/shadow", 3), ("/tmp/out", 4)] {
         let opened = open(path, 0, fd);
@@ -642,10 +642,10 @@ fn copy_detail_names_source_and_destination() {
 }
 
 #[test]
-fn an_index_stamped_by_an_older_format_is_rebuilt() {
+pub fn an_index_stamped_by_an_older_format_is_rebuilt() {
     let temp = PacketSpool::new().unwrap();
     let mut raw = std::fs::File::create(temp.directory.join("telemetry.raw")).unwrap();
-    super::tests::write_rwx_calls(&mut raw, 0..1);
+    crate::tests::write_rwx_calls(&mut raw, 0..1);
     raw.sync_all().unwrap();
     let cancel = Arc::new(AtomicBool::new(false));
     let scan = scan_archive_query(
@@ -678,7 +678,7 @@ fn an_index_stamped_by_an_older_format_is_rebuilt() {
 }
 
 #[test]
-fn a_failed_read_is_listed_with_its_result_while_the_toggle_is_off() {
+pub fn a_failed_read_is_listed_with_its_result_while_the_toggle_is_off() {
     let visibility = file_visibility::FileVisibility {
         show_failed: false,
         ..file_visibility::FileVisibility::default()
@@ -689,14 +689,14 @@ fn a_failed_read_is_listed_with_its_result_while_the_toggle_is_off() {
     assert!(visibility.keeps_with(&row, true));
 }
 
-fn hash_note(flags: u8) -> antinomie_monitor_core::FieldSummary {
+pub fn hash_note(flags: u8) -> antinomie_monitor_core::FieldSummary {
     let mut bytes = vec![0u8; 80];
     bytes[0] = 1; // exec
     bytes[3] = flags;
     captured("lifecycle.file_hash", "antinomie.hash/1", &bytes)
 }
 
-fn executed_detail(mut call: InvocationSummary, flags: Option<u8>) -> String {
+pub fn executed_detail(mut call: InvocationSummary, flags: Option<u8>) -> String {
     if let Some(flags) = flags {
         let mut note = call.exit.clone().unwrap();
         note.phase = 3;
@@ -712,7 +712,7 @@ fn executed_detail(mut call: InvocationSummary, flags: Option<u8>) -> String {
 }
 
 #[test]
-fn an_exec_of_a_script_says_its_interpreter_ran_without_naming_one() {
+pub fn an_exec_of_a_script_says_its_interpreter_ran_without_naming_one() {
     let run = || op(59, "execve", 0, Some("/tmp/run.sh"), [0; 6]);
     assert_eq!(executed_detail(run(), None), "");
     assert_eq!(
@@ -727,7 +727,7 @@ fn an_exec_of_a_script_says_its_interpreter_ran_without_naming_one() {
 }
 
 #[test]
-fn a_rename_to_a_new_name_does_not_say_it_overwrote_anything() {
+pub fn a_rename_to_a_new_name_does_not_say_it_overwrote_anything() {
     let mut files = FdState::default();
     let mut rename = op(82, "rename", 0, Some("/tmp/a"), [0; 6]);
     rename

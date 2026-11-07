@@ -13,7 +13,7 @@ use std::net::IpAddr;
 /// Local addresses are never queried.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum AddressLookup {
+pub enum AddressLookup {
     /// Installed TShark GeoIP fields only.
     #[default]
     Tshark,
@@ -22,11 +22,11 @@ pub(crate) enum AddressLookup {
     /// TShark GeoIP first. `dig` and `whois` fill a missing country or organization.
     TsharkThenWhois,
 }
-const INVENTORY_LIMIT: usize = 16384;
+pub const INVENTORY_LIMIT: usize = 16384;
 
 /// Only an identity-matching artifact manifest proves capture ownership.
 /// A currently open capture from the same boot alone is insufficient.
-pub(super) fn owned_capture(
+pub fn owned_capture(
     directory: &Path,
     identity: Option<&(String, String, String)>,
     path: &Path,
@@ -46,7 +46,7 @@ pub(super) fn owned_capture(
         .any(|candidate| candidate == path))
 }
 
-pub(super) fn in_window(request: &ScanRequest, packet_us: Option<u64>) -> bool {
+pub fn in_window(request: &ScanRequest, packet_us: Option<u64>) -> bool {
     request.owned_pcap
         || (!request
             .started_ms
@@ -57,7 +57,7 @@ pub(super) fn in_window(request: &ScanRequest, packet_us: Option<u64>) -> bool {
 }
 
 /// The Endpoints tab: one row per remote `ip:port`.
-pub(super) const ENDPOINT_FIELDS: &[FieldSpec<'static>] = &[
+pub const ENDPOINT_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("capture.path", "Capture segment of the first frame"),
     FieldSpec::text("network.endpoint", "Remote ip:port"),
     FieldSpec::text("network.ip", "Remote IP"),
@@ -82,7 +82,7 @@ pub(super) const ENDPOINT_FIELDS: &[FieldSpec<'static>] = &[
 ];
 
 /// The rebuilt Domains tab: the Hosts fields, and the DNS names they merge.
-pub(super) const DOMAIN_FIELDS: &[FieldSpec<'static>] = &[
+pub const DOMAIN_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("capture.path", "Capture segment of the evidence packet"),
     FieldSpec::number(
         "network.first_us",
@@ -105,7 +105,7 @@ pub(super) const DOMAIN_FIELDS: &[FieldSpec<'static>] = &[
 ];
 
 /// The rebuilt TLS tab: sessions grouped by server name, server and JA3.
-pub(super) const TLS_FIELDS: &[FieldSpec<'static>] = &[
+pub const TLS_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("capture.path", "Capture segment of the first hello"),
     FieldSpec::number("frame.number", "First client hello"),
     FieldSpec::number("frame.time_us", "Packet time in the capture clock"),
@@ -126,47 +126,47 @@ pub(super) const TLS_FIELDS: &[FieldSpec<'static>] = &[
 ];
 
 #[derive(Default)]
-struct Host {
-    capture: String,
-    frame: u64,
-    first: Option<u64>,
-    last: Option<u64>,
-    count: u64,
-    addresses: BTreeSet<String>,
-    sources: BTreeSet<String>,
+pub struct Host {
+    pub capture: String,
+    pub frame: u64,
+    pub first: Option<u64>,
+    pub last: Option<u64>,
+    pub count: u64,
+    pub addresses: BTreeSet<String>,
+    pub sources: BTreeSet<String>,
     /// How DNS answered the name: NOERROR, NXDOMAIN, ...
-    rcodes: BTreeSet<String>,
+    pub rcodes: BTreeSet<String>,
 }
 
 /// One remote `ip:port` the capture shows traffic with.
 #[derive(Default)]
-struct Endpoint {
-    capture: String,
-    frame: u64,
-    frames: u64,
-    bytes: u64,
-    first: Option<u64>,
-    last: Option<u64>,
+pub struct Endpoint {
+    pub capture: String,
+    pub frame: u64,
+    pub frames: u64,
+    pub bytes: u64,
+    pub first: Option<u64>,
+    pub last: Option<u64>,
 }
 
 /// One TLS session, as far as its hellos showed.
 #[derive(Default)]
-struct TlsSession {
-    capture: String,
-    frame: u64,
-    time: Option<u64>,
-    server: Option<(IpAddr, u16)>,
-    sni: String,
-    alpn: String,
-    version: String,
-    ja3: String,
-    ja4: String,
-    ja3s: String,
-    cert_sha1: String,
+pub struct TlsSession {
+    pub capture: String,
+    pub frame: u64,
+    pub time: Option<u64>,
+    pub server: Option<(IpAddr, u16)>,
+    pub sni: String,
+    pub alpn: String,
+    pub version: String,
+    pub ja3: String,
+    pub ja4: String,
+    pub ja3s: String,
+    pub cert_sha1: String,
 }
 
 /// What a frame says about the two ends of its conversation.
-pub(super) struct PacketFacts<'a> {
+pub struct PacketFacts<'a> {
     pub source: &'a str,
     pub source_port: &'a str,
     pub destination: &'a str,
@@ -178,7 +178,7 @@ pub(super) struct PacketFacts<'a> {
 }
 
 /// One HTTP request of the capture.
-pub(super) struct UrlFacts<'a> {
+pub struct UrlFacts<'a> {
     pub frame: u64,
     pub time: Option<u64>,
     pub method: &'a str,
@@ -191,7 +191,7 @@ pub(super) struct UrlFacts<'a> {
 }
 
 /// The TLS fields of one frame.
-pub(super) struct TlsFrame<'a> {
+pub struct TlsFrame<'a> {
     pub frame: u64,
     pub time: Option<u64>,
     /// `tcp.stream`, empty for datagrams.
@@ -211,11 +211,11 @@ pub(super) struct TlsFrame<'a> {
 }
 
 #[derive(Default)]
-pub(super) struct Inventory {
-    ips: BTreeMap<String, (u64, String, String, String)>,
-    hosts: BTreeMap<String, Host>,
-    endpoints: BTreeMap<(IpAddr, u16, &'static str), Endpoint>,
-    tls: BTreeMap<String, TlsSession>,
+pub struct Inventory {
+    pub ips: BTreeMap<String, (u64, String, String, String)>,
+    pub hosts: BTreeMap<String, Host>,
+    pub endpoints: BTreeMap<(IpAddr, u16, &'static str), Endpoint>,
+    pub tls: BTreeMap<String, TlsSession>,
     /// The run's indicators the capture shows, for the IOC window.
     pub ioc: Collector,
     pub capture: String,
@@ -224,18 +224,18 @@ pub(super) struct Inventory {
 
 /// The tables of the Network section's rebuilt tabs.
 #[derive(Default)]
-pub(super) struct Tables {
+pub struct Tables {
     pub endpoints: Vec<Vec<Cell>>,
     pub domains: Vec<Vec<Cell>>,
     pub tls: Vec<Vec<Cell>>,
 }
 
-fn port_of(text: &str) -> Option<u16> {
+pub fn port_of(text: &str) -> Option<u16> {
     text.parse().ok()
 }
 
 /// TLS version names from TShark's hexadecimal or decimal codes.
-fn tls_version(code: &str) -> String {
+pub fn tls_version(code: &str) -> String {
     let value = code.strip_prefix("0x").map_or_else(
         || code.parse::<u32>().ok(),
         |hex| u32::from_str_radix(hex, 16).ok(),
@@ -251,7 +251,7 @@ fn tls_version(code: &str) -> String {
 }
 
 /// A DNS response code by name; `NOERROR` with no answers says so.
-pub(super) fn rcode_name(code: i128, answered: bool) -> String {
+pub fn rcode_name(code: i128, answered: bool) -> String {
     match code {
         0 if answered => "NOERROR".into(),
         0 => "NOERROR, no answer".into(),
@@ -264,7 +264,7 @@ pub(super) fn rcode_name(code: i128, answered: bool) -> String {
     }
 }
 
-fn packet_evidence(capture: &str, frame: u64) -> Evidence {
+pub fn packet_evidence(capture: &str, frame: u64) -> Evidence {
     Evidence {
         source: Source::Pcap,
         label: format!("Packets · frame {frame}"),
@@ -759,7 +759,7 @@ impl Inventory {
         tables
     }
 
-    pub(super) fn incomplete(&self) -> Vec<String> {
+    pub fn incomplete(&self) -> Vec<String> {
         self.ips
             .iter()
             .filter_map(|(ip, (_, country, organization, _))| {
@@ -771,7 +771,7 @@ impl Inventory {
             })
             .collect()
     }
-    pub(super) fn fill_missing(&mut self, ip: &str, country: &str, organization: &str) {
+    pub fn fill_missing(&mut self, ip: &str, country: &str, organization: &str) {
         if let Some((_, stored_country, stored_organization, _)) = self.ips.get_mut(ip) {
             if stored_country.is_empty() && !country.is_empty() {
                 *stored_country = country.to_owned();
@@ -865,7 +865,7 @@ impl Inventory {
         (ips, hosts)
     }
 }
-pub(super) fn enrich_public(
+pub fn enrich_public(
     inventory: &mut Inventory,
     cancel: &std::sync::atomic::AtomicBool,
     warning: &mut Option<String>,
@@ -895,7 +895,7 @@ pub(super) fn enrich_public(
     Ok(())
 }
 
-fn lookup_public(ip: &str) -> Result<(String, String), String> {
+pub fn lookup_public(ip: &str) -> Result<(String, String), String> {
     let address = ip
         .parse::<std::net::IpAddr>()
         .map_err(|_| "address lookup is only for an IP address".to_owned())?;
@@ -925,7 +925,7 @@ fn lookup_public(ip: &str) -> Result<(String, String), String> {
     Ok((country, organization))
 }
 
-fn command_text(program: &str, args: &[&str]) -> Result<String, String> {
+pub fn command_text(program: &str, args: &[&str]) -> Result<String, String> {
     let output = std::process::Command::new("timeout")
         .args(["4", program])
         .args(args)
@@ -943,7 +943,7 @@ fn command_text(program: &str, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-pub(super) fn parse_whois(text: &str) -> (String, String) {
+pub fn parse_whois(text: &str) -> (String, String) {
     let country = whois_field(text, &["country"])
         .unwrap_or_default()
         .to_owned();
@@ -954,7 +954,7 @@ pub(super) fn parse_whois(text: &str) -> (String, String) {
     (country, organization)
 }
 
-fn whois_field<'a>(text: &'a str, keys: &[&str]) -> Option<&'a str> {
+pub fn whois_field<'a>(text: &'a str, keys: &[&str]) -> Option<&'a str> {
     text.lines().find_map(|line| {
         let (key, value) = line.split_once(':')?;
         let value = value.trim();
@@ -967,7 +967,7 @@ fn whois_field<'a>(text: &'a str, keys: &[&str]) -> Option<&'a str> {
     })
 }
 
-fn ptr_name(text: &str) -> Option<String> {
+pub fn ptr_name(text: &str) -> Option<String> {
     text.lines().map(str::trim).find_map(|line| {
         if line.is_empty() || line.starts_with(';') {
             None
@@ -977,7 +977,7 @@ fn ptr_name(text: &str) -> Option<String> {
     })
 }
 
-fn available(value: &str) -> &str {
+pub fn available(value: &str) -> &str {
     if value.is_empty() {
         "Unavailable"
     } else {
@@ -987,7 +987,7 @@ fn available(value: &str) -> &str {
 
 /// Loopback, link-local, and private ranges are local to the guest or host.
 /// Carrier-grade NAT and public addresses keep their recorded lookup result.
-pub(super) fn local_address(ip: &str) -> bool {
+pub fn local_address(ip: &str) -> bool {
     match ip.parse::<std::net::IpAddr>() {
         Ok(std::net::IpAddr::V4(address)) => {
             address.is_private()
@@ -1006,7 +1006,7 @@ pub(super) fn local_address(ip: &str) -> bool {
     }
 }
 
-pub(super) fn qtype(text: &str) -> String {
+pub fn qtype(text: &str) -> String {
     let label = match text {
         "1" => "A",
         "2" => "NS",
@@ -1031,25 +1031,8 @@ pub(super) fn qtype(text: &str) -> String {
     label.into()
 }
 
-/// Temp-data key Open Packets leaves for the app.
-pub(super) const OPEN_PACKETS: &str = "triage-open-packets";
-
-/// The button that links the derived tables to the raw capture.
-pub(super) fn open_packets_button(ui: &mut egui::Ui, available: bool) {
-    let label = format!("{} Open Packets", egui_phosphor::regular::NETWORK);
-    if ui
-        .add_enabled(available, egui::Button::new(label))
-        .on_hover_text("Show this run's capture in Packets")
-        .on_disabled_hover_text("This run has no packet capture")
-        .clicked()
-    {
-        ui.ctx()
-            .data_mut(|data| data.insert_temp(egui::Id::new(OPEN_PACKETS), true));
-    }
-}
-
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     #[test]

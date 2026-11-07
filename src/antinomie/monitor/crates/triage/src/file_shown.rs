@@ -8,7 +8,7 @@ use super::file_location::Location;
 use super::*;
 
 /// What a table needs besides its rows.
-pub(super) struct Notes<'a> {
+pub struct Notes<'a> {
     /// The start of the run, in the guest's nanoseconds.
     pub start: Option<u64>,
     /// Paths a Suspicious activity finding names as its object.
@@ -16,21 +16,21 @@ pub(super) struct Notes<'a> {
 }
 
 /// The stored column a table's Path is in.
-fn path_column(slot: usize) -> usize {
+pub fn path_column(slot: usize) -> usize {
     match slot {
         1 | 8..=15 => 3,
         _ => 1,
     }
 }
 
-pub(super) fn text_of<'a>(values: &'a [(&'static str, RowValue)], key: &str) -> Option<&'a str> {
+pub fn text_of<'a>(values: &'a [(&'static str, RowValue)], key: &str) -> Option<&'a str> {
     values.iter().find_map(|(name, value)| match value {
         RowValue::Text(text) if *name == key => Some(text.as_str()),
         _ => None,
     })
 }
 
-fn list_of<'a>(values: &'a [(&'static str, RowValue)], key: &str) -> &'a [String] {
+pub fn list_of<'a>(values: &'a [(&'static str, RowValue)], key: &str) -> &'a [String] {
     values
         .iter()
         .find_map(|(name, value)| match value {
@@ -43,7 +43,7 @@ fn list_of<'a>(values: &'a [(&'static str, RowValue)], key: &str) -> &'a [String
 /// What the findings above Info say of one path: how many name it as their
 /// object, and the worst of them.
 #[derive(Clone)]
-pub(super) struct PathFlag {
+pub struct PathFlag {
     pub count: u64,
     pub worst: rules::Tier,
     /// The rule of the worst finding, whose title the tag shows.
@@ -51,10 +51,10 @@ pub(super) struct PathFlag {
 }
 
 /// The paths that findings above Info name, with what they say of each.
-pub(super) type Flags = std::collections::BTreeMap<String, PathFlag>;
+pub type Flags = std::collections::BTreeMap<String, PathFlag>;
 
 /// Count one finding of `rule` and `tier` against `path`.
-pub(super) fn flag(flags: &mut Flags, path: &str, tier: rules::Tier, rule: &str) {
+pub fn flag(flags: &mut Flags, path: &str, tier: rules::Tier, rule: &str) {
     let entry = flags.entry(path.to_owned()).or_insert_with(|| PathFlag {
         count: 0,
         worst: tier,
@@ -69,7 +69,7 @@ pub(super) fn flag(flags: &mut Flags, path: &str, tier: rules::Tier, rule: &str)
 
 /// The tag of a path a finding involves: the worst tier with the behaviour's
 /// title, or the number of findings when there are several.
-pub(super) fn finding_tag(flag: &PathFlag) -> Badge {
+pub fn finding_tag(flag: &PathFlag) -> Badge {
     let title = rules::rule_title(&flag.rule);
     let (text, hover) = if flag.count == 1 {
         (
@@ -97,7 +97,7 @@ pub(super) fn finding_tag(flag: &PathFlag) -> Badge {
 }
 
 /// The tags of a path: where it lives, its other names, and a finding.
-pub(super) fn path_tags(
+pub fn path_tags(
     locations: &[String],
     names: &[String],
     flagged: Option<&PathFlag>,
@@ -128,14 +128,14 @@ pub(super) fn path_tags(
 }
 
 /// The Tags cell: the tags of a path as pills, and no text of its own.
-pub(super) fn tags_cell(badges: Vec<Badge>) -> Cell {
+pub fn tags_cell(badges: Vec<Badge>) -> Cell {
     let mut cell = table::cell("", tone::text(), false);
     cell.badges = badges;
     cell
 }
 
 /// A SHA-256 as the table shows it: the first twelve digits.
-pub(super) fn short_hash(hash: &str) -> String {
+pub fn short_hash(hash: &str) -> String {
     match hash.char_indices().nth(12) {
         Some((end, _)) => format!("{}\u{2026}", &hash[..end]),
         None => hash.to_owned(),
@@ -144,7 +144,7 @@ pub(super) fn short_hash(hash: &str) -> String {
 
 /// Swap the text of `cell` for its time from the start of the run; the
 /// absolute time it showed moves to the hover.
-fn relative_time(cell: &mut Cell, notes: &Notes<'_>) {
+pub fn relative_time(cell: &mut Cell, notes: &Notes<'_>) {
     let Some(ns) = files::number(&cell.values, "event.time_ns") else {
         return;
     };
@@ -158,7 +158,7 @@ fn relative_time(cell: &mut Cell, notes: &Notes<'_>) {
 
 /// The headers a Files table draws: those of the columns it shows (see
 /// [`file_tabs::shown_columns`]), with Tags after the Path.
-pub(super) fn headers<'a>(slot: usize, stored: &[&'a str]) -> Vec<&'a str> {
+pub fn headers<'a>(slot: usize, stored: &[&'a str]) -> Vec<&'a str> {
     let mut shown: Vec<&str> = file_tabs::shown_columns(slot)
         .iter()
         .map(|&index| stored[index])
@@ -170,7 +170,7 @@ pub(super) fn headers<'a>(slot: usize, stored: &[&'a str]) -> Vec<&'a str> {
 
 /// The rows of a Files table as drawn: the columns of `slot` (see
 /// [`file_tabs::shown_columns`]) with the decoration above.
-pub(super) fn shown(slot: usize, rows: &[Vec<Cell>], notes: &Notes<'_>) -> Vec<Vec<Cell>> {
+pub fn shown(slot: usize, rows: &[Vec<Cell>], notes: &Notes<'_>) -> Vec<Vec<Cell>> {
     let keep = file_tabs::shown_columns(slot);
     let path_at = path_column(slot);
     let path_shown = keep.iter().position(|&index| index == path_at).unwrap_or(0);
@@ -211,26 +211,8 @@ pub(super) fn shown(slot: usize, rows: &[Vec<Cell>], notes: &Notes<'_>) -> Vec<V
         .collect()
 }
 
-/// The run's SHA-256 note in a row's menu: copy the whole digest.
-pub(super) fn copy_hash_menu(ui: &mut egui::Ui, values: &[(&str, RowValue)]) {
-    let hash = values.iter().find_map(|(name, value)| match value {
-        RowValue::Text(hash) if *name == "file.sha256" && !hash.is_empty() => Some(hash),
-        _ => None,
-    });
-    if let Some(hash) = hash {
-        if ui
-            .button("Copy SHA-256")
-            .on_hover_text(hash.as_str())
-            .clicked()
-        {
-            ui.ctx().copy_text(hash.clone());
-            ui.close();
-        }
-    }
-}
-
 /// A size as the table writes it: "812 B", "4.1 KiB".
-pub(super) fn size_text(bytes: u64) -> String {
+pub fn size_text(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{bytes} B")
     } else {

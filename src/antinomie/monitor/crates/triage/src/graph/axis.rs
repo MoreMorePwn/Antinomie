@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum Spacing {
+pub enum Spacing {
     /// One slot per moment, equal widths.
     #[default]
     Events,
@@ -23,7 +23,7 @@ pub(crate) enum Spacing {
 }
 
 impl Spacing {
-    pub(in crate::triage) fn other(self) -> Self {
+    pub fn other(self) -> Self {
         match self {
             Self::Events => Self::Time,
             Self::Time => Self::Events,
@@ -35,7 +35,7 @@ impl Spacing {
 /// run, but never so much that a few findings are left in the middle of the
 /// plot with the sides empty (three slots at half a slot's room each would
 /// leave a sixth of the width empty at both ends).
-pub(super) fn slot_pad(slots: f64) -> f64 {
+pub fn slot_pad(slots: f64) -> f64 {
     if slots <= 1.0 {
         // A lone slot still gets a window as wide as one slot.
         return 0.5;
@@ -44,13 +44,13 @@ pub(super) fn slot_pad(slots: f64) -> f64 {
 }
 
 /// A gap in time at least this many times the typical gap is marked.
-pub(super) const BREAK_RATIO: f64 = 8.0;
+pub const BREAK_RATIO: f64 = 8.0;
 /// Breaks drawn at most.
-pub(super) const MAX_BREAKS: usize = 48;
+pub const MAX_BREAKS: usize = 48;
 
 /// The slots of one index, shared with every axis made from it.
 #[derive(Clone, Debug, Default)]
-pub(in crate::triage) struct Slots {
+pub struct Slots {
     /// Distinct `first_ns` of the findings, sorted.
     pub times: Arc<[u64]>,
     /// The width of a slot, in ns, outside the first and last: the median gap.
@@ -60,7 +60,7 @@ pub(in crate::triage) struct Slots {
 }
 
 impl Slots {
-    pub(in crate::triage) fn new(times: Vec<u64>) -> Self {
+    pub fn new(times: Vec<u64>) -> Self {
         let mut gaps: Vec<u64> = times.windows(2).map(|pair| pair[1] - pair[0]).collect();
         let median = if gaps.is_empty() {
             1_000_000.0
@@ -90,25 +90,25 @@ impl Slots {
 
 /// The map between a time in ns and a place on the axis.
 #[derive(Clone, Debug)]
-pub(in crate::triage) struct Axis {
+pub struct Axis {
     pub spacing: Spacing,
     pub slots: Slots,
 }
 
 impl Axis {
-    pub(in crate::triage) fn new(spacing: Spacing, slots: &Slots) -> Self {
+    pub fn new(spacing: Spacing, slots: &Slots) -> Self {
         Self {
             spacing,
             slots: slots.clone(),
         }
     }
 
-    fn events(&self) -> bool {
+    pub fn events(&self) -> bool {
         self.spacing == Spacing::Events && !self.slots.times.is_empty()
     }
 
     /// The place of `ns` on the axis.
-    pub(in crate::triage) fn to_u(&self, ns: f64) -> f64 {
+    pub fn to_u(&self, ns: f64) -> f64 {
         if !self.events() {
             return ns;
         }
@@ -126,7 +126,7 @@ impl Axis {
     }
 
     /// The time at a place on the axis.
-    pub(in crate::triage) fn to_ns(&self, u: f64) -> f64 {
+    pub fn to_ns(&self, u: f64) -> f64 {
         if !self.events() {
             return u;
         }
@@ -144,39 +144,39 @@ impl Axis {
     }
 
     /// The shortest window worth showing: a microsecond, or a slot and a half.
-    pub(in crate::triage) fn min_span(&self) -> f64 {
+    pub fn min_span(&self) -> f64 {
         if self.events() {
             1.5
         } else {
-            super::view::MIN_SPAN_NS
+            MIN_SPAN_NS
         }
     }
 
     /// The window that shows every finding with a little room.
-    pub(in crate::triage) fn all(&self, findings: (u64, u64)) -> (f64, f64) {
+    pub fn all(&self, findings: (u64, u64)) -> (f64, f64) {
         if self.events() {
             let slots = self.slots.times.len() as f64;
             let pad = slot_pad(slots);
             (-pad, slots - 1.0 + pad)
         } else {
-            super::view::fitted_findings(findings)
+            fitted_findings(findings)
         }
     }
 
     /// Where the whole run lies on the axis: what pan and zoom stay inside and
     /// the overview ruler spans.
-    pub(in crate::triage) fn run(&self, run: (u64, u64)) -> (f64, f64) {
+    pub fn run(&self, run: (u64, u64)) -> (f64, f64) {
         if self.events() {
             let slots = self.slots.times.len() as f64;
             let pad = slot_pad(slots);
             (-pad, slots - 1.0 + pad)
         } else {
-            super::view::fitted(run)
+            fitted(run)
         }
     }
 
     /// A window in ns, as the other spacing's units.
-    pub(in crate::triage) fn convert_from(&self, other: Spacing, window: (f64, f64)) -> (f64, f64) {
+    pub fn convert_from(&self, other: Spacing, window: (f64, f64)) -> (f64, f64) {
         if other == self.spacing {
             return window;
         }
@@ -190,3 +190,24 @@ impl Axis {
         )
     }
 }
+
+/// The shortest window: one microsecond.
+pub const MIN_SPAN_NS: f64 = 1_000.0;
+
+/// The window that shows the whole run, with a little room at both ends.
+pub fn fitted(extent: (u64, u64)) -> (f64, f64) {
+    let (lo, hi) = (extent.0 as f64, extent.1 as f64);
+    let margin = ((hi - lo) * 0.01).max(MIN_SPAN_NS / 2.0);
+    (lo - margin, hi + margin)
+}
+
+/// The window a graph opens at: the findings with some room, however short
+/// their stretch of a long run is (a burst of a few milliseconds at the end of
+/// a minute is shown as the burst).
+pub fn fitted_findings(findings: (u64, u64)) -> (f64, f64) {
+    let (lo, hi) = (findings.0 as f64, findings.1 as f64);
+    // A single finding has no stretch: half a millisecond either side.
+    let pad = ((hi - lo) * 0.06).max(500_000.0);
+    (lo - pad, hi + pad)
+}
+

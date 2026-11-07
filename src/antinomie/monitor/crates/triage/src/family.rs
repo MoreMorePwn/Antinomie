@@ -9,14 +9,14 @@ use std::collections::BTreeMap;
 
 /// A malware family a detection names, with where it said so.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Candidate {
+pub struct Candidate {
     pub name: String,
     pub source: String,
 }
 
 /// What MalwareBazaar says of the run's sample: its `signature` and `tags`.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Bazaar<'a> {
+pub struct Bazaar<'a> {
     pub signature: Option<&'a str>,
     pub tags: &'a [String],
 }
@@ -27,7 +27,7 @@ pub(crate) struct Bazaar<'a> {
 /// `test_Malaysia`), the bare category `RANSOMWARE`, and pack prefixes. A
 /// candidate is never taken from one of these, and a rule whose name carries
 /// one is a generic match.
-pub(crate) const GENERIC_FRAGMENTS: &[&str] = &[
+pub const GENERIC_FRAGMENTS: &[&str] = &[
     "masshunt",
     "unique",
     "base",
@@ -43,7 +43,7 @@ pub(crate) const GENERIC_FRAGMENTS: &[&str] = &[
 
 /// Prefixes and words of the packs' rule names that are no family but do not
 /// make a rule generic (`SIGNATURE_BASE_EXT_HKTL_...`, `MULTI_Malware_...`).
-const PACK_WORDS: &[&str] = &[
+pub const PACK_WORDS: &[&str] = &[
     "th",
     "multi",
     "signature",
@@ -55,7 +55,7 @@ const PACK_WORDS: &[&str] = &[
 ];
 
 /// Words that name a kind of rule, a platform or a date, not a family.
-const NOT_FAMILY: &[&str] = &[
+pub const NOT_FAMILY: &[&str] = &[
     "mal",
     "malware",
     "elf",
@@ -151,7 +151,7 @@ const NOT_FAMILY: &[&str] = &[
 ];
 
 /// Families that Linux IDS signature names carry as a word.
-const IDS_FAMILIES: &[&str] = &[
+pub const IDS_FAMILIES: &[&str] = &[
     "mirai",
     "gafgyt",
     "bashlite",
@@ -177,13 +177,13 @@ const IDS_FAMILIES: &[&str] = &[
 ];
 
 /// A lower-case word of a rule name that is no family.
-fn not_family(lower: &str) -> bool {
+pub fn not_family(lower: &str) -> bool {
     NOT_FAMILY.contains(&lower) || GENERIC_FRAGMENTS.contains(&lower) || PACK_WORDS.contains(&lower)
 }
 
 /// Families whose usual spelling has inner capitals; rule names and tags often
 /// give them in one case.
-const SPELLINGS: &[&str] = &[
+pub const SPELLINGS: &[&str] = &[
     "RotaJakiro",
     "BPFDoor",
     "XorDDoS",
@@ -213,7 +213,7 @@ const SPELLINGS: &[&str] = &[
     "Tinyshell",
 ];
 
-fn pretty(word: &str) -> String {
+pub fn pretty(word: &str) -> String {
     if let Some(known) = SPELLINGS
         .iter()
         .find(|known| known.eq_ignore_ascii_case(word))
@@ -232,12 +232,12 @@ fn pretty(word: &str) -> String {
 }
 
 /// The family a Malpedia-style value names: `elf.mirai` is Mirai.
-fn meta_family(value: &str) -> String {
+pub fn meta_family(value: &str) -> String {
     pretty(value.rsplit('.').next().unwrap_or(value).trim())
 }
 
 /// A rule's name without the `s123::` prefix the engine puts before its id.
-pub(crate) fn plain_name(rule: &str) -> &str {
+pub fn plain_name(rule: &str) -> &str {
     match rule.split_once("::") {
         Some((prefix, name))
             if prefix.starts_with('s') && prefix[1..].chars().all(|c| c.is_ascii_digit()) =>
@@ -249,7 +249,7 @@ pub(crate) fn plain_name(rule: &str) -> &str {
 }
 
 /// `Linux_Trojan_Gafgyt_ba2c1b10`: Elastic's `<Os>_<Category>_<Family>_<hash>`.
-fn elastic_family(rule: &str) -> Option<String> {
+pub fn elastic_family(rule: &str) -> Option<String> {
     const OS: &[&str] = &["linux", "multi", "windows", "macos", "freebsd"];
     const CATEGORY: &[&str] = &[
         "trojan",
@@ -297,7 +297,7 @@ fn elastic_family(rule: &str) -> Option<String> {
 /// `MAL_ELF_Mirai_Jan2020`, `elf_mirai` and `SEKOIA_Backdoor_Lin_Bpfdoor`
 /// each carry one, `Suspicious_Strings` carries none. A name like
 /// `DetectGoMethodSignatures` is a sentence, not a family.
-fn family_in_rule_name(rule: &str) -> Option<String> {
+pub fn family_in_rule_name(rule: &str) -> Option<String> {
     let rule = rule.strip_prefix("SIGNATURE_BASE_").unwrap_or(rule);
     for token in rule.split(['_', '-', ' ', '.']) {
         let lower = token.to_ascii_lowercase();
@@ -316,7 +316,7 @@ fn family_in_rule_name(rule: &str) -> Option<String> {
 
 /// Tags MalwareBazaar gives that say a file type, an architecture, a packer or
 /// a kind of malware, not a family.
-const GENERIC_TAGS: &[&str] = &[
+pub const GENERIC_TAGS: &[&str] = &[
     "elf",
     "exe",
     "dll",
@@ -411,7 +411,7 @@ const GENERIC_TAGS: &[&str] = &[
 ];
 
 /// Whether a MalwareBazaar tag could name a family.
-fn tag_is_family(tag: &str) -> bool {
+pub fn tag_is_family(tag: &str) -> bool {
     let lower = tag.trim().to_ascii_lowercase();
     lower.len() >= 3
         && !GENERIC_TAGS.contains(&lower.as_str())
@@ -421,29 +421,29 @@ fn tag_is_family(tag: &str) -> bool {
         && lower.chars().any(|c| c.is_ascii_alphabetic())
 }
 
-fn curated_pack(source: &str) -> bool {
+pub fn curated_pack(source: &str) -> bool {
     let lower = source.to_ascii_lowercase();
     ["malpedia", "forge", "yarahub"]
         .iter()
         .any(|pack| lower.contains(pack))
 }
 
-fn is_elastic(source: &str) -> bool {
+pub fn is_elastic(source: &str) -> bool {
     source.to_ascii_lowercase().contains("elastic")
 }
 
-fn is_yarahub(source: &str) -> bool {
+pub fn is_yarahub(source: &str) -> bool {
     source.to_ascii_lowercase().contains("yarahub")
 }
 
 /// Elastic's score, the rule's severity when it is a number.
-fn score(severity: &str) -> Option<u32> {
+pub fn score(severity: &str) -> Option<u32> {
     severity.trim().parse().ok()
 }
 
 /// How much one YARA match says about the sample.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Strength {
+pub enum Strength {
     /// An Elastic rule scored 70 or more, a rule with `family` meta, or a
     /// curated pack's rule that is not generic.
     Strong,
@@ -457,7 +457,7 @@ pub(crate) enum Strength {
 
 /// Whether a rule's name is a generic or hunting rule (see
 /// `GENERIC_FRAGMENTS`).
-pub(crate) fn is_generic_rule(rule: &str) -> bool {
+pub fn is_generic_rule(rule: &str) -> bool {
     let name = plain_name(rule);
     let lower = name.to_ascii_lowercase();
     if lower.starts_with("test_") || lower == "ransomware" {
@@ -471,7 +471,7 @@ pub(crate) fn is_generic_rule(rule: &str) -> bool {
 }
 
 /// Whether a rule's name says it is for another platform than a Linux ELF.
-pub(crate) fn wrong_platform(rule: &str) -> bool {
+pub fn wrong_platform(rule: &str) -> bool {
     const OTHER: &[&str] = &[
         "windows",
         "win32",
@@ -507,7 +507,7 @@ pub(crate) fn wrong_platform(rule: &str) -> bool {
 
 /// The strength of one YARA match: its rule name, severity (an Elastic score),
 /// pack and `family` meta.
-pub(crate) fn strength(rule: &str, severity: &str, source: &str, family: &str) -> Strength {
+pub fn strength(rule: &str, severity: &str, source: &str, family: &str) -> Strength {
     if wrong_platform(rule) {
         return Strength::WrongPlatform;
     }
@@ -536,7 +536,7 @@ pub(crate) fn strength(rule: &str, severity: &str, source: &str, family: &str) -
 /// type, an architecture, a packer, a kind of malware) and not the signature
 /// again. A sample with signature `Mirai` and tags `elf`, `Mirai`, `Prometei`
 /// gives Mirai (signature) and Prometei (tag).
-pub(crate) fn bazaar_families(
+pub fn bazaar_families(
     signature: Option<&str>,
     tags: &[String],
 ) -> Vec<(String, &'static str)> {
@@ -561,11 +561,11 @@ pub(crate) fn bazaar_families(
 }
 
 /// One mention of a family.
-struct Mention {
-    name: String,
-    points: u32,
-    strong: bool,
-    source: String,
+pub struct Mention {
+    pub name: String,
+    pub points: u32,
+    pub strong: bool,
+    pub source: String,
 }
 
 /// The families the run's detection matches and the sample's MalwareBazaar
@@ -574,7 +574,7 @@ struct Mention {
 /// by MalwareBazaar comes before the fragments of other rule names, and
 /// several rules naming one family add up. MalwareBazaar's signature and its
 /// tags may name different families; both are candidates.
-pub(crate) fn family_candidates(hits: &[DetectionHit], bazaar: Bazaar<'_>) -> Vec<Candidate> {
+pub fn family_candidates(hits: &[DetectionHit], bazaar: Bazaar<'_>) -> Vec<Candidate> {
     let mut mentions: Vec<Mention> = Vec::new();
     let yara = |hit: &&DetectionHit| hit.engine.eq_ignore_ascii_case("yara");
     for hit in hits.iter().filter(yara) {
@@ -648,7 +648,7 @@ pub(crate) fn family_candidates(hits: &[DetectionHit], bazaar: Bazaar<'_>) -> Ve
 
 /// One candidate per family: the points add up, the strongest mention gives the
 /// name's spelling and the source, and the other kinds of source follow it.
-fn merge(mentions: Vec<Mention>) -> Vec<Candidate> {
+pub fn merge(mentions: Vec<Mention>) -> Vec<Candidate> {
     struct Total {
         first: usize,
         points: u32,
@@ -727,7 +727,7 @@ fn merge(mentions: Vec<Mention>) -> Vec<Candidate> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     fn hit(engine: &str, rule: &str, severity: &str, family: &str, source: &str) -> DetectionHit {

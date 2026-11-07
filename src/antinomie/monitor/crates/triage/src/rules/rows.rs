@@ -7,7 +7,7 @@ use super::{Category, Tier};
 
 /// The table's stored columns. Filters, sorts and exports address them by
 /// place; [`SHOWN`] says which are laid out and in what order.
-pub(in crate::triage) const HEADERS: &[&str] = &[
+pub const HEADERS: &[&str] = &[
     "Rule",
     "Tier",
     "Category",
@@ -26,20 +26,20 @@ pub(in crate::triage) const HEADERS: &[&str] = &[
     "Result",
     "When",
 ];
-pub(in crate::triage) const COL_TIER: usize = 1;
-pub(in crate::triage) const COL_PROCESS: usize = 3;
-pub(in crate::triage) const COL_SUMMARY: usize = 4;
-pub(in crate::triage) const COL_COUNT: usize = 5;
-pub(in crate::triage) const COL_TIME: usize = 7;
-pub(in crate::triage) const COL_BEHAVIOUR: usize = 12;
-pub(in crate::triage) const COL_TARGET: usize = 13;
-pub(in crate::triage) const COL_ATTACK: usize = 14;
-pub(in crate::triage) const COL_RESULT: usize = 15;
-pub(in crate::triage) const COL_WHEN: usize = 16;
+pub const COL_TIER: usize = 1;
+pub const COL_PROCESS: usize = 3;
+pub const COL_SUMMARY: usize = 4;
+pub const COL_COUNT: usize = 5;
+pub const COL_TIME: usize = 7;
+pub const COL_BEHAVIOUR: usize = 12;
+pub const COL_TARGET: usize = 13;
+pub const COL_ATTACK: usize = 14;
+pub const COL_RESULT: usize = 15;
+pub const COL_WHEN: usize = 16;
 /// The columns the table lays out, left to right. The others (Rule, Category,
 /// Summary, Source, Time, Confidence, Evidence, Version, Outcome) stay in the
 /// row for filters and exports and are read in Details.
-pub(in crate::triage) const SHOWN: [usize; 8] = [
+pub const SHOWN: [usize; 8] = [
     COL_TIER,
     COL_BEHAVIOUR,
     COL_TARGET,
@@ -52,12 +52,12 @@ pub(in crate::triage) const SHOWN: [usize; 8] = [
 
 /// The key of a cell's own hover text, and of the reason a tier chip carries
 /// a flag for limited confidence.
-pub(in crate::triage) const TIP: &str = "cell.tooltip";
-pub(in crate::triage) const LIMITED: &str = "cell.limited";
+pub const TIP: &str = "cell.tooltip";
+pub const LIMITED: &str = "cell.limited";
 
 /// Which rows the table shows: the chips above it.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub(in crate::triage) struct View {
+pub struct View {
     /// INFO rows are built only when asked for; their counts are always kept.
     pub show_info: bool,
     /// Rows hidden as housekeeping or outside the run's tree.
@@ -69,15 +69,15 @@ pub(in crate::triage) struct View {
 }
 
 impl View {
-    pub(in crate::triage) fn tier_on(&self, tier: Tier) -> bool {
+    pub fn tier_on(&self, tier: Tier) -> bool {
         self.tiers & (1 << tier.index()) != 0
     }
 
-    pub(in crate::triage) fn toggle_tier(&mut self, tier: Tier) {
+    pub fn toggle_tier(&mut self, tier: Tier) {
         self.tiers ^= 1 << tier.index();
     }
 
-    pub(in crate::triage) fn category_on(&self, category: Category) -> bool {
+    pub fn category_on(&self, category: Category) -> bool {
         self.categories
             & (1 << Category::ALL
                 .iter()
@@ -86,7 +86,7 @@ impl View {
             != 0
     }
 
-    pub(in crate::triage) fn toggle_category(&mut self, category: Category) {
+    pub fn toggle_category(&mut self, category: Category) {
         self.categories ^= 1
             << Category::ALL
                 .iter()
@@ -95,7 +95,7 @@ impl View {
     }
 }
 
-fn text<'a>(values: &'a [(&'static str, RowValue)], key: &str) -> Option<&'a str> {
+pub fn text<'a>(values: &'a [(&'static str, RowValue)], key: &str) -> Option<&'a str> {
     values.iter().find_map(|(name, value)| match value {
         RowValue::Text(text) if *name == key => Some(text.as_str()),
         _ => None,
@@ -103,7 +103,7 @@ fn text<'a>(values: &'a [(&'static str, RowValue)], key: &str) -> Option<&'a str
 }
 
 /// Whether a row passes the chips.
-pub(in crate::triage) fn view_keeps(view: &View, values: &[(&'static str, RowValue)]) -> bool {
+pub fn view_keeps(view: &View, values: &[(&'static str, RowValue)]) -> bool {
     if !view.show_hidden
         && values
             .iter()
@@ -126,7 +126,7 @@ pub(in crate::triage) fn view_keeps(view: &View, values: &[(&'static str, RowVal
             .any(|candidate| view.category_on(*candidate) && Some(candidate.tag()) == category)
 }
 
-fn tags(agg: &Agg) -> Vec<String> {
+pub fn tags(agg: &Agg) -> Vec<String> {
     flag::NAMES
         .iter()
         .filter(|(bit, _)| agg.flags & bit != 0)
@@ -135,7 +135,7 @@ fn tags(agg: &Agg) -> Vec<String> {
 }
 
 /// The `Outcome` cell: what the first call returned, and how many failed.
-fn outcome(agg: &Agg) -> String {
+pub fn outcome(agg: &Agg) -> String {
     if agg.count <= 1 {
         agg.outcome.clone()
     } else if agg.failed == agg.count {
@@ -147,7 +147,7 @@ fn outcome(agg: &Agg) -> String {
     }
 }
 
-pub(super) fn finding(agg: &Agg) -> Finding {
+pub fn finding(agg: &Agg) -> Finding {
     let spec = agg.spec();
     let color = agg.tier.tone();
     let mut summary = agg.summary.clone();
@@ -344,7 +344,7 @@ pub(super) fn finding(agg: &Agg) -> Finding {
 
 /// Fill the cells that read the run's clocks: `Time` on the host's clock and
 /// `When` as an offset from `start`, the first moment of the run.
-pub(in crate::triage) fn stamp(
+pub fn stamp(
     finding: &mut Finding,
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
     start: Option<u64>,
@@ -367,7 +367,7 @@ pub(in crate::triage) fn stamp(
 }
 
 /// The row that stands for rows a cap did not keep.
-pub(super) fn overflow_row(rule: &'static str, overflow: &Overflow) -> Option<Finding> {
+pub fn overflow_row(rule: &'static str, overflow: &Overflow) -> Option<Finding> {
     let first = overflow.first.as_ref()?;
     let mut agg = first.clone();
     agg.count = overflow.count;

@@ -11,32 +11,32 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Paths remembered as existing. Past this, "not seen before" no longer means
 /// anything, so no file is inferred to be new.
-const KNOWN_PATHS: usize = 262_144;
+pub const KNOWN_PATHS: usize = 262_144;
 /// Bound on every other per-run table kept here.
-const TABLE_LIMIT: usize = 262_144;
+pub const TABLE_LIMIT: usize = 262_144;
 
-pub(super) const O_CREAT: u64 = 0o100;
-pub(super) const O_EXCL: u64 = 0o200;
-pub(super) const O_TRUNC: u64 = 0o1000;
+pub const O_CREAT: u64 = 0o100;
+pub const O_EXCL: u64 = 0o200;
+pub const O_TRUNC: u64 = 0o1000;
 /// `__O_TMPFILE | O_DIRECTORY`; both bits must be set.
-pub(super) const O_TMPFILE: u64 = 0o20200000;
-const SOCK_CLOEXEC: u64 = 0o2000000;
-const EINPROGRESS: i64 = -115;
+pub const O_TMPFILE: u64 = 0o20200000;
+pub const SOCK_CLOEXEC: u64 = 0o2000000;
+pub const EINPROGRESS: i64 = -115;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum SocketKind {
+pub enum SocketKind {
     Stream,
     Datagram,
     Other,
 }
 
 /// An IP address and port a socket was connected or bound to.
-pub(super) type Endpoint = (std::net::IpAddr, u16);
+pub type Endpoint = (std::net::IpAddr, u16);
 
 #[derive(Clone, Copy)]
-pub(super) struct Socket {
-    kind: SocketKind,
-    cloexec: bool,
+pub struct Socket {
+    pub kind: SocketKind,
+    pub cloexec: bool,
     /// `socket()` domain: 2 inet, 10 inet6, 17 packet.
     pub domain: u64,
     /// A raw or packet socket.
@@ -56,7 +56,7 @@ impl Socket {
         self.kind == SocketKind::Datagram
     }
 
-    fn new(kind: SocketKind, cloexec: bool, domain: u64, raw: bool) -> Self {
+    pub fn new(kind: SocketKind, cloexec: bool, domain: u64, raw: bool) -> Self {
         Self {
             kind,
             cloexec,
@@ -72,27 +72,27 @@ impl Socket {
 }
 
 #[derive(Default)]
-pub(super) struct State {
-    known: BTreeSet<String>,
-    known_overflow: bool,
-    sockets: BTreeMap<(u64, u32, u64), Socket>,
+pub struct State {
+    pub known: BTreeSet<String>,
+    pub known_overflow: bool,
+    pub sockets: BTreeMap<(u64, u32, u64), Socket>,
     /// `(owner cookie, owner pid, address, port)` of datagram flows already reported.
-    flows: BTreeSet<(u64, u32, String, u16)>,
+    pub flows: BTreeSet<(u64, u32, String, u16)>,
     /// Answer address → `(capture time in µs, queried name)`.
-    dns: BTreeMap<String, Vec<(Option<u64>, String)>>,
+    pub dns: BTreeMap<String, Vec<(Option<u64>, String)>>,
     /// Working directory the root process was launched in.
     pub launch_cwd: Option<String>,
     pub root_cookie: u64,
-    seeded: bool,
+    pub seeded: bool,
     /// Credentials in effect for each task, by task cookie.
-    credentials: BTreeMap<u64, kernel_notes::Credentials>,
+    pub credentials: BTreeMap<u64, kernel_notes::Credentials>,
     /// The guest's user and group names, when they could be read.
     pub names: Option<std::sync::Arc<antinomie_monitor_core::guest_names::GuestNames>>,
     /// The guest was asked to hash the files the run writes.
     pub hashes_writes: bool,
     /// File creations held until the guest's hash of the file arrives, by the
     /// file's identity (see `normalized::call`).
-    pub(super) held: BTreeMap<
+    pub held: BTreeMap<
         antinomie_monitor_core::kernel_notes::FileKey,
         antinomie_monitor_core::analysis::detection::Event,
     >,
@@ -100,21 +100,21 @@ pub(super) struct State {
 
 impl State {
     /// The path was seen earlier in this run, so it existed then.
-    pub(super) fn knows(&self, path: &str) -> bool {
+    pub fn knows(&self, path: &str) -> bool {
         self.known.contains(path)
     }
 
-    pub(super) fn set_credentials(&mut self, task: u64, creds: kernel_notes::Credentials) {
+    pub fn set_credentials(&mut self, task: u64, creds: kernel_notes::Credentials) {
         if self.credentials.len() < TABLE_LIMIT || self.credentials.contains_key(&task) {
             self.credentials.insert(task, creds);
         }
     }
 
-    pub(super) fn credentials(&self, task: u64) -> Option<kernel_notes::Credentials> {
+    pub fn credentials(&self, task: u64) -> Option<kernel_notes::Credentials> {
         self.credentials.get(&task).copied()
     }
 
-    pub(super) fn copy_sockets(&mut self, source: (u64, u32), target: (u64, u32)) {
+    pub fn copy_sockets(&mut self, source: (u64, u32), target: (u64, u32)) {
         let copied: Vec<_> = self
             .sockets
             .iter()
@@ -127,7 +127,7 @@ impl State {
     }
 
     /// Remember what a capture's DNS answers say, from one DNS row.
-    pub(super) fn learn_dns(&mut self, row: &[Cell]) {
+    pub fn learn_dns(&mut self, row: &[Cell]) {
         let values = row
             .first()
             .map(|cell| cell.values.as_slice())
@@ -159,7 +159,7 @@ impl State {
     /// The name a DNS answer in this run's capture gave for `address`. Several
     /// different names for one address are only told apart by capture time;
     /// without it none is chosen.
-    pub(super) fn hostname(&self, address: &str, at_us: Option<u64>) -> Option<String> {
+    pub fn hostname(&self, address: &str, at_us: Option<u64>) -> Option<String> {
         let address = address.parse::<std::net::IpAddr>().ok()?.to_string();
         let answers = self.dns.get(&address)?;
         let first = &answers.first()?.1;
@@ -177,7 +177,7 @@ impl State {
             .map(|(_, name)| name.clone())
     }
 
-    fn remember(&mut self, path: String) {
+    pub fn remember(&mut self, path: String) {
         if self.known.len() >= KNOWN_PATHS {
             self.known_overflow = true;
         } else {
@@ -189,7 +189,7 @@ impl State {
 /// Seed the root process's working directory with the directory it was
 /// launched in, the first time one of its tasks is seen. Later `chdir` and
 /// `fchdir` calls are followed from there.
-pub(super) fn seed_launch_cwd(files: &mut FdState, event: &EventSummary) {
+pub fn seed_launch_cwd(files: &mut FdState, event: &EventSummary) {
     let state = &mut files.journal;
     if state.seeded
         || state.root_cookie == 0
@@ -208,7 +208,7 @@ pub(super) fn seed_launch_cwd(files: &mut FdState, event: &EventSummary) {
         .or_insert(cwd);
 }
 
-pub(super) struct Parent {
+pub struct Parent {
     pub pid: u32,
     pub image: Option<String>,
     pub command_line: Option<String>,
@@ -216,7 +216,7 @@ pub(super) struct Parent {
 
 /// The parent a fork or clone result linked to this task, with the image and
 /// command line that parent had when last seen to exec.
-pub(super) fn parent(files: &FdState, event: &EventSummary) -> Option<Parent> {
+pub fn parent(files: &FdState, event: &EventSummary) -> Option<Parent> {
     let own = TaskKey {
         pid: event.pid,
         cookie: event.task_cookie,
@@ -236,7 +236,7 @@ pub(super) fn parent(files: &FdState, event: &EventSummary) -> Option<Parent> {
 /// The task's working directory and whether it is only inferred: a directory
 /// reached by `chdir` is joined lexically and symlinks are not followed, so
 /// only the launch directory and a `getcwd` answer are exact.
-pub(super) fn current_directory(
+pub fn current_directory(
     files: &FdState,
     call: &InvocationSummary,
     event: &EventSummary,
@@ -246,14 +246,14 @@ pub(super) fn current_directory(
     Some((path.clone(), files.cwd_unverified.contains(&owner)))
 }
 
-const LEXICAL: [&str; 2] = [
+pub const LEXICAL: [&str; 2] = [
     " (lexical cwd path; symlinks unknown)",
     " (lexical dirfd path; symlinks unknown)",
 ];
 
 /// A displayed path without its annotation, and whether it was only joined
 /// lexically. Relative paths that could not be resolved give nothing.
-pub(super) fn clean(display: &str) -> Option<(String, bool)> {
+pub fn clean(display: &str) -> Option<(String, bool)> {
     if display.is_empty()
         || display == "—"
         || display.contains("(relative,")
@@ -270,20 +270,20 @@ pub(super) fn clean(display: &str) -> Option<(String, bool)> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Role {
+pub enum Role {
     Subject,
     Old,
     New,
 }
 
-pub(super) struct PathUse {
+pub struct PathUse {
     pub name: String,
     /// Joined lexically from the working directory or a directory descriptor.
     pub lexical: bool,
     pub role: Role,
 }
 
-fn resolved(
+pub fn resolved(
     raw: &str,
     call: &InvocationSummary,
     event: &EventSummary,
@@ -296,7 +296,7 @@ fn resolved(
 
 /// The paths a call names, resolved as far as the trace allows. A path that
 /// cannot be resolved keeps the text the call was given, as auditd records it.
-pub(super) fn paths(
+pub fn paths(
     files: &FdState,
     call: &InvocationSummary,
     event: &EventSummary,
@@ -346,7 +346,7 @@ pub(super) fn paths(
     }
 }
 
-pub(super) struct Creation {
+pub struct Creation {
     pub path: String,
     pub lexical: bool,
     /// The call proves a new file only by the path not having been seen
@@ -361,7 +361,7 @@ pub(super) struct Creation {
 /// `O_CREAT|O_TRUNC` succeed on an existing file too: the file is new only if
 /// the path was not seen before, which the caller marks as inferred. With
 /// `plain_creat` an `O_CREAT` open without either flag is judged the same way.
-pub(super) fn creation(
+pub fn creation(
     files: &FdState,
     call: &InvocationSummary,
     event: &EventSummary,
@@ -412,7 +412,7 @@ pub(super) fn creation(
 }
 
 /// Update what is known about paths and sockets after one call.
-pub(super) fn track(files: &mut FdState, call: &InvocationSummary, event: &EventSummary) {
+pub fn track(files: &mut FdState, call: &InvocationSummary, event: &EventSummary) {
     track_sockets(files, call, event);
     if !succeeded(call) {
         return;
@@ -429,7 +429,7 @@ pub(super) fn track(files: &mut FdState, call: &InvocationSummary, event: &Event
     }
 }
 
-fn track_sockets(files: &mut FdState, call: &InvocationSummary, event: &EventSummary) {
+pub fn track_sockets(files: &mut FdState, call: &InvocationSummary, event: &EventSummary) {
     let Some(args) = call_args(call) else { return };
     let Some(result) = call.exit.as_ref().and_then(|exit| exit.result) else {
         return;
@@ -538,7 +538,7 @@ fn track_sockets(files: &mut FdState, call: &InvocationSummary, event: &EventSum
 
 /// What the descriptor passed as the call's first argument is, when its
 /// `socket()` or `accept()` was seen.
-pub(super) fn socket_kind(
+pub fn socket_kind(
     files: &FdState,
     call: &InvocationSummary,
     event: &EventSummary,
@@ -553,14 +553,14 @@ pub(super) fn socket_kind(
 }
 
 /// The socket a task's descriptor refers to, when its `socket()` or `accept()` was seen.
-pub(super) fn socket_at(files: &FdState, cookie: u64, tid: u32, fd: u64) -> Option<&Socket> {
+pub fn socket_at(files: &FdState, cookie: u64, tid: u32, fd: u64) -> Option<&Socket> {
     let owner = table_owner(files, cookie, tid);
     files.journal.sockets.get(&(owner.0, owner.1, fd))
 }
 
 /// First time this process reaches this datagram peer. A datagram socket has
 /// no connection to open or close, so each peer is reported once.
-pub(super) fn first_flow(
+pub fn first_flow(
     files: &mut FdState,
     call: &InvocationSummary,
     event: &EventSummary,
@@ -572,7 +572,7 @@ pub(super) fn first_flow(
     flows.len() < TABLE_LIMIT && flows.insert((owner.0, owner.1, address.to_owned(), port))
 }
 
-pub(super) struct Address {
+pub struct Address {
     pub ip: String,
     pub port: u16,
     /// The `struct sockaddr` as captured.
@@ -582,7 +582,7 @@ pub(super) struct Address {
 /// The IP address and port in the `struct sockaddr` a call was given or
 /// filled in. Only a complete AF_INET or AF_INET6 address is decoded; Unix
 /// sockets and short captures give nothing.
-pub(super) fn address(call: &InvocationSummary, name: &str, argument: usize) -> Option<Address> {
+pub fn address(call: &InvocationSummary, name: &str, argument: usize) -> Option<Address> {
     // accept4 takes the same address argument as accept.
     let name = if name == "accept4" { "accept" } else { name };
     let field = call
@@ -621,7 +621,7 @@ pub(super) fn address(call: &InvocationSummary, name: &str, argument: usize) -> 
 }
 
 /// Index of the address argument of an address-taking syscall.
-pub(super) fn address_argument(name: &str) -> Option<usize> {
+pub fn address_argument(name: &str) -> Option<usize> {
     let argument = match name {
         "connect" => "uservaddr",
         "accept" | "accept4" => "upeer_sockaddr",

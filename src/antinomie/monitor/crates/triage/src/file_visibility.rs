@@ -3,7 +3,7 @@
 use super::*;
 
 #[derive(Clone, Copy)]
-pub(super) struct FileVisibility {
+pub struct FileVisibility {
     pub hide_standard_io: bool,
     pub hide_libraries: bool,
     /// List calls the kernel refused, in every Files table. On by default.
@@ -64,7 +64,7 @@ impl FileVisibility {
 /// What the visibility chips hide in one Files table, counted over the whole
 /// run so the chips and the tab can show the real numbers.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub(super) struct VisibilityCount {
+pub struct VisibilityCount {
     /// Rows the table could list before the chips.
     pub total: u64,
     /// Rows the table lists with the chips as they are.
@@ -78,11 +78,11 @@ pub(super) struct VisibilityCount {
 
 impl VisibilityCount {
     /// Count a refused call's row; [`Self::add`] counts it only when listed.
-    pub(super) fn note_failed(&mut self, row: &[Cell]) {
+    pub fn note_failed(&mut self, row: &[Cell]) {
         self.failed += u64::from(FileVisibility::failed(row));
     }
 
-    pub(super) fn add(&mut self, visibility: FileVisibility, row: &[Cell], show_failed: bool) {
+    pub fn add(&mut self, visibility: FileVisibility, row: &[Cell], show_failed: bool) {
         let (stdio, library) = FileVisibility::classes(row);
         self.total += 1;
         self.stdio += u64::from(stdio);
@@ -93,7 +93,7 @@ impl VisibilityCount {
 
 /// Where a Files table's visibility counts are kept: Opened, Read, Changed,
 /// then the operation tabs in slot order.
-pub(super) fn visibility_slot(tab: FileTab) -> usize {
+pub fn visibility_slot(tab: FileTab) -> usize {
     match tab {
         FileTab::Opened => 0,
         FileTab::Read => 1,
@@ -102,13 +102,13 @@ pub(super) fn visibility_slot(tab: FileTab) -> usize {
     }
 }
 
-pub(super) fn library_path(path: &str) -> bool {
+pub fn library_path(path: &str) -> bool {
     path.split('/')
         .any(|component| matches!(component, "lib" | "lib32" | "lib64" | "libx32"))
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     #[test]

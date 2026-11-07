@@ -10,10 +10,10 @@ use super::rules::{Engine, Options, Tier};
 use super::*;
 use antinomie_monitor_core::dump_trigger::{LiveFinding, LiveJudge, TriggerTier};
 
-struct Judge {
-    engine: Engine,
-    files: FdState,
-    sets: std::collections::BTreeMap<u32, std::collections::BTreeSet<u64>>,
+pub struct Judge {
+    pub engine: Engine,
+    pub files: FdState,
+    pub sets: std::collections::BTreeMap<u32, std::collections::BTreeSet<u64>>,
 }
 
 impl LiveJudge for Judge {
@@ -58,7 +58,7 @@ impl LiveJudge for Judge {
     }
 }
 
-fn make() -> Box<dyn LiveJudge> {
+pub fn make() -> Box<dyn LiveJudge> {
     Box::new(Judge {
         engine: Engine::new(Options::default()),
         files: FdState::default(),
@@ -67,6 +67,6 @@ fn make() -> Box<dyn LiveJudge> {
 }
 
 /// Hand the rule engine to the recorder.
-pub(crate) fn register() {
+pub fn register() {
     antinomie_monitor_core::dump_trigger::set_judge(make);
 }

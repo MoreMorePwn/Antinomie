@@ -5,7 +5,7 @@ use super::super::*;
 use super::support::*;
 
 #[test]
-fn a_failed_call_is_one_tier_down_and_says_so() {
+pub fn a_failed_call_is_one_tier_down_and_says_so() {
     let out = run(vec![open(1, "/etc/ld.so.preload", 1, -13)]);
     let row = rows(&out, "injection.ld_so_preload");
     assert_eq!(text(row[0], "finding.tier"), "medium");
@@ -18,7 +18,7 @@ fn a_failed_call_is_one_tier_down_and_says_so() {
 }
 
 #[test]
-fn failing_is_the_signal_for_scans_and_the_kernel_exploit_and_rwx_attempts() {
+pub fn failing_is_the_signal_for_scans_and_the_kernel_exploit_and_rwx_attempts() {
     for rule in SPECS.iter().filter(|spec| spec.signal).map(|spec| spec.id) {
         assert!(
             [
@@ -36,7 +36,7 @@ fn failing_is_the_signal_for_scans_and_the_kernel_exploit_and_rwx_attempts() {
 }
 
 #[test]
-fn five_failed_attempts_at_one_target_keep_a_high_rule_high() {
+pub fn five_failed_attempts_at_one_target_keep_a_high_rule_high() {
     let tries = |n: usize| {
         run((0..n)
             .map(|_| sys(1, 175, "init_module", [0, 100, 0, 0, 0, 0], -1))
@@ -60,7 +60,7 @@ fn five_failed_attempts_at_one_target_keep_a_high_rule_high() {
 }
 
 #[test]
-fn repeats_fold_by_rule_task_and_object() {
+pub fn repeats_fold_by_rule_task_and_object() {
     let same: Calls = (0..5).map(|_| open_write(1, "/etc/cron.d/x", 3)).collect();
     let out = run(same);
     assert_eq!(rows(&out, "persistence.cron").len(), 1);
@@ -83,7 +83,7 @@ fn repeats_fold_by_rule_task_and_object() {
 }
 
 #[test]
-fn a_pool_of_identical_children_is_one_row_with_a_count() {
+pub fn a_pool_of_identical_children_is_one_row_with_a_count() {
     let mut calls = vec![exec(1, "/tmp/miner", &["miner", "--pool", "x"])];
     for child in 0..64i64 {
         calls.push(fork(1, 100 + child));
@@ -119,7 +119,7 @@ fn a_pool_of_identical_children_is_one_row_with_a_count() {
 }
 
 #[test]
-fn a_steady_loop_is_shown_as_every_so_long() {
+pub fn a_steady_loop_is_shown_as_every_so_long() {
     let calls: Calls = (0..12u64)
         .map(|n| at(open_write(1, "/etc/cron.d/x", 3), n * 5 * SECOND))
         .collect();
@@ -147,7 +147,7 @@ fn a_steady_loop_is_shown_as_every_so_long() {
 }
 
 #[test]
-fn rows_past_the_per_rule_and_task_cap_are_counted_in_one_overflow_row() {
+pub fn rows_past_the_per_rule_and_task_cap_are_counted_in_one_overflow_row() {
     let calls: Calls = (0..60)
         .map(|n| open_write(1, &format!("/etc/cron.d/job{n}"), 3))
         .collect();
@@ -167,7 +167,7 @@ fn rows_past_the_per_rule_and_task_cap_are_counted_in_one_overflow_row() {
 }
 
 #[test]
-fn info_is_counted_and_its_rows_are_built_only_when_asked() {
+pub fn info_is_counted_and_its_rows_are_built_only_when_asked() {
     let calls = vec![
         exec(1, "/bin/ls", &["ls"]),
         exec(1, "/bin/cat", &["cat", "x"]),
@@ -183,7 +183,7 @@ fn info_is_counted_and_its_rows_are_built_only_when_asked() {
 }
 
 #[test]
-fn the_badge_tiers_and_task_chip_count_visible_rows_of_low_and_above() {
+pub fn the_badge_tiers_and_task_chip_count_visible_rows_of_low_and_above() {
     let out = run(vec![
         open_write(1, "/etc/cron.d/x", 3),
         open_write(1, "/etc/systemd/system/y.service", 3),
@@ -208,7 +208,7 @@ fn the_badge_tiers_and_task_chip_count_visible_rows_of_low_and_above() {
 }
 
 #[test]
-fn a_capture_of_the_whole_vm_keeps_only_what_started_during_it() {
+pub fn a_capture_of_the_whole_vm_keeps_only_what_started_during_it() {
     let capture = |calls: Calls| {
         run_with(
             calls,
@@ -264,19 +264,19 @@ fn a_capture_of_the_whole_vm_keeps_only_what_started_during_it() {
     assert_eq!(out_hidden(&caused), 0);
 }
 
-fn out_hidden(out: &Output) -> u64 {
+pub fn out_hidden(out: &Output) -> u64 {
     out.hidden
 }
 
 #[test]
-fn a_run_scopes_by_its_root_so_nothing_is_outside() {
+pub fn a_run_scopes_by_its_root_so_nothing_is_outside() {
     let out = run(vec![open_write(7, "/etc/cron.d/x", 3)]);
     assert_eq!(out.hidden, 0);
     assert_eq!(tier(&out, "persistence.cron").as_deref(), Some("high"));
 }
 
 #[test]
-fn the_chips_narrow_by_tier_and_category() {
+pub fn the_chips_narrow_by_tier_and_category() {
     let out = run(vec![
         open_write(1, "/etc/cron.d/x", 3),
         open_read(1, "/root/.aws/credentials", 4),
@@ -308,7 +308,7 @@ fn the_chips_narrow_by_tier_and_category() {
 }
 
 #[test]
-fn file_requests_through_io_uring_are_judged_by_the_file_rules_only() {
+pub fn file_requests_through_io_uring_are_judged_by_the_file_rules_only() {
     let write = open_write(1, "/etc/cron.d/x", 3);
     let files = FdState::default();
     let mut engine = Engine::new(Options {
@@ -332,7 +332,7 @@ fn file_requests_through_io_uring_are_judged_by_the_file_rules_only() {
 }
 
 #[test]
-fn the_table_has_unique_ids_valid_attack_ids_and_every_emitted_rule() {
+pub fn the_table_has_unique_ids_valid_attack_ids_and_every_emitted_rule() {
     let mut seen = std::collections::BTreeSet::new();
     for spec in SPECS {
         assert!(seen.insert(spec.id), "{} twice", spec.id);
@@ -399,7 +399,7 @@ fn the_table_has_unique_ids_valid_attack_ids_and_every_emitted_rule() {
 }
 
 #[test]
-fn the_citations_the_old_rules_got_wrong_are_corrected() {
+pub fn the_citations_the_old_rules_got_wrong_are_corrected() {
     let attack = |id: &str| spec(id).unwrap().attack.to_vec();
     // process.memfd cited DET0508, the process injection strategy; memfd is DET0300.
     assert_eq!(attack("process.memfd"), ["T1620", "DET0300"]);
@@ -424,7 +424,7 @@ fn the_citations_the_old_rules_got_wrong_are_corrected() {
 }
 
 #[test]
-fn the_tiers_match_the_classification_counts_of_the_rules_implemented() {
+pub fn the_tiers_match_the_classification_counts_of_the_rules_implemented() {
     let count = |tier: Tier| SPECS.iter().filter(|spec| spec.tier == tier).count();
     assert!(
         count(Tier::High) > 40
@@ -445,7 +445,7 @@ fn the_tiers_match_the_classification_counts_of_the_rules_implemented() {
 /// Cost of the rules on a large run of ordinary calls, printed for a human to read.
 #[test]
 #[ignore = "measures time; run with --ignored --nocapture"]
-fn the_rules_cost_little_on_a_large_ordinary_run() {
+pub fn the_rules_cost_little_on_a_large_ordinary_run() {
     let mut calls = Vec::new();
     for n in 0..60_000u64 {
         let pid = 1 + (n % 40) as u32;
@@ -472,7 +472,7 @@ fn the_rules_cost_little_on_a_large_ordinary_run() {
 }
 
 #[test]
-fn the_resource_collector_of_an_older_base_is_antinomie_s_not_the_sample_s() {
+pub fn the_resource_collector_of_an_older_base_is_antinomie_s_not_the_sample_s() {
     let collector = "/tmp/.antinomie-resource-abc123def456";
     let out = run(vec![
         exec(9, collector, &["res"]),

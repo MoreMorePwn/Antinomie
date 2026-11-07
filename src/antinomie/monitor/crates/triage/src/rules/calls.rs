@@ -10,7 +10,7 @@ use super::super::file_category;
 
 /// Calls the process tree, the task state and the lifecycle rules need to stay
 /// whole: a program that is not seen to start or end cannot be followed.
-const LIFECYCLE: &[&str] = &[
+pub const LIFECYCLE: &[&str] = &[
     "clone",
     "clone3",
     "fork",
@@ -26,7 +26,7 @@ const LIFECYCLE: &[&str] = &[
 
 /// `file_category::classify` (read through `Ctx::touches` by the path rules):
 /// every call that opens, creates, changes, removes, runs or maps a file.
-const FILES: &[&str] = &[
+pub const FILES: &[&str] = &[
     "open",
     "openat",
     "openat2",
@@ -86,7 +86,7 @@ const FILES: &[&str] = &[
 ];
 
 /// `rules::process`, `rules::evasion` and `rules::probes`.
-const PROCESS: &[&str] = &[
+pub const PROCESS: &[&str] = &[
     "pkey_mprotect",
     "ptrace",
     "process_vm_writev",
@@ -130,7 +130,7 @@ const PROCESS: &[&str] = &[
 ];
 
 /// `rules::network` and `rules::ioc`: sockets, endpoints and traffic.
-const NETWORK: &[&str] = &[
+pub const NETWORK: &[&str] = &[
     "socket",
     "connect",
     "bind",
@@ -151,7 +151,7 @@ const NETWORK: &[&str] = &[
 /// `access`), directory listings, clock reads and readiness waits. They are
 /// what a busy program issues millions of times, and the open, create, exec,
 /// connect and send that give them a meaning are kept. Dropped and counted.
-fn bulk() -> Vec<&'static str> {
+pub fn bulk() -> Vec<&'static str> {
     let mut bulk = vec![
         "getdents",
         "getdents64",
@@ -171,7 +171,7 @@ fn bulk() -> Vec<&'static str> {
 }
 
 /// The calls the recorder keeps once the quota is nearly full.
-pub(in crate::triage) fn watched() -> Vec<String> {
+pub fn watched() -> Vec<String> {
     let bulk = bulk();
     let mut calls: Vec<String> = [LIFECYCLE, FILES, PROCESS, NETWORK]
         .concat()

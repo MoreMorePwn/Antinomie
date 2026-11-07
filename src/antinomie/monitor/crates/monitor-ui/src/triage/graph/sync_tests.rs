@@ -5,7 +5,8 @@
 use super::filter::Parts;
 use super::index::{self, GraphIndex};
 use super::input::Action;
-use super::notify::{HighRule, HighWatch};
+use super::notify::HighRule;
+use super::watch::HighWatch;
 use super::strip::{summary_line, Strip};
 use super::tests;
 use super::Spacing;

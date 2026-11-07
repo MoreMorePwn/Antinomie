@@ -10,18 +10,18 @@ use super::super::*;
 use super::{spec, Spec, Tier};
 
 /// Rows kept per `(rule, task)`, per rule, per task and per run.
-pub(super) const PER_RULE_TASK: usize = 50;
-pub(super) const PER_RULE: usize = 2_000;
-pub(super) const PER_TASK: usize = 500;
-pub(super) const PER_RUN: usize = 20_000;
+pub const PER_RULE_TASK: usize = 50;
+pub const PER_RULE: usize = 2_000;
+pub const PER_TASK: usize = 500;
+pub const PER_RUN: usize = 20_000;
 
 /// A failing HIGH rule that keeps trying (this many times) is still trying.
-pub(super) const RESTORE_AFTER: u64 = 5;
+pub const RESTORE_AFTER: u64 = 5;
 /// A row is periodic when at least this many gaps are this regular.
-const PERIODIC_GAPS: u64 = 7;
-const PERIODIC_SPREAD: f64 = 0.2;
+pub const PERIODIC_GAPS: u64 = 7;
+pub const PERIODIC_SPREAD: f64 = 0.2;
 
-pub(super) mod flag {
+pub mod flag {
     pub const FAILED: u16 = 1;
     pub const ALLOW: u16 = 2;
     pub const OUTSIDE: u16 = 4;
@@ -50,15 +50,15 @@ pub(super) mod flag {
 
 /// Inter-arrival times of one row, kept as running moments.
 #[derive(Default, Clone)]
-pub(super) struct Gaps {
-    last: Option<u64>,
-    n: u64,
-    mean: f64,
-    m2: f64,
+pub struct Gaps {
+    pub last: Option<u64>,
+    pub n: u64,
+    pub mean: f64,
+    pub m2: f64,
 }
 
 impl Gaps {
-    pub(super) fn add(&mut self, time: u64) {
+    pub fn add(&mut self, time: u64) {
         if let Some(last) = self.last.filter(|last| time >= *last) {
             let gap = (time - last) as f64;
             self.n += 1;
@@ -70,7 +70,7 @@ impl Gaps {
     }
 
     /// The pace, in nanoseconds, when the repeats are regular enough to call a loop.
-    pub(super) fn period(&self) -> Option<u64> {
+    pub fn period(&self) -> Option<u64> {
         if self.n < PERIODIC_GAPS || self.mean <= 0.0 {
             return None;
         }
@@ -81,7 +81,7 @@ impl Gaps {
 
 /// One folded row, before its tier is final.
 #[derive(Clone)]
-pub(super) struct Agg {
+pub struct Agg {
     pub rule: &'static str,
     pub cookie: u64,
     pub pid: u32,
@@ -117,11 +117,11 @@ pub(super) struct Agg {
     pub why: Vec<String>,
 }
 
-pub(super) const SAMPLES: usize = 16;
+pub const SAMPLES: usize = 16;
 
 /// One call kept as evidence of a row: where it is, and what it did.
 #[derive(Clone)]
-pub(super) struct Sample {
+pub struct Sample {
     pub stream: u64,
     pub call_id: u64,
     pub ns: u64,
@@ -132,7 +132,7 @@ pub(super) struct Sample {
 }
 
 impl Sample {
-    pub(super) fn new(call: &InvocationSummary, syscall: &str, what: &str, ns: u64) -> Self {
+    pub fn new(call: &InvocationSummary, syscall: &str, what: &str, ns: u64) -> Self {
         let mut shown: String = what.chars().take(160).collect();
         if what.chars().count() > 160 {
             shown.push('\u{2026}');
@@ -149,7 +149,7 @@ impl Sample {
 
     /// One text value of `finding.samples`, fields apart by U+001F: time,
     /// stream, call, syscall, what, result.
-    pub(super) fn encode(&self) -> String {
+    pub fn encode(&self) -> String {
         format!(
             "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
             self.ns, self.stream, self.call_id, self.syscall, self.what, self.result
@@ -158,25 +158,25 @@ impl Sample {
 }
 
 impl Agg {
-    pub(super) fn spec(&self) -> &'static Spec {
+    pub fn spec(&self) -> &'static Spec {
         spec(self.rule).expect("rows only come from classified rules")
     }
 
-    pub(super) fn hidden(&self) -> bool {
+    pub fn hidden(&self) -> bool {
         self.flags & (flag::OUTSIDE | flag::SUPPRESSED) != 0
     }
 
-    pub(super) fn key(&self) -> (u64, u64, u64) {
+    pub fn key(&self) -> (u64, u64, u64) {
         (self.stream, self.cookie, self.call_id)
     }
 
-    pub(super) fn period(&self) -> Option<u64> {
+    pub fn period(&self) -> Option<u64> {
         self.gaps.period()
     }
 }
 
 /// Decide a row's tier from what folded into it, and say why.
-pub(super) fn settle(agg: &mut Agg) {
+pub fn settle(agg: &mut Agg) {
     let spec = agg.spec();
     let mut tier = agg.base;
     agg.why.clear();
@@ -258,7 +258,7 @@ pub(super) fn settle(agg: &mut Agg) {
 }
 
 /// A pace in the largest unit that shows it, for "every ~T".
-pub(super) fn pace(nanoseconds: u64) -> String {
+pub fn pace(nanoseconds: u64) -> String {
     let seconds = nanoseconds as f64 / 1e9;
     if seconds >= 3600.0 {
         format!("{:.1} h", seconds / 3600.0)
@@ -275,7 +275,7 @@ pub(super) fn pace(nanoseconds: u64) -> String {
 
 /// Fold rows of tasks that one parent started and that did the same thing.
 /// The key is the rule, the program, its arguments and the object.
-pub(super) fn fold_siblings(rows: &mut Vec<Agg>, files: &FdState) {
+pub fn fold_siblings(rows: &mut Vec<Agg>, files: &FdState) {
     let mut first: std::collections::BTreeMap<
         (&'static str, Option<TaskKey>, String, u64, String),
         usize,
@@ -329,14 +329,14 @@ pub(super) fn fold_siblings(rows: &mut Vec<Agg>, files: &FdState) {
 
 /// What the caps dropped, per rule.
 #[derive(Default)]
-pub(super) struct Overflow {
+pub struct Overflow {
     pub count: u64,
     pub tier: Option<Tier>,
     pub first: Option<Agg>,
 }
 
 /// Apply the caps in first-seen order. Returns the rows kept and the overflow.
-pub(super) fn cap(
+pub fn cap(
     rows: Vec<Agg>,
 ) -> (Vec<Agg>, std::collections::BTreeMap<&'static str, Overflow>) {
     let mut per_pair = std::collections::BTreeMap::<(&str, u64), usize>::new();

@@ -12,25 +12,25 @@ use super::Hit;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 
-const NS: u64 = 1_000;
+pub const NS: u64 = 1_000;
 /// The built-in suppression list changes with the rules.
-pub(in crate::triage) const SUPPRESSION_VERSION: u32 = 1;
-const MINUTE_US: u64 = 60 * 1_000_000;
-const NXDOMAINS: usize = 10;
-const LONG_LABEL: usize = 40;
-const TUNNEL_QUERIES: usize = 5;
-const TXT_QUERIES: usize = 20;
-const BEACON_REQUESTS: u64 = 8;
+pub const SUPPRESSION_VERSION: u32 = 1;
+pub const MINUTE_US: u64 = 60 * 1_000_000;
+pub const NXDOMAINS: usize = 10;
+pub const LONG_LABEL: usize = 40;
+pub const TUNNEL_QUERIES: usize = 5;
+pub const TXT_QUERIES: usize = 20;
+pub const BEACON_REQUESTS: u64 = 8;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(in crate::triage) enum FrameKind {
+pub enum FrameKind {
     Dns,
     Http,
     Session,
 }
 
 /// A row of the capture as the rules see it.
-pub(super) struct Frame<'a> {
+pub struct Frame<'a> {
     pub kind: FrameKind,
     pub values: &'a [(&'static str, RowValue)],
     pub destination: &'a str,
@@ -38,7 +38,7 @@ pub(super) struct Frame<'a> {
 }
 
 impl Frame<'_> {
-    pub(super) fn text(&self, key: &str) -> &str {
+    pub fn text(&self, key: &str) -> &str {
         self.values
             .iter()
             .find_map(|(name, value)| match value {
@@ -48,11 +48,11 @@ impl Frame<'_> {
             .unwrap_or("")
     }
 
-    pub(super) fn number(&self, key: &str) -> Option<u64> {
+    pub fn number(&self, key: &str) -> Option<u64> {
         files::number(self.values, key)
     }
 
-    fn list(&self, key: &str) -> &[String] {
+    pub fn list(&self, key: &str) -> &[String] {
         self.values
             .iter()
             .find_map(|(name, value)| match value {
@@ -62,32 +62,32 @@ impl Frame<'_> {
             .unwrap_or_default()
     }
 
-    pub(super) fn port(&self) -> Option<u16> {
+    pub fn port(&self) -> Option<u16> {
         self.port.parse().ok()
     }
 }
 
 /// What the rules remember across frames.
 #[derive(Default)]
-pub(super) struct Frames {
+pub struct Frames {
     /// Some resolver answered a name: failed lookups mean something.
     pub resolver_answers: bool,
-    nxdomain: Window<String>,
-    nxdomain_done: bool,
+    pub nxdomain: Window<String>,
+    pub nxdomain_done: bool,
     /// The burst of failed names, with the frame it completed on, to report once a
     /// resolver is known to answer.
     pub nxdomain_hit: Option<(Hit, u64, String, u64)>,
-    long_labels: BTreeMap<String, u64>,
-    text_queries: BTreeMap<String, Window<u64>>,
-    tunnel_done: std::collections::BTreeSet<String>,
-    beats: BTreeMap<String, (Gaps, u64)>,
-    beat_done: std::collections::BTreeSet<String>,
+    pub long_labels: BTreeMap<String, u64>,
+    pub text_queries: BTreeMap<String, Window<u64>>,
+    pub tunnel_done: std::collections::BTreeSet<String>,
+    pub beats: BTreeMap<String, (Gaps, u64)>,
+    pub beat_done: std::collections::BTreeSet<String>,
     /// Frames the suppression list skipped.
     pub suppressed: u64,
 }
 
 /// Names the base looks up by itself: time sync, package mirrors and connectivity checks.
-const HOUSEKEEPING_NAMES: &[&str] = &[
+pub const HOUSEKEEPING_NAMES: &[&str] = &[
     "pool.ntp.org",
     "ntp.ubuntu.com",
     "time.cloudflare.com",
@@ -109,10 +109,10 @@ const HOUSEKEEPING_NAMES: &[&str] = &[
     "mirrors.kernel.org",
 ];
 /// Link-local discovery: mDNS and LLMNR names and ports.
-const HOUSEKEEPING_PORTS: &[u16] = &[5353, 5355, 67, 68, 123];
+pub const HOUSEKEEPING_PORTS: &[u16] = &[5353, 5355, 67, 68, 123];
 
 /// Services that carry commands, files or messages for ordinary programs too.
-const WEB_SERVICES: &[&str] = &[
+pub const WEB_SERVICES: &[&str] = &[
     "api.telegram.org",
     "pastebin.com",
     "paste.ee",
@@ -130,17 +130,17 @@ const WEB_SERVICES: &[&str] = &[
     "ipfs.io",
     "ngrok.io",
 ];
-const WEB_PORTS: &[u16] = &[80, 8080, 8000, 8008, 8888, 3000, 5000, 443, 8443];
-const TLS_PORTS: &[u16] = &[443, 8443, 853, 993, 995, 465, 636, 5223, 4443];
+pub const WEB_PORTS: &[u16] = &[80, 8080, 8000, 8008, 8888, 3000, 5000, 443, 8443];
+pub const TLS_PORTS: &[u16] = &[443, 8443, 853, 993, 995, 465, 636, 5223, 4443];
 
-fn under_domain(name: &str, domain: &str) -> bool {
+pub fn under_domain(name: &str, domain: &str) -> bool {
     name == domain
         || name
             .strip_suffix(domain)
             .is_some_and(|rest| rest.ends_with('.'))
 }
 
-fn housekeeping(name: &str) -> bool {
+pub fn housekeeping(name: &str) -> bool {
     name.ends_with(".local")
         || name.ends_with(".lan")
         || name.starts_with("_")
@@ -150,7 +150,7 @@ fn housekeeping(name: &str) -> bool {
             .any(|domain| under_domain(name, domain))
 }
 
-fn entropy(text: &str) -> f64 {
+pub fn entropy(text: &str) -> f64 {
     let mut counts = [0u32; 256];
     for byte in text.bytes() {
         counts[usize::from(byte)] += 1;
@@ -167,22 +167,22 @@ fn entropy(text: &str) -> f64 {
 }
 
 /// A label of a made-up name: long enough, and as mixed as random letters and digits.
-fn random_looking(label: &str) -> bool {
+pub fn random_looking(label: &str) -> bool {
     label.len() >= 10 && entropy(label) >= 3.0 && label.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
-fn parent(name: &str) -> String {
+pub fn parent(name: &str) -> String {
     let labels: Vec<_> = name.split('.').collect();
     labels[labels.len().saturating_sub(2)..].join(".")
 }
 
-fn service(name: &str, uri: &str) -> bool {
+pub fn service(name: &str, uri: &str) -> bool {
     WEB_SERVICES.iter().any(|domain| under_domain(name, domain))
         && !(name.ends_with("discord.com") && !uri.is_empty() && !uri.starts_with("/api/webhooks"))
 }
 
 /// Judge one row of the capture.
-pub(super) fn rules(st: &mut super::state::State, frame: &Frame) -> Vec<Hit> {
+pub fn rules(st: &mut super::state::State, frame: &Frame) -> Vec<Hit> {
     let mut hits = Vec::new();
     let time = frame.number("frame.time_us").unwrap_or(0);
     let state = &mut st.frames;
@@ -390,7 +390,7 @@ pub(super) fn rules(st: &mut super::state::State, frame: &Frame) -> Vec<Hit> {
 }
 
 /// Requests to one host at a steady pace.
-fn beat(state: &mut Frames, host: &str, time: u64, hits: &mut Vec<Hit>) {
+pub fn beat(state: &mut Frames, host: &str, time: u64, hits: &mut Vec<Hit>) {
     let entry = state.beats.entry(host.to_owned()).or_default();
     entry.0.add(time * NS);
     entry.1 += 1;
@@ -412,7 +412,7 @@ fn beat(state: &mut Frames, host: &str, time: u64, hits: &mut Vec<Hit>) {
 }
 
 /// The task whose own calls reached this address, if any.
-pub(super) fn contact<'a>(st: &'a super::state::State, frame: &Frame) -> Option<&'a Contact> {
+pub fn contact<'a>(st: &'a super::state::State, frame: &Frame) -> Option<&'a Contact> {
     match frame.kind {
         FrameKind::Dns => st.dns_task.as_ref(),
         _ => frame

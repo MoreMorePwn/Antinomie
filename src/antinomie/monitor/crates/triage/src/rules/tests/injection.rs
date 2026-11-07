@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use super::support::*;
 
-fn ptrace(pid: u32, request: u64, target: u64) -> super::support::Calls {
+pub fn ptrace(pid: u32, request: u64, target: u64) -> super::support::Calls {
     vec![sys(pid, 101, "ptrace", [request, target, 0, 0, 0, 0], 0)]
 }
 
 #[test]
-fn attaching_to_another_process_is_high_and_to_itself_is_not() {
+pub fn attaching_to_another_process_is_high_and_to_itself_is_not() {
     for request in [16, 0x4206] {
         let out = run(ptrace(1, request, 99));
         assert_eq!(
@@ -26,7 +26,7 @@ fn attaching_to_another_process_is_high_and_to_itself_is_not() {
 }
 
 #[test]
-fn writing_a_tracee_is_high_and_peeking_is_low_and_folded() {
+pub fn writing_a_tracee_is_high_and_peeking_is_low_and_folded() {
     for request in [4, 5, 6, 13, 15, 0x4205] {
         let out = run(ptrace(1, request, 99));
         assert_eq!(
@@ -47,7 +47,7 @@ fn writing_a_tracee_is_high_and_peeking_is_low_and_folded() {
 }
 
 #[test]
-fn ptrace_traceme_is_an_anti_debug_check_unless_an_exec_follows() {
+pub fn ptrace_traceme_is_an_anti_debug_check_unless_an_exec_follows() {
     let alone = run(ptrace(1, 0, 0));
     assert_eq!(tier(&alone, "evasion.traceme").as_deref(), Some("medium"));
     assert_eq!(
@@ -61,7 +61,7 @@ fn ptrace_traceme_is_an_anti_debug_check_unless_an_exec_follows() {
 }
 
 #[test]
-fn process_vm_writev_is_injection_and_readv_is_credential_access() {
+pub fn process_vm_writev_is_injection_and_readv_is_credential_access() {
     let write = run(vec![sys(
         1,
         311,
@@ -101,7 +101,7 @@ fn process_vm_writev_is_injection_and_readv_is_credential_access() {
 }
 
 #[test]
-fn proc_pid_mem_is_injection_for_writes_and_scraping_for_reads() {
+pub fn proc_pid_mem_is_injection_for_writes_and_scraping_for_reads() {
     let write = run(vec![open(1, "/proc/99/mem", 2, 3)]);
     let row = rows(&write, "injection.proc_mem_write");
     assert_eq!(
@@ -133,7 +133,7 @@ fn proc_pid_mem_is_injection_for_writes_and_scraping_for_reads() {
 }
 
 #[test]
-fn a_preload_variable_in_the_environment_is_medium() {
+pub fn a_preload_variable_in_the_environment_is_medium() {
     let out = run(vec![exec_env(
         1,
         "/bin/ls",
@@ -163,7 +163,7 @@ fn a_preload_variable_in_the_environment_is_medium() {
 }
 
 #[test]
-fn ld_so_preload_is_high_and_the_linker_search_path_is_medium() {
+pub fn ld_so_preload_is_high_and_the_linker_search_path_is_medium() {
     let preload = run(vec![
         open_write(1, "/etc/ld.so.preload", 3),
         write(1, 3, b"/lib/evil.so\n"),

@@ -5,11 +5,11 @@
 use super::ctx::{base, Ctx};
 use super::state::State;
 use super::{probes, process, Hit, Tier};
-use crate::triage::{file_location, process_cells};
+use crate::{file_location, process_cells};
 
-const MINUTE: u64 = 60 * 1_000_000_000;
+pub const MINUTE: u64 = 60 * 1_000_000_000;
 
-pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     probes::call(cx, st, out);
     if cx.is_exec() {
         packed_image(cx, st, out);
@@ -23,7 +23,7 @@ pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
 /// The run's own program is the file Static analysis found packed. It is judged
 /// at the first exec of the run's root task: the packer is a fact about the
 /// file, so this is not a claim about what the program did.
-fn packed_image(cx: &Ctx, st: &State, out: &mut Vec<Hit>) {
+pub fn packed_image(cx: &Ctx, st: &State, out: &mut Vec<Hit>) {
     let Some(packed) = st.packed.as_ref() else {
         return;
     };
@@ -69,7 +69,7 @@ fn packed_image(cx: &Ctx, st: &State, out: &mut Vec<Hit>) {
 }
 
 /// The new program's `argv[0]` is a kernel thread's or a daemon's name.
-fn exec_name(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn exec_name(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     let cookie = cx.call.task_cookie;
     if st.probes.traceme.remove(&cookie) && cx.ok {
         st.probes.traced_exec.insert(cookie);
@@ -86,7 +86,7 @@ fn exec_name(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
 }
 
 /// Programs a reader trusts by name: what a disguise would copy.
-const KNOWN_TOOLS: &[&str] = &[
+pub const KNOWN_TOOLS: &[&str] = &[
     "bash",
     "sudo",
     "login",
@@ -110,7 +110,7 @@ const KNOWN_TOOLS: &[&str] = &[
 /// kernel loaded. Some tools rename themselves on purpose, so this is LOW; it
 /// is MEDIUM when the name is a well-known system tool and the image sits in a
 /// writable place (temp, hidden or home).
-fn argv_masquerade(path: &str, argv: &[String], out: &mut Vec<Hit>) {
+pub fn argv_masquerade(path: &str, argv: &[String], out: &mut Vec<Hit>) {
     let Some(claimed) = process_cells::argv0_mismatch(path, argv) else {
         return;
     };
@@ -143,7 +143,7 @@ fn argv_masquerade(path: &str, argv: &[String], out: &mut Vec<Hit>) {
 }
 
 /// A wait of a minute or more, before the program has done anything else.
-fn sleep(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn sleep(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     let length = match cx.name {
         "nanosleep" | "clock_nanosleep" => probes::sleep_ns(cx),
         // select(0, NULL, NULL, NULL, timeval)

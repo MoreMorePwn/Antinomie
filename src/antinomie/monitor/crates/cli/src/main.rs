@@ -19,13 +19,15 @@ mod output;
 
 /// The analysis workers re-run the running program with a flag (design 1.3), so
 /// every binary that starts them must serve the flags before anything else.
-/// The earlier-bytes copier is the fifth role and arrives with card P2-0.
+/// The earlier-bytes copier is the fifth role: it also names this program as
+/// the one the core runs for it, so a recording made from the CLI is complete.
 fn serve_worker_roles() -> Option<i32> {
     use antinomie_monitor_core::{analysis, disks};
     analysis::detection::worker_main_if_requested()
         .or_else(analysis::properties::worker_main_if_requested)
         .or_else(analysis::worker_main_if_requested)
         .or_else(disks::reader::worker_main_if_requested)
+        .or_else(antinomie_triage::copier::host_copier)
 }
 
 fn main() {

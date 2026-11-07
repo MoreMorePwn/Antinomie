@@ -8,18 +8,18 @@ use super::tools;
 use super::{Hit, Tier};
 use std::net::IpAddr;
 
-const NS: u64 = 1_000_000_000;
-const SCAN: (u64, usize, usize) = (10 * NS, 20, 10);
-const LOGINS: (u64, usize) = (60 * NS, 10);
-const EXPLOIT_HOSTS: usize = 3;
-const LOGIN_PORTS: &[u16] = &[22, 23, 2323];
-const EXPLOIT_PORTS: &[u16] = &[
+pub const NS: u64 = 1_000_000_000;
+pub const SCAN: (u64, usize, usize) = (10 * NS, 20, 10);
+pub const LOGINS: (u64, usize) = (60 * NS, 10);
+pub const EXPLOIT_HOSTS: usize = 3;
+pub const LOGIN_PORTS: &[u16] = &[22, 23, 2323];
+pub const EXPLOIT_PORTS: &[u16] = &[
     2375, 2376, 6379, 7001, 8161, 61616, 9200, 10250, 11211, 27017,
 ];
-const FLOOD_PER_SECOND: usize = 1000;
-const UPLOAD_BYTES: u64 = 10 * 1024 * 1024;
-const UPLOAD_FLOOR: u64 = 1024 * 1024;
-const METADATA: &[&str] = &[
+pub const FLOOD_PER_SECOND: usize = 1000;
+pub const UPLOAD_BYTES: u64 = 10 * 1024 * 1024;
+pub const UPLOAD_FLOOR: u64 = 1024 * 1024;
+pub const METADATA: &[&str] = &[
     "169.254.169.254",
     "169.254.170.2",
     "fd00:ec2::254",
@@ -28,9 +28,9 @@ const METADATA: &[&str] = &[
     "100.100.100.200",
 ];
 /// VM housekeeping that listens or answers by itself: DHCP, NTP, mDNS and LLMNR.
-const HOUSEKEEPING_PORTS: &[u16] = &[67, 68, 123, 5353, 5355];
+pub const HOUSEKEEPING_PORTS: &[u16] = &[67, 68, 123, 5353, 5355];
 
-pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     shell_on_socket(cx, out);
     match cx.name {
         "socket" => raw_socket(cx, out),
@@ -44,7 +44,7 @@ pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     }
 }
 
-fn private(ip: IpAddr) -> bool {
+pub fn private(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified()
@@ -58,11 +58,11 @@ fn private(ip: IpAddr) -> bool {
     }
 }
 
-fn parse(address: &super::super::sigma_events::Address) -> Option<(IpAddr, u16)> {
+pub fn parse(address: &super::super::sigma_events::Address) -> Option<(IpAddr, u16)> {
     Some((address.ip.parse().ok()?, address.port))
 }
 
-fn raw_socket(cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn raw_socket(cx: &Ctx, out: &mut Vec<Hit>) {
     let domain = cx.args[0];
     let kind = cx.args[1] & 0xf;
     if domain == 17 || (matches!(domain, 2 | 10) && kind == 3) {
@@ -80,7 +80,7 @@ fn raw_socket(cx: &Ctx, out: &mut Vec<Hit>) {
 }
 
 /// Remember who reached an address, to tie packets of the capture to a task.
-fn reached(cx: &Ctx, st: &mut State, ip: IpAddr, port: u16) {
+pub fn reached(cx: &Ctx, st: &mut State, ip: IpAddr, port: u16) {
     if st.contacted.len() < 65_536 {
         st.contacted.entry(ip).or_insert_with(|| Contact::of(cx));
     }
@@ -90,7 +90,7 @@ fn reached(cx: &Ctx, st: &mut State, ip: IpAddr, port: u16) {
 }
 
 /// A unix socket path, from a `sockaddr_un`.
-fn unix_path(cx: &Ctx, argument: usize) -> Option<String> {
+pub fn unix_path(cx: &Ctx, argument: usize) -> Option<String> {
     let field = cx.field(argument, "")?;
     let bytes = trace::covered_preview(field);
     if bytes.len() < 3 || u16::from_le_bytes([bytes[0], bytes[1]]) != 1 {
@@ -104,7 +104,7 @@ fn unix_path(cx: &Ctx, argument: usize) -> Option<String> {
     Some(String::from_utf8_lossy(&tail[..end]).into_owned())
 }
 
-fn connect(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn connect(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     if let Some(path) = unix_path(cx, 1) {
         if matches!(
             path.as_str(),
@@ -225,7 +225,7 @@ fn connect(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     }
 }
 
-fn bind(cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn bind(cx: &Ctx, out: &mut Vec<Hit>) {
     // A datagram socket on a fixed port of every interface.
     let Some((ip, port)) = cx.address(1).as_ref().and_then(parse) else {
         return;
@@ -242,7 +242,7 @@ fn bind(cx: &Ctx, out: &mut Vec<Hit>) {
     }
 }
 
-fn listen(cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn listen(cx: &Ctx, out: &mut Vec<Hit>) {
     let Some(socket) = cx.socket(cx.args[0]) else {
         return;
     };
@@ -259,7 +259,7 @@ fn listen(cx: &Ctx, out: &mut Vec<Hit>) {
 }
 
 /// `setsockopt(SO_ATTACH_FILTER)`; with a raw or packet socket it is the BPFDoor shape.
-fn filter(cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn filter(cx: &Ctx, out: &mut Vec<Hit>) {
     if !(cx.args[1] == 1 && cx.args[2] == 26) {
         return;
     }
@@ -281,7 +281,7 @@ fn filter(cx: &Ctx, out: &mut Vec<Hit>) {
 }
 
 /// Bytes sent or received on a socket, and what they say.
-fn traffic(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn traffic(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     let Some(socket) = cx.socket(cx.args[0]) else {
         elf_to_file(cx, st, out);
         return;
@@ -361,7 +361,7 @@ fn traffic(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
 }
 
 /// What a payload sent to a server says about the program.
-fn content(bytes: &[u8], socket: &Socket, out: &mut Vec<Hit>) {
+pub fn content(bytes: &[u8], socket: &Socket, out: &mut Vec<Hit>) {
     let text = String::from_utf8_lossy(&bytes[..bytes.len().min(2048)]).into_owned();
     let lower = text.to_ascii_lowercase();
     let endpoint = socket
@@ -394,7 +394,7 @@ fn content(bytes: &[u8], socket: &Socket, out: &mut Vec<Hit>) {
 }
 
 /// An ELF image that came off a socket and is now written to a file.
-fn elf_to_file(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
+pub fn elf_to_file(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
     if cx.name != "write" || !cx.ok || !st.task(cx).net_elf {
         return;
     }
@@ -412,7 +412,7 @@ fn elf_to_file(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
 }
 
 /// A socket on descriptors 0 and 1 when a shell or interpreter starts: a remote shell.
-fn shell_on_socket(cx: &Ctx, out: &mut Vec<Hit>) {
+pub fn shell_on_socket(cx: &Ctx, out: &mut Vec<Hit>) {
     if !cx.is_exec() {
         return;
     }

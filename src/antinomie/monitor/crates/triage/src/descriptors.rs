@@ -4,7 +4,7 @@ use super::*;
 
 /// Successful `open`, `openat` and `openat2` return the new descriptor.
 /// Every other file operation uses the argument whose schema name is `fd`.
-pub(super) fn file_fd(invocation: &InvocationSummary, event: &EventSummary) -> String {
+pub fn file_fd(invocation: &InvocationSummary, event: &EventSummary) -> String {
     if OPEN_NAMES.contains(&event.syscall_name.as_str()) {
         if async_files::direct_descriptor(invocation) {
             return "registered".into();
@@ -30,7 +30,7 @@ pub(super) fn file_fd(invocation: &InvocationSummary, event: &EventSummary) -> S
 
 /// The `fd` argument. `mmap2` is not in the x86-64 table; its descriptor is
 /// still argument 4, the same slot `mmap` names `fd`.
-pub(super) fn fd_argument(invocation: &InvocationSummary, event: &EventSummary) -> Option<u64> {
+pub fn fd_argument(invocation: &InvocationSummary, event: &EventSummary) -> Option<u64> {
     let args = call_args(invocation)?;
     if matches!(event.syscall_name.as_str(), "copy_file_range" | "splice") {
         return Some(args[2]);
@@ -44,15 +44,15 @@ pub(super) fn fd_argument(invocation: &InvocationSummary, event: &EventSummary) 
     (index < args.len()).then_some(args[index])
 }
 
-pub(super) fn table_owner(files: &FdState, cookie: u64, pid: u32) -> (u64, u32) {
+pub fn table_owner(files: &FdState, cookie: u64, pid: u32) -> (u64, u32) {
     follow_share(&files.share, cookie, pid)
 }
 
-pub(super) fn fs_owner(files: &FdState, cookie: u64, pid: u32) -> (u64, u32) {
+pub fn fs_owner(files: &FdState, cookie: u64, pid: u32) -> (u64, u32) {
     follow_share(&files.fs_share, cookie, pid)
 }
 
-fn follow_share(
+pub fn follow_share(
     share: &std::collections::BTreeMap<(u64, u32), (u64, u32)>,
     cookie: u64,
     pid: u32,
@@ -67,7 +67,7 @@ fn follow_share(
     key
 }
 
-pub(super) fn file_outcome(invocation: &InvocationSummary) -> String {
+pub fn file_outcome(invocation: &InvocationSummary) -> String {
     match invocation.exit.as_ref().and_then(|exit| exit.result) {
         Some(result) if result >= 0 => "successful".into(),
         Some(_) => "failed attempt".into(),
@@ -75,7 +75,7 @@ pub(super) fn file_outcome(invocation: &InvocationSummary) -> String {
     }
 }
 
-pub(super) fn succeeded(invocation: &InvocationSummary) -> bool {
+pub fn succeeded(invocation: &InvocationSummary) -> bool {
     invocation
         .exit
         .as_ref()
@@ -83,7 +83,7 @@ pub(super) fn succeeded(invocation: &InvocationSummary) -> bool {
         .is_some_and(|result| result >= 0)
 }
 
-pub(super) fn remember_open(
+pub fn remember_open(
     files: &mut FdState,
     invocation: &InvocationSummary,
     event: &EventSummary,
@@ -131,7 +131,7 @@ pub(super) fn remember_open(
     }
 }
 
-pub(super) fn remember_cwd(
+pub fn remember_cwd(
     files: &mut FdState,
     invocation: &InvocationSummary,
     event: &EventSummary,
@@ -188,7 +188,7 @@ pub(super) fn remember_cwd(
 /// An absolute chdir is stored as given. A relative chdir is applied to the
 /// task's current directory. Without a recorded directory the relative change
 /// is left unknown instead of being treated as an absolute path.
-fn resolve_chdir(files: &FdState, owner: (u64, u32), path: String) -> Option<String> {
+pub fn resolve_chdir(files: &FdState, owner: (u64, u32), path: String) -> Option<String> {
     if path.starts_with('/') {
         return Some(path);
     }
@@ -196,14 +196,14 @@ fn resolve_chdir(files: &FdState, owner: (u64, u32), path: String) -> Option<Str
     Some(join_cwd(base, &path))
 }
 
-fn join_cwd(base: &str, relative: &str) -> String {
+pub fn join_cwd(base: &str, relative: &str) -> String {
     // chdir resolves '..' after symlinks. Lexical normalization would invent
     // a physical working directory, so retain the literal observed components.
     format!("{}/{relative}", base.trim_end_matches('/'))
 }
 
 /// `dup` returns the new descriptor. `dup2` and `dup3` name it in argument 1.
-pub(super) fn apply_dup(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
+pub fn apply_dup(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
     if event.syscall_name == "fcntl" && succeeded(invocation) {
         if let Some(args) = call_args(invocation) {
             if args[1] == 2 {
@@ -259,8 +259,8 @@ pub(super) fn apply_dup(files: &mut FdState, invocation: &InvocationSummary, eve
 
 /// One cookie per pid when every event for that pid shares it. Two cookies
 /// for one pid are not a guess: the caller uses 0.
-#[cfg(test)]
-pub(super) fn task_cookies(
+#[cfg(any(test, feature = "test-support"))]
+pub fn task_cookies(
     invocations: &[InvocationSummary],
 ) -> std::collections::BTreeMap<u32, u64> {
     let mut sets: std::collections::BTreeMap<u32, std::collections::BTreeSet<u64>> =
@@ -288,7 +288,7 @@ pub(super) fn task_cookies(
 }
 
 /// A successful `close` drops that task's descriptor only.
-pub(super) fn forget_closed(
+pub fn forget_closed(
     files: &mut FdState,
     invocation: &InvocationSummary,
     event: &EventSummary,
@@ -352,7 +352,7 @@ pub(super) fn forget_closed(
     files.cloexec.remove(&(cookie, pid, fd));
 }
 
-fn detach_files(files: &mut FdState, cookie: u64, tid: u32) {
+pub fn detach_files(files: &mut FdState, cookie: u64, tid: u32) {
     let owner = table_owner(files, cookie, tid);
     if owner == (cookie, tid) {
         let sharers = files
@@ -374,7 +374,7 @@ fn detach_files(files: &mut FdState, cookie: u64, tid: u32) {
     }
 }
 
-fn copy_files(files: &mut FdState, source: (u64, u32), target: (u64, u32)) {
+pub fn copy_files(files: &mut FdState, source: (u64, u32), target: (u64, u32)) {
     let entries = files
         .opened
         .iter()
@@ -392,7 +392,7 @@ fn copy_files(files: &mut FdState, source: (u64, u32), target: (u64, u32)) {
 
 /// Snapshot the parent's open descriptors onto the new process. The child
 /// keeps its own entries; a later close does not edit the parent.
-pub(super) fn inherit_open_fds(
+pub fn inherit_open_fds(
     files: &mut FdState,
     invocation: &InvocationSummary,
     event: &EventSummary,
@@ -434,15 +434,15 @@ pub(super) fn inherit_open_fds(
     }
 }
 
-fn shares_files(invocation: &InvocationSummary, event: &EventSummary) -> bool {
+pub fn shares_files(invocation: &InvocationSummary, event: &EventSummary) -> bool {
     clone_flag(invocation, event, CLONE_FILES)
 }
 
-fn shares_fs(invocation: &InvocationSummary, event: &EventSummary) -> bool {
+pub fn shares_fs(invocation: &InvocationSummary, event: &EventSummary) -> bool {
     clone_flag(invocation, event, CLONE_FS)
 }
 
-fn clone_flag(invocation: &InvocationSummary, event: &EventSummary, flag: u64) -> bool {
+pub fn clone_flag(invocation: &InvocationSummary, event: &EventSummary, flag: u64) -> bool {
     match event.syscall_name.as_str() {
         "clone" => call_args(invocation).is_some_and(|args| clone_flags(&args) & flag != 0),
         "clone3" => clone3_flags(invocation).is_some_and(|flags| flags & flag != 0),
@@ -450,7 +450,7 @@ fn clone_flag(invocation: &InvocationSummary, event: &EventSummary, flag: u64) -
     }
 }
 
-pub(super) fn clone3_flags(invocation: &InvocationSummary) -> Option<u64> {
+pub fn clone3_flags(invocation: &InvocationSummary) -> Option<u64> {
     let field = invocation
         .entry
         .iter()
@@ -466,7 +466,7 @@ pub(super) fn clone3_flags(invocation: &InvocationSummary) -> Option<u64> {
     }
 }
 
-pub(super) fn displayed_path(
+pub fn displayed_path(
     invocation: &InvocationSummary,
     event: &EventSummary,
     files: &FdState,
@@ -546,7 +546,7 @@ pub(super) fn displayed_path(
 /// Remember the name of a file the guest identified, when a call opened it or
 /// renamed it, so a later call that reaches the same file by no descriptor of
 /// the run (a slot of an io_uring registered table) can still be named.
-fn remember_identity(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
+pub fn remember_identity(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
     let Some(id) = kernel_records::file_id(invocation) else {
         return;
     };
@@ -573,7 +573,7 @@ fn remember_identity(files: &mut FdState, invocation: &InvocationSummary, event:
 
 /// The name of the file a call acted on, from the identity the guest recorded
 /// for it, when an earlier open or rename of the run named that file.
-pub(super) fn identity_path<'a>(
+pub fn identity_path<'a>(
     files: &'a FdState,
     invocation: &InvocationSummary,
 ) -> Option<&'a str> {
@@ -582,7 +582,7 @@ pub(super) fn identity_path<'a>(
         .map(String::as_str)
 }
 
-fn resolve_path(
+pub fn resolve_path(
     path: &str,
     invocation: &InvocationSummary,
     event: &EventSummary,
@@ -597,7 +597,7 @@ fn resolve_path(
     )
 }
 
-pub(super) fn resolve_path_dirfd(
+pub fn resolve_path_dirfd(
     path: &str,
     invocation: &InvocationSummary,
     event: &EventSummary,
@@ -628,7 +628,7 @@ pub(super) fn resolve_path_dirfd(
     }
 }
 
-pub(super) fn dirfd_argument(invocation: &InvocationSummary, event: &EventSummary) -> Option<u64> {
+pub fn dirfd_argument(invocation: &InvocationSummary, event: &EventSummary) -> Option<u64> {
     let args = call_args(invocation)?;
     let index = (0..args.len()).find(|index| {
         matches!(
@@ -639,7 +639,7 @@ pub(super) fn dirfd_argument(invocation: &InvocationSummary, event: &EventSummar
     (index < args.len()).then_some(args[index])
 }
 
-pub(super) fn path_key(key: &str) -> bool {
+pub fn path_key(key: &str) -> bool {
     key.split(['.', '[', ']']).any(|part| {
         matches!(
             part,
@@ -648,7 +648,7 @@ pub(super) fn path_key(key: &str) -> bool {
     })
 }
 
-pub(super) fn named_path(
+pub fn named_path(
     invocation: &InvocationSummary,
     event: &EventSummary,
     names: &[&str],
@@ -670,7 +670,7 @@ pub(super) fn named_path(
         .find_map(path_text)
 }
 
-pub(super) fn path_text(field: &antinomie_monitor_core::FieldSummary) -> Option<String> {
+pub fn path_text(field: &antinomie_monitor_core::FieldSummary) -> Option<String> {
     if field.capture_error != 0 {
         return None;
     }
@@ -685,7 +685,7 @@ pub(super) fn path_text(field: &antinomie_monitor_core::FieldSummary) -> Option<
     Some(text.to_string())
 }
 
-pub(super) fn path_list(invocation: &InvocationSummary) -> Vec<String> {
+pub fn path_list(invocation: &InvocationSummary) -> Vec<String> {
     let mut paths = Vec::new();
     for event in invocation.entry.iter().chain(invocation.exit.iter()) {
         for field in &event.fields {

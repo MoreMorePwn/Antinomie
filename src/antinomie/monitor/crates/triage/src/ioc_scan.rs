@@ -19,13 +19,13 @@ use antinomie_monitor_core::{
 };
 
 /// Strings of the sample read for network values.
-const STRING_LIMIT: usize = 50_000;
+pub const STRING_LIMIT: usize = 50_000;
 /// Values taken from them.
-const FOUND_LIMIT: usize = 2_000;
+pub const FOUND_LIMIT: usize = 2_000;
 
 /// Whether the run's capture was read.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Capture {
+pub enum Capture {
     Read,
     /// No packet capture was recorded for this run.
     Off,
@@ -33,7 +33,7 @@ pub(super) enum Capture {
 }
 
 /// The indicators of a run with the datasets' answer.
-pub(super) struct IocScan {
+pub struct IocScan {
     pub indicators: Vec<Indicator>,
     pub scan: Arc<Scan>,
     /// Observations dropped past the limits.
@@ -49,22 +49,22 @@ pub(super) struct IocScan {
 
 /// The answer kept between scans while nothing it depends on changes.
 #[derive(Clone)]
-pub(super) struct Cache {
-    key: String,
-    scan: Arc<Scan>,
-    disk: Option<DiskCache>,
+pub struct Cache {
+    pub key: String,
+    pub scan: Arc<Scan>,
+    pub disk: Option<DiskCache>,
 }
 
 /// Hashes taken from a disk dump, kept while the dump and the files stay.
 #[derive(Clone)]
-pub(super) struct DiskCache {
-    key: String,
-    hashes: Arc<std::collections::BTreeMap<String, Hashes>>,
-    notes: Vec<String>,
+pub struct DiskCache {
+    pub key: String,
+    pub hashes: Arc<std::collections::BTreeMap<String, Hashes>>,
+    pub notes: Vec<String>,
 }
 
 /// Everything the scan has gathered for the IOC list.
-pub(super) struct Gathered<'a> {
+pub struct Gathered<'a> {
     pub collector: Collector,
     pub log: log::Log,
     pub files: Vec<IocFile>,
@@ -79,7 +79,7 @@ pub(super) struct Gathered<'a> {
 }
 
 /// A line that says which datasets were read: feed ids with fetch time and switch.
-pub(super) fn signature(data_dir: &std::path::Path) -> String {
+pub fn signature(data_dir: &std::path::Path) -> String {
     feeds::status(data_dir)
         .iter()
         .map(|status| {
@@ -94,11 +94,11 @@ pub(super) fn signature(data_dir: &std::path::Path) -> String {
         .join(",")
 }
 
-fn host_us(clock: Option<antinomie_monitor_core::HostClockAnchor>, ns: u64) -> Option<u64> {
+pub fn host_us(clock: Option<antinomie_monitor_core::HostClockAnchor>, ns: u64) -> Option<u64> {
     clock.and_then(|clock| clock.host_us(ns))
 }
 
-fn guest_ns(clock: Option<antinomie_monitor_core::HostClockAnchor>, us: u64) -> u64 {
+pub fn guest_ns(clock: Option<antinomie_monitor_core::HostClockAnchor>, us: u64) -> u64 {
     clock
         .and_then(|clock| {
             let delta = (i128::from(us) - i128::from(clock.host_us)) * 1000;
@@ -107,7 +107,7 @@ fn guest_ns(clock: Option<antinomie_monitor_core::HostClockAnchor>, us: u64) -> 
         .unwrap_or(0)
 }
 
-fn process(who: &log::Who) -> Process {
+pub fn process(who: &log::Who) -> Process {
     Process {
         pid: who.pid,
         cookie: who.cookie,
@@ -120,7 +120,7 @@ fn process(who: &log::Who) -> Process {
     }
 }
 
-fn call_evidence(who: &log::Who, what: &str) -> Evidence {
+pub fn call_evidence(who: &log::Who, what: &str) -> Evidence {
     Evidence {
         source: Source::Syscall,
         label: format!("Syscall Trace · {what} #{}", who.call_id),
@@ -132,7 +132,7 @@ fn call_evidence(who: &log::Who, what: &str) -> Evidence {
     }
 }
 
-fn hashes(sha256: &str) -> Hashes {
+pub fn hashes(sha256: &str) -> Hashes {
     Hashes {
         sha256: sha256.to_owned(),
         ..Hashes::default()
@@ -140,7 +140,7 @@ fn hashes(sha256: &str) -> Hashes {
 }
 
 /// The sample's digests as static analysis stored them.
-fn sample_hashes(report: &antinomie_monitor_core::AnalysisReport) -> Option<Hashes> {
+pub fn sample_hashes(report: &antinomie_monitor_core::AnalysisReport) -> Option<Hashes> {
     use antinomie_monitor_core::AnalysisKind;
     let sha256 = report.specimen_sha256.clone()?;
     let entry = |label: &str| {
@@ -159,7 +159,7 @@ fn sample_hashes(report: &antinomie_monitor_core::AnalysisReport) -> Option<Hash
     })
 }
 
-fn sample_strings(report: &antinomie_monitor_core::AnalysisReport) -> String {
+pub fn sample_strings(report: &antinomie_monitor_core::AnalysisReport) -> String {
     use antinomie_monitor_core::AnalysisKind;
     let mut text = String::new();
     for entry in report
@@ -175,7 +175,7 @@ fn sample_strings(report: &antinomie_monitor_core::AnalysisReport) -> String {
     text
 }
 
-fn feed(gathered: &mut Gathered<'_>) {
+pub fn feed(gathered: &mut Gathered<'_>) {
     let clock = gathered.clock;
     for call in &gathered.log.connections {
         let seen = Seen {
@@ -390,7 +390,7 @@ fn feed(gathered: &mut Gathered<'_>) {
     }
 }
 
-fn cache_key(indicators: &[Indicator], signature: &str) -> String {
+pub fn cache_key(indicators: &[Indicator], signature: &str) -> String {
     let mut lookups: Vec<String> = indicators
         .iter()
         .flat_map(|indicator| &indicator.lookups)
@@ -409,7 +409,7 @@ fn cache_key(indicators: &[Indicator], signature: &str) -> String {
 
 /// Finish the indicators and match them. The datasets are read only when the
 /// values to look for or the datasets themselves changed since `cache`.
-pub(super) fn build(
+pub fn build(
     mut gathered: Gathered<'_>,
     data_dir: Option<&std::path::Path>,
     run_dir: &std::path::Path,
@@ -471,7 +471,7 @@ pub(super) fn build(
 /// SHA-256 and MD5 of the files the run created or changed, read from the
 /// newest saved disk dump of the run's recording, when there is one. The
 /// answer is kept while the dump and the file list stay the same.
-fn disk_hashes(
+pub fn disk_hashes(
     run_dir: &std::path::Path,
     files: &[IocFile],
     previous: Option<&DiskCache>,
@@ -554,7 +554,7 @@ fn disk_hashes(
 
 /// The verdicts under the person's false-positive list and the online answers
 /// kept with the run.
-pub(super) fn verdicts(
+pub fn verdicts(
     ioc: &IocScan,
     fp: &[known_fp::Entry],
     online: &OnlineResults,
@@ -563,7 +563,7 @@ pub(super) fn verdicts(
 }
 
 /// The tier a match is listed at: a confident or unrated match is HIGH.
-fn tier_of(confidence: Option<u8>) -> rules::Tier {
+pub fn tier_of(confidence: Option<u8>) -> rules::Tier {
     match confidence {
         None => rules::Tier::High,
         Some(confidence) if confidence >= 75 => rules::Tier::High,
@@ -573,7 +573,7 @@ fn tier_of(confidence: Option<u8>) -> rules::Tier {
 }
 
 /// List every match as a finding, so it shows with the detections.
-pub(super) fn list_findings(
+pub fn list_findings(
     engine: &mut rules::Engine,
     ioc: &IocScan,
     verdicts: &[Verdict],
@@ -657,7 +657,7 @@ pub(super) fn list_findings(
     }
 }
 
-fn verdict_cell(verdict: &Verdict) -> Cell {
+pub fn verdict_cell(verdict: &Verdict) -> Cell {
     let online = verdict
         .primary()
         .is_some_and(|found| found.online_at.is_some());
@@ -678,13 +678,13 @@ fn verdict_cell(verdict: &Verdict) -> Cell {
 }
 
 /// The destination address of a row's `src:port → dst:port` endpoints.
-fn destination_of(endpoints: &str) -> Option<String> {
+pub fn destination_of(endpoints: &str) -> Option<String> {
     let (_, destination) = endpoints.split_once(" → ")?;
     let (ip, _) = destination.rsplit_once(':')?;
     Some(ip.trim_matches(['[', ']']).to_owned())
 }
 
-fn text_of<'a>(values: &'a [(&'static str, RowValue)], name: &str) -> &'a str {
+pub fn text_of<'a>(values: &'a [(&'static str, RowValue)], name: &str) -> &'a str {
     values
         .iter()
         .find_map(|(key, value)| match (*key, value) {
@@ -696,7 +696,7 @@ fn text_of<'a>(values: &'a [(&'static str, RowValue)], name: &str) -> &'a str {
 
 /// Add the IOC column to the rebuilt Network tabs, and build the URLs tab
 /// from the HTTP rows.
-pub(super) fn annotate(
+pub fn annotate(
     tabs: &mut NewTabs,
     http: &[Vec<Cell>],
     ioc: &IocScan,
@@ -800,12 +800,12 @@ pub(super) fn annotate(
 }
 
 /// A feed's name for people.
-pub(super) fn dataset_name(id: &str) -> &str {
+pub fn dataset_name(id: &str) -> &str {
     feeds::feed(id).map_or(id, |feed| feed.name)
 }
 
 /// The online answers and false positives to read for a run.
-pub(super) fn run_inputs(
+pub fn run_inputs(
     data_dir: Option<&std::path::Path>,
     run_dir: &std::path::Path,
 ) -> (Vec<known_fp::Entry>, OnlineResults) {
@@ -815,10 +815,10 @@ pub(super) fn run_inputs(
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl IocScan {
     /// A scan of `indicators` with no datasets, for the Summary's tests.
-    pub(super) fn for_tests(indicators: Vec<Indicator>) -> Self {
+    pub fn for_tests(indicators: Vec<Indicator>) -> Self {
         let scan = Arc::new(Scan::default());
         Self {
             indicators,
@@ -837,7 +837,7 @@ impl IocScan {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use antinomie_monitor_core::{
         ioc::indicator::{Collector, Type},

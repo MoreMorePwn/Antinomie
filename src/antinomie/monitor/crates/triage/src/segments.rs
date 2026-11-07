@@ -11,7 +11,7 @@ use antinomie_monitor_core::recording::{LaunchRecord, Recording, RunFilterFacts,
 
 /// The segments of the run in `directory`, oldest first, ending with it. A
 /// run without an identity (a test or an old page) is just its directory.
-pub(super) fn run_segments(directory: &Path, request: &ScanRequest) -> Vec<RunSegment> {
+pub fn run_segments(directory: &Path, request: &ScanRequest) -> Vec<RunSegment> {
     let single = || {
         vec![RunSegment {
             directory: directory.to_path_buf(),
@@ -37,7 +37,7 @@ pub(super) fn run_segments(directory: &Path, request: &ScanRequest) -> Vec<RunSe
 
 /// What the earlier segments add to the index stamp: a segment that changed
 /// (it should not: it is sealed) is read again.
-pub(super) fn segments_stamp(segments: &[RunSegment]) -> String {
+pub fn segments_stamp(segments: &[RunSegment]) -> String {
     use std::os::unix::fs::MetadataExt;
     let mut stamp = String::new();
     for segment in segments.iter().rev().skip(1) {
@@ -53,7 +53,7 @@ pub(super) fn segments_stamp(segments: &[RunSegment]) -> String {
 /// The run's saved facts over all its segments: identity checked in each,
 /// the start, directory and hashing of the first, completeness of the newest
 /// unless an earlier segment lost records.
-pub(super) fn segment_facts(
+pub fn segment_facts(
     segments: &[RunSegment],
     request: &ScanRequest,
 ) -> Result<Option<RunFilterFacts>, String> {
@@ -88,7 +88,7 @@ pub(super) fn segment_facts(
 
 /// [`walk_pages`] over every segment in order; `each` learns which segment a
 /// page came from. Complete only when every segment was read to its end.
-pub(super) fn walk_segments(
+pub fn walk_segments(
     recordings: &[Recording],
     cancel: &AtomicBool,
     mut each: impl FnMut(usize, &[InvocationSummary]) -> Result<(), String>,
@@ -112,7 +112,7 @@ pub(super) fn walk_segments(
 /// The guest's user and group names for this run: given (tests), or read from
 /// the base its disk came from. `None` when they cannot be read; ids then stay
 /// numeric.
-pub(super) fn guest_names(
+pub fn guest_names(
     directory: &Path,
     request: &ScanRequest,
 ) -> Option<Arc<antinomie_monitor_core::guest_names::GuestNames>> {
@@ -132,7 +132,7 @@ pub(super) fn guest_names(
 /// missing, its end record never arrived, or its text could not be read back.
 /// `None` when the recording's record names the program and its arguments, or
 /// when there was no request.
-pub(super) fn requested_launch(
+pub fn requested_launch(
     request: Option<&(u32, String, Vec<String>)>,
     recorded: Option<&LaunchRecord>,
 ) -> Option<LaunchRecord> {
@@ -164,7 +164,7 @@ pub(super) fn requested_launch(
 /// Name the root task after the program the run launched: the kernel started
 /// it without a traced execve, so no call names it. A later exec of the root
 /// keeps its own name; the launched image stays first in its history.
-pub(super) fn name_launched(
+pub fn name_launched(
     nodes: &mut std::collections::BTreeMap<TaskKey, TaskNode>,
     launch: &LaunchRecord,
     root_cookie: u64,

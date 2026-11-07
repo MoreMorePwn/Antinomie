@@ -3,9 +3,9 @@
 use super::*;
 use antinomie_monitor_core::analysis::detection::{EventJournal, Identity};
 
-const POINTER: &str = "linux-6.12.94/x86_64/pointer";
+pub const POINTER: &str = "linux-6.12.94/x86_64/pointer";
 
-fn identity() -> Identity {
+pub fn identity() -> Identity {
     Identity {
         vm_id: "v".into(),
         boot_id: "b".into(),
@@ -15,7 +15,7 @@ fn identity() -> Identity {
 }
 
 /// An execve of `path` whose whole argument vector was captured.
-fn exec(pid: u32, path: &str, arguments: &[&str]) -> InvocationSummary {
+pub fn exec(pid: u32, path: &str, arguments: &[&str]) -> InvocationSummary {
     let mut row = tests::path_call(pid, 59, "execve", 0, path);
     let entry = row.entry.as_mut().unwrap();
     for (index, argument) in arguments.iter().enumerate() {
@@ -38,12 +38,12 @@ fn exec(pid: u32, path: &str, arguments: &[&str]) -> InvocationSummary {
     row
 }
 
-fn with_args(mut row: InvocationSummary, args: [u64; 6]) -> InvocationSummary {
+pub fn with_args(mut row: InvocationSummary, args: [u64; 6]) -> InvocationSummary {
     row.entry.as_mut().unwrap().args = Some(args);
     row
 }
 
-fn with_path(mut row: InvocationSummary, key: &str, path: &str) -> InvocationSummary {
+pub fn with_path(mut row: InvocationSummary, key: &str, path: &str) -> InvocationSummary {
     let mut bytes = path.as_bytes().to_vec();
     bytes.push(0);
     row.entry
@@ -54,7 +54,7 @@ fn with_path(mut row: InvocationSummary, key: &str, path: &str) -> InvocationSum
     row
 }
 
-fn with_address(
+pub fn with_address(
     mut row: InvocationSummary,
     key: &str,
     family: u16,
@@ -73,10 +73,10 @@ fn with_address(
     row
 }
 
-type Fields = serde_json::Value;
+pub type Fields = serde_json::Value;
 
 /// Run calls the way the scan does and return the journal's events.
-fn run(files: &mut FdState, calls: &[InvocationSummary]) -> Vec<Fields> {
+pub fn run(files: &mut FdState, calls: &[InvocationSummary]) -> Vec<Fields> {
     let temp = PacketSpool::new().unwrap();
     let mut journal = EventJournal::new(&temp.directory, &identity()).unwrap();
     let mut held = Vec::new();
@@ -108,14 +108,14 @@ fn run(files: &mut FdState, calls: &[InvocationSummary]) -> Vec<Fields> {
         .collect()
 }
 
-fn of<'a>(events: &'a [Fields], category: &str) -> Vec<&'a Fields> {
+pub fn of<'a>(events: &'a [Fields], category: &str) -> Vec<&'a Fields> {
     events
         .iter()
         .filter(|event| event["category"] == category)
         .collect()
 }
 
-fn auditd<'a>(events: &'a [Fields], kind: &str) -> Vec<&'a Fields> {
+pub fn auditd<'a>(events: &'a [Fields], kind: &str) -> Vec<&'a Fields> {
     events
         .iter()
         .filter(|event| event["category"] == "auditd" && event["fields"]["type"] == kind)
@@ -123,7 +123,7 @@ fn auditd<'a>(events: &'a [Fields], kind: &str) -> Vec<&'a Fields> {
 }
 
 #[test]
-fn a_child_that_execs_before_its_vfork_returns_still_names_its_parent() {
+pub fn a_child_that_execs_before_its_vfork_returns_still_names_its_parent() {
     let calls = [
         exec(1, "/bin/sh", &["sh", "-c", "ls"]),
         // The child execs, and only then does the parent's vfork return.
@@ -153,7 +153,7 @@ fn a_child_that_execs_before_its_vfork_returns_still_names_its_parent() {
 }
 
 #[test]
-fn a_child_exec_names_its_parent_and_the_launch_directory() {
+pub fn a_child_exec_names_its_parent_and_the_launch_directory() {
     let mut files = FdState::default();
     files.journal.launch_cwd = Some("/work".into());
     files.journal.root_cookie = 1;
@@ -188,7 +188,7 @@ fn a_child_exec_names_its_parent_and_the_launch_directory() {
 }
 
 #[test]
-fn chdir_is_followed_from_the_launch_directory_and_marked_inferred() {
+pub fn chdir_is_followed_from_the_launch_directory_and_marked_inferred() {
     let mut files = FdState::default();
     files.journal.launch_cwd = Some("/work".into());
     files.journal.root_cookie = 1;
@@ -212,7 +212,7 @@ fn chdir_is_followed_from_the_launch_directory_and_marked_inferred() {
 }
 
 #[test]
-fn file_event_covers_creating_calls_and_infers_newness_from_paths_already_seen() {
+pub fn file_event_covers_creating_calls_and_infers_newness_from_paths_already_seen() {
     let mut files = FdState::default();
     let open = |path: &str, flags: u64| {
         with_args(
@@ -273,7 +273,7 @@ fn file_event_covers_creating_calls_and_infers_newness_from_paths_already_seen()
 }
 
 #[test]
-fn accepted_connections_and_udp_peers_are_network_connections() {
+pub fn accepted_connections_and_udp_peers_are_network_connections() {
     let mut files = FdState::default();
     let tcp = with_args(tests::call(1, 41, "socket", 4), [2, 1, 0, 0, 0, 0]);
     let udp = with_args(tests::call(1, 41, "socket", 5), [2, 2, 0, 0, 0, 0]);
@@ -351,7 +351,7 @@ fn accepted_connections_and_udp_peers_are_network_connections() {
 }
 
 #[test]
-fn a_destination_takes_its_name_from_the_dns_answer_and_says_so() {
+pub fn a_destination_takes_its_name_from_the_dns_answer_and_says_so() {
     let mut files = FdState::default();
     let answer = |name: &str, address: &str, time: i128| {
         let mut row = cell("", tone::text(), true);
@@ -410,7 +410,7 @@ fn a_destination_takes_its_name_from_the_dns_answer_and_says_so() {
 }
 
 #[test]
-fn auditd_records_use_audit_field_names_and_never_invent_credentials_or_hashes() {
+pub fn auditd_records_use_audit_field_names_and_never_invent_credentials_or_hashes() {
     let mut files = FdState::default();
     let calls = [
         exec(7, "/usr/bin/chmod", &["chmod", "u+s", "/tmp/x"]),
@@ -479,7 +479,7 @@ fn auditd_records_use_audit_field_names_and_never_invent_credentials_or_hashes()
 }
 
 #[test]
-fn an_incomplete_argument_vector_gives_no_argc_and_only_the_arguments_that_were_whole() {
+pub fn an_incomplete_argument_vector_gives_no_argc_and_only_the_arguments_that_were_whole() {
     let mut row = exec(7, "/bin/cp", &["cp", "a"]);
     let entry = row.entry.as_mut().unwrap();
     entry.fields.retain(|field| field.key != "arg1.ptr[2]");
@@ -493,7 +493,7 @@ fn an_incomplete_argument_vector_gives_no_argc_and_only_the_arguments_that_were_
 }
 
 #[test]
-fn auditd_cwd_and_proctitle_records_come_with_syscall_and_path_records() {
+pub fn auditd_cwd_and_proctitle_records_come_with_syscall_and_path_records() {
     let hex = |text: &str| -> String { text.bytes().map(|byte| format!("{byte:02X}")).collect() };
     let mut files = FdState::default();
     files.journal.launch_cwd = Some("/work".into());
@@ -528,7 +528,7 @@ fn auditd_cwd_and_proctitle_records_come_with_syscall_and_path_records() {
 }
 
 #[test]
-fn a_title_is_cut_where_the_kernel_cuts_it_and_missing_without_a_whole_vector() {
+pub fn a_title_is_cut_where_the_kernel_cuts_it_and_missing_without_a_whole_vector() {
     let long = "x".repeat(200);
     let mut files = FdState::default();
     let events = run(&mut files, &[exec(1, "/bin/echo", &["echo", &long])]);
@@ -550,7 +550,7 @@ fn a_title_is_cut_where_the_kernel_cuts_it_and_missing_without_a_whole_vector() 
 use antinomie_monitor_core::kernel_notes::{CREDS_KEY, HASH_KEY};
 
 /// A credentials record: `ids` are uid, euid, suid, fsuid then the gids.
-fn creds_note(ids: [u32; 8], login: Option<u32>, audit: bool, reason: u32) -> EventSummary {
+pub fn creds_note(ids: [u32; 8], login: Option<u32>, audit: bool, reason: u32) -> EventSummary {
     let mut bytes: Vec<u8> = ids.iter().flat_map(|id| id.to_le_bytes()).collect();
     let (auid, session) = match login {
         Some(auid) => (auid, 3),
@@ -563,7 +563,7 @@ fn creds_note(ids: [u32; 8], login: Option<u32>, audit: bool, reason: u32) -> Ev
     note(CREDS_KEY, "antinomie.creds/1", &bytes)
 }
 
-fn hash_note(kind: u8, status: u8, flags: u8, size: u64) -> EventSummary {
+pub fn hash_note(kind: u8, status: u8, flags: u8, size: u64) -> EventSummary {
     let mut bytes = vec![0u8; 80];
     bytes[0] = kind;
     bytes[1] = status;
@@ -577,7 +577,7 @@ fn hash_note(kind: u8, status: u8, flags: u8, size: u64) -> EventSummary {
     note(HASH_KEY, "antinomie.hash/1", &bytes)
 }
 
-fn note(key: &str, layout: &str, bytes: &[u8]) -> EventSummary {
+pub fn note(key: &str, layout: &str, bytes: &[u8]) -> EventSummary {
     let mut event = tests::call(1, 0, "", 0).entry.unwrap();
     event.phase = 3;
     event.args = None;
@@ -585,16 +585,16 @@ fn note(key: &str, layout: &str, bytes: &[u8]) -> EventSummary {
     event
 }
 
-fn with_notes(mut row: InvocationSummary, notes: Vec<EventSummary>) -> InvocationSummary {
+pub fn with_notes(mut row: InvocationSummary, notes: Vec<EventSummary>) -> InvocationSummary {
     row.kernel_notes = notes;
     row
 }
 
-const ROOT: [u32; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
-const USER: [u32; 8] = [1000, 1000, 1000, 1000, 100, 100, 100, 100];
+pub const ROOT: [u32; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
+pub const USER: [u32; 8] = [1000, 1000, 1000, 1000, 100, 100, 100, 100];
 
 #[test]
-fn credentials_follow_the_task_and_apply_after_the_call_that_changed_them() {
+pub fn credentials_follow_the_task_and_apply_after_the_call_that_changed_them() {
     let mut files = FdState::default();
     let calls = [
         with_notes(
@@ -645,7 +645,7 @@ fn credentials_follow_the_task_and_apply_after_the_call_that_changed_them() {
 }
 
 #[test]
-fn a_login_uid_is_the_logon_id_and_an_untracked_one_is_left_out() {
+pub fn a_login_uid_is_the_logon_id_and_an_untracked_one_is_left_out() {
     let mut files = FdState::default();
     let calls = [
         with_notes(
@@ -669,7 +669,7 @@ fn a_login_uid_is_the_logon_id_and_an_untracked_one_is_left_out() {
 }
 
 #[test]
-fn an_exec_and_a_delete_carry_the_hash_the_guest_recorded() {
+pub fn an_exec_and_a_delete_carry_the_hash_the_guest_recorded() {
     let mut files = FdState::default();
     let calls = [
         with_notes(exec(1, "/bin/sh", &["sh"]), vec![hash_note(1, 0, 0, 100)]),
@@ -685,7 +685,7 @@ fn an_exec_and_a_delete_carry_the_hash_the_guest_recorded() {
 }
 
 #[test]
-fn a_skipped_hash_says_why_and_a_missing_one_leaves_the_field_out() {
+pub fn a_skipped_hash_says_why_and_a_missing_one_leaves_the_field_out() {
     let mut files = FdState::default();
     let calls = [
         with_notes(
@@ -719,7 +719,7 @@ fn a_skipped_hash_says_why_and_a_missing_one_leaves_the_field_out() {
 }
 
 #[test]
-fn a_failed_delete_still_reports_nothing_the_guest_did_not_record() {
+pub fn a_failed_delete_still_reports_nothing_the_guest_did_not_record() {
     let mut files = FdState::default();
     let events = run(
         &mut files,
@@ -733,7 +733,7 @@ fn a_failed_delete_still_reports_nothing_the_guest_did_not_record() {
 
 #[test]
 #[ignore = "requires a run recorded by a kernel with credential and hash records in ANTINOMIE_NOTES_RUN"]
-fn a_recorded_run_reaches_the_journal_with_credentials_and_hashes() {
+pub fn a_recorded_run_reaches_the_journal_with_credentials_and_hashes() {
     let directory = std::path::PathBuf::from(
         std::env::var_os("ANTINOMIE_NOTES_RUN").expect("set the recorded run directory"),
     );
@@ -798,7 +798,7 @@ fn a_recorded_run_reaches_the_journal_with_credentials_and_hashes() {
 }
 
 /// A call the task ended in: no Exit, and the task-exit record attached.
-fn ending(pid: u32, tid: u32, raw_status: u64) -> InvocationSummary {
+pub fn ending(pid: u32, tid: u32, raw_status: u64) -> InvocationSummary {
     let mut row = tests::call(pid, 231, "exit_group", 0);
     row.exit = None;
     let mut ended = row.entry.clone().unwrap();
@@ -816,7 +816,7 @@ fn ending(pid: u32, tid: u32, raw_status: u64) -> InvocationSummary {
 }
 
 #[test]
-fn a_process_that_ended_gives_a_termination_event_with_what_the_trace_recorded() {
+pub fn a_process_that_ended_gives_a_termination_event_with_what_the_trace_recorded() {
     let mut files = FdState::default();
     let calls = [exec(5, "/bin/sleep", &["sleep", "1"]), ending(5, 5, 0)];
     let events = run(&mut files, &calls);
@@ -839,21 +839,21 @@ fn a_process_that_ended_gives_a_termination_event_with_what_the_trace_recorded()
 }
 
 #[test]
-fn a_thread_that_ended_is_not_a_process_termination() {
+pub fn a_thread_that_ended_is_not_a_process_termination() {
     let mut files = FdState::default();
     let events = run(&mut files, &[ending(5, 6, 0)]);
     assert!(of(&events, "process_termination").is_empty());
 }
 
 #[test]
-fn a_call_without_a_task_exit_gives_no_termination_event() {
+pub fn a_call_without_a_task_exit_gives_no_termination_event() {
     let mut files = FdState::default();
     let events = run(&mut files, &[tests::call(5, 231, "exit_group", 0)]);
     assert!(of(&events, "process_termination").is_empty());
 }
 
 /// A file identity record of `kind` for inode `ino`, a regular file.
-fn file_id_note(kind: u8, ino: u64) -> EventSummary {
+pub fn file_id_note(kind: u8, ino: u64) -> EventSummary {
     let mut bytes = vec![0u8; 32];
     bytes[0] = kind;
     bytes[1] = 2;
@@ -869,7 +869,7 @@ fn file_id_note(kind: u8, ino: u64) -> EventSummary {
 }
 
 /// The guest's hash of inode `ino` at its last close (`antinomie.hash/2`).
-fn write_hash_note(ino: u64, status: u8, flags: u8) -> EventSummary {
+pub fn write_hash_note(ino: u64, status: u8, flags: u8) -> EventSummary {
     let mut bytes = hash_note(3, status, flags, 10).fields[0].preview.clone();
     bytes.resize(112, 0);
     bytes[80..88].copy_from_slice(&0x803u64.to_le_bytes());
@@ -879,7 +879,7 @@ fn write_hash_note(ino: u64, status: u8, flags: u8) -> EventSummary {
     note(HASH_KEY, "antinomie.hash/2", &bytes)
 }
 
-fn create(path: &str, ino: u64) -> InvocationSummary {
+pub fn create(path: &str, ino: u64) -> InvocationSummary {
     with_notes(
         with_args(
             tests::path_call(1, 2, "open", 3, path),
@@ -890,7 +890,7 @@ fn create(path: &str, ino: u64) -> InvocationSummary {
 }
 
 #[test]
-fn a_created_file_carries_the_hash_its_last_close_left() {
+pub fn a_created_file_carries_the_hash_its_last_close_left() {
     let mut files = FdState::default();
     files.journal.hashes_writes = true;
     let calls = [
@@ -932,7 +932,7 @@ fn a_created_file_carries_the_hash_its_last_close_left() {
 }
 
 #[test]
-fn without_write_hashing_a_creation_is_written_at_once_and_unchanged() {
+pub fn without_write_hashing_a_creation_is_written_at_once_and_unchanged() {
     let mut files = FdState::default();
     let calls = [
         create("/tmp/dropped", 7),
@@ -949,7 +949,7 @@ fn without_write_hashing_a_creation_is_written_at_once_and_unchanged() {
 }
 
 #[test]
-fn names_from_the_base_fill_sysmon_user_and_the_auditd_interpreted_fields() {
+pub fn names_from_the_base_fill_sysmon_user_and_the_auditd_interpreted_fields() {
     let mut files = FdState::default();
     files.journal.names = Some(std::sync::Arc::new(
         antinomie_monitor_core::guest_names::GuestNames::from_files(
@@ -1006,7 +1006,7 @@ fn names_from_the_base_fill_sysmon_user_and_the_auditd_interpreted_fields() {
 }
 
 #[test]
-fn without_names_the_auditd_records_have_no_interpreted_fields() {
+pub fn without_names_the_auditd_records_have_no_interpreted_fields() {
     let mut files = FdState::default();
     let events = run(
         &mut files,
@@ -1022,7 +1022,7 @@ fn without_names_the_auditd_records_have_no_interpreted_fields() {
 }
 
 #[test]
-fn the_launched_program_has_its_own_process_creation_with_its_image_hash() {
+pub fn the_launched_program_has_its_own_process_creation_with_its_image_hash() {
     use antinomie_monitor_core::recording::LaunchRecord;
     let temp = PacketSpool::new().unwrap();
     let mut journal = EventJournal::new(&temp.directory, &identity()).unwrap();
@@ -1076,7 +1076,7 @@ fn the_launched_program_has_its_own_process_creation_with_its_image_hash() {
 }
 
 /// An exec image record naming `path` as the loaded image.
-fn exec_image_note(path: &str) -> EventSummary {
+pub fn exec_image_note(path: &str) -> EventSummary {
     let mut bytes = vec![0u8; 40];
     let mut name = path.as_bytes().to_vec();
     name.push(0);
@@ -1090,7 +1090,7 @@ fn exec_image_note(path: &str) -> EventSummary {
 }
 
 #[test]
-fn an_exec_whose_path_was_not_captured_is_named_by_its_image_never_its_parent() {
+pub fn an_exec_whose_path_was_not_captured_is_named_by_its_image_never_its_parent() {
     let mut files = FdState::default();
     let calls = [
         exec(1, "/bin/sh", &["sh"]),

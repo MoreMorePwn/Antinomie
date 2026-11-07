@@ -7,24 +7,24 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::{path::PathBuf, sync::Arc};
 
 /// Most captured bytes read from the run's object store in one go.
-const READ_STEP: u64 = 65_536;
+pub const READ_STEP: u64 = 65_536;
 /// How much of a transfer's start is kept in memory for previews.
-const LEAD: usize = 512;
+pub const LEAD: usize = 512;
 
 /// A stretch of a transfer's captured bytes: where it lies in the transfer,
 /// and where to read it from when it is needed.
-struct Segment {
-    at: u64,
-    len: u64,
+pub struct Segment {
+    pub at: u64,
+    pub len: u64,
     /// The run's object store, when the field has a saved object.
-    source: Option<Source>,
+    pub source: Option<Source>,
     /// What the event itself holds of the stretch, used when the object cannot
     /// be read (or there is none).
-    fallback: Vec<u8>,
+    pub fallback: Vec<u8>,
 }
 
 impl Segment {
-    fn read(&self, skip: u64, len: u64) -> Option<Vec<u8>> {
+    pub fn read(&self, skip: u64, len: u64) -> Option<Vec<u8>> {
         if let Some(data) = self
             .source
             .as_ref()
@@ -43,27 +43,27 @@ impl Segment {
 /// at most 64 KiB while [`Self::iter`] runs, so a call's memory does not grow
 /// with the size of its buffer.
 #[derive(Default)]
-pub(super) struct CapturedPayload {
-    segments: Vec<Segment>,
+pub struct CapturedPayload {
+    pub segments: Vec<Segment>,
     /// Bytes the recording says it captured, in place within the transfer.
-    captured_size: u64,
-    logical_size: u64,
+    pub captured_size: u64,
+    pub logical_size: u64,
     /// The transfer's first bytes, `None` where not captured.
-    lead: Vec<Option<u8>>,
+    pub lead: Vec<Option<u8>>,
     /// Bytes of a captured stretch that could not be read back.
-    unread: AtomicU64,
+    pub unread: AtomicU64,
 }
 
 /// The captured bytes in transfer order, read as they are asked for.
-pub(super) struct Bytes<'a> {
-    payload: &'a CapturedPayload,
-    until: u64,
-    count_unread: bool,
-    segment: usize,
-    within: u64,
-    chunk: Vec<u8>,
-    chunk_at: u64,
-    next: usize,
+pub struct Bytes<'a> {
+    pub payload: &'a CapturedPayload,
+    pub until: u64,
+    pub count_unread: bool,
+    pub segment: usize,
+    pub within: u64,
+    pub chunk: Vec<u8>,
+    pub chunk_at: u64,
+    pub next: usize,
 }
 
 impl Iterator for Bytes<'_> {
@@ -113,7 +113,7 @@ impl CapturedPayload {
     pub fn iter(&self) -> Bytes<'_> {
         self.bytes(u64::MAX, true)
     }
-    fn bytes(&self, until: u64, count_unread: bool) -> Bytes<'_> {
+    pub fn bytes(&self, until: u64, count_unread: bool) -> Bytes<'_> {
         Bytes {
             payload: self,
             until,
@@ -126,7 +126,7 @@ impl CapturedPayload {
         }
     }
     /// Fill in what is held in memory once the stretches are known.
-    fn settle(&mut self) {
+    pub fn settle(&mut self) {
         self.captured_size = self.segments.iter().map(|segment| segment.len).sum();
         let mut lead = vec![
             None;
@@ -175,7 +175,7 @@ impl CapturedPayload {
 
 /// The fields that carry a read's or write's data, in payload order: the
 /// exit's for a read, the entry's for a write.
-fn payload_fields(
+pub fn payload_fields(
     call: &InvocationSummary,
     reading: bool,
 ) -> Option<Vec<(usize, bool, &antinomie_monitor_core::api::FieldSummary)>> {
@@ -211,7 +211,7 @@ fn payload_fields(
 /// The stretches of a write's payload the kernel captured, as ranges of the
 /// run's object store (or inline copies where there is no object), without
 /// reading them. Whatever they leave uncovered was not captured.
-pub(super) fn write_stretches(
+pub fn write_stretches(
     call: &InvocationSummary,
     directory: Option<&Path>,
     size: u64,
@@ -221,7 +221,7 @@ pub(super) fn write_stretches(
 }
 
 /// The stretches of a read's payload the kernel captured.
-pub(super) fn read_stretches(
+pub fn read_stretches(
     call: &InvocationSummary,
     directory: Option<&Path>,
     size: u64,
@@ -232,7 +232,7 @@ pub(super) fn read_stretches(
 
 /// The same for the bytes a splice from a pipe gave its
 /// file (`file.copy.data`, an Exit field).
-pub(super) fn copy_stretches(
+pub fn copy_stretches(
     call: &InvocationSummary,
     directory: Option<&Path>,
     size: u64,
@@ -241,7 +241,7 @@ pub(super) fn copy_stretches(
     stretches(call, true, directory, size, interned)
 }
 
-fn stretches(
+pub fn stretches(
     call: &InvocationSummary,
     exit: bool,
     directory: Option<&Path>,
@@ -278,7 +278,7 @@ fn stretches(
 
 /// The captured stretches of one field whose bytes begin `base` bytes into
 /// a transfer of `size` bytes.
-fn field_stretches_at(
+pub fn field_stretches_at(
     field: &FieldSummary,
     base: u64,
     directory: Option<&Path>,
@@ -316,7 +316,7 @@ fn field_stretches_at(
 }
 
 /// A field's captured ranges, `(start, end)`, ascending and not overlapping.
-fn field_ranges(field: &FieldSummary) -> Vec<(u64, u64)> {
+pub fn field_ranges(field: &FieldSummary) -> Vec<(u64, u64)> {
     let mut ranges: Vec<_> = field.ranges.iter().copied().take(4096).collect();
     ranges.sort_unstable_by_key(|range| range.0);
     let mut covered_end = 0;
@@ -337,7 +337,7 @@ fn field_ranges(field: &FieldSummary) -> Vec<(u64, u64)> {
 
 /// The stretches of the `size` bytes one field holds (the bytes of pages
 /// written through a mapping), as [`write_stretches`] gives a write's.
-pub(super) fn field_stretches(
+pub fn field_stretches(
     field: &FieldSummary,
     directory: Option<&Path>,
     size: u64,
@@ -349,7 +349,7 @@ pub(super) fn field_stretches(
 }
 
 /// The bytes of one field, as [`capture`] reads a transfer's.
-pub(super) fn field_capture(
+pub fn field_capture(
     field: &FieldSummary,
     directory: Option<&Path>,
     size: u64,
@@ -372,13 +372,13 @@ pub(super) fn field_capture(
 
 /// Directory and object names shared by every extent of a field.
 #[derive(Default)]
-pub(super) struct Interned {
-    recording: Option<Arc<PathBuf>>,
-    raw: Option<Arc<PathBuf>>,
+pub struct Interned {
+    pub recording: Option<Arc<PathBuf>>,
+    pub raw: Option<Arc<PathBuf>>,
 }
 
 impl Interned {
-    fn source(&mut self, directory: &Path, raw: &Path, at: u64) -> Source {
+    pub fn source(&mut self, directory: &Path, raw: &Path, at: u64) -> Source {
         if self.recording.as_deref().map(PathBuf::as_path) != Some(directory) {
             self.recording = Some(Arc::new(directory.to_path_buf()));
         }
@@ -392,7 +392,7 @@ impl Interned {
     }
 }
 
-pub(super) fn capture(
+pub fn capture(
     call: &InvocationSummary,
     reading: bool,
     directory: Option<&Path>,
@@ -432,7 +432,7 @@ pub(super) fn capture(
 
 /// Note one field's captured stretches, placed `base` bytes into a transfer
 /// of `size` bytes, in `result`. Nothing is read here.
-fn field_capture_at(
+pub fn field_capture_at(
     field: &FieldSummary,
     base: u64,
     directory: Option<&Path>,
@@ -469,9 +469,9 @@ fn field_capture_at(
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
-    use crate::triage::tests::{call, captured};
+    use crate::tests::{call, captured};
 
     #[test]
     fn a_big_buffer_is_read_in_steps_of_at_most_64_kib() {

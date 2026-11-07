@@ -17,12 +17,12 @@
 use super::*;
 use antinomie_monitor_core::guest_names::{self, GuestNames};
 
-fn run_of(directory: &Path) -> antinomie_monitor_core::RunSummary {
+pub fn run_of(directory: &Path) -> antinomie_monitor_core::RunSummary {
     serde_json::from_slice(&std::fs::read(directory.join("run.json")).unwrap()).unwrap()
 }
 
 /// The guest's names for a run: its base, read by the disk reader program.
-fn names(directory: &Path) -> Option<Arc<GuestNames>> {
+pub fn names(directory: &Path) -> Option<Arc<GuestNames>> {
     let data = std::env::var_os("ANTINOMIE_TRACER_DATA")?;
     let reader = std::env::var_os("ANTINOMIE_DISK_READER")?;
     let manifest: serde_json::Value =
@@ -39,7 +39,7 @@ fn names(directory: &Path) -> Option<Arc<GuestNames>> {
 /// Scan `directory` as the app does; `whole` reads every recording segment,
 /// otherwise only this one (what Triage did before). The run's own capture of
 /// this segment is the pcap, as the app finds it.
-fn scan(directory: &Path, whole: bool) -> ArchiveScan {
+pub fn scan(directory: &Path, whole: bool) -> ArchiveScan {
     let run = run_of(directory);
     let pcap = antinomie_monitor_core::RunArtifacts::load(directory)
         .ok()
@@ -65,7 +65,7 @@ fn scan(directory: &Path, whole: bool) -> ArchiveScan {
 }
 
 /// The detection journal the last whole scan wrote: its events.
-fn journal(directory: &Path) -> Vec<serde_json::Value> {
+pub fn journal(directory: &Path) -> Vec<serde_json::Value> {
     let data = std::fs::read_to_string(
         directory.join(antinomie_monitor_core::analysis::detection::JOURNAL_FILE),
     )
@@ -77,14 +77,14 @@ fn journal(directory: &Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
-fn pattern_sha(seed: u64, size: u64) -> String {
+pub fn pattern_sha(seed: u64, size: u64) -> String {
     let bytes: Vec<u8> = (0..size).map(|i| (i * 31 + seed) as u8).collect();
     antinomie_monitor_core::storage::sha256_hex(&bytes)
 }
 
-static MISSED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+pub static MISSED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
-fn expect(ok: bool, what: String) {
+pub fn expect(ok: bool, what: String) {
     if ok {
         println!("OK {what}");
     } else {
@@ -92,7 +92,7 @@ fn expect(ok: bool, what: String) {
     }
 }
 
-fn changed_rows(scan: &ArchiveScan) -> Vec<String> {
+pub fn changed_rows(scan: &ArchiveScan) -> Vec<String> {
     scan.changed
         .iter()
         .map(|row| {
@@ -104,7 +104,7 @@ fn changed_rows(scan: &ArchiveScan) -> Vec<String> {
         .collect()
 }
 
-fn event_for<'a>(
+pub fn event_for<'a>(
     events: &'a [serde_json::Value],
     category: &str,
     field: &str,
@@ -117,7 +117,7 @@ fn event_for<'a>(
 
 #[test]
 #[ignore = "requires ANTINOMIE_TRACER_RUNS from `tracer-check record`"]
-fn recorded_tracer_triage() {
+pub fn recorded_tracer_triage() {
     let runs = std::env::var("ANTINOMIE_TRACER_RUNS").expect("ANTINOMIE_TRACER_RUNS");
     let runs: std::collections::BTreeMap<_, _> = runs
         .split(';')
@@ -400,18 +400,18 @@ fn recorded_tracer_triage() {
 }
 
 /// The SHA-256 of `bytes`.
-fn sha(bytes: &[u8]) -> String {
+pub fn sha(bytes: &[u8]) -> String {
     antinomie_monitor_core::storage::sha256_hex(bytes)
 }
 
 /// `pattern(seed)` over `[from, from + len)`, as the fixture writes it.
-fn pattern(seed: u64, from: u64, len: u64) -> Vec<u8> {
+pub fn pattern(seed: u64, from: u64, len: u64) -> Vec<u8> {
     (from..from + len).map(|i| (i * 31 + seed) as u8).collect()
 }
 
 /// The digest after every step of `file`'s history, from an empty start (the
 /// run created each of these files), with `None` where a byte is unknown.
-fn digests(file: &super::file_activity::FileActivity) -> Vec<Option<String>> {
+pub fn digests(file: &super::file_activity::FileActivity) -> Vec<Option<String>> {
     use antinomie_monitor_core::file_reconstruct::{Reconstruction, Start};
     let mut map = Reconstruction::new(Start::empty(), &file.timeline);
     (0..=file.timeline.steps().len())
@@ -423,7 +423,7 @@ fn digests(file: &super::file_activity::FileActivity) -> Vec<Option<String>> {
 }
 
 /// The digest of `file` as it was when its first `kind` call happened.
-fn digest_at(
+pub fn digest_at(
     file: &super::file_activity::FileActivity,
     kind: super::file_activity::Kind,
 ) -> Option<String> {
@@ -441,7 +441,7 @@ fn digest_at(
 /// was executed or read must be the one shown at that call, and the files
 /// must stay listed after they were deleted or emptied. `events` is the run's
 /// normalized journal.
-fn versions(found: &ArchiveScan, events: &[serde_json::Value], fixture: &str) {
+pub fn versions(found: &ArchiveScan, events: &[serde_json::Value], fixture: &str) {
     let activity = &found.file_activity;
     let file = |name: &str| {
         let path = format!("/tmp/tracer-v/{name}");
