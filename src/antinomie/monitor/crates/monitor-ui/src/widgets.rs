@@ -39,7 +39,7 @@ mod wheel;
 mod window;
 mod written;
 
-pub use card::{back_link, bounded_menu, card, detail_block, link};
+pub use card::{back_link, bounded_menu, card, card_sized, detail_block, link};
 pub use facts::{fact_line, facts, titled};
 pub use fit::fit_middle;
 pub use info_panel::{info_panel, InfoPanel};

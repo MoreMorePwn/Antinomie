@@ -200,23 +200,26 @@ pub(super) fn show(
         action = request(0, query);
     }
     if page.total == 0 {
-        ui.label(if state.applied_query.is_empty() {
-            "This listing is empty."
-        } else {
-            "No row matches the search."
-        });
+        ui.label(empty_text(state, listing.map(|listing| listing.rows)));
         return action;
     }
     let mono = egui::TextStyle::Monospace.resolve(ui.style());
-    let row_height = mono.size + 10.0;
-    let loaded = page.start..page.start + page.rows.len() as u64;
-    let mut needed = None;
-    let mut clicked = None;
-    let mut jump: Option<u64> = None;
     let split = matches!(
         kind,
         AnalysisKind::Disassembly | AnalysisKind::Decompilation
     );
+    // Header and table rows have room around their text; code lines sit one
+    // font row apart, as in a text editor, with no item spacing between them.
+    let head_height = mono.size + 10.0;
+    let row_height = if split {
+        ui.fonts_mut(|fonts| fonts.row_height(&mono))
+    } else {
+        head_height
+    };
+    let loaded = page.start..page.start + page.rows.len() as u64;
+    let mut needed = None;
+    let mut clicked = None;
+    let mut jump: Option<u64> = None;
     let names = if split {
         state.functions.clone()
     } else {
@@ -234,6 +237,9 @@ pub(super) fn show(
         ui.push_id(("listing-table", kind_salt(kind)), |ui| {
             // Rows select on click; text selection would swallow it.
             ui.style_mut().interaction.selectable_labels = false;
+            if split {
+                ui.spacing_mut().item_spacing.y = 0.0;
+            }
             let focus: Option<Vec<usize>> = state.function.as_ref().map(|identity| {
                 let mut current = None;
                 page.rows
@@ -250,7 +256,7 @@ pub(super) fn show(
             if focus.as_ref().is_some_and(Vec::is_empty) {
                 ui.label("No rows of this function are in the loaded listing page.");
             }
-            let height = ui.available_height().max(row_height);
+            let height = ui.available_height().max(head_height);
             let mut table = FitBuilder::new(ui)
                 .id_salt(("listing", kind_salt(kind)))
                 .striped(kind != AnalysisKind::Decompilation)
@@ -266,7 +272,7 @@ pub(super) fn show(
             }
             let sort_name = sort_table(kind, state.scope);
             table
-                .header(row_height, |mut header| {
+                .header(head_height, |mut header| {
                     for (column, (title, _)) in columns.iter().enumerate() {
                         header.col(|ui| match kind {
                             AnalysisKind::Strings => {
@@ -570,6 +576,23 @@ fn body_identity(
 
 fn identity_name(identity: &str) -> Option<&str> {
     identity.split_once(':').map(|(_, name)| name)
+}
+
+/// What an empty page says. A structures view that is one kind of row (Imports,
+/// Exports...) names the kind and says the other views hold the rest of the
+/// listing's rows, instead of calling a listing with rows empty.
+fn empty_text(state: &ListingState, rows: Option<u64>) -> String {
+    if !state.applied_query.is_empty() {
+        return "No row matches the search.".into();
+    }
+    match (state.scope, rows) {
+        (Some(scope), Some(rows)) if !scope.kind_query().is_empty() && rows > 0 => format!(
+            "No {} in this file; its {} rows are in the other views.",
+            scope.label().to_lowercase(),
+            antinomie_monitor_core::analysis::detection::group_digits(rows)
+        ),
+        _ => "This listing is empty.".into(),
+    }
 }
 
 /// The user's filter limited to one structures view.
