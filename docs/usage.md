@@ -775,6 +775,15 @@ The network capture is the guest's own view on every route.
   button; in the tab badge it shows as a dash whose hover says "not scanned"
   (a zero would mean the engine scanned and found nothing). A result made with
   an older rule set says "Scanned with an older rule set." with **Rescan**.
+  A run on a VM that keeps running is scanned as soon as its recording is
+  **saved** (its tree ended, its terminal closed, every byte written and its
+  pcap segment closed), without a VM stop; until then the engine says "Waiting
+  for the recording to be saved." Sigma reads the run's event journal, which
+  Triage builds for the selected run: without one the tab says "Waiting for the
+  run's event index to be built.", or, when building it failed, "The run's event
+  journal is incomplete: <why>" and never a raw "No such file or directory".
+  Only the run selected in Triage gets an event index, so a run you never
+  selected has no Sigma scan until you select it.
 - **Failed launches.** A program the guest could not start because its file is
   cut off says "This ELF is truncated: its segments need 30.3 MB, the file has
   2.0 MB. A partial upload or download; get a full copy." in the run's failure
@@ -1039,6 +1048,11 @@ root exited while children live on, shows **Running** in every list and keeps it
 **Stop run** button (toolbar, Run menu, the command palette and the Run History
 row).
 
+Stop run works from any page, not only for the run selected in Triage: with no
+live run selected it acts on the newest live run, and the confirmation names the
+run it will stop ("the newest of 2 live runs"). Select a live run in Run history
+or Triage to stop that one instead.
+
 **Stop run** ends the whole recorded process tree, every live task of the run and
 not only the root, with SIGTERM and then SIGKILL after the grace period, while
 the VM keeps running. The run then ends the way any run ends: the recording
@@ -1050,8 +1064,12 @@ backdoor; stopping the VM instead cuts the run where it stands.
 How a cut or stopped run is worded, in Run History, the sample window's Runs
 list and Summary, Triage's state line and the reports:
 
-- **Stopped by you · root exited 0** (or "root killed by signal 15"): Stop run
-  ended it.
+- **Stopped by you at 5 min 9 s · root exited 0** (or "root killed by signal
+  15"): Stop run ended it, and the time is when the button was pressed. When the
+  tree took 2 s or more to end it adds "tree ended 3 s later"; the run's tooltip
+  gives the press time and the end time. Runs saved before 0.8.3 do not record
+  the press and read "Stopped by you after 6 min 59 s" (to the end of the
+  recording).
 - **Ended by VM stop · root exited 0 · 1 process still running**: the VM stopped
   while the tree was alive. The words give what the root did and how many
   processes were left; the run's pcap is closed at the stop and its route counts

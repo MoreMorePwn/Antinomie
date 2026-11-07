@@ -467,23 +467,35 @@ fn stage(
         Engine::Sigma => {
             staged.sigma_sources = managed;
             staged.sigma_sources.extend(extra);
-            let data = read_bounded(
-                &request.directory,
-                Path::new(JOURNAL_FILE),
-                128 * 1024 * 1024,
-            )?;
-            let digest = crate::storage::sha256_hex(&data);
-            if request
-                .source_digest
-                .as_ref()
-                .is_some_and(|expected| *expected != digest)
-            {
-                return Err("the triage event index changed; retry with its current prefix".into());
+            // No journal file means the run's event index was never finished
+            // (the app closed, or the run changed, while it was being built):
+            // the scan reports it as missing evidence instead of a raw
+            // "No such file or directory".
+            let journal_present = !matches!(
+                fs::symlink_metadata(request.directory.join(JOURNAL_FILE)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound
+            );
+            if journal_present {
+                let data = read_bounded(
+                    &request.directory,
+                    Path::new(JOURNAL_FILE),
+                    128 * 1024 * 1024,
+                )?;
+                let digest = crate::storage::sha256_hex(&data);
+                if request
+                    .source_digest
+                    .as_ref()
+                    .is_some_and(|expected| *expected != digest)
+                {
+                    return Err(
+                        "the triage event index changed; retry with its current prefix".into(),
+                    );
+                }
+                request.source_digest = Some(digest);
+                let path = work.join(JOURNAL_FILE);
+                fs::write(&path, &data).map_err(|error| error.to_string())?;
+                staged.journal = Some(path);
             }
-            request.source_digest = Some(digest);
-            let path = work.join(JOURNAL_FILE);
-            fs::write(&path, &data).map_err(|error| error.to_string())?;
-            staged.journal = Some(path);
             let configured = request.settings.effective_sigma_python();
             if !configured.is_empty() {
                 let python = host_path(&configured);
