@@ -461,6 +461,7 @@ pub fn requirements(
         | Command::InstallTool { .. } => vec![Curl],
         Command::AnalyzeOnly { .. }
         | Command::AnalyzeHostFile { .. }
+        | Command::AnalyzeSample { .. }
         | Command::AnalyzeMore { .. } => vec![Bubblewrap],
         Command::MeasureDisk { .. }
         | Command::OpenDiskReference { .. }

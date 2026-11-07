@@ -2326,6 +2326,17 @@ pub enum Command {
         path: PathBuf,
         analysis: crate::analysis::AnalysisSelection,
     },
+    /// Run static analysis on the library copy of `sha256` on the host, in the
+    /// sandbox, with no VM running (it also runs while another VM boots or
+    /// stops). The sample is decrypted in memory and verified first. The
+    /// report is kept in its own folder, `<data>/analyses/<id>`
+    /// ([`crate::analysis::sample_analysis_directory`]), apart from any VM or
+    /// recording. The result's message is the report id; the report and the
+    /// layers unpacking finds join `Snapshot.analysis_reports`.
+    AnalyzeSample {
+        sha256: String,
+        selection: crate::analysis::AnalysisSelection,
+    },
     /// Run checks the finished analysis kept in `directory` was not asked for
     /// and add them to its report, without a VM and without analyzing again.
     /// `run_id` is the run the report belongs to, when it is a run's.
@@ -2646,6 +2657,12 @@ pub struct Snapshot {
     /// Recordings of stopped boots that are still being made durable. The VM
     /// is already Stopped; this is the host finishing its disk work.
     pub recording_flush: Option<crate::RecordingFlushStatus>,
+    /// The VMs whose automatic disk layer is pending, with the stage of each
+    /// (`live`, `saving`, `finalizing`); a VM with no entry has none. After
+    /// `Stop` the entry is `saving` until the recording is saved, then
+    /// `finalizing` until the earlier bytes are copied and the layer merged:
+    /// the recording is final only when the entry is gone.
+    pub disk_layers: Vec<crate::disk_layers::DiskLayer>,
     pub process_page: Option<crate::observation::GuestProcessPage>,
     pub capture_dir: Option<PathBuf>,
     pub serial_log: Option<PathBuf>,
@@ -2657,12 +2674,6 @@ pub struct Snapshot {
     /// What the guest accepts for process cores; None until it has answered.
     pub guest_core_limits: Option<crate::core_limits::CoreLimits>,
     /// The optional hashing the guest tracer offers; None until it has
-    /// The VMs whose automatic disk layer is pending, with the stage of each
-    /// (`live`, `saving`, `finalizing`); a VM with no entry has none. After
-    /// `Stop` the entry is `saving` until the recording is saved, then
-    /// `finalizing` until the earlier bytes are copied and the layer merged:
-    /// the recording is final only when the entry is gone.
-    pub disk_layers: Vec<crate::disk_layers::DiskLayer>,
     /// answered, all zero for a guest without TRACER_CAPS.
     pub guest_tracer: Option<GuestTracerCaps>,
     pub last_error: Option<String>,
@@ -2987,27 +2998,6 @@ pub fn pair_events(events: &[EventSummary]) -> Vec<InvocationSummary> {
 mod tests {
     use super::*;
     #[test]
-    fn a_catalog_label_loses_its_trailing_antinomie_version() {
-        assert_eq!(
-            base_label_plain("BusyBox \u{2014} Antinomie 0.8.0"),
-            "BusyBox"
-        );
-        assert_eq!(
-            base_label_plain("Debian 13 (Minimal) \u{2014} Antinomie 0.8.0"),
-            "Debian 13 (Minimal)"
-        );
-        assert_eq!(
-            base_label_plain("Lab \u{2014} Antinomie"),
-            "Lab \u{2014} Antinomie"
-        );
-        assert_eq!(
-            base_label_plain("Lab \u{2014} my base"),
-            "Lab \u{2014} my base"
-        );
-        assert_eq!(base_label_plain("Debian"), "Debian");
-    }
-    #[test]
-    fn source_ids_and_revision_status() {
     fn exec_request_validate_refuses_what_no_guest_could_launch() {
         assert!(ExecRequest::default().validate().is_ok());
         fn bad(edit: impl FnOnce(&mut ExecRequest)) -> String {
@@ -3032,6 +3022,27 @@ mod tests {
         assert!(ok.validate().is_ok());
     }
     #[test]
+    fn a_catalog_label_loses_its_trailing_antinomie_version() {
+        assert_eq!(
+            base_label_plain("BusyBox \u{2014} Antinomie 0.8.0"),
+            "BusyBox"
+        );
+        assert_eq!(
+            base_label_plain("Debian 13 (Minimal) \u{2014} Antinomie 0.8.0"),
+            "Debian 13 (Minimal)"
+        );
+        assert_eq!(
+            base_label_plain("Lab \u{2014} Antinomie"),
+            "Lab \u{2014} Antinomie"
+        );
+        assert_eq!(
+            base_label_plain("Lab \u{2014} my base"),
+            "Lab \u{2014} my base"
+        );
+        assert_eq!(base_label_plain("Debian"), "Debian");
+    }
+    #[test]
+    fn source_ids_and_revision_status() {
         let series = "0f".repeat(32);
         assert_eq!(
             parse_source_id(&format!("9:{series}")),

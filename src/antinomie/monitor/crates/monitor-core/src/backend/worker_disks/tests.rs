@@ -845,6 +845,108 @@ fn host_files_are_analyzed_through_the_ordinary_job_queue() {
 }
 
 #[test]
+fn a_library_sample_is_analyzed_on_the_host_with_no_vm_in_its_own_folder() {
+    use crate::analysis::{AnalysisKind, AnalysisState};
+    let images = Images::new();
+    let data = images.path("data");
+    let mut worker = blank_worker(data.clone());
+    assert!(worker.session.is_none(), "no VM is running");
+    let selection = crate::analysis::AnalysisSelection {
+        enabled: true,
+        checks: vec![AnalysisKind::Metadata],
+        time_limit_minutes: 1,
+        limits: Default::default(),
+    };
+    let content = b"#!/bin/sh\necho library sample\n";
+    let mut library = crate::samples::Library::open(&data).unwrap();
+    let sha256 = library
+        .add_bytes(content, crate::samples::NewSample::default())
+        .unwrap()
+        .sha256;
+    drop(library);
+
+    // Refused: disabled analysis, a hash the library does not have, a bad hash.
+    let disabled = crate::analysis::AnalysisSelection::default();
+    assert!(worker.analyze_sample(&sha256, disabled).is_err());
+    let unknown = "0".repeat(64);
+    assert!(
+        worker
+            .analyze_sample(&unknown, selection.clone())
+            .unwrap_err()
+            .contains("not in the library")
+    );
+    assert!(
+        worker
+            .analyze_sample("../../etc", selection.clone())
+            .is_err()
+    );
+    assert!(worker.snapshot.analysis_reports.is_empty());
+
+    // Accepted: the id is the answer, the specimen is the library's bytes and
+    // the folder is under the data directory, not under a VM.
+    let id = worker.analyze_sample(&sha256, selection.clone()).unwrap();
+    let report = worker
+        .snapshot
+        .analysis_reports
+        .iter()
+        .find(|report| report.id == id)
+        .expect("the report is in the snapshot");
+    assert_ne!(report.state, AnalysisState::Unavailable);
+    assert_eq!(report.source_path, format!("sample:{sha256}"));
+    assert_eq!(report.time_limit_seconds, Some(60));
+    let folder = crate::analysis::sample_analysis_directory(&data, &id);
+    assert!(folder.is_dir());
+    let staged = fs::read(folder.join("specimen.partial"))
+        .or_else(|_| fs::read(folder.join("specimen")))
+        .unwrap();
+    assert_eq!(staged, content);
+}
+
+#[test]
+fn eight_finished_reports_make_room_and_eight_running_ones_refuse() {
+    use crate::analysis::{AnalysisKind, AnalysisState};
+    let images = Images::new();
+    let data = images.path("data");
+    let mut worker = blank_worker(data.clone());
+    let selection = crate::analysis::AnalysisSelection {
+        enabled: true,
+        checks: vec![AnalysisKind::Metadata],
+        time_limit_minutes: 0,
+        limits: Default::default(),
+    };
+    let mut library = crate::samples::Library::open(&data).unwrap();
+    let sha256 = library
+        .add_bytes(b"bytes", crate::samples::NewSample::default())
+        .unwrap()
+        .sha256;
+    drop(library);
+    let report = |state| {
+        let mut report = crate::analysis::jobs::new_report("/old", &selection);
+        report.state = state;
+        report
+    };
+    worker.snapshot.analysis_reports = (0..8).map(|_| report(AnalysisState::Running)).collect();
+    assert!(
+        worker
+            .analyze_sample(&sha256, selection.clone())
+            .unwrap_err()
+            .contains("still running")
+    );
+    assert_eq!(worker.snapshot.analysis_reports.len(), 8);
+    worker.snapshot.analysis_reports[3].state = AnalysisState::Complete;
+    let done = worker.snapshot.analysis_reports[3].id.clone();
+    worker.analyze_sample(&sha256, selection).unwrap();
+    assert!(
+        worker
+            .snapshot
+            .analysis_reports
+            .iter()
+            .all(|r| r.id != done)
+    );
+    assert_eq!(worker.snapshot.analysis_reports.len(), 8);
+}
+
+#[test]
 fn checks_are_added_to_a_finished_analysis_without_a_vm_and_only_by_plain_paths() {
     use crate::analysis::{AnalysisKind, AnalysisSectionState, AnalysisState};
     let images = Images::new();

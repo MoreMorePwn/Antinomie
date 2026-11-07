@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! `analyze FILE`: static analysis of a host file, no VM running (design 3.4.3).
 //!
-//! Over what the engine offers today this is `Command::AnalyzeHostFile`, which
-//! needs a VM id to name the folder the report is kept under. The command uses
-//! the id given with `--vm`, else the placeholder `cli-analysis`, which owns the
-//! reports of host files and is not a VM. Card P1-10 (`Command::AnalyzeSample`)
-//! replaces this with the analysis of a library sample kept in a job folder
-//! of its own; then `analyze` should add the file to the library first.
+//! The file is added to the sample library first (the engine analyses library
+//! copies only, and the custody chain records where it came from), then
+//! `Command::AnalyzeSample` analyses that copy in the sandbox on the host. The
+//! report lives in its own folder, `<data>/analyses/<report id>`, apart from any
+//! VM; `--out` copies it (and the layers unpacking found) out.
 use crate::{
     context::Context,
     engine::DirectEngine,
@@ -16,7 +15,9 @@ use crate::{
 };
 use antinomie_monitor_core::{
     AnalysisKind, AnalysisReport, AnalysisSelection, AnalysisState, Command,
+    analysis::sample_analysis_directory,
     dependencies::{self, Dependency},
+    samples::{Library, NewOrigin, NewSample},
     unpack_layers,
 };
 use clap::Args;
@@ -26,8 +27,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// The id the reports of host files are kept under when `--vm` is not given.
-pub const PLACEHOLDER_VM: &str = "cli-analysis";
 const DEFAULT_WAIT: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Args, Debug)]
@@ -45,9 +44,6 @@ pub struct Analyze {
     /// Also copy the report folder(s) into this directory, one folder per report.
     #[arg(long, value_name = "DIR")]
     pub out: Option<PathBuf>,
-    /// The id the report is kept under (default: `cli-analysis`).
-    #[arg(long, value_name = "ID")]
-    pub vm: Option<String>,
 }
 
 /// The checks named by `--checks`, or the triage set.
@@ -88,10 +84,6 @@ pub fn run(arguments: &Analyze, context: &Context) -> Result<Reply, CliError> {
     if let Err(problem) = dependencies::check(&context.options).require(&[Dependency::Bubblewrap]) {
         return Err(CliError::new(ErrorCode::DependencyMissing, problem));
     }
-    let vm_id = arguments
-        .vm
-        .clone()
-        .unwrap_or_else(|| PLACEHOLDER_VM.to_owned());
     let wait = context
         .global
         .timeout
@@ -101,27 +93,19 @@ pub fn run(arguments: &Analyze, context: &Context) -> Result<Reply, CliError> {
     let mut engine = DirectEngine::start(context.options.clone())?;
     context
         .logger
-        .debug("engine started; queueing the analysis");
-    let outcome = analyze(&mut engine, &vm_id, &path, selection, deadline);
+        .debug("engine started; adding the file to the library");
+    let outcome = add_and_analyze(&mut engine, &path, selection, deadline);
     let data_dir = engine.data_dir().to_path_buf();
-    let locations = engine.snapshot.vm_locations.clone();
     engine.finish();
     let (report, layers) = outcome?;
 
-    let root = locations
-        .iter()
-        .find(|location| location.vm_id == vm_id)
-        .map_or_else(
-            || data_dir.join(&vm_id),
-            |location| location.recording_directory.clone(),
-        );
-    let directory = root.join("analyses").join(&report.id);
+    let root = data_dir.join("analyses");
+    let directory = sample_analysis_directory(&data_dir, &report.id);
     let mut copies = Vec::new();
     if let Some(out) = &arguments.out {
         for id in std::iter::once(&report.id).chain(layers.iter().map(|layer| &layer.id)) {
             let target = out.join(id);
-            copy_dir(&root.join("analyses").join(id), &target)
-                .map_err(|error| CliError::io(&target, &error))?;
+            copy_dir(&root.join(id), &target).map_err(|error| CliError::io(&target, &error))?;
             copies.push(target);
         }
     }
@@ -135,30 +119,41 @@ fn finished(report: &AnalysisReport) -> bool {
     )
 }
 
-/// Queue the analysis and wait for it and for the layers unpacking found.
-fn analyze(
+/// Add the file to the library, queue its analysis and wait for it and for
+/// the layers unpacking found.
+fn add_and_analyze(
     engine: &mut DirectEngine,
-    vm_id: &str,
     path: &Path,
     selection: AnalysisSelection,
     deadline: Instant,
 ) -> Result<(AnalysisReport, Vec<AnalysisReport>), CliError> {
-    engine.command(
-        Command::AnalyzeHostFile {
-            vm_id: vm_id.to_owned(),
-            path: path.to_path_buf(),
-            analysis: selection,
+    let mut library = Library::open(engine.data_dir())
+        .map_err(|message| CliError::new(ErrorCode::Internal, message))?;
+    let added = library
+        .add_file(
+            path,
+            NewSample {
+                origin: NewOrigin::default(),
+                ..Default::default()
+            },
+            false,
+        )
+        .map_err(|message| CliError::invalid(message).with_field("file"))?;
+    drop(library);
+    let id = engine.command(
+        Command::AnalyzeSample {
+            sha256: added.sha256,
+            selection,
         },
         deadline,
     )?;
-    let source = path.to_string_lossy().into_owned();
     loop {
         engine.next(Duration::from_millis(100));
         let main = engine
             .snapshot
             .analysis_reports
             .iter()
-            .find(|report| report.layer.is_none() && report.source_path == source)
+            .find(|report| report.id == id)
             .filter(|report| finished(report));
         if let Some(main) = main {
             let wanted = unpack_layers(main)
@@ -169,7 +164,11 @@ fn analyze(
                 .snapshot
                 .analysis_reports
                 .iter()
-                .filter(|report| report.layer.is_some() && finished(report))
+                .filter(|report| {
+                    report.layer.is_some()
+                        && report.source_path == main.source_path
+                        && finished(report)
+                })
                 .cloned()
                 .collect();
             if layers.len() >= wanted {
