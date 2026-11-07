@@ -27,6 +27,7 @@ impl Directory {
                 sealed: "disk.qcow2".into(),
                 top: "snapshots/top.qcow2".into(),
                 manifest_absent: true,
+                marker: Default::default(),
             },
         )
         .unwrap();

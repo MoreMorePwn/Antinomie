@@ -20,6 +20,7 @@ use std::{
 
 mod efi_vars;
 pub(crate) mod run_layer;
+pub use run_layer::{Record as RunLayerRecord, lock_free as run_layer_lock_free};
 
 const MAX_NODES: usize = 256;
 const MAX_CHAIN: usize = 64;

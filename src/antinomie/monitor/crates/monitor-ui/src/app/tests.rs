@@ -44,6 +44,7 @@ mod samples_report;
 mod samples_runs_layout;
 mod samples_shots;
 mod scanned_inputs;
+mod settings_file;
 mod settings_keyboard;
 mod settings_layout;
 mod settings_lookup;
@@ -207,6 +208,8 @@ pub(crate) fn app() -> MonitorApp {
         activity: Default::default(),
         activity_notices_due: true,
         status_notice: None,
+        settings_file: Default::default(),
+        settings_file_reported: None,
         env: exec.env.join("\n"),
         exec,
         args: String::new(),

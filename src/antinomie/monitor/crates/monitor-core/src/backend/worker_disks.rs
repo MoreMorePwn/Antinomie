@@ -574,6 +574,71 @@ impl Worker {
         Ok("static analysis of the extracted file queued".into())
     }
 
+    /// Queue the static analysis of a library sample. The sample is verified and
+    /// decrypted in memory, handed to the job through an anonymous file, and
+    /// analysed on the host like any host file; nothing about it touches a VM.
+    /// Returns the report id.
+    pub(super) fn analyze_sample(
+        &mut self,
+        sha256: &str,
+        selection: crate::analysis::AnalysisSelection,
+    ) -> Result<String, String> {
+        selection.validate()?;
+        if !selection.enabled {
+            return Err("static analysis is not selected".into());
+        }
+        self.make_room_for_analysis()?;
+        let bytes = crate::samples::Library::open(&self.options.data_dir)?.open_bytes(sha256)?;
+        let input = crate::analysis::anonymous_copy(&bytes)?;
+        let name = format!("sample:{}", sha256.to_ascii_lowercase());
+        let report = crate::analysis::jobs::new_report(&name, &selection);
+        let directory =
+            crate::analysis::sample_analysis_directory(&self.options.data_dir, &report.id);
+        if let Some(parent) = directory.parent() {
+            storage::private_dir(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        let report = self.host_analysis.submit_host_opened(
+            report,
+            directory,
+            input,
+            bytes.len() as u64,
+            self.options.capture_quota_size,
+        );
+        drop(bytes);
+        self.host_analysis_updates();
+        if report.state == crate::analysis::AnalysisState::Unavailable {
+            return Err(report
+                .reason
+                .unwrap_or_else(|| "analysis unavailable".into()));
+        }
+        Ok(report.id)
+    }
+
+    /// The snapshot keeps eight standalone reports. A caller that analyses
+    /// samples one after another (a job runner) lets the oldest finished one
+    /// go; only eight unfinished ones refuse.
+    fn make_room_for_analysis(&mut self) -> Result<(), String> {
+        let reports = &mut self.snapshot.analysis_reports;
+        if reports.len() < 8 {
+            return Ok(());
+        }
+        let finished = |report: &crate::analysis::AnalysisReport| {
+            !matches!(
+                report.state,
+                crate::analysis::AnalysisState::Acquiring
+                    | crate::analysis::AnalysisState::Queued
+                    | crate::analysis::AnalysisState::Running
+            )
+        };
+        match reports.iter().position(finished) {
+            Some(index) => {
+                reports.remove(index);
+                Ok(())
+            }
+            None => Err("eight analyses are still running; wait for one to finish".into()),
+        }
+    }
+
     /// Queue checks that a finished analysis in `directory` does not have. The
     /// analysis is not repeated; the new sections join its report.
     pub(super) fn analyze_more(

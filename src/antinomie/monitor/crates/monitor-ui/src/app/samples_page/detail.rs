@@ -692,32 +692,11 @@ pub(super) fn suggested_techniques(data: &Data) -> Vec<String> {
     labels
 }
 
-/// The name a sample takes in the guest: safe characters only.
-pub(super) fn guest_name(record: &SampleRecord) -> String {
-    let name: String = record
-        .name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || ".-_".contains(c) {
-                c
-            } else {
-                '_'
-            }
-        })
-        .take(48)
-        .collect();
-    format!(
-        "/tmp/{}-{}",
-        &record.sha256[..8],
-        if name.is_empty() { "sample" } else { &name }
-    )
-}
-
 impl MonitorApp {
     /// Send the archive into the running VM (the worker reads it back and
     /// compares its SHA-256 first), then open Run program with it.
     fn run_sample_in_vm(&mut self, record: &SampleRecord) {
-        let destination = guest_name(record);
+        let destination = record.guest_path();
         let script = matches!(
             record.file_type.to_ascii_lowercase().as_str(),
             "sh" | "bash"

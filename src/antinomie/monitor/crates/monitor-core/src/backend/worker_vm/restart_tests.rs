@@ -28,6 +28,7 @@ impl Fixture {
                 sealed: "disk.qcow2".into(),
                 top: "snapshots/top.qcow2".into(),
                 manifest_absent: true,
+                marker: Default::default(),
             },
         )
         .unwrap();
@@ -364,7 +365,7 @@ fn restart_retains_old_file_bytes_before_real_qcow_layers_merge() {
             top.as_os_str(),
         ],
     );
-    run_layer::ended("vm");
+    run_layer::ended(&fixture.worker.options, "vm");
 
     let (release, gate) = mpsc::sync_channel(1);
     let saved_boot = boot.clone();
@@ -439,7 +440,7 @@ fn restart_retains_old_file_bytes_before_real_qcow_layers_merge() {
     let next_start = disk_start::DiskStart::capture(&active, "next-boot", disk_start::Via::Start);
     let after = file_before::StartDisk::open(&next_start, Some(reader)).unwrap();
     assert_eq!(after.read("/changed", 0, 4096).unwrap(), new);
-    run_layer::ended("vm");
+    run_layer::ended(&fixture.worker.options, "vm");
     run_layer::finalize(&fixture.worker.options, "vm").unwrap();
     assert!(run_layer::pending_record(&fixture.worker.options, "vm").is_none());
 }

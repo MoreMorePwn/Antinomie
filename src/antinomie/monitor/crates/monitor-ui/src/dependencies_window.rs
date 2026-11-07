@@ -169,7 +169,7 @@ impl DependenciesWindow {
         options: &BackendOptions,
         snapshot: &Snapshot,
     ) -> Result<(), String> {
-        let required = requirements(command, options, snapshot);
+        let required = dependencies::requirements(command, options, snapshot);
         if required.is_empty() {
             return Ok(());
         }
@@ -444,65 +444,6 @@ impl Drop for DependenciesWindow {
                 eprintln!("dependency check worker failed during shutdown");
             }
         }
-    }
-}
-
-fn requirements(
-    command: &Command,
-    options: &BackendOptions,
-    snapshot: &Snapshot,
-) -> Vec<Dependency> {
-    use Dependency::*;
-    match command {
-        Command::Start { vm_id } | Command::RestoreVmSnapshot { vm_id, .. } => {
-            let launch = snapshot
-                .vms
-                .iter()
-                .find(|vm| &vm.id == vm_id)
-                .map(|vm| vm.launch.clone())
-                .unwrap_or_default();
-            let mut required = dependencies::vm_requirements(options, &launch);
-            if matches!(command, Command::RestoreVmSnapshot { .. }) {
-                required.push(QemuImg);
-            }
-            required
-        }
-        // Resetting a VM with a Debian account provisions its new disk again.
-        Command::Reset { vm_id, .. }
-            if snapshot
-                .vms
-                .iter()
-                .find(|vm| &vm.id == vm_id)
-                .and_then(|vm| {
-                    antinomie_monitor_core::stealth::vm_base(
-                        vm.base_identity.as_deref(),
-                        &snapshot.bases,
-                    )
-                })
-                .and_then(|base| base.guest.as_ref())
-                .is_some_and(|guest| guest.requires_credentials) =>
-        {
-            vec![QemuImg, DebianAccount]
-        }
-        Command::Create(_) | Command::Reset { .. } | Command::CreateVmSnapshot { .. } => {
-            vec![QemuImg]
-        }
-        Command::CreateWithCredentials { .. } => vec![QemuImg, DebianAccount],
-        Command::RefreshRemoteBases
-        | Command::DownloadBase { .. }
-        | Command::InstallTool { .. } => vec![Curl],
-        Command::AnalyzeOnly { .. }
-        | Command::AnalyzeHostFile { .. }
-        | Command::AnalyzeMore { .. } => vec![Bubblewrap],
-        Command::MeasureDisk { .. }
-        | Command::OpenDiskReference { .. }
-        | Command::SaveDiskPartition { .. } => vec![QemuImg],
-        Command::OpenCurrentDisk { .. }
-        | Command::DumpDisk { .. }
-        | Command::ImportQcow2Disk { .. }
-        | Command::KeepCurrentDiskAsDump { .. } => vec![QemuImg, Bubblewrap, Prlimit],
-        Command::Execute(request) if request.analysis.enabled => vec![Bubblewrap],
-        _ => Vec::new(),
     }
 }
 

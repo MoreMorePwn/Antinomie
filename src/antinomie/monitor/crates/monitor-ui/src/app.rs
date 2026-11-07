@@ -40,6 +40,7 @@ mod run_state_text;
 mod samples_page;
 pub(crate) mod screenshots_page;
 mod session;
+mod settings_file;
 mod settings_timeouts;
 mod settings_window;
 mod shortcut_list;
@@ -184,7 +185,7 @@ struct Settings {
     /// Disks tab: extraction and hash limits, tree toggles.
     disks: crate::disk_view::DiskSettings,
     /// Public destination country and organization. Local addresses are never queried.
-    address_lookup: crate::triage::AddressLookup,
+    address_lookup: antinomie_monitor_core::settings::AddressLookup,
     /// Scan retained evidence when it becomes ready. Manual Scan still works.
     automatic_detection: bool,
     /// Allow the explicit catalog check and rule-pack download buttons.
@@ -233,6 +234,10 @@ struct Settings {
     debugger: debugger::DebuggerPrefs,
     /// The latest program each VM ran, for the sidebar.
     last_runs: BTreeMap<String, LastRun>,
+    /// Fields of `settings.json` this version does not know, kept for the
+    /// next write (see `settings_file`). Not part of the window's own state.
+    #[serde(skip)]
+    engine_extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The latest program a VM ran and when it started.
@@ -329,7 +334,7 @@ impl Default for Settings {
             minimal_toolbar: false,
             memory_online_symbols: true,
             disks: Default::default(),
-            address_lookup: crate::triage::AddressLookup::Tshark,
+            address_lookup: antinomie_monitor_core::settings::AddressLookup::Tshark,
             automatic_detection: true,
             outbound_catalog: false,
             vm_screen_closed: false,
@@ -349,6 +354,7 @@ impl Default for Settings {
             getting_started: Default::default(),
             debugger: Default::default(),
             last_runs: BTreeMap::new(),
+            engine_extra: Default::default(),
         }
     }
 }
@@ -624,6 +630,10 @@ pub struct MonitorApp {
     /// The quit confirmation was answered Quit: close without asking again.
     quit_confirmed: bool,
     status_notice: Option<(crate::activity::Level, String)>,
+    /// `<data>/settings.json`: what it held and whether it can be written.
+    settings_file: settings_file::SettingsFile,
+    /// The last failure to write it that was shown, so it is shown once.
+    settings_file_reported: Option<String>,
     exec: ExecRequest,
     args: String,
     env: String,
@@ -845,6 +855,7 @@ impl eframe::App for MonitorApp {
         self.settings.triage_detection = self.triage.detection_settings().clone();
         self.settings.triage_detection.rules_root.clear();
         eframe::set_value(storage, "settings", &self.settings);
+        self.persist_engine_settings();
         eframe::set_value(storage, "workspace_layout", &self.layout);
         self.activity.save(storage);
     }

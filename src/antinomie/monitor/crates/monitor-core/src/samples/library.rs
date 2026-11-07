@@ -327,6 +327,31 @@ pub struct SampleRecord {
     pub info: SampleInfo,
 }
 
+impl SampleRecord {
+    /// The path a sample takes in the guest: `/tmp/<sha8>-<name>`, safe
+    /// characters only and at most 48 of the name, so the product name never
+    /// appears in the guest.
+    pub fn guest_path(&self) -> String {
+        let name: String = self
+            .name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || ".-_".contains(c) {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .take(48)
+            .collect();
+        format!(
+            "/tmp/{}-{}",
+            self.sha256.get(..8).unwrap_or(&self.sha256),
+            if name.is_empty() { "sample" } else { &name }
+        )
+    }
+}
+
 /// A file name or path a sample went by, with where it was seen.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Alias {

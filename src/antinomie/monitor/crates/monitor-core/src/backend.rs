@@ -201,6 +201,7 @@ impl Backend {
                     build: None,
                     tool: None,
                     last_publish: Instant::now(),
+                    layer_scan: Instant::now(),
                     latest_snapshot: worker_snapshot,
                     guest_epoch: worker_epoch,
                     reconnect: (0, None),
@@ -759,6 +760,8 @@ struct Worker {
     /// In-flight analysis tool installation.
     tool: Option<ToolJob>,
     last_publish: Instant,
+    /// When the pending disk layers were last read.
+    layer_scan: Instant,
     latest_snapshot: Arc<Mutex<Option<Snapshot>>>,
     guest_epoch: Arc<AtomicU64>,
     /// Automatic reconnection after the guest stopped answering (see

@@ -629,6 +629,39 @@ pub struct ExecRequest {
     pub sample: Option<crate::samples::SampleRef>,
 }
 
+impl ExecRequest {
+    /// Refuse a request that cannot be launched whatever the guest is: what
+    /// the app dialog checks and what a job spec is checked with. The checks
+    /// that need the running guest (base revision, graphical base, debugger)
+    /// stay in the launch.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.path.trim().is_empty() {
+            return Err("the program path is empty".into());
+        }
+        let has_nul = |value: &str| value.contains('\0');
+        if has_nul(&self.path)
+            || has_nul(&self.cwd)
+            || self.args.iter().any(|value| has_nul(value))
+            || self.env.iter().any(|value| has_nul(value))
+        {
+            return Err(
+                "the program path, arguments, folder and environment cannot hold a NUL byte".into(),
+            );
+        }
+        self.analysis.validate()?;
+        if self.core_dump_on_exit && self.run_in.guest_desktop() {
+            return Err("process Core Dump on Exit currently requires App Terminal; desktop wrappers do not identify the selected executable as the root group".into());
+        }
+        if self.debug_on_start && self.run_in.guest_desktop() {
+            return Err("Debug on start needs Run in: App terminal; a desktop launcher runs a shell wrapper, which is what would stop".into());
+        }
+        if let Some(plan) = &self.dump_trigger {
+            plan.validate()?;
+        }
+        Ok(())
+    }
+}
+
 /// Persisted `artifacts.json` in a run directory links independently retained evidence.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -2154,6 +2187,10 @@ pub enum Command {
         run_id: String,
         data: Vec<u8>,
     },
+    /// Poll a run's terminal. The answer is a `Terminal` notification, if
+    /// there is output, and **no `CommandResult` when the read succeeds** (a
+    /// failed read does answer): the window polls often and a result for each
+    /// would flood it. A caller that needs a per-read acknowledgement has none.
     TerminalRead {
         run_id: String,
     },
@@ -2288,6 +2325,17 @@ pub enum Command {
         vm_id: String,
         path: PathBuf,
         analysis: crate::analysis::AnalysisSelection,
+    },
+    /// Run static analysis on the library copy of `sha256` on the host, in the
+    /// sandbox, with no VM running (it also runs while another VM boots or
+    /// stops). The sample is decrypted in memory and verified first. The
+    /// report is kept in its own folder, `<data>/analyses/<id>`
+    /// ([`crate::analysis::sample_analysis_directory`]), apart from any VM or
+    /// recording. The result's message is the report id; the report and the
+    /// layers unpacking finds join `Snapshot.analysis_reports`.
+    AnalyzeSample {
+        sha256: String,
+        selection: crate::analysis::AnalysisSelection,
     },
     /// Run checks the finished analysis kept in `directory` was not asked for
     /// and add them to its report, without a VM and without analyzing again.
@@ -2609,6 +2657,12 @@ pub struct Snapshot {
     /// Recordings of stopped boots that are still being made durable. The VM
     /// is already Stopped; this is the host finishing its disk work.
     pub recording_flush: Option<crate::RecordingFlushStatus>,
+    /// The VMs whose automatic disk layer is pending, with the stage of each
+    /// (`live`, `saving`, `finalizing`); a VM with no entry has none. After
+    /// `Stop` the entry is `saving` until the recording is saved, then
+    /// `finalizing` until the earlier bytes are copied and the layer merged:
+    /// the recording is final only when the entry is gone.
+    pub disk_layers: Vec<crate::disk_layers::DiskLayer>,
     pub process_page: Option<crate::observation::GuestProcessPage>,
     pub capture_dir: Option<PathBuf>,
     pub serial_log: Option<PathBuf>,
@@ -2943,6 +2997,30 @@ pub fn pair_events(events: &[EventSummary]) -> Vec<InvocationSummary> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exec_request_validate_refuses_what_no_guest_could_launch() {
+        assert!(ExecRequest::default().validate().is_ok());
+        fn bad(edit: impl FnOnce(&mut ExecRequest)) -> String {
+            let mut request = ExecRequest::default();
+            edit(&mut request);
+            request.validate().unwrap_err()
+        }
+        assert!(bad(|r| r.path = " ".into()).contains("empty"));
+        assert!(bad(|r| r.args = vec!["a\0b".into()]).contains("NUL"));
+        let desktop = |edit: fn(&mut ExecRequest)| {
+            bad(|r| {
+                r.run_in = RunIn::GuestDesktop;
+                edit(r);
+            })
+        };
+        assert!(desktop(|r| r.core_dump_on_exit = true).contains("Core Dump on Exit"));
+        assert!(desktop(|r| r.debug_on_start = true).contains("Debug on start"));
+        let ok = ExecRequest {
+            run_in: RunIn::GuestDesktop,
+            ..ExecRequest::default()
+        };
+        assert!(ok.validate().is_ok());
+    }
     #[test]
     fn a_catalog_label_loses_its_trailing_antinomie_version() {
         assert_eq!(
