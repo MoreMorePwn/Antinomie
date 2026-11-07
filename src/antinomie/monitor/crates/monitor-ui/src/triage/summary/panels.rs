@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Summary's Key findings, Indicators and one-line rows.
 use super::indicators::SHOWN;
+use super::relations::model::Interest;
 use super::rows::{self, Part};
 use super::state::Built;
 use super::{header::dot, Act, Destination};
@@ -426,34 +427,72 @@ pub(super) fn attack_row(ui: &mut egui::Ui, total: usize, details: &[attack::Det
         rows::figures(ui, &counts);
     });
 }
+/// How many processes of interest the row names; the rest is "+N more".
+const INTEREST_SHOWN: usize = 5;
+/// The longest a process name is drawn, in characters.
+const NAME_SHOWN: usize = 36;
+
+/// `label` cut to [`NAME_SHOWN`] characters with an ellipsis, keeping the end
+/// (the pid) readable: the start and the "(pid)" tail stay.
+fn cut_name(label: &str) -> String {
+    let chars: Vec<char> = label.chars().collect();
+    if chars.len() <= NAME_SHOWN {
+        return label.to_owned();
+    }
+    let tail: String = label
+        .rsplit_once(" (")
+        .map_or(String::new(), |(_, pid)| format!(" ({pid}"));
+    let keep = NAME_SHOWN.saturating_sub(tail.chars().count() + 1);
+    format!("{}\u{2026}{tail}", chars[..keep].iter().collect::<String>())
+}
+
 pub(super) fn interest_row(
     ui: &mut egui::Ui,
-    built: &Built,
+    interest: &[Interest],
     scan: &ArchiveScan,
     acts: &mut Vec<Act>,
 ) {
     line(ui, "Processes of interest", |ui| {
-        if built.interest.is_empty() {
+        if interest.is_empty() {
             ui.label(RichText::new("none with findings or an argv mismatch").color(theme::muted()));
         }
-        for item in &built.interest {
-            // The tier dot, the count and the name share one text size, so
-            // their middles are one line.
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 10.0;
-                let (color, count) = match item.tier {
-                    Some(tier) => (tier.color(), format!("\u{d7}{}", item.findings)),
-                    None => (theme::muted(), "argv".to_owned()),
-                };
-                ui.add(crate::widgets::dot::DotLabel::new(color, count).text_color(color));
-                if rows::item(
-                    ui,
-                    &[Part::Name(&item.label)],
-                    "Open this process's details",
-                ) {
-                    acts.push(Act::Process(item.key));
-                }
-            });
+        // Items sit directly in the wrapped row (no ui of their own, which
+        // took a whole line when it did not fit), each name cut to a readable
+        // length with the full name on hover, and at most `INTEREST_SHOWN`
+        // of them: the rest is "+N more", which opens the Process tree.
+        for item in interest.iter().take(INTEREST_SHOWN) {
+            let (color, count) = match item.tier {
+                Some(tier) => (tier.color(), format!("\u{d7}{}", item.findings)),
+                None => (theme::muted(), "argv".to_owned()),
+            };
+            ui.add(crate::widgets::dot::DotLabel::new(color, count).text_color(color));
+            let name = cut_name(&item.label);
+            let response = ui
+                .add(
+                    egui::Label::new(RichText::new(name).color(theme::text()))
+                        .selectable(false)
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(format!("{}\nOpen this process's details", item.label));
+            if response.clicked() {
+                acts.push(Act::Process(item.key));
+            }
+        }
+        if interest.len() > INTEREST_SHOWN {
+            let more = format!("+{} more", interest.len() - INTEREST_SHOWN);
+            if ui
+                .add(
+                    egui::Label::new(RichText::new(more).color(theme::muted()))
+                        .selectable(false)
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text("Open the Process tree")
+                .clicked()
+            {
+                acts.push(Act::Go(Destination::Tasks));
+            }
         }
         let sections = [
             ("of ".to_owned(), false),
