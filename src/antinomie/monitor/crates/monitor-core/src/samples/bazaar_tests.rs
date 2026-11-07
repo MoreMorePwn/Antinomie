@@ -104,3 +104,43 @@ fn a_record_of_the_wrong_type_is_dropped_not_fatal() {
             .is_empty()
     );
 }
+
+#[test]
+fn the_library_record_of_a_sample_gives_its_signature_and_tags_read_only() {
+    let root =
+        std::env::temp_dir().join(format!("ant-bazaar-info-{}", crate::storage::unique_id()));
+    std::fs::create_dir_all(&root).unwrap();
+    assert!(
+        recorded_info(&root, &"ab".repeat(32)).is_none(),
+        "no library"
+    );
+    let mut library = crate::samples::Library::open(&root).unwrap();
+    let info = parse_reply(REAL).unwrap().remove(0);
+    let bytes = b"\x7fELF-fixture-not-a-real-binary".to_vec();
+    let added = library
+        .add_bytes(
+            &bytes,
+            crate::samples::NewSample {
+                info: Some(info),
+                origin: crate::samples::NewOrigin {
+                    kind: crate::samples::OriginKind::Download,
+                    source: "MalwareBazaar".into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let found = recorded_info(&root, &added.sha256).unwrap();
+    assert_eq!(found.signature.as_deref(), Some("Mirai"));
+    assert_eq!(found.tags, ["elf", "Mirai", "Prometei"]);
+    let local = library
+        .add_bytes(b"#!/bin/sh\n:\n", Default::default())
+        .unwrap();
+    assert!(
+        recorded_info(&root, &local.sha256).is_none(),
+        "a local file has none"
+    );
+    drop(library);
+    std::fs::remove_dir_all(&root).unwrap();
+}

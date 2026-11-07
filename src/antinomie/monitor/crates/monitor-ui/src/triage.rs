@@ -40,6 +40,7 @@ mod descriptors;
 mod details;
 mod detection;
 mod digest;
+pub(crate) mod family;
 mod file_activity;
 mod file_category;
 #[cfg(test)]

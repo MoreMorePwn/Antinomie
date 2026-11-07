@@ -44,6 +44,9 @@ const DOMAINS: &[&str] = &[
     "ftp.debian.org",
     "ftp.us.debian.org",
     "debian.map.fastly.net",
+    // apt's metadata host, its `_https._tcp.` SRV lookups and the resolver's
+    // own queries for them.
+    "ftp-master.debian.org",
     "archive.ubuntu.com",
     "security.ubuntu.com",
     "connectivity-check.ubuntu.com",
@@ -233,5 +236,64 @@ mod tests {
         assert!(noise_of(&all, Type::Endpoint, "203.0.113.9:9999").is_some());
         assert!(noise_of(&all, Type::Endpoint, "203.0.113.9:123").is_none());
         assert!(noise_of(&all, Type::Endpoint, "198.51.100.1:80").is_some());
+    }
+
+    #[test]
+    fn apts_lookups_its_srv_name_and_the_address_they_got_are_the_bases() {
+        let mut c = Collector::default();
+        let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+        let apt = ip("198.18.0.7");
+        c.domain(
+            "_https._tcp.metadata.ftp-master.debian.org",
+            Via::Dns,
+            &[],
+            Source::Pcap,
+            seen(None),
+        );
+        c.domain(
+            "metadata.ftp-master.debian.org",
+            Via::Dns,
+            &[apt],
+            Source::Pcap,
+            seen(None),
+        );
+        c.endpoint(apt, 443, "tcp", Source::Pcap, seen(None));
+        // The sample's own name and the stand-in address it got.
+        let c2 = ip("198.18.0.1");
+        c.domain(
+            "apache-update.ddns.net",
+            Via::Dns,
+            &[c2],
+            Source::Pcap,
+            seen(None),
+        );
+        c.endpoint(c2, 8443, "tcp", Source::Pcap, seen(None));
+        let all = c.finish();
+        assert!(
+            noise_of(
+                &all,
+                Type::Domain,
+                "_https._tcp.metadata.ftp-master.debian.org"
+            )
+            .is_some()
+        );
+        assert!(noise_of(&all, Type::Domain, "metadata.ftp-master.debian.org").is_some());
+        assert!(noise_of(&all, Type::Endpoint, "198.18.0.7:443").is_some());
+        assert!(noise_of(&all, Type::Endpoint, "198.18.0.1:8443").is_none());
+        let stand_in = |key: &str| {
+            all.iter()
+                .find(|i| i.ty == Type::Endpoint && i.key == key)
+                .unwrap()
+                .stand_in
+                .clone()
+        };
+        assert_eq!(
+            stand_in("198.18.0.1:8443").as_deref(),
+            Some("apache-update.ddns.net")
+        );
+        assert_eq!(
+            stand_in("198.18.0.7:443").as_deref(),
+            Some("metadata.ftp-master.debian.org")
+        );
     }
 }

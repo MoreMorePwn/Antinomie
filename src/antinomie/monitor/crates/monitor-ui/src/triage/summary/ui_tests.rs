@@ -1266,3 +1266,173 @@ fn the_one_line_rows_have_strong_numbers_and_muted_words() {
 
 mod fold;
 mod scroll;
+
+/// A view of a Merlin-like run: one Elastic family rule among twelve weak
+/// community and wrong-platform matches (the detections of the evaluation's
+/// Merlin run), and base image traffic beside a stand-in address.
+fn merlin_view() -> (PacketSpool, TriageView) {
+    use antinomie_monitor_core::analysis::detection::{
+        Engine, Finding as Match, Identity, Report, Source, State,
+    };
+    use antinomie_monitor_core::ioc::indicator::Type;
+    #[derive(serde::Deserialize)]
+    struct Run {
+        run: String,
+        hits: Vec<antinomie_monitor_core::run_digest::DetectionHit>,
+    }
+    let runs: Vec<Run> =
+        serde_json::from_str(include_str!("../family_fixtures/runs.json")).unwrap();
+    let hits = runs.into_iter().find(|r| r.run == "6d58d777").unwrap().hits;
+    let (files, mut view) = fixture();
+    let mut report = Report::empty(
+        Engine::Yara,
+        Identity {
+            vm_id: "vm".into(),
+            boot_id: "boot".into(),
+            run_id: "run".into(),
+            root_cookie: 1,
+        },
+    );
+    report.state = State::Complete;
+    for hit in hits.iter().filter(|hit| hit.engine == "YARA") {
+        let at = match report.sources.iter().position(|s| s.name == hit.source) {
+            Some(at) => at,
+            None => {
+                report.sources.push(Source {
+                    name: hit.source.clone(),
+                    version: String::new(),
+                    license: String::new(),
+                    sha256: String::new(),
+                    data: String::new(),
+                });
+                report.sources.len() - 1
+            }
+        };
+        report.findings.push(
+            serde_json::from_value::<Match>(serde_json::json!({
+                "rule_id": hit.rule_id,
+                "title": hit.title,
+                "severity": hit.severity,
+                "source": format!("s{at}"),
+                "license": hit.license,
+                "author": hit.author,
+                "mitre": [],
+                "count": 1,
+                "evidence": [],
+                "details": "Matched the specimen's bytes.",
+            }))
+            .unwrap(),
+        );
+    }
+    view.detection.results[0] = Some(Ok(report));
+    view.detection.rows(0);
+    let mut all = indicators::tests::sample();
+    let mut ntp = indicators::tests::indicator(Type::Endpoint, "198.18.0.2:123");
+    ntp.noise = Some("NTP, the base image's clock sync".into());
+    let mut pool = indicators::tests::indicator(Type::Domain, "1.debian.pool.ntp.org");
+    pool.noise = Some("1.debian.pool.ntp.org is looked up by the base image".into());
+    let mut apt = indicators::tests::indicator(Type::Endpoint, "198.18.0.7:443");
+    apt.noise = Some(
+        "198.18.0.7 is the address the base image's lookup of metadata.ftp-master.debian.org got"
+            .into(),
+    );
+    let mut name = indicators::tests::indicator(Type::Domain, "metadata.ftp-master.debian.org");
+    name.noise = Some("metadata.ftp-master.debian.org is looked up by the base image".into());
+    let mut c2 = indicators::tests::indicator(Type::Endpoint, "198.18.0.1:8443");
+    c2.stand_in = Some("apache-update.ddns.net".into());
+    all.extend([ntp, pool, apt, name, c2]);
+    view.scan.as_mut().unwrap().ioc = Some(std::sync::Arc::new(
+        crate::triage::ioc_scan::IocScan::for_tests(all),
+    ));
+    (files, view)
+}
+
+#[test]
+fn a_merlin_run_names_merlin_folds_the_weak_matches_and_the_background() {
+    let (_files, mut view) = merlin_view();
+    let ctx = context(16.0);
+    let out = settle(&ctx, &mut view, WIDE, None);
+    assert!(has(&out, "Merlin"), "{:?}", texts(&out));
+    for fragment in ["MassHunt", "Unique", "IoT", "Stackstrings", "Remcos"] {
+        assert!(
+            !texts(&out)
+                .iter()
+                .any(|(t, _)| t.contains(fragment) && t.len() < 30),
+            "{fragment}"
+        );
+    }
+    assert!(
+        has(&out, "1 strong \u{b7} 12 weak or generic"),
+        "{:?}",
+        texts(&out)
+    );
+    assert!(has(&out, "Base image background: NTP, apt (2)"));
+    assert!(has(&out, "Base image background: NTP, apt (2)"));
+    assert!(has(&out, "198.18.0.1:8443"));
+    assert!(has(&out, "\u{2192} apache-update.ddns.net"));
+    // The totals stay: the card counts every rule.
+    assert!(has(&out, "13"), "{:?}", texts(&out));
+}
+
+/// The Merlin-like Summary (`ANTINOMIE_TRIAGE_QA_SCENE=summary`, default) or
+/// its Detection > YARA page (`detection`), for screenshots under Xvfb;
+/// `ANTINOMIE_QA_OPEN=1` opens the folded groups.
+#[test]
+#[ignore = "requires owned isolated X11; family candidates / background / weak matches fixture"]
+fn native_family_fixture() {
+    use winit::platform::x11::EventLoopBuilderExtX11;
+    struct Fixture {
+        view: TriageView,
+        detection: bool,
+        deadline: std::time::Instant,
+        frames: u32,
+        _files: PacketSpool,
+    }
+    impl eframe::App for Fixture {
+        fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+            let ctx = root.ctx().clone();
+            self.frames += 1;
+            egui::CentralPanel::default().show(root, |ui| {
+                let input = TriageInput::empty();
+                if self.detection {
+                    self.view.detection.show(ui, self.view.scan.as_ref());
+                } else {
+                    show(&mut self.view, ui, &input);
+                }
+            });
+            if std::time::Instant::now() > self.deadline {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+    let (files, mut view) = merlin_view();
+    view.section = Section::Summary;
+    let detection = std::env::var("ANTINOMIE_TRIAGE_QA_SCENE").as_deref() == Ok("detection");
+    eframe::run_native(
+        "Antinomie family QA",
+        eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_inner_size([1000.0, if detection { 900.0 } else { 1500.0 }])
+                .with_position([16.0, 16.0]),
+            persist_window: false,
+            event_loop_builder: Some(Box::new(|builder| {
+                builder.with_x11();
+                builder.with_any_thread(true);
+            })),
+            ..Default::default()
+        },
+        Box::new(move |cc| {
+            theme::install(&cc.egui_ctx);
+            theme::text_size(&cc.egui_ctx, theme::qa_text_size(15.0));
+            Ok(Box::new(Fixture {
+                view,
+                detection,
+                deadline: std::time::Instant::now() + std::time::Duration::from_secs(40),
+                frames: 0,
+                _files: files,
+            }))
+        }),
+    )
+    .unwrap();
+}

@@ -4,7 +4,7 @@
 //! candidates), rebuilt only when the scan or the detections change.
 use super::super::{digest, rules::Tier, ArchiveScan, TriageView};
 use super::indicators::Indicators;
-use super::insight::{self, Candidate, Key as KeyFinding};
+use super::insight::{self, Key as KeyFinding};
 use super::relations::{
     canvas,
     facts::facts_of,
@@ -12,6 +12,7 @@ use super::relations::{
     group::Rendered,
     model::{self, Graph, Interest},
 };
+use crate::triage::family::{self, Candidate};
 use antinomie_monitor_core::analysis::detection::State as Scanned;
 use eframe::egui;
 use std::collections::BTreeSet;
@@ -116,7 +117,12 @@ impl Built {
         self.key == format!("{}|{}", scan_key(scan), detection_key(view))
     }
 
-    pub(super) fn of(view: &TriageView, scan: &ArchiveScan, packed: bool) -> Self {
+    pub(super) fn of(
+        view: &TriageView,
+        scan: &ArchiveScan,
+        packed: bool,
+        specimen: Option<&str>,
+    ) -> Self {
         let key = format!("{}|{}", scan_key(scan), detection_key(view));
         let facts = facts_of(scan);
         let graph = Graph::build(&facts);
@@ -139,7 +145,19 @@ impl Built {
             .as_ref()
             .map(|ioc| Indicators::of(&ioc.indicators, geo))
             .unwrap_or_default();
-        let candidates = insight::family_candidates(&hits);
+        let bazaar = specimen
+            .zip(view.scan_request.data_dir.as_deref())
+            .and_then(|(sha256, dir)| antinomie_monitor_core::samples::recorded_info(dir, sha256));
+        let candidates = family::family_candidates(
+            &hits,
+            bazaar
+                .as_ref()
+                .map(|info| family::Bazaar {
+                    signature: info.signature.as_deref(),
+                    tags: &info.tags,
+                })
+                .unwrap_or_default(),
+        );
         let mut names: Vec<String> = hits.iter().map(|hit| hit.title.clone()).collect();
         names.extend(hits.iter().map(|hit| hit.family.clone()));
         names.extend(candidates.iter().map(|candidate| candidate.name.clone()));

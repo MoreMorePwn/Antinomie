@@ -41,7 +41,7 @@ mod similar;
 mod summary;
 
 pub use archive::Verification;
-pub use bazaar::{Intel, YaraHit};
+pub use bazaar::{Intel, YaraHit, recorded_info};
 pub use chain::{ChainedEvents, CustodyQuery, GlobalRow, LibraryCheck};
 pub use chain_check::{
     ChainCheck, Entry as CustodyEntry, EntryState, IndexCheck, IndexRecord, Problem, short,

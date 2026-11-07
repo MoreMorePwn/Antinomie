@@ -157,7 +157,10 @@ fn indicators(ioc: &ioc_scan::IocScan) -> Vec<IndicatorEntry> {
 
 /// The family a YARA rule names in its `meta` (`family`, `malware_family` or
 /// `malware`); empty for the other engines and for a rule that names none.
-fn yara_family(engine: antinomie_monitor_core::analysis::detection::Engine, rule: &str) -> String {
+pub(super) fn yara_family(
+    engine: antinomie_monitor_core::analysis::detection::Engine,
+    rule: &str,
+) -> String {
     if engine != antinomie_monitor_core::analysis::detection::Engine::Yara {
         return String::new();
     }

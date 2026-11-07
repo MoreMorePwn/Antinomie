@@ -261,12 +261,20 @@ impl SamplesView {
                         }
                     });
                     row.col(|ui| {
-                        let family = ui.label(
-                            RichText::new(sample.signature.as_deref().unwrap_or("—"))
-                                .color(theme::value(ValueKind::Name)),
-                        );
-                        if let Some(text) = sample.partner_text() {
-                            family.on_hover_text(text);
+                        let (names, sources) = family_cell(sample);
+                        let family =
+                            ui.label(RichText::new(names).color(theme::value(ValueKind::Name)));
+                        match (sample.partner_text(), sources) {
+                            (Some(text), Some(sources)) => {
+                                family.on_hover_text(format!("{sources}\n\n{text}"));
+                            }
+                            (Some(text), None) => {
+                                family.on_hover_text(text);
+                            }
+                            (None, Some(sources)) => {
+                                family.on_hover_text(sources);
+                            }
+                            (None, None) => {}
                         }
                     });
                     row.col(|ui| {
@@ -524,10 +532,13 @@ impl SamplesView {
                             ));
                     });
                     row.col(|ui| {
-                        ui.label(
-                            RichText::new(info.signature.as_deref().unwrap_or("-"))
-                                .color(theme::value(ValueKind::Name)),
+                        let (names, sources) = family_cell(info);
+                        let family = ui.label(
+                            RichText::new(names).color(theme::value(ValueKind::Name)),
                         );
+                        if let Some(sources) = sources {
+                            family.on_hover_text(sources);
+                        }
                     });
                     row.col(|ui| {
                         ui.label(
@@ -649,4 +660,30 @@ impl SamplesView {
         }
         action
     }
+}
+
+/// The Family column of a MalwareBazaar record: the families its signature
+/// and tags name, "Mirai \u{b7} Prometei", and on hover where each came from.
+/// "\u{2014}" for a record that names none.
+pub(crate) fn family_cell(
+    info: &antinomie_monitor_core::samples::SampleInfo,
+) -> (String, Option<String>) {
+    let families = crate::triage::family::bazaar_families(info.signature.as_deref(), &info.tags);
+    if families.is_empty() {
+        return (
+            info.signature.clone().unwrap_or_else(|| "\u{2014}".into()),
+            None,
+        );
+    }
+    let names = families
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>()
+        .join(" \u{b7} ");
+    let sources = families
+        .iter()
+        .map(|(name, source)| format!("{name}: {source}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (names, Some(sources))
 }

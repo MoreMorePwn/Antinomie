@@ -91,6 +91,16 @@ pub(super) struct Thread {
     pub ended: bool,
 }
 
+/// Files the C library's name resolution reads on every lookup. Reading them
+/// again and again is a program resolving names, not looking at the machine.
+const RESOLVER_CONFIG: &[&str] = &[
+    "/etc/resolv.conf",
+    "/etc/hosts",
+    "/etc/nsswitch.conf",
+    "/etc/host.conf",
+    "/etc/gai.conf",
+];
+
 /// One process's counters (all its threads together, keyed by the thread group
 /// id): a program that spreads its work over worker threads is still one
 /// program. A flag that ends in `_done` means the rule already fired.
@@ -100,6 +110,8 @@ pub(super) struct Task {
     /// Under `/proc`: pids whose process files were opened.
     pub proc_pids: BTreeSet<u32>,
     proc_done: bool,
+    /// Reads of the resolver's configuration (see `RESOLVER_CONFIG`).
+    resolver_reads: u32,
     pub dirs: Window<String>,
     search_done: bool,
     documents: BTreeSet<String>,
@@ -568,7 +580,16 @@ impl State {
             _ => None,
         };
         if let Some((rule, what)) = class {
-            if cx.ok || cx.failed {
+            // The C library's resolver reads these again and again while a
+            // program looks names up (Tsunami's DNS loop read resolv.conf
+            // 1,242 times). The first read says the program looked at its
+            // resolver; the rest is name resolution, not discovery.
+            let repeated = RESOLVER_CONFIG.contains(&path) && {
+                let task = self.task(cx);
+                task.resolver_reads = task.resolver_reads.saturating_add(1);
+                task.resolver_reads > 1
+            };
+            if (cx.ok || cx.failed) && !repeated {
                 out.push(Hit::new(rule, what, format!("{} reads {path}", cx.name)));
             }
         }
