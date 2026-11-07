@@ -52,6 +52,37 @@ const PACK_WORDS: &[&str] = &[
     "dvr",
     "forgeauto",
     "threat",
+    // The rule packs' vendors and authors name their rules `SEKOIA_...`,
+    // `ESET_...`, `DITEKSHEN_...`: a vendor is never the family.
+    "sekoia",
+    "eset",
+    "elastic",
+    "ditekshen",
+    "gcti",
+    "malpedia",
+    "fireeye",
+    "rt",
+    "cape",
+    "volexity",
+    "trellix",
+    "arc",
+    "loldrivers",
+    "withsecurelabs",
+    "blackberry",
+    "elceef",
+    "craiu",
+    "cod3nym",
+    "cadosecurity",
+    "dr4k0nia",
+    "synacktiv",
+    "deadbits",
+    "yarahub",
+    "forge",
+    "auto",
+    "expl",
+    "unidentified",
+    "guid",
+    "name",
 ];
 
 /// Words that name a kind of rule, a platform or a date, not a family.
@@ -61,6 +92,7 @@ const NOT_FAMILY: &[&str] = &[
     "elf",
     "linux",
     "lin",
+    "lnx",
     "unix",
     "win",
     "windows",
@@ -231,9 +263,42 @@ fn pretty(word: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The family a Malpedia-style value names: `elf.mirai` is Mirai.
+/// The family a Malpedia-style or `family` meta value names: `elf.mirai` is
+/// Mirai and `MIRAI_OHSHIT` is Mirai too (a family token, not the whole
+/// value with its suffix glued on).
 fn meta_family(value: &str) -> String {
-    pretty(value.rsplit('.').next().unwrap_or(value).trim())
+    let value = value.trim();
+    let last = value.rsplit('.').next().unwrap_or(value).trim();
+    family_token(last).unwrap_or_else(|| pretty(last))
+}
+
+/// The family token of a name made of words: the first known family when one
+/// is there (`Redmenshen_Bpfdoor` is BPFDoor), else the first word that is
+/// no vendor, platform or category.
+fn family_token(name: &str) -> Option<String> {
+    let tokens: Vec<&str> = name
+        .split(['_', '-', ' ', '.'])
+        .filter(|token| {
+            let lower = token.to_ascii_lowercase();
+            !lower.is_empty() && !not_family(&lower) && !lower.chars().any(|c| c.is_ascii_digit())
+        })
+        .collect();
+    let known = tokens.iter().find(|token| {
+        SPELLINGS
+            .iter()
+            .chain(IDS_FAMILIES.iter())
+            .any(|known| known.eq_ignore_ascii_case(token))
+    });
+    if let Some(token) = known {
+        return Some(pretty(token));
+    }
+    let token = tokens.first()?;
+    let humps = token
+        .chars()
+        .zip(token.chars().skip(1))
+        .filter(|(a, b)| a.is_lowercase() && b.is_uppercase())
+        .count();
+    (token.len() >= 3 && humps < 2).then(|| pretty(token))
 }
 
 /// A rule's name without the `s123::` prefix the engine puts before its id.
@@ -298,20 +363,7 @@ fn elastic_family(rule: &str) -> Option<String> {
 /// each carry one, `Suspicious_Strings` carries none. A name like
 /// `DetectGoMethodSignatures` is a sentence, not a family.
 fn family_in_rule_name(rule: &str) -> Option<String> {
-    let rule = rule.strip_prefix("SIGNATURE_BASE_").unwrap_or(rule);
-    for token in rule.split(['_', '-', ' ', '.']) {
-        let lower = token.to_ascii_lowercase();
-        if lower.is_empty() || not_family(&lower) || lower.chars().any(|c| c.is_ascii_digit()) {
-            continue;
-        }
-        let humps = token
-            .chars()
-            .zip(token.chars().skip(1))
-            .filter(|(a, b)| a.is_lowercase() && b.is_uppercase())
-            .count();
-        return (lower.len() >= 3 && humps < 2).then(|| pretty(token));
-    }
-    None
+    family_token(rule.strip_prefix("SIGNATURE_BASE_").unwrap_or(rule))
 }
 
 /// Tags MalwareBazaar gives that say a file type, an architecture, a packer or
@@ -773,13 +825,53 @@ mod tests {
                 &expected
             };
             assert_eq!(first, Some(wanted), "{run}: {found:?}");
-            for fragment in ["MassHunt", "IoT", "BASE", "Unique", "Stackstrings", "Hunt"] {
+            for fragment in [
+                "MassHunt",
+                "IoT",
+                "BASE",
+                "Unique",
+                "Stackstrings",
+                "Hunt",
+                "Lnx",
+                "Sekoia",
+                "Eset",
+                "Mirai_ohshit",
+            ] {
                 assert!(
                     !found.iter().any(|c| c.name.eq_ignore_ascii_case(fragment)),
                     "{run}: {fragment} in {found:?}"
                 );
             }
         }
+    }
+
+    #[test]
+    fn vendors_and_actors_are_no_family_and_a_meta_gives_its_token() {
+        let pack = "selection/pack/yara-forge-core/x.yar";
+        for (rule, family) in [
+            ("SEKOIA_Backdoor_Lin_Bpfdoor", Some("BPFDoor")),
+            ("ESET_Ebury_V1_7_Crypto", Some("Ebury")),
+            (
+                "SIGNATURE_BASE_APT_MAL_LNX_Redmenshen_Bpfdoor_Controller_May22_1",
+                Some("BPFDoor"),
+            ),
+            ("DITEKSHEN_MALWARE_Linux_Foobar", Some("Foobar")),
+            ("GCTI_Linux_Generic", None),
+            ("ELASTIC_LNX_Generic", None),
+        ] {
+            let found = family_candidates(
+                &[hit("YARA", rule, "indicator", "", pack)],
+                Bazaar::default(),
+            );
+            assert_eq!(
+                found.first().map(|c| c.name.as_str()),
+                family,
+                "{rule}: {found:?}"
+            );
+        }
+        assert_eq!(meta_family("MIRAI_OHSHIT"), "Mirai");
+        assert_eq!(meta_family("elf.mirai"), "Mirai");
+        assert_eq!(meta_family("win.cobalt_strike"), "Cobalt");
     }
 
     #[test]

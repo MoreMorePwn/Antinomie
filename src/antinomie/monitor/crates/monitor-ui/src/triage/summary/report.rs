@@ -200,6 +200,31 @@ fn notes(
     open
 }
 
+/// What the run saved: its cores, memory dumps, capture segments and trigger
+/// log, in the rows of the sample page's Artifacts. Nothing when it saved none.
+fn run_artifacts(ui: &mut egui::Ui, view: &mut TriageView) {
+    if view.run_box.is_empty() {
+        return;
+    }
+    ui.add_space(10.0);
+    let font = egui::TextStyle::Body.resolve(ui.style()).size;
+    let data_dir = view.scan_request.data_dir.clone().unwrap_or_default();
+    let count = view.run_box.count();
+    let mut open = None;
+    presentation::frame().show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        presentation::heading(
+            ui,
+            "Run artifacts",
+            &format!("{count} saved by this run; Open shows them in their tab, for this run only."),
+        );
+        open = crate::app::samples_page::detail::show_run_box(ui, &view.run_box, &data_dir, font);
+    });
+    if open.is_some() {
+        view.open_artifact = open;
+    }
+}
+
 /// The three detector cards, and the line that says one needs attention.
 fn engines(
     ui: &mut egui::Ui,
@@ -419,6 +444,7 @@ pub(super) fn content(
             ) {
                 acts.push(Act::Screenshot(shot.unwrap_or_default()));
             }
+            run_artifacts(ui, view);
         });
     view.summary_state = state;
     if attack_jump.is_some() {

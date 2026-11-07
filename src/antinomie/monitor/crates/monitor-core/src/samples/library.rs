@@ -332,6 +332,10 @@ pub struct SampleRecord {
 pub struct Alias {
     pub name: String,
     pub path: String,
+    /// `path` is a place on this computer (a file the analyst imported), not
+    /// a path inside a guest: the window words it and shows the path only on
+    /// hover.
+    pub host_path: bool,
     /// The run or source that used it.
     pub seen: String,
 }
@@ -583,6 +587,11 @@ impl Library {
                 }
                 None => rows.push(Alias {
                     name: origin.name,
+                    host_path: !origin.path.is_empty()
+                        && matches!(
+                            origin.kind,
+                            OriginKind::Added | OriginKind::Migrated | OriginKind::Found
+                        ),
                     path: origin.path,
                     seen,
                 }),

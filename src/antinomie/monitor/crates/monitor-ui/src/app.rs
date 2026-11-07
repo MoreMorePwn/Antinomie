@@ -37,7 +37,7 @@ mod run_kill;
 mod run_labels;
 mod run_selector;
 mod run_state_text;
-mod samples_page;
+pub(crate) mod samples_page;
 pub(crate) mod screenshots_page;
 mod session;
 mod settings_timeouts;

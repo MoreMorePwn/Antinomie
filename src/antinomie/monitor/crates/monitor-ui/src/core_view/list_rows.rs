@@ -143,20 +143,38 @@ impl CoreView {
             &tags,
         );
         let filter_id = ui.id().with(("table-filter", "core-history"));
+        ui.checkbox(&mut self.this_run_only, "This run only")
+            .on_hover_text(match &self.triage_run {
+                Some(run) => format!(
+                    "Only the cores of the run selected in Triage ({}). It follows that selection.",
+                    crate::run_link::short(run)
+                ),
+                None => "Only the cores of the run selected in Triage. No run is selected there."
+                    .to_owned(),
+            });
         let manual_shown: Vec<_> = self
             .manual
             .iter()
-            .map(|core| filter.keep_table(&manual_filter_row(ui, core)))
+            .map(|core| {
+                self.of_this_run(&self.manual_link(core))
+                    && filter.keep_table(&manual_filter_row(ui, core))
+            })
             .collect();
         let acquired_shown: Vec<_> = self
             .acquired
             .iter()
-            .map(|core| filter.keep_table(&acquired_filter_row(ui, core)))
+            .map(|core| {
+                self.of_this_run(&acquired_link(core))
+                    && filter.keep_table(&acquired_filter_row(ui, core))
+            })
             .collect();
         let imported_shown: Vec<_> = self
             .records
             .iter()
-            .map(|record| filter.keep_table(&imported_filter_row(ui, record)))
+            .map(|record| {
+                self.of_this_run(&imported_link(record))
+                    && filter.keep_table(&imported_filter_row(ui, record))
+            })
             .collect();
         let matched = manual_shown
             .iter()
@@ -231,7 +249,11 @@ impl CoreView {
             if !manual_shown[index] {
                 continue;
             }
-            let fallback = format!("PID {} · {}", core.target.tgid, core.id);
+            let twin = self.trigger_twins.get(&core.directory);
+            let fallback = match twin {
+                Some((label, _)) => format!("{label} · PID {}", core.target.tgid),
+                None => format!("PID {} · {}", core.target.tgid, core.id),
+            };
             let title = crate::evidence::title(ui, &core.directory, &fallback);
             let selected = self.selected_directory.as_ref() == Some(&core.directory);
             let state = manual_status(core);
@@ -240,9 +262,23 @@ impl CoreView {
             } else {
                 crate::theme::text()
             };
-            let row =
-                crate::network_view::capture_row(ui, selected, (&title, color), &state, font_size)
-                    .on_hover_text(format!("{title}\n{state}\n{}", core.directory.display()));
+            let cell = self.cell_of(&self.manual_link(core));
+            let (row, run_clicked) = crate::network_view::capture_row_run(
+                ui,
+                selected,
+                (&title, color),
+                &state,
+                Some(cell.line()),
+                font_size,
+            );
+            let row = row.on_hover_text(format!(
+                "{title}\n{state}\n{}\n\n{}",
+                core.directory.display(),
+                cell.tip_text()
+            ));
+            if run_clicked {
+                *action = cell.run_id.clone().map(CoreAction::OpenRun);
+            }
             let core_file = core.file.clone();
             row.context_menu(|ui| {
                 crate::evidence::menu(ui, &core.directory);
@@ -278,7 +314,7 @@ impl CoreView {
                     *delete = Some(Deletion::core(&core.directory, &title, DeleteKind::Core));
                 }
             });
-            if row.clicked() && self.job.is_none() {
+            if row.clicked() && !run_clicked && self.job.is_none() {
                 *acquired_selection = Some((core.directory.clone(), core.file.clone()));
             }
         }
@@ -303,13 +339,17 @@ impl CoreView {
             file_action,
             project_action,
             delete,
+            action,
             ..
         } = outcome;
         for (index, core) in self.acquired.iter().enumerate() {
             if !acquired_shown[index] {
                 continue;
             }
-            let fallback = format!("Run {}", core.run_id);
+            let fallback = match &core.trigger {
+                Some(label) => label.clone(),
+                None => format!("Run {}", core.run_id),
+            };
             let title = crate::evidence::title(ui, &core.directory, &fallback);
             let selected = self.selected_directory.as_ref() == Some(&core.directory)
                 || self
@@ -324,9 +364,23 @@ impl CoreView {
                 | antinomie_monitor_core::RunArtifactState::Interrupted => crate::theme::warn(),
                 _ => crate::theme::text(),
             };
-            let row =
-                crate::network_view::capture_row(ui, selected, (&title, color), state, font_size)
-                    .on_hover_text(format!("{title}\n{state}\n{}", core.directory.display()));
+            let cell = self.cell_of(&acquired_link(core));
+            let (row, run_clicked) = crate::network_view::capture_row_run(
+                ui,
+                selected,
+                (&title, color),
+                state,
+                Some(cell.line()),
+                font_size,
+            );
+            let row = row.on_hover_text(format!(
+                "{title}\n{state}\n{}\n\n{}",
+                core.directory.display(),
+                cell.tip_text()
+            ));
+            if run_clicked {
+                *action = cell.run_id.clone().map(CoreAction::OpenRun);
+            }
             let core_file = core.file.clone();
             // A core a run took is an artifact of that run's sample.
             let note = crate::query::NoteRun::find(ui.ctx(), &core.vm_id, &core.run_id)
@@ -369,7 +423,7 @@ impl CoreView {
                     *delete = Some(Deletion::core(&core.directory, &title, DeleteKind::Core));
                 }
             });
-            if row.clicked() && self.job.is_none() {
+            if row.clicked() && !run_clicked && self.job.is_none() {
                 *acquired_selection = Some((core.directory.clone(), core.file.clone()));
             }
         }
@@ -394,6 +448,7 @@ impl CoreView {
             file_action,
             project_action,
             delete,
+            action,
             ..
         } = outcome;
         for (index, record) in self.records.iter().enumerate() {
@@ -411,14 +466,23 @@ impl CoreView {
                 record.core.threads.len(),
                 record.core.mappings.len()
             );
-            let row = crate::network_view::capture_row(
+            let cell = self.cell_of(&imported_link(record));
+            let (row, run_clicked) = crate::network_view::capture_row_run(
                 ui,
                 selected,
                 (&title, crate::theme::text()),
                 &detail,
+                Some(cell.line()),
                 font_size,
-            )
-            .on_hover_text(record.core.source.display().to_string());
+            );
+            let row = row.on_hover_text(format!(
+                "{}\n\n{}",
+                record.core.source.display(),
+                cell.tip_text()
+            ));
+            if run_clicked {
+                *action = cell.run_id.clone().map(CoreAction::OpenRun);
+            }
             let core_file = record.core.source.clone();
             row.context_menu(|ui| {
                 crate::evidence::menu(ui, &record.dir);
@@ -456,9 +520,125 @@ impl CoreView {
                     ));
                 }
             });
-            if row.clicked() && self.job.is_none() {
+            if row.clicked() && !run_clicked && self.job.is_none() {
                 *imported_selection = Some(record.clone());
             }
+        }
+    }
+}
+
+/// Which run a core belongs to, as its record says.
+pub(super) struct Link {
+    pub(super) run: Option<String>,
+    pub(super) live: Vec<String>,
+    pub(super) certainty: antinomie_monitor_core::provenance::Certainty,
+}
+
+impl Link {
+    fn of(provenance: &antinomie_monitor_core::provenance::Provenance) -> Self {
+        Self {
+            run: provenance.run_id.clone(),
+            live: provenance.live_runs.clone(),
+            certainty: provenance.certainty,
+        }
+    }
+
+    fn none() -> Self {
+        Self {
+            run: None,
+            live: Vec::new(),
+            certainty: antinomie_monitor_core::provenance::Certainty::Unknown,
+        }
+    }
+}
+
+/// A run's exit core or trigger core: its record carries the run.
+pub(super) fn acquired_link(core: &AcquiredCore) -> Link {
+    core.provenance.as_ref().map_or_else(
+        || Link {
+            run: Some(core.run_id.clone()),
+            live: Vec::new(),
+            certainty: antinomie_monitor_core::provenance::Certainty::Exact,
+        },
+        Link::of,
+    )
+}
+
+/// An imported core belongs to no run.
+pub(super) fn imported_link(record: &CoreRecord) -> Link {
+    record.provenance.as_ref().map_or_else(Link::none, Link::of)
+}
+
+impl CoreView {
+    /// A core taken by hand or by a trigger: the trigger's run, else the
+    /// record's, else the run it is the root of.
+    pub(super) fn manual_link(&self, core: &ProcessCoreCapture) -> Link {
+        use antinomie_monitor_core::provenance::Certainty;
+        if let Some((_, run)) = self.trigger_twins.get(&core.directory) {
+            return Link {
+                run: Some(run.clone()),
+                live: Vec::new(),
+                certainty: Certainty::Exact,
+            };
+        }
+        if let Some(provenance) = &core.provenance {
+            return Link::of(provenance);
+        }
+        match &core.source_run_id {
+            Some(run) => Link {
+                run: Some(run.clone()),
+                live: Vec::new(),
+                certainty: Certainty::Exact,
+            },
+            None => Link::none(),
+        }
+    }
+
+    /// The Run column's text for a core.
+    pub(super) fn cell_of(&self, link: &Link) -> CoreRunCell {
+        let cell = crate::run_link::cell(
+            link.run.as_deref(),
+            &link.live,
+            link.certainty,
+            &self.run_names,
+        );
+        CoreRunCell {
+            clickable: cell.run_id.is_some(),
+            text: format!("Run: {}", cell.text),
+            tip: cell.tip,
+            run_id: cell.run_id,
+        }
+    }
+
+    /// Whether the This run only filter keeps a core with this link.
+    pub(super) fn of_this_run(&self, link: &Link) -> bool {
+        if !self.this_run_only {
+            return true;
+        }
+        let Some(run) = &self.triage_run else {
+            return true;
+        };
+        link.run.as_ref() == Some(run) || link.live.contains(run)
+    }
+}
+
+/// The Run line of a core's row.
+pub(super) struct CoreRunCell {
+    text: String,
+    tip: String,
+    clickable: bool,
+    pub(super) run_id: Option<String>,
+}
+
+impl CoreRunCell {
+    pub(super) fn tip_text(&self) -> &str {
+        &self.tip
+    }
+
+    pub(super) fn line(&self) -> crate::network_view::RunLine<'_> {
+        crate::network_view::RunLine {
+            text: &self.text,
+            clickable: self.clickable,
         }
     }
 }

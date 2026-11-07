@@ -295,6 +295,10 @@ pub(crate) struct TriageView {
     route: crate::route_ui::RouteText,
     /// The selected run's notes, shown at the bottom of the Summary.
     notes: Vec<String>,
+    /// The Summary's Run artifacts box: what the selected run saved.
+    run_box: crate::app::samples_page::detail::RunBoxState,
+    /// An artifact of the Run artifacts box the user asked to open.
+    open_artifact: Option<crate::app::samples_page::detail::ArtifactOpen>,
     /// Export report: the dialog, its choices and the running export.
     report: report_export::Dialog,
     /// The Summary's Relationships box and the data derived for it.
@@ -365,6 +369,8 @@ impl Default for TriageView {
             changed_paths: Arc::default(),
             route: crate::route_ui::RouteText::default(),
             notes: Vec::new(),
+            run_box: Default::default(),
+            open_artifact: None,
             report: report_export::Dialog::default(),
             summary_state: Default::default(),
             run_facts: Default::default(),
@@ -467,6 +473,24 @@ impl TriageView {
     /// instead of between the pane's other warnings.
     pub(crate) fn set_notes(&mut self, notes: Vec<String>) {
         self.notes = notes;
+    }
+
+    /// The selected run, for the Summary's Run artifacts box: its cores,
+    /// memory dumps, capture segments and trigger log.
+    pub(crate) fn set_run_artifacts(
+        &mut self,
+        run: &antinomie_monitor_core::RunSummary,
+        live: bool,
+    ) {
+        let ended = self.run_ended_ms();
+        self.run_box.refresh(run, live, ended);
+    }
+
+    /// An artifact the Run artifacts box was asked to open, once.
+    pub(crate) fn take_open_artifact(
+        &mut self,
+    ) -> Option<crate::app::samples_page::detail::ArtifactOpen> {
+        self.open_artifact.take()
     }
 
     /// Settings › Notifications: raise a toast for a HIGH finding of a live run.

@@ -55,6 +55,8 @@ impl MonitorApp {
         notes.extend(route.note.clone());
         self.triage.set_notes(notes);
         self.triage.set_route_text(route);
+        self.triage
+            .set_run_artifacts(&run, self.live_history_run(&run));
         let screenshot = self.last_run_screenshot(ui.ctx(), &run, self.triage.run_ended_ms());
         self.triage.set_run_facts(
             run.environment
@@ -125,6 +127,9 @@ impl MonitorApp {
         // Row menus file a note about a row under this run's sample.
         crate::query::NoteRun::set(ui.ctx(), &run);
         let jump = self.triage.show(ui, input);
+        if let Some(open) = self.triage.take_open_artifact() {
+            self.open_run_artifact(open);
+        }
         if let Some(path) = self.triage.take_open_screenshot() {
             self.open_screenshot_path(ui.ctx(), path);
         }
@@ -138,6 +143,38 @@ impl MonitorApp {
             self.open_scanned_input(input);
         }
         self.apply_triage_navigation(ui.ctx(), jump);
+    }
+
+    /// Open `run_id` of the selected VM in Triage: the Run column of Core
+    /// dumps and Memory.
+    pub(super) fn open_run_in_triage(&mut self, run_id: &str) {
+        match self.run(run_id).cloned() {
+            Some(run) => self.open_sample_run(&run, Panel::Triage, None),
+            None => self.report_error(format!(
+                "Run {} is not in this VM's history (it may have been deleted)",
+                &run_id[..run_id.len().min(8)]
+            )),
+        }
+    }
+
+    /// The Run artifacts box of Triage's Summary asked for an artifact: its
+    /// tab opens, showing only this run's.
+    fn open_run_artifact(&mut self, open: crate::app::samples_page::detail::ArtifactOpen) {
+        use crate::app::samples_page::detail::ArtifactOpen;
+        match open {
+            ArtifactOpen::Core(_) => {
+                self.core_view.set_this_run_only(true);
+                self.focus_panel = Some(Panel::CoreDump);
+            }
+            ArtifactOpen::Memory(_) => {
+                self.memory_view.set_this_run_only(true);
+                self.focus_panel = Some(Panel::Memory);
+            }
+            ArtifactOpen::Capture(path) => {
+                self.network_view.open(Some(path));
+                self.focus_panel = Some(Panel::Network);
+            }
+        }
     }
 
     /// Opens a scanned input where it is viewed best.

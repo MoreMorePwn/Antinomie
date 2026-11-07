@@ -17,7 +17,7 @@ mod add;
 mod custody_all;
 mod custody_parts;
 mod delete_run;
-mod detail;
+pub(crate) mod detail;
 mod export;
 mod list;
 mod note_picker;
