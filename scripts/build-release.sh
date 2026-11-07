@@ -36,15 +36,17 @@ stage="$(mktemp -d)"
 trap 'rm -rf -- "$stage"' EXIT
 package="$stage/$name"
 mkdir -p "$package"
-cp "$TARGET_DIR/release/antinomie-monitor" "$package/"
-strip "$package/antinomie-monitor"
+cp "$TARGET_DIR/release/antinomie-monitor" "$TARGET_DIR/release/antinomie-cli" "$package/"
+strip "$package/antinomie-monitor" "$package/antinomie-cli"
 # Read the entire stream: grep -q can hide a match behind strings' SIGPIPE
 # when pipefail is enabled.
 for private_path in "$HOME" "$REPO" "$TARGET_DIR"; do
-    if strings "$package/antinomie-monitor" | grep -F "$private_path" >/dev/null; then
-        echo "build-release: the executable still names $private_path; refusing to package" >&2
-        exit 1
-    fi
+    for executable in antinomie-monitor antinomie-cli; do
+        if strings "$package/$executable" | grep -F "$private_path" >/dev/null; then
+            echo "build-release: $executable still names $private_path; refusing to package" >&2
+            exit 1
+        fi
+    done
 done
 cp "$REPO/install.sh" "$REPO/CHANGELOG.md" "$REPO/LICENSE" "$REPO/LICENSING.md" \
    "$REPO/THIRD-PARTY-NOTICES.md" "$package/"
@@ -91,6 +93,7 @@ Install for the current user (no root needed):
 
 Or run it in place:
     ./antinomie-monitor
+    ./antinomie-cli --help      # headless command line, no window
 
 Requirements: glibc 2.39 or newer (Debian 13, Ubuntu 24.04 or later), QEMU
 (qemu-system-x86_64, qemu-img, GTK display backend) and access to /dev/kvm

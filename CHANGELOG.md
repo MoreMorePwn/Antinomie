@@ -14,6 +14,11 @@ x86 programs by their own table.
 
 ### Host
 
+- **`antinomie-cli`, a headless command line.** A new binary beside the window
+  (`antinomie-cli --help`) with `doctor`, `capabilities` and `config path`, the
+  output formats human, json and ndjson, and fixed exit codes. It does not link
+  the GUI libraries. See "Command line" in docs/usage.md.
+
 - **Clock model for the boot age.** A new Clock model setting in a VM's Device
   profile (Auto, Always running, Suspend) chooses whether the boot age steps
   both guest clocks or only CLOCK_BOOTTIME. Auto picks Suspend on Debian bases,

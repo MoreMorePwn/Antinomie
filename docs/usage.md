@@ -1173,6 +1173,59 @@ column repeated. The HTML prints on a landscape page. The exports of runs and
 samples have a **Tactic** column for ATT&CK techniques (named in text, with the
 colour as a chip in HTML and a bar in PDF).
 
+## Command line (0.9.0)
+
+`antinomie-cli` is the headless front end: the same engine as the window, with no
+display. It ships beside `antinomie-monitor` and does not link the GUI libraries.
+The grammar is `antinomie-cli [GLOBAL FLAGS] GROUP COMMAND [FLAGS] [ARGS]`; the
+global flags may also follow the command.
+
+| Global flag | Meaning |
+|---|---|
+| `--data-dir PATH` | Data directory (default `$HOME/antinomie`; `~` is expanded). Use a directory of its own for automation, never the one the window uses |
+| `--bundle PATH`, `--qemu PATH`, `--qemu-img PATH`, `--tcg`, `--no-headless` | Engine options, as in the window. The CLI is headless unless `--no-headless` is given |
+| `--direct`, `--daemon`, `--socket PATH` | Choose direct mode or a running daemon (they conflict) |
+| `-o, --format human\|json\|ndjson` | Output format; `human` on a terminal, `json` otherwise |
+| `--color auto\|always\|never` | Colour of human output; `NO_COLOR` is honoured |
+| `-q`, `-v`, `-vv`, `--log-format text\|json` | Log lines on standard error |
+| `--timeout SECONDS` | Overall limit of the command |
+
+**Output.** `json` prints exactly one document on standard output:
+`{"api_version":1,"ok":true,"result":...}`, or on failure (with a non-zero exit)
+`{"api_version":1,"ok":false,"error":{"code":...,"message":...,"retryable":...,"details":...}}`.
+A list result is `{"items":[...],"next_cursor":...}`. `ndjson` prints one object
+per line: a list command prints its items and then a last line
+`{"result":{"count":N,"next_cursor":...}}`; any other command prints
+`{"result":...}`; a failure prints `{"error":...}`. Log lines stay on standard error.
+
+**Exit codes.**
+
+| Code | Name | Meaning |
+|---|---|---|
+| 0 | ok | Success |
+| 1 | failed | Other failure |
+| 2 | usage | Bad arguments |
+| 3 | not_found | Sample, run, VM, base or job does not exist |
+| 4 | invalid | The arguments were refused (`invalid_argument`, `precondition_failed`, `conflict`) |
+| 5 | denied | Policy or file permission |
+| 10 to 14 | job_failed, job_partial, job_cancelled, job_rejected, wait_timeout | A waited job did not succeed (Auto mode) |
+| 20 | dependency | A required tool is missing; `doctor` shows which |
+| 21 | busy | The data directory is owned by another process, or the daemon is starting or stopping |
+| 22 | quota | `quota_exceeded` |
+| 30 to 32 | suspicious, malicious, inconclusive | With `--verdict-exit` only (Auto mode) |
+| 130 | interrupted | Interrupted with Ctrl-C |
+
+**Commands so far.**
+
+- `doctor [--require tool,...]` lists the runtime tools and exits 20 when a
+  required one is missing. Without `--require` the tools the window also treats as
+  required count; a missing KVM is a warning (VMs then run with TCG). Tool names:
+  `qemu`, `qemu-img`, `gtk`, `kvm`, `curl`, `debian-account`, `bubblewrap`,
+  `tshark`, `prlimit`, `suricata`, `python-venv`, `wireshark`, `file-chooser`.
+- `capabilities` prints the API version, the app version and revision, the lane
+  count, the report formats and the accelerator (`kvm` or `tcg`).
+- `config path` prints the paths of `settings.json`, `service.toml` and `policies/`.
+
 ## Troubleshooting
 
 - **Settings did not survive a restart** (0.8.1 and earlier): fixed in 0.8.2; the
