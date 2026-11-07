@@ -7,8 +7,8 @@ operations and errors that the command line (`antinomie-cli`), the local socket
 and, later, the web process share. The machine-readable form is
 [job-api-1.schema.json](job-api-1.schema.json), generated from the Rust types of
 the `antinomie-service` crate (`src/api/`) with `schemars` and checked in; a test
-fails when the file is stale. The recording reads (`recording.*`) are added by
-the query contract.
+fails when the file is stale. The recording reads (`recording.*`) are in the
+second part of this document.
 
 Names here are final for version 1. The API changes only additively: a new
 optional field does not change the version; a changed meaning or a removed field
@@ -190,3 +190,162 @@ closes or sends `{"id": 7, "op": "cancel"}`. The first line on a connection is
 `{"frame": "engine.hello", "data": {"api_version", "app_version", "owner", "epoch", "gseq", "truncated"}}`.
 Limits: 2 MiB per line, 16 requests in flight per connection, 300 s idle, 64
 connections. Socket uploads carry base64 in `params.data`, at most 1 MiB per call.
+
+# Recording queries, version 1
+
+The `recording.*` operations read finished or live recordings. They are paged,
+bounded, cancellable and read-only: a query never writes into a recording, never
+takes the data-directory lock, and never talks to the engine except to learn the
+live state of a recording. They work beside a daemon, beside a lane that is
+writing, and with no owner at all. The types are in
+`antinomie-service/src/query/` and in the same schema file.
+
+## Addressing
+
+A run is addressed by its `run_key`: an opaque string produced by
+`recording.run.list` and by `Job.recording.run_key`. Clients never build or parse
+it. (The CLI also accepts `vm:boot:run`, which it turns into a key; the key is
+the base64url form of the three ids, and each id must be a plain file name.) A
+run id alone is not unique across boots.
+
+The analysis operations take exactly one of `run_key` (the analysis linked to a
+run) or `job_id` (the host-side analysis of a job). Custody takes `sha256`
+instead of a run.
+
+## Result shapes
+
+Every result is one of two shapes.
+
+| Shape | Members |
+|---|---|
+| `Page<T>` | `items`, `next_cursor`, `total?`, `total_exact?`, `generation`, `phase`, `partial?`, `building?`, `untrusted?` |
+| `Single<T>` | `value?`, `generation`, `phase`, `partial?`, `building?`, `untrusted?` |
+
+`generation` is a decimal string: a token for the recording's content. For a
+`complete` recording it is the ETag; for a `live` or `finalizing` one a cache
+must not use it. `partial` is true when the recording is `interrupted` or an
+engine limit cut the page. `total_exact` is false while the recording or a
+packet parse is still growing. `untrusted` is true when rows carry strings that
+came from the sample or the guest: escape them.
+
+`phase` is one of:
+
+| Phase | Meaning |
+|---|---|
+| `live` | The boot is running or its recording is still being saved. Core reads (class C) work on the indexed prefix; Triage reads (class T) fail `precondition_failed` with `details.reason = "recording_open"` |
+| `finalizing` | The recording is saved and final; the earlier-bytes copy or the disk merge is pending. Everything works; file rows carry `earlier: "pending"` and an earlier version fails `layer_pending` |
+| `complete` | No layer is pending. Full reads; pages are cacheable by `generation` |
+| `interrupted` | The writer is gone. Reads work; pages say `partial: true` |
+
+A class T read whose scan is not cached answers at once with `building` (and no
+items, no `next_cursor`, no `total`): a success that a binding maps to HTTP 202
+with `Retry-After`. The client polls the same request. Core reads never answer
+`building`.
+
+## Operations
+
+Class **C** needs only the engine. Class **T** needs the Triage scan and can answer
+`building`. Scope **N** is `read`, **S** is `artifacts:sensitive`.
+
+| Op | Class | Scope | Request besides `run_key` | Result |
+|---|---|---|---|---|
+| `recording.run.list` | C | N | `vm_id?`, `sample_sha256?`, `job_id?`, `state?`, `since_ms?` | `Page<RunInfo>` |
+| `recording.run.get` | C | N | | `Single<RunDetail>` |
+| `recording.summary` | T | N | | `Single<Summary>` |
+| `recording.trace.page` | C | N | `pid?`, `q?`, `hide_groups[]` | `Page<TraceRow>` |
+| `recording.trace.get` | C | N | `ref` | `Single<Invocation>` |
+| `recording.captured.read` | C | S | `field`, `offset`, `len` (at most 65 536) | bytes |
+| `recording.process.tree` | C | N | `root_pid?` | `Page<ProcessNode>` |
+| `recording.findings.list` | T | N | `tier?`, `category?`, `rule?`, `pid?`, `q?`, `sort?` | `Page<Finding>` |
+| `recording.findings.get` | T | N | `finding_id` | `Single<FindingDetail>` |
+| `recording.indicators.list` | T | N | `kind?`, `matched?`, `q?`, `defang?`, `sort?` | `Page<Indicator>` |
+| `recording.files.list` | T | N | `tab`, `q?`, `sort?` | `Page<FileRow>` |
+| `recording.files.versions` | T | N | `file_id` | `Single<FileVersions>` |
+| `recording.files.content` | T | S | `version_id`, `range?` (at most 1 MiB) | bytes |
+| `recording.network.summary` | T | N | | `Single<NetworkSummary>` |
+| `recording.network.list` | T | N | `tab`, `q?`, `sort?` | `Page<NetworkRow>` |
+| `recording.network.captures` | C | N | | `Page<Capture>` |
+| `recording.network.packets` | C | N | `capture_id`, `filter?` | `Page<PacketRow>` |
+| `recording.network.packet` | C | S | `capture_id`, `n` | `Single<PacketDetail>` |
+| `recording.timeline` | T | N | `from_ms?`, `to_ms?`, `kinds[]` | `Page<TimelineEvent>` |
+| `recording.cores.list` | C | N | | `Page<CoreInfo>` |
+| `recording.analysis.list` | C | N | `run_key` or `job_id` | `Page<AnalysisSection>` |
+| `recording.analysis.section` | C | N | `run_key` or `job_id`, `kind`, `q?`, `sort?` | `Page<AnalysisRow>` |
+| `recording.analysis.ghidra` | C | N | `run_key` or `job_id`, `q?` | `Page<AnalysisRow>` |
+| `recording.custody.list` | C | N | `sha256` or `run_key` | `Page<CustodyEntry>` |
+| `recording.terminal.replay` | C | N | | `Page<TerminalRecord>` |
+| `recording.artifact.list` | C | N | | `Page<RecordingArtifact>` |
+| `recording.artifact.get` | C | S or N | `artifact_id`, `range?` | bytes |
+
+Every list also takes `limit` and `cursor`. `capabilities.queries` lists, for the
+build in front of you, every operation with its class, scope, subject, filters,
+sortable fields, default order, maximum limit and (for operations with a `tab`) the
+columns of each table; clients must read it instead of hard-coding a filter. The
+catalogue is generated from the same table the operations are defined by, and a
+test fails when an operation takes a filter or a sort the catalogue does not list.
+
+## Identifiers and numbers
+
+Identifiers and counters that can exceed 2^53 (task cookies, stream, call and
+object ids, byte offsets of raw files) are decimal strings and are named `*_id`,
+`*_cookie` or `*_offset`. Register values and addresses are lower-case hex strings
+with `0x`. `*_ms` is host Unix milliseconds; `guest_ns` is the guest monotonic
+clock of the recording, never wall time; `*_us` is Unix microseconds of the packet
+capture clock. A `ts_ms` beside a `guest_ns` is the host time mapped through the
+run's clock anchor, and is absent when the run has none (a run without an anchor
+rejects `from_ms` and `to_ms` with `unsupported`).
+
+## Paging, cursors and sorting
+
+| Item | Rule |
+|---|---|
+| Limits | Row pages: default 100, at most 500 (packets 500, analysis and Ghidra pages 1024, terminal 256). A page is also cut when its encoded size would pass 1 MiB: fewer rows, never a truncated row |
+| Cursor | Opaque; binds the offset, the `generation`, the filter and the sort. The trace cursor is a raw-file byte offset, not a row number |
+| Stale cursor | A cursor from another generation, filter or sort fails `conflict` with `details.reason = "cursor_stale"`; on a live recording the client restarts from the first page |
+| Sorting | A `sort` is `{field, dir}` with `dir` `asc` or `desc`. Only the lists whose catalogue entry has sortable fields accept it (findings, indicators, files, network, and the analysis listing where the engine supports it); a `sort` on any other list is `invalid_argument`. Sorting is over the whole row set before the page is cut |
+| Byte reads | At most 65 536 bytes per call for `captured.read`, 1 MiB for `files.content` and `artifact.get`; whole files are streamed by the binding |
+
+## Limits and deadlines
+
+| Limit | Default |
+|---|---|
+| Light reads in flight (run list, trace pages, custody, artifact, capture and core lists, terminal replay) | 16 |
+| Heavy reads in flight (Triage scans, the process tree, the packet filter, analysis listings that sort) | 2 |
+| Deadline, light | 10 s |
+| Deadline, heavy | 60 s for a page; a Triage scan runs in the background, bounded by 900 s |
+| Scan cache | 2 scans in memory, 1 GiB, dropped when the `generation` changes |
+
+Over the limit: `quota_exceeded` with `details.reason = "heavy_read_limit"` and
+`retry_after_s`. A deadline: `unavailable` with `details.reason = "read_timeout"`;
+the read is cancelled.
+
+## Sensitivity
+
+| Class | What | Rule |
+|---|---|---|
+| Normal (`read`) | Run, process, finding, indicator, file, network and timeline rows; trace rows and calls; analysis rows; custody entries; packet rows; terminal replay | Strings are untrusted text. Indicator values are raw; the row carries the defanged form and `raw_indicators: true` |
+| Sensitive (`artifacts:sensitive`) | Bytes the sample or guest produced: `captured.read`, `files.content`, `network.packet`, and `artifact.get` of a capture, memory dump, core or file copy | Audit-logged |
+| Secret | Guest password, API keys, SOCKS password | Never in any result |
+| Local | Host paths, `directory` | Local socket and CLI only |
+
+## Read errors
+
+| Condition | Error |
+|---|---|
+| Unknown or deleted `run_key`, `file_id`, `capture_id`, `artifact_id`; a `run_key` of a recording the service cannot reach | `not_found` |
+| Cursor from another generation or filter | `conflict`, `reason: cursor_stale` |
+| Earlier file bytes while the layer is pending | `precondition_failed`, `reason: layer_pending` |
+| A Triage read of a recording that is still being written | `precondition_failed`, `reason: recording_open`, `details.phase` |
+| The run never produced the data (no capture, no core) | `not_found`, `details.reason = "not_recorded"` |
+| A core needs a newer guest revision | `unsupported`, `details.reason = "guest_revision"` |
+| A byte range above its limit | `payload_too_large` |
+| Heavy-read limit or deadline | `quota_exceeded` or `unavailable` (see above) |
+| The recording is corrupt or the index cannot be built | `internal`, `details.reason = "recording_unreadable"` |
+| A scan failed | `internal`, `details.reason = "scan_failed"`; the next call may start it again |
+
+## Reserved
+
+`recording.memory.*`, `recording.disks.*`, `recording.cores.read`,
+`recording.cores.disassemble`, `recording.cores.strings`, `recording.screenshot.*`,
+`recording.export.*` and every write are reserved; the service answers
+`unsupported`.

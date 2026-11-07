@@ -315,7 +315,11 @@ mod tests {
     fn the_read_error_table_maps_to_codes_and_reasons() {
         let table: [(ApiError, ErrorCode, Option<ErrorReason>); 10] = [
             (ApiError::not_found("run"), ErrorCode::NotFound, None),
-            (ApiError::cursor_stale(), ErrorCode::Conflict, Some(ErrorReason::CursorStale)),
+            (
+                ApiError::cursor_stale(),
+                ErrorCode::Conflict,
+                Some(ErrorReason::CursorStale),
+            ),
             (
                 ApiError::layer_pending(),
                 ErrorCode::PreconditionFailed,
@@ -331,7 +335,11 @@ mod tests {
                 ErrorCode::Unsupported,
                 Some(ErrorReason::GuestRevision),
             ),
-            (ApiError::payload_too_large(65_536), ErrorCode::PayloadTooLarge, None),
+            (
+                ApiError::payload_too_large(65_536),
+                ErrorCode::PayloadTooLarge,
+                None,
+            ),
             (
                 ApiError::heavy_read_limit(5),
                 ErrorCode::QuotaExceeded,
@@ -347,13 +355,20 @@ mod tests {
                 ErrorCode::Internal,
                 Some(ErrorReason::RecordingUnreadable),
             ),
-            (ApiError::scan_failed(), ErrorCode::Internal, Some(ErrorReason::ScanFailed)),
+            (
+                ApiError::scan_failed(),
+                ErrorCode::Internal,
+                Some(ErrorReason::ScanFailed),
+            ),
         ];
         for (error, code, reason) in table {
             assert_eq!(error.code, code, "{error:?}");
             assert_eq!(error.reason(), reason, "{error:?}");
         }
-        assert_eq!(ApiError::heavy_read_limit(5).details["retry_after_s"], json!(5));
+        assert_eq!(
+            ApiError::heavy_read_limit(5).details["retry_after_s"],
+            json!(5)
+        );
     }
 
     #[test]

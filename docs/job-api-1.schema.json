@@ -4045,6 +4045,5893 @@
         }
       ],
       "description": "The values of `details.reason` the contract names (5.7, 5.12.1, 5.12.8)."
+    },
+    "PageRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "description": "`{limit, cursor}`. `limit` defaults to 100 and is at most 500 for a row page\n(packets 500, analysis and Ghidra pages 1024, terminal 256)."
+    },
+    "Sort": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "dir": {
+          "$ref": "#/$defs/SortDir"
+        }
+      },
+      "required": [
+        "field",
+        "dir"
+      ],
+      "description": "A `sort` request: ties keep the default order. Only the fields\n`capabilities.queries` names for the operation are allowed."
+    },
+    "SortDir": {
+      "type": "string",
+      "enum": [
+        "asc",
+        "desc"
+      ]
+    },
+    "Page": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RunInfo"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When cheap."
+        },
+        "total_exact": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False while the recording or a TShark parse is still growing."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when the recording is `interrupted` or an engine limit cut the\npage. Absent means false."
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        }
+      },
+      "required": [
+        "items",
+        "generation",
+        "phase"
+      ],
+      "description": "A page of rows."
+    },
+    "RunInfo": {
+      "type": "object",
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "vm_id": {
+          "type": "string",
+          "description": "The engine's own ids. N"
+        },
+        "boot_id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/RunStateName"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "started_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "ended_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sample_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sha256Hex"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The library sample the run executed. N"
+        },
+        "program": {
+          "type": "string",
+          "description": "Guest path of the executable. U"
+        },
+        "job_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The job of this service that made the run; absent for runs made by the\nGUI or a CLI one-shot. N"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Route"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The route kind (`drop`, `inet_sim`, ...). N"
+        },
+        "exit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunExit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "end_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`RunSummary.recording_error` text, host paths removed. U"
+        }
+      },
+      "required": [
+        "run_key",
+        "vm_id",
+        "boot_id",
+        "run_id",
+        "state",
+        "phase",
+        "program"
+      ],
+      "description": "`recording.run.list` item (from `RunSummary` and the library)."
+    },
+    "RunKey": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "maxLength": 512,
+      "description": "Opaque run address. Produced by recording.run.list and Job.recording.run_key; clients never build or parse it."
+    },
+    "RunStateName": {
+      "type": "string",
+      "enum": [
+        "unknown",
+        "running",
+        "stop_requested",
+        "finished",
+        "stopped",
+        "terminal_closed",
+        "finalized",
+        "failed_to_start",
+        "launch_unconfirmed",
+        "interrupted"
+      ],
+      "description": "`RunState` by its serde spelling (`api.rs`)."
+    },
+    "RunExit": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/RunExitKind"
+        },
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "required": [
+        "kind",
+        "code"
+      ],
+      "description": "How the root process ended: `exited` with a code, or `signaled`."
+    },
+    "RunExitKind": {
+      "type": "string",
+      "enum": [
+        "exited",
+        "signaled"
+      ]
+    },
+    "Generation": {
+      "type": "string",
+      "pattern": "^[0-9]{1,20}$",
+      "description": "Monotonic token for the recording's content, a decimal string. The ETag of a complete recording."
+    },
+    "Building": {
+      "type": "object",
+      "properties": {
+        "progress": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScanProgress"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retry_after_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "retry_after_ms"
+      ],
+      "description": "The answer of a Triage-based read (class T) whose scan is not cached: a\nsuccess, mapped to HTTP `202` with `Retry-After`. The page has no items, no\n`next_cursor`, no `total`."
+    },
+    "ScanProgress": {
+      "type": "object",
+      "properties": {
+        "done": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "done",
+        "total"
+      ],
+      "description": "Progress of a running Triage scan."
+    },
+    "Single": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunDetail"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent while `building`."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "generation",
+        "phase"
+      ],
+      "description": "A single result (`recording.run.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
+    },
+    "RunDetail": {
+      "type": "object",
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "vm_id": {
+          "type": "string",
+          "description": "The engine's own ids. N"
+        },
+        "boot_id": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/RunStateName"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "started_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "ended_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sample_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sha256Hex"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The library sample the run executed. N"
+        },
+        "program": {
+          "type": "string",
+          "description": "Guest path of the executable. U"
+        },
+        "job_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The job of this service that made the run; absent for runs made by the\nGUI or a CLI one-shot. N"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Route"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The route kind (`drop`, `inet_sim`, ...). N"
+        },
+        "exit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunExit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "end_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`RunSummary.recording_error` text, host paths removed. U"
+        },
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Execution"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "U"
+        },
+        "route_record": {
+          "description": "The engine's `RouteRecord`, host paths removed."
+        },
+        "machine": {
+          "description": "The engine's `MachineRecord`."
+        },
+        "environment": {
+          "description": "The engine's `RunEnvironment`, host paths removed."
+        },
+        "artifacts": {
+          "$ref": "#/$defs/RunArtifactStates"
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "owner_state": {
+          "$ref": "#/$defs/OwnerState"
+        },
+        "layer": {
+          "$ref": "#/$defs/LayerState"
+        },
+        "recording_error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "U"
+        },
+        "directory": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "L: the recording directory. Absent from every remote reply."
+        }
+      },
+      "required": [
+        "run_key",
+        "vm_id",
+        "boot_id",
+        "run_id",
+        "state",
+        "phase",
+        "program",
+        "notes",
+        "artifacts",
+        "generation",
+        "owner_state",
+        "layer"
+      ],
+      "description": "`recording.run.get`: a [`RunInfo`] and more."
+    },
+    "Execution": {
+      "type": "object",
+      "properties": {
+        "live_task_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "pending_async_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "total_task_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "async_loss_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "root_wait_status": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "root_exit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunExit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "live_task_count",
+        "pending_async_count",
+        "total_task_count",
+        "async_loss_count"
+      ],
+      "description": "From `RunExecution`. All N."
+    },
+    "RunArtifactStates": {
+      "type": "object",
+      "properties": {
+        "network": {
+          "$ref": "#/$defs/ArtifactStatus"
+        },
+        "memory": {
+          "$ref": "#/$defs/ArtifactStatus"
+        },
+        "core": {
+          "$ref": "#/$defs/ArtifactStatus"
+        }
+      },
+      "required": [
+        "network",
+        "memory",
+        "core"
+      ],
+      "description": "`{network, memory, core}`."
+    },
+    "ArtifactStatus": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/ArtifactState"
+        },
+        "present": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "state",
+        "present"
+      ],
+      "description": "One kind of evidence a run can keep."
+    },
+    "ArtifactState": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "waiting_for_tree_exit",
+        "waiting_for_root_exit",
+        "recording",
+        "queued",
+        "in_progress",
+        "complete",
+        "partial",
+        "interrupted",
+        "failed"
+      ],
+      "description": "`RunArtifactState` by its serde spelling."
+    },
+    "OwnerState": {
+      "type": "string",
+      "enum": [
+        "alive",
+        "gone",
+        "unknown"
+      ],
+      "description": "Who writes the recording now (5.12.2)."
+    },
+    "LayerState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "none",
+            "pending"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "orphaned",
+          "description": "The finalizer is gone; the recording itself is whole and only the\nearlier-bytes copy is missing until the next engine start adopts it."
+        }
+      ],
+      "description": "The run layer of the recording's VM."
+    },
+    "Single2": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Summary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent while `building`."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "generation",
+        "phase"
+      ],
+      "description": "A single result (`recording.run.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
+    },
+    "Summary": {
+      "type": "object",
+      "properties": {
+        "assessment": {
+          "$ref": "#/$defs/AssessmentKind"
+        },
+        "highest_tier": {
+          "$ref": "#/$defs/Tier"
+        },
+        "families": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "counts": {
+          "$ref": "#/$defs/Counts"
+        },
+        "key_behaviours": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KeyBehaviour"
+          }
+        },
+        "detections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DetectionHit"
+          }
+        },
+        "techniques": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ioc_dataset_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "basis": {
+          "type": "string",
+          "description": "One sentence stating why."
+        }
+      },
+      "required": [
+        "assessment",
+        "highest_tier",
+        "families",
+        "counts",
+        "key_behaviours",
+        "detections",
+        "techniques",
+        "ioc_dataset_count",
+        "basis"
+      ],
+      "description": "`recording.summary`: the assessment fields of the JSON report summary (5.4.3\nwithout the policy `label` and `score`, which belong to a job)."
+    },
+    "Page2": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceRow"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When cheap."
+        },
+        "total_exact": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False while the recording or a TShark parse is still growing."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when the recording is `interrupted` or an engine limit cut the\npage. Absent means false."
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        }
+      },
+      "required": [
+        "items",
+        "generation",
+        "phase"
+      ],
+      "description": "A page of rows."
+    },
+    "TraceRow": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/CallRef"
+        },
+        "guest_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "ts_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "0 in recordings older than 0.3.0."
+        },
+        "tid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "nr": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "args": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Six hex strings, or null."
+        },
+        "ret": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Signed result as decimal text; null while no exit is recorded."
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "group": {
+          "$ref": "#/$defs/SyscallGroupName",
+          "description": "A syscall group of `syscall_groups.rs` (a filter value)."
+        },
+        "args_preview": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArgPreview"
+          },
+          "description": "U"
+        },
+        "async_saved": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "ref",
+        "guest_ns",
+        "pid",
+        "tid",
+        "name",
+        "nr",
+        "complete",
+        "group",
+        "args_preview",
+        "async_saved"
+      ],
+      "description": "`recording.trace.page` row (from `InvocationSummary` and its `entry` or\n`exit` event)."
+    },
+    "CallRef": {
+      "type": "object",
+      "properties": {
+        "stream": {
+          "$ref": "#/$defs/U64"
+        },
+        "task": {
+          "$ref": "#/$defs/U64"
+        },
+        "call": {
+          "$ref": "#/$defs/U64"
+        }
+      },
+      "required": [
+        "stream",
+        "task",
+        "call"
+      ],
+      "description": "The identity of one call inside a recording; clients pass it back unchanged."
+    },
+    "U64": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$",
+      "description": "An unsigned 64-bit number as decimal text: it can exceed 2^53."
+    },
+    "SyscallGroupName": {
+      "type": "string",
+      "enum": [
+        "process",
+        "file",
+        "network",
+        "memory",
+        "ipc",
+        "signal",
+        "polling",
+        "security",
+        "system",
+        "time",
+        "info"
+      ],
+      "description": "A syscall group of the engine's `syscall_groups.rs`, by lower-case name."
+    },
+    "ArgPreview": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "arg": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "layout": {
+          "type": "string"
+        },
+        "captured_len": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "logical_len": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string",
+          "description": "A lossy UTF-8 rendering, at most 256 characters. U"
+        }
+      },
+      "required": [
+        "key",
+        "layout",
+        "captured_len",
+        "complete",
+        "text"
+      ],
+      "description": "One captured argument field of a call, in a row (`args_preview`)."
+    },
+    "Single3": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Invocation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent while `building`."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "generation",
+        "phase"
+      ],
+      "description": "A single result (`recording.run.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
+    },
+    "Invocation": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/CallRef"
+        },
+        "entry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CallEvent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CallEvent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_exit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CallEvent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The kernel's record that the task ended inside the call."
+        },
+        "async_events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CallEvent"
+          },
+          "description": "At most 256 (`ASYNC_PREVIEW_LIMIT`)."
+        },
+        "async_saved": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "async_omitted": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "kernel_notes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CallEvent"
+          },
+          "description": "At most `NOTES_PER_CALL`: credentials and file hashes."
+        },
+        "task_exit_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WaitStatusInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ref",
+        "async_events",
+        "async_saved",
+        "async_omitted",
+        "kernel_notes"
+      ],
+      "description": "`recording.trace.get` (from `InvocationSummary`)."
+    },
+    "CallEvent": {
+      "type": "object",
+      "properties": {
+        "event_seq": {
+          "$ref": "#/$defs/U64"
+        },
+        "phase": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "The engine's small integer: entry, exit, async."
+        },
+        "syscall_nr": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "syscall_name": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "tid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cpu": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "guest_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "ts_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "args": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "result": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The engine's text."
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CapturedField"
+          }
+        }
+      },
+      "required": [
+        "event_seq",
+        "phase",
+        "syscall_nr",
+        "syscall_name",
+        "pid",
+        "tid",
+        "cpu",
+        "guest_ns",
+        "complete",
+        "issues",
+        "fields"
+      ],
+      "description": "One phase of a call (from `EventSummary`). U"
+    },
+    "CapturedField": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "Opaque `\"<object_id>:<key>\"`, the value `recording.captured.read` takes."
+        },
+        "key": {
+          "type": "string"
+        },
+        "arg": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "layout": {
+          "type": "string"
+        },
+        "logical_len": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "captured_len": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "capture_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "preview": {
+          "type": "string",
+          "description": "The engine's bounded preview, base64. U"
+        },
+        "ranges": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/U64"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "description": "`[offset, len]` pairs of the stored bytes."
+        },
+        "recapture": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "field",
+        "key",
+        "layout",
+        "captured_len",
+        "complete",
+        "preview",
+        "ranges"
+      ],
+      "description": "A captured field of an event. `raw_path` is L and is never sent; the bytes\ncome only from `recording.captured.read`."
+    },
+    "WaitStatusInfo": {
+      "type": "object",
+      "properties": {
+        "raw": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "exited": {
+          "type": "boolean"
+        },
+        "code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "signal": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "core_dumped": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "raw",
+        "exited",
+        "core_dumped"
+      ],
+      "description": "The kernel's wait status of a task, decoded."
+    },
+    "Single4": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BytesReply"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent while `building`."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "generation",
+        "phase"
+      ],
+      "description": "A single result (`recording.run.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
+    },
+    "BytesReply": {
+      "type": "object",
+      "properties": {
+        "offset": {
+          "$ref": "#/$defs/U64"
+        },
+        "len": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "data_b64": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "offset",
+        "len",
+        "data_b64"
+      ],
+      "description": "The bytes of a read (`captured.read`, `files.content`, `artifact.get`,\n`network.packet` bytes) on the socket: base64, with the range it covers."
+    },
+    "Page3": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProcessNode"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When cheap."
+        },
+        "total_exact": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False while the recording or a TShark parse is still growing."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when the recording is `interrupted` or an engine limit cut the\npage. Absent means false."
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        }
+      },
+      "required": [
+        "items",
+        "generation",
+        "phase"
+      ],
+      "description": "A page of rows."
+    },
+    "ProcessNode": {
+      "type": "object",
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "parent_pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "0 when unknown."
+        },
+        "name": {
+          "type": "string",
+          "description": "The command name, or the file name of the last program it executed. U"
+        },
+        "exe": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The path of the last program it executed. U"
+        },
+        "at_start": {
+          "type": "boolean",
+          "description": "Running when the capture started."
+        },
+        "first_guest_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "last_guest_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "calls": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "System calls observed (entry events)."
+        },
+        "packets": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "exited": {
+          "type": "boolean"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        }
+      },
+      "required": [
+        "pid",
+        "parent_pid",
+        "name",
+        "at_start",
+        "first_guest_ns",
+        "last_guest_ns",
+        "calls",
+        "packets",
+        "exited"
+      ],
+      "description": "`recording.process.tree` row (from `CaptureProcess`), ordered by `pid`."
+    },
+    "ProcessTreeNotes": {
+      "type": "object",
+      "properties": {
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The engine's issues, host paths removed."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "The 262 144-node limit cut the list."
+        }
+      },
+      "required": [
+        "issues",
+        "truncated"
+      ],
+      "description": "The extras of the first page of `recording.process.tree`."
+    },
+    "Page4": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Finding"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When cheap."
+        },
+        "total_exact": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False while the recording or a TShark parse is still growing."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when the recording is `interrupted` or an engine limit cut the\npage. Absent means false."
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        }
+      },
+      "required": [
+        "items",
+        "generation",
+        "phase"
+      ],
+      "description": "A page of rows."
+    },
+    "Finding": {
+      "type": "object",
+      "properties": {
+        "finding_id": {
+          "type": "string",
+          "description": "Opaque id of the row inside this `generation`."
+        },
+        "rule": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier",
+          "description": "After context."
+        },
+        "base_tier": {
+          "$ref": "#/$defs/Tier",
+          "description": "The rule's own tier."
+        },
+        "category": {
+          "$ref": "#/$defs/FindingCategory"
+        },
+        "techniques": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "ATT&CK technique and detection ids."
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Occurrences folded into the row."
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FindingFlag"
+          }
+        },
+        "hidden": {
+          "type": "boolean"
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "source": {
+          "type": "string",
+          "description": "Rule reference text."
+        },
+        "summary": {
+          "type": "string",
+          "description": "Matching facts. U"
+        },
+        "object": {
+          "type": "string",
+          "description": "What repeats are folded by. U"
+        },
+        "attempted": {
+          "type": "boolean"
+        },
+        "success": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Observed non-negative exit; null without an exit."
+        },
+        "first_guest_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "last_guest_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "ts_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "process": {
+          "$ref": "#/$defs/ProcessRef",
+          "description": "U"
+        },
+        "ref": {
+          "$ref": "#/$defs/CallRef",
+          "description": "The representative call."
+        },
+        "ret": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "finding_id",
+        "rule",
+        "version",
+        "tier",
+        "base_tier",
+        "category",
+        "techniques",
+        "count",
+        "flags",
+        "hidden",
+        "confidence",
+        "source",
+        "summary",
+        "object",
+        "attempted",
+        "first_guest_ns",
+        "last_guest_ns",
+        "process",
+        "ref"
+      ],
+      "description": "`recording.findings.list` row (from the Triage `Finding` model). Tones are\nnever sent."
+    },
+    "FindingCategory": {
+      "type": "string",
+      "enum": [
+        "execution",
+        "persistence",
+        "privilege",
+        "evasion",
+        "credential",
+        "discovery",
+        "injection",
+        "c2",
+        "rootkit",
+        "impact",
+        "collection",
+        "lateral",
+        "exfiltration"
+      ]
+    },
+    "FindingFlag": {
+      "type": "string",
+      "enum": [
+        "failed",
+        "allow-listed",
+        "outside-scope",
+        "vm-wide",
+        "suppressed",
+        "async",
+        "collapsed",
+        "capped",
+        "periodic",
+        "repeated"
+      ],
+      "description": "The flags of a finding row."
+    },
+    "Confidence": {
+      "type": "string",
+      "enum": [
+        "high",
+        "limited"
+      ]
+    },
+    "ProcessRef": {
+      "type": "object",
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "tid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cookie": {
+          "$ref": "#/$defs/U64"
+        },
+        "exe": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "U"
+        }
+      },
+      "required": [
+        "pid",
+        "tid",
+        "cookie"
+      ],
+      "description": "The process of a finding or file row."
+    },
+    "Single5": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FindingDetail"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent while `building`."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "generation",
+        "phase"
+      ],
+      "description": "A single result (`recording.run.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
+    },
+    "FindingDetail": {
+      "type": "object",
+      "properties": {
+        "finding_id": {
+          "type": "string",
+          "description": "Opaque id of the row inside this `generation`."
+        },
+        "rule": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier",
+          "description": "After context."
+        },
+        "base_tier": {
+          "$ref": "#/$defs/Tier",
+          "description": "The rule's own tier."
+        },
+        "category": {
+          "$ref": "#/$defs/FindingCategory"
+        },
+        "techniques": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "ATT&CK technique and detection ids."
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Occurrences folded into the row."
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FindingFlag"
+          }
+        },
+        "hidden": {
+          "type": "boolean"
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "source": {
+          "type": "string",
+          "description": "Rule reference text."
+        },
+        "summary": {
+          "type": "string",
+          "description": "Matching facts. U"
+        },
+        "object": {
+          "type": "string",
+          "description": "What repeats are folded by. U"
+        },
+        "attempted": {
+          "type": "boolean"
+        },
+        "success": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Observed non-negative exit; null without an exit."
+        },
+        "first_guest_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "last_guest_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "ts_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "process": {
+          "$ref": "#/$defs/ProcessRef",
+          "description": "U"
+        },
+        "ref": {
+          "$ref": "#/$defs/CallRef",
+          "description": "The representative call."
+        },
+        "ret": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CallRef"
+          },
+          "description": "The call of every folded occurrence, at most 256."
+        },
+        "evidence_omitted": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "rule_text": {
+          "type": "string",
+          "description": "The rule's one-line description."
+        }
+      },
+      "required": [
+        "finding_id",
+        "rule",
+        "version",
+        "tier",
+        "base_tier",
+        "category",
+        "techniques",
+        "count",
+        "flags",
+        "hidden",
+        "confidence",
+        "source",
+        "summary",
+        "object",
+        "attempted",
+        "first_guest_ns",
+        "last_guest_ns",
+        "process",
+        "ref",
+        "evidence_refs",
+        "evidence_omitted",
+        "rule_text"
+      ],
+      "description": "`recording.findings.get`."
+    },
+    "Page5": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Indicator"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When cheap."
+        },
+        "total_exact": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False while the recording or a TShark parse is still growing."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when the recording is `interrupted` or an engine limit cut the\npage. Absent means false."
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        }
+      },
+      "required": [
+        "items",
+        "generation",
+        "phase"
+      ],
+      "description": "A page of rows."
+    },
+    "Indicator": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/IndicatorKind"
+        },
+        "value": {
+          "type": "string",
+          "description": "The raw indicator. U"
+        },
+        "defanged": {
+          "type": "string",
+          "description": "The defanged form. U"
+        },
+        "match": {
+          "$ref": "#/$defs/IndicatorMatch"
+        },
+        "dataset": {
+          "type": "string",
+          "description": "The dataset answer. U"
+        },
+        "record_id": {
+          "type": "string"
+        },
+        "family": {
+          "type": "string"
+        },
+        "reference": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/IndicatorSource"
+          }
+        },
+        "process": {
+          "type": "string",
+          "description": "The one process that made a matching call. U"
+        },
+        "first_us": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "last_us": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "url": {
+          "type": "string",
+          "description": "URL and TLS facts. U"
+        },
+        "sni": {
+          "type": "string"
+        },
+        "ja3": {
+          "type": "string"
+        },
+        "ja4": {
+          "type": "string"
+        },
+        "ja3s": {
+          "type": "string"
+        },
+        "cert_sha1": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string",
+          "description": "File indicators. U"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "md5": {
+          "type": "string"
+        },
+        "sha1": {
+          "type": "string"
+        },
+        "file_role": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "raw_indicators": {
+          "type": "boolean",
+          "description": "Always true: the value is raw and must not be rendered as active content."
+        }
+      },
+      "required": [
+        "kind",
+        "value",
+        "defanged",
+        "match",
+        "dataset",
+        "record_id",
+        "family",
+        "reference",
+        "sources",
+        "process",
+        "first_us",
+        "last_us",
+        "count",
+        "url",
+        "sni",
+        "ja3",
+        "ja4",
+        "ja3s",
+        "cert_sha1",
+        "path",
+        "sha256",
+        "md5",
+        "sha1",
+        "file_role",
+        "raw_indicators"
+      ],
+      "description": "`recording.indicators.list` row (from `report::Indicator`). It keeps the raw\nvalue; `defanged` is the safe form."
+    },
+    "IndicatorKind": {
+      "type": "string",
+      "enum": [
+        "endpoint",
+        "domain",
+        "url",
+        "tls",
+        "file"
+      ]
+    },
+    "IndicatorMatch": {
+      "type": "string",
+      "enum": [
+        "matched",
+        "known_fp",
+        "no_match",
+        "not_checked"
+      ]
+    },
+    "IndicatorSource": {
+      "type": "string",
+      "enum": [
+        "pcap",
+        "syscall",
+        "disk",
+        "static"
+      ]
+    },
+    "Page6": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FileRow"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When cheap."
+        },
+        "total_exact": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False while the recording or a TShark parse is still growing."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when the recording is `interrupted` or an engine limit cut the\npage. Absent means false."
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        }
+      },
+      "required": [
+        "items",
+        "generation",
+        "phase"
+      ],
+      "description": "A page of rows."
+    },
+    "FileRow": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileChangedRow"
+        },
+        {
+          "$ref": "#/$defs/FileOperationRow"
+        }
+      ],
+      "description": "`recording.files.list` row: the shape depends on `tab`."
+    },
+    "FileChangedRow": {
+      "type": "object",
+      "properties": {
+        "file_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Every name seen."
+        },
+        "inode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`device:inode`."
+        },
+        "standard_io": {
+          "type": "boolean"
+        },
+        "created": {
+          "type": "boolean"
+        },
+        "deleted": {
+          "type": "boolean"
+        },
+        "original_size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "final_size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "diff_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "reconstruction": {
+          "$ref": "#/$defs/Reconstruction"
+        },
+        "bytes_written": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "bytes_not_captured": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "bytes_unknown": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "guest_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "earlier": {
+          "$ref": "#/$defs/EarlierState"
+        },
+        "first_guest_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "last_guest_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "file_id",
+        "path",
+        "names",
+        "standard_io",
+        "created",
+        "deleted",
+        "diff_count",
+        "complete",
+        "reconstruction",
+        "bytes_written",
+        "bytes_not_captured",
+        "bytes_unknown",
+        "earlier",
+        "first_guest_ns",
+        "last_guest_ns"
+      ],
+      "description": "A row of the `changed` tab. All U."
+    },
+    "Reconstruction": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "incomplete",
+        "not reconstructed"
+      ],
+      "description": "How completely a changed file could be reconstructed."
+    },
+    "EarlierState": {
+      "type": "string",
+      "enum": [
+        "copied",
+        "created",
+        "not_copied",
+        "elsewhere",
+        "unavailable",
+        "pending"
+      ],
+      "description": "`file_before_store::Status`, plus `pending` while the layer is."
+    },
+    "FileOperationRow": {
+      "type": "object",
+      "properties": {
+        "file_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "path_known": {
+          "type": "boolean"
+        },
+        "old_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "new_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "type": "string",
+          "description": "The call as the tables name it."
+        },
+        "via": {
+          "$ref": "#/$defs/FileVia"
+        },
+        "success": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "access": {
+          "type": "string"
+        },
+        "fd": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "read_size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "written_size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "requested_size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "offset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/U64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "interpreter": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "For a script."
+        },
+        "content": {
+          "type": "string",
+          "description": "The captured first octets as a lossy text preview, at most 256\ncharacters."
+        },
+        "content_gap": {
+          "type": "boolean"
+        },
+        "process": {
+          "$ref": "#/$defs/ProcessRef"
+        },
+        "guest_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "ts_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "ref": {
+          "$ref": "#/$defs/CallRef"
+        }
+      },
+      "required": [
+        "file_id",
+        "path",
+        "path_known",
+        "operation",
+        "via",
+        "access",
+        "count",
+        "content",
+        "content_gap",
+        "process",
+        "guest_ns",
+        "ref"
+      ],
+      "description": "A row of an operation tab (`opened`, `created`, `read`, `written`,\n`deleted`, `renamed`, `executed`, `attributes`, `probed`, `other`). All U."
+    },
+    "FileVia": {
+      "type": "string",
+      "enum": [
+        "syscall",
+        "io_uring",
+        "AIO"
+      ]
+    },
+    "Single6": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileVersions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent while `building`."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "generation",
+        "phase"
+      ],
+      "description": "A single result (`recording.run.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
+    },
+    "FileVersions": {
+      "type": "object",
+      "properties": {
+        "versions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FileVersion"
+          }
+        }
+      },
+      "required": [
+        "versions"
+      ],
+      "description": "The content of `recording.files.versions`."
+    },
+    "FileVersion": {
+      "type": "object",
+      "properties": {
+        "version_id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/VersionKind"
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "#/$defs/EarlierState"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "version_id",
+        "kind",
+        "size",
+        "available",
+        "status"
+      ],
+      "description": "`recording.files.versions`."
+    },
+    "VersionKind": {
+      "type": "string",
+      "enum": [
+        "earlier",
+        "later"
+      ]
+    },
+    "Single7": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NetworkSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent while `building`."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "generation",
+        "phase"
+      ],
+      "description": "A single result (`recording.run.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
+    },
+    "NetworkSummary": {
+      "type": "object",
+      "properties": {
+        "captures": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Capture segments."
+        },
+        "frames": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "endpoints": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "domains": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "urls": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "tls_sessions": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "dns_names": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "http_requests": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "top_endpoints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EndpointRow"
+          },
+          "description": "Ten rows each, by bytes (endpoints) or count. U"
+        },
+        "top_domains": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DomainRow"
+          }
+        },
+        "top_urls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UrlRow"
+          }
+        },
+        "top_tls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TlsRow"
+          }
+        }
+      },
+      "required": [
+        "captures",
+        "frames",
+        "bytes",
+        "endpoints",
+        "domains",
+        "urls",
+        "tls_sessions",
+        "dns_names",
+        "http_requests",
+        "top_endpoints",
+        "top_domains",
+        "top_urls",
+        "top_tls"
+      ],
+      "description": "One row of a `top_*` list: the tab's [`NetworkRow`] shape."
+    },
+    "EndpointRow": {
+      "type": "object",
+      "properties": {
+        "capture": {
+          "type": "string",
+          "description": "A `capture_id` from `recording.network.captures`."
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "ip": {
+          "type": "string"
+        },
+        "port": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "protocol": {
+          "$ref": "#/$defs/TransportProtocol"
+        },
+        "frames": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "country": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "organization": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "first_us": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "last_us": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "frame": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The first frame number."
+        }
+      },
+      "required": [
+        "capture",
+        "endpoint",
+        "ip",
+        "protocol",
+        "frames",
+        "bytes",
+        "first_us",
+        "last_us",
+        "frame"
+      ],
+      "description": "`endpoints` tab. All U."
+    },
+    "TransportProtocol": {
+      "type": "string",
+      "enum": [
+        "tcp",
+        "udp"
+      ]
+    },
+    "DomainRow": {
+      "type": "object",
+      "properties": {
+        "capture": {
+          "type": "string"
+        },
+        "hostname": {
+          "type": "string"
+        },
+        "addresses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NameSource"
+          }
+        },
+        "rcodes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "first_us": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "last_us": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "frame": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "capture",
+        "hostname",
+        "addresses",
+        "count",
+        "sources",
+        "rcodes",
+        "first_us",
+        "last_us",
+        "frame"
+      ],
+      "description": "`domains` tab. All U."
+    },
+    "NameSource": {
+      "type": "string",
+      "enum": [
+        "DNS",
+        "HTTP",
+        "TLS"
+      ]
+    },
+    "UrlRow": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "status": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "first_us": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "frame": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "url",
+        "method",
+        "host",
+        "uri",
+        "count",
+        "first_us",
+        "frame"
+      ],
+      "description": "`urls` tab: one row per distinct cleartext request URL. All U."
+    },
+    "TlsRow": {
+      "type": "object",
+      "properties": {
+        "capture": {
+          "type": "string"
+        },
+        "frame": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "time_us": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "sni": {
+          "type": "string"
+        },
+        "alpn": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "version": {
+          "type": "string"
+        },
+        "ja3": {
+          "type": "string"
+        },
+        "ja4": {
+          "type": "string"
+        },
+        "ja3s": {
+          "type": "string"
+        },
+        "cert_sha1": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessions": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "capture",
+        "frame",
+        "time_us",
+        "endpoint",
+        "sni",
+        "alpn",
+        "version",
+        "ja3",
+        "ja4",
+        "ja3s",
+        "sessions"
+      ],
+      "description": "`tls` tab. All U."
+    },
+    "Page7": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NetworkRow"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When cheap."
+        },
+        "total_exact": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False while the recording or a TShark parse is still growing."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when the recording is `interrupted` or an engine limit cut the\npage. Absent means false."
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        }
+      },
+      "required": [
+        "items",
+        "generation",
+        "phase"
+      ],
+      "description": "A page of rows."
+    },
+    "NetworkRow": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EndpointRow"
+        },
+        {
+          "$ref": "#/$defs/DomainRow"
+        },
+        {
+          "$ref": "#/$defs/DnsRow"
+        },
+        {
+          "$ref": "#/$defs/UrlRow"
+        },
+        {
+          "$ref": "#/$defs/TlsRow"
+        },
+        {
+          "$ref": "#/$defs/HttpRow"
+        }
+      ],
+      "description": "`recording.network.list` row: the shape depends on `tab`."
+    },
+    "DnsRow": {
+      "type": "object",
+      "properties": {
+        "hostname": {
+          "type": "string"
+        },
+        "rcodes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "addresses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "first_us": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "frame": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "hostname",
+        "rcodes",
+        "addresses",
+        "count",
+        "first_us",
+        "frame"
+      ],
+      "description": "`dns` tab: the `domains` rows whose `sources` contain `DNS`. All U."
+    },
+    "HttpRow": {
+      "type": "object",
+      "properties": {
+        "capture": {
+          "type": "string"
+        },
+        "frame": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "time_us": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "endpoints": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "status": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "attribution": {
+          "type": "string",
+          "description": "`unknown` unless the socket identity proves it."
+        }
+      },
+      "required": [
+        "capture",
+        "frame",
+        "time_us",
+        "endpoints",
+        "method",
+        "host",
+        "uri",
+        "version",
+        "complete",
+        "attribution"
+      ],
+      "description": "`http` tab. All U."
+    },
+    "Page8": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Capture"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When cheap."
+        },
+        "total_exact": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False while the recording or a TShark parse is still growing."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when the recording is `interrupted` or an engine limit cut the\npage. Absent means false."
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        }
+      },
+      "required": [
+        "items",
+        "generation",
+        "phase"
+      ],
+      "description": "A page of rows."
+    },
+    "Capture": {
+      "type": "object",
+      "properties": {
+        "capture_id": {
+          "type": "string"
+        },
+        "segment": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The order; a snapshot boundary starts a new segment."
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "packets": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "first_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "last_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "state": {
+          "$ref": "#/$defs/ArtifactState"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "L"
+        }
+      },
+      "required": [
+        "capture_id",
+        "segment",
+        "size",
+        "state"
+      ],
+      "description": "`recording.network.captures` item. The host path is L and never sent."
+    },
+    "Page9": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PacketRow"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When cheap."
+        },
+        "total_exact": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False while the recording or a TShark parse is still growing."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when the recording is `interrupted` or an engine limit cut the\npage. Absent means false."
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        }
+      },
+      "required": [
+        "items",
+        "generation",
+        "phase"
+      ],
+      "description": "A page of rows."
+    },
+    "PacketRow": {
+      "type": "object",
+      "properties": {
+        "n": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Frame number from 1."
+        },
+        "time_us": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Capture time, Unix microseconds on the host clock."
+        },
+        "length": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Octets on the wire."
+        },
+        "captured": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "source": {
+          "type": "string",
+          "description": "U"
+        },
+        "destination": {
+          "type": "string"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "info": {
+          "type": "string"
+        },
+        "src_ip": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dst_ip": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "src_port": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "dst_port": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "tcp_flags": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "transport": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PacketTransport"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "n",
+        "time_us",
+        "length",
+        "captured",
+        "source",
+        "destination",
+        "protocol",
+        "info"
+      ],
+      "description": "`recording.network.packets` row (no payload bytes). The columns are\nTShark's defaults, each cut to 256 characters."
+    },
+    "PacketTransport": {
+      "type": "string",
+      "enum": [
+        "tcp",
+        "udp"
+      ]
+    },
+    "Single8": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PacketDetail"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent while `building`."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "generation",
+        "phase"
+      ],
+      "description": "A single result (`recording.run.get`, `summary`, `findings.get`,\n`network.summary`, `trace.get`, `files.versions`, `packet`)."
+    },
+    "PacketDetail": {
+      "type": "object",
+      "properties": {
+        "n": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "frame_len": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "tree": {
+          "$ref": "#/$defs/DetailTree"
+        },
+        "bytes": {
+          "type": "string",
+          "description": "The whole frame, base64."
+        }
+      },
+      "required": [
+        "n",
+        "frame_len",
+        "tree",
+        "bytes"
+      ],
+      "description": "`recording.network.packet`. The whole object is S."
+    },
+    "DetailTree": {
+      "type": "object",
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DetailNode"
+          }
+        },
+        "cut": {
+          "type": "boolean",
+          "description": "The tree was cut."
+        }
+      },
+      "required": [
+        "nodes",
+        "cut"
+      ]
+    },
+    "DetailNode": {
+      "type": "object",
+      "properties": {
+        "depth": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "label": {
+          "type": "string",
+          "description": "Carries decoded payload text. S"
+        },
+        "name": {
+          "type": "string"
+        },
+        "start": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "len": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "end": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "depth",
+        "label",
+        "name",
+        "start",
+        "len",
+        "end"
+      ],
+      "description": "A node of a decoded packet."
+    },
+    "Page10": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TimelineEvent"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When cheap."
+        },
+        "total_exact": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False while the recording or a TShark parse is still growing."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when the recording is `interrupted` or an engine limit cut the\npage. Absent means false."
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        }
+      },
+      "required": [
+        "items",
+        "generation",
+        "phase"
+      ],
+      "description": "A page of rows."
+    },
+    "TimelineEvent": {
+      "type": "object",
+      "properties": {
+        "ts_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "guest_ns": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "kind": {
+          "$ref": "#/$defs/TimelineKind"
+        },
+        "pid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "tier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tier"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For `finding` and `detection`."
+        },
+        "title": {
+          "type": "string",
+          "description": "One line, at most 200 characters. U"
+        },
+        "ref": {
+          "$ref": "#/$defs/TimelineRef"
+        }
+      },
+      "required": [
+        "ts_ms",
+        "kind",
+        "title",
+        "ref"
+      ],
+      "description": "`recording.timeline` item. No merged timeline exists in the engine; this\nobject is composed from the models above."
+    },
+    "TimelineKind": {
+      "type": "string",
+      "enum": [
+        "process_start",
+        "process_exit",
+        "finding",
+        "file",
+        "network",
+        "detection"
+      ]
+    },
+    "TimelineRef": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "finding_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "finding_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "file_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "file_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "capture_id": {
+              "type": "string"
+            },
+            "frame": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "capture_id",
+            "frame"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "detection_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "detection_id"
+          ]
+        },
+        {
+          "$ref": "#/$defs/CallRef"
+        }
+      ],
+      "description": "The row to open, by `kind`: `{finding_id}`, `{file_id}`,\n`{capture_id, frame}`, `{detection_id}` or an invocation `ref`."
+    },
+    "Page11": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CoreInfo"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When cheap."
+        },
+        "total_exact": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False while the recording or a TShark parse is still growing."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when the recording is `interrupted` or an engine limit cut the\npage. Absent means false."
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        }
+      },
+      "required": [
+        "items",
+        "generation",
+        "phase"
+      ],
+      "description": "A page of rows."
+    },
+    "CoreInfo": {
+      "type": "object",
+      "properties": {
+        "core_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ArtifactState"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested_size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "accepted_size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "expected_size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "saved_size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "logical_size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "threads": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Counts only."
+        },
+        "mappings": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "U"
+        }
+      },
+      "required": [
+        "core_id",
+        "state",
+        "warnings"
+      ],
+      "description": "The `CoreReason` spelling is the engine's; carried as text.\n`recording.cores.list` item. Registers, mappings and memory are not sent."
+    },
+    "Page12": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AnalysisSection"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When cheap."
+        },
+        "total_exact": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False while the recording or a TShark parse is still growing."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when the recording is `interrupted` or an engine limit cut the\npage. Absent means false."
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        }
+      },
+      "required": [
+        "items",
+        "generation",
+        "phase"
+      ],
+      "description": "A page of rows."
+    },
+    "AnalysisSection": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/AnalysisKindName"
+        },
+        "state": {
+          "$ref": "#/$defs/AnalysisSectionState"
+        },
+        "summary": {
+          "type": "string",
+          "description": "One sentence. U"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tool names and versions."
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The kept listing."
+        },
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "limits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AnalysisLimitInfo"
+          }
+        },
+        "ghidra": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GhidraInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "state",
+        "summary",
+        "tools",
+        "rows",
+        "bytes",
+        "truncated",
+        "limits"
+      ],
+      "description": "`recording.analysis.list` item (`AnalysisSection`)."
+    },
+    "AnalysisKindName": {
+      "type": "string",
+      "enum": [
+        "metadata",
+        "structures",
+        "strings",
+        "regex",
+        "entropy",
+        "hardening",
+        "rules",
+        "identification",
+        "capabilities",
+        "disassembly",
+        "decompilation",
+        "embedded",
+        "floss",
+        "unpacking"
+      ]
+    },
+    "AnalysisSectionState": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "complete",
+        "partial",
+        "unavailable",
+        "timeout"
+      ]
+    },
+    "AnalysisLimitInfo": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "setting": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "description": "`AnalysisLimit`."
+    },
+    "GhidraInfo": {
+      "type": "object",
+      "properties": {
+        "tool": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "endian": {
+          "type": "string"
+        },
+        "pointer_bits": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "functions": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "instructions": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "language",
+        "endian",
+        "pointer_bits",
+        "functions",
+        "instructions",
+        "note"
+      ],
+      "description": "The companion disassembly of a section (`AnalysisDisassembly`)."
+    },
+    "Page13": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AnalysisRow"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When cheap."
+        },
+        "total_exact": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False while the recording or a TShark parse is still growing."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when the recording is `interrupted` or an engine limit cut the\npage. Absent means false."
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        }
+      },
+      "required": [
+        "items",
+        "generation",
+        "phase"
+      ],
+      "description": "A page of rows."
+    },
+    "AnalysisRow": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "entry": {
+          "$ref": "#/$defs/AnalysisEntry"
+        }
+      },
+      "required": [
+        "index",
+        "entry"
+      ],
+      "description": "A page item of `analysis.section` and `analysis.ghidra`: the listing row\nindex and the entry."
+    },
+    "AnalysisEntry": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "offset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/U64"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "File offset."
+        },
+        "record": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "label",
+        "value"
+      ],
+      "description": "The entry of a listing (`AnalysisEntry`). U"
+    },
+    "AnalysisRecord": {
+      "type": "object",
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "id": {
+          "type": "string"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisLocation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": true
+      },
+      "required": [
+        "revision",
+        "id",
+        "data"
+      ],
+      "description": "The structured record of an entry (`AnalysisData`): `data` is the engine's\nobject with the tag `type`, one of `field`, `section`, `symbol`, `import`,\n`export`, `string`, `entropy`, `property`, `instruction`, `function`,\n`source_line`, `rule_match`, `capability`, `signature`, `floss_string`,\n`layer`, `identification`. Its members are the engine's own, all class U."
+    },
+    "AnalysisLocation": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "`file_offset`, `object_address` or `relative_virtual_address`."
+        },
+        "value": {
+          "type": "string",
+          "description": "A hex string."
+        },
+        "file_range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "description": "Where an analysis record sits in the file."
+    },
+    "FileRange": {
+      "type": "object",
+      "properties": {
+        "offset": {
+          "$ref": "#/$defs/U64"
+        },
+        "len": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "offset",
+        "len"
+      ]
+    },
+    "AnalysisPageNotes": {
+      "type": "object",
+      "properties": {
+        "functions": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/AnalysisFunctionLines"
+          },
+          "description": "Disassembly and decompilation add the functions counted over the whole\nlisting."
+        },
+        "sorted": {
+          "type": "boolean",
+          "description": "False for `disassembly` and `decompilation`: the engine drops `sort`."
+        }
+      },
+      "required": [
+        "sorted"
+      ],
+      "description": "The extras of a page of `analysis.section` and `analysis.ghidra`."
+    },
+    "AnalysisFunctionLines": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "lines": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "name",
+        "address",
+        "lines"
+      ],
+      "description": "One function of a disassembly or decompilation page."
+    },
+    "Page14": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CustodyEntry"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When cheap."
+        },
+        "total_exact": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False while the recording or a TShark parse is still growing."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when the recording is `interrupted` or an engine limit cut the\npage. Absent means false."
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        }
+      },
+      "required": [
+        "items",
+        "generation",
+        "phase"
+      ],
+      "description": "A page of rows."
+    },
+    "CustodyEntry": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Number in the sample's chain, from 1."
+        },
+        "at_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "by": {
+          "type": "string",
+          "description": "`app`, `auto:policy-<name>`, `web:<user>`, `local:<uid>`. U"
+        },
+        "kind": {
+          "type": "string",
+          "description": "One of the names of `custody::KINDS` (plus `automation`)."
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "The members of that `CustodyEvent` variant. A host path in `origin`,\n`path` or `from` is L: a remote reply carries the file name only. U"
+        },
+        "before_chain": {
+          "type": "boolean",
+          "description": "Recorded before the log existed."
+        },
+        "prev": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "seq",
+        "at_ms",
+        "by",
+        "kind",
+        "data",
+        "before_chain",
+        "prev",
+        "hash"
+      ],
+      "description": "`recording.custody.list` item (`EventRow`)."
+    },
+    "Page15": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TerminalRecord"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When cheap."
+        },
+        "total_exact": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False while the recording or a TShark parse is still growing."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when the recording is `interrupted` or an engine limit cut the\npage. Absent means false."
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        }
+      },
+      "required": [
+        "items",
+        "generation",
+        "phase"
+      ],
+      "description": "A page of rows."
+    },
+    "TerminalRecord": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "output"
+            },
+            "data_b64": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data_b64"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "resize"
+            },
+            "rows": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "cols": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0,
+              "maximum": 65535
+            }
+          },
+          "required": [
+            "kind",
+            "rows",
+            "cols"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "eof"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ],
+      "description": "`recording.terminal.replay` item. Sample-controlled bytes: render only in a\nterminal widget. U"
+    },
+    "Page16": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RecordingArtifact"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "When cheap."
+        },
+        "total_exact": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "False while the recording or a TShark parse is still growing."
+        },
+        "generation": {
+          "$ref": "#/$defs/Generation"
+        },
+        "phase": {
+          "$ref": "#/$defs/RecordingPhase"
+        },
+        "partial": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when the recording is `interrupted` or an engine limit cut the\npage. Absent means false."
+        },
+        "building": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Building"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "untrusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "True when rows carry strings that came from the sample or the guest\n(5.2): escape them on display."
+        }
+      },
+      "required": [
+        "items",
+        "generation",
+        "phase"
+      ],
+      "description": "A page of rows."
+    },
+    "RecordingArtifact": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/RecordingArtifactId"
+        },
+        "kind": {
+          "$ref": "#/$defs/RecordingArtifactKind"
+        },
+        "name": {
+          "type": "string",
+          "description": "The relative file name."
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sha256Hex"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Empty past the hashing limit."
+        },
+        "sensitive": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "size",
+        "sensitive"
+      ],
+      "description": "`recording.artifact.list` item. `telemetry.raw`, `manifest.json`,\n`events.json` and the `objects/` store are the recorder's internal format\nand are not listed."
+    },
+    "RecordingArtifactId": {
+      "type": "string",
+      "pattern": "^ra_[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "description": "The identifier of a file of a recording."
+    },
+    "RecordingArtifactKind": {
+      "type": "string",
+      "enum": [
+        "terminal_journal",
+        "terminal_screen",
+        "run_record",
+        "artifacts_record",
+        "triage_digest",
+        "analysis_report",
+        "network_capture",
+        "memory_dump",
+        "core_dump",
+        "file_before"
+      ],
+      "description": "What a file of the recording is."
+    },
+    "RunFilter": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "vm_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sample_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sha256Hex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "job_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunStateName"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "since_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "description": "`recording.run.list`. Newest first; not sortable."
+    },
+    "RunParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        }
+      },
+      "required": [
+        "run_key"
+      ],
+      "description": "`recording.run.get`, `recording.summary`, `recording.network.summary`,\n`recording.network.captures`, `recording.cores.list`,\n`recording.artifact.list`: the run alone."
+    },
+    "TracePageParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "pid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "q": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hide_groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SyscallGroupName"
+          }
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run_key"
+      ],
+      "description": "`recording.trace.page`: raw-file byte offset order, not sortable."
+    },
+    "TraceGetParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "ref": {
+          "$ref": "#/$defs/CallRef"
+        }
+      },
+      "required": [
+        "run_key",
+        "ref"
+      ],
+      "description": "`recording.trace.get`."
+    },
+    "CapturedReadParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "field": {
+          "type": "string",
+          "description": "From `Invocation`."
+        },
+        "offset": {
+          "$ref": "#/$defs/U64"
+        },
+        "len": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "run_key",
+        "field",
+        "offset",
+        "len"
+      ],
+      "description": "`recording.captured.read`: at most 65 536 bytes. Sensitive."
+    },
+    "ProcessTreeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "root_pid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Default: the run's root `pid`."
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run_key"
+      ],
+      "description": "`recording.process.tree`."
+    },
+    "FindingsListParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "tier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "category": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FindingCategory"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rule": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "q": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run_key"
+      ],
+      "description": "`recording.findings.list`."
+    },
+    "FindingGetParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "finding_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_key",
+        "finding_id"
+      ],
+      "description": "`recording.findings.get`."
+    },
+    "IndicatorsListParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IndicatorKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "matched": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "q": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "defang": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "sort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run_key"
+      ],
+      "description": "`recording.indicators.list`."
+    },
+    "FilesListParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "tab": {
+          "$ref": "#/$defs/FileTab"
+        },
+        "q": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run_key",
+        "tab"
+      ],
+      "description": "`recording.files.list`."
+    },
+    "FileTab": {
+      "type": "string",
+      "enum": [
+        "opened",
+        "created",
+        "read",
+        "written",
+        "deleted",
+        "renamed",
+        "executed",
+        "attributes",
+        "probed",
+        "other",
+        "changed"
+      ],
+      "description": "The tabs of `recording.files.list`."
+    },
+    "FileVersionsParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "file_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_key",
+        "file_id"
+      ],
+      "description": "`recording.files.versions`."
+    },
+    "FileContentParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "version_id": {
+          "type": "string"
+        },
+        "range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ByteRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "run_key",
+        "version_id"
+      ],
+      "description": "`recording.files.content`: at most 1 MiB per call. Sensitive."
+    },
+    "NetworkListParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "tab": {
+          "$ref": "#/$defs/NetworkTab"
+        },
+        "q": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run_key",
+        "tab"
+      ],
+      "description": "`recording.network.list`."
+    },
+    "NetworkTab": {
+      "type": "string",
+      "enum": [
+        "endpoints",
+        "domains",
+        "urls",
+        "tls",
+        "dns",
+        "http"
+      ]
+    },
+    "NetworkPacketsParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "capture_id": {
+          "type": "string"
+        },
+        "filter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run_key",
+        "capture_id"
+      ],
+      "description": "`recording.network.packets`: frame order; `filter` is a Wireshark\ndisplay filter, at most 500 rows per page."
+    },
+    "NetworkPacketParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "capture_id": {
+          "type": "string"
+        },
+        "n": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "run_key",
+        "capture_id",
+        "n"
+      ],
+      "description": "`recording.network.packet`. Sensitive."
+    },
+    "TimelineParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "from_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "to_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "kinds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TimelineKind"
+          }
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run_key"
+      ],
+      "description": "`recording.timeline`: `ts_ms` order, not sortable."
+    },
+    "AnalysisListParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "job_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "description": "`recording.analysis.list`: exactly one of `run_key` (the analysis linked\nto a run) or `job_id` (the host-side analysis of a job)."
+    },
+    "AnalysisSectionParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "job_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/AnalysisKindName"
+        },
+        "q": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "description": "`recording.analysis.section`: at most 1024 rows per page."
+    },
+    "AnalysisGhidraParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "job_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "q": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "description": "`recording.analysis.ghidra`: address order, not sortable."
+    },
+    "CustodyListParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sha256Hex"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "description": "`recording.custody.list`: `sha256` instead of `run_key`, or the run's\nsample when `run_key` is given."
+    },
+    "TerminalReplayParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run_key"
+      ],
+      "description": "`recording.terminal.replay`: at most 256 records; the cursor is a\njournal byte offset."
+    },
+    "ArtifactGetParams2": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_key": {
+          "$ref": "#/$defs/RunKey"
+        },
+        "artifact_id": {
+          "$ref": "#/$defs/RecordingArtifactId"
+        },
+        "range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ByteRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "run_key",
+        "artifact_id"
+      ],
+      "description": "`recording.artifact.get`: at most 1 MiB per call; a capture, memory\ndump, core or file copy is sensitive."
     }
   }
 }
