@@ -8,7 +8,7 @@
 //!   auto-cycle run --bundle DIR --data DIR --out DIR --case NAME
 //!       [--strategy reset|snapshot_disk|snapshot_full] [--workload few|many|hang|none]
 //!       [--cycles N] [--ram MIB] [--disk GIB] [--user-run] [--no-route] [--keep]
-//!       [--run-limit SECONDS] [--desktop]
+//!       [--run-limit SECONDS] [--desktop] [--probe-analysis]
 //!   auto-cycle compat --data DIR
 //!       tries to resume the VM's Full snapshot with a non-headless host
 //!       (the E16 question); the refusal comes before any window opens.
@@ -17,6 +17,15 @@
 //! sample library, launch it on the Drop route, run under a time limit,
 //! collect (stop, flush, wait for the run layer) and report. `--keep` keeps
 //! the data directory. Benign programs only.
+//!
+//! `<out>/<case>.trace.jsonl` is the fixture a fake engine replays: one JSON
+//! object per line with `t` (seconds since the engine started) and `dir`:
+//! `command` (`id`, `name`, `detail`), `note` (a `Notification`: `kind` is
+//! `snapshot` with a `digest` that is written only when it changes,
+//! `command_result`, `run_started`, `analysis_updated`, `terminal`,
+//! `terminal_screen`, or `run_layer_file` with `present`, which is the layer
+//! marker `run-layer.json` seen on disk) or `meta` (stage marks of this
+//! driver). `<case>.summary.json` has the per-stage seconds of every cycle.
 use antinomie_monitor_core::{
     Backend, BackendOptions, Command, ExecRequest, GuestCredentials, Notification,
     RunArtifactState, RunArtifacts, RunIn, Snapshot, SnapshotRequest, VmConfig, VmSnapshotMode,
@@ -116,8 +125,10 @@ impl Lab {
                         "state": format!("{:?}", run.state), "path": run.request.path}));
                 }
                 Notification::AnalysisUpdated { run_id, report } => {
-                    self.log(json!({"dir": "note", "kind": "analysis_updated", "run": run_id,
-                        "state": format!("{:?}", report.state)}));
+                    self.log(
+                        json!({"dir": "note", "kind": "analysis_updated", "run": run_id,
+                        "state": format!("{:?}", report.state)}),
+                    );
                 }
                 Notification::Terminal {
                     run_id,
@@ -152,7 +163,7 @@ impl Lab {
     fn send(&mut self, command: Command) -> Result<u64, String> {
         let name = format!("{command:?}");
         let name = name
-            .split(|c| c == '(' || c == ' ' || c == '{')
+            .split(['(', ' ', '{'])
             .next()
             .unwrap_or("")
             .to_owned();
@@ -276,6 +287,7 @@ struct Config {
     keep: bool,
     limit: u64,
     desktop: bool,
+    probe_analysis: bool,
 }
 
 fn arg_value(args: &[String], name: &str) -> Option<String> {
@@ -294,15 +306,19 @@ fn parse(args: &[String]) -> Result<Config, String> {
         out: need("--out")?.into(),
         case: need("--case")?,
         strategy: arg_value(args, "--strategy").unwrap_or_else(|| "snapshot_disk".into()),
-        cycles: arg_value(args, "--cycles").map_or(Ok(1), |v| v.parse().map_err(|e| format!("{e}")))?,
-        ram: arg_value(args, "--ram").map_or(Ok(1024), |v| v.parse().map_err(|e| format!("{e}")))?,
+        cycles: arg_value(args, "--cycles")
+            .map_or(Ok(1), |v| v.parse().map_err(|e| format!("{e}")))?,
+        ram: arg_value(args, "--ram")
+            .map_or(Ok(1024), |v| v.parse().map_err(|e| format!("{e}")))?,
         disk: arg_value(args, "--disk").map_or(Ok(4), |v| v.parse().map_err(|e| format!("{e}")))?,
         // "many" needs root to overwrite system data files.
         root: workload == "many" && !args.iter().any(|a| a == "--user-run"),
         route: !args.iter().any(|a| a == "--no-route"),
         keep: args.iter().any(|a| a == "--keep"),
-        limit: arg_value(args, "--run-limit").map_or(Ok(120), |v| v.parse().map_err(|e| format!("{e}")))?,
+        limit: arg_value(args, "--run-limit")
+            .map_or(Ok(120), |v| v.parse().map_err(|e| format!("{e}")))?,
         desktop: args.iter().any(|a| a == "--desktop"),
+        probe_analysis: args.iter().any(|a| a == "--probe-analysis"),
         workload,
     })
 }
@@ -338,6 +354,24 @@ fn qcow_files(path: &Path) -> usize {
         .unwrap_or(0)
 }
 
+/// Layers behind the newest qcow2 file under `snapshots/`, by
+/// `qemu-img info --backing-chain`; None when there is none or it cannot be read.
+fn chain_depth(snapshots: &Path) -> Option<usize> {
+    let newest = std::fs::read_dir(snapshots)
+        .ok()?
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "qcow2"))
+        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())?
+        .path();
+    let output = std::process::Command::new("qemu-img")
+        .args(["info", "--backing-chain", "--force-share", "--output=json"])
+        .arg(&newest)
+        .output()
+        .ok()?;
+    let chain: Value = serde_json::from_slice(&output.stdout).ok()?;
+    chain.as_array().map(Vec::len)
+}
+
 #[allow(clippy::too_many_lines)]
 fn run_case(config: &Config) -> Result<Value, String> {
     std::fs::create_dir_all(&config.out).map_err(|e| e.to_string())?;
@@ -361,8 +395,10 @@ fn run_case(config: &Config) -> Result<Value, String> {
         layer_file: None,
         layer_seen: None,
     };
-    lab.log(json!({"dir": "meta", "case": config.case, "strategy": config.strategy,
-        "workload": config.workload, "cycles": config.cycles}));
+    lab.log(
+        json!({"dir": "meta", "case": config.case, "strategy": config.strategy,
+        "workload": config.workload, "cycles": config.cycles}),
+    );
     lab.settle(|_| true, 1)?;
     thread::sleep(Duration::from_millis(500));
     lab.pump();
@@ -398,7 +434,12 @@ fn run_case(config: &Config) -> Result<Value, String> {
     )?;
     setup.insert("create_vm_s", took);
     lab.settle(|s| s.vms.len() > vms_before, 30)?;
-    let vm_id = lab.snapshot.vms.last().map(|v| v.id.clone()).ok_or("VM missing")?;
+    let vm_id = lab
+        .snapshot
+        .vms
+        .last()
+        .map(|v| v.id.clone())
+        .ok_or("VM missing")?;
     let location = lab
         .snapshot
         .vm_locations
@@ -427,8 +468,16 @@ fn run_case(config: &Config) -> Result<Value, String> {
     } else {
         // Boot once to the point a clean lane would be at, then freeze.
         let begun = Instant::now();
-        lab.command(Command::Start { vm_id: vm_id.clone() }, 900)?;
-        lab.settle(|s| s.state == VmState::Running && s.guest_kernel.is_some(), 300)?;
+        lab.command(
+            Command::Start {
+                vm_id: vm_id.clone(),
+            },
+            900,
+        )?;
+        lab.settle(
+            |s| s.state == VmState::Running && s.guest_kernel.is_some(),
+            300,
+        )?;
         prep.insert("first_boot_s", begun.elapsed().as_secs_f64());
         let full = config.strategy == "snapshot_full";
         if !full {
@@ -461,7 +510,14 @@ fn run_case(config: &Config) -> Result<Value, String> {
             600,
         )?;
         prep.insert("create_snapshot_s", begun.elapsed().as_secs_f64());
-        lab.settle(|s| s.vm_snapshot_trees.get(&vm_id).is_some_and(|t| !t.nodes.is_empty()), 30)?;
+        lab.settle(
+            |s| {
+                s.vm_snapshot_trees
+                    .get(&vm_id)
+                    .is_some_and(|t| !t.nodes.is_empty())
+            },
+            30,
+        )?;
         let id = lab.snapshot.vm_snapshot_trees[&vm_id]
             .nodes
             .iter()
@@ -513,7 +569,12 @@ fn run_case(config: &Config) -> Result<Value, String> {
         let resumed = config.strategy != "reset";
         if !resumed {
             let begun = Instant::now();
-            lab.command(Command::Start { vm_id: vm_id.clone() }, 900)?;
+            lab.command(
+                Command::Start {
+                    vm_id: vm_id.clone(),
+                },
+                900,
+            )?;
             stage.insert("start_command_s", begun.elapsed().as_secs_f64());
         }
         let begun = Instant::now();
@@ -645,6 +706,30 @@ fn run_case(config: &Config) -> Result<Value, String> {
         stage.insert("stop_command_s", begun.elapsed().as_secs_f64());
         lab.settle(|s| s.state == VmState::Stopped, 120)?;
         stage.insert("stopped_s", begun.elapsed().as_secs_f64());
+        // Host-side analysis of the library copy needs no guest, but the only
+        // command that analyses a file asks the running guest for it.
+        let analyze_after_stop = if config.probe_analysis && cycle == 1 {
+            let selection = antinomie_monitor_core::analysis::AnalysisSelection {
+                enabled: true,
+                ..Default::default()
+            };
+            Some(
+                match lab.command(
+                    Command::AnalyzeOnly {
+                        path: guest_path.clone(),
+                        uid: 1000,
+                        gid: 1000,
+                        analysis: selection,
+                    },
+                    30,
+                ) {
+                    Ok((message, _)) => format!("ok: {message}"),
+                    Err(error) => format!("refused: {error}"),
+                },
+            )
+        } else {
+            None
+        };
         lab.settle(|s| s.recording_flush.is_none(), 1800)?;
         stage.insert("flush_done_s", begun.elapsed().as_secs_f64());
         let layer_file = lab.layer_file.clone();
@@ -659,25 +744,33 @@ fn run_case(config: &Config) -> Result<Value, String> {
             lab.pump();
             thread::sleep(Duration::from_millis(50));
         }
-        stage.insert("layer_wait_after_flush_s", layer_begun.elapsed().as_secs_f64());
+        stage.insert(
+            "layer_wait_after_flush_s",
+            layer_begun.elapsed().as_secs_f64(),
+        );
         stage.insert("stop_to_layer_settled_s", begun.elapsed().as_secs_f64());
         stage.insert("collect_s", collect_begun.elapsed().as_secs_f64());
         stage.insert("cycle_s", cycle_begun.elapsed().as_secs_f64());
         lab.log(json!({"dir": "meta", "kind": "cycle_end", "cycle": cycle}));
 
-        let final_run = lab
-            .snapshot
-            .runs
-            .iter()
-            .find(|r| r.id == run.id)
-            .cloned();
-        let text = String::from_utf8_lossy(lab.terminals.get(&run.id).map_or(&[][..], |d| d)).into_owned();
+        let final_run = lab.snapshot.runs.iter().find(|r| r.id == run.id).cloned();
+        let text =
+            String::from_utf8_lossy(lab.terminals.get(&run.id).map_or(&[][..], |d| d)).into_owned();
         let tree = lab.snapshot.vm_snapshot_trees.get(&vm_id);
         let (disk_bytes, disk_files) = dir_stats(&location.disk_directory);
         let snapshots_dir = location.disk_directory.join("snapshots");
         let (rec_bytes, _) = dir_stats(&location.recording_directory);
         cycles.push(json!({
             "cycle": cycle,
+            // What the analyse and report stages need to find the evidence.
+            "handoff": {
+                "vm_id": vm_id, "boot_id": run.boot_id, "run_id": run.id,
+                "run_directory": run.directory,
+                "recording_directory": location.recording_directory,
+                "sample_sha256": sha256,
+                "digest_file_present": run.directory.join("triage-digest.json").exists(),
+                "artifacts_json_present": run.directory.join("artifacts.json").exists(),
+            },
             "stages": stage,
             "layer_pending_before_stop": layer_before_stop,
             "layer_pending_at_flush_done": layer_at_flush,
@@ -689,6 +782,8 @@ fn run_case(config: &Config) -> Result<Value, String> {
             "terminal_tail": clip(&text.chars().rev().take(200).collect::<String>().chars().rev().collect::<String>(), 200),
             "snapshot_nodes": tree.map(|t| t.nodes.len()),
             "qcow2_files_in_snapshots_dir": qcow_files(&snapshots_dir),
+            "backing_chain_depth": chain_depth(&snapshots_dir),
+            "analyze_only_after_stop": analyze_after_stop,
             "vm_disk_dir_bytes": disk_bytes,
             "vm_disk_dir_files": disk_files,
             "recording_dir_bytes": rec_bytes,
