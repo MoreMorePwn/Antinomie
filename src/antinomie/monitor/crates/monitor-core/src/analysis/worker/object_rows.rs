@@ -147,12 +147,10 @@ fn needed_rows(section: &mut AnalysisSection, specimen: &[u8]) {
         structured_entry(
             section,
             "Needed library",
-            library.clone(),
+            library,
             None,
-            AnalysisData::Import {
-                name: None,
-                library: Some(library),
-                ordinal: None,
+            AnalysisData::Field {
+                group: "Needed libraries".into(),
             },
         );
     }
