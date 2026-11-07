@@ -448,7 +448,8 @@ impl Default for Choices {
             parts: Part::ALL.to_vec(),
             formats: vec![Format::Html, Format::Pdf],
             bundle: false,
-            defang: false,
+            // The readable formats defang by default, like the sample report.
+            defang: true,
             folder: String::new(),
         }
     }

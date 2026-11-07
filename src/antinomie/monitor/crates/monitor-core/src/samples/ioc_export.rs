@@ -4,7 +4,9 @@
 //! report's MISP and STIX 2.1 writers turn into an event and a bundle. CSV
 //! cells that could run as a formula are defused; the defang option rewrites
 //! the indicator values (`hxxp`, `[.]`) in the CSV and JSON, never in MISP or
-//! STIX, which keep raw values for tools.
+//! STIX, which keep raw values for tools. The app writes the files raw (the
+//! JSON says `"defanged": false`): a defanged value fed to a blocklist is
+//! useless, and the readable reports are where defanging belongs.
 use super::ioc_union::SampleIoc;
 use crate::{
     ioc::export::{cell, when},
