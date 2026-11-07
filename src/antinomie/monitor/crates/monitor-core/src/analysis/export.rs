@@ -105,10 +105,10 @@ pub fn export_analysis(
         } else {
             writeln!(
                 out,
-                "Antinomie static analysis\nReport: {}\nSource: {}\nState: {:?}\nSHA-256: {}",
+                "Antinomie static analysis\nReport: {}\nSource: {}\nState: {}\nSHA-256: {}",
                 report.id,
                 report.source_path,
-                report.state,
+                state_word(report.state),
                 report.specimen_sha256.as_deref().unwrap_or("Unavailable")
             )
             .map_err(|e| e.to_string())?;
@@ -131,9 +131,9 @@ pub fn export_analysis(
             } else {
                 writeln!(
                     out,
-                    "\n{} ({:?})\n{}",
+                    "\n{} ({})\n{}",
                     section.kind.label(),
-                    section.state,
+                    section_state_word(section.state),
                     section.summary
                 )
                 .map_err(|e| e.to_string())?;
@@ -148,9 +148,9 @@ pub fn export_analysis(
                     if !first {
                         out.write_all(b",").map_err(|e| e.to_string())?;
                     }
-                    serde_json::to_writer(&mut out, entry).map_err(|e| e.to_string())?;
+                    serde_json::to_writer(&mut out, &readable(entry)).map_err(|e| e.to_string())?;
                 } else {
-                    text_row(&mut out, entry).map_err(|e| e.to_string())?;
+                    text_row(&mut out, &readable(entry)).map_err(|e| e.to_string())?;
                 }
                 first = false;
                 Ok(())
@@ -197,6 +197,94 @@ fn visit_rows(
         }
     }
     Ok(())
+}
+
+fn state_word(state: super::AnalysisState) -> &'static str {
+    use super::AnalysisState as S;
+    match state {
+        S::Acquiring => "acquiring",
+        S::Queued => "queued",
+        S::Running => "running",
+        S::Complete => "complete",
+        S::Partial => "partial",
+        S::Unavailable => "unavailable",
+        S::Cancelled => "cancelled",
+    }
+}
+
+fn section_state_word(state: super::AnalysisSectionState) -> &'static str {
+    use super::AnalysisSectionState as S;
+    match state {
+        S::Pending => "pending",
+        S::Running => "running",
+        S::Complete => "complete",
+        S::Partial => "partial",
+        S::Unavailable => "unavailable",
+        S::Timeout => "timed out",
+    }
+}
+
+/// The object header's values as words (`Elf` is `ELF`, `X86_64` is `x86-64`).
+fn header_value(label: &str, value: &str) -> Option<String> {
+    Some(
+        match (label, value) {
+            ("Format", "Elf") => "ELF",
+            ("Format", "MachO") => "Mach-O",
+            ("Format", "Pe") => "PE",
+            ("Format", "Coff") => "COFF",
+            ("Format", "Xcoff") => "XCOFF",
+            ("Format", "Wasm") => "WebAssembly",
+            ("Architecture", "X86_64") => "x86-64",
+            ("Architecture", "I386") => "x86 (32-bit)",
+            ("Architecture", "Aarch64") => "AArch64 (ARM64)",
+            ("Architecture", "Arm") => "ARM (32-bit)",
+            ("Architecture", "Riscv64") => "RISC-V 64",
+            ("Architecture", "Riscv32") => "RISC-V 32",
+            ("Architecture", "Mips") => "MIPS",
+            ("Architecture", "Mips64") => "MIPS64",
+            ("Object kind", "Executable") => "executable",
+            ("Object kind", "Dynamic") => "shared object",
+            ("Object kind", "Relocatable") => "relocatable object",
+            ("Object kind", "Core") => "core dump",
+            ("Object kind", "Unknown") => "unknown",
+            ("Endianness", "Little") => "little-endian",
+            ("Endianness", "Big") => "big-endian",
+            _ => return None,
+        }
+        .to_owned(),
+    )
+}
+
+/// The entry as an export reads it: the section flags as words (`alloc,
+/// write`) and the header values spelled out, not Rust's debug output.
+fn readable(entry: &AnalysisEntry) -> AnalysisEntry {
+    let mut out = entry.clone();
+    match entry.record.as_ref().map(|record| &record.data) {
+        Some(AnalysisData::Section {
+            name,
+            virtual_size,
+            raw_flags,
+            flags,
+            ..
+        }) => {
+            let words = if flags.is_empty() {
+                "none".to_owned()
+            } else {
+                flags
+                    .iter()
+                    .map(|flag| flag.to_ascii_lowercase().replace('_', " "))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            out.value = format!("{name}; size {virtual_size}; flags {words} ({raw_flags})");
+        }
+        _ => {
+            if let Some(value) = header_value(&entry.label, &entry.value) {
+                out.value = value;
+            }
+        }
+    }
+    out
 }
 
 fn text_row(out: &mut impl Write, entry: &AnalysisEntry) -> std::io::Result<()> {
