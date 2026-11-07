@@ -119,11 +119,13 @@ pub(in crate::app::samples_page) fn section(
             .unwrap_or(PAGE);
         ui.horizontal(|ui| {
             ui.label(RichText::new("Filter").color(theme::muted()));
-            ui.add(
+            let edit = ui.add(
                 egui::TextEdit::singleline(&mut filter)
                     .hint_text(crate::theme::placeholder(ui, "path or state"))
+                    .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                     .desired_width(crate::theme::plain_edit_width(220.0)),
             );
+            crate::widgets::clear_button(ui, &edit, &mut filter);
         });
         let needle = filter.trim().to_lowercase();
         let shown: Vec<&Row> = rows

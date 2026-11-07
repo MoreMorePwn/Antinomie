@@ -202,6 +202,9 @@ struct Settings {
     /// Start on a VM with no snapshot asks first (Settings > Notifications).
     /// The question's "Don't ask me again" turns it off. On by default.
     warn_no_snapshot: bool,
+    /// Clear in Activity asks first (Settings > Notifications). The question's
+    /// "Don't ask me again" turns it off. On by default.
+    warn_clear_activity: bool,
     /// The size the activity graph's window opened at last, in points.
     graph_window: [f32; 2],
     /// How the activity graph spaces findings along its time axis.
@@ -333,6 +336,7 @@ impl Default for Settings {
             toast_high_findings: false,
             toast_run_finished: true,
             warn_no_snapshot: true,
+            warn_clear_activity: true,
             graph_window: crate::triage::GRAPH_WINDOW_SIZE,
             graph_spacing: Default::default(),
             report_export: Default::default(),
@@ -368,6 +372,8 @@ enum Confirm {
     StartWithoutSnapshot(String),
     /// Quit while jobs run: the list shows what would stop.
     Quit,
+    /// Clear the Activity log.
+    ClearActivity,
 }
 
 #[derive(Clone, Copy, PartialEq)]

@@ -307,8 +307,9 @@ impl SamplesView {
                                     "Hash, file type (elf, pe32) or a word in file names and sources",
                             }
                         )))
-                        .margin(theme::TEXT_EDIT_MARGIN),
+                        .margin(crate::widgets::clear_margin(theme::TEXT_EDIT_MARGIN)),
                 );
+                crate::widgets::clear_button(ui, &edit, &mut self.text);
                 if ready
                     && edit.lost_focus()
                     && ui.input(|input| input.key_pressed(egui::Key::Enter))

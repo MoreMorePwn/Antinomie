@@ -261,7 +261,7 @@ impl Open {
             self.cache_at = self.map.position();
         }
         let mut open = true;
-        let shown = egui::Window::new("File reconstruction")
+        let shown = crate::widgets::capped(egui::Window::new("File reconstruction"), ctx)
             .id(egui::Id::new("file-reconstruction-window"))
             .open(&mut open)
             .default_size(egui::vec2(1020.0, 720.0) + crate::widgets::frame_extra(ctx))

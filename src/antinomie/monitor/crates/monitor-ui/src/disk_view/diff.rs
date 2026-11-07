@@ -578,13 +578,14 @@ impl DiskView {
                     changed_filter = true;
                 }
             }
-            changed_filter |= ui
-                .add(
-                    egui::TextEdit::singleline(&mut diff.filter.text)
-                        .desired_width(crate::theme::plain_edit_width(200.0))
-                        .hint_text(crate::theme::placeholder(ui, "path contains")),
-                )
-                .changed();
+            let edit = ui.add(
+                egui::TextEdit::singleline(&mut diff.filter.text)
+                    .desired_width(crate::theme::plain_edit_width(200.0))
+                    .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
+                    .hint_text(crate::theme::placeholder(ui, "path contains")),
+            );
+            changed_filter |= edit.changed();
+            changed_filter |= crate::widgets::clear_button(ui, &edit, &mut diff.filter.text);
             changed_filter |= ui
                 .checkbox(
                     &mut diff.filter.hide_metadata,

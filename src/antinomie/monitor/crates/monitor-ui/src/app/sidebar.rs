@@ -464,5 +464,12 @@ impl MonitorApp {
     pub(super) fn activity(&mut self, ui: &mut egui::Ui) {
         self.activity.ingest(ui.ctx());
         self.activity.show(ui);
+        if self.activity.take_clear_asked() {
+            if self.settings.warn_clear_activity {
+                self.confirm = Some(Confirm::ClearActivity);
+            } else {
+                self.activity.clear();
+            }
+        }
     }
 }

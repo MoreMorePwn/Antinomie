@@ -954,6 +954,106 @@ pub(crate) mod tests {
         .1
     }
 
+    /// One frame of the whole Snapshots window (not just its dialog).
+    fn window_frame(
+        ctx: &egui::Context,
+        manager: &mut SnapshotManager,
+        tree: &VmSnapshotTree,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events,
+                ..Default::default()
+            },
+            |root| {
+                let ctx = &root.ctx().clone();
+                let _ = manager.show(ctx, Some(tree), None, true);
+            },
+        )
+    }
+
+    fn click_at(
+        ctx: &egui::Context,
+        manager: &mut SnapshotManager,
+        tree: &VmSnapshotTree,
+        size: egui::Vec2,
+        pos: egui::Pos2,
+    ) {
+        for pressed in [None, Some(true), Some(false)] {
+            let mut events = vec![egui::Event::PointerMoved(pos)];
+            if let Some(pressed) = pressed {
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            window_frame(ctx, manager, tree, size, events);
+        }
+    }
+
+    /// The details buttons of the Snapshots window open the Restore question
+    /// (B1 of the evaluation: they appeared to do nothing).
+    #[test]
+    fn the_window_buttons_open_the_restore_question() {
+        // The wide layout; below 740 points the details sit under the graph and
+        // scroll into view.
+        for size in [egui::vec2(1400.0, 900.0), egui::vec2(1150.0, 800.0)] {
+            for (button, boot_from_disk) in [
+                ("Resume disk + memory…", false),
+                ("Restore disk and boot…", true),
+            ] {
+                let ctx = context();
+                let tree = fixture();
+                let mut manager = SnapshotManager::default();
+                manager.bind("vm", "Analyst");
+                manager.selected = Some("sample".into());
+                for _ in 0..40 {
+                    window_frame(&ctx, &mut manager, &tree, size, Vec::new());
+                }
+                let output = window_frame(&ctx, &mut manager, &tree, size, Vec::new());
+                let close = text_rect(&output, "Close");
+                let shown: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some((
+                            text.galley.text().to_owned(),
+                            text.galley.rect.translate(text.pos.to_vec2()),
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(
+                    shown.iter().any(|(text, _)| text == button),
+                    "{button} not drawn at {size:?}; Close at {close:?}; {shown:?}"
+                );
+                let at = text_rect(&output, button).center();
+                click_at(&ctx, &mut manager, &tree, size, at);
+                assert!(manager.decision_open(), "{button} at {size:?}");
+                match &manager.decision {
+                    Some(Decision::Restore {
+                        id,
+                        boot_from_disk: boot,
+                        ..
+                    }) => assert!(id == "sample" && *boot == boot_from_disk),
+                    _ => panic!("no restore question after {button}"),
+                }
+                // The question is drawn, inside the screen.
+                let output = window_frame(&ctx, &mut manager, &tree, size, Vec::new());
+                let title = text_rect(&output, "Restore snapshot");
+                assert!(
+                    title.left() >= 0.0 && title.right() <= size.x && title.bottom() <= size.y,
+                    "{title:?} in {size:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn restore_confirmation_saves_current_atomically_and_cancel_has_no_command() {
         let ctx = context();

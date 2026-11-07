@@ -24,11 +24,13 @@ pub(crate) fn guide(ctx: &egui::Context) {
             ui.label("Bare words search the row; text compares are case-sensitive, lower(field) ignores case.");
             let query_id = egui::Id::new("filter-guide-query");
             let mut query = ui.ctx().data(|data| data.get_temp::<String>(query_id).unwrap_or_default());
-            ui.add(
+            let edit = ui.add(
                 egui::TextEdit::singleline(&mut query)
                     .hint_text(crate::theme::placeholder(ui, "Search fields, operators, schema argument names, syscall names"))
+                    .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                     .desired_width(f32::INFINITY),
             );
+            crate::widgets::clear_button(ui, &edit, &mut query);
             let needle = query.to_lowercase();
             ui.ctx().data_mut(|data| data.insert_temp(query_id, query));
             ui.add_space(6.0);

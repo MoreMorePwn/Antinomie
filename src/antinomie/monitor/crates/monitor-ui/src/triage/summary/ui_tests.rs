@@ -1436,3 +1436,170 @@ fn native_family_fixture() {
     )
     .unwrap();
 }
+
+/// The user's run 4ccf6396: six processes of interest, the first with a name
+/// of about 70 characters, left a wide gap under the row.
+fn long_interest() -> Vec<relations::model::Interest> {
+    use crate::triage::rules::Tier;
+    let item = |pid: u32, label: &str, tier: Tier, findings: u32| relations::model::Interest {
+        key: (pid, u64::from(pid)),
+        label: label.into(),
+        tier: Some(tier),
+        findings,
+        warn: false,
+    };
+    vec![
+        item(
+            1351,
+            "d1cdeea8-d1cdeea8a081397632c0522476da2122f93c71cb14a36ad4 (1351)",
+            Tier::High,
+            3,
+        ),
+        item(1355, "systemctl (1355)", Tier::High, 1),
+        item(1352, "sh (1352)", Tier::Low, 1),
+        item(1353, "which (1353)", Tier::Low, 1),
+        item(1354, "sh (1354)", Tier::Low, 1),
+        item(1379, "sh (1379)", Tier::Low, 1),
+    ]
+}
+
+#[test]
+fn many_long_processes_of_interest_stay_a_compact_row() {
+    let (_files, view) = fixture();
+    let scan = view.scan.as_ref().unwrap();
+    for width in [1920.0_f32, 1280.0, 760.0] {
+        let ctx = context(16.0);
+        let mut height = 0.0;
+        let mut out = None;
+        for _ in 0..4 {
+            out = Some(ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 600.0),
+                    )),
+                    ..Default::default()
+                },
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
+                        let mut acts = Vec::new();
+                        height = ui
+                            .scope(|ui| panels::interest_row(ui, &long_interest(), scan, &mut acts))
+                            .response
+                            .rect
+                            .height();
+                    });
+                },
+            ));
+        }
+        let line = ctx.global_style().spacing.interact_size.y;
+        // Six items and the count fit in two or three lines at most.
+        assert!(
+            height <= line * 3.4,
+            "{height} tall at {width}: a gap under the row"
+        );
+        for (text, rect) in texts(&out.unwrap()) {
+            assert!(rect.right() <= width, "{text:?} past the window");
+        }
+    }
+}
+
+/// The Summary's one-line rows with the long process list of run 4ccf6396,
+/// for screenshots under Xvfb. `ANTINOMIE_QA_LEGACY=1` draws the processes
+/// the way they were drawn before 0.8.3 (each in a nested row of its own).
+#[test]
+#[ignore = "requires owned isolated X11; Summary rows screenshot fixture"]
+fn native_interest_row_fixture() {
+    use winit::platform::x11::EventLoopBuilderExtX11;
+    struct Fixture {
+        view: TriageView,
+        deadline: std::time::Instant,
+        legacy: bool,
+        _files: PacketSpool,
+    }
+    impl eframe::App for Fixture {
+        fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+            let ctx = root.ctx().clone();
+            egui::CentralPanel::default().show(root, |ui| {
+                let mut acts = Vec::new();
+                presentation::frame().show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    panels::attack_row(ui, 0, &[]);
+                    if self.legacy {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 10.0;
+                            ui.label(
+                                egui::RichText::new("Processes of interest")
+                                    .strong()
+                                    .color(theme::heading()),
+                            );
+                            for item in long_interest() {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 10.0;
+                                    let color = item.tier.map_or(theme::muted(), |t| t.color());
+                                    ui.add(
+                                        crate::widgets::dot::DotLabel::new(
+                                            color,
+                                            format!("\u{d7}{}", item.findings),
+                                        )
+                                        .text_color(color),
+                                    );
+                                    rows::item(ui, &[rows::Part::Value(&item.label)], "Open");
+                                });
+                            }
+                            rows::counted_item(
+                                ui,
+                                &[("of 8 processes".to_owned(), false)],
+                                "Open the Process tree",
+                            );
+                        });
+                    } else {
+                        panels::interest_row(
+                            ui,
+                            &long_interest(),
+                            self.view.scan.as_ref().unwrap(),
+                            &mut acts,
+                        );
+                    }
+                    panels::files_row(ui, self.view.scan.as_ref().unwrap(), &mut acts);
+                    panels::network_row(ui, self.view.scan.as_ref().unwrap(), &mut acts);
+                });
+            });
+            if std::time::Instant::now() > self.deadline {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+    let (files, view) = fixture();
+    let width = std::env::var("ANTINOMIE_QA_WIDTH")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(1280.0);
+    let legacy = std::env::var("ANTINOMIE_QA_LEGACY").is_ok_and(|value| value == "1");
+    eframe::run_native(
+        "Antinomie summary rows QA",
+        eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_inner_size([width, 220.0])
+                .with_position([16.0, 16.0]),
+            persist_window: false,
+            event_loop_builder: Some(Box::new(|builder| {
+                builder.with_x11();
+                builder.with_any_thread(true);
+            })),
+            ..Default::default()
+        },
+        Box::new(move |cc| {
+            theme::install(&cc.egui_ctx);
+            theme::text_size(&cc.egui_ctx, 16.0);
+            Ok(Box::new(Fixture {
+                view,
+                deadline: std::time::Instant::now() + std::time::Duration::from_secs(10),
+                legacy,
+                _files: files,
+            }))
+        }),
+    )
+    .unwrap();
+}

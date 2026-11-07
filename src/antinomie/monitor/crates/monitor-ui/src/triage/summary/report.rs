@@ -385,7 +385,7 @@ pub(super) fn content(
                 ui.set_width(ui.available_width());
                 panels::attack_row(ui, attack.len(), &attack_details);
                 if let Some(built) = &state.built {
-                    panels::interest_row(ui, built, scan, &mut acts);
+                    panels::interest_row(ui, &built.interest, scan, &mut acts);
                 }
                 panels::files_row(ui, scan, &mut acts);
                 panels::network_row(ui, scan, &mut acts);

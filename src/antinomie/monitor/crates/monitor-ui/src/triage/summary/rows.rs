@@ -11,8 +11,6 @@ pub(super) enum Part<'a> {
     Value(&'a str),
     /// Secondary information (country, organization, type, hash): muted.
     Note(&'a str),
-    /// A name in the normal text colour and the text font (a process).
-    Name(&'a str),
 }
 
 /// A clickable item. It does not look like a link; hovering it underlines
@@ -25,7 +23,6 @@ pub(super) fn item(ui: &mut egui::Ui, parts: &[Part<'_>], hint: &str) -> bool {
             let text = match part {
                 Part::Value(text) => RichText::new(*text).monospace().color(theme::text()),
                 Part::Note(text) => RichText::new(*text).color(theme::muted()),
-                Part::Name(text) => RichText::new(*text).color(theme::text()),
             };
             ui.add(egui::Label::new(if hot { text.underline() } else { text }).selectable(false));
         }

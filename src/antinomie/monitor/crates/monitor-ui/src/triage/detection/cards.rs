@@ -40,7 +40,7 @@ pub(super) fn match_cards(
     let mut opened = None;
     egui::ScrollArea::vertical()
         .id_salt("detection-matches")
-        .max_height(320.0)
+        .max_height(list_height(ui))
         .auto_shrink([false, true])
         .show(ui, |ui| {
             let mut draw = |ui: &mut egui::Ui, rows: &[&Vec<Cell>], from: usize| {
@@ -95,6 +95,20 @@ pub(in crate::triage) fn yara_strength(
         &pack_name(report, finding),
         &crate::triage::digest::yara_family(report.engine, &finding.rule_text),
     )
+}
+
+/// The least height the match list is given, however short the pane.
+const MIN_LIST_HEIGHT: f32 = 240.0;
+
+/// How tall the match list may be: what is left of the page's visible height
+/// below the point it starts at, so it fills the pane and grows when the
+/// Details, Activity and Jobs pane folds away. The page scrolls when the
+/// list's start is lower than that.
+pub(super) fn list_height(ui: &egui::Ui) -> f32 {
+    // The distance from the top of the page's content, not of the screen:
+    // scrolling the page must not change the list.
+    let used = ui.cursor().top() - ui.min_rect().top();
+    (ui.clip_rect().height() - used).max(MIN_LIST_HEIGHT)
 }
 
 /// "Sort by" and its menu, drawn inline on the row the table filter shares.
@@ -604,6 +618,71 @@ mod tests {
             unreachable!()
         };
         (report, view.rows[0].clone())
+    }
+
+    /// The match list takes the page's visible height below its start, so it
+    /// grows when the Details, Activity and Jobs pane folds away (a taller
+    /// pane) instead of stopping at a fixed 320 points.
+    #[test]
+    fn the_match_list_fills_the_pane_at_two_heights() {
+        let findings: Vec<_> = (0..60)
+            .map(|n| finding(&format!("r{n}"), &format!("Rule {n}"), vec![bytes_at(n)]))
+            .collect();
+        let mut view = View::default();
+        view.results[0] = Some(Ok(report(findings)));
+        view.rows(0);
+        let Some(Ok(report)) = view.results[0].clone() else {
+            unreachable!()
+        };
+        let mut lists = Vec::new();
+        for height in [560.0_f32, 1000.0] {
+            let ctx = egui::Context::default();
+            let mut list = egui::Rect::NOTHING;
+            for _ in 0..3 {
+                let _ = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(900.0, height),
+                        )),
+                        ..Default::default()
+                    },
+                    |root| {
+                        egui::CentralPanel::default().show(root, |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("page")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.label("Matches");
+                                    ui.add_space(40.0);
+                                    list = ui
+                                        .scope(|ui| {
+                                            let _ = match_cards(
+                                                ui,
+                                                &report,
+                                                TABLES[0],
+                                                &view.rows[0],
+                                                MatchSort::default(),
+                                            );
+                                        })
+                                        .response
+                                        .rect;
+                                });
+                        });
+                    },
+                );
+            }
+            // It ends at the bottom of the pane, give or take the panel's margin.
+            assert!(list.bottom() <= height, "{list:?} in {height}");
+            assert!(list.bottom() >= height - 30.0, "{list:?} in {height}");
+            lists.push(list.height());
+        }
+        assert!(lists[0] >= MIN_LIST_HEIGHT - 1.0, "{lists:?}");
+        assert!(lists[1] > lists[0] + 380.0, "{lists:?}");
+        assert!(
+            lists[1] > 320.0 * 2.0,
+            "more than the old fixed height: {lists:?}"
+        );
     }
 
     fn titles(report: &Report, rows: &[Vec<Cell>], sort: MatchSort) -> Vec<String> {

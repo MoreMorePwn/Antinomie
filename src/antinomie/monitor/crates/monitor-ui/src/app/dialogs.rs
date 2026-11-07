@@ -4,6 +4,8 @@ use super::*;
 
 /// The "Don't ask me again" tick of the no-snapshot question, until it closes.
 const DONT_ASK_NO_SNAPSHOT: &str = "start_no_snapshot_dont_ask";
+/// The "Don't ask me again" tick of the Activity clear question.
+const DONT_ASK_CLEAR_ACTIVITY: &str = "clear_activity_dont_ask";
 
 impl MonitorApp {
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
@@ -446,6 +448,12 @@ impl MonitorApp {
                     "Start anyway",
                     false,
                 ),
+                Confirm::ClearActivity => (
+                    "Clear Activity",
+                    "Clear the saved Activity log, including the entries the Info, Warn and Error filters hide? This cannot be undone.",
+                    "Clear",
+                    true,
+                ),
                 Confirm::DebugKill => (
                     "Detach and kill",
                     "Detach the debugger and end the debugged process with SIGKILL? Its state is lost; the VM keeps running.",
@@ -491,6 +499,13 @@ impl MonitorApp {
                             .on_hover_text("Start will not ask again for any VM. Settings > Notifications turns the question back on.");
                         ui.data_mut(|data| data.insert_temp(id, dont_ask));
                     }
+                    if matches!(confirm, Confirm::ClearActivity) {
+                        let id = egui::Id::new(DONT_ASK_CLEAR_ACTIVITY);
+                        let mut dont_ask = ui.data(|data| data.get_temp::<bool>(id)).unwrap_or(false);
+                        ui.checkbox(&mut dont_ask, "Don't ask me again")
+                            .on_hover_text("Clear will not ask again. Settings > Notifications turns the question back on.");
+                        ui.data_mut(|data| data.insert_temp(id, dont_ask));
+                    }
                     if matches!(confirm, Confirm::Quit) {
                         let lines = self.quit_lines();
                         if lines.is_empty() {
@@ -527,7 +542,7 @@ impl MonitorApp {
                                     && self.running()
                                     && self.snapshot.memory_dump.is_none()
                             }
-                            Confirm::Quit => true,
+                            Confirm::Quit | Confirm::ClearActivity => true,
                             Confirm::StartWithoutSnapshot(vm_id) => {
                                 self.snapshot.active_vm.is_none()
                                     && self.selected.as_ref() == Some(vm_id)
@@ -582,6 +597,13 @@ impl MonitorApp {
                             }
                             self.send(Command::Start { vm_id });
                         }
+                        Confirm::ClearActivity => {
+                            let id = egui::Id::new(DONT_ASK_CLEAR_ACTIVITY);
+                            if ctx.data(|data| data.get_temp::<bool>(id)).unwrap_or(false) {
+                                self.settings.warn_clear_activity = false;
+                            }
+                            self.activity.clear();
+                        }
                         Confirm::Quit => {
                             self.quit_confirmed = true;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -593,7 +615,10 @@ impl MonitorApp {
                 self.confirm = None;
             }
             if self.confirm.is_none() {
-                ctx.data_mut(|data| data.remove_temp::<bool>(egui::Id::new(DONT_ASK_NO_SNAPSHOT)));
+                ctx.data_mut(|data| {
+                    data.remove_temp::<bool>(egui::Id::new(DONT_ASK_NO_SNAPSHOT));
+                    data.remove_temp::<bool>(egui::Id::new(DONT_ASK_CLEAR_ACTIVITY));
+                });
             }
         }
     }

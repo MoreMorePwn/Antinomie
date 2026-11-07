@@ -103,7 +103,11 @@ fn capture_selection(
 ) {
     let core_supported = capabilities.core_on_exit;
     ui.add_space(12.0);
-    crate::theme::section(ui, "Memory");
+    crate::theme::section(ui, "Dumps");
+    // The trigger comes first; the dumps taken when the program exits sit
+    // below its options.
+    trigger_selection(ui, request, capabilities);
+    ui.add_space(6.0);
     ui.checkbox(&mut request.memory_dump_on_exit, "Memory Dump on Exit")
         .on_hover_text("Dump VM RAM after the process tree exits. This is post-exit VM memory, not a process core.");
     let core_enabled = core_supported && request.run_in == RunIn::AppTerminal;
@@ -129,7 +133,6 @@ fn capture_selection(
                 .wrap(),
         );
     }
-    trigger_selection(ui, request, capabilities);
     ui.add_space(12.0);
     crate::theme::section(ui, "Network");
     // A VM without a network card has nothing to capture: the box is off
@@ -226,8 +229,6 @@ fn trigger_selection(
     capabilities: LaunchCapabilities,
 ) {
     use antinomie_monitor_core::dump_trigger::{DumpTrigger, TriggerTier};
-    ui.add_space(12.0);
-    crate::theme::section(ui, "Triggers");
     let mut on = request.dump_trigger.is_some();
     ui.checkbox(&mut on, "Dump when suspicious activity is seen")
         .on_hover_text("While the program runs, the Triage rules judge each call as it arrives. The first match at or above the chosen tier takes the dump you pick, within the budget below. The program is not stopped; a memory dump pauses the VM while QEMU writes it.");
