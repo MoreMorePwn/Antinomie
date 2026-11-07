@@ -563,10 +563,18 @@ impl State {
             "/etc/os-release"
             | "/usr/lib/os-release"
             | "/proc/version"
-            | "/proc/meminfo"
             | "/etc/hostname"
-            | "/etc/issue"
-            | "/proc/cpuinfo" => Some(("discovery.system_info", "system details")),
+            | "/etc/issue" => Some(("discovery.system_info", "OS and kernel")),
+            "/proc/meminfo" | "/proc/cpuinfo" => Some(("discovery.system_info", "hardware")),
+            p if p.starts_with("/sys/class/dmi/id/")
+                || p.starts_with("/sys/hypervisor")
+                || hardware_cpu_file(p) =>
+            {
+                Some(("discovery.system_info", "hardware"))
+            }
+            "/proc/self/mountinfo" | "/proc/1/mountinfo" => {
+                Some(("discovery.system_info", "mounts and container"))
+            }
             "/etc/resolv.conf" | "/proc/net/route" | "/proc/net/arp" | "/proc/net/dev"
             | "/proc/net/if_inet6" | "/proc/net/fib_trie" => {
                 Some(("discovery.network_config", "network configuration"))
@@ -590,7 +598,10 @@ impl State {
                 task.resolver_reads > 1
             };
             if (cx.ok || cx.failed) && !repeated {
-                out.push(Hit::new(rule, what, format!("{} reads {path}", cx.name)));
+                out.push(
+                    Hit::new(rule, what, format!("{} reads {path}", cx.name))
+                        .detail(format!("Read {path}")),
+                );
             }
         }
         if let Some(rest) = path.strip_prefix("/proc/") {
@@ -653,6 +664,20 @@ impl State {
             ));
         }
     }
+}
+
+/// A CPU sysfs file a program reads to learn what the processor is. The
+/// counts and cache sizes the C library and runtimes read at startup
+/// (`online`, `possible`, `present`, `cpu*/cache/`) are not discovery.
+fn hardware_cpu_file(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/sys/devices/system/cpu/") else {
+        return false;
+    };
+    !(matches!(
+        rest,
+        "online" | "offline" | "possible" | "present" | "kernel_max"
+    ) || rest.contains("/cache/")
+        || rest.is_empty())
 }
 
 fn task_ended(cx: &Ctx) -> bool {

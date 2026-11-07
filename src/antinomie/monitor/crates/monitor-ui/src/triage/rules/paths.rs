@@ -956,6 +956,20 @@ fn fallback(cx: &Ctx, out: &mut Vec<Hit>) {
         if via_pseudo(path) {
             continue;
         }
+        // An open for writing changes nothing; the write that follows does. An
+        // O_CREAT open that only found its name unseen may have found the file
+        // already there; O_EXCL, O_TMPFILE and O_TRUNC leave a mark either way.
+        let marks = super::super::sigma_events::O_EXCL
+            | super::super::sigma_events::O_TMPFILE
+            | super::super::sigma_events::O_TRUNC;
+        let bare_open = match touch.op {
+            Op::Opened => true,
+            Op::Created => cx.open_flags().is_some_and(|flags| flags & marks == 0),
+            _ => false,
+        };
+        if bare_open {
+            continue;
+        }
         let place = file_location::classify(path, &[]);
         let configuration = place.contains(&file_location::Location::Persistence)
             || path.starts_with("/etc/")

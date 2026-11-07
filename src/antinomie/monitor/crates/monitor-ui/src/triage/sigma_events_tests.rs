@@ -123,6 +123,36 @@ fn auditd<'a>(events: &'a [Fields], kind: &str) -> Vec<&'a Fields> {
 }
 
 #[test]
+fn a_child_that_execs_before_its_vfork_returns_still_names_its_parent() {
+    let calls = [
+        exec(1, "/bin/sh", &["sh", "-c", "ls"]),
+        // The child execs, and only then does the parent's vfork return.
+        exec(42, "/bin/ls", &["ls", "-l"]),
+        tests::call(1, 58, "vfork", 42),
+    ];
+    let mut whole = std::collections::BTreeMap::new();
+    observe_processes(&mut whole, &calls);
+    for settled in [false, true] {
+        let mut files = FdState::default();
+        files.journal.root_cookie = 1;
+        if settled {
+            files.settled_parents = process_tree::settled_parents(&whole);
+        }
+        let events = run(&mut files, &calls);
+        let child = &of(&events, "process_creation")[1]["fields"];
+        assert_eq!(
+            child.get("ParentProcessId").is_some(),
+            settled,
+            "settled {settled}"
+        );
+        if settled {
+            assert_eq!(child["ParentProcessId"], 1);
+            assert_eq!(child["ParentImage"], "/bin/sh");
+        }
+    }
+}
+
+#[test]
 fn a_child_exec_names_its_parent_and_the_launch_directory() {
     let mut files = FdState::default();
     files.journal.launch_cwd = Some("/work".into());

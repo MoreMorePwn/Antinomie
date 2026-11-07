@@ -31,10 +31,13 @@ impl Change {
         if has("Created") {
             roles.push("created");
         }
-        if self
-            .hash
-            .as_ref()
-            .is_some_and(|hash| hash.kind == HashKind::Write)
+        // The guest hashes a file when its last writer closes it, written or
+        // not: the role needs a write, cut, copy or shared mapping as well.
+        if self.wrote()
+            && self
+                .hash
+                .as_ref()
+                .is_some_and(|hash| hash.kind == HashKind::Write)
         {
             roles.push("written at close");
         } else if has("Written") {

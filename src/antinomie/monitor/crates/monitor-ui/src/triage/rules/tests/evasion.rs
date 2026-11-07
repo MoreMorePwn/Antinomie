@@ -626,3 +626,116 @@ fn argv_that_is_not_a_disguise_raises_no_argv_finding() {
     assert!(has(&daemon, "evasion.masquerade_daemon"));
     assert!(!has(&daemon, "evasion.argv_masquerade"));
 }
+
+fn prctl_name(name: Option<&str>) -> InvocationSummary {
+    let call = sys(1, 157, "prctl", [15, 0, 0, 0, 0, 0], 0);
+    match name {
+        Some(name) => with_path(call, "arg1.name", name),
+        None => call,
+    }
+}
+
+#[test]
+fn a_process_that_renames_itself_is_low_and_an_imitation_is_medium() {
+    let run_with = |calls: Vec<InvocationSummary>| {
+        let mut all = vec![exec(1, "/tmp/x", &["x"])];
+        all.extend(calls);
+        run(all)
+    };
+    let plain = run_with(vec![prctl_name(Some("worker-1"))]);
+    assert_eq!(
+        tier(&plain, "evasion.process_rename").as_deref(),
+        Some("low")
+    );
+    assert_eq!(
+        list(
+            rows(&plain, "evasion.process_rename")[0],
+            "finding.technique"
+        ),
+        ["T1036.005"]
+    );
+    assert!(!has(&plain, "evasion.masquerade_daemon"));
+    assert!(!has(&plain, "evasion.argv_masquerade"));
+    for name in ["[kworker/0:1]", "sshd", "systemd"] {
+        let out = run_with(vec![prctl_name(Some(name))]);
+        assert_eq!(
+            tier(&out, "evasion.process_rename").as_deref(),
+            Some("medium"),
+            "{name}"
+        );
+    }
+    // A name the recording did not capture still fires, and says so.
+    let blind = run_with(vec![prctl_name(None)]);
+    let row = rows(&blind, "evasion.process_rename")[0];
+    assert!(
+        text(row, "finding.summary").contains("not recorded")
+            || text(row, "finding.object").contains("not recorded")
+    );
+    // A failed prctl renamed nothing.
+    let failed = run_with(vec![with_path(
+        sys(1, 157, "prctl", [15, 0, 0, 0, 0, 0], -22),
+        "arg1.name",
+        "x",
+    )]);
+    assert!(!has(&failed, "evasion.process_rename"));
+    // PR_SET_DUMPABLE is another option.
+    assert!(!has(
+        &run_with(vec![sys(1, 157, "prctl", [4, 1, 0, 0, 0, 0], 0)]),
+        "evasion.process_rename"
+    ));
+}
+
+#[test]
+fn a_write_to_the_own_comm_file_renames_the_process() {
+    for path in [
+        "/proc/self/comm",
+        "/proc/1/comm",
+        "/proc/thread-self/comm",
+        "/proc/self/task/7/comm",
+    ] {
+        let out = run(vec![
+            exec(1, "/tmp/x", &["x"]),
+            open(1, path, 1, 3),
+            write(1, 3, b"kworker/0:0"),
+        ]);
+        assert_eq!(
+            tier(&out, "evasion.process_rename").as_deref(),
+            Some("medium"),
+            "{path}"
+        );
+    }
+    // Another process's comm is not a rename of this one.
+    let other = run(vec![
+        exec(1, "/tmp/x", &["x"]),
+        open(1, "/proc/4242/comm", 1, 3),
+        write(1, 3, b"worker"),
+    ]);
+    assert!(!has(&other, "evasion.process_rename"));
+    // Reading comm is not renaming.
+    let read_only = run(vec![
+        exec(1, "/tmp/x", &["x"]),
+        open_read(1, "/proc/self/comm", 3),
+    ]);
+    assert!(!has(&read_only, "evasion.process_rename"));
+    let attr = run(vec![
+        exec(1, "/tmp/x", &["x"]),
+        open(1, "/proc/self/attr/exec", 1, 3),
+        write(1, 3, b"unconfined"),
+    ]);
+    assert_eq!(
+        tier(&attr, "evasion.process_rename").as_deref(),
+        Some("low")
+    );
+}
+
+#[test]
+fn renaming_and_argv_zero_are_separate_findings_in_one_process() {
+    let out = run(vec![
+        exec(1, "/tmp/x", &["/usr/bin/python3", "-c", "x"]),
+        prctl_name(Some("python3")),
+    ]);
+    assert!(has(&out, "evasion.process_rename"));
+    assert!(has(&out, "evasion.argv_masquerade"));
+    assert_eq!(rows(&out, "evasion.process_rename").len(), 1);
+    assert_eq!(rows(&out, "evasion.argv_masquerade").len(), 1);
+}

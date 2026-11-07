@@ -569,6 +569,13 @@ pub(in crate::triage) const SPECS: &[Spec] = &[
         &["T1036.005"],
     ),
     rule(
+        "evasion.process_rename",
+        1,
+        T::Low,
+        C::Evasion,
+        &["T1036.005"],
+    ),
+    rule(
         "evasion.sandbox_probe",
         1,
         T::Medium,

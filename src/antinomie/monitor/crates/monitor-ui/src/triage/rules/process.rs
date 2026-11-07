@@ -89,9 +89,31 @@ pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
                 format!("{}: work through a ring makes few system calls", cx.name),
             ));
         }
-        "bpf" | "ioctl" => bpf_program(cx, st, out),
+        "bpf" | "ioctl" => {
+            bpf_program(cx, st, out);
+            network_ioctl(cx, out);
+        }
+        "sendto" => netlink_query(cx, out),
+        "uname"
+            if cx.ok
+                && !matches!(cx.image_name(), "uname")
+                && !cx.image_name().starts_with("ld-") =>
+        {
+            out.push(
+                Hit::new(
+                    "discovery.system_info",
+                    "OS and kernel",
+                    "uname asks for the kernel name, release and machine".into(),
+                )
+                .detail("uname"),
+            );
+        }
         "clone" | "fork" | "vfork" | "clone3" => forks(cx, st, out),
-        "write" => dirty_pipe(cx, st, out),
+        "write" => {
+            dirty_pipe(cx, st, out);
+            comm_write(cx, out);
+        }
+        "pwrite64" => comm_write(cx, out),
         "splice" => splice(cx, st),
         _ => {}
     }
@@ -246,10 +268,136 @@ fn prctl(cx: &Ctx, out: &mut Vec<Hit>) {
         }
         15 => {
             let name = cx.text(1).unwrap_or_default();
+            let before = out.len();
             masquerade(&name, cx.image_name(), "prctl(PR_SET_NAME)", out);
+            if cx.ok {
+                renamed(cx, &name, "prctl(PR_SET_NAME)", out.len() > before, out);
+            }
         }
         _ => {}
     }
+}
+
+/// The process gave itself a new name: `prctl(PR_SET_NAME)` or a write to its
+/// `comm` file. LOW; MEDIUM when the name imitates a kernel thread or a daemon.
+/// An empty `name` is a name the recording did not capture.
+fn renamed(cx: &Ctx, name: &str, how: &str, imitates: bool, out: &mut Vec<Hit>) {
+    let shown = if name.is_empty() {
+        "new name not recorded".to_owned()
+    } else {
+        format!("{name:?}")
+    };
+    let mut hit = Hit::new(
+        "evasion.process_rename",
+        if name.is_empty() {
+            "(not recorded)"
+        } else {
+            name
+        },
+        format!("{how} renames {} to {shown}", cx.image_name()),
+    )
+    .detail(format!("Program: {}", cx.image_name()));
+    if imitates {
+        hit = hit
+            .tier(Tier::Medium)
+            .detail("The new name imitates a kernel thread or a system daemon: MEDIUM. The same call is also listed under its own rule.");
+    }
+    out.push(hit);
+}
+
+/// A write to the task's own `comm` file renames it; one to `attr/` changes
+/// its security label.
+fn comm_write(cx: &Ctx, out: &mut Vec<Hit>) {
+    if !cx.ok {
+        return;
+    }
+    let Some(path) = cx.fd_path(cx.args[0]) else {
+        return;
+    };
+    let path = super::ctx::proc_self(path, cx.event.pid);
+    if path == "/proc/self/comm"
+        || (path.starts_with("/proc/self/task/") && path.ends_with("/comm"))
+    {
+        let data = cx.payload(false);
+        let name = String::from_utf8_lossy(&data);
+        let name = name.trim_end_matches(['\n', '\0']).to_owned();
+        let before = out.len();
+        masquerade(&name, cx.image_name(), "write to comm", out);
+        renamed(
+            cx,
+            &name,
+            "a write to /proc/self/comm",
+            out.len() > before,
+            out,
+        );
+    } else if path.starts_with("/proc/self/attr/") {
+        out.push(
+            Hit::new(
+                "evasion.process_rename",
+                path.clone(),
+                format!("a write to {path} changes the process's security attributes"),
+            )
+            .detail(format!("Program: {}", cx.image_name())),
+        );
+    }
+}
+
+/// `ioctl` calls that list the machine's interfaces, addresses and hardware address.
+fn network_ioctl(cx: &Ctx, out: &mut Vec<Hit>) {
+    let what = match cx.args[1] {
+        0x8912 => "SIOCGIFCONF: the list of interfaces",
+        0x8913 => "SIOCGIFFLAGS: an interface's flags",
+        0x8915 => "SIOCGIFADDR: an interface's address",
+        0x8919 => "SIOCGIFBRDADDR: an interface's broadcast address",
+        0x891b => "SIOCGIFNETMASK: an interface's netmask",
+        0x8927 => "SIOCGIFHWADDR: an interface's hardware address",
+        0x8933 => "SIOCGIFINDEX: an interface's index",
+        _ => return,
+    };
+    if cx.ok {
+        out.push(
+            Hit::new(
+                "discovery.network_config",
+                "network configuration",
+                format!("ioctl {what}"),
+            )
+            .detail(format!("ioctl {what}")),
+        );
+    }
+}
+
+/// A route-socket request for the machine's links, addresses or routes
+/// (`RTM_GETLINK`, `RTM_GETADDR`, `RTM_GETROUTE`), as `ip` and `getifaddrs` ask.
+fn netlink_query(cx: &Ctx, out: &mut Vec<Hit>) {
+    const AF_NETLINK: u64 = 16;
+    if !cx.ok
+        || cx
+            .socket(cx.args[0])
+            .is_none_or(|socket| socket.domain != AF_NETLINK)
+    {
+        return;
+    }
+    let Some(kind) = cx
+        .bytes(1, "")
+        .and_then(|bytes| bytes.get(4..6))
+        .map(|kind| u16::from_le_bytes([kind[0], kind[1]]))
+    else {
+        return;
+    };
+    let what = match kind {
+        18 => "RTM_GETLINK: the interfaces",
+        22 => "RTM_GETADDR: the addresses",
+        26 => "RTM_GETROUTE: the routes",
+        _ => return,
+    };
+    out.push(
+        Hit::new(
+            "discovery.network_config",
+            "network configuration",
+            format!("netlink {what}"),
+        )
+        .detail(format!("netlink {what}")),
+    );
 }
 
 /// A process named after a kernel thread or a system daemon.

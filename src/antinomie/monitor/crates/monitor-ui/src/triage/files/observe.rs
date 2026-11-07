@@ -261,6 +261,9 @@ impl FileIndex {
         }
         if !failed {
             let created = hits.iter().any(|hit| hit.category == Category::Created);
+            change.create_certain |= hits
+                .iter()
+                .any(|hit| hit.category == Category::Created && !hit.inferred);
             for hit in hits {
                 if hit.category == Category::Truncated && created {
                     continue;

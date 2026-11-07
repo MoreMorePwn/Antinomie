@@ -453,3 +453,65 @@ fn the_argv_column_quotes_each_argument_and_the_hover_numbers_them() {
     assert!(hover.contains("argv[3] = \u{2026}") && hover.contains("4 arguments, 1 cut short"));
     assert_eq!(process_cells::argv_hover(&[]), None);
 }
+
+/// A `vfork` child that execs at once is recorded before the parent's call
+/// returns, and the parent that made it is often not the process's main
+/// thread (Prometei, 2026-11-07; RotaJakiro, 2026-11-07).
+fn vfork_calls() -> Vec<InvocationSummary> {
+    vec![
+        as_task(exec(1160, "/tmp/p", &["p"]), 1160, 1160, 1),
+        // Thread 1170 of process 1160 runs for a while.
+        as_task(call(1160, 202, "futex", 0), 1160, 1170, 11),
+        // The child execs first: its parent is not known yet.
+        as_task(
+            exec(1171, "/bin/sh", &["sh", "-c", "pgrep x"]),
+            1171,
+            1171,
+            12,
+        ),
+        // Then the thread's vfork returns the child's pid.
+        as_task(sys(1160, 58, "vfork", [0; 6], 1171), 1160, 1170, 11),
+        // Its own child: the grandchild is linked to the sh.
+        as_task(exec(1172, "/bin/pgrep", &["pgrep", "x"]), 1172, 1172, 13),
+        as_task(sys(1171, 58, "vfork", [0; 6], 1172), 1171, 1171, 12),
+    ]
+}
+
+#[test]
+fn a_child_cloned_by_a_thread_hangs_under_the_process_not_the_thread() {
+    let nodes = process_nodes(&vfork_calls());
+    let sh = node(&nodes, 1171, 12);
+    let parent = sh.parent.expect("the sh has a parent");
+    assert_eq!(
+        (parent.pid, parent.cookie),
+        (1160, 1),
+        "the main task, not thread 1170"
+    );
+    assert!(!sh.parent_missing);
+    assert_eq!(sh.depth, 1);
+    let pgrep = node(&nodes, 1172, 13);
+    assert_eq!(pgrep.parent.unwrap().pid, 1171);
+    assert_eq!(pgrep.depth, 2);
+    assert!(node(&nodes, 1160, 11).thread);
+}
+
+#[test]
+fn the_settled_parents_name_the_process_for_a_child_seen_before_its_clone_returned() {
+    let mut nodes = std::collections::BTreeMap::new();
+    // Only the calls before the vfork returned: the sh has no parent yet.
+    observe_processes(&mut nodes, &vfork_calls()[..3]);
+    let sh = TaskKey {
+        pid: 1171,
+        cookie: 12,
+    };
+    assert!(nodes[&sh].parent.is_none());
+    observe_processes(&mut nodes, &vfork_calls()[3..]);
+    let settled = settled_parents(&nodes);
+    assert!(
+        settled[&sh]
+            == TaskKey {
+                pid: 1160,
+                cookie: 1
+            }
+    );
+}
