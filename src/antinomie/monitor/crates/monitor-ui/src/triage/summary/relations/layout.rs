@@ -3,8 +3,8 @@
 //! Each node's subtree has its own width and height, so siblings never pile
 //! into one global column. A process has the processes it started, the files
 //! it wrote or ran and the endpoints it contacted beside it, to its right;
-//! the root is at the top left. A node with many children lays them out in
-//! several lanes side by side, so a big run is a block, not a thin strip.
+//! the root is at the top left. All the children of a node are stacked in the
+//! next column to its right, however many there are.
 use super::model::{EdgeKind, Graph, NodeKind};
 use eframe::egui::{self, Pos2, Rect, Vec2};
 
@@ -13,8 +13,6 @@ pub(super) const NODE: Vec2 = egui::vec2(188.0, 30.0);
 pub(super) const ROW: f32 = 64.0;
 /// From one column to the next.
 pub(super) const COLUMN: f32 = 260.0;
-/// The lane counts tried for a wide node.
-const LANES: [usize; 13] = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32];
 
 const NONE: u32 = u32::MAX;
 
@@ -86,45 +84,6 @@ pub(super) fn tree_parent(
         })
         .min_by_key(|edge| (strength(edge.kind), edge.from))
         .map(|edge| edge.from)
-}
-
-/// The lanes for children of `heights` and `widths` (in columns): the lane
-/// count whose block is nearest a square, and each child's lane.
-fn lanes(heights: &[f32], widths: &[u32]) -> (usize, Vec<usize>) {
-    let count = heights.len();
-    let total: f32 = heights.iter().sum();
-    let assign = |lanes: usize| -> Vec<usize> {
-        let target = total / lanes as f32;
-        let mut before = 0.0;
-        heights
-            .iter()
-            .map(|h| {
-                let lane = (((before + h / 2.0) / target) as usize).min(lanes - 1);
-                before += h;
-                lane
-            })
-            .collect()
-    };
-    if count < 2 {
-        return (1, vec![0; count]);
-    }
-    let mut best = (f32::MAX, 1, vec![0; count]);
-    for lanes in LANES.into_iter().filter(|&lanes| lanes <= count) {
-        let which = assign(lanes);
-        let mut lane_height = vec![0.0f32; lanes];
-        let mut lane_width = vec![0u32; lanes];
-        for (i, &lane) in which.iter().enumerate() {
-            lane_height[lane] += heights[i];
-            lane_width[lane] = lane_width[lane].max(widths[i]);
-        }
-        let wide = lane_width.iter().sum::<u32>() as f32 * COLUMN;
-        let high = lane_height.iter().copied().fold(0.0, f32::max);
-        let ratio = (high / wide).max(wide / high);
-        if ratio < best.0 * 0.75 {
-            best = (ratio, lanes, which);
-        }
-    }
-    (best.1, best.2)
 }
 
 impl Layout {
@@ -203,8 +162,7 @@ impl Layout {
                 }
             }
         }
-        // Bottom up: the size of each subtree and where its children go.
-        let mut width = vec![1u32; m + 1];
+        // Bottom up: the height of each subtree and where its children go.
         let mut high = vec![ROW; m + 1];
         let mut centre = vec![ROW / 2.0; m + 1];
         let mut dx = vec![0.0f32; m + 1];
@@ -215,41 +173,23 @@ impl Layout {
             if kids.is_empty() {
                 continue;
             }
-            let heights: Vec<f32> = kids.iter().map(|&k| high[k as usize]).collect();
-            let widths: Vec<u32> = kids.iter().map(|&k| width[k as usize]).collect();
-            let (count, which) = lanes(&heights, &widths);
-            let mut lane_width = vec![0u32; count];
-            for (i, &lane) in which.iter().enumerate() {
-                lane_width[lane] = lane_width[lane].max(widths[i]);
+            // The children are one column: stacked, one under the other.
+            let mut stacked = 0.0f32;
+            for &k in kids {
+                let k = k as usize;
+                dx[k] = 0.0;
+                dy[k] = stacked;
+                stacked += high[k];
             }
-            let mut lane_x = vec![0u32; count];
-            for lane in 1..count {
-                lane_x[lane] = lane_x[lane - 1] + lane_width[lane - 1];
-            }
-            let mut lane_y = vec![0.0f32; count];
-            for (i, &k) in kids.iter().enumerate() {
-                let lane = which[i];
-                dx[k as usize] = lane_x[lane] as f32 * COLUMN;
-                dy[k as usize] = lane_y[lane];
-                lane_y[lane] += heights[i];
-            }
-            let block = lane_y.iter().copied().fold(0.0, f32::max);
-            width[v] = 1 + lane_width.iter().sum::<u32>();
-            high[v] = block.max(ROW);
-            // Between the first and the last child, or half way down the block
-            // for lanes; but never far below the first child, so the root of a
-            // tall tree is near the top, where the view opens.
+            high[v] = stacked.max(ROW);
+            // Between the first and the last child; but never far below the
+            // top of the column, so the root of a tall tree is near the top,
+            // where the view opens.
             let first = centre[kids[0] as usize];
-            centre[v] = if count == 1 {
-                let (last_at, last) = (
-                    dy[kids[kids.len() - 1] as usize],
-                    kids[kids.len() - 1] as usize,
-                );
-                ((first + last_at + centre[last]) / 2.0).min(first + 3.0 * ROW)
-            } else {
-                (block / 2.0).min(first + 3.0 * ROW)
-            }
-            .clamp(ROW / 2.0, high[v] - ROW / 2.0);
+            let last = kids[kids.len() - 1] as usize;
+            centre[v] = ((first + dy[last] + centre[last]) / 2.0)
+                .min(3.0 * ROW)
+                .clamp(ROW / 2.0, high[v] - ROW / 2.0);
         }
         // Top down: absolute places. The children of a node start one column
         // right of it; the roots start at the left edge.
@@ -316,11 +256,6 @@ mod tests {
         }
     }
 
-    fn aspect(layout: &Layout) -> f32 {
-        let size = layout.bounds.size();
-        (size.x / size.y).max(size.y / size.x)
-    }
-
     #[test]
     fn a_small_run_is_a_tree_from_the_root_with_no_overlap() {
         let graph = Graph::build(&fixture());
@@ -382,9 +317,9 @@ mod tests {
     }
 
     #[test]
-    fn many_children_are_laid_out_in_lanes_not_one_column() {
+    fn many_children_are_one_column_however_many_there_are() {
         let mut facts = fixture();
-        for n in 0..60u32 {
+        for n in 0..150u32 {
             facts.procs.push(Proc {
                 pid: 1000 + n,
                 cookie: 100 + u64::from(n),
@@ -400,39 +335,29 @@ mod tests {
             .filter(|&n| graph.nodes[n].label.starts_with("ls"))
             .map(|n| layout.get(n).unwrap())
             .collect();
-        assert_eq!(ls.len(), 60);
-        let mut columns: Vec<i32> = ls.iter().map(|r| r.left() as i32).collect();
-        columns.sort_unstable();
-        columns.dedup();
-        assert!(columns.len() > 1, "more than one lane");
+        assert_eq!(ls.len(), 150);
         assert!(
-            layout.bounds.height() < 60.0 * ROW,
-            "shorter than one column"
+            ls.iter().all(|r| r.left() == ls[0].left()),
+            "all in one column"
+        );
+        assert!(
+            layout.bounds.height() >= 150.0 * ROW,
+            "a column as tall as its children: {:?}",
+            layout.bounds
         );
     }
 
     #[test]
-    fn a_big_run_is_a_block_not_a_strip() {
+    fn a_big_run_is_placed_without_overlap_in_the_full_view_and_the_grouped_one() {
         let graph = Graph::build(&synthetic(1500, 5000));
         assert!(graph.nodes.len() > 6000);
         let layout = Layout::of(&graph, &all(&graph));
         assert_no_overlap(&layout);
-        assert!(aspect(&layout) < 4.0, "{:?}", layout.bounds.size());
         // The grouped view of the same run, and its capped Full.
         let view = Rendered::compact(&graph, &BTreeSet::new(), 15);
         assert_no_overlap(&view.layout);
-        assert!(
-            aspect(&view.layout) < 4.0,
-            "{:?}",
-            view.layout.bounds.size()
-        );
         let full = Rendered::full(&graph, &graph.expanded(super::super::group::FULL_CAP));
         assert_no_overlap(&full.layout);
-        assert!(
-            aspect(&full.layout) < 4.0,
-            "{:?}",
-            full.layout.bounds.size()
-        );
     }
 
     #[test]

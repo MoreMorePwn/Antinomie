@@ -9,7 +9,8 @@ use super::model::{EdgeKind, Graph, GroupInfo, NodeKind};
 use crate::theme;
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Shape, Stroke, Vec2};
 
-const MIN_ZOOM: f32 = 0.05;
+/// Low enough for Fit all to show about a thousand boxes in one column.
+const MIN_ZOOM: f32 = 0.005;
 const MAX_ZOOM: f32 = 3.0;
 /// The smallest size a graph opens at.
 const READABLE: f32 = 0.6;
@@ -75,9 +76,28 @@ impl Default for View {
 }
 
 impl View {
-    /// The whole graph in the viewport, never enlarged past 1.
+    /// Fit: the whole graph in the viewport (never enlarged past 1) when it
+    /// can be read there; else its width and its top, at a size the names
+    /// can be read at (the root is near the top left). A tall column runs
+    /// off below, reached by scrolling or panning; "Fit all" shows all of it.
     pub(in crate::triage) fn fit(&mut self, viewport: Vec2, bounds: Rect) {
         // The zoom bar sits at the top right: the graph is fitted below it.
+        let top = BAR_HEIGHT + 2.0 * BAR_MARGIN;
+        let room = egui::vec2(viewport.x, (viewport.y - top).max(1.0));
+        let across = (room.x / bounds.width().max(1.0)).clamp(MIN_ZOOM, 1.0);
+        let down = room.y / bounds.height().max(1.0);
+        if across.min(down) >= READABLE || down >= across {
+            self.fit_all(viewport, bounds);
+            return;
+        }
+        let zoom = across.max(READABLE);
+        self.zoom = zoom;
+        self.offset = egui::vec2(-bounds.min.x, top - bounds.min.y) * zoom;
+        self.fitted = true;
+    }
+
+    /// Every box in the viewport, however small that makes them.
+    pub(in crate::triage) fn fit_all(&mut self, viewport: Vec2, bounds: Rect) {
         let top = BAR_HEIGHT + 2.0 * BAR_MARGIN;
         let room = egui::vec2(viewport.x, (viewport.y - top).max(1.0));
         let zoom = (room.x / bounds.width().max(1.0))
@@ -167,17 +187,6 @@ pub(in crate::triage) fn show(
     let viewport = rect.size();
     if !view.fitted && viewport.x > 1.0 {
         view.fit(viewport, layout.bounds);
-        // A graph too big for the box opens at a size the names can be read
-        // at, on the root; "Fit" shows all of it.
-        if view.zoom < READABLE {
-            view.zoom = READABLE;
-            let root = layout
-                .root
-                .and_then(|node| layout.get(node))
-                .map_or(Pos2::ZERO, |at| at.center());
-            view.offset =
-                egui::vec2(viewport.x * 0.22, viewport.y * 0.3) - root.to_vec2() * READABLE;
-        }
     }
     if let Some(pin) = view.pin {
         let now = ui.input(|i| i.time);
@@ -236,12 +245,12 @@ pub(in crate::triage) fn show(
     let button_pad = ui.spacing().button_padding.x * 2.0;
     let gap = BAR_GAP;
     let percent_width = text_width("300%", &small_font);
-    let inner = ["Fit", "+", "\u{2212}"]
+    let inner = ["Fit all", "Fit", "+", "\u{2212}"]
         .iter()
         .map(|text| text_width(text, &button_font) + button_pad)
         .sum::<f32>()
         + percent_width
-        + 3.0 * gap;
+        + 4.0 * gap;
     let bar_size = egui::vec2(
         (inner + 2.0 * BAR_PAD).min(rect.width() - 2.0 * BAR_MARGIN),
         BAR_HEIGHT,
@@ -313,7 +322,9 @@ pub(in crate::triage) fn show(
             color,
             Stroke::NONE,
         ));
-        if scale >= LABELS_FROM {
+        // The label sits at the middle of the edge: left out when that is
+        // out of the box, however long the edge.
+        if scale >= LABELS_FROM && reach.contains(a + (b - a) * 0.5) {
             let text = if edge.count > 1 {
                 format!("{} \u{d7}{}", edge.kind.label(), edge.count)
             } else {
@@ -515,8 +526,15 @@ pub(in crate::triage) fn show(
     zoom_ui.set_clip_rect(visible);
     zoom_ui.spacing_mut().item_spacing.x = BAR_GAP;
     if zoom_ui
+        .small_button("Fit all")
+        .on_hover_text("Show every box, however small")
+        .clicked()
+    {
+        view.fit_all(viewport, layout.bounds);
+    }
+    if zoom_ui
         .small_button("Fit")
-        .on_hover_text("Show the whole graph")
+        .on_hover_text("Show the top of the graph, as wide as the box")
         .clicked()
     {
         view.fit(viewport, layout.bounds);
@@ -924,7 +942,7 @@ mod tests {
             walk(&shape.shape, &mut bars, &mut texts);
         }
         let bar = bars.first().copied().expect("the bar's background");
-        assert!(bar.width() < 180.0, "hugs its buttons: {bar:?}");
+        assert!(bar.width() < 300.0, "hugs its buttons: {bar:?}");
         let text = |wanted: &str| {
             texts
                 .iter()
@@ -932,9 +950,109 @@ mod tests {
                 .map(|(_, r)| *r)
                 .unwrap_or_else(|| panic!("{wanted:?} in the bar"))
         };
-        let (first, last) = (text("\u{2212}"), text("Fit"));
+        let (first, last) = (text("\u{2212}"), text("Fit all"));
         let (left, right) = (first.left() - bar.left(), bar.right() - last.right());
         assert!((left - right).abs() < 2.0, "left {left}, right {right}");
+    }
+
+    /// A parent with `kids` children, each its own box in one column.
+    fn parent_with(kids: u32) -> (Graph, Layout) {
+        use super::super::model::Proc;
+        let mut facts = fixture();
+        for n in 0..kids {
+            facts.procs.push(Proc {
+                pid: 1000 + n,
+                cookie: 100 + u64::from(n),
+                parent: Some((401, 1)),
+                name: format!("kid{n}"),
+                ..Default::default()
+            });
+        }
+        let graph = Graph::build(&facts);
+        let all: Vec<usize> = (0..graph.nodes.len()).collect();
+        let layout = Layout::of(&graph, &all);
+        (graph, layout)
+    }
+
+    fn draw(
+        ctx: &egui::Context,
+        graph: &Graph,
+        layout: &Layout,
+        view: &mut View,
+    ) -> Vec<(String, Rect)> {
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1280.0, 800.0))),
+                ..Default::default()
+            },
+            |root| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(root, |ui| {
+                        show(ui, egui::Id::new("c"), graph, layout, view, 700.0, &[]);
+                    });
+            },
+        );
+        let (mut bars, mut texts) = (Vec::new(), Vec::new());
+        for shape in &out.shapes {
+            walk(&shape.shape, &mut bars, &mut texts);
+        }
+        texts
+    }
+
+    #[test]
+    fn a_parent_with_150_children_is_one_column_fit_reads_the_root_and_fit_all_shows_every_box() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let (graph, layout) = parent_with(150);
+        let kids: Vec<Rect> = (0..graph.nodes.len())
+            .filter(|&n| graph.nodes[n].label.starts_with("kid"))
+            .map(|n| layout.get(n).unwrap())
+            .collect();
+        assert_eq!(kids.len(), 150);
+        assert!(
+            kids.iter().all(|r| r.left() == kids[0].left()),
+            "one column"
+        );
+        let mut view = View::default();
+        let first = draw(&ctx, &graph, &layout, &mut view);
+        // Fit: the root and the first levels are readable.
+        assert!(view.zoom >= READABLE - 1e-3, "{}", view.zoom);
+        let root = layout.root.expect("a root");
+        let name = &graph.nodes[root].label;
+        assert!(
+            first.iter().any(|(text, _)| text.contains(name.as_str())),
+            "the root's label is drawn: {first:?}"
+        );
+        // Culling: only the boxes in view are drawn.
+        assert!(first.len() < 60, "{} texts drawn", first.len());
+        // Fit all: every box inside the view.
+        let viewport = egui::vec2(1280.0, 700.0);
+        view.fit_all(viewport, layout.bounds);
+        let box_rect = Rect::from_min_size(Pos2::ZERO, viewport);
+        for &node in &layout.shown {
+            let at = view.rect_to_screen(Pos2::ZERO, layout.get(node).unwrap());
+            assert!(box_rect.contains_rect(at), "{at:?} outside {box_rect:?}");
+        }
+        let all = draw(&ctx, &graph, &layout, &mut view);
+        assert!(all.len() < 60, "{} texts drawn at Fit all", all.len());
+    }
+
+    #[test]
+    fn fit_all_reaches_a_thousand_boxes_in_one_column() {
+        let (_, layout) = parent_with(1000);
+        let mut view = View::default();
+        let viewport = egui::vec2(1280.0, 700.0);
+        view.fit_all(viewport, layout.bounds);
+        assert!(view.zoom > MIN_ZOOM, "{}", view.zoom);
+        let box_rect = Rect::from_min_size(Pos2::ZERO, viewport);
+        let last = layout
+            .shown
+            .iter()
+            .filter_map(|&n| layout.get(n))
+            .map(|r| view.rect_to_screen(Pos2::ZERO, r))
+            .fold(Rect::NOTHING, |a, b| a.union(b));
+        assert!(box_rect.contains_rect(last), "{last:?}");
     }
 
     #[test]

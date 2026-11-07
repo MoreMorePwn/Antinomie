@@ -734,7 +734,7 @@ fn the_relationships_box_is_compact_or_full_and_has_no_timeline() {
 }
 
 #[test]
-fn a_wide_level_is_laid_out_in_lanes_when_its_group_is_open() {
+fn a_wide_level_is_one_column_when_its_group_is_open() {
     let (_files, mut view) = crowded(40, 0);
     let ctx = context(16.0);
     let out = settle(&ctx, &mut view, WIDE, None);
@@ -756,11 +756,11 @@ fn a_wide_level_is_laid_out_in_lanes_when_its_group_is_open() {
         .filter(|(text, _)| text.contains(" ls ("))
         .map(|(_, rect)| rect)
         .collect();
-    assert!(ls.len() >= 6, "{} visible", ls.len());
+    assert!(ls.len() >= 3, "{} visible", ls.len());
     let mut columns: Vec<i32> = ls.iter().map(|r| r.min.x as i32).collect();
     columns.sort_unstable();
     columns.dedup();
-    assert!(columns.len() > 1, "more than one lane: {ls:?}");
+    assert_eq!(columns.len(), 1, "one column: {ls:?}");
 }
 
 /// The clip rectangle and the place of the text `wanted`, as the page drew it.
@@ -808,7 +808,11 @@ fn the_zoom_controls_are_clipped_with_the_box_when_the_page_scrolls() {
         wheel(&ctx, &mut view, size, egui::pos2(300.0, 200.0), -15.0);
         out = settle(&ctx, &mut view, size, None);
     }
-    assert!(seen, "the controls were drawn at some point {:?}", texts(&out));
+    assert!(
+        seen,
+        "the controls were drawn at some point {:?}",
+        texts(&out)
+    );
     assert!(crossed, "the page scrolled past the top of the box");
 }
 
