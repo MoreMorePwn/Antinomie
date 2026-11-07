@@ -794,6 +794,7 @@ fn the_zoom_controls_are_clipped_with_the_box_when_the_page_scrolls() {
     // Scroll the page past the box a little at a time; in every frame the
     // controls that are drawn are clipped to the page.
     let (mut seen, mut crossed) = (false, false);
+    let mut clock = 1.0;
     for _ in 0..200 {
         for control in ["Fit", "+", "\u{2212}", "100%"] {
             if let Some((clip, rect)) = try_shape(&out, control) {
@@ -805,8 +806,24 @@ fn the_zoom_controls_are_clipped_with_the_box_when_the_page_scrolls() {
                 );
             }
         }
-        wheel(&ctx, &mut view, size, egui::pos2(300.0, 200.0), -15.0);
-        out = settle(&ctx, &mut view, size, None);
+        // Time moves forward: a clock that runs back makes egui's wheel
+        // smoothing apply a huge step, and the page jumps to its end.
+        let at = egui::pos2(300.0, 200.0);
+        let events = vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::MouseWheel {
+                phase: egui::TouchPhase::Move,
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -15.0),
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        out = draw_at(&ctx, &mut view, size, events, clock, None);
+        for _ in 0..4 {
+            clock += 0.02;
+            out = draw_at(&ctx, &mut view, size, vec![], clock, None);
+        }
+        clock += 0.02;
     }
     assert!(
         seen,
