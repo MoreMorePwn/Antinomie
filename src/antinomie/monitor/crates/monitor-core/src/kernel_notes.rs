@@ -70,6 +70,11 @@ pub const FILE_ID_KEY: &str = "lifecycle.file_id";
 /// The operand an io_uring or AIO request carries instead.
 pub const FILE_ID_OPERAND: &str = "async.operand.file_id";
 pub const EXEC_IMAGE_KEY: &str = "lifecycle.exec_image";
+/// The task a fork, vfork or clone made (lifecycle records of the creating
+/// call, each one u64): its thread group id, its own id and its task cookie.
+pub const CHILD_TGID_KEY: &str = "lifecycle.child_tgid";
+pub const CHILD_PID_KEY: &str = "lifecycle.child_pid";
+pub const CHILD_COOKIE_KEY: &str = "lifecycle.child_cookie";
 /// Where a read or write began and how much it moved (an Exit field).
 pub const FILE_POSITION_KEY: &str = "file.position";
 /// The operands of an in-kernel copy or an allocation (an Exit field).
@@ -111,7 +116,14 @@ pub fn is_note(event: &EventSummary) -> bool {
         && event.fields.iter().any(|field| {
             matches!(
                 field.key.as_str(),
-                CREDS_KEY | HASH_KEY | FILE_ID_KEY | EXEC_IMAGE_KEY | FILE_MAPPED_KEY
+                CREDS_KEY
+                    | HASH_KEY
+                    | FILE_ID_KEY
+                    | EXEC_IMAGE_KEY
+                    | FILE_MAPPED_KEY
+                    | CHILD_TGID_KEY
+                    | CHILD_PID_KEY
+                    | CHILD_COOKIE_KEY
             )
         })
 }
@@ -123,6 +135,39 @@ fn payload<'a>(event: &'a EventSummary, key: &str, layout: &str, size: usize) ->
     let field = event.fields.iter().find(|field| field.key == key)?;
     (field.complete && field.layout == layout && field.preview.len() >= size)
         .then(|| &field.preview[..size])
+}
+
+/// A task a call created, as the guest recorded it: a new process has its own
+/// pid as its thread group id; a new thread has the caller's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChildTask {
+    /// The child's thread group id.
+    pub tgid: u32,
+    /// The child's own task id, when the guest recorded it.
+    pub tid: Option<u32>,
+    pub cookie: Option<u64>,
+}
+
+/// The child task the notes of one call record, if the guest wrote its thread
+/// group id. Independent of the call's flags, which may not have been captured.
+pub fn child_task<'a>(
+    notes: impl IntoIterator<Item = &'a EventSummary> + Clone,
+) -> Option<ChildTask> {
+    let word = |key: &str| {
+        notes.clone().into_iter().find_map(|event| {
+            let field = event.fields.iter().find(|field| field.key == key)?;
+            let bytes = field.preview.get(..8)?;
+            (field.complete).then(|| u64::from_le_bytes(bytes.try_into().unwrap_or_default()))
+        })
+    };
+    let tgid = u32::try_from(word(CHILD_TGID_KEY)?)
+        .ok()
+        .filter(|pid| *pid != 0)?;
+    Some(ChildTask {
+        tgid,
+        tid: word(CHILD_PID_KEY).and_then(|pid| u32::try_from(pid).ok()),
+        cookie: word(CHILD_COOKIE_KEY),
+    })
 }
 
 fn u32_at(data: &[u8], at: usize) -> u32 {

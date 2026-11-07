@@ -217,6 +217,10 @@ fn credential_and_hash_records_come_back_with_their_call_and_are_not_observation
     for packet in observation(1, 5001, b"lifecycle.exec_commit", &[]) {
         write(&mut raw, packet);
     }
+    // The task a fork or clone made belongs to its call, like the notes.
+    for packet in observation(1, 5002, b"lifecycle.child_tgid", &[]) {
+        write(&mut raw, packet);
+    }
     raw.sync_all().unwrap();
     let recording = open_recording(&directory).unwrap();
     let page = recording.invocation_page(0, 10).unwrap();
@@ -226,7 +230,14 @@ fn credential_and_hash_records_come_back_with_their_call_and_are_not_observation
         .iter()
         .flat_map(|event| event.fields.iter().map(|field| field.key.as_str()))
         .collect();
-    assert_eq!(keys, ["lifecycle.creds", "lifecycle.file_hash"]);
+    assert_eq!(
+        keys,
+        [
+            "lifecycle.creds",
+            "lifecycle.file_hash",
+            "lifecycle.child_tgid"
+        ]
+    );
     assert_eq!(call.async_saved, 600, "notes are not async observations");
     let (seqs, total) = browse_all(&recording, (9, 10, 1), 256);
     assert_eq!((seqs.len(), total), (600, 600));
