@@ -70,10 +70,10 @@ pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui, input: &Triag
             (Section::Summary, "Summary".into()),
             (Section::Properties, "Properties".into()),
             (Section::Detection, detection),
-            (Section::Process, "Process".into()),
-            (Section::Files, "Files".into()),
-            (Section::Network, "Network".into()),
-            (Section::Bpf, "eBPF".into()),
+            (Section::Process, view.section_tab(Section::Process)),
+            (Section::Files, view.section_tab(Section::Files)),
+            (Section::Network, view.section_tab(Section::Network)),
+            (Section::Bpf, view.section_tab(Section::Bpf)),
         ] {
             if crate::widgets::tab(ui, view.section == section, &item).clicked() {
                 view.section = section;

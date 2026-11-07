@@ -260,6 +260,7 @@ impl Window {
             theme::loading_weak(ui, "Indexing this run\u{2019}s files\u{2026}");
             return;
         };
+        let mut shown = Vec::new();
         ui.horizontal_wrapped(|ui| {
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
@@ -292,13 +293,19 @@ impl Window {
                     *flag = !*flag;
                 }
             }
+            // Shown / total, as the other tables' filter bars say it.
+            shown = self.shown(activity);
+            let group = antinomie_monitor_core::analysis::detection::group_digits;
+            ui.colored_label(
+                theme::muted(),
+                format!(
+                    "{} / {} rows",
+                    group(shown.len() as u64),
+                    group(activity.files.len() as u64 + activity.omitted_files)
+                ),
+            )
+            .on_hover_text("Files listed with the filter and the Hide chips, out of all the run touched");
         });
-        let shown = self.shown(activity);
-        ui.weak(format!(
-            "{} of {} files",
-            shown.len(),
-            activity.files.len() as u64 + activity.omitted_files
-        ));
         if activity.omitted_files > 0 || activity.omitted_events > 0 {
             crate::activity::info(
                 ui,

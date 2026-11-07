@@ -143,13 +143,28 @@ fn figure_job(ui: &egui::Ui, value: &str, unit: &str) -> egui::text::LayoutJob {
     job
 }
 
+/// The headline of a configuration card, at least as tall as the large
+/// figure of its neighbours, so the rows under the three cards line up.
+fn headline(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    let body = ui.text_style_height(&egui::TextStyle::Body);
+    let line = ui.fonts_mut(|fonts| fonts.row_height(&egui::FontId::proportional(body * 1.9)));
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), 0.0),
+        egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true),
+        |ui| {
+            ui.set_min_height(line);
+            add(ui);
+        },
+    );
+}
+
 fn compute(ui: &mut egui::Ui, vm: &VmConfig) {
     title(ui, icon::CPU, "Compute", theme::blue());
     // The vCPU count and the RAM side by side, both in the large figure.
     let ram = crate::values::short_size(u64::from(vm.ram_mib) << 20);
     let (amount, unit) = ram.split_once(' ').unwrap_or((ram.as_str(), ""));
     let unit = format!("{unit} RAM");
-    ui.horizontal_wrapped(|ui| {
+    headline(ui, |ui| {
         ui.spacing_mut().item_spacing.x = ui.text_style_height(&egui::TextStyle::Body) * 1.5;
         figure(ui, &vm.cpus.to_string(), "vCPU");
         figure(ui, amount, unit.trim());
@@ -166,7 +181,7 @@ fn compute(ui: &mut egui::Ui, vm: &VmConfig) {
 
 fn storage(ui: &mut egui::Ui, vm: &VmConfig, snapshot: &Snapshot) {
     title(ui, icon::HARD_DRIVES, "Storage and display", theme::blue());
-    figure(ui, &vm.disk_gib.to_string(), "GiB disk");
+    headline(ui, |ui| figure(ui, &vm.disk_gib.to_string(), "GiB disk"));
     let base = crate::app::selected_base(snapshot, vm.base_identity.as_deref())
         .map(|base| base.label.clone())
         .unwrap_or_else(|| {
@@ -205,12 +220,14 @@ fn network(ui: &mut egui::Ui, vm: &VmConfig) {
             theme::muted()
         },
     );
-    ui.label(
-        RichText::new(network_label(vm))
-            .size(ui.text_style_height(&egui::TextStyle::Body) * 1.15)
-            .strong()
-            .color(theme::heading()),
-    );
+    headline(ui, |ui| {
+        ui.label(
+            RichText::new(network_label(vm))
+                .size(ui.text_style_height(&egui::TextStyle::Body) * 1.15)
+                .strong()
+                .color(theme::heading()),
+        );
+    });
     let wait = vm.transport.send_wait_us();
     rows(
         ui,
@@ -434,6 +451,15 @@ mod tests {
         snapshot: &Snapshot,
         events: Vec<egui::Event>,
     ) -> Vec<(String, egui::Rect)> {
+        drawn_at(vm, snapshot, events, 1100.0)
+    }
+
+    fn drawn_at(
+        vm: &VmConfig,
+        snapshot: &Snapshot,
+        events: Vec<egui::Event>,
+        width: f32,
+    ) -> Vec<(String, egui::Rect)> {
         fn collect(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
             match shape {
                 egui::Shape::Text(text) => {
@@ -451,7 +477,7 @@ mod tests {
             let input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(1100.0, 1400.0),
+                    egui::vec2(width, 1400.0),
                 )),
                 events: if frame == 3 {
                     events.clone()
@@ -636,6 +662,37 @@ mod tests {
                 .any(|text| text.contains("fallback") || text.contains("not supported")),
             "a base that supports everything has no warning: {texts:?}"
         );
+    }
+
+    #[test]
+    fn the_rows_of_the_three_cards_line_up_at_1280_and_1920() {
+        for width in [1280.0, 1920.0] {
+            let texts = drawn_at(
+                &vm(StealthProfile::transparent()),
+                &Snapshot::default(),
+                Vec::new(),
+                width,
+            );
+            let y = |name: &str| {
+                texts
+                    .iter()
+                    .find(|(text, _)| text == name)
+                    .unwrap_or_else(|| panic!("{name}: {texts:?}"))
+                    .1
+                    .min
+                    .y
+            };
+            // The first row of each card, and the second.
+            let first = [y("CPU model"), y("Base image"), y("Ring")];
+            let second = [y("Acceleration"), y("Display"), y("When full")];
+            for row in [first, second] {
+                assert!(
+                    // A round capital overshoots its line by a pixel.
+                    row.iter().all(|y| (y - row[0]).abs() < 1.5),
+                    "{width}: {row:?}"
+                );
+            }
+        }
     }
 
     #[test]

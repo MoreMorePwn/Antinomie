@@ -301,10 +301,20 @@ pub(super) fn process_tree_nodes(
         PROCESS_FIELDS,
         &[],
     );
+    let total = rows.len();
     let filtered = rows
         .into_iter()
         .filter(|row| compiled.keep_table(&row[0].values))
         .collect::<Vec<_>>();
+    let group = antinomie_monitor_core::analysis::detection::group_digits;
+    ui.colored_label(
+        theme::muted(),
+        format!(
+            "{} / {} rows",
+            group(filtered.len() as u64),
+            group(total as u64)
+        ),
+    );
     // The tree is of the rows that are left: a filter leaves gaps, not stale
     // branches.
     let depths = filtered

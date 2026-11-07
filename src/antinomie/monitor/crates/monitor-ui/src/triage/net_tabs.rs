@@ -105,7 +105,7 @@ pub(super) fn stored_column(slot: usize, shown: usize) -> usize {
 }
 
 impl TriageView {
-    fn new_count(&self, which: NewTab) -> Count {
+    pub(super) fn new_count(&self, which: NewTab) -> Count {
         if self.preparing() {
             return Count::Pending;
         }

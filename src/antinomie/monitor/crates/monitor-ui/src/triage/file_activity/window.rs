@@ -187,7 +187,7 @@ impl Window {
 
     /// The files the filter, toggles and order keep, as indices into the
     /// activity.
-    pub(super) fn shown(&self, activity: &Activity) -> Vec<usize> {
+    pub(in crate::triage) fn shown(&self, activity: &Activity) -> Vec<usize> {
         let needle = self.filter.trim().to_lowercase();
         let mut kept: Vec<usize> = activity
             .files

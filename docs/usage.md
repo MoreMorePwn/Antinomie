@@ -604,7 +604,7 @@ The network capture is the guest's own view on every route.
   finding in time, ↑/↓ lane, Enter evidence, `T` spacing, `F` fit, `+`/`-` zoom at the
   selection, Space fold the lane, `H` `M` `L` `I` the tier chips and Show INFO,
   `1`…`9` and `0` the first ten category chips.
-- **Triage › Files › By file** is the first tab of Files and opens by default: one row
+- **Triage › Files › By file** is the first tab of Files and opens by default (its filter bar ends with "x / y rows", the files listed out of all the run touched, as the Process tree's does): one row
   for each file the run touched, with **Path** (the path only) and
   **Tags** (where it lives, such as `/tmp`, `home`, `system`, `proc`, `hidden`,
   `persistence` and `credentials`; `+2 names` when it was also seen under other names,
@@ -764,7 +764,15 @@ The network capture is the guest's own view on every route.
   toggle ("Show the N rules not applicable") as the title line, the counts under
   it and the list under them. The **Detection** tab of the Triage strip shows
   the matched rules of YARA, IDS and Sigma as "x · y · z", each capped at 99+;
-  hover it for the engines by name. A scan that starts by itself and fails never replaces the result
+  hover it for the engines by name. The **Process**, **Files**, **Network** and
+  **eBPF** tabs carry the same kind of badge: processes (not threads) and
+  Suspicious activity findings as "p · f"; the files of By file with its default
+  filter; Endpoints, Domains, URLs and TLS as "p · q · r · s" in the tab order;
+  and the eBPF observations. Each is capped at 99+, shows a dash when the run
+  has no scan yet, and names its numbers in the hover ("12 processes · 3
+  findings"). A rule score (Elastic's 0 to 100) is coloured by range in the
+  match cards and their Details: red from 90, orange from 70, amber from 40,
+  muted below. A scan that starts by itself and fails never replaces the result
   on screen, and no scan starts by itself while an engine tool has not answered.
   **Settings > Detection > Scan runs with IDS and Sigma when they end** (on by
   default) makes each engine scan a run once its evidence is ready, and again
