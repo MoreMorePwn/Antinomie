@@ -21,10 +21,6 @@ const NONE: u32 = u32::MAX;
 /// Where each shown node sits.
 pub(in crate::triage) struct Layout {
     rects: Vec<Rect>,
-    /// Per node, the node it hangs under in the tree (`usize::MAX` for a
-    /// root) and the top of the room its children have.
-    up: Vec<usize>,
-    tops: Vec<f32>,
     /// The shown nodes, in the order they were given.
     pub shown: Vec<usize>,
     pub bounds: Rect,
@@ -41,8 +37,6 @@ impl Default for Layout {
     fn default() -> Self {
         Self {
             rects: Vec::new(),
-            up: Vec::new(),
-            tops: Vec::new(),
             shown: Vec::new(),
             bounds: Rect::from_min_size(Pos2::ZERO, Vec2::splat(1.0)),
             root: None,
@@ -139,17 +133,6 @@ impl Layout {
             .get(node)
             .copied()
             .filter(|rect| rect.is_positive())
-    }
-
-    /// Whether `child` hangs directly under `parent` in the tree.
-    pub(in crate::triage) fn is_child(&self, parent: usize, child: usize) -> bool {
-        self.up.get(child) == Some(&parent)
-    }
-
-    /// The top of the room the children of `node` have: above every box
-    /// of its subtree, in the gap under whatever is over it.
-    pub(in crate::triage) fn room_top(&self, node: usize) -> Option<f32> {
-        self.tops.get(node).copied().filter(|top| top.is_finite())
     }
 
     #[cfg(test)]
@@ -273,8 +256,6 @@ impl Layout {
         let mut x = vec![0.0f32; m + 1];
         let mut y = vec![0.0f32; m + 1];
         let mut rects = vec![Rect::NOTHING; graph.nodes.len()];
-        let mut up = vec![usize::MAX; graph.nodes.len()];
-        let mut tops = vec![f32::NAN; graph.nodes.len()];
         let mut bounds = Rect::NOTHING;
         for &v in &order {
             let v = v as usize;
@@ -284,22 +265,16 @@ impl Layout {
                 let k = k as usize;
                 x[k] = base_x + step + dx[k];
                 y[k] = base_y + dy[k];
-                if v < m {
-                    up[shown[k]] = shown[v];
-                }
             }
             if v < m {
                 let rect =
                     Rect::from_min_size(Pos2::new(base_x, base_y + centre[v] - NODE.y / 2.0), NODE);
                 rects[shown[v]] = rect;
-                tops[shown[v]] = base_y;
                 bounds = bounds.union(rect);
             }
         }
         Self {
             rects,
-            up,
-            tops,
             shown: shown.to_vec(),
             bounds: bounds.expand(24.0),
             root: roots.first().map(|&l| shown[l as usize]),

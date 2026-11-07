@@ -700,7 +700,7 @@ The network capture is the guest's own view on every route.
   in the window; **Laying out…** shows while a big run is
   placed; the icon beside **Mermaid** opens the graph in a window of its own with the
   same controls; drag the background to pan, Ctrl and the wheel or the
-  buttons (a small bar that fits its buttons) to zoom, the plain wheel scrolls the page everywhere, over the graph too, and the Key findings and Indicators lists and the Activity graph's lanes take it only while they can still scroll that way; a process whose children sit in several lanes draws its fork and exec edges as one trunk beside each lane with a stub to every child (a child with a finding keeps its tier colour on its stub); click a node to open it,
+  buttons (a small bar that fits its buttons) to zoom, the plain wheel scrolls the page everywhere, over the graph too, and the Key findings and Indicators lists and the Activity graph's lanes take it only while they can still scroll that way; click a node to open it,
   **Mermaid** to copy what is shown; edges read fork, exec, write, run, connect, inject, signal),
   then one line each for **MITRE ATT&CK**, **Processes of interest**, **Files** and
   **Network**, the folded **MITRE ATT&CK techniques** list, the **Detection engines** (three cards of one height, so the state tag and **Open results** line up),
