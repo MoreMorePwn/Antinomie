@@ -1104,4 +1104,77 @@ mod tests {
             }
         }
     }
+
+    /// A parent with `ANTINOMIE_QA_KIDS` (150) children in the graph box, for
+    /// screenshots under Xvfb. `ANTINOMIE_QA_FITALL=1` presses Fit all.
+    #[test]
+    #[ignore = "requires owned isolated X11; Relationships graph screenshot fixture"]
+    fn native_one_column_graph_fixture() {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        struct Fixture {
+            graph: Graph,
+            layout: Layout,
+            view: View,
+            fit_all: bool,
+            frame: u32,
+            deadline: std::time::Instant,
+        }
+        impl eframe::App for Fixture {
+            fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+                let ctx = root.ctx().clone();
+                self.frame += 1;
+                if self.fit_all && self.frame == 5 {
+                    let room = egui::vec2(ctx.content_rect().width() - 16.0, 700.0);
+                    self.view.fit_all(room, self.layout.bounds);
+                }
+                egui::CentralPanel::default().show(root, |ui| {
+                    show(
+                        ui,
+                        egui::Id::new("c"),
+                        &self.graph,
+                        &self.layout,
+                        &mut self.view,
+                        700.0,
+                        &[],
+                    );
+                });
+                if std::time::Instant::now() > self.deadline {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
+        }
+        let kids = std::env::var("ANTINOMIE_QA_KIDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(150);
+        let (graph, layout) = parent_with(kids);
+        let fit_all = std::env::var("ANTINOMIE_QA_FITALL").is_ok_and(|value| value == "1");
+        eframe::run_native(
+            "Antinomie graph QA",
+            eframe::NativeOptions {
+                viewport: egui::ViewportBuilder::default()
+                    .with_inner_size([1280.0, 800.0])
+                    .with_position([0.0, 0.0]),
+                persist_window: false,
+                event_loop_builder: Some(Box::new(|builder| {
+                    builder.with_x11();
+                    builder.with_any_thread(true);
+                })),
+                ..Default::default()
+            },
+            Box::new(move |cc| {
+                theme::install(&cc.egui_ctx);
+                Ok(Box::new(Fixture {
+                    graph,
+                    layout,
+                    view: View::default(),
+                    fit_all,
+                    frame: 0,
+                    deadline: std::time::Instant::now() + std::time::Duration::from_secs(40),
+                }))
+            }),
+        )
+        .expect("native graph fixture");
+    }
 }
