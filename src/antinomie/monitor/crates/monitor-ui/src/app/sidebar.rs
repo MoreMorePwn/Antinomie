@@ -34,12 +34,11 @@ impl MonitorApp {
             None => machine.push(("No base".into(), theme::warn())),
         }
         let fallbacks = self.stealth_fallbacks_of(vm);
-        // The base image's name and its architecture. A base records no
-        // architecture yet: every base is x86-64 until the arm64 ones come.
+        // The base image's name and its architecture, from the base's bundle.
         machine.extend([
             (" · ".into(), theme::muted()),
             (
-                antinomie_monitor_core::GuestArch::default().label(),
+                base_arch(&self.snapshot, vm.base_identity.as_deref()).label(),
                 theme::muted(),
             ),
         ]);

@@ -175,6 +175,30 @@ fn the_sidebar_vm_line_is_the_base_image_name_and_the_architecture() {
 }
 
 #[test]
+fn the_sidebar_vm_line_names_an_arm64_base_as_arm64() {
+    let ctx = context();
+    let mut app = app();
+    let mut base = test_base("debian-arm64", false);
+    base.label = "Debian 13 (Minimal)".into();
+    base.arch = antinomie_monitor_core::GuestArch::AARCH64;
+    app.snapshot.bases = vec![base];
+    app.snapshot.vms = vec![VmConfig {
+        id: "vm".into(),
+        name: "Arm VM".into(),
+        base_identity: Some("debian-arm64".into()),
+        ..VmConfig::default()
+    }];
+    app.selected = Some("vm".into());
+    let shown = texts(&settle(&mut app, &ctx));
+    assert!(
+        shown
+            .iter()
+            .any(|(text, _)| text == "Debian 13 (Minimal) · arm64"),
+        "{shown:?}"
+    );
+}
+
+#[test]
 fn settings_pages_keep_no_paragraph_only_short_lines() {
     let ctx = context();
     let mut longs: Vec<String> = Vec::new();
