@@ -812,3 +812,95 @@ fn a_note_chip_opens_its_panel_in_the_vm_that_holds_it() {
         .is_some_and(|text| text.contains("no longer listed")));
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// Every text drawn in one frame.
+fn page_texts(app: &mut MonitorApp, ctx: &egui::Context) -> Vec<String> {
+    // Tall, so nothing is below the fold.
+    let output = render(app, ctx, egui::vec2(1400.0, 6000.0));
+    let mut found = Vec::new();
+    for shape in &output.shapes {
+        galleys(&shape.shape, &mut |text, _| found.push(text.to_owned()));
+    }
+    found
+}
+
+#[test]
+fn the_family_field_shows_what_triage_named_and_aliases_show_no_host_path() {
+    use antinomie_monitor_core::run_digest::{DetectionHit, RunDigest};
+    let root = super::samples_list::temp("detail-family");
+    let (script, _, _) = super::samples_list::fixture(&root);
+    let first = save_run(&root, &script, "install.sh", "r1", 1_000, false);
+    // Triage named Tsunami from an Elastic rule that has no family meta, so
+    // the rollup's YARA family is empty.
+    let _ = RunDigest::update(&first.directory, |digest| {
+        digest.detections = Some(vec![
+            DetectionHit {
+                engine: "YARA".into(),
+                rule_id: "s1::Linux_Trojan_Tsunami_30c039e2".into(),
+                title: "Linux_Trojan_Tsunami_30c039e2".into(),
+                severity: "100".into(),
+                source: "selection/pack/elastic-protections-yara/Linux_Trojan_Tsunami.yar".into(),
+                ..Default::default()
+            },
+            DetectionHit {
+                engine: "YARA".into(),
+                rule_id: "s2::SEKOIA_Backdoor_Lin_Tsunami".into(),
+                title: "SEKOIA_Backdoor_Lin_Tsunami".into(),
+                severity: "indicator".into(),
+                source: "selection/pack/yara-forge-core/sekoia.yar".into(),
+                ..Default::default()
+            },
+        ]);
+    });
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut app = app();
+    app.options.data_dir = root.clone();
+    app.snapshot.vms.push(VmConfig {
+        id: "vm".into(),
+        name: "Debian".into(),
+        ..VmConfig::default()
+    });
+    app.rules_ui.set_packs_for_test(Vec::new());
+    app.open_library(crate::workspace::LibraryPage::Samples);
+    until(&mut app, &ctx, |app| app.samples_page.is_loaded());
+    app.samples_page.open_detail(&script);
+    until(&mut app, &ctx, |app| {
+        app.samples_page.detail_rollup().is_some()
+    });
+    let mut texts = Vec::new();
+    for _ in 0..4 {
+        texts = page_texts(&mut app, &ctx);
+    }
+    assert!(
+        texts.iter().any(|text| text.contains("Tsunami")),
+        "{texts:?}"
+    );
+    let at = texts.iter().position(|text| text == "Family").unwrap();
+    assert_eq!(
+        texts[at + 1],
+        "Tsunami",
+        "Family says what Triage named: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|text| text.contains("Triage run 1")),
+        "the source of the name is shown: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|text| text.contains("Sekoia")),
+        "{texts:?}"
+    );
+    // The sample was added from /cases/install.sh: the Aliases say so in
+    // words, the folder is not on the page.
+    assert!(
+        texts
+            .iter()
+            .any(|text| text == "imported from a file on this computer"),
+        "{texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|text| text.contains("/cases/")),
+        "the host path leaked: {texts:?}"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}

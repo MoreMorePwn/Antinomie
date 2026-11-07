@@ -55,6 +55,8 @@ pub(crate) enum MemoryAction {
     CancelInstall,
     /// Look up symbol tables online for dumps without one (a setting).
     OnlineSymbols(bool),
+    /// Open this run in Triage: a dump's Run column was clicked.
+    OpenRun(String),
 }
 
 pub(crate) struct MemoryContext<'a> {
@@ -206,6 +208,41 @@ pub(crate) struct MemoryView {
     show_content: bool,
     content: crate::content_view::ContentView,
     content_source: Option<crate::content_view::ContentSource>,
+    /// The runs of the VM, for the Run column.
+    run_names: crate::run_link::RunNames,
+    /// The run list `run_names` was made from.
+    names_for: Option<std::sync::Arc<Vec<antinomie_monitor_core::RunSummary>>>,
+    /// The run selected in Triage, which "This run only" follows.
+    triage_run: Option<String>,
+    this_run_only: bool,
+    /// The run each dump folder belongs to by the runs' own records, for
+    /// dumps saved before they carried a provenance.
+    legacy_links:
+        std::collections::HashMap<PathBuf, antinomie_monitor_core::provenance::Provenance>,
+}
+
+impl MemoryView {
+    /// The runs of the VM and the run Triage has selected, once per frame.
+    pub(crate) fn set_runs(
+        &mut self,
+        runs: &std::sync::Arc<Vec<antinomie_monitor_core::RunSummary>>,
+        triage_run: Option<String>,
+    ) {
+        if !self
+            .names_for
+            .as_ref()
+            .is_some_and(|known| std::sync::Arc::ptr_eq(known, runs))
+        {
+            self.run_names = crate::run_link::RunNames::of(runs);
+            self.names_for = Some(std::sync::Arc::clone(runs));
+        }
+        self.triage_run = triage_run;
+    }
+
+    /// Show only the dumps of the run selected in Triage (or all of them).
+    pub(crate) fn set_this_run_only(&mut self, on: bool) {
+        self.this_run_only = on;
+    }
 }
 
 impl Default for MemoryView {
@@ -249,6 +286,11 @@ impl Default for MemoryView {
             show_content: false,
             content: crate::content_view::ContentView::new("memory"),
             content_source: None,
+            run_names: Default::default(),
+            names_for: None,
+            triage_run: None,
+            this_run_only: false,
+            legacy_links: Default::default(),
         }
     }
 }

@@ -274,8 +274,10 @@ fn verdict(ui: &mut egui::Ui, data: &Data) {
                 field(&mut columns[1], "Highest suspicion", |ui| {
                     super::triage_parts::highest(ui, data);
                 });
-                field(&mut columns[2], "Family", |ui| family(ui, data));
-                if let Some(source) = family_source(data) {
+                field(&mut columns[2], "Family", |ui| {
+                    family_field::family(ui, data)
+                });
+                if let Some(source) = family_field::family_source(data) {
                     columns[2].label(RichText::new(source).small().color(theme::muted()));
                 }
             });
@@ -286,91 +288,6 @@ fn verdict(ui: &mut egui::Ui, data: &Data) {
 fn field(ui: &mut egui::Ui, label: &str, value: impl FnOnce(&mut egui::Ui)) {
     ui.label(RichText::new(label).small().color(theme::muted()));
     ui.horizontal_wrapped(value);
-}
-
-/// The family a YARA rule that matched names, newest rule list first.
-fn yara_family(data: &Data) -> Option<&antinomie_monitor_core::samples::RuleRow> {
-    data.rollup
-        .rules
-        .iter()
-        .find(|rule| rule.engine.eq_ignore_ascii_case("yara") && !rule.family.trim().is_empty())
-}
-
-/// The families the download source's record names: its signature and its
-/// tags, when they name different ones.
-fn bazaar_families(data: &Data) -> Vec<(String, &'static str)> {
-    crate::triage::family::bazaar_families(
-        data.record.info.signature.as_deref(),
-        &data.record.info.tags,
-    )
-}
-
-/// The Family field: the family name (the download source's signature, else a
-/// YARA rule's), else the sample's malware-category tags, else "Unknown".
-fn family(ui: &mut egui::Ui, data: &Data) {
-    let both = bazaar_families(data);
-    if both.len() > 1 {
-        let names = both
-            .iter()
-            .map(|(name, _)| name.as_str())
-            .collect::<Vec<_>>()
-            .join(" \u{b7} ");
-        let sources = both
-            .iter()
-            .map(|(name, source)| format!("{name}: {source}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        ui.label(RichText::new(names).strong())
-            .on_hover_text(sources);
-        return;
-    }
-    let named = data.record.family.trim();
-    if !named.is_empty() {
-        ui.label(RichText::new(named).strong());
-        return;
-    }
-    if let Some(rule) = yara_family(data) {
-        ui.label(RichText::new(rule.family.trim()).strong());
-        return;
-    }
-    let categories: Vec<&Tag> = data
-        .tags
-        .iter()
-        .filter(|tag| tag.kind == TagKind::Category)
-        .collect();
-    if categories.is_empty() {
-        ui.label(theme::hint_text("Unknown"));
-    }
-    for tag in categories {
-        sample_tags::tag(ui, tag);
-    }
-}
-
-/// Where the family name came from: the download source's signature, a YARA
-/// rule, or both when they agree. Nothing when the field shows tags.
-fn family_source(data: &Data) -> Option<String> {
-    use antinomie_monitor_core::samples::OriginKind;
-    if bazaar_families(data).len() > 1 {
-        return Some("MalwareBazaar signature and tags".into());
-    }
-    let named = data.record.family.trim();
-    let yara = yara_family(data);
-    let downloaded = data
-        .origins
-        .iter()
-        .find(|origin| origin.kind == OriginKind::Download);
-    match (named.is_empty(), downloaded, yara) {
-        (false, Some(origin), Some(rule)) if rule.family.trim().eq_ignore_ascii_case(named) => {
-            Some(format!(
-                "{} signature · YARA rule {}",
-                origin.source, rule.rule
-            ))
-        }
-        (false, Some(origin), _) => Some(format!("{} signature", origin.source)),
-        (false, None, _) => Some("Recorded with the sample".into()),
-        (true, _, Some(rule)) => Some(format!("YARA rule {}", rule.rule)),
-        (true, _, None) => None,
-    }
 }
 
 /// The outcome of a run in words that carry its state where the exit alone
@@ -995,10 +912,22 @@ fn identity(
                             ),
                             value_width,
                         );
-                        let source = [&origin.source, &origin.path, &origin.detail]
+                        // A file the analyst imported is told in words, not by the
+                        // folder it came from (the custody log keeps the path).
+                        let host_file = matches!(
+                            origin.kind,
+                            antinomie_monitor_core::samples::OriginKind::Added
+                                | antinomie_monitor_core::samples::OriginKind::Migrated
+                                | antinomie_monitor_core::samples::OriginKind::Found
+                        ) && !origin.path.is_empty();
+                        let path = if host_file {
+                            HOST_FILE_WORDS
+                        } else {
+                            origin.path.as_str()
+                        };
+                        let source = [origin.source.as_str(), path, origin.detail.as_str()]
                             .into_iter()
                             .filter(|part| !part.is_empty())
-                            .cloned()
                             .collect::<Vec<_>>()
                             .join(" · ");
                         if !source.is_empty() {
@@ -1085,6 +1014,10 @@ fn archive_state(
     });
 }
 
+/// How an alias imported from a file on this computer reads; its path is the
+/// tooltip's.
+const HOST_FILE_WORDS: &str = "imported from a file on this computer";
+
 /// Every file name the sample went by.
 fn aliases(ui: &mut egui::Ui, data: &Data, font: f32) {
     parts::panel_frame().show(ui, |ui| {
@@ -1161,6 +1094,20 @@ fn aliases(ui: &mut egui::Ui, data: &Data, font: f32) {
                                 shown.on_hover_text(&alias.name);
                             });
                             row.col(|ui| {
+                                if alias.host_path {
+                                    // The analyst's own folders stay out of the
+                                    // page; the hover and the custody log have them.
+                                    let shown = fit_table::cell_rich(
+                                        ui,
+                                        fit_table::Cell::Text,
+                                        RichText::new(HOST_FILE_WORDS).color(theme::text()),
+                                    );
+                                    shown.on_hover_text(format!(
+                                        "{HOST_FILE_WORDS}: {}",
+                                        alias.path
+                                    ));
+                                    return;
+                                }
                                 let shown = fit_table::cell_rich(
                                     ui,
                                     fit_table::Cell::Mono,

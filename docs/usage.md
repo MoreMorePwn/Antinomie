@@ -664,7 +664,10 @@ The network capture is the guest's own view on every route.
   sample's MalwareBazaar record, strongest first, each with its source (an Elastic
   `Linux_Trojan_<Family>` rule, a `family` or Malpedia metadata, MalwareBazaar's
   signature and its tags, which may name two families; name fragments such as
-  MassHunt, IoT or Unique are never a family); and behaviour tags), **Key findings** (the six worst by tier and
+  MassHunt, IoT or Unique, and a rule pack's vendor or author in a rule name such as
+  `SEKOIA_` or `ESET_`, are never a family; a family is the one family word of the
+  rule, so `SEKOIA_Backdoor_Lin_Bpfdoor` and `MIRAI_OHSHIT_payload` name BPFDoor and
+  Mirai); and behaviour tags), **Key findings** (the six worst by tier and
   then first time, each with its description on a line below, cut to its first sentence
   with "…" when there is more: a click on the description shows all of it and another
   folds it; a click on the row opens the finding's Details, **all N** opens Suspicious activity, **Show more** turns
@@ -1301,6 +1304,31 @@ explained in plain words ("The process had already exited, or had started over
 ...") with its raw state and status in brackets. When the process is still
 running under a new identity (a thread of it called exec, which replaces the
 main thread's start time), the host asks once more for that process.
+
+Every core and memory dump records where it came from, in its own metadata
+(`metadata.json` of a core, `core.json` of a manual core, `dump.json` of a memory
+dump): the VM, boot and run (or none), why it was taken (the run's exit, a trigger,
+by hand or imported), the process of a core (pid, tid and task cookie), the finding
+of a trigger dump (rule and tier) and the time window. The link to the run is
+**exact** for a dump the run asked for and for a core whose task is in the run's
+process tree, **by time** for a memory dump taken by hand while runs were live
+(the dump holds the whole VM, so the live runs are only linked by the time), and
+**VM-wide** when no run was live. A record from before this field reads as
+unknown ("Not in a run").
+
+**Core dumps** and **Memory** show this as a **Run** line under each entry: the
+run's short id and the sample's name; a click opens the run in Triage. The
+**This run only** checkbox keeps only the entries of the run selected in Triage
+and follows that selection. **Core dumps** also lists the cores a trigger took,
+as "Trigger: <rule> (<tier>)", for a run whose Core dump on exit is off, whether
+the VM is running or stopped. `core_state` in `artifacts.json` means the exit
+core only; "Disabled" there never means the run has no cores.
+
+**Triage > Summary** ends with a **Run artifacts** box: the selected run's cores,
+memory dumps and capture segments in the rows of the sample page's Artifacts
+(same columns; **Open** shows the tab for this run only), the run's time window,
+the packet count of each capture segment and the trigger log (each match that took
+a dump, each that came too late, and how many more the budget held back).
 
 ### Country and organization of addresses (GeoIP)
 

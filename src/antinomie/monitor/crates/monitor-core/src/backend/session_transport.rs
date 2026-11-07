@@ -11,6 +11,8 @@ mod terminal;
 /// Rings whose fill the read-gap tracker watches (more are not).
 const MAX_WATCHED_RINGS: usize = 64;
 const GUEST_TURNS: u64 = 3;
+/// Task cookies one run remembers for matching a core to the run.
+const TASKS_KEPT: usize = 65_536;
 /// How long past its deadline a command waits for a guest whose control
 /// worker has not had those passes.
 const STALLED_GUEST_GRACE: Duration = Duration::from_secs(2);
@@ -108,6 +110,9 @@ impl Session {
                     run.observe_clock(header.timestamp_ns);
                     run.telemetry_loss
                         .packet(header.task_cookie, header.packet_seq);
+                    if run.tasks.len() < TASKS_KEPT {
+                        run.tasks.insert(header.task_cookie);
+                    }
                 }
                 let saved = run
                     .capture

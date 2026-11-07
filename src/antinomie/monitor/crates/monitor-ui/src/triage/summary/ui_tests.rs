@@ -1098,6 +1098,12 @@ fn native_summary_boxes_fixture() {
     let (files, mut view) = crowded(0, 12);
     with_indicators(&mut view);
     view.section = Section::Summary;
+    // ANTINOMIE_QA_RUN_ARTIFACTS = a throwaway folder: the Run artifacts box
+    // for a run that took a trigger core and one capture segment.
+    if let Some(dir) = std::env::var_os("ANTINOMIE_QA_RUN_ARTIFACTS") {
+        let run = crate::app::samples_page::detail::fixture_run(std::path::Path::new(&dir));
+        view.set_run_artifacts(&run, false);
+    }
     eframe::run_native(
         "Antinomie summary QA",
         eframe::NativeOptions {

@@ -117,6 +117,10 @@ pub struct MemoryDump {
     pub system: String,
     /// A symbol table was saved with the dump (`symbols/`).
     pub symbols: bool,
+    /// Where it came from: the run, why it was taken, how sure the link is.
+    /// None in a dump saved before the field; it reads as unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::provenance::Provenance>,
     /// Why the dump failed, if it did.
     pub error: Option<String>,
     /// The dump folder (not saved).
@@ -251,6 +255,7 @@ pub fn import(
         system: symbols
             .as_ref()
             .map_or_else(|| os.label().into(), |(_, label)| label.clone()),
+        provenance: Some(crate::provenance::Provenance::imported(&vm.id, now)),
         ..MemoryDump::default()
     };
     create(recording_dir, dump, symbols.as_ref().map(|(path, _)| *path))
@@ -277,6 +282,43 @@ pub fn list(recording_dirs: &[PathBuf]) -> Vec<MemoryDump> {
     dumps.sort_by(|a, b| b.started_ms.cmp(&a.started_ms).then(b.id.cmp(&a.id)));
     dumps.dedup_by(|a, b| a.dir == b.dir);
     dumps
+}
+
+/// The run each dump folder belongs to, from the runs' own records, for dumps
+/// saved before they carried a provenance: a run's `artifacts.json` names the
+/// folder of its exit dump and of the dumps its trigger took. Bounded to 4096
+/// run folders.
+pub fn run_links(
+    recording_dirs: &[PathBuf],
+) -> std::collections::HashMap<PathBuf, crate::provenance::Provenance> {
+    let mut links = std::collections::HashMap::new();
+    let mut seen = 0usize;
+    for root in recording_dirs {
+        let Ok(entries) = fs::read_dir(root.join("runs")) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > 4096 {
+                return links;
+            }
+            let Ok(Some(artifacts)) = crate::RunArtifacts::load(&entry.path()) else {
+                continue;
+            };
+            if let Some(dir) = &artifacts.memory_dump {
+                links.insert(dir.clone(), artifacts.exit_provenance(0));
+            }
+            for (record, dump) in artifacts.trigger_memory() {
+                if let Some(dir) = &dump.path {
+                    links.insert(
+                        dir.clone(),
+                        record.provenance(&artifacts.vm_id, &artifacts.boot_id, &artifacts.run_id),
+                    );
+                }
+            }
+        }
+    }
+    links
 }
 
 /// Delete a dump with its results. An imported file is left alone.

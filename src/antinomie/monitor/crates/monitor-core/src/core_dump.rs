@@ -496,6 +496,10 @@ pub struct CoreRecord {
     pub label: String,
     pub tags: String,
     pub core: CoreDump,
+    /// Where it came from: its run, origin and process. None in a record
+    /// saved before the field; it reads as unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::provenance::Provenance>,
 }
 impl CoreRecord {
     /// Save a reference and metadata under the chosen recording root. The
@@ -521,6 +525,15 @@ impl CoreRecord {
             label,
             tags: String::new(),
             core,
+            provenance: Some(crate::provenance::Provenance::imported(
+                "",
+                u64::try_from(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_or(0, |elapsed| elapsed.as_millis()),
+                )
+                .unwrap_or(0),
+            )),
         };
         record.save()?;
         Ok(record)

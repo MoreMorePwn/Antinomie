@@ -76,6 +76,7 @@ pub(in crate::app::samples_page) enum Availability {
     InRecord,
 }
 
+#[derive(Clone)]
 pub(in crate::app::samples_page) struct Output {
     pub(in crate::app::samples_page) number: usize,
     pub(in crate::app::samples_page) kind: Kind,
@@ -291,99 +292,142 @@ pub(in crate::app::samples_page) fn section(
             parts::muted_line(ui, "None.");
             return;
         }
-        super::artifact_rows::request_hashes(ui.ctx(), data.data_dir(), &data.outputs);
-        kind_counts(ui, data);
-        ui.add_space(4.0);
-        let ([file, hash, run, because, size, availability], roomy, actions) =
-            artifact_widths(ui, data);
-        parts::on_surface(ui, |ui| {
-            parts::click_table(ui, "sample_summary_outputs")
-                .column(crate::widgets::fit_table::Col::fixed(file).clip(true))
-                .column(crate::widgets::fit_table::Col::fixed(hash))
-                .column(crate::widgets::fit_table::Col::fixed(run))
-                .column(crate::widgets::fit_table::Col::fixed(because).clip(true))
-                .column(crate::widgets::fit_table::Col::fixed(size).clip(true))
-                .column(crate::widgets::fit_table::Col::fixed(availability).clip(true))
-                .column(crate::widgets::fit_table::Col::rest(80.0).at_least(actions))
-                .header(fit_table::header_height(font), |mut header| {
-                    for title in [
-                        "File",
-                        "SHA-256",
-                        "Run",
-                        "Saved because",
-                        "Size",
-                        "Availability",
-                        "",
-                    ] {
-                        header.col(|ui| fit_table::head(ui, title));
-                    }
-                })
-                .body(|body| {
-                    body.rows(
-                        fit_table::row_height(font) + 6.0,
-                        data.outputs.len(),
-                        |mut row| {
-                            let output = &data.outputs[row.index()];
-                            let here = output.availability == Availability::InRun;
-                            let run_there = data
-                                .runs
-                                .iter()
-                                .any(|entry| entry.number == output.number && entry.folder);
-                            row.col(|ui| {
-                                ui.add(egui::Label::new(output.kind.label()).truncate())
-                                    .on_hover_text(output.kind.label());
-                            });
-                            row.col(|ui| {
-                                fit_table::cell(ui, fit_table::Cell::Mono, &output.short())
-                                    .on_hover_text(if output.hash.is_empty() {
-                                        "SHA-256 of the file"
-                                    } else {
-                                        output.hash.as_str()
-                                    });
-                            });
-                            row.col(|ui| {
-                                ui.label(if output.number == 0 {
-                                    "–".to_owned()
-                                } else {
-                                    parts::run_name(output.number)
-                                });
-                            });
-                            row.col(|ui| {
-                                ui.add(egui::Label::new(&output.saved_because).truncate())
-                                    .on_hover_text(&output.saved_because);
-                            });
-                            row.col(|ui| {
-                                ui.label(output.size.map_or(
-                                    "–".to_owned(),
-                                    antinomie_monitor_core::byte_size::short_size,
-                                ));
-                            });
-                            row.col(|ui| availability_chip(ui, output));
-                            row.col(|ui| {
-                                let buttons = |ui: &mut egui::Ui| {
-                                    artifact_buttons(ui, output, (here, run_there), &mut act);
-                                };
-                                // A narrow table keeps one button, which opens the
-                                // three, so a row stays one line.
-                                if roomy {
-                                    ui.horizontal(buttons);
-                                } else {
-                                    ui.menu_button("Actions", buttons);
-                                }
-                            });
-                            row.response().context_menu(|ui| {
-                                artifact_menu(ui, output, here, &mut act);
-                            });
-                        },
-                    );
-                });
-        });
+        let run_present = |output: &Output| {
+            data.runs
+                .iter()
+                .any(|entry| entry.number == output.number && entry.folder)
+        };
+        table(
+            ui,
+            &data.outputs,
+            &Table {
+                id: "sample_summary_outputs",
+                data_dir: data.data_dir(),
+                font,
+                run_present: &run_present,
+                go_to_run: true,
+                run_label: None,
+            },
+            &mut act,
+        );
     });
     act
 }
 
+/// What a table of artifacts needs besides its rows.
+pub(in crate::app::samples_page) struct Table<'a> {
+    pub(in crate::app::samples_page) id: &'a str,
+    pub(in crate::app::samples_page) data_dir: &'a std::path::Path,
+    pub(in crate::app::samples_page) font: f32,
+    /// Whether the run an output belongs to can still be opened.
+    pub(in crate::app::samples_page) run_present: &'a dyn Fn(&Output) -> bool,
+    /// The Go to run button: the sample page has it, a run's own page does not.
+    pub(in crate::app::samples_page) go_to_run: bool,
+    /// What the Run column says instead of "Run 3": a run's own page names
+    /// its run by id.
+    pub(in crate::app::samples_page) run_label: Option<&'a str>,
+}
+
+/// The rows of `outputs` as the Output files table draws them.
+pub(in crate::app::samples_page) fn table(
+    ui: &mut egui::Ui,
+    outputs: &[Output],
+    table: &Table<'_>,
+    act: &mut Option<Act>,
+) {
+    super::artifact_rows::request_hashes(ui.ctx(), table.data_dir, outputs);
+    kind_counts(ui, outputs);
+    ui.add_space(4.0);
+    let ([file, hash, run, because, size, availability], roomy, actions) =
+        artifact_widths(ui, outputs);
+    parts::on_surface(ui, |ui| {
+        parts::click_table(ui, table.id)
+            .column(crate::widgets::fit_table::Col::fixed(file).clip(true))
+            .column(crate::widgets::fit_table::Col::fixed(hash))
+            .column(crate::widgets::fit_table::Col::fixed(run))
+            .column(crate::widgets::fit_table::Col::fixed(because).clip(true))
+            .column(crate::widgets::fit_table::Col::fixed(size).clip(true))
+            .column(crate::widgets::fit_table::Col::fixed(availability).clip(true))
+            .column(crate::widgets::fit_table::Col::rest(80.0).at_least(actions))
+            .header(fit_table::header_height(table.font), |mut header| {
+                for title in [
+                    "File",
+                    "SHA-256",
+                    "Run",
+                    "Saved because",
+                    "Size",
+                    "Availability",
+                    "",
+                ] {
+                    header.col(|ui| fit_table::head(ui, title));
+                }
+            })
+            .body(|body| {
+                body.rows(
+                    fit_table::row_height(table.font) + 6.0,
+                    outputs.len(),
+                    |mut row| {
+                        let output = &outputs[row.index()];
+                        let here = output.availability == Availability::InRun;
+                        let run_there = (table.run_present)(output);
+                        row.col(|ui| {
+                            ui.add(egui::Label::new(output.kind.label()).truncate())
+                                .on_hover_text(output.kind.label());
+                        });
+                        row.col(|ui| {
+                            fit_table::cell(ui, fit_table::Cell::Mono, &output.short())
+                                .on_hover_text(if output.hash.is_empty() {
+                                    "SHA-256 of the file"
+                                } else {
+                                    output.hash.as_str()
+                                });
+                        });
+                        row.col(|ui| {
+                            ui.label(match table.run_label {
+                                Some(label) => label.to_owned(),
+                                None if output.number == 0 => "–".to_owned(),
+                                None => parts::run_name(output.number),
+                            });
+                        });
+                        row.col(|ui| {
+                            ui.add(egui::Label::new(&output.saved_because).truncate())
+                                .on_hover_text(&output.saved_because);
+                        });
+                        row.col(|ui| {
+                            ui.label(output.size.map_or(
+                                "–".to_owned(),
+                                antinomie_monitor_core::byte_size::short_size,
+                            ));
+                        });
+                        row.col(|ui| availability_chip(ui, output));
+                        row.col(|ui| {
+                            let buttons = |ui: &mut egui::Ui| {
+                                artifact_buttons(
+                                    ui,
+                                    output,
+                                    (here, run_there, table.go_to_run),
+                                    act,
+                                );
+                            };
+                            // A narrow table keeps one button, which opens the
+                            // three, so a row stays one line.
+                            if roomy {
+                                ui.horizontal(buttons);
+                            } else {
+                                ui.menu_button("Actions", buttons);
+                            }
+                        });
+                        row.response().context_menu(|ui| {
+                            artifact_menu(ui, output, (here, table.go_to_run), act);
+                        });
+                    },
+                );
+            });
+    });
+}
+
 /// How many of each kind of artifact are here and how many are gone.
-fn kind_counts(ui: &mut egui::Ui, data: &Data) {
+fn kind_counts(ui: &mut egui::Ui, outputs: &[Output]) {
     ui.horizontal_wrapped(|ui| {
         for kind in [
             Kind::Memory,
@@ -393,13 +437,11 @@ fn kind_counts(ui: &mut egui::Ui, data: &Data) {
             Kind::Saved,
             Kind::StaticReport,
         ] {
-            let here = data
-                .outputs
+            let here = outputs
                 .iter()
                 .filter(|o| o.kind == kind && o.is_present())
                 .count();
-            let gone = data
-                .outputs
+            let gone = outputs
                 .iter()
                 .filter(|o| o.kind == kind && !o.is_present())
                 .count();
@@ -422,13 +464,13 @@ fn kind_counts(ui: &mut egui::Ui, data: &Data) {
 }
 
 /// The widths of the table's columns, whether the buttons fit in a row, and their column.
-fn artifact_widths(ui: &mut egui::Ui, data: &Data) -> ([f32; 6], bool, f32) {
+fn artifact_widths(ui: &mut egui::Ui, outputs: &[Output]) -> ([f32; 6], bool, f32) {
     let body = egui::TextStyle::Body.resolve(ui.style());
     let widest = |title: &str, text: &dyn Fn(&Output) -> String| {
         parts::fitted(
             ui,
             &body,
-            std::iter::once(title.to_owned()).chain(data.outputs.iter().map(text)),
+            std::iter::once(title.to_owned()).chain(outputs.iter().map(text)),
         )
     };
     let file = widest("File", &|output| output.kind.label().to_owned());
@@ -521,7 +563,7 @@ fn availability_chip(ui: &mut egui::Ui, output: &Output) {
 fn artifact_buttons(
     ui: &mut egui::Ui,
     output: &Output,
-    (here, run_there): (bool, bool),
+    (here, run_there, go_to_run): (bool, bool, bool),
     act: &mut Option<Act>,
 ) {
     let why = match output.availability {
@@ -548,10 +590,11 @@ fn artifact_buttons(
     {
         *act = Some(Act::Open(output.number, output.kind));
     }
-    if ui
-        .add_enabled(run_there, egui::Button::new("Go to run").small())
-        .on_disabled_hover_text("The run's folder was deleted")
-        .clicked()
+    if go_to_run
+        && ui
+            .add_enabled(run_there, egui::Button::new("Go to run").small())
+            .on_disabled_hover_text("The run's folder was deleted")
+            .clicked()
     {
         *act = Some(Act::GoToRun(output.number));
     }
@@ -569,7 +612,12 @@ fn artifact_buttons(
 }
 
 /// The menu of an artifact's row.
-fn artifact_menu(ui: &mut egui::Ui, output: &Output, here: bool, act: &mut Option<Act>) {
+fn artifact_menu(
+    ui: &mut egui::Ui,
+    output: &Output,
+    (here, go_to_run): (bool, bool),
+    act: &mut Option<Act>,
+) {
     let why = match output.availability {
         Availability::Deleted => "The file was deleted",
         _ => "The file is missing",
@@ -582,7 +630,7 @@ fn artifact_menu(ui: &mut egui::Ui, output: &Output, here: bool, act: &mut Optio
         *act = Some(Act::Open(output.number, output.kind));
         ui.close();
     }
-    if ui.button("Go to run").clicked() {
+    if go_to_run && ui.button("Go to run").clicked() {
         *act = Some(Act::GoToRun(output.number));
         ui.close();
     }

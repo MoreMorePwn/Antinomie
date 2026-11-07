@@ -44,6 +44,10 @@ pub(crate) struct ProgramRun {
     pub(crate) telemetry_loss: crate::telemetry_loss::LossTracker,
     /// The live rule judge of a run with a dump trigger.
     pub(crate) watch: Option<crate::dump_trigger::Watch>,
+    /// Tasks (by cookie) whose calls the run's recording holds: its process
+    /// tree as far as telemetry has shown it, to tell which run a core taken
+    /// by hand belongs to. Bounded.
+    pub(crate) tasks: std::collections::HashSet<u64>,
 }
 
 impl ProgramRun {
@@ -83,6 +87,7 @@ impl ProgramRun {
             ended_ms: None,
             custody: None,
             telemetry_loss: Default::default(),
+            tasks: Default::default(),
             watch: None,
         };
         run.refresh_analysis_metadata()?;

@@ -53,6 +53,7 @@ impl MemoryView {
 
     pub(super) fn scan(&mut self, roots: &[PathBuf]) {
         self.dumps = memory::list(roots);
+        self.legacy_links = memory::run_links(roots);
         self.dumps_for = Some(roots.to_vec());
         if self
             .selected
@@ -234,12 +235,21 @@ impl MemoryView {
             &tags,
         );
         let filter_id = ui.id().with(("table-filter", "memory-dump-history"));
+        ui.checkbox(&mut self.this_run_only, "This run only")
+            .on_hover_text(match &self.triage_run {
+                Some(run) => format!(
+                    "Only the dumps of the run selected in Triage ({}). A by-hand dump counts for the runs that were live while it was written. It follows that selection.",
+                    crate::run_link::short(run)
+                ),
+                None => "Only the dumps of the run selected in Triage. No run is selected there.".to_owned(),
+            });
         let shown: Vec<_> = self
             .dumps
             .iter()
             .enumerate()
             .filter(|(index, dump)| {
-                filter.keep_table(&memory_dump_row(dump, annotations[*index].as_ref()))
+                self.of_this_run(&self.link_of(dump))
+                    && filter.keep_table(&memory_dump_row(dump, annotations[*index].as_ref()))
             })
             .map(|(_, dump)| dump)
             .collect();
@@ -253,6 +263,10 @@ impl MemoryView {
             self.selected_run = None;
             self.result = None;
         }
+        let cells: Vec<DumpRunCell> = shown
+            .iter()
+            .map(|dump| self.cell_of(&self.link_of(dump)))
+            .collect();
         let mut select = None;
         let mut delete = None;
         let font_size = cx.font_size;
@@ -279,7 +293,7 @@ impl MemoryView {
                     );
                     ui.add(egui::ProgressBar::new(fraction).desired_height(4.0));
                 }
-                for dump in shown {
+                for (dump, cell) in shown.into_iter().zip(cells) {
                     if cx
                         .dumping
                         .is_some_and(|progress| progress.dump.id == dump.id)
@@ -293,10 +307,20 @@ impl MemoryView {
                         theme::text()
                     };
                     let title = crate::evidence::title(ui, &dump.dir, &dump_title(dump));
-                    let row =
-                        capture_row(ui, selected, (&title, color), &dump_detail(dump), font_size)
+                    let (row, run_clicked) = crate::network_view::capture_row_run(
+                        ui,
+                        selected,
+                        (&title, color),
+                        &dump_detail(dump),
+                        Some(cell.line()),
+                        font_size,
+                    );
+                    if run_clicked {
+                        action = cell.run_id.clone().map(MemoryAction::OpenRun);
+                    }
+                    let row = row
                             .on_hover_text(format!(
-                                "{}\n{}{}",
+                                "{}\n{}{}\n\n{}",
                                 dump.path().display(),
                                 dump.boot_id
                                     .as_ref()
@@ -306,9 +330,10 @@ impl MemoryView {
                                     "Symbol table of its base included"
                                 } else {
                                     "No symbol table: Volatility looks for one itself, MemNixFS rebuilds one from the kernel"
-                                }
+                                },
+                                cell.tip_text()
                             ));
-                    if row.clicked() {
+                    if row.clicked() && !run_clicked {
                         select = Some(dump.id.clone());
                     }
                     row.context_menu(|ui| {
@@ -612,5 +637,86 @@ pub(super) fn add_dump_identity(
     }
     if let Some(boot_id) = boot_id {
         row.push(("boot.id", crate::query::RowValue::Text(boot_id.to_owned())));
+    }
+}
+
+/// Which run a dump belongs to, as its record says.
+pub(super) struct Link {
+    pub(super) run: Option<String>,
+    pub(super) live: Vec<String>,
+    pub(super) certainty: antinomie_monitor_core::provenance::Certainty,
+}
+
+/// The Run line of a dump's row.
+pub(super) struct DumpRunCell {
+    text: String,
+    tip: String,
+    clickable: bool,
+    pub(super) run_id: Option<String>,
+}
+
+impl DumpRunCell {
+    pub(super) fn tip_text(&self) -> &str {
+        &self.tip
+    }
+
+    pub(super) fn line(&self) -> crate::network_view::RunLine<'_> {
+        crate::network_view::RunLine {
+            text: &self.text,
+            clickable: self.clickable,
+        }
+    }
+}
+
+impl MemoryView {
+    /// The record's provenance, else what the runs' records say of its folder.
+    pub(super) fn link_of(&self, dump: &MemoryDump) -> Link {
+        let provenance = dump
+            .provenance
+            .as_ref()
+            .filter(|found| {
+                found.run_id.is_some()
+                    || !found.live_runs.is_empty()
+                    || found.certainty != antinomie_monitor_core::provenance::Certainty::Unknown
+            })
+            .or_else(|| self.legacy_links.get(&dump.dir));
+        provenance.map_or(
+            Link {
+                run: None,
+                live: Vec::new(),
+                certainty: antinomie_monitor_core::provenance::Certainty::Unknown,
+            },
+            |found| Link {
+                run: found.run_id.clone(),
+                live: found.live_runs.clone(),
+                certainty: found.certainty,
+            },
+        )
+    }
+
+    pub(super) fn cell_of(&self, link: &Link) -> DumpRunCell {
+        let cell = crate::run_link::cell(
+            link.run.as_deref(),
+            &link.live,
+            link.certainty,
+            &self.run_names,
+        );
+        DumpRunCell {
+            clickable: cell.run_id.is_some(),
+            text: format!("Run: {}", cell.text),
+            tip: cell.tip,
+            run_id: cell.run_id,
+        }
+    }
+
+    /// Whether This run only keeps a dump with this link.
+    pub(super) fn of_this_run(&self, link: &Link) -> bool {
+        if !self.this_run_only {
+            return true;
+        }
+        let Some(run) = &self.triage_run else {
+            return true;
+        };
+        link.run.as_ref() == Some(run) || link.live.contains(run)
     }
 }

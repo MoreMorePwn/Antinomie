@@ -157,6 +157,7 @@ fn live_manual_metadata_refresh_keeps_loaded_inspection_and_filters() {
         issue: None,
         requested_max_size: None,
         guest_max_size: None,
+        provenance: None,
         stored_bytes: None,
         expected_size: None,
         allocated_size: None,
@@ -354,6 +355,9 @@ fn late_catalog_reply_is_rejected_for_vm_and_roots_and_current_refresh_is_queued
                     state: antinomie_monitor_core::RunArtifactState::WaitingForRootExit,
                     deleted: None,
                     sizes: None,
+                    trigger: None,
+                    note: None,
+                    provenance: None,
                 }],
                 ..Default::default()
             }),
@@ -599,6 +603,7 @@ impl Fixture {
                     "Remaining mapping pages were omitted from this synthetic capture".into(),
                 ],
             },
+            provenance: None,
         };
         let mut page = vec![None; PAGE_SIZE * 2];
         page[..4096].fill(Some(0x90));
@@ -722,6 +727,9 @@ fn sidebar_selection_shows_unfinished_capture_without_old_core_context() {
         state: antinomie_monitor_core::RunArtifactState::WaitingForRootExit,
         deleted: None,
         sizes: None,
+        trigger: None,
+        note: None,
+        provenance: None,
     });
     let output = settle(&ctx, &mut fixture.view, size);
     let content = texts(&output);
@@ -791,6 +799,7 @@ fn unfinished_manual_core_shows_recorded_status_without_stale_context() {
         issue: None,
         requested_max_size: None,
         guest_max_size: None,
+        provenance: None,
         stored_bytes: None,
         expected_size: None,
         allocated_size: None,
@@ -1648,6 +1657,9 @@ fn cancel_process_core_shows_only_while_a_capture_is_in_progress_and_cancels_tha
         state,
         deleted: None,
         sizes: None,
+        trigger: None,
+        note: None,
+        provenance: None,
     };
     let button = |texts: &[(String, egui::Rect)]| {
         texts
@@ -1763,6 +1775,9 @@ fn acquired_core(
         state,
         deleted: None,
         sizes: None,
+        trigger: None,
+        note: None,
+        provenance: None,
     }
 }
 
@@ -1887,6 +1902,7 @@ fn a_note_chip_selects_its_core_and_a_core_row_names_the_vm_and_the_core() {
         issue: None,
         requested_max_size: None,
         guest_max_size: None,
+        provenance: None,
         stored_bytes: None,
         expected_size: None,
         allocated_size: None,

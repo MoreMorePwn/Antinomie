@@ -34,6 +34,7 @@ mod regex_matches;
 mod route_ui;
 mod rules_window;
 mod run_filter;
+mod run_link;
 mod run_recording;
 mod run_state_line;
 mod runs;

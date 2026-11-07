@@ -216,7 +216,25 @@ pub struct TriggerRecord {
     pub core: Option<TriggerDump>,
 }
 
+impl LiveFinding {
+    /// "c2.bpf_backdoor (High)".
+    pub fn rule_with_tier(&self) -> String {
+        format!("{} ({})", self.rule, self.tier.label())
+    }
+}
+
 impl TriggerRecord {
+    /// The provenance of this trigger's dumps: the run, the finding and the
+    /// process that made it; exact, since the run asked for them.
+    pub fn provenance(
+        &self,
+        vm_id: &str,
+        boot_id: &str,
+        run_id: &str,
+    ) -> crate::provenance::Provenance {
+        crate::provenance::Provenance::trigger(vm_id, boot_id, run_id, &self.finding, self.at_ms)
+    }
+
     pub fn pending(&self) -> bool {
         [&self.memory, &self.core]
             .into_iter()

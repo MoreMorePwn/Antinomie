@@ -584,9 +584,30 @@ pub(crate) fn capture_row(
     detail: &str,
     font_size: f32,
 ) -> egui::Response {
+    capture_row_run(ui, selected, (title, color), detail, None, font_size).0
+}
+
+/// The Run line of a list row: what it says and whether a click opens the
+/// run. Its tooltip is part of the row's.
+pub(crate) struct RunLine<'a> {
+    pub text: &'a str,
+    pub clickable: bool,
+}
+
+/// A capture-list entry with a third line, "Run: ...", that is a link of its
+/// own. Returns the row's response and whether the run line was clicked.
+pub(crate) fn capture_row_run(
+    ui: &mut egui::Ui,
+    selected: bool,
+    (title, color): (&str, egui::Color32),
+    detail: &str,
+    run: Option<RunLine<'_>>,
+    font_size: f32,
+) -> (egui::Response, bool) {
     let small = (font_size - 2.0).max(11.0);
     let padding = egui::vec2(8.0, 5.0);
-    let height = font_size + small + padding.y * 2.0 + 6.0;
+    let lines = if run.is_some() { 2.0 } else { 1.0 };
+    let height = font_size + (small + 3.0) * lines + padding.y * 2.0 + 3.0;
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
         egui::Sense::click(),
@@ -613,12 +634,34 @@ pub(crate) fn capture_row(
     let top = rect.min + padding;
     let title_height = title.size().y;
     ui.painter().galley(top, title, color);
-    ui.painter().galley(
-        top + egui::vec2(0.0, title_height + 3.0),
-        detail,
-        theme::muted(),
-    );
-    response
+    let detail_top = top + egui::vec2(0.0, title_height + 3.0);
+    let detail_height = detail.size().y;
+    ui.painter().galley(detail_top, detail, theme::muted());
+    let mut run_clicked = false;
+    if let Some(run) = run {
+        let tint = if run.clickable {
+            theme::palette().accent
+        } else {
+            theme::muted()
+        };
+        let galley = line(run.text, egui::FontId::proportional(small), tint);
+        let at = detail_top + egui::vec2(0.0, detail_height + 3.0);
+        let area = egui::Rect::from_min_size(at, egui::vec2(width, galley.size().y));
+        ui.painter().galley(at, galley, tint);
+        // The row keeps the click (a widget on top of it would fight it); the
+        // run line is the part of the row the pointer was in, and the row's
+        // tooltip carries what the line says (`RunLine::tip`).
+        if run.clickable {
+            if ui.rect_contains_pointer(area) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            run_clicked = response.clicked()
+                && response
+                    .interact_pointer_pos()
+                    .is_some_and(|pointer| area.contains(pointer));
+        }
+    }
+    (response, run_clicked)
 }
 
 /// A muted hint centered near the top of an empty area.

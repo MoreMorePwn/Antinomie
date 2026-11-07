@@ -123,13 +123,14 @@ impl Worker {
             memory: None,
             core: None,
         };
-        let (pid, run_id, root_pid) = (finding.pid, run.summary.id.clone(), run.summary.pid);
+        let (run_id, root_pid) = (run.summary.id.clone(), run.summary.pid);
         if plan.core {
             let request = (
                 run.summary.request.core_max_size,
                 run.summary.request.core_timeout_ms,
             );
-            let (mut core, gone) = self.queue_trigger_core(pid, &run_id, root_pid, request, None);
+            let (mut core, gone) =
+                self.queue_trigger_core(&finding, &run_id, root_pid, request, None);
             if gone && core.error.as_deref() == Some("") {
                 // The exit is seen while the guest answers the process list.
                 core.error = Some(self.too_late_for(cookie, &finding));
@@ -155,7 +156,8 @@ impl Worker {
                     ..TriggerDump::default()
                 });
             } else {
-                record.memory = Some(self.start_trigger_memory(plan.memory_max_mib));
+                record.memory =
+                    Some(self.start_trigger_memory(plan.memory_max_mib, cookie, &finding));
             }
         }
         let note = format!(
@@ -244,7 +246,7 @@ impl Worker {
 
     fn queue_trigger_core(
         &mut self,
-        pid: u32,
+        finding: &LiveFinding,
         run_id: &str,
         root_pid: u32,
         (max_size, timeout_ms): (Option<u32>, Option<u32>),
@@ -253,6 +255,7 @@ impl Worker {
         let Some(session) = self.session.as_mut() else {
             return (failed("the VM is stopped"), false);
         };
+        let pid = finding.pid;
         if pid == 0 {
             return (failed("the call names no process"), true);
         }
@@ -284,6 +287,13 @@ impl Worker {
             Ok(id) => {
                 if let Some(owner) = session.manual_cores.get_mut(&id) {
                     owner.eager = true;
+                    owner.summary.provenance = Some(crate::provenance::Provenance::trigger(
+                        &session.vm.id,
+                        &session.boot_id,
+                        run_id,
+                        finding,
+                        unix_ms(),
+                    ));
                 }
                 (
                     TriggerDump {
@@ -298,7 +308,12 @@ impl Worker {
         }
     }
 
-    fn start_trigger_memory(&mut self, max_mib: u32) -> TriggerDump {
+    fn start_trigger_memory(
+        &mut self,
+        max_mib: u32,
+        cookie: u64,
+        finding: &LiveFinding,
+    ) -> TriggerDump {
         let Some(session) = self.session.as_ref() else {
             return failed("the VM is stopped");
         };
@@ -320,7 +335,7 @@ impl Worker {
                 ));
             }
         }
-        match self.start_memory_dump_for(None) {
+        match self.start_memory_dump_for(None, Some((cookie, finding))) {
             Ok(_) => match self.snapshot.memory_dump.as_ref() {
                 Some(progress) => TriggerDump {
                     state: RunArtifactState::InProgress,
@@ -481,7 +496,17 @@ impl Worker {
                 .and_then(|session| session.runs.get(&cookie))
                 .and_then(|run| run.summary.request.dump_trigger.as_ref())
                 .map_or(0, |plan| plan.memory_max_mib);
-            let dump = self.start_trigger_memory(max);
+            let Some(finding) = self
+                .session
+                .as_ref()
+                .and_then(|session| session.runs.get(&cookie))
+                .and_then(|run| run.summary.triggers.as_ref())
+                .and_then(|log| log.records.get(index))
+                .map(|record| record.finding.clone())
+            else {
+                continue;
+            };
+            let dump = self.start_trigger_memory(max, cookie, &finding);
             self.save_trigger(cookie, |log| {
                 if let Some(record) = log.records.get_mut(index) {
                     record.memory = Some(dump);
@@ -507,7 +532,7 @@ impl Worker {
             limits,
         } = gone;
         let (mut core, still_gone) =
-            self.queue_trigger_core(finding.pid, &run_id, root_pid, limits, Some(&target));
+            self.queue_trigger_core(&finding, &run_id, root_pid, limits, Some(&target));
         if still_gone && core.error.as_deref() == Some("") {
             core.error = Some(self.too_late_for(cookie, &finding));
         }

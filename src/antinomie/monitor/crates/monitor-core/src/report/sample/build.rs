@@ -89,7 +89,11 @@ pub fn identity(
             .take(LIST_ROWS)
             .map(|alias| NameRow {
                 name: alias.name.clone(),
-                path: alias.path.clone(),
+                path: if alias.host_path {
+                    "imported from a file on this computer".into()
+                } else {
+                    alias.path.clone()
+                },
                 seen: alias.seen.clone(),
             })
             .collect(),

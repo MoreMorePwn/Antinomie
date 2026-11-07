@@ -63,6 +63,7 @@ pub mod packet_filter;
 pub mod parser;
 mod pre_ack;
 mod process_tree;
+pub mod provenance;
 mod quota;
 pub mod read_gaps;
 mod recapture;

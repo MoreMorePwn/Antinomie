@@ -108,6 +108,9 @@ struct CoreCatalog {
     imported: Vec<CoreRecord>,
     acquired: Vec<AcquiredCore>,
     manual: Vec<ProcessCoreCapture>,
+    /// Manual cores that a run's dump trigger took, by folder: the label
+    /// "Trigger: <finding>" they are listed with, and the run.
+    triggers: Vec<(PathBuf, (String, String))>,
     issues: Vec<String>,
 }
 
@@ -118,6 +121,8 @@ pub(crate) enum CoreAction {
     CancelRun(String),
     /// Delete a saved core, once the user confirms.
     Delete(crate::evidence_delete::Deletion),
+    /// Open this run in Triage: its Run column was clicked.
+    OpenRun(String),
 }
 
 pub(crate) struct CoreControls<'a> {
@@ -140,6 +145,12 @@ struct AcquiredCore {
     deleted: Option<&'static str>,
     /// Sizes and reason the run recorded for its exit core.
     sizes: Option<sizes::CoreSizes>,
+    /// "Trigger: <finding>" for a core the run's dump trigger took.
+    trigger: Option<String>,
+    /// What a trigger core's record says of its size or why it is missing.
+    note: Option<String>,
+    /// Which run it belongs to and why it was taken.
+    provenance: Option<antinomie_monitor_core::provenance::Provenance>,
 }
 
 impl AcquiredCore {
@@ -153,6 +164,10 @@ impl AcquiredCore {
     fn status_text(&self) -> String {
         match self.deleted {
             Some(label) => label.to_owned(),
+            None if self.trigger.is_some() => match &self.note {
+                Some(note) => format!("{} \u{b7} {note}", self.status()),
+                None => self.status().to_owned(),
+            },
             None => sizes::acquired_status(self.state, self.sizes.as_ref())
                 .unwrap_or_else(|| self.status().to_owned()),
         }
@@ -236,8 +251,39 @@ pub(crate) struct CoreView {
     /// What the shared Details panel shows: the row chosen last.
     detail: Option<details::CoreDetail>,
     strings: strings::StringsState,
+    /// The runs of the VM, for the Run column.
+    run_names: crate::run_link::RunNames,
+    /// The run list `run_names` was made from.
+    names_for: Option<std::sync::Arc<Vec<antinomie_monitor_core::RunSummary>>>,
+    /// The run selected in Triage, which "This run only" follows.
+    triage_run: Option<String>,
+    this_run_only: bool,
+    /// Folders of cores a dump trigger took, with their "Trigger: ..." label.
+    trigger_twins: std::collections::HashMap<PathBuf, (String, String)>,
 }
 impl CoreView {
+    /// The runs of the VM and the run Triage has selected, once per frame.
+    pub(crate) fn set_runs(
+        &mut self,
+        runs: &std::sync::Arc<Vec<antinomie_monitor_core::RunSummary>>,
+        triage_run: Option<String>,
+    ) {
+        if !self
+            .names_for
+            .as_ref()
+            .is_some_and(|known| std::sync::Arc::ptr_eq(known, runs))
+        {
+            self.run_names = crate::run_link::RunNames::of(runs);
+            self.names_for = Some(std::sync::Arc::clone(runs));
+        }
+        self.triage_run = triage_run;
+    }
+
+    /// Show only the cores of the run selected in Triage (or all of them).
+    pub(crate) fn set_this_run_only(&mut self, on: bool) {
+        self.this_run_only = on;
+    }
+
     /// A note's chip asks for a core of the selected VM: the list selects it
     /// the next time it is drawn.
     /// The Content searches under way, for the Jobs window.
@@ -647,5 +693,7 @@ impl Drop for CoreView {
 mod issue_tests;
 #[cfg(test)]
 mod layout_tests;
+#[cfg(test)]
+mod run_tests;
 #[cfg(test)]
 mod tests;
