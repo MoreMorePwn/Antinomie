@@ -347,6 +347,37 @@ impl<'open> Dialog<'open> {
     }
 }
 
+/// Escape was pressed while the window `id` is the topmost one and no text
+/// field or menu has the key: the window should close. The key is consumed.
+pub fn escape_closes(ctx: &egui::Context, id: egui::Id) -> bool {
+    if !ctx.input(|input| input.key_pressed(egui::Key::Escape))
+        || egui::Popup::is_any_open(ctx)
+        || ctx.memory(|memory| memory.focused().is_some())
+    {
+        return false;
+    }
+    let top = ctx.memory(|memory| {
+        memory
+            .layer_ids()
+            .filter(|layer| layer.order == egui::Order::Middle)
+            .last()
+            .map(|layer| layer.id)
+    });
+    let closes = top == Some(id);
+    if closes {
+        ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+    }
+    closes
+}
+
+/// Where a window that grows downward opens: top edge near the top of the
+/// content area, so its title bar and close button stay where they were while
+/// its content changes. Use with `.pivot(Align2::CENTER_TOP)`.
+pub fn top_anchor(ctx: &egui::Context) -> egui::Pos2 {
+    let area = crate::title_bar::content_rect(ctx);
+    egui::pos2(area.center().x, area.top() + 56.0)
+}
+
 const CLOSE_SIZE: f32 = 22.0;
 
 /// The share of the content area a spawned window may take each way.
