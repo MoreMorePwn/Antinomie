@@ -62,7 +62,7 @@ mod vm_screen;
 mod widgets;
 mod workspace;
 
-use antinomie_monitor_core::{Backend, BackendOptions, Command, Notification};
+use antinomie_monitor_core::BackendOptions;
 use clap::Parser;
 use std::{path::PathBuf, time::Duration};
 
@@ -194,9 +194,12 @@ fn main() -> eframe::Result<()> {
     }
     if let Some(directory) = args.install_base {
         // A plain message and exit code 1, not eframe's Debug form of the error.
-        if let Err(message) = install_base(options, directory) {
-            eprintln!("{}", failure_line(&message));
-            std::process::exit(1);
+        match antinomie_monitor_core::direct::install_base(options, directory) {
+            Ok(message) => println!("{message}"),
+            Err(message) => {
+                eprintln!("{}", failure_line(&message));
+                std::process::exit(1);
+            }
         }
         return Ok(());
     }
@@ -250,42 +253,6 @@ fn failure_line(message: &str) -> String {
     format!("Error: {message}")
 }
 
-fn install_base(options: BackendOptions, directory: PathBuf) -> Result<(), String> {
-    let mut backend = Backend::new(options)?;
-    let id = backend.send(Command::ImportBase { directory })?;
-    // Copying and verifying a desktop image can exceed two minutes. The worker
-    // owns that operation until completion, including during shutdown, so a
-    // frontend deadline cannot cancel it or truthfully report its outcome.
-    let result = wait_for_base_import(id, |timeout| backend.recv_timeout(timeout));
-    let shutdown = backend.shutdown();
-    match (result, shutdown) {
-        (Ok(message), Ok(())) => {
-            println!("{message}");
-            Ok(())
-        }
-        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
-        (Err(error), Err(shutdown)) => Err(format!("{error}; shutdown: {shutdown}")),
-    }
-}
-
-fn wait_for_base_import(
-    id: u64,
-    mut receive: impl FnMut(Duration) -> Result<Option<Notification>, String>,
-) -> Result<String, String> {
-    loop {
-        if let Some(Notification::CommandResult {
-            id: reply,
-            success,
-            message,
-        }) = receive(Duration::from_secs(1))?
-        {
-            if reply == id {
-                return if success { Ok(message) } else { Err(message) };
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,49 +260,5 @@ mod tests {
     #[test]
     fn command_line_failures_are_plain_text() {
         assert_eq!(failure_line("no bundle"), "Error: no bundle");
-    }
-
-    #[test]
-    fn base_import_waits_past_two_minutes_of_receive_timeouts_for_its_result() {
-        let mut polls = 0;
-        let result = wait_for_base_import(7, |timeout| {
-            assert_eq!(timeout, Duration::from_secs(1));
-            polls += 1;
-            Ok((polls > 130).then(|| Notification::CommandResult {
-                id: 7,
-                success: true,
-                message: "base imported".into(),
-            }))
-        });
-        assert_eq!(result.as_deref(), Ok("base imported"));
-        assert_eq!(polls, 131);
-    }
-
-    #[test]
-    fn base_import_ignores_other_commands_and_preserves_its_failure() {
-        let mut notifications = [
-            Notification::CommandResult {
-                id: 6,
-                success: true,
-                message: "another command completed".into(),
-            },
-            Notification::CommandResult {
-                id: 7,
-                success: false,
-                message: "bundle changed during import; copies rejected".into(),
-            },
-        ]
-        .into_iter();
-        let result = wait_for_base_import(7, |_| Ok(notifications.next()));
-        assert_eq!(
-            result,
-            Err("bundle changed during import; copies rejected".into())
-        );
-    }
-
-    #[test]
-    fn base_import_reports_disconnected_worker_without_claiming_success() {
-        let result = wait_for_base_import(7, |_| Err("backend owner disconnected".into()));
-        assert_eq!(result, Err("backend owner disconnected".into()));
     }
 }
