@@ -1,0 +1,23 @@
+[package]
+name = "antinomie-cli"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+authors.workspace = true
+description = "Antinomie command line: headless analysis and Auto mode"
+
+[[bin]]
+name = "antinomie-cli"
+path = "src/main.rs"
+
+[dependencies]
+antinomie-monitor-core = { path = "../monitor-core" }
+antinomie-service = { path = "../service" }
+clap = { version = "4", features = ["derive"] }
+serde.workspace = true
+# Result objects print their members in the order a command built them.
+serde_json = { workspace = true, features = ["preserve_order"] }
+
+[dev-dependencies]
+rustix = { version = "1", features = ["fs"] }
+rusqlite = "0.41.0"

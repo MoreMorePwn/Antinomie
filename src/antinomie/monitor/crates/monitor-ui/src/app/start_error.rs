@@ -10,6 +10,8 @@ pub(super) fn advice(error: &str) -> &'static str {
         "Antinomie found data from an older version and could not move it into the new data folder. \
          Close every other Antinomie window, then press Retry. If this stays, move or delete the new data folder \
          (the path is under Settings once the app starts, by default ~/antinomie) if it holds nothing you need, then Retry."
+    } else if error.starts_with(antinomie_monitor_core::data_owner::IN_USE) {
+        "Another Antinomie process owns this data folder (named above). Close it, or start this one with a different data folder (--data-dir), then press Retry."
     } else {
         "Fix the cause named above (a full disk, a folder you cannot write to, another Antinomie still running), then press Retry."
     }
@@ -75,5 +77,20 @@ impl MonitorApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::advice;
+
+    #[test]
+    fn a_directory_owned_by_another_process_gets_its_own_advice() {
+        let owned = format!(
+            "{} by the Antinomie daemon (pid 7)",
+            antinomie_monitor_core::data_owner::IN_USE
+        );
+        assert!(advice(&owned).contains("--data-dir"));
+        assert!(!advice("disk full").contains("--data-dir"));
     }
 }

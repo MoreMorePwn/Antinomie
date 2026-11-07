@@ -539,6 +539,9 @@ pub struct BackendOptions {
     /// port of a base whose command line names none (Debian's), so its boot
     /// shows in the serial log. The app leaves it off.
     pub serial_console: bool,
+    /// What this process records about itself in `run/owner.json` when it
+    /// takes the data directory (the window by default).
+    pub owner: crate::data_owner::OwnerClaim,
 }
 impl Default for BackendOptions {
     fn default() -> Self {
@@ -562,6 +565,7 @@ impl Default for BackendOptions {
             start: StartSettings::default(),
             headless: false,
             serial_console: false,
+            owner: Default::default(),
         }
     }
 }

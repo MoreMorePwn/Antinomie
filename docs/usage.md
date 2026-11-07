@@ -1535,6 +1535,93 @@ column repeated. The HTML prints on a landscape page. The exports of runs and
 samples have a **Tactic** column for ATT&CK techniques (named in text, with the
 colour as a chip in HTML and a bar in PDF).
 
+## Command line (0.9.0)
+
+`antinomie-cli` is the headless front end: the same engine as the window, with no
+display. It ships beside `antinomie-monitor` and does not link the GUI libraries.
+The grammar is `antinomie-cli [GLOBAL FLAGS] GROUP COMMAND [FLAGS] [ARGS]`; the
+global flags may also follow the command.
+
+| Global flag | Meaning |
+|---|---|
+| `--data-dir PATH` | Data directory (default `$HOME/antinomie`; `~` is expanded). Use a directory of its own for automation, never the one the window uses |
+| `--bundle PATH`, `--qemu PATH`, `--qemu-img PATH`, `--tcg`, `--no-headless` | Engine options, as in the window. The CLI is headless unless `--no-headless` is given |
+| `--direct`, `--daemon`, `--socket PATH` | Choose direct mode or a running daemon (they conflict) |
+| `-o, --format human\|json\|ndjson` | Output format; `human` on a terminal, `json` otherwise |
+| `--color auto\|always\|never` | Colour of human output; `NO_COLOR` is honoured |
+| `-q`, `-v`, `-vv`, `--log-format text\|json` | Log lines on standard error |
+| `--timeout SECONDS` | Overall limit of the command |
+
+**Output.** `json` prints exactly one document on standard output:
+`{"api_version":1,"ok":true,"result":...}`, or on failure (with a non-zero exit)
+`{"api_version":1,"ok":false,"error":{"code":...,"message":...,"retryable":...,"details":...}}`.
+A list result is `{"items":[...],"next_cursor":...}`. `ndjson` prints one object
+per line: a list command prints its items and then a last line
+`{"result":{"count":N,"next_cursor":...}}`; any other command prints
+`{"result":...}`; a failure prints `{"error":...}`. Log lines stay on standard error.
+
+**Exit codes.**
+
+| Code | Name | Meaning |
+|---|---|---|
+| 0 | ok | Success |
+| 1 | failed | Other failure |
+| 2 | usage | Bad arguments |
+| 3 | not_found | Sample, run, VM, base or job does not exist |
+| 4 | invalid | The arguments were refused (`invalid_argument`, `precondition_failed`, `conflict`) |
+| 5 | denied | Policy or file permission |
+| 10 to 14 | job_failed, job_partial, job_cancelled, job_rejected, wait_timeout | A waited job did not succeed (Auto mode) |
+| 20 | dependency | A required tool is missing; `doctor` shows which |
+| 21 | busy | The data directory is owned by another process, or the daemon is starting or stopping |
+| 22 | quota | `quota_exceeded` |
+| 30 to 32 | suspicious, malicious, inconclusive | With `--verdict-exit` only (Auto mode) |
+| 130 | interrupted | Interrupted with Ctrl-C |
+
+**Commands so far.**
+
+- `doctor [--require tool,...]` lists the runtime tools and exits 20 when a
+  required one is missing. Without `--require` the tools the window also treats as
+  required count; a missing KVM is a warning (VMs then run with TCG). Tool names:
+  `qemu`, `qemu-img`, `gtk`, `kvm`, `curl`, `debian-account`, `bubblewrap`,
+  `tshark`, `prlimit`, `suricata`, `python-venv`, `wireshark`, `file-chooser`.
+- `capabilities` prints the API version, the app version and revision, the lane
+  count, the report formats and the accelerator (`kvm` or `tcg`).
+- `doctor` also reports who owns the data directory (`data_dir.owner`, from
+  `run/owner.json`, ignored when its process is gone). A command that needs the
+  engine while the window owns the directory exits 21 and names the window.
+- `sample add FILE... [--name N] [--tag K=V] [--delete-original]` hashes and archives
+  files in the library (never runs them) and prints the SHA-256 of each; a tag is
+  `verdict=`, `category=`, `technique=` or `custom=` plus a value, or a bare custom
+  value. `sample list [--q TEXT] [--tag K=V] [--limit N] [--cursor C] [--all]
+  [--custody]`, `sample show SHA256 [--origins] [--events] [--runs]`,
+  `sample tag SHA256 TAG... [--remove]`, `sample verify [SHA256]` (exit 1 when an
+  archive does not match its hash) and `sample remove SHA256 --yes` (deletes the
+  archive; the record and its custody log stay). A sample is the `Sample` object
+  of the job API: `sha256`, `size`, `type`, `architecture`, `name`, `tags`,
+  `first_seen_ms`, `run_count`, `last_job`, `custody_ok` (null unless
+  `--custody` or `show`). These commands and `custody verify` need no engine
+  lock, so they work while the window is open.
+- `custody verify [SHA256] [--export PATH] [--sign minisign|ssh --key KEY]` checks
+  the custody chain of one sample, or every chain and the library index when no
+  SHA-256 is given (exit 1 when something does not verify). `--export` writes the
+  custody record of the sample (JSON with `verify-custody.py` beside it, or a
+  readable page for a `.html` path), optionally signed with your own key.
+- `analyze FILE [--checks LIST] [--time-limit-min N] [--out DIR] [--vm ID]` runs
+  the static analysis of a file on the host, with no VM, and prints a summary of
+  each check. It starts the engine itself (so it needs the data directory to be
+  free: exit 21 names the owner) and needs bubblewrap. The report folder is
+  `<data>/<ID>/analyses/<report id>` (`ID` defaults to `cli-analysis`, which is
+  not a VM); `--out` also copies the report folder, and the folders of any
+  unpacked layers, into `DIR`. `--checks` takes the names metadata, structures,
+  strings, regex, entropy, hardening, rules, identification, capabilities,
+  disassembly, decompilation, embedded, floss, unpacking; the default is the
+  triage set.
+- `rules list [--engine yara|sigma|ids]` lists the installed rule packs and
+  custom groups with their state; `rules enable ID` and `rules disable ID` switch
+  one (`pack:ID` or `group:ID` when an id names both). Changing the selection
+  takes the data-directory lock; listing does not.
+- `config path` prints the paths of `settings.json`, `service.toml` and `policies/`.
+
 ## Troubleshooting
 
 - **Settings did not survive a restart** (0.8.1 and earlier): fixed in 0.8.2; the

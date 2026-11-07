@@ -1,0 +1,867 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! `sample add/list/show/tag/verify/remove` (design 3.4.3). The commands work
+//! on the library directly and need no engine lock, so they run beside a
+//! window or a daemon. Results use the `Sample` object of design 5.4.7.
+use super::library::{library_error, open_existing, open_for_write, parse_sha256};
+use crate::{
+    context::Context,
+    error::{CliError, ErrorCode},
+    output::{Reply, block, table},
+};
+use antinomie_monitor_core::samples::{
+    Library, NewOrigin, NewSample, SampleRecord, Tag, TagKind, Verification, arch_label,
+};
+use clap::{Args, Subcommand};
+use serde_json::{Value, json};
+use std::path::PathBuf;
+
+#[derive(Subcommand, Debug)]
+pub enum Sample {
+    /// Add files to the library (hashed and archived, never run).
+    Add(Add),
+    /// List samples, newest first.
+    List(List),
+    /// Show one sample.
+    Show(Show),
+    /// Add or remove tags.
+    Tag(TagArgs),
+    /// Read archives back and compare their SHA-256.
+    Verify {
+        /// One sample; default: every sample that has an archive.
+        sha256: Option<String>,
+    },
+    /// Delete a sample's archive (the record and its custody log stay).
+    Remove {
+        sha256: String,
+        /// Confirm the deletion.
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct Add {
+    #[arg(required = true, value_name = "FILE")]
+    pub files: Vec<PathBuf>,
+    /// Library name (one file only; default: the file name).
+    #[arg(long)]
+    pub name: Option<String>,
+    /// Tag as KIND=VALUE (verdict, category, technique, custom) or a bare custom value.
+    #[arg(long = "tag", value_name = "K=V")]
+    pub tags: Vec<String>,
+    /// Delete the original after the archive read back and matched.
+    #[arg(long)]
+    pub delete_original: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct List {
+    /// Text in the name, SHA-256, type, architecture or a tag.
+    #[arg(long)]
+    pub q: Option<String>,
+    /// Only samples with this tag (KIND=VALUE); repeat to require several.
+    #[arg(long = "tag", value_name = "K=V")]
+    pub tags: Vec<String>,
+    /// At most this many samples.
+    #[arg(long, default_value_t = 100)]
+    pub limit: usize,
+    /// Continue after the `next_cursor` of an earlier page.
+    #[arg(long)]
+    pub cursor: Option<String>,
+    /// Include samples whose archive was removed.
+    #[arg(long)]
+    pub all: bool,
+    /// Fill `custody_ok` by checking every chain (otherwise it is null).
+    #[arg(long)]
+    pub custody: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct Show {
+    pub sha256: String,
+    /// Add the routes that brought the sample in.
+    #[arg(long)]
+    pub origins: bool,
+    /// Add the custody events.
+    #[arg(long)]
+    pub events: bool,
+    /// Add the runs the library knows.
+    #[arg(long)]
+    pub runs: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct TagArgs {
+    pub sha256: String,
+    #[arg(required = true, value_name = "TAG")]
+    pub tags: Vec<String>,
+    /// Remove the tags instead of adding them.
+    #[arg(long)]
+    pub remove: bool,
+}
+
+pub fn run(sample: &Sample, context: &Context) -> Result<Reply, CliError> {
+    let data = context.data_dir();
+    match sample {
+        Sample::Add(arguments) => add(arguments, open_for_write(data)?),
+        Sample::List(arguments) => list(arguments, open_existing(data)?),
+        Sample::Show(arguments) => show(arguments, open_existing(data)?),
+        Sample::Tag(arguments) => tag(arguments, open_for_write(data)?),
+        Sample::Verify { sha256 } => verify(sha256.as_deref(), open_existing(data)?),
+        Sample::Remove { sha256, yes } => remove(sha256, *yes, open_existing(data)?),
+    }
+}
+
+/// `KIND=VALUE` as a tag; a bare value is a custom tag.
+pub fn parse_tag(text: &str) -> Result<Tag, CliError> {
+    let (kind, value) = match text.split_once('=') {
+        Some(("verdict", value)) => (TagKind::Verdict, value),
+        Some(("category", value)) => (TagKind::Category, value),
+        Some(("technique", value)) => (TagKind::Technique, value),
+        Some(("custom", value)) => (TagKind::Custom, value),
+        Some((kind, _)) => {
+            return Err(CliError::invalid(format!(
+                "unknown tag kind {kind:?}; use verdict, category, technique or custom"
+            ))
+            .with_field("tag"));
+        }
+        None => (TagKind::Custom, text),
+    };
+    let tag = Tag::new(kind, value);
+    tag.validate()
+        .map_err(|message| CliError::invalid(message).with_field("tag"))?;
+    Ok(tag)
+}
+
+fn tag_value(tag: &Tag) -> Value {
+    json!({"kind": tag.kind, "value": tag.value})
+}
+
+/// The `Sample` object of design 5.4.7. `last_job` is null until Auto mode
+/// records jobs; `custody_ok` is null when no chain check was made.
+pub fn sample_value(
+    record: &SampleRecord,
+    tags: &[Tag],
+    run_count: usize,
+    custody_ok: Option<bool>,
+) -> Value {
+    json!({
+        "sha256": record.sha256,
+        "size": record.size,
+        "type": record.file_type.to_ascii_lowercase(),
+        "architecture": (!record.arch.is_empty()).then(|| arch_label(&record.arch)),
+        "name": record.name,
+        "tags": tags.iter().map(tag_value).collect::<Vec<_>>(),
+        "first_seen_ms": record.added_ms,
+        "run_count": run_count,
+        "last_job": Value::Null,
+        "custody_ok": custody_ok,
+    })
+}
+
+fn add(arguments: &Add, mut library: Library) -> Result<Reply, CliError> {
+    if arguments.name.is_some() && arguments.files.len() > 1 {
+        return Err(CliError::invalid("--name names one sample; give one file").with_field("name"));
+    }
+    let tags: Vec<Tag> = arguments
+        .tags
+        .iter()
+        .map(|text| parse_tag(text))
+        .collect::<Result<_, _>>()?;
+    let mut items = Vec::new();
+    let mut failures = 0;
+    let mut first_failure: Option<CliError> = None;
+    for path in &arguments.files {
+        let new = NewSample {
+            name: arguments.name.clone().unwrap_or_default(),
+            tags: tags.clone(),
+            origin: NewOrigin::default(),
+            ..Default::default()
+        };
+        match library.add_file(path, new, arguments.delete_original) {
+            Ok(added) => {
+                let record = library.get(&added.sha256).map_err(library_error)?;
+                let mut item =
+                    json!({"path": path, "ok": true, "sha256": added.sha256, "new": added.new});
+                if let Some(record) = record {
+                    item["name"] = record.name.into();
+                    item["size"] = record.size.into();
+                    item["type"] = record.file_type.to_ascii_lowercase().into();
+                }
+                items.push(item);
+            }
+            Err(message) => {
+                failures += 1;
+                let error = library_error(message);
+                items.push(json!({"path": path, "ok": false, "error": error.to_value()}));
+                first_failure.get_or_insert(error);
+            }
+        }
+    }
+    let rows: Vec<Vec<String>> = items
+        .iter()
+        .map(|item| {
+            vec![
+                item["sha256"].as_str().unwrap_or("-").to_owned(),
+                match (item["ok"].as_bool(), item["new"].as_bool()) {
+                    (Some(true), Some(true)) => "added".to_owned(),
+                    (Some(true), _) => "already in the library".to_owned(),
+                    _ => format!(
+                        "FAILED: {}",
+                        item["error"]["message"].as_str().unwrap_or("")
+                    ),
+                },
+                item["path"].as_str().unwrap_or("").to_owned(),
+            ]
+        })
+        .collect();
+    let text = table(&["sha256", "result", "file"], &rows);
+    match first_failure {
+        None => Ok(Reply::list(items, None).with_human(text)),
+        Some(first) => Err(CliError::new(
+            first.code,
+            format!(
+                "{failures} of {} files were not added: {}",
+                items.len(),
+                first.message
+            ),
+        )
+        .with_details(json!({"items": items}))
+        .with_human_output(text)),
+    }
+}
+
+fn matches_query(value: &Value, query: &str) -> bool {
+    let needle = query.to_ascii_lowercase();
+    let mut texts = vec![
+        value["sha256"].as_str().unwrap_or("").to_owned(),
+        value["name"].as_str().unwrap_or("").to_owned(),
+        value["type"].as_str().unwrap_or("").to_owned(),
+        value["architecture"].as_str().unwrap_or("").to_owned(),
+    ];
+    if let Some(tags) = value["tags"].as_array() {
+        texts.extend(
+            tags.iter()
+                .filter_map(|t| t["value"].as_str())
+                .map(str::to_owned),
+        );
+    }
+    texts
+        .iter()
+        .any(|text| text.to_ascii_lowercase().contains(&needle))
+}
+
+fn has_tags(tags: &[Tag], wanted: &[Tag]) -> bool {
+    wanted.iter().all(|want| {
+        tags.iter()
+            .any(|tag| tag.kind == want.kind && tag.value == want.value)
+    })
+}
+
+/// `v1.<offset>`: where the next page starts in the newest-first order.
+fn parse_cursor(cursor: Option<&str>) -> Result<usize, CliError> {
+    match cursor {
+        None => Ok(0),
+        Some(text) => text
+            .strip_prefix("v1.")
+            .and_then(|offset| offset.parse().ok())
+            .ok_or_else(|| {
+                CliError::invalid("the cursor is not one this command returned")
+                    .with_field("cursor")
+            }),
+    }
+}
+
+fn list(arguments: &List, library: Option<Library>) -> Result<Reply, CliError> {
+    if arguments.limit == 0 || arguments.limit > 1000 {
+        return Err(CliError::invalid("--limit is 1 to 1000").with_field("limit"));
+    }
+    let wanted: Vec<Tag> = arguments
+        .tags
+        .iter()
+        .map(|text| parse_tag(text))
+        .collect::<Result<_, _>>()?;
+    let offset = parse_cursor(arguments.cursor.as_deref())?;
+    let Some(library) = library else {
+        return Ok(Reply::list(Vec::new(), None).with_human("No samples.\n".into()));
+    };
+    let tags = library.all_tags().map_err(library_error)?;
+    let runs = library.run_stats().map_err(library_error)?;
+    let checks = if arguments.custody {
+        Some(library.custody_check_all().map_err(library_error)?)
+    } else {
+        None
+    };
+    let mut matching = Vec::new();
+    for record in library.list().map_err(library_error)? {
+        if record.removed_ms.is_some() && !arguments.all {
+            continue;
+        }
+        let own = tags.get(&record.sha256).map_or(&[][..], Vec::as_slice);
+        if !has_tags(own, &wanted) {
+            continue;
+        }
+        let custody_ok = checks.as_ref().map(|all| {
+            all.samples
+                .get(&record.sha256)
+                .is_none_or(|check| check.ok())
+        });
+        let count = runs.get(&record.sha256).map_or(0, |stats| stats.count);
+        let value = sample_value(&record, own, count, custody_ok);
+        if arguments
+            .q
+            .as_deref()
+            .is_none_or(|q| matches_query(&value, q))
+        {
+            matching.push(value);
+        }
+    }
+    let end = (offset + arguments.limit).min(matching.len());
+    let page: Vec<Value> = matching.get(offset..end).unwrap_or_default().to_vec();
+    let next = (end < matching.len()).then(|| format!("v1.{end}"));
+    let rows: Vec<Vec<String>> = page.iter().map(row).collect();
+    let mut text = table(&["sha256", "size", "type", "arch", "runs", "name"], &rows);
+    if let Some(next) = &next {
+        text.push_str(&format!("more: --cursor {next}\n"));
+    }
+    Ok(Reply::list(page, next).with_human(text))
+}
+
+fn row(sample: &Value) -> Vec<String> {
+    vec![
+        sample["sha256"].as_str().unwrap_or("").to_owned(),
+        sample["size"].to_string(),
+        sample["type"].as_str().unwrap_or("").to_owned(),
+        sample["architecture"].as_str().unwrap_or("-").to_owned(),
+        sample["run_count"].to_string(),
+        sample["name"].as_str().unwrap_or("").to_owned(),
+    ]
+}
+
+fn missing_library(sha256: &str) -> CliError {
+    CliError::not_found(format!("sample {sha256} is not in the library")).with_field("sha256")
+}
+
+fn show(arguments: &Show, library: Option<Library>) -> Result<Reply, CliError> {
+    let sha256 = parse_sha256(&arguments.sha256)?;
+    let library = library.ok_or_else(|| missing_library(&sha256))?;
+    let record = library
+        .get(&sha256)
+        .map_err(library_error)?
+        .ok_or_else(|| missing_library(&sha256))?;
+    let tags = library.tags(&sha256).map_err(library_error)?;
+    let runs = library.runs_of(&sha256).map_err(library_error)?;
+    let check = library.custody_check(&sha256).map_err(library_error)?;
+    let mut value = sample_value(&record, &tags, runs.len(), Some(check.ok()));
+    value["sha1"] = record.sha1.clone().into();
+    value["md5"] = record.md5.clone().into();
+    value["description"] = record.description.clone().into();
+    value["removed_ms"] = record.removed_ms.into();
+    if arguments.origins {
+        let origins = library.origins(&sha256).map_err(library_error)?;
+        value["origins"] = origins
+            .iter()
+            .map(|o| {
+                json!({
+                    "kind": o.kind.as_str(), "source": o.source, "detail": o.detail,
+                    "name": o.name, "path": o.path, "vm_id": o.vm_id, "vm_name": o.vm_name,
+                    "run_id": o.run_id, "parent": o.parent, "at_ms": o.at_ms,
+                    "before_custody": o.before_custody,
+                })
+            })
+            .collect();
+    }
+    if arguments.events {
+        let events = library.events(&sha256).map_err(library_error)?;
+        value["events"] = events
+            .iter()
+            .map(|e| {
+                json!({
+                    "seq": e.seq, "at_ms": e.at_ms, "by": e.by, "kind": e.event.key(),
+                    "label": e.event.label(), "detail": e.event.detail(),
+                    "before_chain": e.before_chain, "hash": e.hash,
+                })
+            })
+            .collect();
+    }
+    if arguments.runs {
+        value["runs"] = runs
+            .iter()
+            .map(|r| {
+                json!({
+                    "vm_id": r.vm_id, "vm_name": r.vm_name, "run_id": r.run_id,
+                    "started_ms": r.started_ms, "exit": r.exit,
+                })
+            })
+            .collect();
+    }
+    let human = block(&[
+        ("sha256", record.sha256.clone()),
+        ("name", record.name.clone()),
+        ("size", record.size.to_string()),
+        ("type", value["type"].as_str().unwrap_or("").to_owned()),
+        (
+            "architecture",
+            value["architecture"].as_str().unwrap_or("-").to_owned(),
+        ),
+        (
+            "tags",
+            tags.iter()
+                .map(|t| t.value.clone())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        ("runs", runs.len().to_string()),
+        ("custody", check.summary()),
+        (
+            "archive",
+            if record.removed_ms.is_some() {
+                "removed"
+            } else {
+                "present"
+            }
+            .to_owned(),
+        ),
+    ]);
+    Ok(Reply::value(value).with_human(human))
+}
+
+fn tag(arguments: &TagArgs, mut library: Library) -> Result<Reply, CliError> {
+    let sha256 = parse_sha256(&arguments.sha256)?;
+    let changes: Vec<Tag> = arguments
+        .tags
+        .iter()
+        .map(|text| parse_tag(text))
+        .collect::<Result<_, _>>()?;
+    let mut tags = library.tags(&sha256).map_err(library_error)?;
+    if !library.contains(&sha256).map_err(library_error)? {
+        return Err(missing_library(&sha256));
+    }
+    for change in changes {
+        if arguments.remove {
+            tags.retain(|tag| !(tag.kind == change.kind && tag.value == change.value));
+        } else if !tags
+            .iter()
+            .any(|tag| tag.kind == change.kind && tag.value == change.value)
+        {
+            tags.push(change);
+        }
+    }
+    library.set_tags(&sha256, &tags).map_err(library_error)?;
+    let tags = library.tags(&sha256).map_err(library_error)?;
+    let human = tags
+        .iter()
+        .map(|t| {
+            format!(
+                "{}={}\n",
+                serde_json::to_value(t.kind)
+                    .unwrap_or_default()
+                    .as_str()
+                    .unwrap_or(""),
+                t.value
+            )
+        })
+        .collect::<String>();
+    Ok(Reply::value(json!({
+        "sha256": sha256,
+        "tags": tags.iter().map(tag_value).collect::<Vec<_>>(),
+    }))
+    .with_human(human))
+}
+
+fn status(result: &Verification) -> (&'static str, String) {
+    match result {
+        Verification::Matches => ("matches", String::new()),
+        Verification::Missing => ("missing", "the archive is missing".into()),
+        Verification::Mismatch(detail) => ("mismatch", detail.clone()),
+    }
+}
+
+fn verify(sha256: Option<&str>, library: Option<Library>) -> Result<Reply, CliError> {
+    let one = sha256.map(parse_sha256).transpose()?;
+    let Some(mut library) = library else {
+        return match one {
+            Some(sha256) => Err(missing_library(&sha256)),
+            None => Ok(Reply::list(Vec::new(), None).with_human("No samples.\n".into())),
+        };
+    };
+    let results = match &one {
+        Some(sha256) => vec![(
+            sha256.clone(),
+            library.verify(sha256).map_err(library_error)?,
+        )],
+        None => library.verify_all().map_err(library_error)?,
+    };
+    let items: Vec<Value> = results
+        .iter()
+        .map(|(sha256, result)| {
+            let (state, detail) = status(result);
+            json!({"sha256": sha256, "status": state, "ok": result.is_ok(), "detail": detail})
+        })
+        .collect();
+    let rows: Vec<Vec<String>> = items
+        .iter()
+        .map(|i| {
+            vec![
+                i["sha256"].as_str().unwrap_or("").to_owned(),
+                i["status"].as_str().unwrap_or("").to_owned(),
+                i["detail"].as_str().unwrap_or("").to_owned(),
+            ]
+        })
+        .collect();
+    let text = table(&["sha256", "status", "detail"], &rows);
+    let bad = items.iter().filter(|i| i["ok"] == false).count();
+    if bad == 0 {
+        return Ok(Reply::list(items, None).with_human(text));
+    }
+    Err(CliError::new(
+        ErrorCode::VerificationFailed,
+        format!(
+            "{bad} of {} archives do not match their SHA-256",
+            items.len()
+        ),
+    )
+    .with_details(json!({"items": items}))
+    .with_human_output(text))
+}
+
+fn remove(sha256: &str, yes: bool, library: Option<Library>) -> Result<Reply, CliError> {
+    let sha256 = parse_sha256(sha256)?;
+    if !yes {
+        return Err(CliError::invalid(
+            "removing deletes the archive of the sample; the record and custody log stay. Add --yes to confirm",
+        )
+        .with_field("yes"));
+    }
+    let mut library = library.ok_or_else(|| missing_library(&sha256))?;
+    library.remove(&sha256).map_err(library_error)?;
+    Ok(Reply::value(json!({"sha256": sha256, "removed": true}))
+        .with_human(format!("Removed the archive of {sha256}.\n")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        app::{Environment, execute},
+        exit::Exit,
+    };
+    use serde_json::Value;
+    use std::{ffi::OsString, path::Path};
+
+    /// A data directory and a folder of files to add, removed on drop.
+    struct Scratch(PathBuf);
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let root = std::env::temp_dir().join(format!("ant-cli-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(root.join("files")).unwrap();
+            Self(root)
+        }
+        fn data(&self) -> String {
+            self.0.join("data").display().to_string()
+        }
+        fn file(&self, name: &str, bytes: &[u8]) -> String {
+            let path = self.0.join("files").join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path.display().to_string()
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn cli(scratch: &Scratch, args: &[&str]) -> (Exit, Value) {
+        let mut all: Vec<OsString> = ["antinomie-cli", "-o", "json", "--data-dir"]
+            .iter()
+            .map(OsString::from)
+            .collect();
+        all.push(scratch.data().into());
+        all.extend(args.iter().map(OsString::from));
+        let environment = Environment {
+            stdout_is_terminal: false,
+            stderr_is_terminal: false,
+            no_color: true,
+            home: None,
+        };
+        let (exit, out) = execute(all, &environment);
+        (
+            exit,
+            serde_json::from_str(&out.stdout).unwrap_or(Value::Null),
+        )
+    }
+
+    /// A tiny ELF header: enough for the type and architecture detection.
+    fn elf(extra: u8) -> Vec<u8> {
+        let mut bytes = vec![0x7f, b'E', b'L', b'F', 2, 1, 1, 0];
+        bytes.resize(18, 0);
+        bytes[16] = 2; // ET_EXEC
+        bytes[18 - 2] = 2;
+        bytes.extend_from_slice(&[0x3e, 0, 1, 0, 0, 0]);
+        bytes.resize(64, extra);
+        bytes
+    }
+
+    #[test]
+    fn nothing_is_created_by_reading_an_empty_data_directory() {
+        let scratch = Scratch::new("empty");
+        let (exit, value) = cli(&scratch, &["sample", "list"]);
+        assert_eq!(exit, Exit::Ok);
+        assert_eq!(value["result"]["items"], serde_json::json!([]));
+        assert!(!Path::new(&scratch.data()).exists());
+        let (exit, value) = cli(&scratch, &["sample", "show", &"a".repeat(64)]);
+        assert_eq!(exit.code(), 3);
+        assert_eq!(value["error"]["code"], "not_found");
+    }
+
+    #[test]
+    fn add_list_show_tag_verify_remove_round_trip() {
+        let scratch = Scratch::new("roundtrip");
+        let first = scratch.file("one.bin", &elf(1));
+        let second = scratch.file("two.bin", b"#!/bin/sh\necho hi\n");
+
+        let (exit, added) = cli(
+            &scratch,
+            &[
+                "sample",
+                "add",
+                &first,
+                &second,
+                "--tag",
+                "category=miner",
+                "--tag",
+                "lab",
+            ],
+        );
+        assert_eq!(exit, Exit::Ok, "{added}");
+        let items = added["result"]["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["new"], true);
+        let sha_elf = items[0]["sha256"].as_str().unwrap().to_owned();
+        let sha_sh = items[1]["sha256"].as_str().unwrap().to_owned();
+        assert_eq!(sha_elf.len(), 64);
+
+        // The same bytes again are not new.
+        let (_, again) = cli(&scratch, &["sample", "add", &first]);
+        assert_eq!(again["result"]["items"][0]["new"], false);
+
+        // Section 5.4.7 members, in the Sample object.
+        let (_, listed) = cli(&scratch, &["sample", "list"]);
+        let samples = listed["result"]["items"].as_array().unwrap();
+        assert_eq!(samples.len(), 2);
+        let elf_sample = samples
+            .iter()
+            .find(|s| s["sha256"] == sha_elf.as_str())
+            .unwrap();
+        for key in [
+            "sha256",
+            "size",
+            "type",
+            "architecture",
+            "name",
+            "tags",
+            "first_seen_ms",
+            "run_count",
+            "last_job",
+            "custody_ok",
+        ] {
+            assert!(elf_sample.get(key).is_some(), "missing {key}");
+        }
+        assert_eq!(elf_sample["type"], "elf");
+        assert_eq!(elf_sample["architecture"], "x86-64");
+        assert_eq!(elf_sample["name"], "one.bin");
+        assert_eq!(elf_sample["run_count"], 0);
+        assert!(elf_sample["last_job"].is_null() && elf_sample["custody_ok"].is_null());
+        assert_eq!(elf_sample["tags"].as_array().unwrap().len(), 2);
+
+        // Filters.
+        let (_, by_tag) = cli(&scratch, &["sample", "list", "--tag", "category=miner"]);
+        assert_eq!(by_tag["result"]["items"].as_array().unwrap().len(), 2);
+        let (_, none) = cli(&scratch, &["sample", "list", "--tag", "verdict=malicious"]);
+        assert!(none["result"]["items"].as_array().unwrap().is_empty());
+        let (_, by_q) = cli(&scratch, &["sample", "list", "--q", "TWO"]);
+        assert_eq!(by_q["result"]["items"][0]["sha256"], sha_sh.as_str());
+        let (_, checked) = cli(&scratch, &["sample", "list", "--custody"]);
+        assert!(
+            checked["result"]["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|s| s["custody_ok"] == true)
+        );
+
+        // Paging.
+        let (_, page) = cli(&scratch, &["sample", "list", "--limit", "1"]);
+        assert_eq!(page["result"]["items"].as_array().unwrap().len(), 1);
+        let cursor = page["result"]["next_cursor"].as_str().unwrap().to_owned();
+        let (_, rest) = cli(
+            &scratch,
+            &["sample", "list", "--limit", "1", "--cursor", &cursor],
+        );
+        assert_eq!(rest["result"]["items"].as_array().unwrap().len(), 1);
+        assert!(rest["result"]["next_cursor"].is_null());
+        assert_ne!(
+            page["result"]["items"][0]["sha256"],
+            rest["result"]["items"][0]["sha256"]
+        );
+        let (exit, _) = cli(&scratch, &["sample", "list", "--cursor", "junk"]);
+        assert_eq!(exit.code(), 4);
+
+        // Show with detail.
+        let (exit, shown) = cli(
+            &scratch,
+            &[
+                "sample",
+                "show",
+                &sha_elf.to_ascii_uppercase(),
+                "--origins",
+                "--events",
+                "--runs",
+            ],
+        );
+        assert_eq!(exit, Exit::Ok);
+        let result = &shown["result"];
+        assert_eq!(result["custody_ok"], true);
+        assert_eq!(result["origins"][0]["kind"], "added");
+        assert!(!result["events"].as_array().unwrap().is_empty());
+        assert_eq!(result["runs"], serde_json::json!([]));
+        assert_eq!(result["sha1"].as_str().unwrap().len(), 40);
+
+        // Tags.
+        let (_, tagged) = cli(
+            &scratch,
+            &[
+                "sample",
+                "tag",
+                &sha_elf,
+                "verdict=suspicious",
+                "category=miner",
+            ],
+        );
+        assert_eq!(tagged["result"]["tags"].as_array().unwrap().len(), 3);
+        let (_, untagged) = cli(
+            &scratch,
+            &[
+                "sample",
+                "tag",
+                &sha_elf,
+                "lab",
+                "category=miner",
+                "--remove",
+            ],
+        );
+        assert_eq!(
+            untagged["result"]["tags"],
+            serde_json::json!([{"kind": "verdict", "value": "suspicious"}])
+        );
+        let (exit, bad) = cli(&scratch, &["sample", "tag", &sha_elf, "verdict=great"]);
+        assert_eq!(exit.code(), 4);
+        assert_eq!(bad["error"]["field"], "tag");
+        let (exit, _) = cli(&scratch, &["sample", "tag", &"0".repeat(64), "x"]);
+        assert_eq!(exit.code(), 3);
+
+        // Verify: all, one.
+        let (exit, verified) = cli(&scratch, &["sample", "verify"]);
+        assert_eq!(exit, Exit::Ok);
+        assert_eq!(verified["result"]["items"].as_array().unwrap().len(), 2);
+        assert!(
+            verified["result"]["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|i| i["status"] == "matches")
+        );
+        let (exit, _) = cli(&scratch, &["sample", "verify", &sha_sh]);
+        assert_eq!(exit, Exit::Ok);
+
+        // A damaged archive: exit 1 with the status named.
+        let archive =
+            antinomie_monitor_core::samples::archive_path(Path::new(&scratch.data()), &sha_sh)
+                .unwrap();
+        std::fs::write(&archive, b"not a zip").unwrap();
+        let (exit, damaged) = cli(&scratch, &["sample", "verify", &sha_sh]);
+        assert_eq!(exit.code(), 1);
+        assert_eq!(damaged["error"]["code"], "verification_failed");
+        assert_eq!(
+            damaged["error"]["details"]["items"][0]["status"],
+            "mismatch"
+        );
+
+        // Remove needs --yes; the record stays and the archive goes.
+        let (exit, refused) = cli(&scratch, &["sample", "remove", &sha_elf]);
+        assert_eq!(exit.code(), 4);
+        assert_eq!(refused["error"]["field"], "yes");
+        let (exit, _) = cli(&scratch, &["sample", "remove", &sha_elf, "--yes"]);
+        assert_eq!(exit, Exit::Ok);
+        let (_, visible) = cli(&scratch, &["sample", "list"]);
+        assert_eq!(visible["result"]["items"].as_array().unwrap().len(), 1);
+        let (_, everything) = cli(&scratch, &["sample", "list", "--all"]);
+        assert_eq!(everything["result"]["items"].as_array().unwrap().len(), 2);
+        let (_, gone) = cli(&scratch, &["sample", "show", &sha_elf]);
+        assert!(gone["result"]["removed_ms"].is_u64());
+        let _ = scratch.path();
+    }
+
+    #[test]
+    fn add_reports_each_file_and_fails_when_one_does() {
+        let scratch = Scratch::new("addfail");
+        let good = scratch.file("good.bin", b"hello");
+        let missing = scratch
+            .path()
+            .join("files")
+            .join("missing.bin")
+            .display()
+            .to_string();
+        let (exit, value) = cli(&scratch, &["sample", "add", &good, &missing]);
+        assert_ne!(exit, Exit::Ok);
+        assert_eq!(value["ok"], false);
+        let items = value["error"]["details"]["items"].as_array().unwrap();
+        assert_eq!(items[0]["ok"], true);
+        assert_eq!(items[1]["ok"], false);
+        // The good file was added anyway.
+        let (_, listed) = cli(&scratch, &["sample", "list"]);
+        assert_eq!(listed["result"]["items"].as_array().unwrap().len(), 1);
+        // --name with several files is refused before anything is added.
+        let (exit, _) = cli(&scratch, &["sample", "add", &good, &good, "--name", "x"]);
+        assert_eq!(exit.code(), 4);
+    }
+
+    #[test]
+    fn delete_original_removes_the_file_after_it_is_archived() {
+        let scratch = Scratch::new("delete");
+        let file = scratch.file("gone.bin", b"to be archived");
+        let (exit, _) = cli(
+            &scratch,
+            &[
+                "sample",
+                "add",
+                &file,
+                "--delete-original",
+                "--name",
+                "kept",
+            ],
+        );
+        assert_eq!(exit, Exit::Ok);
+        assert!(!Path::new(&file).exists());
+        let (_, listed) = cli(&scratch, &["sample", "list"]);
+        assert_eq!(listed["result"]["items"][0]["name"], "kept");
+    }
+
+    #[test]
+    fn tags_parse_by_kind() {
+        assert_eq!(parse_tag("lab").unwrap().kind, TagKind::Custom);
+        assert_eq!(parse_tag("custom=a=b").unwrap().value, "a=b");
+        assert_eq!(
+            parse_tag("technique=T1053.003 Cron").unwrap().kind,
+            TagKind::Technique
+        );
+        assert!(parse_tag("shade=red").is_err());
+        assert!(parse_tag("technique=nope").is_err());
+        assert!(parse_tag("").is_err());
+    }
+}

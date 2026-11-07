@@ -14,6 +14,26 @@ x86 programs by their own table.
 
 ### Host
 
+- **The data folder says who owns it.** The process that takes the data folder
+  writes `run/owner.json` (its pid, whether it is the window, a daemon or a
+  command, when it started) and removes it on a clean exit. A second Antinomie
+  that finds the folder in use now names the owner instead of only saying it is
+  in use, and the ownership is checked before an old data folder is migrated.
+  `antinomie-cli doctor` shows the owner too.
+
+- **`antinomie-cli`, a headless command line.** A new binary beside the window
+  (`antinomie-cli --help`) with `doctor`, `capabilities` and `config path`, the
+  output formats human, json and ndjson, and fixed exit codes. It does not link
+  the GUI libraries. See "Command line" in docs/usage.md.
+
+- **Samples and custody from the command line.** `antinomie-cli sample add, list,
+  show, tag, verify, remove` and `custody verify` (with export and signing) work
+  on the sample library without the engine lock, so they run beside the window.
+
+- **Static analysis and rule selection from the command line.** `antinomie-cli
+  analyze FILE` runs the static analysis of a host file and prints a summary;
+  `rules list, enable, disable` use the rule registry of the data directory.
+
 - **Clock model for the boot age.** A new Clock model setting in a VM's Device
   profile (Auto, Always running, Suspend) chooses whether the boot age steps
   both guest clocks or only CLOCK_BOOTTIME. Auto picks Suspend on Debian bases,
