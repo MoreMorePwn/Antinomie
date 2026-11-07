@@ -8,5 +8,7 @@ description = "Job, event and query API of Antinomie's headless mode (UI-free)"
 
 [dependencies]
 antinomie-monitor-core = { path = "../monitor-core" }
+schemars = "1"
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
