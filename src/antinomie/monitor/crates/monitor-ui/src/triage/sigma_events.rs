@@ -217,11 +217,14 @@ pub(super) struct Parent {
 /// The parent a fork or clone result linked to this task, with the image and
 /// command line that parent had when last seen to exec.
 pub(super) fn parent(files: &FdState, event: &EventSummary) -> Option<Parent> {
-    let node = files.process_images.get(&TaskKey {
+    let own = TaskKey {
         pid: event.pid,
         cookie: event.task_cookie,
-    })?;
-    let key = node.parent?;
+    };
+    let node = files.process_images.get(&own)?;
+    // The parent as the whole recording settled it: a child that execs before
+    // the call that made it returns has no parent yet in the calls seen so far.
+    let key = files.settled_parents.get(&own).copied().or(node.parent)?;
     let parent = files.process_images.get(&key)?;
     Some(Parent {
         pid: key.pid,

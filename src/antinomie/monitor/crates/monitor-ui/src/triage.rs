@@ -1498,6 +1498,9 @@ struct PacketIndex {
 struct FdState {
     /// Images tracked in observation order, keyed by stable task identity.
     process_images: std::collections::BTreeMap<TaskKey, TaskNode>,
+    /// Task → its parent process as the whole recording settled it (see
+    /// `process_tree::settled_parents`); empty while only a prefix is known.
+    settled_parents: std::collections::BTreeMap<TaskKey, TaskKey>,
     /// `(owner cookie, owner pid, fd)` → path text captured for that descriptor.
     opened: std::collections::BTreeMap<(u64, u32, u64), String>,
     /// Child task → the task whose descriptor table it shares (`CLONE_FILES`).

@@ -479,6 +479,18 @@ pub(super) fn finish_processes(
 ) -> Vec<ProcessNode> {
     inherit_fork_images(&mut nodes);
     let threads = attach_threads(&mut nodes);
+    // A child cloned by one thread of a process belongs to the process: the
+    // Process tree and the Relationships graph show processes, not threads.
+    let leaders: Vec<(TaskKey, TaskKey)> = nodes
+        .iter()
+        .filter_map(|(key, node)| Some((*key, node.parent.filter(|p| threads.contains(p))?)))
+        .collect();
+    for (key, thread) in leaders {
+        let leader = nodes.get(&thread).and_then(|node| node.parent);
+        if let Some(node) = nodes.get_mut(&key) {
+            node.parent = leader;
+        }
+    }
     process_record::match_killers(&mut nodes);
     let mut children: std::collections::BTreeMap<TaskKey, Vec<TaskKey>> =
         std::collections::BTreeMap::new();
@@ -649,6 +661,37 @@ fn adopt_task(
         node.provisional = false;
     }
     key
+}
+
+/// Every task's parent as the whole recording settled it, with a parent that
+/// is a thread of a process replaced by the process's main task. A task that
+/// starts running (a `vfork` child that execs at once) is seen before the
+/// call that created it returns, so this is read from a full pass and not
+/// from the calls seen so far.
+pub(super) fn settled_parents(
+    nodes: &std::collections::BTreeMap<TaskKey, TaskNode>,
+) -> std::collections::BTreeMap<TaskKey, TaskKey> {
+    let mut main: std::collections::BTreeMap<u32, TaskKey> = Default::default();
+    for (key, node) in nodes {
+        if key.cookie != 0 && node.tid == key.pid {
+            main.entry(key.pid).or_insert(*key);
+        }
+    }
+    nodes
+        .iter()
+        .filter_map(|(key, node)| {
+            let parent = node.parent?;
+            let is_thread = nodes
+                .get(&parent)
+                .is_some_and(|node| node.tid != 0 && node.tid != parent.pid);
+            let parent = if is_thread {
+                main.get(&parent.pid).copied().unwrap_or(parent)
+            } else {
+                parent
+            };
+            Some((*key, parent))
+        })
+        .collect()
 }
 
 fn link_child(

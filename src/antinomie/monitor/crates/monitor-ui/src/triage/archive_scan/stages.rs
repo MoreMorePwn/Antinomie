@@ -238,6 +238,7 @@ pub(super) fn open_scan(
         Err(error) => (None, Some(error)),
     };
     let mut files = FdState::default();
+    files.settled_parents = process_tree::settled_parents(&nodes);
     files.journal.launch_cwd = facts.as_ref().and_then(|facts| facts.launch_cwd.clone());
     files.journal.root_cookie = request.root_cookie;
     files.journal.hashes_writes = facts.as_ref().is_some_and(|facts| facts.hashed_writes);
