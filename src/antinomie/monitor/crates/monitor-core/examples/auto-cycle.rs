@@ -162,11 +162,7 @@ impl Lab {
 
     fn send(&mut self, command: Command) -> Result<u64, String> {
         let name = format!("{command:?}");
-        let name = name
-            .split(['(', ' ', '{'])
-            .next()
-            .unwrap_or("")
-            .to_owned();
+        let name = name.split(['(', ' ', '{']).next().unwrap_or("").to_owned();
         let detail = match &command {
             Command::Create(_) | Command::CreateWithCredentials { .. } => String::new(),
             other => clip(&format!("{other:?}"), 300),
