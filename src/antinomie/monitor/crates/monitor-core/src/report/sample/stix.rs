@@ -119,12 +119,25 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
     let malware = object("malware", sha, &at, fields);
     let malware_id = id_of(&malware);
     objects.push(malware);
-    if !sample.family.is_empty() {
+    // The family the library holds and the ones the matched rules name.
+    let mut families: Vec<String> = Vec::new();
+    for name in std::iter::once(sample.family.as_str())
+        .chain(sample.family_candidates.iter().map(|c| c.name.as_str()))
+        .filter(|name| !name.is_empty())
+    {
+        if !families
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(name))
+        {
+            families.push(name.to_owned());
+        }
+    }
+    for name in &families {
         let family = object(
             "malware",
-            &format!("family:{}", sample.family),
+            &format!("family:{name}"),
             &at,
-            json!({"name": sample.family, "is_family": true, "created_by_ref": identity_id}),
+            json!({"name": name, "is_family": true, "malware_types": ["unknown"], "created_by_ref": identity_id}),
         );
         objects.push(relationship(
             "variant-of",
@@ -172,11 +185,19 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
         }
     }
 
+    let mut patterns = std::collections::BTreeSet::new();
     for item in &report.indicators {
         let indicator = as_indicator(item);
+        if !indicator.shared() {
+            continue;
+        }
         let Some(pattern) = pattern(&indicator) else {
             continue;
         };
+        // One indicator per pattern (the same hash under several paths).
+        if !patterns.insert(pattern.clone()) {
+            continue;
+        }
         let mut fields = json!({
             "name": format!("{} {}", indicator.kind, indicator.value),
             "pattern": pattern,
@@ -272,6 +293,8 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
         }),
     ));
 
+    let mut seen = std::collections::BTreeSet::new();
+    objects.retain(|object| seen.insert(id_of(object)));
     let bundle = json!({
         "type": "bundle",
         "id": format!("bundle--{}", super::super::uuid5(&format!("stix:bundle:sample:{sha}:{}", report.generated_ms))),
