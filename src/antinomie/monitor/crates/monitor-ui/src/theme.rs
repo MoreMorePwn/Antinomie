@@ -143,6 +143,10 @@ pub fn neutral_accent() -> Color32 {
 pub fn error() -> Color32 {
     palette().error
 }
+/// Between the warning amber and the error red: a score in the 70s and 80s.
+pub fn orange() -> Color32 {
+    error().lerp_to_gamma(warn(), 0.5)
+}
 pub fn info() -> Color32 {
     palette().info
 }
