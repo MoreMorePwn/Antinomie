@@ -21,6 +21,7 @@ use std::{
 
 mod activity;
 mod archive;
+mod bazaar;
 mod chain;
 mod chain_check;
 mod chain_export;
@@ -41,6 +42,7 @@ mod similar;
 mod summary;
 
 pub use archive::Verification;
+pub use bazaar::{Intel, YaraHit, recorded_info};
 pub use chain::{ChainedEvents, CustodyQuery, GlobalRow, LibraryCheck};
 pub use chain_check::{
     ChainCheck, Entry as CustodyEntry, EntryState, IndexCheck, IndexRecord, Problem, short,
@@ -233,6 +235,9 @@ pub struct SampleInfo {
     pub reporter: String,
     /// CPU architecture (hash lookups only), such as `x86_64` or `ARM`.
     pub file_arch: Option<String>,
+    /// What MalwareBazaar's partners say (hash lookups only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intel: Option<Intel>,
 }
 
 fn null_as_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
@@ -395,9 +400,7 @@ pub fn parse_reply(body: &[u8]) -> Result<Vec<SampleInfo>, String> {
     })?;
     match reply.query_status.as_str() {
         "ok" => match reply.data {
-            Some(data) => {
-                serde_json::from_value(data).map_err(|e| format!("MalwareBazaar reply: {e}"))
-            }
+            Some(data) => Ok(bazaar::records(&data)),
             None => Ok(Vec::new()),
         },
         "no_results" | "tag_not_found" | "signature_not_found" | "hash_not_found" => Ok(Vec::new()),
@@ -892,6 +895,8 @@ pub const STARTERS: &[(&str, &str)] = &[
     ("CoinMiner", "XMRig-based miners"),
 ];
 
+#[cfg(test)]
+mod bazaar_tests;
 #[cfg(test)]
 mod chain_tests;
 #[cfg(test)]

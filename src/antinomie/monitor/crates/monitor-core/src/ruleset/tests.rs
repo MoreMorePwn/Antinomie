@@ -787,7 +787,7 @@ fn an_old_parser_index_keeps_real_toggles_and_a_failed_rewrite() {
     assert!(report.obsolete.iter().any(|item| item.contains("keeps")));
     let index: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("index.json")).unwrap()).unwrap();
-    assert_eq!(index["parser"], 2);
+    assert_eq!(index["parser"], INDEX_PARSER);
     let names: Vec<_> = index["rules"]
         .as_array()
         .unwrap()
@@ -1322,6 +1322,7 @@ fn group_migration_reconciles_only_the_selected_revision() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+mod meta_case;
 mod rule_text;
 mod source_catalog;
 mod source_fixture;

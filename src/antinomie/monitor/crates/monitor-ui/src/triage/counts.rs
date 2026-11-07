@@ -7,6 +7,8 @@ use crate::widgets::{self, TabItem, Tone};
 pub(super) enum Count {
     Pending,
     Unavailable,
+    /// The engine has not scanned this run (or could not): never a zero.
+    NotScanned,
     Ready(u64),
     /// A table with chips on: the rows it lists out of all the run has.
     Shown {
@@ -20,6 +22,7 @@ impl Count {
         match self {
             Self::Pending => "…".into(),
             Self::Unavailable => "—".into(),
+            Self::NotScanned => "–".into(),
             Self::Ready(count) => antinomie_monitor_core::analysis::detection::group_digits(count),
             Self::Shown { shown, total } => {
                 let group = antinomie_monitor_core::analysis::detection::group_digits;
@@ -43,6 +46,50 @@ impl Count {
     }
 }
 
+impl Count {
+    /// The label with a count over 99 shortened to "99+", for a tab title.
+    pub(super) fn capped_label(self) -> String {
+        match self {
+            Self::Ready(count) if count > 99 => "99+".into(),
+            other => other.label(),
+        }
+    }
+
+    /// The full wording for a hover text: "120 matched", "not scanned".
+    fn named(self) -> String {
+        match self {
+            Self::Pending => "updating".into(),
+            Self::Unavailable => "no count".into(),
+            Self::NotScanned => "not scanned".into(),
+            Self::Ready(_) | Self::Shown { .. } => format!("{} matched", self.label()),
+        }
+    }
+}
+
+/// The Detection tab: "Detection 3 · 0 · 99+", the matched rules of YARA, IDS
+/// and Sigma in the badge style of the IOC tab, each capped at "99+". It has
+/// no badge until an engine has a count.
+pub(super) fn detection_tab(counts: [Count; 3]) -> TabItem {
+    let item = TabItem::new("Detection");
+    if counts
+        .iter()
+        .all(|count| matches!(count, Count::Unavailable))
+    {
+        return item;
+    }
+    let any = counts
+        .iter()
+        .any(|count| matches!(count, Count::Ready(found) if *found > 0));
+    let text = counts.map(Count::capped_label).join(" · ");
+    let tone = if any { Tone::Accent } else { Tone::Neutral };
+    item.badge(text, tone).tooltip(format!(
+        "Matched rules: YARA {} · IDS {} · Sigma {}",
+        counts[0].named(),
+        counts[1].named(),
+        counts[2].named()
+    ))
+}
+
 /// One navigation unit: a thin-bordered tab with a count badge. Call it
 /// inside `widgets::tab_row`.
 pub(super) fn tab(
@@ -57,6 +104,7 @@ pub(super) fn tab(
         .tooltip(match count {
             Count::Pending => "Updating the whole-run count",
             Count::Unavailable => "No whole-run count is available",
+            Count::NotScanned => "Not scanned: scan this run to get a count",
             Count::Ready(_) => "Whole-run count before table filters and pagination",
             Count::Shown { .. } => {
                 "Rows listed with the Hide chips on, out of all the run recorded. Turn a chip off to list the hidden rows"
@@ -167,9 +215,18 @@ impl TriageView {
 
     pub(super) fn file_tabs(&mut self, ui: &mut egui::Ui) {
         widgets::tab_row(ui, |ui| {
-            // Per-file history leads: it is the way into every file the run
-            // touched, with how many there are.
+            // The per-file table leads, then the history of one file: they are
+            // the way into every file the run touched, with how many there are.
             let count = self.section_count(Metric::History);
+            let by_file = TabItem::new("By file")
+                .badge(count.label(), count.tone(false))
+                .tooltip(
+                    "One row for each file the run touched: what happened to it, who did it, its size, type and SHA-256",
+                );
+            if widgets::tab(ui, self.by_file && !self.history_tab, &by_file).clicked() {
+                self.by_file = true;
+                self.history_tab = false;
+            }
             let item = TabItem::new("Per-file history")
                 .badge(count.label(), count.tone(false))
                 .tooltip(
@@ -177,6 +234,7 @@ impl TriageView {
                 );
             if widgets::tab(ui, self.history_tab, &item).clicked() {
                 self.history_tab = true;
+                self.by_file = false;
             }
             for value in FileTab::ALL {
                 let metric = match value {
@@ -187,13 +245,14 @@ impl TriageView {
                 };
                 if tab(
                     ui,
-                    self.files == value && !self.history_tab,
+                    self.files == value && !self.history_tab && !self.by_file,
                     value.title(),
                     self.section_count(metric),
                     false,
                 ) {
                     self.files = value;
                     self.history_tab = false;
+                    self.by_file = false;
                 }
             }
         });
@@ -202,3 +261,67 @@ impl TriageView {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod detection_tab_tests {
+    use super::*;
+
+    fn painted(counts: [Count; 3]) -> String {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut texts = Vec::new();
+        let output = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::CentralPanel::default().show(root, |ui| {
+                widgets::tab_row(ui, |ui| {
+                    widgets::tab(ui, false, &detection_tab(counts));
+                });
+            });
+        });
+        fn walk(shape: &egui::epaint::Shape, texts: &mut Vec<String>) {
+            match shape {
+                egui::epaint::Shape::Text(text) => texts.push(text.galley.text().to_owned()),
+                egui::epaint::Shape::Vec(shapes) => {
+                    shapes.iter().for_each(|shape| walk(shape, texts));
+                }
+                _ => {}
+            }
+        }
+        for shape in &output.shapes {
+            walk(&shape.shape, &mut texts);
+        }
+        texts.join("|")
+    }
+
+    #[test]
+    fn the_detection_tab_counts_each_engine_capped_at_99_plus() {
+        let text = painted([Count::Ready(3), Count::Ready(0), Count::Ready(99)]);
+        assert!(
+            text.contains("Detection") && text.contains("3 · 0 · 99"),
+            "{text}"
+        );
+        let text = painted([Count::Ready(100), Count::Pending, Count::Unavailable]);
+        assert!(text.contains("99+ · … · —"), "{text}");
+        let text = painted([Count::Ready(2), Count::NotScanned, Count::NotScanned]);
+        assert!(text.contains("2 · – · –"), "{text}");
+        assert!(!text.contains("100"), "{text}");
+    }
+
+    #[test]
+    fn the_hover_names_each_engine_and_an_unscanned_run_has_no_badge() {
+        let item = detection_tab([Count::Ready(120), Count::Ready(1), Count::Unavailable]);
+        let tip = item.tooltip.unwrap();
+        assert!(tip.contains("YARA 120 matched"), "{tip}");
+        assert!(
+            tip.contains("IDS 1 matched") && tip.contains("Sigma no count"),
+            "{tip}"
+        );
+        assert!(detection_tab([Count::Unavailable; 3]).badge.is_none());
+        let tip = detection_tab([Count::Ready(1), Count::NotScanned, Count::NotScanned])
+            .tooltip
+            .unwrap();
+        assert!(
+            tip.contains("IDS not scanned") && tip.contains("Sigma not scanned"),
+            "{tip}"
+        );
+    }
+}

@@ -114,24 +114,37 @@ fn import_lines(text: &str) -> Vec<String> {
 
 /// The rule's own `license` (or `malpedia_license`) meta, when it names one.
 pub(super) fn own_license(body: &str) -> Option<String> {
-    for line in body.lines() {
-        let line = line.trim_start();
-        let key_len = line
-            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .unwrap_or(line.len());
-        let (key, rest) = line.split_at(key_len);
-        if key != "license" && key != "malpedia_license" {
-            continue;
+    license_by_keys(body, &["license", "malpedia_license"])
+}
+
+/// The first of `keys` that the rule's meta sets to an actual license.
+pub(super) fn license_by_keys(body: &str, keys: &[&str]) -> Option<String> {
+    // A key is matched in any case; a line with the exact spelling wins.
+    for exact in [true, false] {
+        for line in body.lines() {
+            let line = line.trim_start();
+            let key_len = line
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(line.len());
+            let (key, rest) = line.split_at(key_len);
+            let listed = if exact {
+                keys.contains(&key)
+            } else {
+                keys.iter().any(|name| name.eq_ignore_ascii_case(key))
+            };
+            if !listed {
+                continue;
+            }
+            let Some(value) = rest.trim_start().strip_prefix('=') else {
+                continue;
+            };
+            let value = value.trim().trim_matches('"').trim();
+            let lower = value.to_ascii_lowercase();
+            if value.is_empty() || matches!(lower.as_str(), "n/a" | "none" | "unknown" | "-") {
+                return None;
+            }
+            return Some(value.to_owned());
         }
-        let Some(value) = rest.trim_start().strip_prefix('=') else {
-            continue;
-        };
-        let value = value.trim().trim_matches('"').trim();
-        let lower = value.to_ascii_lowercase();
-        if value.is_empty() || matches!(lower.as_str(), "n/a" | "none" | "unknown" | "-") {
-            return None;
-        }
-        return Some(value.to_owned());
     }
     None
 }
@@ -195,13 +208,32 @@ fn slug_of(name: &str) -> String {
 /// Mark the candidates YARA-X cannot compile. Rules are added in file order
 /// to one namespace, so a rule that needs a dropped rule fails too.
 fn mark_uncompilable(imports: &[String], candidates: &mut [Candidate], cancel: &AtomicBool) {
+    let header = imports.join("\n");
+    mark_uncompilable_with(candidates, cancel, |_| ("check".to_owned(), header.clone()));
+}
+
+/// As [`mark_uncompilable`], with the namespace and the import lines each
+/// candidate is checked under chosen by its position. A file of a rule-files
+/// pack gets a namespace of its own, as the installed pack does: YARA-X keeps
+/// imports per namespace, so a rule that uses a module its own file never
+/// imports fails here as it would on install, instead of borrowing another
+/// file's import.
+fn mark_uncompilable_with(
+    candidates: &mut [Candidate],
+    cancel: &AtomicBool,
+    header_of: impl Fn(usize) -> (String, String),
+) {
     let mut compiler = yara_x::Compiler::new();
     compiler.relaxed_re_syntax(true);
-    compiler.new_namespace("check");
-    let header = imports.join("\n");
+    let mut namespace: Option<String> = None;
     for (index, candidate) in candidates.iter_mut().enumerate() {
         if index % 64 == 0 && cancel.load(Ordering::Relaxed) {
             return;
+        }
+        let (wanted, header) = header_of(index);
+        if namespace.as_deref() != Some(wanted.as_str()) {
+            compiler.new_namespace(&wanted);
+            namespace = Some(wanted);
         }
         let source = format!("{header}\n{}\n", candidate.text);
         let code = yara_x::SourceCode::from(source.as_str());
@@ -379,6 +411,119 @@ pub(super) fn filter_yara_forge(
         text.push('\n');
         outcome.files.push(YaraFile {
             path: format!("{file}.yar"),
+            text,
+        });
+    }
+    Ok(outcome)
+}
+
+/// The YARAhub filter: one rule per file, each with its license in a meta key.
+/// A rule is kept when that license is allowed, it is not a listed duplicate
+/// and YARA-X compiles it; each kept file is written as it came, so findings
+/// still show the publisher's own meta (author, reference, license).
+pub(super) fn filter_yara_rule_files(
+    files: &[(String, String)],
+    filter: &YaraRuleFilesFilter,
+    cancel: &AtomicBool,
+) -> Result<YaraForgeOutcome, String> {
+    let keys: Vec<&str> = filter.license_keys.iter().map(String::as_str).collect();
+    let excluded: BTreeSet<&str> = filter.exclude_files.iter().map(String::as_str).collect();
+    let mut ordered: Vec<&(String, String)> = files.iter().collect();
+    ordered.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut outcome = YaraForgeOutcome::default();
+    let mut candidates = Vec::new();
+    // (file, its imports, the candidates it contributes)
+    let mut groups: Vec<(&str, Vec<String>, std::ops::Range<usize>)> = Vec::new();
+    let mut names = BTreeSet::new();
+    for (path, text) in ordered {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
+        let text = text.replace("\r\n", "\n");
+        let file_imports = import_lines(&text);
+        let first = candidates.len();
+        for (name, body, helper) in yara_blocks(&text) {
+            if excluded.contains(path.as_str()) {
+                outcome
+                    .report
+                    .omit("it duplicates a rule of another pack", 1);
+                continue;
+            }
+            match license_by_keys(&body, &keys) {
+                None => outcome.report.omit("it names no license", 1),
+                Some(license)
+                    if !filter
+                        .allowed_licenses
+                        .iter()
+                        .any(|allowed| license.starts_with(allowed.as_str())) =>
+                {
+                    outcome
+                        .report
+                        .omit("its own license is not an allowed one", 1);
+                }
+                Some(_) if !names.insert(name) => {
+                    outcome
+                        .report
+                        .omit("another file already holds a rule with that name", 1);
+                }
+                Some(_) => candidates.push(Candidate {
+                    text: body,
+                    helper,
+                    basis: Basis::OwnLicense,
+                    failure: None,
+                }),
+            }
+        }
+        if candidates.len() > first {
+            groups.push((path, file_imports, first..candidates.len()));
+        }
+    }
+    // Each candidate is checked in its own file's namespace, under that
+    // file's own imports, as the installed pack compiles it.
+    let headers: Vec<(String, String)> = {
+        let mut headers = vec![(String::new(), String::new()); candidates.len()];
+        for (path, file_imports, range) in &groups {
+            for header in &mut headers[range.clone()] {
+                *header = ((*path).to_owned(), file_imports.join("\n"));
+            }
+        }
+        headers
+    };
+    mark_uncompilable_with(&mut candidates, cancel, |index| headers[index].clone());
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
+    for (path, file_imports, range) in groups {
+        let mut kept = Vec::new();
+        for candidate in &candidates[range] {
+            if let Some(failure) = &candidate.failure {
+                outcome.report.omit("it does not compile with YARA-X", 1);
+                if outcome.report.examples.len() < 5 {
+                    outcome.report.examples.push(failure.clone());
+                }
+                continue;
+            }
+            outcome.report.kept += u64::from(!candidate.helper);
+            outcome.report.helpers += u64::from(candidate.helper);
+            *outcome
+                .report
+                .kept_by
+                .entry("its own license".into())
+                .or_default() += 1;
+            kept.push(candidate.text.as_str());
+        }
+        if kept.is_empty() {
+            continue;
+        }
+        let mut text = String::new();
+        if !file_imports.is_empty() {
+            text.push_str(&file_imports.join("\n"));
+            text.push_str("\n\n");
+        }
+        text.push_str(&kept.join("\n\n"));
+        text.push('\n');
+        outcome.files.push(YaraFile {
+            path: path.to_owned(),
             text,
         });
     }

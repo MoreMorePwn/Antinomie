@@ -483,6 +483,59 @@ fn the_console_runs_gdb_on_a_terminal_connected_to_the_session_port() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A session that appears between two frames gets one gdb. The tab used to
+/// draw (and start gdb) before the panel followed the new session; the reset
+/// then dropped that gdb and the next frame started another. The dropped one
+/// could still connect first and, leaving, release a program held by Debug on
+/// start: it ran past the breakpoint the console then set.
+#[test]
+fn a_new_session_starts_its_console_gdb_once() {
+    use std::os::unix::fs::PermissionsExt;
+    let ctx = context();
+    let size = egui::vec2(1280.0, 820.0);
+    let root = std::env::temp_dir().join(format!("ant-console-once-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let starts = root.join("starts");
+    // A system pwndbg stand-in: the console runs it whatever gdb is in PATH.
+    let pwndbg = root.join("pwndbg");
+    std::fs::write(
+        &pwndbg,
+        format!(
+            "#!/bin/bash\necho start >> '{}'\necho FAKE-PWNDBG\nwhile read -r line; do :; done\n",
+            starts.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&pwndbg, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut app = app();
+    observer_fixture(&mut app);
+    app.options.data_dir = root.clone();
+    app.settings.debugger.toggle_pane(Pane::Console);
+    app.settings.debugger.gdb_flavour = GdbFlavour::Pwndbg;
+    let mut tool = tool("pwndbg", false);
+    tool.system = Some(pwndbg.display().to_string());
+    app.snapshot.analysis_tools = vec![tool];
+    // No session yet (the previous one ended), then one arrives.
+    for _ in 0..3 {
+        render(&mut app, &ctx, size);
+    }
+    assert!(!app.debugger.console.running());
+    app.snapshot.debug = Some(info());
+    app.snapshot.debug_view = Some(Arc::new(stopped()));
+    let mut screen = String::new();
+    for _ in 0..80 {
+        render(&mut app, &ctx, size);
+        screen = app.debugger.console.contents();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    assert!(app.debugger.console.running(), "{screen}");
+    assert!(screen.contains("FAKE-PWNDBG"), "{screen}");
+    let started = std::fs::read_to_string(&starts).unwrap_or_default();
+    assert_eq!(started.lines().count(), 1, "gdb started {started:?}");
+    app.debugger.track_session(None);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn a_gdb_that_will_not_run_is_reported_in_the_pane() {
     let ctx = context();
@@ -523,16 +576,23 @@ fn the_flavour_is_chosen_in_settings_and_defaults_to_gef() {
         &ctx,
         input(vec![egui::Event::PointerMoved(over_the_page)]),
     );
-    crate::app::tests::draw_input(
-        &mut app,
-        &ctx,
-        input(vec![egui::Event::MouseWheel {
-            phase: egui::TouchPhase::Move,
-            unit: egui::MouseWheelUnit::Point,
-            delta: egui::vec2(0.0, -200.0),
-            modifiers: egui::Modifiers::NONE,
-        }]),
-    );
+    // Scroll a step at a time until the label shows: the distance depends on
+    // the spacing and the sub-headings above it.
+    for _ in 0..40 {
+        if has(&frames(&mut app, &ctx, size), "Debugger console") {
+            break;
+        }
+        crate::app::tests::draw_input(
+            &mut app,
+            &ctx,
+            input(vec![egui::Event::MouseWheel {
+                phase: egui::TouchPhase::Move,
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -100.0),
+                modifiers: egui::Modifiers::NONE,
+            }]),
+        );
+    }
     let shown = frames(&mut app, &ctx, size);
     assert!(has(&shown, "Debugger console"), "{shown:?}");
     assert!(has(&shown, "GEF (bata24)") && has(&shown, "pwndbg"));

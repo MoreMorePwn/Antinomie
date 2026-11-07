@@ -23,6 +23,9 @@ struct LaunchPlan {
     args: Vec<u8>,
     summary: RunSummary,
     route_claim: Option<crate::route::RouteClaim>,
+    /// The run's Routed route could not be brought up: it is recorded as not
+    /// started instead of being sent to the guest.
+    route_failure: Option<String>,
 }
 
 /// A launch the guest acknowledged: its reply and identity.
@@ -268,8 +271,21 @@ impl Worker {
             .join(&run_id);
         // The route comes up before anything of the run exists, and a
         // route that cannot start is the run's error (no fallback).
-        let (route, route_claim) =
-            session.claim_run_route(&self.options, &run_id, request.route)?;
+        let (route, route_claim, route_failure) =
+            match session.claim_run_route(&self.options, &run_id, request.route) {
+                Ok((route, claim)) => (route, claim, None),
+                // A Routed VM whose route would not come up: the run is
+                // recorded as not started. Any other refusal leaves nothing.
+                Err(error) if session.vm.network() == crate::api::VmNetwork::Routed => {
+                    let default = crate::route::load_config(&self.options.data_dir)
+                        .map(|config| config.default_route)
+                        .unwrap_or_default();
+                    let record = super::route_failure::unstarted_record(request.route, default);
+                    let text = super::route_failure::not_started_text(record.kind, &error);
+                    (record, None, Some(text))
+                }
+                Err(error) => return Err(error),
+            };
         let summary = RunSummary {
             started_ms: None,
             clock_anchor: None,
@@ -316,6 +332,7 @@ impl Worker {
             reduced: None,
             boot_wait: None,
             triggers: None,
+            stopped_by_user: false,
             execution: None,
             analysis: selected
                 .then(|| crate::analysis::jobs::new_report(&request.path, &request.analysis)),
@@ -330,6 +347,7 @@ impl Worker {
             args,
             summary,
             route_claim,
+            route_failure,
         })
     }
 
@@ -346,6 +364,7 @@ impl Worker {
             args,
             summary,
             route_claim,
+            route_failure,
         } = plan;
         let LaunchShape {
             inline_acquisition,
@@ -375,6 +394,11 @@ impl Worker {
         run.tracer_hashing = tracer_hashing;
         let mut artifacts = RunArtifactOwner::new(&run.summary);
         artifacts.route_claim = route_claim;
+        if let Some(text) = route_failure {
+            // The route would not come up: nothing is sent to the guest, but
+            // the run keeps a record saying why.
+            return Err(session.record_unstarted_run(&mut run, artifacts, text));
+        }
         let prepared = if request.capture_network {
             session.start_run_network(&self.options, &mut artifacts)
         } else {
@@ -403,7 +427,14 @@ impl Worker {
                     &self.sender,
                     timeout,
                 )
-                .map_err(|error| launch_failure(error, &request.path, &request.cwd))?;
+                .map_err(|error| {
+                    launch_failure(
+                        error,
+                        &request.path,
+                        &request.cwd,
+                        request.host_copy.as_deref(),
+                    )
+                })?;
             (|| {
                 if reply.len()
                     != 24

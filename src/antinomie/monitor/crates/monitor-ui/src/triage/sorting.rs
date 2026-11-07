@@ -34,6 +34,8 @@ fn atom(header: &str, column: usize, row: &[Cell]) -> Atom {
         .unwrap_or_default();
     let names: &[&str] = match header {
         "Time" => &["event.time_ns", "frame.time_us"],
+        "When" => &["finding.first_ns"],
+        "Count" => &["finding.count"],
         "Frame" => &["frame.number"],
         "Diff count" => &["file.diff_count"],
         "Requests" | "Queries" => &["network.count"],
@@ -43,6 +45,8 @@ fn atom(header: &str, column: usize, row: &[Cell]) -> Atom {
         "Evidence" => &["event.id", "frame.number"],
         "TID" => &["process.tid"],
         "Path" => &["file.path"],
+        "Started" => &["process.first_ns"],
+        "Lifetime" => &["process.lifetime_ns"],
         "First seen" => &["process.first_ns", "network.first_us"],
         "Last seen" => &["process.last_ns", "network.last_us"],
         _ => &[],
@@ -375,6 +379,8 @@ impl Spool {
                         theme: cell.theme,
                         mono: cell.mono,
                         values,
+                        badges: Vec::new(),
+                        note: None,
                     })
                 })
                 .collect::<Result<_, &str>>()?;

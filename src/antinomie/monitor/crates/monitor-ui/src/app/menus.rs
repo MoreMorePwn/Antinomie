@@ -14,44 +14,44 @@ impl MonitorApp {
         if self.vm_snapshots.decision_open() || crate::typing::typing(ctx) {
             return;
         }
+        // A shortcut being recorded in Settings > Keyboard is not a command.
+        if self.shortcut_ui.recording.is_some() {
+            return;
+        }
         let pressed = |shortcut: egui::KeyboardShortcut| {
             ctx.input_mut(|input| input.consume_shortcut(&shortcut))
         };
-        // Shift+F5 first: F5 alone would also match it.
-        let mut asked = Vec::new();
-        for action in [
-            Action::StopVm,
-            Action::StartVm,
-            Action::NewVm,
-            Action::RunProgram,
-            Action::UploadFile,
-            Action::AttachDebugger,
-            Action::TypeClipboard,
-            Action::ToggleSidebar,
-            Action::ToggleBottomPane,
-            Action::Settings,
-            Action::Quit,
-        ] {
-            if action.shortcut().is_some_and(pressed) {
-                asked.push(action);
-            }
-        }
         // The new shortcuts do not reach behind a confirmation.
         let modal = self.confirm.is_some();
-        if !modal {
-            if pressed(keys::PALETTE) {
-                asked.push(Action::Palette);
+        let mut asked = Vec::new();
+        // The shortcuts with more modifiers come first: Ctrl+Shift+S must not
+        // be taken for Ctrl+S.
+        for (action, shortcut) in self.bound_actions() {
+            let behind_confirmation = !matches!(
+                action,
+                Action::StopVm
+                    | Action::StartVm
+                    | Action::NewVm
+                    | Action::RunProgram
+                    | Action::UploadFile
+                    | Action::AttachDebugger
+                    | Action::TypeClipboard
+                    | Action::ToggleSidebar
+                    | Action::ToggleBottomPane
+                    | Action::Settings
+                    | Action::Quit
+            );
+            if (modal && behind_confirmation) || !pressed(shortcut) {
+                continue;
             }
+            asked.push(action);
+        }
+        if !modal {
             if let Some(position) = (0..keys::TAB_KEYS.len())
                 .find(|position| keys::tab_shortcut(*position).is_some_and(pressed))
             {
                 if let Some(panel) = self.layout.work_tabs().get(position) {
                     asked.push(Action::Go(panel.clone()));
-                }
-            }
-            for panel in [Panel::Activity, Panel::Jobs] {
-                if Action::Go(panel.clone()).shortcut().is_some_and(pressed) {
-                    asked.push(Action::Go(panel));
                 }
             }
             if crate::typing::question_mark_pressed(ctx) {
@@ -80,6 +80,9 @@ impl MonitorApp {
                             self.menu_item(ui, Action::DownloadBase, None);
                             self.menu_item(ui, Action::BuildBase, None);
                         });
+                        ui.separator();
+                        self.menu_item(ui, Action::ExplorerFolder, None);
+                        self.menu_item(ui, Action::AddSampleFile, None);
                         ui.separator();
                         self.menu_item(ui, Action::Quit, None);
                     });
@@ -208,7 +211,8 @@ impl MonitorApp {
                         let text = format!(
                             "{} Search  {}",
                             egui_phosphor::regular::MAGNIFYING_GLASS,
-                            ctx.format_shortcut(&keys::PALETTE)
+                            self.shortcut_text(ctx, &Action::Palette)
+                                .unwrap_or_default()
                         );
                         if ui
                             .add(egui::Button::new(text).frame(false))
@@ -320,22 +324,28 @@ impl MonitorApp {
             if spinner {
                 theme::spinner(ui);
             }
+            // The toolbar's own spacing is 4 points; the name is a different
+            // thing from the state beside it, so they get a wider gap.
+            ui.add_space(STATUS_GAP);
         }
-        ui.scope(|ui| {
-            // Less the dot that follows the name.
-            let room = (ui.available_width() - 20.0).max(24.0);
-            ui.set_max_width(room);
-            ui.add(
-                egui::Label::new(RichText::new(name).color(if active.is_some() {
-                    theme::text()
-                } else {
-                    theme::muted()
-                }))
-                .truncate(),
-            )
-            .on_hover_text(name);
-        });
-        ui.colored_label(color, "●");
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let label = ui
+            .scope(|ui| {
+                // Less the dot that follows the name.
+                let room = (ui.available_width() - 20.0).max(24.0);
+                ui.set_max_width(room);
+                ui.add(
+                    egui::Label::new(RichText::new(name).color(if active.is_some() {
+                        theme::text()
+                    } else {
+                        theme::muted()
+                    }))
+                    .truncate(),
+                )
+                .on_hover_text(name)
+            })
+            .inner;
+        crate::widgets::dot::after(ui, &label, &font, color);
     }
 
     /// The toolbar's buttons in the order they are drawn.
@@ -352,7 +362,7 @@ impl MonitorApp {
         vec![
             self.vm_power_spec(&shortcut),
             ToolSpec::new(ToolAction::Snapshots, 1, icon::CLOCK_COUNTER_CLOCKWISE, "Snapshots", "Save, restore and branch this VM's disk and memory".into(), self.selected.is_some() && !self.closing, theme::blue(), false, false),
-            ToolSpec::new(ToolAction::Kill, 2, icon::X_CIRCLE, "Kill", "Terminate the selected active run and descendants; keep the VM running. Select a live run in Run history when several are active.".into(), self.kill_target().is_some(), theme::error(), false, false),
+            ToolSpec::new(ToolAction::Kill, 2, icon::X_CIRCLE, "Stop run", "End the selected run: the program and every process it started, even after the root exited. The recording closes normally (network capture, route counts, journal) and the VM keeps running. Select a live run in Run history when several are active.".into(), self.kill_target().is_some(), theme::error(), false, false),
             ToolSpec::new(ToolAction::RunProgram, 2, icon::TERMINAL_WINDOW, "Run program", shortcut("Run a program in the VM and record it", Action::RunProgram), self.running(), theme::blue(), false, self.launch_open),
             ToolSpec::new(
                 ToolAction::CaptureAll,
@@ -430,6 +440,9 @@ impl MonitorApp {
         }
     }
 }
+
+/// Extra gap between the VM state word (and its spinner) and the VM name.
+pub(super) const STATUS_GAP: f32 = 10.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum ToolAction {

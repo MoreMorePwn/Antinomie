@@ -11,6 +11,14 @@ use crate::widgets::fit_table::{Col, FitBuilder};
 use antinomie_monitor_core::capture_processes::CaptureProcess;
 use std::sync::mpsc;
 
+/// The least width of the list's columns, from their header and their longest
+/// usual value (`Launch unconfirmed`, `Signal 11 (core)`, a VM's name), each
+/// with its sort arrow.
+pub(crate) const RUN_ARGUMENTS_MIN: f32 = 160.0;
+pub(crate) const RUN_STATUS_MIN: f32 = 120.0;
+pub(crate) const RUN_EXIT_MIN: f32 = 110.0;
+pub(crate) const RUN_VM_MIN: f32 = 100.0;
+
 /// The process tree of the run shown below the list.
 enum Tree {
     Reading {
@@ -363,11 +371,13 @@ impl MonitorApp {
                     .striped(true)
                     .resizable(true)
                     .column(Col::flex(start_width).at_least(110.0))
-                    .column(Col::rest(80.0).at_least(150.0).resizable(false))
-                    .column(Col::flex(110.0).range(70.0..=320.0))
-                    .column(Col::flex(100.0).range(70.0..=220.0))
-                    .column(Col::flex(85.0).range(60.0..=160.0))
-                    .column(Col::flex(80.0).range(60.0..=200.0))
+                    .column(Col::flex(160.0).range(120.0..=420.0))
+                    // Arguments take the width the others leave; a long
+                    // command line is cut, the whole of it is on hover.
+                    .column(Col::rest(RUN_ARGUMENTS_MIN))
+                    .column(Col::flex(130.0).range(RUN_STATUS_MIN..=240.0))
+                    .column(Col::flex(110.0).range(RUN_EXIT_MIN..=200.0))
+                    .column(Col::flex(120.0).range(RUN_VM_MIN..=260.0))
                     .column(Col::fixed(72.0))
                     .max_scroll_height(height)
                     .min_scrolled_height(0.0)

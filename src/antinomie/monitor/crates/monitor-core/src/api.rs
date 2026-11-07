@@ -210,21 +210,24 @@ impl VmAcceleration {
 }
 
 /// Where a VM's screen shows: a tab of the app (QEMU's VNC display on a
-/// private unix socket), or QEMU's own window.
+/// private unix socket), QEMU's own window, or nowhere (`-display none`, no
+/// VNC).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VmScreen {
     #[default]
     InApp,
     QemuWindow,
+    NoScreen,
 }
 impl VmScreen {
-    pub const ALL: &'static [Self] = &[Self::InApp, Self::QemuWindow];
+    pub const ALL: &'static [Self] = &[Self::InApp, Self::QemuWindow, Self::NoScreen];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::InApp => "In the app (VNC)",
             Self::QemuWindow => "QEMU window",
+            Self::NoScreen => "No screen",
         }
     }
 
@@ -408,10 +411,17 @@ pub struct TransportSettings {
     pub max_wait_ms: u32,
     /// Host table of events still being assembled, 2048..=131072.
     pub event_table: u32,
+    /// Under Capture All, drop telemetry while the host falls behind instead
+    /// of slowing the guest (keeps a desktop guest responsive; the recording
+    /// loses events). Off by default, and only meaningful with `lossless`:
+    /// never-drop then never drops under Capture All, the guest runs slower.
+    pub capture_all_shed: bool,
 }
 impl TransportSettings {
     pub const RING_KIB: [u32; 5] = [256, 512, 1024, 2048, 4096];
     pub const EVENT_TABLE: std::ops::RangeInclusive<u32> = 2048..=131_072;
+    /// Checks the ranges; `capture_all_shed` takes either value (drop mode
+    /// ignores it, so switching modes keeps the choice).
     pub fn validate(&self) -> Result<(), String> {
         if !Self::RING_KIB.contains(&self.ring_kib) {
             return Err("transport ring must be 256, 512, 1024, 2048 or 4096 KiB".into());
@@ -442,6 +452,7 @@ impl Default for TransportSettings {
             lossless: true,
             max_wait_ms: 5000,
             event_table: 16_384,
+            capture_all_shed: false,
         }
     }
 }
@@ -490,7 +501,7 @@ impl Default for StartSettings {
             // host at load 6, and more than 21 s at load 12; Debian takes
             // several times longer.
             tcg_multiplier: 10,
-            kvm_fallback: false,
+            kvm_fallback: true,
             boot_wait_secs: 60,
         }
     }
@@ -657,6 +668,12 @@ pub struct RunArtifacts {
     /// releases, which list no core for the run.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub core_deleted: bool,
+    /// The dumps the run's dump trigger took, the same records `run.json`
+    /// keeps under `triggers`. `core_state` above describes the exit core only
+    /// (Core dump on exit), so a run whose exit core is off but whose trigger
+    /// took a core no longer reads as having no core at all.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub trigger_dumps: Vec<crate::dump_trigger::TriggerRecord>,
 }
 
 impl RunArtifacts {
@@ -949,6 +966,11 @@ pub struct RunSummary {
     /// nothing matched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triggers: Option<crate::dump_trigger::TriggerLog>,
+    /// The user ended the run with Stop run. A root that had already exited,
+    /// or one that obeyed the signal, would otherwise read as an ordinary
+    /// finish. Absent in runs saved before it existed and in runs not stopped.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stopped_by_user: bool,
 }
 
 impl RunSummary {
@@ -2363,10 +2385,24 @@ pub struct Health {
     pub writer_held_ns: u64,
     #[serde(default)]
     pub writer_held_longest_ns: u64,
-    /// Capture All is dropping telemetry because the host is behind; the
-    /// guest would otherwise wait on every traced syscall.
+    /// Capture All is dropping telemetry because the host is behind and the
+    /// VM's transport settings allow it; the guest would otherwise wait on
+    /// every traced syscall.
     #[serde(default)]
     pub shedding: bool,
+    /// Never-drop is slowing the guest under Capture All: its senders waited
+    /// more than half the time for the host, and nothing is dropped for it
+    /// (shedding is off in the VM's transport settings).
+    #[serde(default)]
+    pub never_drop_slowing: bool,
+    /// How often this boot Capture All started shedding, and for how long in
+    /// all (spells that ended); always 0 unless the VM's transport settings
+    /// allow shedding. Any other drop in never-drop mode is a send that waited
+    /// out its whole wait.
+    #[serde(default)]
+    pub shed_count: u64,
+    #[serde(default)]
+    pub shed_ns: u64,
     /// Pauses between telemetry reads (see [`crate::read_gaps`]).
     #[serde(default)]
     pub read_gaps: crate::read_gaps::ReadGapStats,
@@ -3228,6 +3264,23 @@ mod tests {
         for raw in [0x7f, 0x17f, 0x109, 0x10000] {
             assert_eq!(WaitStatus::from_raw(raw), None, "{raw:#x}");
         }
+    }
+    #[test]
+    fn older_transport_settings_load_with_capture_all_shedding_off() {
+        let old: TransportSettings = serde_json::from_str(
+            r#"{"ring_kib":2048,"lossless":true,"max_wait_ms":5000,"event_table":16384}"#,
+        )
+        .unwrap();
+        assert!(old.lossless && !old.capture_all_shed);
+        assert_eq!(old.validate(), Ok(()));
+        assert!(!TransportSettings::default().capture_all_shed);
+        let allowed = TransportSettings {
+            capture_all_shed: true,
+            ..TransportSettings::default()
+        };
+        assert_eq!(allowed.validate(), Ok(()));
+        let saved = serde_json::to_string(&allowed).unwrap();
+        assert!(saved.contains(r#""capture_all_shed":true"#), "{saved}");
     }
     #[test]
     fn older_recording_health_defaults_new_loss_counters() {

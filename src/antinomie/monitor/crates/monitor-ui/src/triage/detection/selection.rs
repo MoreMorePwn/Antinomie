@@ -34,10 +34,15 @@ impl View {
                 Ok(done) => {
                     self.selection_rx = None;
                     if done.epoch == self.epoch && done.generation == self.rules_generation {
-                        let tools_changed = self
-                            .digest_facts
-                            .as_ref()
-                            .is_some_and(|old| *old != done.facts);
+                        // A probe that did not answer is no change of the tool.
+                        let unanswered = |facts: &antinomie_monitor_core::ruleset::ToolFacts| {
+                            use antinomie_monitor_core::ruleset::ToolProbe;
+                            matches!(facts.sigma, ToolProbe::Unknown(_))
+                                || matches!(facts.suricata, ToolProbe::Unknown(_))
+                        };
+                        let tools_changed = self.digest_facts.as_ref().is_some_and(|old| {
+                            *old != done.facts && !unanswered(old) && !unanswered(&done.facts)
+                        });
                         self.digest_cache = done.digests;
                         self.digest_generation = done.generation;
                         self.digest_facts = Some(done.facts);

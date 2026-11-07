@@ -646,6 +646,7 @@ pub(super) fn listed(run: &RunSummary) -> RunSummary {
         reduced: run.reduced.clone(),
         boot_wait: run.boot_wait.clone(),
         triggers: run.triggers.clone(),
+        stopped_by_user: run.stopped_by_user,
         recording_error: run.recording_error.clone(),
         execution: run.execution.clone(),
         analysis: run
@@ -680,13 +681,16 @@ pub(super) fn sample_name(run: &RunSummary) -> &str {
 /// the tree scrolls inside the box, both ways.
 fn bounded_tree<R>(ui: &mut egui::Ui, viewport: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let height = crate::details_scroll::tree_height(ui, viewport);
-    let result = ui
-        .allocate_ui_with_layout(
-            egui::vec2(ui.available_width(), height),
-            egui::Layout::top_down(egui::Align::Min),
-            add,
-        )
-        .inner;
+    // The Details area's own scroll bar runs along its right edge; the box
+    // stops short of it so the tree's bar never sits on top of that one.
+    let width = (ui.available_width() - crate::details_scroll::bar_gutter(ui)).max(120.0);
+    let boxed = ui.allocate_ui_with_layout(
+        egui::vec2(width, height),
+        egui::Layout::top_down(egui::Align::Min),
+        add,
+    );
+    crate::details_scroll::remember_tree_rect(ui.ctx(), boxed.response.rect);
+    let result = boxed.inner;
     crate::details_scroll::tree_splitter(ui, height);
     result
 }
@@ -878,6 +882,18 @@ pub(super) fn feature_tree(run: &RunSummary, labels: Option<run_labels::Labels>)
                 feature.hover = dump.error.clone();
                 features.push(feature);
             }
+        }
+        for miss in log.iter().flat_map(|log| &log.missed) {
+            let mut feature = Feature::new(
+                1,
+                format!(
+                    "{} matched in pid {}: no dump, too late",
+                    miss.finding.rule, miss.finding.pid
+                ),
+            );
+            feature.available = false;
+            feature.hover = Some(miss.reason.clone());
+            features.push(feature);
         }
         if let Some(log) = log
             && log.skipped > 0

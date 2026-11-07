@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The run's overall state in words, beside the Network route line of Triage:
-//! "Running · 12:34 elapsed", "Finished after 5:02 (exit 0)", "Still recording:
-//! 10 processes alive". The words are Run History's.
+//! "Running · 12 min 34 s elapsed", "Ran for 5 min 2 s · exit 0", "Still
+//! recording: 10 processes alive". The words are Run History's.
 use crate::widgets::Tone;
 use antinomie_monitor_core::{RunState, RunSummary, WaitStatus};
 use eframe::egui::{self, Color32};
@@ -17,12 +17,12 @@ pub(crate) fn describe(
 ) -> String {
     let elapsed = |end: u64| {
         run.started_ms
-            .map(|start| crate::time_format::elapsed(end.saturating_sub(start)))
+            .map(|start| crate::time_format::duration_ms(end.saturating_sub(start)))
     };
     let after = |text: &str| match run.started_ms.zip(ended_ms) {
         Some((start, end)) => format!(
             "{text} after {}",
-            crate::time_format::elapsed(end.saturating_sub(start))
+            crate::time_format::duration_ms(end.saturating_sub(start))
         ),
         None => text.to_owned(),
     };
@@ -39,11 +39,16 @@ pub(crate) fn describe(
         .execution
         .as_ref()
         .map_or(0, |status| status.live_task_count);
+    let with_detail = |head: String| match detail(run) {
+        Some(detail) => format!("{head} · {detail}"),
+        None => head,
+    };
     let running = |word: &str| match elapsed(now_ms) {
         Some(time) => format!("{word} · {time} elapsed"),
         None => word.to_owned(),
     };
     match run.state {
+        RunState::StopRequested => running("Stopping"),
         // The root program is gone and its children keep the run open.
         _ if run.state.is_live() && root.is_some() && live.max(alive.unwrap_or(0)) > 0 => {
             let count = live.max(alive.unwrap_or(0));
@@ -53,13 +58,24 @@ pub(crate) fn describe(
             format!("Still recording: {count} {plural} alive{time}")
         }
         RunState::Running => running("Running"),
-        RunState::StopRequested => running("Stop requested"),
         RunState::TerminalClosed => running("PTY closed"),
-        RunState::Finished => match exit {
-            Some(exit) => format!("{} ({exit})", after("Finished")),
-            None => after("Finished"),
-        },
-        RunState::Stopped => after("Stopped by the user"),
+        RunState::Finished => {
+            let ran = match run.started_ms.zip(ended_ms) {
+                Some((start, end)) => format!(
+                    "Ran for {}",
+                    crate::time_format::duration_ms(end.saturating_sub(start))
+                ),
+                None => "Finished".to_owned(),
+            };
+            match exit {
+                Some(exit) => format!("{ran} · {exit}"),
+                None => ran,
+            }
+        }
+        RunState::Stopped => with_detail(after("Stopped by you")),
+        RunState::Finalized | RunState::Interrupted if ended_by_vm_stop(run) => {
+            with_detail(after("Ended by VM stop"))
+        }
         RunState::Finalized => after("Recording ended"),
         RunState::Interrupted => after("Interrupted"),
         RunState::FailedToStart => format!(
@@ -71,6 +87,45 @@ pub(crate) fn describe(
         RunState::LaunchUnconfirmed => "Launch unconfirmed".into(),
         RunState::Unknown => "State unknown".into(),
     }
+}
+
+/// Whether the VM stopped (or the app closed) while the run's process tree was
+/// still alive: the recording was cut there, whatever the root had done.
+pub(crate) fn ended_by_vm_stop(run: &RunSummary) -> bool {
+    matches!(run.state, RunState::Finalized | RunState::Interrupted)
+        && run
+            .execution
+            .as_ref()
+            .is_some_and(|status| status.live_task_count > 0 || status.root_exit.is_none())
+}
+
+/// What the root did and what was left, for a run Stop run or a VM stop ended:
+/// "root exited 0 · 1 process still running". `None` when the guest never
+/// reported the run's status.
+pub(crate) fn detail(run: &RunSummary) -> Option<String> {
+    let status = run.execution.as_ref()?;
+    let root = match status.root_exit.as_ref() {
+        Some(WaitStatus::Exited { code }) => format!("root exited {code}"),
+        Some(WaitStatus::Signaled { signal, .. }) => format!("root killed by signal {signal}"),
+        None => "root had not exited".to_owned(),
+    };
+    let left = status.live_task_count;
+    if left == 0 {
+        return Some(root);
+    }
+    let plural = if left == 1 { "process" } else { "processes" };
+    Some(format!("{root} · {left} {plural} still running"))
+}
+
+/// The start and end times of `run` for the tooltip of its state line, in the
+/// host zone; `None` when the run has no start time.
+pub(crate) fn times(run: &RunSummary, ended_ms: Option<u64>) -> Option<String> {
+    let start = run.started_ms?;
+    let at = |ms: u64| crate::time_format::local_seconds(ms / 1000);
+    Some(match ended_ms {
+        Some(end) if !run.state.is_live() => format!("Started {}\nEnded {}", at(start), at(end)),
+        _ => format!("Started {}", at(start)),
+    })
 }
 
 /// Whether the line changes with the clock: the run is going.
@@ -134,7 +189,7 @@ pub(crate) fn ending(run: &RunSummary) -> Option<Ending> {
 
 /// The colour of a run's state words, the one palette the run-finished toast
 /// (green success, amber crash or kill), the Triage state line, Run History,
-/// the Samples window's Runs and the VM Summary share. Colour never stands
+/// the Samples window's Runs and the VM Overview share. Colour never stands
 /// alone: the state words stay beside it.
 pub(crate) fn color(run: &RunSummary) -> Color32 {
     crate::widgets::fg_or_muted(state_tone(run))
@@ -157,8 +212,9 @@ fn state_tone(run: &RunSummary) -> Option<Tone> {
         RunState::Finished => match ending(run)? {
             Ending::Success => Some(Tone::Good),
             Ending::TimeLimit => Some(Tone::Info),
-            Ending::Signal { .. } => Some(Tone::Warn),
-            Ending::Exit(_) | Ending::Unknown | Ending::Stopped => Some(Tone::Neutral),
+            // Finished, but the program did not succeed: amber, as a crash is.
+            Ending::Signal { .. } | Ending::Exit(_) => Some(Tone::Warn),
+            Ending::Unknown | Ending::Stopped => Some(Tone::Neutral),
         },
     }
 }
@@ -166,4 +222,190 @@ fn state_tone(run: &RunSummary) -> Option<Tone> {
 /// The state words in their colour.
 pub(crate) fn text(run: &RunSummary, words: &str) -> egui::RichText {
     egui::RichText::new(words).color(color(run))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use antinomie_monitor_core::{ExecRequest, RunExecution};
+
+    fn finished() -> RunSummary {
+        RunSummary {
+            environment: None,
+            reduced: None,
+            boot_wait: None,
+            triggers: None,
+            stopped_by_user: false,
+            started_ms: Some(1_700_000_000_000),
+            clock_anchor: None,
+            id: "r".into(),
+            vm_id: "vm".into(),
+            boot_id: "b".into(),
+            session_id: 1,
+            root_task_cookie: 1,
+            pid: 1,
+            request: ExecRequest::default(),
+            directory: std::path::PathBuf::new(),
+            terminal_eof: false,
+            state: RunState::Finished,
+            recording_error: None,
+            machine: None,
+            route: None,
+            execution: Some(RunExecution {
+                generation: 1,
+                live_task_count: 0,
+                pending_async_count: 0,
+                flags: 0,
+                root_wait_status: None,
+                root_exit: Some(WaitStatus::Exited { code: 0 }),
+                async_loss_count: 0,
+                total_task_count: 1,
+            }),
+            analysis: None,
+            notes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_finished_run_says_how_long_it_ran_and_how_it_ended() {
+        let run = finished();
+        let end = 1_700_000_000_000 + (3 * 60 + 52) * 1000;
+        assert_eq!(
+            describe(&run, end, Some(end), None),
+            "Ran for 3 min 52 s · exit 0"
+        );
+        assert_eq!(describe(&run, end, None, None), "Finished · exit 0");
+        let stopped = RunSummary {
+            state: RunState::Stopped,
+            ..run.clone()
+        };
+        assert_eq!(
+            describe(&stopped, end, Some(end), None),
+            "Stopped by you after 3 min 52 s · root exited 0"
+        );
+    }
+
+    fn with_live(state: RunState, root: Option<WaitStatus>, live: u64) -> RunSummary {
+        let mut run = finished();
+        run.state = state;
+        let execution = run.execution.as_mut().unwrap();
+        execution.root_exit = root;
+        execution.live_task_count = live;
+        run
+    }
+
+    #[test]
+    fn a_vm_stop_over_a_live_child_says_what_happened() {
+        // The report's "Interrupted · Exit 0": the root exited 0, a child lived.
+        let end = 1_700_000_060_000;
+        for state in [RunState::Interrupted, RunState::Finalized] {
+            let run = with_live(state, Some(WaitStatus::Exited { code: 0 }), 1);
+            assert!(ended_by_vm_stop(&run));
+            assert_eq!(
+                describe(&run, end, Some(end), None),
+                "Ended by VM stop after 1 min 0 s · root exited 0 · 1 process still running"
+            );
+        }
+        let many = with_live(RunState::Finalized, Some(WaitStatus::Exited { code: 3 }), 4);
+        assert_eq!(
+            describe(&many, 0, None, None),
+            "Ended by VM stop · root exited 3 · 4 processes still running"
+        );
+        let running = with_live(RunState::Interrupted, None, 2);
+        assert_eq!(
+            describe(&running, 0, None, None),
+            "Ended by VM stop · root had not exited · 2 processes still running"
+        );
+        // A recording that ended with nothing alive is only that.
+        let quiet = with_live(RunState::Finalized, Some(WaitStatus::Exited { code: 0 }), 0);
+        assert!(!ended_by_vm_stop(&quiet));
+        assert_eq!(describe(&quiet, 0, None, None), "Recording ended");
+    }
+
+    #[test]
+    fn stop_run_reads_as_the_users_act_even_when_the_root_had_exited() {
+        let run = with_live(RunState::Stopped, Some(WaitStatus::Exited { code: 0 }), 0);
+        assert_eq!(
+            describe(&run, 0, None, None),
+            "Stopped by you · root exited 0"
+        );
+        let signalled = with_live(
+            RunState::Stopped,
+            Some(WaitStatus::Signaled {
+                signal: 15,
+                core_dumped: false,
+            }),
+            0,
+        );
+        assert_eq!(
+            describe(&signalled, 0, None, None),
+            "Stopped by you · root killed by signal 15"
+        );
+        // Waiting for the guest to report the end.
+        let stopping = with_live(
+            RunState::StopRequested,
+            Some(WaitStatus::Exited { code: 0 }),
+            1,
+        );
+        assert_eq!(
+            describe(&stopping, 1_700_000_005_000, None, None),
+            "Stopping · 5 s elapsed"
+        );
+    }
+
+    #[test]
+    fn a_finished_run_that_did_not_exit_zero_is_amber_and_the_rest_keep_their_colours() {
+        let with_exit = |state, exit: Option<WaitStatus>| {
+            let mut run = finished();
+            run.state = state;
+            if let Some(execution) = run.execution.as_mut() {
+                execution.root_exit = exit;
+            }
+            color(&run)
+        };
+        let warn = crate::widgets::fg_or_muted(Some(Tone::Warn));
+        let good = crate::widgets::fg_or_muted(Some(Tone::Good));
+        assert_eq!(
+            with_exit(RunState::Finished, Some(WaitStatus::Exited { code: 0 })),
+            good
+        );
+        assert_eq!(
+            with_exit(RunState::Finished, Some(WaitStatus::Exited { code: 1 })),
+            warn
+        );
+        assert_eq!(
+            with_exit(
+                RunState::Finished,
+                Some(WaitStatus::Signaled {
+                    signal: 9,
+                    core_dumped: false
+                })
+            ),
+            warn
+        );
+        assert_ne!(good, warn);
+        // Failed and Interrupted keep theirs; Interrupted with exit 0 is not amber.
+        let error = crate::widgets::fg_or_muted(Some(Tone::Error));
+        assert_eq!(
+            with_exit(RunState::Interrupted, Some(WaitStatus::Exited { code: 1 })),
+            error
+        );
+        assert_eq!(with_exit(RunState::FailedToStart, None), error);
+    }
+
+    #[test]
+    fn the_times_go_in_the_tooltip() {
+        let run = finished();
+        let tip = times(&run, Some(1_700_000_232_000)).unwrap();
+        assert!(tip.starts_with("Started 20"), "{tip}");
+        assert!(tip.contains("\nEnded 20"), "{tip}");
+        assert!(times(
+            &RunSummary {
+                started_ms: None,
+                ..run
+            },
+            None
+        )
+        .is_none());
+    }
 }

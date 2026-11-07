@@ -3,7 +3,7 @@
 use super::super::*;
 use super::ctx::Ctx;
 use super::frames::{self, FrameKind};
-use super::noise::{self, flag, Agg, Gaps, SAMPLES};
+use super::noise::{self, flag, Agg, Gaps, Sample, SAMPLES};
 use super::state::State;
 use super::{collect_hits, probes, rows, spec, Hit, Tier};
 use std::collections::HashMap;
@@ -227,8 +227,9 @@ impl Engine {
             agg.first_ns = agg.first_ns.min(time);
             agg.last_ns = agg.last_ns.max(time);
             agg.gaps.add(time);
-            if agg.samples.len() < SAMPLES {
-                agg.samples.push((cx.call.stream_id, cx.call.call_id));
+            if agg.samples.len() <= SAMPLES {
+                agg.samples
+                    .push(Sample::new(cx.call, cx.name, &hit.summary, time));
             }
             for line in hit.detail {
                 if agg.detail.len() < 32 && !agg.detail.contains(&line) {
@@ -244,6 +245,7 @@ impl Engine {
         let mut gaps = Gaps::default();
         gaps.add(time);
         let image = cx.image.map(str::to_owned);
+        let first = Sample::new(cx.call, cx.name, &hit.summary, time);
         let agg = Agg {
             rule: spec.id,
             cookie: task,
@@ -271,7 +273,7 @@ impl Engine {
             flags: if cx.via_async { flag::ASYNC } else { 0 },
             detail: hit.detail,
             siblings: 0,
-            samples: Vec::new(),
+            samples: vec![first],
             packet: None,
             tier: spec.tier,
             why: Vec::new(),
@@ -456,7 +458,9 @@ impl Engine {
             }
             shown.push(agg);
         }
-        let (kept, overflow) = noise::cap(shown);
+        let (mut kept, overflow) = noise::cap(shown);
+        // The worst first, each tier in the order it happened.
+        kept.sort_by_key(|agg| (std::cmp::Reverse(agg.tier), agg.first_ns));
         let held_back = self.dropped;
         let mut output = Output {
             rows: Vec::new(),

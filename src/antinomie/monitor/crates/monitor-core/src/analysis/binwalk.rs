@@ -5,9 +5,6 @@ use super::*;
 use std::time::Duration;
 
 const SYSTEM: &[&str] = &["/usr/bin/binwalk", "/usr/local/bin/binwalk"];
-/// binwalk's own time limit, in seconds.
-pub(super) const TIMEOUT_SECONDS: u64 = 180;
-
 pub(super) fn embedded(section: &mut AnalysisSection, specimen_len: u64) {
     let Some(binwalk) = tools::find(SYSTEM) else {
         section.state = AnalysisSectionState::Unavailable;
@@ -16,7 +13,9 @@ pub(super) fn embedded(section: &mut AnalysisSection, specimen_len: u64) {
     };
     // binwalk keeps its configuration under $HOME and prints nothing
     // when that directory cannot be created.
-    let timeout = Duration::from_secs(super::limits::seconds(TIMEOUT_SECONDS));
+    let timeout = Duration::from_secs(super::limits::seconds_for(
+        super::limits::TimedTool::Binwalk,
+    ));
     let run = match tools::run_with(
         binwalk,
         &["/input/specimen"],

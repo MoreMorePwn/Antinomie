@@ -4,6 +4,8 @@
 //! running them there. Nothing is run or unpacked on the host.
 mod pending;
 mod rows;
+#[cfg(test)]
+mod stored_tests;
 mod tables;
 
 use crate::query::{self, FieldSpec, RowValue};
@@ -766,13 +768,14 @@ impl SamplesView {
                         self.filter_bar(ui);
                         self.status_line(ui);
                         ui.add_space(4.0);
-                        // The results and the downloaded list (its header and two
-                        // rows, scrolling inside beyond that) each keep a fixed room,
+                        // The results and the downloaded list (its header and at
+                        // least five rows, scrolling inside beyond that) each keep a fixed room,
                         // so the window is the same size before, while and after a
                         // search or a download.
                         let row =
                             theme::row_height(cx.font_size).max(ui.spacing().interact_size.y + 4.0);
-                        let list = row * 2.0;
+                        let list =
+                            tables::stored_list_height(row, ui.spacing().item_spacing.y, largest.y);
                         let stored_area = ui.spacing().interact_size.y + 6.0 + row + list + 4.0;
                         // About four rows, then the table scrolls inside itself. A
                         // fixed height, not "what the window has left": that would

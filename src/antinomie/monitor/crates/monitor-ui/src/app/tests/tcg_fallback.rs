@@ -111,7 +111,13 @@ fn use_tcg_for_this_vm_saves_the_vm_with_tcg_and_a_cpu_model_that_runs_there() {
 #[test]
 fn use_tcg_when_kvm_is_unavailable_is_saved_with_the_settings() {
     let mut app = app();
-    assert!(!app.settings.start.kvm_fallback);
+    // On for a new install; an old file's saved "off" stays off.
+    assert!(app.settings.start.kvm_fallback);
+    let old: Settings = serde_json::from_str(r#"{"start": {"kvm_fallback": false}}"#).unwrap();
+    assert!(!old.start.kvm_fallback);
+    let unset: Settings = serde_json::from_str(r#"{"start": {"tcg_multiplier": 12}}"#).unwrap();
+    assert!(unset.start.kvm_fallback && unset.start.tcg_multiplier == 12);
+    app.settings.start.kvm_fallback = false;
     app.apply_tcg_choice(true, false);
     assert!(app.settings.start.kvm_fallback && app.options.start.kvm_fallback);
     assert!(app.submitted.iter().any(|command| matches!(

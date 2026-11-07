@@ -607,8 +607,22 @@ impl Probed {
         artifact_route_stats(&self.run).map_or(0, |stats| stats.tcp_blocked)
     }
 
-    /// The run's network capture files and their sizes.
+    /// The run's network capture files and their sizes. artifacts.json goes
+    /// through the backend's status file queue, which a busy disk delays past
+    /// the run's end (a restore's sealed recordings ahead of it): wait up to
+    /// 30 s for a written capture before taking the list as it is.
     fn captures(&self) -> Vec<(PathBuf, u64)> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let captures = self.capture_files();
+            if captures.iter().any(|(_, size)| *size > 24) || Instant::now() > deadline {
+                return captures;
+            }
+            thread::sleep(Duration::from_millis(500));
+        }
+    }
+
+    fn capture_files(&self) -> Vec<(PathBuf, u64)> {
         let text =
             fs::read_to_string(self.run.directory.join("artifacts.json")).unwrap_or_default();
         let value: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();

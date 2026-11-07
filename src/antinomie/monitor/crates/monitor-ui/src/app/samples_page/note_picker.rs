@@ -648,12 +648,15 @@ impl Picker {
                         RichText::new(egui_phosphor::regular::MAGNIFYING_GLASS)
                             .color(theme::muted()),
                     );
-                    ui.add(
+                    let edit = ui.add(
                         egui::TextEdit::singleline(&mut self.search)
                             .hint_text(crate::theme::placeholder(ui, hint))
                             .frame(egui::Frame::NONE)
+                            .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                             .desired_width(f32::INFINITY),
-                    )
+                    );
+                    crate::widgets::clear_button(ui, &edit, &mut self.search);
+                    edit
                 })
                 .inner
             })

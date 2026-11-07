@@ -239,7 +239,7 @@ download anything, **you build a full pack** yourself:
 4. Inspect the live views, then reopen the saved run from **Run History**.
 
 <div align="center">
-<img src="assets/screenshots/getting-started.png" alt="Antinomie 0.8.2's Getting started window on a fresh install, on the Base image step, listing the BusyBox, Debian 13 Minimal and Debian 13 GNOME bases from the catalog" width="640">
+<img src="assets/screenshots/getting-started.png" alt="Antinomie 0.8.3's Getting started window on a fresh install, on the Base image step, listing the BusyBox, Debian 13 Minimal and Debian 13 GNOME bases from the catalog" width="960">
 <br>
 <sub>First launch on an empty data directory: the Getting started guide.</sub>
 </div>
@@ -403,7 +403,7 @@ terminal: `antinomie --check-dependencies`. The
   why a process ended on a signal.
 * **Network and VMs:** offline IP geolocation for TShark (an optional DB-IP Lite
   download or your own MaxMind GeoLite2 folder), and a snapshot diagram on the VM
-  Summary.
+  Overview.
 
 ## What's new in 0.8.1
 

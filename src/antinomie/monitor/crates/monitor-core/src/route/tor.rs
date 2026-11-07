@@ -105,9 +105,14 @@ fn read_tail(path: &Path, from: u64) -> String {
 
 /// The last non-empty lines of a file, for an error message.
 fn last_lines(path: &Path) -> String {
+    last_n_lines(path, 2)
+}
+
+/// The last `count` non-empty lines of a log, joined with ` | `.
+fn last_n_lines(path: &Path, count: usize) -> String {
     let text = read_tail(path, 0);
     let lines: Vec<_> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-    lines[lines.len().saturating_sub(2)..].join(" | ")
+    lines[lines.len().saturating_sub(count)..].join(" | ")
 }
 
 /// Starts tor in `<state_root>/<slot>` and waits until it has bootstrapped.
@@ -184,9 +189,10 @@ pub(crate) fn start_tor(
             return Err(format!(
                 "Tor: tor did not finish bootstrapping within {} s ({at}); check that this \
                  computer can reach the Tor network, or set an existing SOCKS address \
-                 in Settings. Log: {}",
+                 in Settings. Log: {}. Last log lines: {}",
                 wait.as_secs(),
-                log_path.display()
+                log_path.display(),
+                last_n_lines(&log_path, 6)
             ));
         }
         thread::sleep(Duration::from_millis(100));

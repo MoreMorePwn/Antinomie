@@ -781,9 +781,11 @@ fn packet_cell(
     // Paint the cell and half of each gap so a
     // tinted row reads as one band.
     if let Some(tint) = tint {
-        let cell = ui
-            .max_rect()
-            .expand2(egui::vec2(ui.spacing().item_spacing.x / 2.0, 0.0));
+        let cell = crate::widgets::fit_table::snapped(
+            ui.painter(),
+            ui.max_rect()
+                .expand2(egui::vec2(ui.spacing().item_spacing.x / 2.0, 0.0)),
+        );
         ui.painter().rect_filled(cell, 0.0, tint);
     }
     let set = match column {

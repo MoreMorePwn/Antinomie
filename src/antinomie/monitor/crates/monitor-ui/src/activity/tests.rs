@@ -210,6 +210,11 @@ fn native_activity_controls_filter_rows_and_clear_all_levels() {
     assert!(filtered.iter().any(|(text, _)| text == "Error row"));
     assert_eq!(journal.counts(), (1, 1));
     click(&ctx, &mut journal, rect("Clear").center());
+    // The button only asks; the app clears after its question.
+    assert!(!journal.entries.is_empty());
+    assert!(journal.take_clear_asked());
+    assert!(!journal.take_clear_asked());
+    journal.clear();
     assert!(journal.entries.is_empty());
     assert_eq!(journal.counts(), (0, 0));
     for (width, font) in [(320.0, 16.0), (320.0, 24.0)] {

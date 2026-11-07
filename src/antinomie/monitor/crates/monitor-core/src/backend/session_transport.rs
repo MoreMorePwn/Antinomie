@@ -129,6 +129,15 @@ impl Session {
                 );
                 match run.assembler.ingest(&packet) {
                     Ok(event) => {
+                        if let (Some(watch), Some(exited)) = (run.watch.as_mut(), event.as_ref())
+                            && exited.tid == exited.pid
+                            && exited
+                                .fields
+                                .iter()
+                                .any(|field| field.key == "lifecycle.task_exit")
+                        {
+                            watch.exit(exited.pid, exited.timestamp_ns);
+                        }
                         if run.assembler.just_finished
                             && let (Some(watch), Some(done)) = (run.watch.as_mut(), event.as_ref())
                         {
@@ -302,44 +311,39 @@ impl Session {
             _ => {}
         }
     }
-    /// Capture All load shedding: drop instead of waiting while the host is
-    /// behind (see [`Shed`]). `wait_ns` is the guest's total send wait.
+    /// Capture All load shedding, when the VM's settings allow it (see
+    /// [`Shed`]); otherwise only whether never-drop is slowing the guest.
+    /// `wait_ns` is the guest's total send wait.
     pub(super) fn shed_load(&mut self, wait_ns: u64, health: &mut Health) -> Result<(), String> {
         let configured = self.vm.transport.send_wait_us();
-        let now = Instant::now();
-        let elapsed = now.saturating_duration_since(self.shed.sampled);
-        if elapsed >= Duration::from_millis(500) {
-            let waited = wait_ns.saturating_sub(self.shed.sampled_wait_ns);
-            self.shed.wait_share = waited as f64 / elapsed.as_nanos().max(1) as f64;
-            self.shed.sampled = now;
-            self.shed.sampled_wait_ns = wait_ns;
+        let reading = super::shed::Reading {
+            now: Instant::now(),
+            wait_ns,
+            send_wait_us: configured,
+            allowed: self.vm.transport.capture_all_shed,
+            capture_all: self.captures.values().any(|capture| {
+                capture.summary.scope == CaptureScope::AllUserspace
+                    && capture.summary.state == CaptureState::Active
+            }),
+            backlog: crate::writer::backlog(),
+        };
+        if let Some(change) = self.shed.decide(reading) {
+            match change {
+                super::shed::Change::Start => {
+                    self.transport.set_send_wait(0)?;
+                    health.shed_count = health.shed_count.saturating_add(1);
+                }
+                super::shed::Change::Stop(spell) => {
+                    self.transport.set_send_wait(configured)?;
+                    health.shed_ns = health
+                        .shed_ns
+                        .saturating_add(u64::try_from(spell.as_nanos()).unwrap_or(u64::MAX));
+                }
+            }
+            self.shed.apply(change, reading.now);
         }
-        let capture_all = self.captures.values().any(|capture| {
-            capture.summary.scope == CaptureScope::AllUserspace
-                && capture.summary.state == CaptureState::Active
-        });
-        let backlog = crate::writer::backlog();
-        if !self.shed.active
-            && configured > 0
-            && capture_all
-            && (backlog > SHED_BACKLOG || self.shed.wait_share > SHED_WAIT_SHARE)
-        {
-            self.transport.set_send_wait(0)?;
-            self.shed = Shed {
-                active: true,
-                since: now,
-                ..self.shed
-            };
-        } else if self.shed.active
-            && (!capture_all
-                || (backlog < RESUME_BACKLOG
-                    && now.saturating_duration_since(self.shed.since) >= SHED_MIN))
-        {
-            self.transport.set_send_wait(configured)?;
-            self.shed.active = false;
-            self.shed.wait_share = 0.0;
-        }
-        health.shedding = self.shed.active;
+        health.shedding = self.shed.active();
+        health.never_drop_slowing = self.shed.slowing(&reading);
         Ok(())
     }
     /// Write the packets the raw captures buffered during a drain pass.
@@ -590,7 +594,11 @@ impl Session {
         self.seal_process_cores(state, snapshot);
         // QEMU has ended (or host ownership is being sealed at a restore boundary).
         // A queued post-exit dump cannot be claimed to have succeeded here.
-        for owner in self.run_artifacts.values_mut() {
+        let mut owners = std::mem::take(&mut self.run_artifacts);
+        for owner in owners.values_mut() {
+            // A VM that ended on its own (or at a reconnect boundary) still
+            // gives back what the gateway counted for a run that held a route.
+            self.release_run_route(owner);
             if let Some(capture) = owner.network.take() {
                 // At VM exit QEMU already closed it; no object-del is necessary.
                 if let Err(error) = finish_network_summary(capture) {
@@ -622,6 +630,7 @@ impl Session {
                 }),
             ));
         }
+        self.run_artifacts = owners;
         // Host-side analyses (specimen already on the host) go on without the
         // VM: the worker takes them from here (`Worker::carry_analyses`).
         if let Some(carried) = self.analysis.detach_host_side() {

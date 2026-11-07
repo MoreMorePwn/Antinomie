@@ -60,18 +60,21 @@ impl MonitorApp {
         } else {
             "Fold the sidebar to icons"
         };
+        // The same borderless look as `tool_button`: no frame at rest, the
+        // hover and pressed tints on the widget states.
         let clicked = ui
-            .add(
-                egui::Button::new(
-                    RichText::new(egui_phosphor::regular::SIDEBAR_SIMPLE).color(theme::muted()),
+            .scope(|ui| {
+                theme::borderless_buttons(ui);
+                ui.add(
+                    egui::Button::new(
+                        RichText::new(egui_phosphor::regular::SIDEBAR_SIMPLE).color(theme::muted()),
+                    )
+                    .min_size(egui::vec2(0.0, ui.spacing().interact_size.y)),
                 )
-                .frame(false),
-            )
-            .on_hover_text(format!(
-                "{tooltip} ({})",
-                ui.ctx().format_shortcut(&keys::TOGGLE_SIDEBAR)
-            ))
-            .clicked();
+                .on_hover_text(self.with_shortcut(ui.ctx(), tooltip, &Action::ToggleSidebar))
+                .clicked()
+            })
+            .inner;
         if clicked {
             self.toggle_sidebar();
         }

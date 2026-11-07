@@ -34,7 +34,19 @@ fn reasons(coverage: &Coverage, wanted: &[CoverageReason]) -> String {
 /// "2,094 rules loaded · 5 not loadable (TLS fingerprint 3, dataset 2)" for IDS,
 /// "12 rules evaluated · 40 not applicable (no matching events 30, ...)" for Sigma.
 /// None for YARA and for results saved before the counts were kept.
+#[cfg(test)]
 pub(super) fn summary(engine: Engine, coverage: &Coverage) -> Option<String> {
+    summary_of(engine, coverage, None)
+}
+
+/// [`summary`], with the rules of the enabled packs when the Rule packs line
+/// above counts more than the engine loaded: "370 rules loaded (of 386 in the
+/// enabled packs)".
+pub(super) fn summary_of(
+    engine: Engine,
+    coverage: &Coverage,
+    offered: Option<u64>,
+) -> Option<String> {
     let (done, other, wanted, total) = match engine {
         Engine::Ids => (
             "loaded",
@@ -51,11 +63,45 @@ pub(super) fn summary(engine: Engine, coverage: &Coverage) -> Option<String> {
         Engine::Yara => return None,
     };
     let mut text = format!("{} {done}", plural(coverage.evaluated, "rule", "rules"));
+    if let Some(offered) = offered.filter(|offered| *offered != coverage.evaluated) {
+        text.push_str(&format!(
+            " (of {} in the enabled packs)",
+            engine::group_digits(offered)
+        ));
+    }
     if total > 0 {
         text.push_str(&format!(
             " · {} {other} ({})",
             engine::group_digits(total),
             reasons(coverage, wanted)
+        ));
+    }
+    Some(text)
+}
+
+/// Why the Rule packs line and the loaded count differ, for the tooltip.
+pub(super) fn difference_note(engine: Engine, coverage: &Coverage, offered: u64) -> Option<String> {
+    if engine != Engine::Ids || offered == coverage.evaluated {
+        return None;
+    }
+    let digits = engine::group_digits;
+    let refused = coverage.not_loadable();
+    let rest = offered.saturating_sub(coverage.evaluated + refused);
+    let mut text = format!(
+        "The Rule packs line counts every rule in the enabled packs ({}). Suricata loaded {} of them for this scan.",
+        digits(offered),
+        digits(coverage.evaluated)
+    );
+    if refused > 0 {
+        text.push_str(&format!(
+            " {} were refused before the scan (the list below names each one and why).",
+            digits(refused)
+        ));
+    }
+    if rest > 0 {
+        text.push_str(&format!(
+            " {} more were switched off one by one, belong to a pack the scan could not use, or were left out by Suricata itself (an unsupported keyword, a rule it could not parse, a protocol the capture does not have).",
+            digits(rest)
         ));
     }
     Some(text)
@@ -81,8 +127,30 @@ fn item_text(item: &antinomie_monitor_core::analysis::detection::CoverageItem) -
 }
 
 impl View {
-    /// The rule counts of the selected engine, the collapsible list of the rules
-    /// that did not apply, and the preview note.
+    /// The IDS's "2,094 rules loaded · 7 not loadable" line and its hover note.
+    /// It rides at the right end of the Rule packs line.
+    pub(super) fn loaded_line(&self, index: usize) -> Option<(String, Option<String>)> {
+        let Some(Ok(report)) = self.results[index].as_ref() else {
+            return None;
+        };
+        if report.engine != Engine::Ids {
+            return None;
+        }
+        let coverage = report.coverage.as_ref()?;
+        let offered: u64 = self.sets[index]
+            .iter()
+            .filter(|set| set.enabled)
+            .map(|set| set.rules)
+            .sum();
+        let offered = (offered > 0).then_some(offered);
+        let line = summary_of(report.engine, coverage, offered)?;
+        let note = offered.and_then(|offered| difference_note(report.engine, coverage, offered));
+        Some((line, note))
+    }
+
+    /// The collapsible list of the rules that did not apply, headed by its
+    /// toggle; Sigma's rule counts sit under the toggle, and the preview note
+    /// last. The IDS's loaded line is on the Rule packs line.
     pub(super) fn coverage_section(&self, ui: &mut egui::Ui, index: usize) {
         let Some(Ok(report)) = self.results[index].as_ref() else {
             return;
@@ -90,11 +158,13 @@ impl View {
         let Some(coverage) = report.coverage.as_ref() else {
             return;
         };
-        let Some(line) = summary(report.engine, coverage) else {
-            return;
-        };
-        ui.label(RichText::new(line).small().color(theme::muted()));
-        if !coverage.listed.is_empty() {
+        let listed = !coverage.listed.is_empty();
+        let open_id = ui.id().with(("detection-coverage-open", index));
+        let mut open = listed
+            && ui
+                .data(|data| data.get_temp::<bool>(open_id))
+                .unwrap_or(false);
+        if listed {
             let count = coverage.listed.len() as u64 + coverage.unlisted;
             let title = if report.engine == Engine::Ids {
                 format!("Show the {} rules not loaded", engine::group_digits(count))
@@ -104,28 +174,48 @@ impl View {
                     engine::group_digits(count)
                 )
             };
-            egui::CollapsingHeader::new(RichText::new(title).small())
-                .id_salt(("detection-coverage", index))
-                .show(ui, |ui| {
-                    for item in &coverage.listed {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(item_text(item)).small().color(theme::muted()),
-                            )
-                            .wrap(),
-                        );
-                    }
-                    if coverage.unlisted > 0 {
-                        ui.label(
-                            RichText::new(format!(
-                                "…and {} more not listed; the counts above include them",
-                                engine::group_digits(coverage.unlisted)
-                            ))
-                            .small()
-                            .color(theme::muted()),
-                        );
-                    }
-                });
+            let caret = if open {
+                egui_phosphor::regular::CARET_DOWN
+            } else {
+                egui_phosphor::regular::CARET_RIGHT
+            };
+            if ui
+                .add(
+                    egui::Button::new(RichText::new(format!("{caret} {title}")).small())
+                        .frame(false),
+                )
+                .clicked()
+            {
+                open = !open;
+                ui.data_mut(|data| data.insert_temp(open_id, open));
+            }
+        }
+        if report.engine != Engine::Ids {
+            if let Some(line) = summary_of(report.engine, coverage, None) {
+                ui.label(RichText::new(line).small().color(theme::muted()));
+            }
+        }
+        if open {
+            ui.indent(("detection-coverage", index), |ui| {
+                for item in &coverage.listed {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(item_text(item)).small().color(theme::muted()),
+                        )
+                        .wrap(),
+                    );
+                }
+                if coverage.unlisted > 0 {
+                    ui.label(
+                        RichText::new(format!(
+                            "…and {} more not listed; the counts above include them",
+                            engine::group_digits(coverage.unlisted)
+                        ))
+                        .small()
+                        .color(theme::muted()),
+                    );
+                }
+            });
         }
         if let Some(note) = preview_note(report.engine, coverage) {
             ui.label(RichText::new(note).small().color(theme::muted()));
@@ -167,6 +257,30 @@ mod tests {
         };
         assert_eq!(summary(Engine::Ids, &clean).unwrap(), "1 rule loaded");
         assert!(summary(Engine::Yara, &clean).is_none());
+    }
+
+    #[test]
+    fn the_rule_packs_count_and_the_loaded_count_are_told_apart() {
+        let coverage = ids();
+        // 2,094 loaded + 7 refused of 2,110 offered leaves 9 unexplained by us.
+        assert_eq!(
+            summary_of(Engine::Ids, &coverage, Some(2110)).unwrap(),
+            "2,094 rules loaded (of 2,110 in the enabled packs) · 7 not loadable (TLS fingerprint 3, dataset 2, duplicate 1, no SID 1)"
+        );
+        let note = difference_note(Engine::Ids, &coverage, 2110).unwrap();
+        assert!(
+            note.contains("every rule in the enabled packs (2,110)"),
+            "{note}"
+        );
+        assert!(note.contains("Suricata loaded 2,094"), "{note}");
+        assert!(note.contains("7 were refused"), "{note}");
+        assert!(note.contains("9 more were switched off"), "{note}");
+        // Equal counts need no explanation.
+        assert_eq!(
+            summary_of(Engine::Ids, &coverage, Some(2094)).unwrap(),
+            summary(Engine::Ids, &coverage).unwrap()
+        );
+        assert!(difference_note(Engine::Ids, &coverage, 2094).is_none());
     }
 
     #[test]
@@ -222,10 +336,8 @@ mod tests {
             }))
         };
         let text = draw(&view);
-        assert!(
-            text.contains("2,094 rules loaded · 7 not loadable"),
-            "{text}"
-        );
+        // The loaded line moved to the Rule packs line.
+        assert!(!text.contains("rules loaded"), "{text}");
         assert!(text.contains("Show the 7 rules not loaded"), "{text}");
         assert!(text.contains("match counts are complete"), "{text}");
         assert!(
@@ -253,5 +365,51 @@ mod tests {
                 egui::CentralPanel::default().show(root, |ui| view.coverage_section(ui, 2));
             }));
         assert!(!text.contains("rules"), "{text}");
+    }
+
+    fn sigma_view() -> View {
+        let mut view = View::default();
+        let mut report = super::super::tests::report(Vec::new());
+        report.engine = Engine::Sigma;
+        let mut coverage = Coverage {
+            evaluated: 12,
+            ..Coverage::default()
+        };
+        coverage.add(CoverageReason::NoMatchingEvents, "rule one", "no events");
+        report.coverage = Some(coverage);
+        view.results[2] = Some(Ok(report));
+        view
+    }
+
+    fn pane(view: &mut View) -> Vec<(String, egui::Rect)> {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut texts = Vec::new();
+        for shape in super::super::tests::frames(&ctx, 2, |root| {
+            egui::CentralPanel::default().show(root, |ui| view.coverage_section(ui, 2));
+        }) {
+            super::super::tests::each_galley_rect(&shape.shape, &mut |text, rect| {
+                texts.push((text.to_owned(), rect));
+            });
+        }
+        texts
+    }
+
+    #[test]
+    fn the_not_applicable_toggle_is_the_line_above_the_counts() {
+        let mut view = sigma_view();
+        let texts = pane(&mut view);
+        let find = |needle: &str| {
+            texts
+                .iter()
+                .find(|(text, _)| text.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} missing: {texts:?}"))
+                .1
+        };
+        let toggle = find("Show the 1 rules not applicable");
+        let counts = find("12 rules evaluated");
+        assert!(toggle.max.y <= counts.min.y + 1.0, "{toggle:?} {counts:?}");
+        // The list stays folded until the toggle is opened.
+        assert!(!texts.iter().any(|(text, _)| text.contains("no events")));
     }
 }

@@ -11,6 +11,7 @@ pub(super) enum Location {
     Credentials,
     System,
     Temp,
+    Home,
     PseudoFs,
     SelfPath,
     Hidden,
@@ -24,6 +25,7 @@ impl Location {
             Self::Credentials => "credentials",
             Self::System => "system",
             Self::Temp => "temp",
+            Self::Home => "home",
             Self::PseudoFs => "pseudo-fs",
             Self::SelfPath => "self",
             Self::Hidden => "hidden",
@@ -35,12 +37,23 @@ impl Location {
         matches!(self, Self::Persistence | Self::Credentials | Self::Hidden)
     }
 
+    /// The word of the small badge on a path in a table.
+    pub(super) fn badge(tag: &str) -> &str {
+        match tag {
+            "temp" => "/tmp",
+            "pseudo-fs" => "proc",
+            "self" => "sample",
+            other => other,
+        }
+    }
+
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Persistence => "Persistence",
             Self::Credentials => "Credentials",
             Self::System => "System binary/library",
             Self::Temp => "Temp/staging",
+            Self::Home => "Home directory",
             Self::PseudoFs => "Pseudo-filesystem",
             Self::SelfPath => "Sample itself",
             Self::Hidden => "Hidden",
@@ -148,6 +161,8 @@ const RULES: &[(Location, Rule)] = &[
     (Location::Temp, Rule::Under("/tmp")),
     (Location::Temp, Rule::Under("/dev/shm")),
     (Location::Temp, Rule::Under("/var/tmp")),
+    (Location::Home, Rule::Under("/home")),
+    (Location::Home, Rule::Under("/root")),
     (Location::PseudoFs, Rule::Under("/proc")),
     (Location::PseudoFs, Rule::Under("/sys")),
     (Location::PseudoFs, Rule::UnderExcept("/dev", "/dev/shm")),
@@ -236,8 +251,8 @@ mod tests {
     fn hidden_paths_and_combined_classes() {
         assert_eq!(tags("/tmp/.x/payload"), ["temp", "hidden"]);
         assert!(tags("/home/user/.cache/a").contains(&"hidden"));
-        assert!(tags("/home/user/a..b").is_empty());
-        assert!(tags("/home/user/./a/../b").is_empty());
+        assert_eq!(tags("/home/user/a..b"), ["home"]);
+        assert_eq!(tags("/home/user/./a/../b"), ["home"]);
         let combined = tags("/home/user/.ssh/authorized_keys");
         for tag in ["persistence", "credentials", "hidden"] {
             assert!(combined.contains(&tag), "{tag}");

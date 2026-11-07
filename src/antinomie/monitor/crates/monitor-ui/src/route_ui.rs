@@ -31,6 +31,8 @@ pub(crate) struct RouteText {
     /// The run's overall state ("Running · 12:34 elapsed"), shown beside the
     /// route line where the run is known.
     pub run_state: Option<String>,
+    /// The run's start and end times, for the tooltip of the state words.
+    pub run_state_tip: Option<String>,
     /// The colour of the state words (the run-state palette).
     pub run_state_color: Option<egui::Color32>,
 }
@@ -51,6 +53,7 @@ pub(crate) fn describe(route: Option<&RouteRecord>, stats: Option<RouteStats>) -
             note: None,
             filter: None,
             run_state: None,
+            run_state_tip: None,
             run_state_color: None,
         };
     };
@@ -92,6 +95,7 @@ pub(crate) fn describe(route: Option<&RouteRecord>, stats: Option<RouteStats>) -
         detail,
         filter,
         run_state: None,
+        run_state_tip: None,
         run_state_color: None,
         leaves: matches!(
             route.kind,
@@ -117,11 +121,14 @@ pub(crate) fn line(ui: &mut egui::Ui, text: &RouteText) {
         }
         if let Some(state) = &text.run_state {
             ui.label(RichText::new("·").color(theme::muted()));
-            ui.label(
+            let label = ui.label(
                 RichText::new(state)
                     .strong()
                     .color(text.run_state_color.unwrap_or_else(theme::text)),
             );
+            if let Some(tip) = &text.run_state_tip {
+                label.on_hover_text(tip);
+            }
         }
     });
 }
@@ -218,7 +225,17 @@ pub(crate) fn selector(ui: &mut egui::Ui, request: &mut ExecRequest, choice: &Ro
         );
         return;
     }
+    // The default fills the choice until the person picks a route. A fill
+    // that Settings > Network routes has since changed follows the new
+    // default, so a saved Tor shows as Tor in the next Run form.
+    let filled_id = egui::Id::new("run-route-filled");
+    let filled = ui.data(|data| data.get_temp::<RouteKind>(filled_id));
+    if request.route.is_none() || (request.route == filled && filled != Some(choice.default)) {
+        request.route = Some(choice.default);
+        ui.data_mut(|data| data.insert_temp(filled_id, choice.default));
+    }
     let mut selected = request.route.unwrap_or(choice.default);
+    let before = selected;
     ui.horizontal(|ui| {
         ui.label("Route");
         egui::ComboBox::from_id_salt("run-route")
@@ -230,6 +247,10 @@ pub(crate) fn selector(ui: &mut egui::Ui, request: &mut ExecRequest, choice: &Ro
             });
     });
     request.route = Some(selected);
+    if selected != before {
+        // Picked by hand: the default no longer replaces it.
+        ui.data_mut(|data| data.remove::<RouteKind>(filled_id));
+    }
     ui.add(
         egui::Label::new(
             RichText::new(selected.explain())
@@ -354,6 +375,40 @@ mod tests {
         routed.route = Some(RouteKind::Drop);
         draw(&mut routed, RouteChoice::new(VmNetwork::Routed, &config));
         assert_eq!(routed.route, Some(RouteKind::Drop));
+    }
+
+    #[test]
+    fn a_default_saved_in_settings_fills_the_next_run_form_unless_a_route_was_picked() {
+        let ctx = egui::Context::default();
+        let draw = |request: &mut ExecRequest, choice: RouteChoice| {
+            let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+                egui::CentralPanel::default().show(root, |ui| selector(ui, request, &choice));
+            });
+        };
+        let config = |default_route| RouteConfig {
+            default_route,
+            ..RouteConfig::default()
+        };
+        let mut request = ExecRequest::default();
+        draw(
+            &mut request,
+            RouteChoice::new(VmNetwork::Routed, &config(RouteKind::Drop)),
+        );
+        assert_eq!(request.route, Some(RouteKind::Drop));
+        // Settings now says Tor: the form, still holding the old fill, follows.
+        draw(
+            &mut request,
+            RouteChoice::new(VmNetwork::Routed, &config(RouteKind::Tor)),
+        );
+        assert_eq!(request.route, Some(RouteKind::Tor));
+        // A route the person picked is not replaced (marked as picked by hand).
+        ctx.data_mut(|data| data.remove::<RouteKind>(egui::Id::new("run-route-filled")));
+        request.route = Some(RouteKind::InetSim);
+        draw(
+            &mut request,
+            RouteChoice::new(VmNetwork::Routed, &config(RouteKind::Drop)),
+        );
+        assert_eq!(request.route, Some(RouteKind::InetSim));
     }
 
     #[test]

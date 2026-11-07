@@ -36,9 +36,13 @@ pub(crate) const LAYER_MAX_COUNT: usize = 3;
 pub(crate) const LAYER_MAX_SIZE: u64 = 64 * 1024 * 1024;
 /// All layers of one file, in octets.
 pub(crate) const TOTAL_MAX_SIZE: u64 = 3 * LAYER_MAX_SIZE;
-/// Wall-clock budget of the whole section, and of one run of the unpacker.
-pub(super) const BUDGET_SECONDS: u64 = 240;
+/// Wall-clock budget of one run of the unpacker (the whole section's is the UPX
+/// time in Settings > Analysis tools).
 const RUN_SECONDS: u64 = 60;
+
+/// What to do about a UPX file whose headers were damaged on purpose.
+pub(super) const UPX_ALTERED_HINT: &str =
+    "UPX headers are altered (anti-unpacking); restore the UPX! magic and sizes to unpack it";
 
 /// Whether the file shows UPX's own marks, however damaged its headers are.
 /// Identification and Unpacking share this, so they cannot disagree.
@@ -65,7 +69,7 @@ fn sha256(bytes: &[u8]) -> String {
 }
 
 pub(super) fn unpack(section: &mut AnalysisSection, specimen: &[u8], artifacts: &Path) {
-    let tool = tools::find_tool(crate::analysis_tools::UPX_SYSTEM, MANAGED);
+    let tool = tools::find_tool("upx", crate::analysis_tools::UPX_SYSTEM, MANAGED);
     unpack_with(section, specimen, artifacts, tool);
 }
 
@@ -77,7 +81,7 @@ fn unpack_with(
     tool: Option<&str>,
 ) {
     let started = Instant::now();
-    let budget_seconds = super::limits::seconds(BUDGET_SECONDS);
+    let budget_seconds = super::limits::seconds_for(super::limits::TimedTool::Unpack);
     let run_seconds = super::limits::seconds(RUN_SECONDS);
     // Set when the unpacker or the section's time budget ran out.
     let mut out_of_time: Option<u64> = None;
@@ -108,7 +112,7 @@ fn unpack_with(
             {
                 layers[at].packer = Some("UPX (headers too damaged to locate)".into());
                 problem = Some(format!(
-                    "{sign} is in the file but UPX's headers are altered beyond repair, so it cannot be unpacked here; unpack it by running it in the VM or with a dumped memory image"
+                    "{UPX_ALTERED_HINT}. {sign} is in the file but UPX's headers are altered beyond repair, so it cannot be unpacked here; unpack it by running it in the VM or with a dumped memory image"
                 ));
             }
             break;
@@ -164,7 +168,13 @@ fn unpack_with(
                 if error.contains("timed out after") {
                     out_of_time = Some(run_seconds);
                 }
-                problem = Some(error);
+                // A header that had to be changed and still would not unpack
+                // was altered on purpose to stop `upx -d`.
+                problem = Some(if !found.changes.is_empty() && out_of_time.is_none() {
+                    format!("{error}; {UPX_ALTERED_HINT}")
+                } else {
+                    error
+                });
                 break;
             }
         };

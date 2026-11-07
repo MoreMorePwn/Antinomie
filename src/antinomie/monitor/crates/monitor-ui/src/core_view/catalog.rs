@@ -180,6 +180,7 @@ impl CoreView {
         self.manual.clear();
         self.records.clear();
         self.catalog_issues.clear();
+        self.reported_issues.clear();
         self.import_open = false;
         if changed_vm
             || self
@@ -361,6 +362,18 @@ pub(super) fn selected_core_refresh(probe: SelectedCoreProbe) -> SelectedCoreRef
     }
 }
 
+/// The record text a run stored when its core could not be armed, in plain
+/// words. Runs recorded with Debug on start before the arm reply was split
+/// from the debugger's start record stored the raw parser error; the bytes
+/// were never kept, so those records cannot be listed.
+pub(super) fn plain_issue(issue: &str) -> String {
+    if issue.contains("process-core arm: invalid acquisition reply length or padding") {
+        "This run's core dump record is from an older guest and can't be listed".into()
+    } else {
+        issue.to_owned()
+    }
+}
+
 /// Read bounded sidecars on the inspection worker; ELF data is read only on open.
 pub(super) fn catalog(roots: &[PathBuf], vm_id: Option<&str>) -> Result<CoreCatalog, String> {
     let mut result = CoreCatalog::default();
@@ -434,7 +447,7 @@ pub(super) fn catalog(roots: &[PathBuf], vm_id: Option<&str>) -> Result<CoreCata
                 if result.issues.len() >= 16 {
                     break;
                 }
-                let mut issue_text: String = issue.chars().take(2048).collect();
+                let mut issue_text: String = plain_issue(issue).chars().take(2048).collect();
                 if issue.chars().count() > 2048 {
                     issue_text.push('…');
                 }

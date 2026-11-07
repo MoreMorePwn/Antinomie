@@ -299,9 +299,16 @@ impl MonitorApp {
             return;
         };
         let install = self.snapshot.tool_install.clone();
-        if let Some(command) =
-            crate::tools_page::tool_row(ui, &tool, install.as_ref(), !self.closing)
-        {
+        let mut chosen = self.settings.own_tools.contains(id);
+        let command = crate::tools_page::tool_row_with(
+            ui,
+            &tool,
+            install.as_ref(),
+            !self.closing,
+            Some(&mut chosen),
+        );
+        crate::tools_page::set_own(&mut self.settings.own_tools, id, chosen);
+        if let Some(command) = command {
             self.send(command);
         }
     }
@@ -413,8 +420,9 @@ impl MonitorApp {
                         .on_hover_text(
                             "Path to a tor program; empty uses PATH, then the copy installed below.",
                         );
-                    hint(
+                    hint_tip(
                         ui,
+                        "Started for each run, stopped when it ends.",
                         "Started for each run on a free local port with its own data folder and no control port, and stopped when the run ends. A run waits for Tor to finish starting and does not start without it.",
                     );
                 });
@@ -503,7 +511,12 @@ impl MonitorApp {
                  records or exported.",
             );
             ui.vertical(|ui| {
-                super::dialogs::password_input(ui, &mut draft.socks5.password, "route_socks5_password");
+                super::dialogs::password_input_width(
+                    ui,
+                    &mut draft.socks5.password,
+                    "route_socks5_password",
+                    260.0,
+                );
             });
             ui.end_row();
             ui.label("Check target");

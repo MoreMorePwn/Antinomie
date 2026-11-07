@@ -9,6 +9,8 @@ const CLONE3: u64 = 435;
 mod async_files;
 mod async_previews;
 mod layout;
+mod scroll;
+mod suspicious;
 mod theme_switch;
 
 #[test]
@@ -196,6 +198,10 @@ fn native_triage_fixture() {
             view.process = ProcessTab::Suspicious;
         }
         "bpf" => view.section = Section::Bpf,
+        "detection" => {
+            view.section = Section::Detection;
+            view.detection.qa_scene();
+        }
         "opened" => {
             view.section = Section::Files;
             view.files = FileTab::Opened;
@@ -295,7 +301,7 @@ fn native_triage_fixture() {
                 "changed" => scan.changed.first().cloned().map(|row| {
                     (
                         "triage-changed",
-                        vec!["Time", "Path", "PID / TID", "Diff count", "Evidence"],
+                        vec!["Time", "Path", "Process", "Diff count", "Evidence"],
                         row,
                     )
                 }),
@@ -305,7 +311,7 @@ fn native_triage_fixture() {
                         vec![
                             "Time",
                             "Path",
-                            "PID / TID",
+                            "Process",
                             "Transferred / content",
                             "Result",
                             "Evidence",
@@ -917,7 +923,7 @@ fn caps_keep_two_thousand_rows_per_rule_and_count_the_rest_in_an_overflow_row() 
         second.findings[0].cells[rules::COL_SUMMARY].text,
         "+51 more not stored (cap)"
     );
-    assert_eq!(second.findings[0].cells[5].text, "51");
+    assert_eq!(second.findings[0].cells[5].text, "\u{d7}51");
     let journal = std::fs::read_to_string(temp.directory.join("triage-findings-v2.jsonl")).unwrap();
     assert_eq!(journal.lines().count(), 2001);
     let fact: serde_json::Value = serde_json::from_str(journal.lines().next().unwrap()).unwrap();
@@ -949,7 +955,11 @@ fn repeats_of_one_task_are_one_row_with_a_count_and_a_time_span() {
     .unwrap();
     assert_eq!(scan.findings.len(), 1);
     let row = &scan.findings[0];
-    assert_eq!(row.cells[5].text, "40");
+    assert!(
+        row.cells[5].text.starts_with("\u{d7}40"),
+        "{}",
+        row.cells[5].text
+    );
     assert_eq!(files::number(&row.values, "finding.count"), Some(40));
     assert!(
         files::number(&row.values, "finding.last_ns")
@@ -1550,8 +1560,8 @@ fn file_process_labels_follow_exec_time_without_guessing_unknown_or_reused_pid()
     let read = call(3, 0, "read", 0);
     let event = trace::representative(&read).unwrap();
     assert_eq!(
-        process_identity(event.pid, event.tid, process_image(&files, event)),
-        "old (PID 3 · TID 3)"
+        process_cells::task_label(event.pid, event.tid, process_image(&files, event)),
+        "old (3 · 3)"
     );
     let mut next = call(3, 59, "execve", 0);
     next.entry
@@ -1561,8 +1571,8 @@ fn file_process_labels_follow_exec_time_without_guessing_unknown_or_reused_pid()
         .push(captured("arg0.pathname", "", b"/bin/new\0"));
     observe_processes(&mut files.process_images, &[next]);
     assert_eq!(
-        process_identity(event.pid, event.tid, process_image(&files, event)),
-        "new (PID 3 · TID 3)"
+        process_cells::task_label(event.pid, event.tid, process_image(&files, event)),
+        "new (3 · 3)"
     );
     let mut reused = event.clone();
     reused.task_cookie += 100;
@@ -1585,8 +1595,8 @@ fn a_worker_thread_is_named_by_its_process_in_file_labels() {
     worker.tid = 4;
     worker.task_cookie = 4;
     assert_eq!(
-        process_identity(worker.pid, worker.tid, process_image(&files, &worker)),
-        "locker (PID 3 · TID 4)"
+        process_cells::task_label(worker.pid, worker.tid, process_image(&files, &worker)),
+        "locker (3 · 4)"
     );
 }
 

@@ -217,14 +217,16 @@ impl MonitorApp {
             .flat_map(|row| row.tags.iter().cloned())
             .collect();
         ui.horizontal_wrapped(|ui| {
-            ui.add(
+            let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.samples_page.query)
                     .hint_text(crate::theme::placeholder(
                         ui,
                         "Name, description, tag or SHA-256 prefix",
                     ))
+                    .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                     .desired_width(crate::theme::plain_edit_width(380.0)),
             );
+            crate::widgets::clear_button(ui, &edit, &mut self.samples_page.query);
             let count = self.samples_page.tag_filter.len();
             if ui
                 .selectable_label(

@@ -23,6 +23,8 @@ use std::sync::{Arc, Mutex};
 
 /// The request a Files tab's row menu leaves for the Per-file history.
 pub(in crate::triage) const REQUEST: &str = "triage-reconstruct-request";
+/// The request a row menu leaves for the history of a file.
+pub(in crate::triage) const HISTORY_REQUEST: &str = "triage-file-history-request";
 /// The Files tab tables whose rows can be reconstructed.
 const TABLES: &[&str] = &[
     "triage-opened",
@@ -36,6 +38,7 @@ const TABLES: &[&str] = &[
     "triage-probed",
     "triage-other",
     "triage-changed",
+    "triage-files",
 ];
 /// Bytes in a row of the byte map.
 const ROW: usize = 16;
@@ -70,6 +73,15 @@ pub(in crate::triage) fn menu(
     values: &[(&str, crate::triage::RowValue)],
 ) {
     if let Some(path) = row_path(table, values) {
+        if ui
+            .button("Open file history")
+            .on_hover_text("Show this file's calls as a graph in the Per-file history")
+            .clicked()
+        {
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(egui::Id::new(HISTORY_REQUEST), path.clone()));
+            ui.close();
+        }
         if ui
             .button("Reconstruct contents…")
             .on_hover_text("Open this file's reconstruction in the Per-file history")
@@ -249,7 +261,7 @@ impl Open {
             self.cache_at = self.map.position();
         }
         let mut open = true;
-        let shown = egui::Window::new("File reconstruction")
+        let shown = crate::widgets::capped(egui::Window::new("File reconstruction"), ctx)
             .id(egui::Id::new("file-reconstruction-window"))
             .open(&mut open)
             .default_size(egui::vec2(1020.0, 720.0) + crate::widgets::frame_extra(ctx))

@@ -51,24 +51,32 @@ fn technique_parts(value: &str) -> (&str, &str) {
 
 /// The text of a tag as one pill line: a verdict's dot, a technique's ID in
 /// monospace, a custom tag's `#`. The text is the theme's own colour.
-fn tag_job(ui: &egui::Ui, tag: &Tag, context: Option<Tactic>) -> egui::text::LayoutJob {
+fn tag_job(
+    ui: &egui::Ui,
+    tag: &Tag,
+    context: Option<Tactic>,
+) -> (egui::text::LayoutJob, Vec<Color32>) {
     use crate::widgets::tone::{pill_font, pill_text};
     let small = pill_font(ui);
     let mut job = egui::text::LayoutJob::default();
     match tag.kind {
         TagKind::Verdict => {
             let color = verdict_color(&tag.value);
-            pill_text(&mut job, "● ", small.clone(), color);
             pill_text(&mut job, &tag.value, small, color);
+            return (job, vec![color]);
         }
         TagKind::Category => pill_text(&mut job, &tag.value, small, theme::text()),
         TagKind::Technique => {
             let (id, name) = technique_parts(&tag.value);
-            return attack::technique_job(ui, id, name, &attack::badge_tactics(id, context));
+            let tactics = attack::badge_tactics(id, context);
+            return (
+                attack::technique_job(ui, id, name, &tactics),
+                attack::technique_dots(&tactics),
+            );
         }
         TagKind::Custom => pill_text(&mut job, &format!("#{}", tag.value), small, theme::text()),
     }
-    job
+    (job, Vec::new())
 }
 
 /// Draw one tag. In a wrapping row a tag that does not fit what is left of
@@ -80,9 +88,11 @@ pub(crate) fn tag(ui: &mut egui::Ui, tag: &Tag) -> egui::Response {
 
 /// [`tag`] for a technique drawn in the row of the tactic `context`.
 pub(crate) fn tag_in(ui: &mut egui::Ui, tag: &Tag, context: Option<Tactic>) -> egui::Response {
-    use crate::widgets::tone::{pill, PillLook};
+    use crate::widgets::tone::{pill_dots, PillLook};
     let palette = theme::palette();
-    let job = tag_job(ui, tag, context);
+    let (job, dots) = tag_job(ui, tag, context);
+    let pill =
+        |ui: &mut egui::Ui, look: PillLook, job, min: f32| pill_dots(ui, look, &dots, job, min);
     let look = |fill: Color32, stroke: Stroke, corner: u8| PillLook {
         fill,
         stroke,
@@ -143,9 +153,11 @@ pub(crate) fn tag_in(ui: &mut egui::Ui, tag: &Tag, context: Option<Tactic>) -> e
 /// The width a tag drawn with [`tag_in`] takes on one line, for a caller that
 /// keeps a tag and something beside it together.
 pub(crate) fn width_of_in(ui: &egui::Ui, tag: &Tag, context: Option<Tactic>) -> f32 {
-    let mut job = tag_job(ui, tag, context);
+    let (mut job, dots) = tag_job(ui, tag, context);
     job.wrap.max_width = f32::INFINITY;
-    ui.fonts_mut(|fonts| fonts.layout_job(job)).size().x + 16.0
+    let lead =
+        crate::widgets::tone::dots_width(crate::widgets::tone::pill_font(ui).size, dots.len());
+    ui.fonts_mut(|fonts| fonts.layout_job(job)).size().x + lead + 16.0
 }
 
 /// The tags the list shows: verdicts and categories, with the techniques and

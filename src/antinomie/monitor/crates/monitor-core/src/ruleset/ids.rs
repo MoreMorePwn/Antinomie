@@ -19,6 +19,7 @@ pub(super) fn parse_ids(text: &str) -> Vec<IndexedRule> {
                 tags: Vec::new(),
                 severity: ids_field(&body, "classtype").unwrap_or_default(),
                 license: String::new(),
+                author: String::new(),
                 source_url: ids_field(&body, "reference").unwrap_or_default(),
                 condition: clip(&body, 180),
                 references: Vec::new(),

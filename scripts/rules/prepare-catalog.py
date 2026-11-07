@@ -67,6 +67,13 @@ ALLOWED_REPOSITORY_LICENSES = [
 # recognise. Each is checked against the repository itself before it is used.
 HEADER_MISSES = {"https://github.com/deadbits/yara-rules": "Unlicense"}
 
+# abuse.ch YARAhub: every rule names its license in `yarahub_license`, one of the
+# Creative Commons values the YARAhub guidelines list. The non-commercial and
+# no-derivatives values are not allowed here, as for YARA-Forge.
+YARAHUB_LICENSE_KEYS = ["yarahub_license"]
+YARAHUB_ALLOWED_LICENSES = ["CC0 1.0", "CC BY 4.0", "CC BY-SA 4.0"]
+YARAHUB_URL = "https://yaraify.abuse.ch/yarahub/yaraify-rules.zip"
+
 SIGMA_PREFIXES = [
     "rules/linux/process_creation/",
     "rules/linux/file_event/",
@@ -96,6 +103,10 @@ class Run:
             self.api_cache = json.loads(self.cache_file.read_text())
         self.pins = dict(item.split("=", 1) for item in args.pin)
         self.counts = dict(item.split("=", 1) for item in args.count)
+        self.only = set(args.only)
+        self.base_packs = []
+        if args.base:
+            self.base_packs = json.loads(Path(args.base).read_text())["packs"]
 
     def warn(self, text):
         self.warnings.append(text)
@@ -273,6 +284,7 @@ def build_yara_forge(run):
             raise SystemExit("the YARA-Forge package is unexpectedly large")
         data = archive.read(member)
     text = data.decode("utf-8")
+    run.forge_text = text
     sets = split_sets(text)
     # License table from the package headers, completed from the repositories.
     table = {}
@@ -378,6 +390,150 @@ def build_yara_forge(run):
         "repositories_without_license": sum(1 for e in table.values() if e["license"] == "none"),
     }
     return pack, summary
+
+
+# --- abuse.ch YARAhub ------------------------------------------------------
+
+def meta_value(block, keys):
+    """First of `keys` that the rule's meta sets to a value (the monitor's rule)."""
+    for key in keys:
+        match = re.search(r'^[ \t]*' + re.escape(key) + r'[ \t]*=[ \t]*"([^"]*)"', block, re.M)
+        if match and match.group(1).strip().lower() not in ("", "n/a", "none", "unknown", "-"):
+            return match.group(1).strip()
+    return None
+
+
+def rule_name(block):
+    match = RULE_START.search(block)
+    return match.group(1) if match else ""
+
+
+def rule_body_key(block):
+    """The rule without its name and meta: strings and condition, whitespace removed."""
+    for marker in ("strings:", "condition:"):
+        at = block.find(marker)
+        if at >= 0:
+            return hashlib.sha256(re.sub(r"\s+", "", block[at:]).encode()).hexdigest()
+    return hashlib.sha256(re.sub(r"\s+", "", block).encode()).hexdigest()
+
+
+def classify_yarahub(members, forge_text):
+    """Decide each YARAhub file. `members` is {path: text}, one rule per file.
+
+    Returns (kept, dropped_by_license, no_license, duplicates, license_counts):
+    paths kept, then the counts, and `duplicates` as the sorted paths of kept
+    candidates whose rule name or body equals a rule of the YARA-Forge package.
+    """
+    forge_names, forge_bodies = set(), set()
+    for item in split_sets(forge_text) if forge_text else []:
+        for block in yara_blocks(item["body"]):
+            forge_names.add(rule_name(block))
+            forge_bodies.add(rule_body_key(block))
+    allowed, dropped, unnamed, duplicates = [], 0, 0, []
+    licenses = collections.Counter()
+    for path in sorted(members):
+        block = members[path]
+        license_name = meta_value(block, YARAHUB_LICENSE_KEYS)
+        licenses[license_name or "(none)"] += 1
+        if license_name is None:
+            unnamed += 1
+        elif not license_name.startswith(tuple(YARAHUB_ALLOWED_LICENSES)):
+            dropped += 1
+        elif rule_name(block) in forge_names or rule_body_key(block) in forge_bodies:
+            duplicates.append(path)
+        else:
+            allowed.append(path)
+    return allowed, dropped, unnamed, duplicates, licenses
+
+
+def pinned_forge_text(run):
+    """The YARA-Forge package this run already has, or the one --base pins."""
+    if getattr(run, "forge_text", ""):
+        return run.forge_text
+    pack = next((p for p in run.base_packs if p["id"] == "yara-forge-core"), None)
+    if not pack:
+        return ""
+    source = pack["sources"][0]
+    path, size, digest, _ = run.download(source["url"], run.directory("yara-forge-core-pinned"), "forge.zip")
+    if digest != source["sha256"]:
+        raise SystemExit("the pinned YARA-Forge release no longer matches the base catalog")
+    with zipfile.ZipFile(path) as archive:
+        return archive.read(source["files"][0]["path"]).decode("utf-8")
+
+
+def build_yarahub(run):
+    pack_id = "abuse-ch-yarahub"
+    directory = run.directory(pack_id)
+    path, size, digest, headers = run.download(YARAHUB_URL, directory, "yaraify-rules.zip")
+    members = {}
+    hashes = {}
+    with zipfile.ZipFile(path) as archive:
+        if len(archive.infolist()) > 20000:
+            raise SystemExit("the YARAhub archive has too many members")
+        for info in archive.infolist():
+            name = info.filename
+            if info.is_dir() or "/" in name or not name.endswith(".yar") or info.file_size > 1024 * 1024:
+                run.warn(f"YARAhub member {name!r} skipped")
+                continue
+            data = archive.read(info)
+            members[name] = data.decode("utf-8", "replace")
+            hashes[name] = sha256_bytes(data)
+    total = sum(count_yara(text)[0] for text in members.values())
+    forge_text = pinned_forge_text(run)
+    if not forge_text:
+        run.warn("no YARA-Forge package is available; no YARAhub duplicates were checked")
+    kept, dropped, unnamed, duplicates, licenses = classify_yarahub(members, forge_text)
+    stamp = headers.get("Last-Modified") or ""
+    try:
+        day = datetime.datetime.strptime(stamp, "%a, %d %b %Y %H:%M:%S %Z").strftime("%Y-%m-%d")
+    except ValueError:
+        day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    return {
+        "id": pack_id,
+        "engine": "yara",
+        "name": "abuse.ch YARAhub",
+        "homepage": "https://yaraify.abuse.ch/yarahub/",
+        "license": "Each rule's own license (the yarahub_license meta: CC0 1.0, CC BY 4.0 or CC BY-SA 4.0 are kept; non-commercial and no-derivatives rules are removed). abuse.ch publishes the YARAhub download itself without restriction (CC0). Mixed; not one MIT license.",
+        "license_url": "https://yaraify.abuse.ch/faq/",
+        "revision": f"snapshot-{day}",
+        "revision_kind": "rolling",
+        "app": ">=0.8.3",
+        "engine_requirement": "YARA-X 1.21",
+        "rules": int(run.counts.get(pack_id, len(kept))),
+        "helpers": 0,
+        "evidence": ["sample", "memory", "recovered-file"],
+        "limits": [
+            "Community rules shared as TLP:CLEAR on abuse.ch YARAhub; quality and false-positive rates differ by author. abuse.ch rewrites the download daily, so the hashes in this catalog describe one snapshot and a newer download installs and is recorded as different.",
+            "Rules whose own yarahub_license is not allowed (non-commercial or no-derivatives), rules that name no license, and rules that YARA-X cannot compile are removed locally.",
+            "Rules that duplicate a YARA-Forge Core rule (same name or same strings and condition) at the pinned release are not installed twice; rules added upstream later are not checked.",
+        ],
+        "sources": [{
+            "url": YARAHUB_URL,
+            "format": "zip",
+            "size": size,
+            "sha256": digest,
+            "rolling": True,
+            "files": [{"path": n, "sha256": hashes[n]} for n in sorted(hashes)],
+        }],
+        "filter": {
+            "kind": "yara-rule-files",
+            "license_keys": YARAHUB_LICENSE_KEYS,
+            "allowed_licenses": YARAHUB_ALLOWED_LICENSES,
+            "exclude_files": duplicates,
+        },
+        "options": [],
+        "notices": [
+            "These rules are shared by their authors on abuse.ch YARAhub (https://yaraify.abuse.ch/yarahub/). Each rule keeps its author and its own Creative Commons license, shown with every finding. Antinomie downloads the public TLP:CLEAR archive from abuse.ch and uses it only on this computer.",
+        ],
+    }, {
+        "rules": total,
+        "files": len(members),
+        "licenses": dict(sorted(licenses.items())),
+        "kept_before_compile_check": len(kept),
+        "dropped: own license not allowed": dropped,
+        "dropped: no license named": unnamed,
+        "dropped: duplicate of a YARA-Forge Core rule": len(duplicates),
+    }
 
 
 # --- Elastic ---------------------------------------------------------------
@@ -721,6 +877,17 @@ Antinomie repository from the revisions above, on {date}.
 """
 
 
+BUILDER_IDS = {
+    "build_yara_forge": "yara-forge-core",
+    "build_yarahub": "abuse-ch-yarahub",
+    "build_elastic": "elastic-protections-yara",
+    "build_suricata": "suricata-builtin",
+    "build_et_open": "emerging-threats-open",
+    "build_sslbl": "abuse-ch-sslbl",
+    "build_sigma": "sigmahq-linux",
+}
+
+
 def render_readme(catalog, bucket):
     rows = ["| Pack | Engine | Source | Revision | License |", "|---|---|---|---|---|"]
     for pack in catalog["packs"]:
@@ -730,7 +897,9 @@ def render_readme(catalog, bucket):
         )
     notes = (
         "The Elastic rules are under the Elastic License 2.0, which is not an "
-        "open-source license; YARA-Forge repositories without a license file are "
+        "open-source license; abuse.ch YARAhub rules keep the Creative Commons "
+        "license each author chose and non-commercial ones are removed locally; "
+        "YARA-Forge repositories without a license file are "
         "all rights reserved and are used only if a person opts in."
     )
     return README.format(
@@ -784,19 +953,34 @@ def main():
     parser.add_argument("--downloads", required=True, help="empty or new directory; one new subdirectory per pack")
     parser.add_argument("--pin", action="append", default=[], metavar="ID=REVISION", help="yara-forge-core=<tag>, elastic-protections-yara=<sha>, suricata-builtin=<tag>, sigmahq-linux=<sha>")
     parser.add_argument("--count", action="append", default=[], metavar="ID=RULES", help="replace an approximate rule count, for example with the monitor's compile-checked count")
+    parser.add_argument("--only", action="append", default=[], metavar="ID", help="build only this pack and take the others unchanged from --base")
+    parser.add_argument("--base", default="", help="an earlier catalog.json to keep the packs that --only does not name")
     parser.add_argument("--bucket", default=BUCKET)
     parser.add_argument("--api-cache", default="", help="JSON file that keeps GitHub API answers between runs (unauthenticated requests are rate limited)")
     parser.add_argument("--report", default="", help="also write the generation report to this file")
     args = parser.parse_args()
     run = Run(args)
     run.downloads.mkdir(parents=True, exist_ok=True)
-    builders = [build_yara_forge, build_elastic, build_suricata, build_et_open, build_sslbl, build_sigma]
+    builders = [build_yara_forge, build_yarahub, build_elastic, build_suricata, build_et_open, build_sslbl, build_sigma]
     packs, summaries = [], {}
+    if bool(args.only) != bool(args.base):
+        raise SystemExit("--only and --base go together")
+    base = {pack["id"]: pack for pack in run.base_packs}
     for builder in builders:
+        pack_id = BUILDER_IDS[builder.__name__]
+        if run.only and pack_id not in run.only:
+            if pack_id not in base:
+                raise SystemExit(f"--base has no {pack_id} pack")
+            packs.append(base[pack_id])
+            continue
         pack, summary = builder(run)
         packs.append(pack)
         summaries[pack["id"]] = summary
         print(f"{pack['id']}: {pack['revision_kind']} {pack['revision']}, about {pack['rules']} rules", file=sys.stderr)
+    previous = Path(args.base).with_name("generation-report.json") if args.base else None
+    if previous and previous.is_file():
+        earlier = json.loads(previous.read_text())["summaries"]
+        summaries = {pid: summaries.get(pid, earlier.get(pid)) for pid in (p["id"] for p in packs) if pid in summaries or pid in earlier}
     catalog = {
         "schema": 2,
         "generated": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"),

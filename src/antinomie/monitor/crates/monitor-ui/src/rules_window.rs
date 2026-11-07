@@ -17,17 +17,22 @@ use std::{
 
 mod abusech;
 mod catalog_tab;
+mod counts;
 pub(crate) mod first_run;
 mod ioc;
 mod page;
 #[cfg(test)]
 mod page_tests;
+#[cfg(test)]
+mod qa_fixture;
 mod regex_tab;
+mod rule_details;
+mod rule_list;
 #[cfg(test)]
 pub(crate) mod source_tests;
 mod sources;
 
-use page::{RuleText, Tab};
+use page::Tab;
 
 /// A window or page the Detection rules page asks the app to open, to repair an engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +58,8 @@ enum Done {
 }
 
 struct Job {
+    /// The engine page the job was started from.
+    engine: String,
     cancel: Arc<AtomicBool>,
     /// The latest status line of a long job, such as a download.
     progress: Arc<Mutex<String>>,
@@ -65,36 +72,32 @@ pub(crate) struct Model {
     requested: Option<RulesAction>,
     loaded: bool,
     engine: String,
-    filter: String,
-    applied: String,
     catalog: Option<Catalog>,
     registry: Registry,
     rows: Vec<IndexedRule>,
-    visible: Vec<usize>,
     pack_id: String,
     group_id: String,
     status: String,
     status_error: Option<String>,
+    /// The page (engine tab) the status line belongs to, with the text it was
+    /// noted for: a result shows only where it happened.
+    status_scope: (String, String),
     /// The status text of a job that finished well (installed, saved, read):
     /// shown in the success green.
     status_done: Option<String>,
     /// The status text of a download that was asked for while downloads are
     /// off. It shows in red where it happened and is not an error.
     blocked: Option<String>,
-    detail: Option<usize>,
     tab: Tab,
     /// The catalog pack whose details show, by id.
     catalog_pick: String,
     /// The set `rows` were read for; empty while none are.
     rows_key: String,
-    /// `visible` in the order the rules table header chose, and what that
-    /// order was made for (sort, `list_gen`).
-    sorted: Vec<usize>,
-    sorted_for: Option<(Option<(usize, bool)>, u64)>,
-    /// Changes whenever the filter, the rules or their states do.
+    /// Changes whenever a rule's state does: the open rule lists sort again.
     list_gen: u64,
-    rule_text: Option<RuleText>,
-    rule_text_rx: Option<Receiver<Result<String, String>>>,
+    /// The floating rules windows, one per pack or group: the list and the
+    /// selected rule's details.
+    rule_lists: Vec<rule_list::RuleList>,
     job: Option<Job>,
     group_name: String,
     import_path: String,
@@ -165,7 +168,7 @@ impl Model {
             self.changed |= !self.loaded;
             crate::activity::report(ctx, crate::activity::Level::Error, error);
         }
-        if self.job.is_some() || self.rule_text_rx.is_some() {
+        if self.job.is_some() || self.rule_lists.iter().any(|list| list.is_reading()) {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
@@ -196,22 +199,10 @@ impl Model {
     }
 
     fn poll(&mut self) {
-        if let Some(done) = self
-            .rule_text_rx
-            .as_ref()
-            .and_then(|rx| match rx.try_recv() {
-                Ok(result) => Some(result),
-                Err(mpsc::TryRecvError::Empty) => None,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    Some(Err("The rule could not be read".into()))
-                }
-            })
-        {
-            self.rule_text_rx = None;
-            if let Some(shown) = &mut self.rule_text {
-                shown.text = Some(done);
-            }
+        for list in &mut self.rule_lists {
+            list.poll();
         }
+        let job_engine = self.job.as_ref().map(|job| job.engine.clone());
         let finished = self.job.as_ref().and_then(|job| match job.rx.try_recv() {
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
@@ -221,6 +212,7 @@ impl Model {
         });
         if let Some(result) = finished {
             self.job = None;
+            self.status_scope = (String::new(), job_engine.unwrap_or_default());
             match result {
                 Ok(Done::Catalog(catalog)) => {
                     self.catalog = Some(catalog);
@@ -236,9 +228,6 @@ impl Model {
                 Ok(Done::Rules(key, rows)) => {
                     self.rows = rows;
                     self.rows_key = key;
-                    self.apply_filter();
-                    self.detail = None;
-                    self.rule_text = None;
                     self.status = format!("Indexed {} rules.", self.rows.len());
                     self.status_done = Some(self.status.clone());
                 }
@@ -296,30 +285,6 @@ impl Model {
                 }
             }
         }
-    }
-
-    fn apply_filter(&mut self) {
-        self.applied = self.filter.clone();
-        let needle = self.filter.to_ascii_lowercase();
-        self.visible = self
-            .rows
-            .iter()
-            .enumerate()
-            .filter(|(_, rule)| {
-                needle.is_empty()
-                    || rule.id.to_ascii_lowercase().contains(&needle)
-                    || rule.name.to_ascii_lowercase().contains(&needle)
-                    || rule.file.to_ascii_lowercase().contains(&needle)
-                    || rule.severity.to_ascii_lowercase().contains(&needle)
-                    || rule
-                        .tags
-                        .iter()
-                        .any(|tag| tag.to_ascii_lowercase().contains(&needle))
-                    || rule.reason.to_ascii_lowercase().contains(&needle)
-            })
-            .map(|(index, _)| index)
-            .collect();
-        self.list_gen += 1;
     }
 
     /// Whether the selected engine can scan, and how to repair it if not.
@@ -489,10 +454,10 @@ impl Model {
         }
     }
 
-    fn rule_disabled(&self, rule: &IndexedRule) -> bool {
+    fn rule_disabled(&self, key: &str, rule: &IndexedRule) -> bool {
         self.registry
             .disabled
-            .get(&self.rule_key())
+            .get(key)
             .is_some_and(|ids| ids.contains(&rule.id))
     }
 
@@ -581,6 +546,7 @@ impl Model {
             return;
         }
         self.job = Some(Job {
+            engine: self.engine.clone(),
             cancel,
             progress,
             rx,

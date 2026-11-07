@@ -142,6 +142,40 @@ fn limits_report(app: &mut MonitorApp) {
     ];
 }
 
+/// The static scene's report with the notes a cut-off ELF and a shared
+/// library earn in Identity (ANTINOMIE_QA_REPORT = notes).
+fn notes_report(app: &mut MonitorApp) {
+    use antinomie_monitor_core::{AnalysisData, AnalysisEntry, AnalysisRecord};
+    let Some(report) = app.history[0].analysis.as_mut() else {
+        return;
+    };
+    report.source_path = "/tmp/redtail".into();
+    for section in report
+        .sections
+        .iter_mut()
+        .filter(|section| section.kind == AnalysisKind::Metadata)
+    {
+        for (id, text) in [
+            (9_001, "This ELF is truncated: its segments need 30.3 MB, the file has 2.0 MB. A partial upload or download; get a full copy."),
+            (9_002, "This is a shared library, not a program; it is meant to be loaded by another process (LD_PRELOAD or dlopen)."),
+        ] {
+            section.entries.push(AnalysisEntry {
+                label: "Note".into(),
+                value: text.into(),
+                offset: None,
+                record: Some(AnalysisRecord {
+                    revision: 1,
+                    id,
+                    location: None,
+                    data: AnalysisData::Field {
+                        group: "Notes".into(),
+                    },
+                }),
+            });
+        }
+    }
+}
+
 #[test]
 #[ignore = "requires X11 native rendering; exits after the given seconds"]
 fn native_ui_polish_fixture() {
@@ -238,6 +272,34 @@ fn native_ui_polish_fixture() {
                     .process(b"analyst@vm:~$ ./demo\r\nhello from the guest\r\nanalyst@vm:~$ ");
                 app.terminals.insert("term-shot".into(), terminal);
             }
+            // ANTINOMIE_QA_EXIT = 1: the second and third run end with exit 1
+            // and a signal, to show Finished in amber next to the green one.
+            if var("ANTINOMIE_QA_EXIT") == "1" {
+                for (at, root_exit) in [
+                    antinomie_monitor_core::WaitStatus::Exited { code: 0 },
+                    antinomie_monitor_core::WaitStatus::Exited { code: 1 },
+                    antinomie_monitor_core::WaitStatus::Signaled {
+                        signal: 9,
+                        core_dumped: false,
+                    },
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if let Some(run) = app.history.get_mut(at) {
+                        run.execution = Some(antinomie_monitor_core::RunExecution {
+                            generation: 1,
+                            live_task_count: 0,
+                            pending_async_count: 0,
+                            flags: 0,
+                            root_wait_status: None,
+                            root_exit: Some(root_exit),
+                            async_loss_count: 0,
+                            total_task_count: 1,
+                        });
+                    }
+                }
+            }
             app.settings.set_theme(theme_choice);
             app.settings.show_fps = var("ANTINOMIE_QA_FPS") == "1";
             theme::apply_theme(&cc.egui_ctx, theme_choice);
@@ -245,6 +307,9 @@ fn native_ui_polish_fixture() {
                 app.selected_analysis = Some("report-1".into());
                 if var("ANTINOMIE_QA_REPORT") == "limits" {
                     limits_report(&mut app);
+                }
+                if var("ANTINOMIE_QA_REPORT") == "notes" {
+                    notes_report(&mut app);
                 }
             }
             // ANTINOMIE_QA_OPEN = strings | regex | routes | rules | about | started
@@ -267,6 +332,7 @@ fn native_ui_polish_fixture() {
                 }
                 "rules" => app.open_library(crate::workspace::LibraryPage::Rules),
                 "about" => app.about_open = true,
+                "launch" => app.launch_open = true,
                 "perf" => app.performance.open = true,
                 "settings_analysis" => {
                     app.settings_open = true;

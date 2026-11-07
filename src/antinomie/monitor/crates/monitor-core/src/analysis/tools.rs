@@ -103,11 +103,16 @@ pub(super) fn find(candidates: &[&'static str]) -> Option<&'static str> {
 
 /// A tool: the system's copy first, then the one Antinomie installed
 /// (mounted at `analysis_tools::SANDBOX_DIR`).
-/// `ANTINOMIE_ANALYSIS_TOOLS=managed` (passed in from the host) prefers the
-/// copy Antinomie installed over the system's.
-pub(super) fn find_tool(system: &[&'static str], managed: &'static str) -> Option<&'static str> {
+/// A tool chosen in Settings (`ANTINOMIE_OWN_TOOLS`, passed in from the host),
+/// or every tool by `ANTINOMIE_ANALYSIS_TOOLS=managed`, prefers the copy
+/// Antinomie installed over the system's.
+pub(super) fn find_tool(
+    id: &str,
+    system: &[&'static str],
+    managed: &'static str,
+) -> Option<&'static str> {
     let managed = Path::new(managed).is_file().then_some(managed);
-    if std::env::var("ANTINOMIE_ANALYSIS_TOOLS").as_deref() == Ok("managed") {
+    if crate::analysis_tools::prefers_own(id) {
         managed.or_else(|| find(system))
     } else {
         find(system).or(managed)

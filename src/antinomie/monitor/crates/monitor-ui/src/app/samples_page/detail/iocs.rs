@@ -317,11 +317,13 @@ impl MonitorApp {
                 ],
                 &mut state.presence,
             );
-            ui.add(
+            let edit = ui.add(
                 egui::TextEdit::singleline(&mut state.search)
                     .hint_text(crate::theme::placeholder(ui, "Search value, path, process"))
+                    .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                     .desired_width(crate::theme::plain_edit_width(220.0)),
             );
+            crate::widgets::clear_button(ui, &edit, &mut state.search);
             for (label, flag, tip) in [
                 (
                     "Hide private and reserved",
@@ -611,6 +613,21 @@ fn notes(ui: &mut egui::Ui, data: &Data) {
             .collect::<Vec<_>>()
             .join(", ")
     };
+    // A run that never started has nothing for Triage to read; its digest
+    // says why, so it is not listed as one waiting to be read.
+    for entry in &data.runs {
+        if let Some(why) = entry
+            .digest
+            .as_ref()
+            .and_then(|digest| digest.launch_failure.as_deref())
+        {
+            crate::activity::inline_only(
+                ui,
+                crate::activity::Level::Info,
+                format!("{} did not start: {why}", parts::run_name(entry.number)),
+            );
+        }
+    }
     if !union.unlisted.is_empty() {
         crate::activity::inline_only(
             ui,

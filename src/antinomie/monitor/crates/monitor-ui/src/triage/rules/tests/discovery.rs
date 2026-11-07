@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use super::support::*;
+use crate::query::RowValue;
 
 #[test]
 fn walking_the_process_list_is_low_after_ten_processes_or_with_ps() {
@@ -217,4 +218,120 @@ fn many_hosts_or_ports_within_seconds_is_a_scan_and_failure_does_not_lower_it() 
         )]),
         "discovery.network_scan"
     ));
+}
+
+#[test]
+fn a_dns_loop_reading_resolv_conf_again_and_again_is_flagged_once() {
+    let mut calls = Vec::new();
+    for _ in 0..300 {
+        calls.push(open_read(1, "/etc/resolv.conf", 3));
+        calls.push(close(1, 3));
+    }
+    let out = run(calls);
+    let found = rows(&out, "discovery.network_config");
+    assert_eq!(found.len(), 1, "one row");
+    assert!(
+        found[0]
+            .values
+            .iter()
+            .any(|(name, value)| *name == "finding.count" && matches!(value, RowValue::Number(1))),
+        "the reads after the first are name resolution, not counted"
+    );
+}
+
+#[test]
+fn hardware_files_are_one_row_with_the_files_listed_and_startup_reads_are_not_discovery() {
+    let out = run(vec![
+        open_read(1, "/proc/cpuinfo", 3),
+        open_read(1, "/sys/devices/system/cpu/cpu0/topology/core_id", 4),
+        open_read(1, "/sys/class/dmi/id/product_name", 5),
+        open_read(1, "/sys/hypervisor/type", 6),
+    ]);
+    let hardware: Vec<_> = rows(&out, "discovery.system_info")
+        .into_iter()
+        .filter(|row| text(row, "finding.object") == "hardware")
+        .collect();
+    assert_eq!(hardware.len(), 1, "one finding for the category");
+    let detail = list(hardware[0], "finding.detail").join("\n");
+    for file in [
+        "/proc/cpuinfo",
+        "core_id",
+        "product_name",
+        "/sys/hypervisor/type",
+    ] {
+        assert!(detail.contains(file), "{file}: {detail}");
+    }
+    // What the C library and language runtimes read as they start.
+    let startup = run(vec![
+        open_read(1, "/sys/devices/system/cpu/online", 3),
+        open_read(1, "/sys/devices/system/cpu/possible", 4),
+        open_read(1, "/sys/devices/system/cpu/cpu0/cache/index0/size", 5),
+        open_read(1, "/sys/kernel/mm/transparent_hugepage/hpage_pmd_size", 6),
+        open_read(1, "/proc/self/auxv", 7),
+        open_read(1, "/proc/self/maps", 8),
+    ]);
+    assert!(
+        !has(&startup, "discovery.system_info"),
+        "{:?}",
+        rules_of(&startup)
+    );
+    let mounts = run(vec![open_read(1, "/proc/self/mountinfo", 3)]);
+    assert!(has(&mounts, "discovery.system_info"));
+}
+
+#[test]
+fn uname_the_system_call_is_kernel_discovery() {
+    let out = run(vec![
+        exec(1, "/tmp/x", &["x"]),
+        sys(1, 63, "uname", [0x7000, 0, 0, 0, 0, 0], 0),
+    ]);
+    assert_eq!(rows(&out, "discovery.system_info").len(), 1);
+    // The uname program has its own rule; the loader's call is not the program's.
+    let program = run(vec![
+        exec(1, "/usr/bin/uname", &["uname", "-a"]),
+        sys(1, 63, "uname", [0x7000, 0, 0, 0, 0, 0], 0),
+    ]);
+    assert_eq!(rows(&program, "discovery.system_info").len(), 1);
+}
+
+#[test]
+fn interface_ioctls_and_route_queries_are_network_configuration() {
+    for request in [0x8912u64, 0x8915, 0x8927, 0x891b, 0x8933] {
+        let out = run(vec![
+            socket(1, 2, 2, 3),
+            sys(1, 16, "ioctl", [3, request, 0x2000, 0, 0, 0], 0),
+        ]);
+        assert_eq!(
+            tier(&out, "discovery.network_config").as_deref(),
+            Some("low"),
+            "{request:#x}"
+        );
+    }
+    let other = run(vec![
+        socket(1, 2, 2, 3),
+        sys(1, 16, "ioctl", [3, 0x5401, 0x2000, 0, 0, 0], 0),
+    ]);
+    assert!(!has(&other, "discovery.network_config"));
+    // getifaddrs: RTM_GETADDR over a route netlink socket.
+    let mut request = vec![0u8; 20];
+    request[4..6].copy_from_slice(&22u16.to_le_bytes());
+    let netlink = run(vec![
+        socket(1, 16, 3, 3),
+        with_entry(
+            sys(1, 44, "sendto", [3, 0x2000, 20, 0, 0, 0], 20),
+            "arg1.data",
+            &request,
+        ),
+    ]);
+    assert!(has(&netlink, "discovery.network_config"));
+    request[4..6].copy_from_slice(&16u16.to_le_bytes());
+    let new_link = run(vec![
+        socket(1, 16, 3, 3),
+        with_entry(
+            sys(1, 44, "sendto", [3, 0x2000, 20, 0, 0, 0], 20),
+            "arg1.data",
+            &request,
+        ),
+    ]);
+    assert!(!has(&new_link, "discovery.network_config"));
 }

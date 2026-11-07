@@ -60,13 +60,11 @@ impl Model {
         if !self.ioc.loaded || self.ioc.stale {
             self.refresh_ioc(data_dir);
         }
-        ui.label(
-            RichText::new(
+        ui.label(RichText::new("abuse.ch datasets kept on this machine.").color(theme::text()))
+            .on_hover_text(
                 "abuse.ch datasets kept on this machine. Triage > IOC matches a run's indicators \
                  against them offline. They change only when you press Download or Update.",
-            )
-            .color(theme::text()),
-        );
+            );
         self.notices(ui, outbound);
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("abuse.ch Auth-Key").color(theme::muted()))
@@ -75,7 +73,11 @@ impl Model {
                 Some(masked) => ui.colored_label(theme::good(), format!("set ({masked})")),
                 None => ui.colored_label(theme::neutral_accent(), "not set"),
             };
-            if ui.button("API keys…").clicked() {
+            if ui
+                .button("API keys…")
+                .on_hover_text("Open the API keys window to set the abuse.ch Auth-Key.")
+                .clicked()
+            {
                 self.requested = Some(super::RulesAction::ApiKeys);
             }
         });
@@ -115,10 +117,19 @@ impl Model {
             {
                 self.ioc_update(data_dir, *outbound, None);
             }
-            if busy && ui.button("Cancel").clicked() {
+            if busy
+                && ui
+                    .button("Cancel")
+                    .on_hover_text("Stop the running download; nothing is changed.")
+                    .clicked()
+            {
                 self.cancel_job();
             }
-            if ui.button("Open datasets folder").clicked() {
+            if ui
+                .button("Open datasets folder")
+                .on_hover_text("Show the folder where the datasets are kept.")
+                .clicked()
+            {
                 let root = ioc::feeds::root(data_dir);
                 let _ = std::fs::create_dir_all(&root);
                 crate::folders::show_detached(root);
@@ -143,7 +154,7 @@ impl Model {
         self.fp_section(ui, data_dir);
     }
 
-    fn ioc_stale_banner(&self, ui: &mut egui::Ui, now: u64) {
+    fn ioc_stale_banner(&mut self, ui: &mut egui::Ui, now: u64) {
         let old = self
             .ioc
             .statuses
@@ -161,13 +172,20 @@ impl Model {
                 ),
             );
         }
-        let failed: Vec<_> = self
-            .ioc
-            .statuses
-            .iter()
-            .filter(|status| status.last_error.is_some())
-            .map(|status| status.feed.name)
-            .collect();
+        let (need_key, failed) = failed_updates(&self.ioc.statuses);
+        if !need_key.is_empty() {
+            crate::activity::error(
+                ui,
+                format!(
+                    "{} need{} a free abuse.ch Auth-Key. The previous copy is still used.",
+                    need_key.join(" and "),
+                    if need_key.len() == 1 { "s" } else { "" }
+                ),
+            );
+            if crate::widgets::link(ui, "Settings > API keys: set the Auth-Key").clicked() {
+                self.requested = Some(super::RulesAction::ApiKeys);
+            }
+        }
         if !failed.is_empty() {
             crate::activity::error(
                 ui,
@@ -382,8 +400,7 @@ impl Model {
     }
 
     fn fp_section(&mut self, ui: &mut egui::Ui, data_dir: &Path) {
-        theme::section(ui, "Known false positives");
-        ui.weak(
+        theme::section(ui, "Known false positives").on_hover_text(
             "Values you marked as harmless in Triage > IOC. A match on one is shown as Known FP \
              with your reason and is not counted as Matched.",
         );
@@ -483,9 +500,44 @@ fn state_chip(status: &FeedStatus, now: u64) -> (&'static str, Tone) {
     }
 }
 
+/// The datasets whose last update failed for want of a usable abuse.ch
+/// Auth-Key (missing, refused with 401 or 403), and the ones that failed for
+/// another reason, which is the network.
+fn failed_updates(statuses: &[FeedStatus]) -> (Vec<&'static str>, Vec<&'static str>) {
+    let (mut need_key, mut other) = (Vec::new(), Vec::new());
+    for status in statuses {
+        let Some(error) = status.last_error.as_deref() else {
+            continue;
+        };
+        if error.contains("Auth-Key") {
+            need_key.push(status.feed.name);
+        } else {
+            other.push(status.feed.name);
+        }
+    }
+    (need_key, other)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_or_refused_key_is_told_apart_from_a_network_error() {
+        let status = |name: &str, error: &str| FeedStatus {
+            feed: ioc::FEEDS.iter().find(|feed| feed.name == name).unwrap(),
+            meta: None,
+            enabled: true,
+            last_error: Some(error.to_owned()),
+        };
+        let (key, network) = failed_updates(&[
+            status("ThreatFox", "abuse.ch now requires an Auth-Key"),
+            status("URLhaus dump", "abuse.ch rejected the Auth-Key (HTTP 403)"),
+            status("SSLBL JA3", "could not connect"),
+        ]);
+        assert_eq!(key, ["ThreatFox", "URLhaus dump"]);
+        assert_eq!(network, ["SSLBL JA3"]);
+    }
     use crate::rules_window::source_tests::{click, joined, render};
     use std::{
         collections::BTreeMap,

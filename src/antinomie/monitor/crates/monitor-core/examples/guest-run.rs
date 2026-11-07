@@ -21,6 +21,13 @@
 //!
 //! `"create_timeout"` (seconds, default 900) bounds the creation of a VM with
 //! an account (an arm64 Debian VM's includes its provisioning boot).
+//!
+//! `"headless": false` starts the VM with its default in-app screen (QEMU's
+//! VNC display on a private unix socket; no host display is needed), and
+//! `"screen_check": true` then reads it as the app does, after the uploads:
+//! RFB handshake and framebuffer updates until one shows a drawn pixel
+//! (within `boot_timeout`). The report's `screen` gives its size and timing.
+//!
 //! `"vm": {"nat": true}` gives the VM NAT networking.
 //! `"vm": {"isolated_network": true}` uses restricted networking without
 //! outbound forwarding and overrides NAT, as in the application.
@@ -31,7 +38,8 @@
 //! runs and stops it after them; `"keep"` leaves it running for the VM stop
 //! to end. The report then lists the VM's network captures.
 //! `"vm": {"transport": {"ring_kib": 4096, "lossless": true, "max_wait_ms": 100,
-//! "event_table": 16384}}` sets the VM's transport settings (any subset).
+//! "event_table": 16384, "capture_all_shed": true}}` sets the VM's transport
+//! settings (any subset).
 //!
 //! A run may set `"core_dump_on_exit"`, `"memory_dump_on_exit"`, and
 //! `"capture_network"` (each boolean).
@@ -133,22 +141,35 @@ impl Session {
 
     fn command(&mut self, command: Command, seconds: u64) -> Result<String, String> {
         let id = self.backend.send(command)?;
+        self.result(id, seconds).map_err(|late| {
+            late.unwrap_or_else(|| {
+                format!("command {id} deadline; state {:?}", self.snapshot.state)
+            })
+        })
+    }
+
+    /// Waits for command `id`'s result; `Err(None)` when it is not in yet.
+    fn result(&mut self, id: u64, seconds: u64) -> Result<String, Option<String>> {
         let deadline = Instant::now() + Duration::from_secs(seconds);
         loop {
             if let Some((_, success, message)) = self.pump().filter(|(reply, ..)| *reply == id) {
-                return if success { Ok(message) } else { Err(message) };
+                return if success {
+                    Ok(message)
+                } else {
+                    Err(Some(message))
+                };
             }
             if Instant::now() > deadline {
-                return Err(format!(
-                    "command {id} deadline; state {:?}",
-                    self.snapshot.state
-                ));
+                return Err(None);
             }
             thread::sleep(Duration::from_millis(10));
         }
     }
 
     /// Retries a guest command until the guest's kernel control accepts it.
+    /// A command still unanswered is waited for, not sent again: the backend
+    /// is still working on it, and a second Execute would launch the program
+    /// twice.
     fn guest_command(
         &mut self,
         make: impl Fn() -> Command,
@@ -156,7 +177,18 @@ impl Session {
     ) -> Result<String, String> {
         let deadline = Instant::now() + Duration::from_secs(seconds);
         loop {
-            match self.command(make(), 60) {
+            let id = self.backend.send(make())?;
+            let mut outcome = self.result(id, 60);
+            while outcome == Err(None) && Instant::now() < deadline {
+                eprintln!("guest command {id} still unanswered; waiting");
+                outcome = self.result(id, 60);
+            }
+            let outcome = outcome.map_err(|late| {
+                late.unwrap_or_else(|| {
+                    format!("command {id} deadline; state {:?}", self.snapshot.state)
+                })
+            });
+            match outcome {
                 Ok(message) => return Ok(message),
                 Err(error) if Instant::now() < deadline => {
                     // Let a busy command worker drain before asking again.
@@ -439,6 +471,15 @@ fn run() -> Result<Value, String> {
         session.command(Command::StartNetworkCapture, 30)?;
     }
     let boot_seconds = started.elapsed().as_secs_f64();
+    let screen = if plan
+        .get("screen_check")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        Some(screen_check(&mut session, boot)?)
+    } else {
+        None
+    };
 
     let mut runs = Vec::new();
     for spec in plan
@@ -648,25 +689,86 @@ fn run() -> Result<Value, String> {
     // run can leave in the hundreds of megabytes.
     session.command(Command::Stop, 600)?;
     session.settle(|s| s.state == VmState::Stopped, 60)?;
-    let network_captures = network_capture
-        .then(|| {
-            session
-                .snapshot
-                .vm_locations
-                .iter()
-                .find(|location| location.vm_id == vm_id)
-                .map(|location| {
-                    antinomie_monitor_core::network::list_captures(&location.recording_directory)
-                })
-        })
-        .flatten();
+    // A stopped capture's final summary (its end and size) is a queued
+    // background write: on a busy disk the folder still holds the summary
+    // from its start for a while.
+    let recordings = session
+        .snapshot
+        .vm_locations
+        .iter()
+        .find(|location| location.vm_id == vm_id)
+        .map(|location| location.recording_directory.clone());
+    let network_captures = match recordings.filter(|_| network_capture) {
+        Some(recordings) => {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            loop {
+                let captures = antinomie_monitor_core::network::list_captures(&recordings);
+                if captures.iter().all(|capture| capture.stopped_ms.is_some())
+                    || Instant::now() > deadline
+                {
+                    break Some(captures);
+                }
+                thread::sleep(Duration::from_millis(200));
+            }
+        }
+        None => None,
+    };
     session.backend.shutdown()?;
     Ok(
         json!({"vm_id": vm_id, "base": base, "boot_seconds": boot_seconds,
               "runs": runs, "recorder": recorder, "health": health,
               "guest_resources": guest_resources, "capture": capture,
-              "network_captures": network_captures, "screenshot": screenshot}),
+              "network_captures": network_captures, "screenshot": screenshot,
+              "screen": screen}),
     )
+}
+
+/// The in-app screen, as the app's VM screen tab reads it: the VNC client
+/// connects to the VM's private `vnc.sock`, does the RFB handshake and takes
+/// framebuffer updates until one has a pixel that is not black (the firmware
+/// or the kernel console drew it). Needs a VM started without `headless`.
+fn screen_check(session: &mut Session, seconds: u64) -> Result<Value, String> {
+    use antinomie_monitor_core::vnc::ScreenClient;
+    session
+        .settle(|snapshot| snapshot.vm_screen.is_some(), 30)
+        .map_err(|_| "the VM has no in-app screen socket (\"headless\": false?)")?;
+    let socket = session
+        .snapshot
+        .vm_screen
+        .clone()
+        .ok_or("no screen socket")?;
+    let started = Instant::now();
+    let client = ScreenClient::start(socket.clone(), std::sync::Arc::new(|| {}));
+    let deadline = started + Duration::from_secs(seconds);
+    let mut first = None;
+    loop {
+        session.pump();
+        if let Some((width, height, rgba)) = client.frame() {
+            let first_seconds = *first.get_or_insert_with(|| started.elapsed().as_secs_f64());
+            let lit = rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|pixel| pixel[..3] != [0, 0, 0])
+                .count();
+            if lit > 0 {
+                let report = json!({"socket": socket, "name": client.name(),
+                    "width": width, "height": height, "lit_pixels": lit,
+                    "first_frame_seconds": first_seconds,
+                    "lit_frame_seconds": started.elapsed().as_secs_f64()});
+                eprintln!("screen: {report}");
+                return Ok(report);
+            }
+        }
+        if Instant::now() > deadline {
+            return Err(format!(
+                "screen check: no drawn frame on {} in {seconds} s (status {:?}, first frame after {first:?} s)",
+                socket.display(),
+                client.status()
+            ));
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
 }
 
 /// Find the exact QMP endpoint of the QEMU process owning this serial log.

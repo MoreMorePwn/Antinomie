@@ -85,14 +85,16 @@ impl TagPicker {
         });
         ui.add_space(4.0);
         Self::heading(ui, "ATT&CK technique");
-        ui.add(
+        let edit = ui.add(
             egui::TextEdit::singleline(&mut self.technique_query)
                 .hint_text(crate::theme::placeholder(
                     ui,
                     "Search by ID or name, for example T1053 or cron",
                 ))
+                .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                 .desired_width(ui.available_width()),
         );
+        crate::widgets::clear_button(ui, &edit, &mut self.technique_query);
         let found = mitre::search(&self.technique_query, SEARCH_LIMIT);
         let picked_techniques: Vec<Tag> = self
             .picked

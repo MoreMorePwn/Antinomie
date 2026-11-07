@@ -166,7 +166,7 @@ pub const ANSI_COLORS: [[u8; 3]; 16] = [
     [255, 255, 255],
 ];
 
-/// The colour of series `index` in the VM Summary's meters (amber, teal,
+/// The colour of series `index` in the VM Overview's meters (amber, teal,
 /// blue; later ones repeat the blue). The same in every theme.
 pub fn series(index: usize) -> Color32 {
     match index {
@@ -212,6 +212,15 @@ pub fn terminal() -> Color32 {
 /// roots); levels past the palette start over.
 pub fn tree_branch(level: usize) -> Color32 {
     palette().tree[level % TREE_COLOR_COUNT]
+}
+
+/// The colour of indicator category `index` (Endpoints, DNS names, URLs,
+/// Files): orange, purple, yellow and green, none of them the text colour or
+/// the blue of headings and links, and each readable in the dark and the
+/// light theme.
+pub fn category(index: usize) -> Color32 {
+    let palette = palette();
+    [palette.string, palette.pointer, palette.name, palette.good][index % 4]
 }
 
 /// What a value is, for its syntax color.
@@ -356,10 +365,9 @@ pub fn section_title(ui: &egui::Ui, title: impl Into<String>) -> egui::RichText 
         .text_styles
         .get(&TextStyle::Body)
         .map_or(DEFAULT_TEXT_SIZE, |font| font.size);
-    egui::RichText::new(title)
-        .strong()
-        .color(heading())
-        .size(body + 2.0)
+    let mut font = bold_font(ui);
+    font.size = body + 2.0;
+    egui::RichText::new(title).font(font).color(heading())
 }
 
 /// What a list, table or tab says when it has nothing in it: one muted line a

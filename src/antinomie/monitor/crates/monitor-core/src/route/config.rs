@@ -340,6 +340,12 @@ fn find_program(id: &str, configured: &str, data_dir: &Path) -> Result<Option<Pa
             Err(format!("{} is not a file", path.display()))
         };
     }
+    // A tool set to Antinomie's own copy in Settings comes before the system's.
+    if crate::analysis_tools::prefers_own(id)
+        && let Some(own) = crate::analysis_tools::managed_entry(data_dir, id)
+    {
+        return Ok(Some(own));
+    }
     Ok(find_on_path(id)
         .or_else(|| {
             crate::analysis_tools::system_candidates(id)

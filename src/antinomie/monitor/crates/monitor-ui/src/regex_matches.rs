@@ -170,12 +170,15 @@ impl RegexWindow {
             ctx.request_repaint_after(std::time::Duration::from_millis(75));
         }
         let mut open = true;
-        egui::Window::new(format!("Regex matches · {}", self.title))
-            .id(egui::Id::new(("regex-matches", salt)))
-            .open(&mut open)
-            .default_size(egui::vec2(900.0, 520.0) + crate::widgets::frame_extra(ctx))
-            .resizable(true)
-            .show(ctx, |ui| self.body(ui));
+        crate::widgets::capped(
+            egui::Window::new(format!("Regex matches · {}", self.title)),
+            ctx,
+        )
+        .id(egui::Id::new(("regex-matches", salt)))
+        .open(&mut open)
+        .default_size(egui::vec2(900.0, 520.0) + crate::widgets::frame_extra(ctx))
+        .resizable(true)
+        .show(ctx, |ui| self.body(ui));
         if !open {
             self.open = false;
             // A scan in progress is not wanted any more; the result stays.
@@ -310,11 +313,13 @@ impl RegexWindow {
                         }
                     }
                 });
-            ui.add(
+            let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.query)
                     .hint_text(crate::theme::placeholder(ui, "Filter the matches"))
+                    .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                     .desired_width(ui.available_width()),
             );
+            crate::widgets::clear_button(ui, &edit, &mut self.query);
         });
     }
 

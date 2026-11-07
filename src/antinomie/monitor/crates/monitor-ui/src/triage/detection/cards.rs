@@ -3,9 +3,12 @@
 //! short summary, a facts row and a Details button.
 use super::finding::{pack_name, parse_details};
 use super::*;
+use antinomie_monitor_core::analysis::detection::MatchSort;
 
 /// Widest MITRE chip list on a card; the rest is counted.
 const CHIP_LIMIT: usize = 6;
+/// Room between a card's title, description, facts and tags.
+const CARD_GAP: f32 = 7.0;
 /// Room the Details button and the severity badge take beside the title.
 const TITLE_RESERVE: f32 = 190.0;
 
@@ -17,32 +20,186 @@ pub(super) fn match_cards(
     report: &Report,
     table_id: &str,
     rows: &[Vec<Cell>],
+    sort: MatchSort,
 ) -> Option<WindowKey> {
     if report.findings.is_empty() {
         return None;
     }
-    presentation::heading(ui, "Matches", "");
     if rows.is_empty() {
         ui.weak("No matches.");
         return None;
     }
+    let order = sorted(report, rows, sort);
+    let rows: Vec<&Vec<Cell>> = order.into_iter().map(|index| &rows[index]).collect();
+    // YARA matches that say little sit folded under the ones that do.
+    let (strong, weak): (Vec<&Vec<Cell>>, Vec<&Vec<Cell>>) = rows.into_iter().partition(|row| {
+        finding_for(report, row).is_none_or(|finding| {
+            yara_strength(report, finding) == crate::triage::family::Strength::Strong
+        })
+    });
     let mut opened = None;
     egui::ScrollArea::vertical()
         .id_salt("detection-matches")
-        .max_height(320.0)
+        .max_height(list_height(ui))
         .auto_shrink([false, true])
         .show(ui, |ui| {
-            for (index, row) in rows.iter().enumerate() {
-                let Some(finding) = finding_for(report, row) else {
-                    continue;
-                };
-                if let Some(next) = card(ui, report, finding, table_id, index, row) {
-                    opened = Some(next);
+            let mut draw = |ui: &mut egui::Ui, rows: &[&Vec<Cell>], from: usize| {
+                for (index, row) in rows.iter().enumerate() {
+                    let row = row.as_slice();
+                    let Some(finding) = finding_for(report, row) else {
+                        continue;
+                    };
+                    if let Some(next) = card(ui, report, finding, table_id, from + index, row) {
+                        opened = Some(next);
+                    }
+                    ui.add_space(6.0);
                 }
-                ui.add_space(6.0);
+            };
+            draw(ui, &strong, 0);
+            if !weak.is_empty() {
+                egui::CollapsingHeader::new(
+                    RichText::new(format!("Weak or generic matches ({})", weak.len()))
+                        .color(theme::muted()),
+                )
+                .id_salt(("weak-matches", table_id))
+                .default_open(strong.is_empty())
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(
+                            "Unscored community rules without a family, generic or hunting \
+                             rules, Elastic rules scored below 70, and rules for another \
+                             platform. Nothing is removed: the counts are totals.",
+                        )
+                        .small()
+                        .color(theme::muted()),
+                    );
+                    draw(ui, &weak, strong.len());
+                });
             }
         });
     opened
+}
+
+/// How much a YARA match says; every other engine's match counts as strong.
+pub(in crate::triage) fn yara_strength(
+    report: &Report,
+    finding: &Finding,
+) -> crate::triage::family::Strength {
+    use crate::triage::family::{strength, Strength};
+    if report.engine != Engine::Yara {
+        return Strength::Strong;
+    }
+    strength(
+        &finding.title,
+        &finding.severity,
+        &pack_name(report, finding),
+        &crate::triage::digest::yara_family(report.engine, &finding.rule_text),
+    )
+}
+
+/// The least height the match list is given, however short the pane.
+const MIN_LIST_HEIGHT: f32 = 240.0;
+
+/// How tall the match list may be: what is left of the page's visible height
+/// below the point it starts at, so it fills the pane and grows when the
+/// Details, Activity and Jobs pane folds away. The page scrolls when the
+/// list's start is lower than that.
+pub(super) fn list_height(ui: &egui::Ui) -> f32 {
+    // The distance from the top of the page's content, not of the screen:
+    // scrolling the page must not change the list.
+    let used = ui.cursor().top() - ui.min_rect().top();
+    (ui.clip_rect().height() - used).max(MIN_LIST_HEIGHT)
+}
+
+/// "Sort by" and its menu, drawn inline on the row the table filter shares.
+/// The choice is kept in Settings.
+pub(super) fn sort_picker(ui: &mut egui::Ui, sort: &mut MatchSort) {
+    {
+        ui.label(RichText::new("Sort by").color(theme::muted()));
+        egui::ComboBox::from_id_salt("detection-match-sort")
+            .selected_text(sort.label())
+            .show_ui(ui, |ui| {
+                for option in MatchSort::ALL {
+                    ui.selectable_value(sort, option, option.label());
+                }
+            })
+            .response
+            .on_hover_text(
+                "Risk puts the highest severity first. MITRE technique sorts by the first technique id. \
+                 First hit sorts by where the first hit was recorded (journal event, call or packet order); \
+                 matches without a position come last.",
+            );
+    }
+}
+
+/// Severity on one scale: named levels and Suricata's numbers (1 is highest).
+pub(super) fn risk_rank(severity: &str) -> u8 {
+    match severity.trim().to_ascii_lowercase().as_str() {
+        "critical" => 5,
+        "high" | "1" => 4,
+        "medium" | "indicator" | "2" => 3,
+        "low" | "3" | "4" => 2,
+        "informational" | "info" => 1,
+        _ => 0,
+    }
+}
+
+/// The digits of the first technique id as a sort key: T1055.001 is (1055, 1).
+fn technique_key(finding: &Finding) -> Option<(u32, u32)> {
+    finding
+        .mitre
+        .iter()
+        .filter_map(|id| {
+            let id = id.trim().trim_start_matches(['T', 't']);
+            let (main, sub) = id.split_once('.').unwrap_or((id, "0"));
+            Some((main.parse().ok()?, sub.parse().unwrap_or(0)))
+        })
+        .min()
+}
+
+/// Where the first hit was recorded: the first journal event, else the first
+/// call or packet; a location with no order (bytes) has none.
+fn first_hit(finding: &Finding) -> Option<u64> {
+    finding
+        .events
+        .first()
+        .copied()
+        .or_else(|| match finding.evidence.first()? {
+            Evidence::Call { call, .. } => Some(*call),
+            Evidence::Packet { frame, .. } => Some(*frame),
+            Evidence::Bytes { .. } => None,
+        })
+}
+
+/// The indexes of `rows` in the order `sort` asks for; equal rows keep the
+/// order the engine reported them in.
+pub(super) fn sorted(report: &Report, rows: &[Vec<Cell>], sort: MatchSort) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..rows.len()).collect();
+    let found: Vec<Option<&Finding>> = rows.iter().map(|row| finding_for(report, row)).collect();
+    order.sort_by(|a, b| {
+        let (Some(x), Some(y)) = (found[*a], found[*b]) else {
+            return found[*b].is_some().cmp(&found[*a].is_some());
+        };
+        match sort {
+            MatchSort::Risk => risk_rank(&y.severity)
+                .cmp(&risk_rank(&x.severity))
+                .then(y.count.cmp(&x.count)),
+            MatchSort::Name => x.title.to_lowercase().cmp(&y.title.to_lowercase()),
+            MatchSort::Mitre => technique_key(x)
+                .is_none()
+                .cmp(&technique_key(y).is_none())
+                .then(technique_key(x).cmp(&technique_key(y))),
+            // One engine per tab: the engine's packs are the grouping left.
+            MatchSort::Engine => pack_name(report, x).cmp(&pack_name(report, y)),
+            MatchSort::Hits => y.count.cmp(&x.count),
+            MatchSort::FirstHit => first_hit(x)
+                .is_none()
+                .cmp(&first_hit(y).is_none())
+                .then(first_hit(x).cmp(&first_hit(y))),
+        }
+        .then_with(|| x.title.to_lowercase().cmp(&y.title.to_lowercase()))
+    });
+    order
 }
 
 fn card(
@@ -87,13 +244,24 @@ fn card(
                     if !finding.severity.is_empty() {
                         presentation::badge(ui, &finding.severity, tint);
                     }
+                    ui.label(
+                        RichText::new(format!(
+                            "{} {}",
+                            finding.count,
+                            if finding.count == 1 { "hit" } else { "hits" }
+                        ))
+                        .small()
+                        .color(theme::muted()),
+                    );
                 },
                 |ui| {
                     details = Some(ui.button("Details…"));
                 },
             );
+            ui.add_space(CARD_GAP);
             let summary = card_summary(report.engine, finding);
             clipped(ui, &summary, 2);
+            ui.add_space(CARD_GAP);
             ui.add(
                 egui::Label::new(
                     RichText::new(facts_line(report, finding))
@@ -103,6 +271,7 @@ fn card(
                 .wrap(),
             );
             if !finding.mitre.is_empty() {
+                ui.add_space(CARD_GAP);
                 ui.horizontal_wrapped(|ui| {
                     for reference in finding.mitre.iter().take(CHIP_LIMIT) {
                         presentation::badge(ui, reference, theme::blue());
@@ -196,43 +365,18 @@ pub(super) fn card_summary(engine: Engine, finding: &Finding) -> String {
     }
 }
 
-/// Hit count, first location, rule pack and a short author, in one muted line.
+/// The rule pack (its folder or file name) and every author, in one muted
+/// line. The hit count sits beside the severity tag.
 fn facts_line(report: &Report, finding: &Finding) -> String {
-    let mut facts = vec![
-        format!(
-            "{} {}",
-            finding.count,
-            if finding.count == 1 { "hit" } else { "hits" }
-        ),
-        match_location(finding),
-    ];
+    let mut facts = Vec::new();
     let pack = pack_name(report, finding);
     if !pack.is_empty() {
         facts.push(pack);
     }
     if !finding.author.trim().is_empty() {
-        facts.push(format!("by {}", short_author(&finding.author)));
+        facts.push(format!("by {}", finding.author.trim()));
     }
     facts.join(" · ")
-}
-
-/// The first author, with the number of others.
-pub(super) fn short_author(author: &str) -> String {
-    let names: Vec<&str> = author
-        .split([',', ';', '&'])
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .collect();
-    let first = names.first().copied().unwrap_or(author.trim());
-    let first: String = if first.chars().count() > 28 {
-        first.chars().take(27).chain(['…']).collect()
-    } else {
-        first.to_owned()
-    };
-    match names.len() {
-        0 | 1 => first,
-        more => format!("{first} +{}", more - 1),
-    }
 }
 
 pub(super) fn finding_for<'a>(report: &'a Report, row: &[Cell]) -> Option<&'a Finding> {
@@ -267,38 +411,6 @@ pub(super) fn severity_color(severity: &str) -> egui::Color32 {
     }
 }
 
-pub(super) fn match_location(finding: &Finding) -> String {
-    let Some(evidence) = finding.evidence.first() else {
-        return format!(
-            "{} occurrence{}; no recorded location",
-            finding.count,
-            if finding.count == 1 { "" } else { "s" }
-        );
-    };
-    let first = match evidence {
-        Evidence::Call { call, .. } => format!("syscall {call}"),
-        Evidence::Packet { frame, .. } => format!("packet #{frame}"),
-        Evidence::Bytes { path, offset, .. } => {
-            let name = path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "bytes".into());
-            offset.map_or_else(
-                || format!("file {name}"),
-                |offset| format!("{name} at 0x{offset:x}"),
-            )
-        }
-    };
-    if finding.evidence.len() == 1 {
-        format!("Matched {first}")
-    } else {
-        format!(
-            "Matched {first} and {} more locations",
-            finding.evidence.len() - 1
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::tests::{finding, frames, rendered_text, report};
@@ -315,23 +427,6 @@ mod tests {
     }
 
     #[test]
-    fn match_location_names_the_recorded_byte_and_counts_the_rest() {
-        let mut sample = finding("sample", "Sample", vec![bytes_at(0x10), bytes_at(0x20)]);
-        sample.details = "marker".into();
-        assert_eq!(card_summary(Engine::Yara, &sample), "marker");
-        assert_eq!(
-            super::super::finding::evidence_label(&sample.evidence[0]),
-            "specimen — open bytes at 0x10"
-        );
-        assert_eq!(
-            match_location(&sample),
-            "Matched specimen at 0x10 and 1 more locations"
-        );
-        sample.details = String::new();
-        assert!(card_summary(Engine::Yara, &sample).contains("did not record"));
-    }
-
-    #[test]
     fn numeric_and_named_severities_share_one_scale() {
         assert_eq!(severity_color("1"), theme::error());
         assert_eq!(severity_color("high"), theme::error());
@@ -341,13 +436,6 @@ mod tests {
         assert_eq!(severity_color("4"), theme::blue());
         assert_eq!(severity_color("informational"), theme::blue());
         assert_eq!(severity_color("unspecified"), theme::muted());
-    }
-
-    #[test]
-    fn short_author_keeps_the_first_name_and_counts_the_others() {
-        assert_eq!(short_author("Ann"), "Ann");
-        assert_eq!(short_author("Ann, Bob & Cy"), "Ann +2");
-        assert!(short_author(&"x".repeat(60)).ends_with('…'));
     }
 
     #[test]
@@ -380,7 +468,7 @@ mod tests {
         let ctx = egui::Context::default();
         let shapes = frames(&ctx, 2, |root| {
             egui::CentralPanel::default().show(root, |ui| {
-                let _ = match_cards(ui, report, TABLES[0], &view.rows[0]);
+                let _ = match_cards(ui, report, TABLES[0], &view.rows[0], MatchSort::default());
             });
         });
         let joined = rendered_text(&shapes);
@@ -389,7 +477,8 @@ mod tests {
         assert!(joined.contains("Details…"), "{joined}");
         assert!(joined.contains("4 hits"), "{joined}");
         assert!(joined.contains("Forge Core"), "{joined}");
-        assert!(joined.contains("by Ann Lee +1"), "{joined}");
+        assert!(joined.contains("by Ann Lee, Bob"), "{joined}");
+        assert!(!joined.contains("Matched"), "{joined}");
         assert!(joined.contains("T1059.004"), "{joined}");
         assert!(!joined.contains("author:"), "{joined}");
         assert!(!joined.contains("tags:"), "{joined}");
@@ -409,7 +498,7 @@ mod tests {
         let ctx = egui::Context::default();
         let shapes = frames(&ctx, 2, |root| {
             egui::CentralPanel::default().show(root, |ui| {
-                let _ = match_cards(ui, report, TABLES[0], &view.rows[0]);
+                let _ = match_cards(ui, report, TABLES[0], &view.rows[0], MatchSort::default());
             });
         });
         let mut longest_rows = 0;
@@ -461,7 +550,9 @@ mod tests {
                 },
                 |root| {
                     egui::CentralPanel::default().show(root, |ui| {
-                        if let Some(key) = match_cards(ui, report, TABLES[0], &view.rows[0]) {
+                        if let Some(key) =
+                            match_cards(ui, report, TABLES[0], &view.rows[0], MatchSort::default())
+                        {
                             opened = Some(key);
                         }
                     });
@@ -504,5 +595,189 @@ mod tests {
         draw(&ctx, vec![at(true)]);
         draw(&ctx, vec![at(false)]);
         assert_eq!(ctx.data(|data| data.get_temp::<bool>(focus)), Some(true));
+    }
+
+    fn sorting_report() -> (Report, Vec<Vec<Cell>>) {
+        let mut a = finding("a", "Zeta loader", vec![bytes_at(1)]);
+        a.severity = "low".into();
+        a.count = 9;
+        a.mitre = vec!["T1105".into()];
+        let mut b = finding("b", "alpha injector", vec![bytes_at(2)]);
+        b.severity = "critical".into();
+        b.count = 2;
+        b.mitre = vec!["T1055.001".into()];
+        b.events = vec![40];
+        let mut c = finding("c", "Mid runner", vec![bytes_at(3)]);
+        c.severity = "medium".into();
+        c.count = 5;
+        c.events = vec![7];
+        let mut view = View::default();
+        view.results[0] = Some(Ok(report(vec![a, b, c])));
+        view.rows(0);
+        let Some(Ok(report)) = view.results[0].clone() else {
+            unreachable!()
+        };
+        (report, view.rows[0].clone())
+    }
+
+    /// The match list takes the page's visible height below its start, so it
+    /// grows when the Details, Activity and Jobs pane folds away (a taller
+    /// pane) instead of stopping at a fixed 320 points.
+    #[test]
+    fn the_match_list_fills_the_pane_at_two_heights() {
+        let findings: Vec<_> = (0..60)
+            .map(|n| finding(&format!("r{n}"), &format!("Rule {n}"), vec![bytes_at(n)]))
+            .collect();
+        let mut view = View::default();
+        view.results[0] = Some(Ok(report(findings)));
+        view.rows(0);
+        let Some(Ok(report)) = view.results[0].clone() else {
+            unreachable!()
+        };
+        let mut lists = Vec::new();
+        for height in [560.0_f32, 1000.0] {
+            let ctx = egui::Context::default();
+            let mut list = egui::Rect::NOTHING;
+            for _ in 0..3 {
+                let _ = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(900.0, height),
+                        )),
+                        ..Default::default()
+                    },
+                    |root| {
+                        egui::CentralPanel::default().show(root, |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("page")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.label("Matches");
+                                    ui.add_space(40.0);
+                                    list = ui
+                                        .scope(|ui| {
+                                            let _ = match_cards(
+                                                ui,
+                                                &report,
+                                                TABLES[0],
+                                                &view.rows[0],
+                                                MatchSort::default(),
+                                            );
+                                        })
+                                        .response
+                                        .rect;
+                                });
+                        });
+                    },
+                );
+            }
+            // It ends at the bottom of the pane, give or take the panel's margin.
+            assert!(list.bottom() <= height, "{list:?} in {height}");
+            assert!(list.bottom() >= height - 30.0, "{list:?} in {height}");
+            lists.push(list.height());
+        }
+        assert!(lists[0] >= MIN_LIST_HEIGHT - 1.0, "{lists:?}");
+        assert!(lists[1] > lists[0] + 380.0, "{lists:?}");
+        assert!(
+            lists[1] > 320.0 * 2.0,
+            "more than the old fixed height: {lists:?}"
+        );
+    }
+
+    fn titles(report: &Report, rows: &[Vec<Cell>], sort: MatchSort) -> Vec<String> {
+        sorted(report, rows, sort)
+            .into_iter()
+            .map(|index| finding_for(report, &rows[index]).unwrap().title.clone())
+            .collect()
+    }
+
+    #[test]
+    fn matches_sort_by_risk_name_technique_hits_and_first_hit() {
+        let (report, rows) = sorting_report();
+        assert_eq!(
+            titles(&report, &rows, MatchSort::default()),
+            ["alpha injector", "Mid runner", "Zeta loader"],
+            "risk is the default"
+        );
+        assert_eq!(
+            titles(&report, &rows, MatchSort::Name),
+            ["alpha injector", "Mid runner", "Zeta loader"]
+        );
+        // T1055.001 before T1105; the one with no technique last.
+        assert_eq!(
+            titles(&report, &rows, MatchSort::Mitre),
+            ["alpha injector", "Zeta loader", "Mid runner"]
+        );
+        assert_eq!(
+            titles(&report, &rows, MatchSort::Hits),
+            ["Zeta loader", "Mid runner", "alpha injector"]
+        );
+        // Journal event 7 before 40; bytes have no order and come last.
+        assert_eq!(
+            titles(&report, &rows, MatchSort::FirstHit),
+            ["Mid runner", "alpha injector", "Zeta loader"]
+        );
+        assert_eq!(titles(&report, &rows, MatchSort::Engine).len(), 3);
+    }
+
+    #[test]
+    fn the_sort_menu_is_drawn_and_the_order_follows_it() {
+        let (report, rows) = sorting_report();
+        let ctx = egui::Context::default();
+        let mut sort = MatchSort::Hits;
+        let shapes = frames(&ctx, 2, |root| {
+            egui::CentralPanel::default().show(root, |ui| {
+                ui.horizontal(|ui| sort_picker(ui, &mut sort));
+                let _ = match_cards(ui, &report, TABLES[0], &rows, sort);
+            });
+        });
+        let mut y = std::collections::HashMap::new();
+        for shape in &shapes {
+            super::super::tests::each_galley_rect(&shape.shape, &mut |text, rect| {
+                y.entry(text.to_owned()).or_insert(rect.min.y);
+            });
+        }
+        assert!(y.contains_key("Sort by"), "{:?}", y.keys());
+        assert!(y.contains_key("Hit count"), "{:?}", y.keys());
+        assert!(y["Zeta loader"] < y["Mid runner"]);
+        assert!(y["Mid runner"] < y["alpha injector"]);
+    }
+
+    #[test]
+    fn every_author_is_shown_and_the_hits_sit_beside_the_severity() {
+        let mut long = finding("long", "Long author", vec![bytes_at(1)]);
+        long.author = "Florian Roth, Nasreddine Bencherchali, Someone With A Very Long Name".into();
+        long.count = 3;
+        let mut view = View::default();
+        view.results[0] = Some(Ok(report(vec![long])));
+        view.rows(0);
+        let Some(Ok(report)) = &view.results[0] else {
+            unreachable!()
+        };
+        let ctx = egui::Context::default();
+        let shapes = frames(&ctx, 2, |root| {
+            egui::CentralPanel::default().show(root, |ui| {
+                let _ = match_cards(ui, report, TABLES[0], &view.rows[0], MatchSort::Risk);
+            });
+        });
+        let mut at = std::collections::HashMap::new();
+        for shape in &shapes {
+            super::super::tests::each_galley_rect(&shape.shape, &mut |text, rect| {
+                at.insert(text.to_owned(), rect);
+            });
+        }
+        let joined = rendered_text(&shapes);
+        assert!(
+            joined.contains(
+                "by Florian Roth, Nasreddine Bencherchali, Someone With A Very Long Name"
+            ),
+            "{joined}"
+        );
+        assert!(!joined.contains('…') || !joined.contains("+2"), "{joined}");
+        assert!(!joined.contains("Matched"), "{joined}");
+        let (badge, hits) = (&at["high"], &at["3 hits"]);
+        assert!((badge.center().y - hits.center().y).abs() < 6.0);
+        assert!(hits.min.x > badge.max.x, "hits are right of the severity");
     }
 }

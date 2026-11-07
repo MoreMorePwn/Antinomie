@@ -14,9 +14,12 @@ pub(in crate::triage) use header::ScanActivity;
 mod inputs;
 mod journal;
 mod kept;
+#[cfg(test)]
+mod qa;
 mod scan;
 mod selection;
 
+pub(in crate::triage) use cards::yara_strength;
 use cards::{card_summary, match_cards, severity_color};
 use finding::{byte_preview, evidence_list, evidence_values, WindowKey};
 use selection::SelectionDigests;
@@ -63,6 +66,50 @@ pub(super) fn name(engine: Engine) -> &'static str {
         Engine::Ids => "IDS",
         Engine::Sigma => "Sigma",
     }
+}
+/// What an empty result of a complete scan says when some inputs were not
+/// scanned: how many, and the reasons the scan recorded for them. `None`
+/// when every input was scanned.
+pub(super) fn return_note(inputs: Option<&[engine::ScannedInput]>) -> Option<String> {
+    let inputs = inputs?;
+    let skipped: Vec<_> = inputs
+        .iter()
+        .filter(|input| input.outcome != engine::InputOutcome::Succeeded)
+        .collect();
+    if skipped.is_empty() {
+        return None;
+    }
+    let scanned = inputs.len() - skipped.len();
+    let mut reasons: Vec<String> = Vec::new();
+    for input in &skipped {
+        let reason = input.reason.trim();
+        let reason = if reason.is_empty() {
+            "no reason was recorded"
+        } else {
+            reason
+        };
+        if !reasons.iter().any(|known| known == reason) {
+            reasons.push(reason.to_owned());
+        }
+    }
+    let shown: Vec<_> = reasons.iter().take(3).cloned().collect();
+    let more = reasons.len().saturating_sub(shown.len());
+    let mut why = shown.join("; ");
+    if more > 0 {
+        why.push_str(&format!("; and {more} more"));
+    }
+    let noun = |count: usize| if count == 1 { "input" } else { "inputs" };
+    Some(format!(
+        "No rule matched the {scanned} {} that {} scanned. {} of {} {} {} not scanned ({why}). \
+         An input is left out when it is too large, of a type the engine cannot read, or cut off \
+         by the time limit; Scanned inputs gives the reason for each.",
+        noun(scanned),
+        if scanned == 1 { "was" } else { "were" },
+        skipped.len(),
+        inputs.len(),
+        noun(inputs.len()),
+        if skipped.len() == 1 { "was" } else { "were" },
+    ))
 }
 fn attribution(author: &str) -> &str {
     if author.is_empty() {
@@ -189,6 +236,8 @@ pub(super) struct View {
     bytes: Option<BytePreview>,
     pending_byte: Option<Evidence>,
     pub automatic: bool,
+    /// The engine whose stale result asked for a rescan this frame.
+    rescan: Option<usize>,
     pub profile: String,
     pub open_manager: bool,
     /// A rule the Matches table is to be filtered to when it next shows (set
@@ -202,6 +251,8 @@ pub(super) struct View {
     auto_key: [String; 3],
     scanned_generation: [u64; 3],
     notes: [String; 3],
+    /// Per engine: why the last background re-scan was not taken over.
+    kept_note: [String; 3],
     budgets: [AttemptBudget; 3],
     auto_started: [bool; 3],
     digests: std::collections::BTreeMap<String, FileDigest>,
@@ -238,12 +289,11 @@ pub(super) struct View {
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
 }
 
-/// An input's caveat above the findings: how Sigma events are converted is a
-/// plain note, anything else an input says (an IDS limit) stays a warning.
+/// An input's caveat above the findings. How Sigma events are converted is
+/// the hover text of Scanned inputs, so only another caveat (an IDS limit) is
+/// drawn, as a warning.
 fn input_note(ui: &mut egui::Ui, text: &str) {
-    if text == antinomie_monitor_core::analysis::detection::SIGMA_COVERAGE_WARNING {
-        ui.add(egui::Label::new(egui::RichText::new(text).color(theme::text())).wrap());
-    } else {
+    if text != antinomie_monitor_core::analysis::detection::SIGMA_COVERAGE_WARNING {
         crate::activity::warning(ui, text);
     }
 }
@@ -317,6 +367,7 @@ impl View {
         self.applied = Default::default();
         self.auto_key = Default::default();
         self.notes = Default::default();
+        self.kept_note = Default::default();
         self.budgets = Default::default();
         self.auto_started = Default::default();
         for phase in &mut self.phase {
@@ -341,6 +392,38 @@ impl View {
                 source_digest: digest,
                 frozen: None,
             })
+    }
+    /// Why an automatic scan's `result` must not replace the complete result
+    /// of `index` that is shown, or `None` when it may.
+    fn kept_reason(&self, index: usize, result: &Result<Report, String>) -> Option<String> {
+        let Some(Ok(shown)) = &self.results[index] else {
+            return None;
+        };
+        if shown.state != State::Complete {
+            return None;
+        }
+        let why = match result {
+            Err(error) if error == "cancelled" => return None,
+            Err(error) => error.clone(),
+            Ok(report) if report.state == State::Complete => return None,
+            Ok(report) => report
+                .warnings
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "the engine could not evaluate the evidence".into()),
+        };
+        Some(format!(
+            "A background re-scan did not complete ({why}). The earlier result is kept; press Scan to try again."
+        ))
+    }
+    /// Whether `report` was made with a rule selection other than the one
+    /// installed now (a pack was installed, updated or removed since).
+    pub(super) fn stale_selection(&self, index: usize, report: &Report) -> bool {
+        let current = &self.digest_cache[index];
+        self.digest_generation == self.rules_generation
+            && !current.is_empty()
+            && report.state != State::Skipped
+            && report.selection != *current
     }
     pub(super) fn rows(&mut self, index: usize) {
         self.counts[index] = self.results[index]
@@ -584,8 +667,19 @@ impl View {
                                     self.auto_key[index].clear();
                                 }
                             }
-                            self.results[index] = Some(*result);
-                            self.rows(index);
+                            // A background re-scan that failed or could not
+                            // evaluate (an engine tool that did not answer) never
+                            // replaces a complete result that is on screen.
+                            let kept = automatic
+                                .then(|| self.kept_reason(index, &result))
+                                .flatten();
+                            if let Some(reason) = kept {
+                                self.kept_note[index] = reason;
+                            } else {
+                                self.kept_note[index].clear();
+                                self.results[index] = Some(*result);
+                                self.rows(index);
+                            }
                             self.progress[index] = None;
                         }
                     }
@@ -659,7 +753,21 @@ impl View {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
+    /// The whole Detection page in one vertical scroll area, so a section that
+    /// grows (the list of rules not applied, a long match list) scrolls the
+    /// page instead of running past the bottom of the pane.
     pub fn show(&mut self, ui: &mut egui::Ui, scan: Option<&ArchiveScan>) {
+        egui::ScrollArea::vertical()
+            .id_salt("detection-page")
+            .auto_shrink([false, false])
+            .show(ui, |ui| self.show_page(ui, scan));
+        // The Rescan button of a result shown above sets this; the result is
+        // borrowed while it is drawn, so the scan starts here.
+        if let Some(index) = self.rescan.take() {
+            self.scan_now(ui.ctx(), index, scan);
+        }
+    }
+    fn show_page(&mut self, ui: &mut egui::Ui, scan: Option<&ArchiveScan>) {
         if self.fresh_registry().is_none() {
             self.request_registry(ui.ctx());
         }
@@ -669,9 +777,8 @@ impl View {
             .position(|engine| *engine == self.selected)
             .unwrap_or(0);
         self.rule_sets(ui, index);
-        self.scanned_inputs(ui, index, scan);
         let scanning = self.is_scanning(index);
-        self.scan_controls(ui, index, scan, scanning);
+        self.scanned_inputs(ui, index, scan, scanning);
         if scanning {
             self.scan_progress(ui, index);
         }
@@ -688,7 +795,7 @@ impl View {
         }
         let Some(result) = &self.results[index] else {
             if !scanning {
-                ui.weak("Not scanned.");
+                self.not_scanned_row(ui, index, scan);
             }
             return;
         };
@@ -699,6 +806,19 @@ impl View {
                 return;
             }
         };
+        if self.stale_selection(index, report) {
+            let mut rescan = false;
+            ui.horizontal_wrapped(|ui| {
+                crate::activity::warning(ui, "Scanned with an older rule set.");
+                rescan = ui
+                    .add_enabled(self.rx.is_none(), egui::Button::new("Rescan"))
+                    .on_hover_text("Scan again with the rule packs installed now.")
+                    .clicked();
+            });
+            if rescan {
+                self.rescan = Some(index);
+            }
+        }
         if self.selected == Engine::Sigma
             && report
                 .source_digest
@@ -723,20 +843,13 @@ impl View {
         }
         if report.findings.is_empty() {
             ui.weak(match report.state {
-                State::Complete
-                    if report.inputs.as_ref().is_some_and(|inputs| {
-                        inputs
-                            .iter()
-                            .any(|input| input.outcome != engine::InputOutcome::Succeeded)
-                    }) =>
-                {
-                    "No rule matched the inputs that were scanned. Some inputs were not; see Scanned inputs."
+                State::Complete => {
+                    return_note(report.inputs.as_deref()).unwrap_or_else(|| "No matches.".into())
                 }
-                State::Complete => "No matches.",
-                State::NoRules => "No rules enabled. This is not a clean scan.",
-                State::Missing => "Evidence missing. This is not a clean scan.",
-                State::Skipped => header::SKIPPED_NOTE,
-                _ => "No retained matches. Coverage is incomplete or unavailable.",
+                State::NoRules => "No rules enabled. This is not a clean scan.".into(),
+                State::Missing => "Evidence missing. This is not a clean scan.".into(),
+                State::Skipped => header::SKIPPED_NOTE.into(),
+                _ => "No retained matches. Coverage is incomplete or unavailable.".into(),
             });
         }
         let draft_id = ui.id().with(("table-filter", TABLES[index]));
@@ -757,8 +870,29 @@ impl View {
             let draft = format!("finding.mitre == \"{technique}\"");
             ui.data_mut(|data| data.insert_temp(draft_id, draft));
         }
-        let filter =
-            query::table_filter(ui, TABLES[index], "finding.severity == high", FIELDS, &[]);
+        // "Matches" and Sort by, with the filter beside it on the same row.
+        let has_matches = !report.findings.is_empty();
+        if has_matches {
+            presentation::heading(ui, "Matches", "");
+        }
+        let base = ui.id();
+        let filter = ui
+            .horizontal(|ui| {
+                if has_matches {
+                    cards::sort_picker(ui, &mut self.settings.match_sort);
+                }
+                query::table_filter_under(
+                    ui,
+                    base,
+                    TABLES[index],
+                    "finding.severity == high",
+                    FIELDS,
+                    &[],
+                )
+            })
+            .inner;
+        // Room between the filter and the start of the matches.
+        ui.add_space(12.0);
         let draft = ui
             .data(|data| data.get_temp::<String>(draft_id))
             .unwrap_or_default();
@@ -776,8 +910,13 @@ impl View {
                 .collect();
             self.applied[index] = Some(draft);
         }
-        let opened = match_cards(ui, report, TABLES[index], &self.filtered[index]);
-        table(ui, TABLES[index], HEADERS, &self.filtered[index]);
+        let opened = match_cards(
+            ui,
+            report,
+            TABLES[index],
+            &self.filtered[index],
+            self.settings.match_sort,
+        );
         if let Some(key) = opened {
             self.open_window(key);
         }
@@ -834,8 +973,14 @@ impl View {
         egui::CollapsingHeader::new(format!("Evidence locations ({})", finding.evidence.len()))
             .default_open(true)
             .show(ui, |ui| {
-                selected =
-                    evidence_list(ui, report.engine, finding, "detection-evidence-hits", 240.0);
+                let height = finding::evidence_height(ui);
+                selected = evidence_list(
+                    ui,
+                    report.engine,
+                    finding,
+                    "detection-evidence-hits",
+                    height,
+                );
             });
         byte_preview(ui, self.bytes.as_ref(), self.byte_rx.is_some(), finding);
         if let Some(key) = window {
@@ -1278,5 +1423,88 @@ mod tests {
         assert!(view.results.iter().all(|result| result.is_none()));
         assert!(!frames.is_empty(), "preparation produced no UI frames");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_empty_result_says_how_many_inputs_were_not_scanned_and_why() {
+        let input = |outcome, reason: &str| {
+            let mut input = engine::ScannedInput::new(engine::InputKind::Capture, "/r/a");
+            input.outcome = outcome;
+            input.reason = reason.into();
+            input
+        };
+        use engine::InputOutcome::{Failed, Skipped, Succeeded};
+        assert!(return_note(None).is_none());
+        assert!(return_note(Some(&[input(Succeeded, "")])).is_none());
+        let note = return_note(Some(&[
+            input(Succeeded, ""),
+            input(Skipped, "memory scanning is off"),
+            input(Failed, "timed out after 60 s"),
+            input(Skipped, "memory scanning is off"),
+        ]))
+        .unwrap();
+        assert!(
+            note.starts_with("No rule matched the 1 input that was scanned."),
+            "{note}"
+        );
+        assert!(note.contains("3 of 4 inputs were not scanned"), "{note}");
+        assert!(
+            note.contains("memory scanning is off; timed out after 60 s"),
+            "{note}"
+        );
+        assert!(note.contains("too large"), "{note}");
+        assert!(note.contains("time limit"), "{note}");
+        assert!(note.contains("Scanned inputs"), "{note}");
+    }
+
+    #[test]
+    fn a_failed_background_rescan_keeps_the_complete_result_on_screen() {
+        let mut view = View::default();
+        view.results[2] = Some(Ok(report(vec![finding("r", "Rule", vec![])])));
+        // The report helper is complete; an automatic scan that failed or could
+        // not evaluate does not replace it.
+        assert!(view
+            .kept_reason(2, &Err("Sigma tool timed out".into()))
+            .is_some());
+        let mut empty = report(vec![]);
+        empty.state = State::Unavailable;
+        empty.warnings = vec!["No Sigma rule was evaluated: probe unknown".into()];
+        let why = view.kept_reason(2, &Ok(empty)).unwrap();
+        assert!(why.contains("earlier result is kept"), "{why}");
+        assert!(why.contains("probe unknown"), "{why}");
+        // A complete result, a cancel, or nothing on screen is taken over.
+        assert!(view.kept_reason(2, &Ok(report(vec![]))).is_none());
+        assert!(view.kept_reason(2, &Err("cancelled".into())).is_none());
+        assert!(view.kept_reason(1, &Err("boom".into())).is_none());
+        // A result that was not complete is replaced by the new one.
+        let mut limited = report(vec![]);
+        limited.state = State::Unavailable;
+        view.results[2] = Some(Ok(limited));
+        assert!(view.kept_reason(2, &Err("boom".into())).is_none());
+    }
+
+    #[test]
+    fn an_unanswered_tool_probe_holds_back_the_automatic_scan() {
+        use antinomie_monitor_core::ruleset::{ToolFacts, ToolProbe};
+        let mut view = View::default();
+        assert!(!view.tool_unanswered(2));
+        let found = ToolProbe::Found {
+            identity: "x".into(),
+            version: "1".into(),
+        };
+        let mut facts = ToolFacts {
+            app: String::new(),
+            yara: String::new(),
+            suricata: found.clone(),
+            sigma: ToolProbe::Unknown("did not answer".into()),
+            sigma_python: PathBuf::new(),
+        };
+        view.digest_facts = Some(facts.clone());
+        assert!(view.tool_unanswered(2));
+        assert!(!view.tool_unanswered(1));
+        assert!(!view.tool_unanswered(0));
+        facts.sigma = found;
+        view.digest_facts = Some(facts);
+        assert!(!view.tool_unanswered(2));
     }
 }

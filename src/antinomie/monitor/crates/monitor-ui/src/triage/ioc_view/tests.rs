@@ -10,7 +10,7 @@ use antinomie_monitor_core::{
     ruleset::Fetcher,
 };
 
-const SIZE: egui::Vec2 = egui::vec2(1400.0, 1500.0);
+const SIZE: egui::Vec2 = egui::vec2(1400.0, 2800.0);
 
 // The fixture capture is a GET of http://example.com/ to 93.184.216.34:80.
 const THREATFOX: &str = "# \"first_seen_utc\", \"ioc_id\", \"ioc_value\", \"ioc_type\", \"threat_type\", \"fk_malware\", \"malware_alias\", \"malware_printable\", \"last_seen_utc\", \"confidence_level\"\n\"2026-09-02 10:11:12\", \"1831204\", \"93.184.216.34:80\", \"ip:port\", \"botnet_cc\", \"elf.mirai\", \"\", \"Mirai\", \"\", \"75\"\n";
@@ -487,7 +487,7 @@ fn a_run_without_a_capture_says_the_network_tabs_were_skipped() {
 }
 
 #[test]
-fn the_summary_page_has_an_ioc_card_and_the_tab_counts_the_indicators() {
+fn the_summary_indicators_header_names_the_matches_and_the_tab_counts_the_indicators() {
     if !tshark() {
         return;
     }
@@ -496,12 +496,13 @@ fn the_summary_page_has_an_ioc_card_and_the_tab_counts_the_indicators() {
     let mut view = fixture.view(scan, Section::Summary);
     let ctx = context();
     let text = shown(&settle(&ctx, &mut view));
-    assert!(text.contains("Indicators (IOC)"), "{text}");
+    // The dataset line sits in the Indicators header and opens the IOC view.
+    assert!(text.contains("Indicators"), "{text}");
     assert!(
-        text.contains("indicators matched") || text.contains("indicator matched"),
+        text.contains("indicators matched (datasets dated ")
+            || text.contains("indicator matched (datasets dated "),
         "{text}"
     );
-    assert!(text.contains("Open IOC"), "{text}");
     let (matched, total, date) = view.ioc_headline().unwrap();
     assert!(matched >= 2 && total >= 3, "{matched} of {total}");
     assert_eq!(date.len(), 10);

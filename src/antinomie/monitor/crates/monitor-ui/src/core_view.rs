@@ -186,6 +186,9 @@ pub(crate) struct CoreView {
     acquired: Vec<AcquiredCore>,
     manual: Vec<ProcessCoreCapture>,
     catalog_issues: Vec<String>,
+    /// Issues already sent to the activity log, so a persistent one is
+    /// reported once rather than on every frame.
+    reported_issues: std::collections::HashSet<String>,
     selected: Option<CoreRecord>,
     selected_stamp: Option<CoreFileStamp>,
     selected_directory: Option<PathBuf>,
@@ -472,6 +475,22 @@ impl CoreView {
         }
     }
 
+    /// Sends each distinct catalog issue to the activity log once.
+    pub(super) fn report_new_issues(&mut self, ctx: &egui::Context) -> usize {
+        let mut reported = 0;
+        for issue in &self.catalog_issues {
+            if self.reported_issues.insert(issue.clone()) {
+                reported += 1;
+                crate::activity::report(
+                    ctx,
+                    crate::activity::Level::Error,
+                    format!("Core dump list: {issue}"),
+                );
+            }
+        }
+        reported
+    }
+
     /// | Argument | Meaning |
     /// |---|---|
     /// | `ui` | Core panel surface |
@@ -492,13 +511,7 @@ impl CoreView {
         self.set_catalog_scope(recording_roots, vm_id);
         self.poll();
         self.poll_catalog();
-        for issue in &self.catalog_issues {
-            crate::activity::report(
-                ui.ctx(),
-                crate::activity::Level::Error,
-                format!("Core dump list: {issue}"),
-            );
-        }
+        let _ = self.report_new_issues(ui.ctx());
         for capture in controls
             .captures
             .iter()
@@ -630,6 +643,8 @@ impl Drop for CoreView {
     }
 }
 
+#[cfg(test)]
+mod issue_tests;
 #[cfg(test)]
 mod layout_tests;
 #[cfg(test)]

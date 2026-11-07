@@ -26,10 +26,14 @@ mod launch;
 mod launch_source;
 mod layout;
 mod library;
+mod main_polish;
+mod main_window_ui;
 mod memory_probe;
 mod network;
 mod pending;
+mod rules_list;
 mod rules_startup;
+mod run_in_vm_click;
 mod run_kill;
 mod run_selection;
 mod samples_custody;
@@ -37,14 +41,21 @@ mod samples_detail;
 mod samples_features;
 mod samples_list;
 mod samples_report;
+mod samples_runs_layout;
 mod samples_shots;
 mod scanned_inputs;
+mod settings_keyboard;
+mod settings_layout;
+mod settings_lookup;
+mod settings_tools;
 mod settings_window;
 mod shortcuts;
 mod start_error;
+mod start_warning;
 mod startup;
 mod stealth;
 mod stealth_shots;
+mod stop_run_shots;
 mod tcg_fallback;
 mod tcg_shots;
 mod terminal_windows;
@@ -61,6 +72,7 @@ mod trace_view;
 mod ui_polish_shots;
 mod upload;
 mod vm_dialog;
+mod vm_screen_fold;
 mod workspace;
 
 use antinomie_monitor_core::{RunIn, WaitStatus};
@@ -324,6 +336,7 @@ pub(super) fn run(id: &str) -> RunSummary {
         reduced: None,
         boot_wait: None,
         triggers: None,
+        stopped_by_user: false,
         started_ms: None,
         clock_anchor: None,
         id: id.into(),

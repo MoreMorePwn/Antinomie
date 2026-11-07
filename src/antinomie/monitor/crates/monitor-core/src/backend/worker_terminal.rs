@@ -165,6 +165,7 @@ impl Worker {
         }
         let run = session.runs.get_mut(&cookie).ok_or("unknown run")?;
         run.summary.state = RunState::StopRequested;
+        run.summary.stopped_by_user = true;
         if let Some(log) = run.custody.as_mut() {
             log.action(
                 crate::samples::ActionKind::Kill,

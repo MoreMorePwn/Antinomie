@@ -792,10 +792,12 @@ mod tests {
             acceleration: VmAcceleration::Kvm,
             ..Default::default()
         };
-        assert!(vm_requirements(&options, &kvm).contains(&Dependency::Kvm));
-        let mut allowed = options.clone();
-        allowed.start.kvm_fallback = true;
-        assert!(!vm_requirements(&allowed, &kvm).contains(&Dependency::Kvm));
+        // Falling back to TCG is on by default, so KVM is not required.
+        assert!(options.start.kvm_fallback);
+        assert!(!vm_requirements(&options, &kvm).contains(&Dependency::Kvm));
+        let mut strict = options.clone();
+        strict.start.kvm_fallback = false;
+        assert!(vm_requirements(&strict, &kvm).contains(&Dependency::Kvm));
     }
 
     #[test]

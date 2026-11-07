@@ -318,3 +318,19 @@ fn the_account_tool_itself_writing_passwd_is_one_tier_down() {
         .iter()
         .any(|row| text(row, "finding.tier") == "medium"));
 }
+
+#[test]
+fn opening_a_config_file_for_writing_without_writing_is_not_a_change() {
+    // The Prometei case: O_WRONLY|O_CREAT|O_APPEND on /etc/hosts, then close.
+    let out = run(vec![open_write(1, "/etc/hosts", 3), close(1, 3)]);
+    assert!(
+        !has(&out, "persistence.config_write"),
+        "{:?}",
+        rules_of(&out)
+    );
+    // The same open followed by a write is a change.
+    assert!(has(&run(writes("/etc/hosts")), "persistence.config_write"));
+    // O_TRUNC changes the file whether or not it was there.
+    let cut = run(vec![open_truncate(1, "/etc/hosts", 3), close(1, 3)]);
+    assert!(has(&cut, "persistence.config_write"));
+}

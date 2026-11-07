@@ -210,14 +210,27 @@ impl<'open> Dialog<'open> {
         let mut window = if fixed {
             window
         } else {
-            window.max_size(
-                egui::vec2(
-                    max_width.unwrap_or(f32::INFINITY).min(area.width() - 24.0),
-                    max_height
-                        .unwrap_or(f32::INFINITY)
-                        .min(area.height() - 24.0),
-                ) + frame,
-            )
+            // A window never takes more than `MAX_SHARE` of the content
+            // area unless its caller asked for a different cap, and never
+            // less room than a usable minimum.
+            // A window still opens at the size its caller chose when the
+            // area has room for it, even above the share.
+            let mut cap = cap_size(area);
+            if let Some(width) = sizes.default.map(|size| size.x).or(sizes.default_width) {
+                cap.x = cap.x.max(width.min(area.width() - 24.0));
+            }
+            if let Some(height) = sizes.default.map(|size| size.y).or(sizes.default_height) {
+                cap.y = cap.y.max(height.min(area.height() - 24.0));
+            }
+            let max = egui::vec2(
+                max_width.map_or(cap.x, |width| width.min(area.width() - 24.0)),
+                max_height.map_or(cap.y, |height| height.min(area.height() - 24.0)),
+            );
+            if sizes.min.is_none() {
+                window = window
+                    .min_size(egui::vec2(MIN_WIDTH.min(max.x), MIN_HEIGHT.min(max.y)) + frame);
+            }
+            window.max_size(max + frame)
         };
         // A window that opens centred stays centred while the app window
         // grows to its final size (the first frames of a start run in a
@@ -335,6 +348,28 @@ impl<'open> Dialog<'open> {
 }
 
 const CLOSE_SIZE: f32 = 22.0;
+
+/// The share of the content area a spawned window may take each way.
+pub const MAX_SHARE: f32 = 0.8;
+/// The smallest a spawned window is resized to, unless its caller says so.
+const MIN_WIDTH: f32 = 280.0;
+const MIN_HEIGHT: f32 = 140.0;
+
+/// The most a spawned window's contents may be (the frame not counted):
+/// [`MAX_SHARE`] of the content area each way, never below a usable size.
+pub fn cap_size(area: egui::Rect) -> egui::Vec2 {
+    egui::vec2(
+        (area.width() * MAX_SHARE).max(MIN_WIDTH),
+        (area.height() * MAX_SHARE).max(MIN_HEIGHT),
+    )
+}
+
+/// Caps a window made with `egui::Window::new` the way [`window`] caps its
+/// own: at [`MAX_SHARE`] of the content area, so its contents scroll or wrap
+/// inside it instead of widening it.
+pub fn capped<'a>(window: egui::Window<'a>, ctx: &egui::Context) -> egui::Window<'a> {
+    window.max_size(cap_size(crate::title_bar::content_rect(ctx)) + frame_extra(ctx))
+}
 
 /// What a window's frame (margins and stroke) adds to the size of its
 /// contents: egui 0.36 counts it in the sizes asked of a window, where 0.31

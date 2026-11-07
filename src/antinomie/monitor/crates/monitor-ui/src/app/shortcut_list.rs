@@ -8,6 +8,15 @@ use super::*;
 pub(super) struct ShortcutUi {
     pub(super) palette: palette::Palette,
     pub(super) list_open: bool,
+    /// Settings > Keyboard: the action waiting for a key press, while it does.
+    pub(super) recording: Option<Action>,
+    /// What the last recording could not do, for its row.
+    pub(super) notice: Option<(Action, String)>,
+    /// A key that another action has: the action to change, the key, and who
+    /// has it, until the person decides.
+    pub(super) conflict: Option<(Action, egui::KeyboardShortcut, Action)>,
+    /// Settings > Keyboard: the words the list is narrowed to.
+    pub(super) filter: String,
 }
 
 impl ShortcutUi {
@@ -171,18 +180,23 @@ impl MonitorApp {
             ),
             "Show the 1st to 9th tab of the work area, left to right",
         );
-        for panel in [Panel::Activity, Panel::Jobs] {
-            let action = Action::Go(panel.clone());
-            if let Some(keys) = action
-                .shortcut()
+        // The views and the pages and windows the palette opens that were
+        // given a shortcut.
+        for action in Action::bindable()
+            .into_iter()
+            .filter(|action| !Action::PALETTE.contains(action))
+        {
+            let Some(keys) = self
+                .shortcut_of(&action)
                 .map(|shortcut| ctx.format_shortcut(&shortcut))
-            {
-                add(
-                    "Workspace tabs",
-                    keys,
-                    &format!("Show the {} tab (lower bar)", panel.title()),
-                );
-            }
+            else {
+                continue;
+            };
+            let what = match &action {
+                Action::Go(panel) => format!("Show the {} tab", panel.title()),
+                other => format!("{} ({})", other.label(self), other.group()),
+            };
+            add("Workspace tabs", keys, &what);
         }
         for (area, keys, what) in AREA_SHORTCUTS {
             add(area, (*keys).into(), what);
@@ -203,7 +217,8 @@ impl MonitorApp {
         }
         let rows = self.shortcut_rows(ctx);
         let mut open = true;
-        egui::Window::new("Keyboard shortcuts")
+        let mut open_keyboard = false;
+        crate::widgets::capped(egui::Window::new("Keyboard shortcuts"), ctx)
             .id(egui::Id::new("keyboard_shortcuts"))
             .open(&mut open)
             .order(egui::Order::Foreground)
@@ -211,6 +226,14 @@ impl MonitorApp {
             .default_size(egui::vec2(640.0, 520.0) + crate::widgets::frame_extra(ctx))
             .show(ctx, |ui| {
                 ui.label(OWNERSHIP_RULE);
+                ui.add_space(6.0);
+                if ui
+                    .button("Change shortcuts…")
+                    .on_hover_text("Settings > Keyboard: one row per action")
+                    .clicked()
+                {
+                    open_keyboard = true;
+                }
                 ui.add_space(6.0);
                 egui::ScrollArea::vertical()
                     .id_salt("keyboard_shortcuts_scroll")
@@ -241,6 +264,9 @@ impl MonitorApp {
             });
         if !open {
             self.shortcut_ui.list_open = false;
+        }
+        if open_keyboard {
+            self.open_settings_page("Keyboard");
         }
     }
 }

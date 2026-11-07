@@ -295,17 +295,8 @@ fn schema_gap_note(scan: &ArchiveScan) -> Option<String> {
 
 fn processes(scan: &ArchiveScan, clock: Option<antinomie_monitor_core::HostClockAnchor>) -> Table {
     let rows = super::super::process_tree::process_rows(&scan.process, clock, &scan.suspicious);
-    let headers = [
-        "Process",
-        "Executable",
-        "TID",
-        "Argv",
-        "First seen",
-        "Last seen",
-        "Task outcome",
-        "Exec history",
-    ];
-    let mut out = table(&headers, &[0, 1, 3, 4, 5, 6, 7], &rows, 0, &[]);
+    let headers = super::super::process_tree::PROCESS_HEADERS;
+    let mut out = table(&headers, &[0, 1, 2, 3, 4, 5, 6, 7, 8], &rows, 0, &[]);
     for (row, source) in out.rows.iter_mut().zip(&rows) {
         let depth = files::number(&source[0].values, "process.depth").unwrap_or(0) as usize;
         row[0] = format!(
@@ -319,21 +310,30 @@ fn processes(scan: &ArchiveScan, clock: Option<antinomie_monitor_core::HostClock
 }
 
 fn findings(scan: &ArchiveScan, clock: Option<antinomie_monitor_core::HostClockAnchor>) -> Table {
+    let start = scan.process.iter().filter_map(|node| node.first_ns).min();
     let rows: Vec<Vec<Cell>> = scan
         .findings
         .iter()
         .map(|finding| {
-            let mut cells = finding.cells.clone();
-            cells[rules::COL_TIME].text = crate::time_format::guest_ns(
-                clock,
-                files::number(&finding.values, "event.time_ns"),
-            );
-            cells
+            let mut finding = finding.clone();
+            rules::stamp(&mut finding, clock, start);
+            finding.cells
         })
         .collect();
     table(
         rules::HEADERS,
-        &[rules::COL_TIME, 1, 0, 2, 3, 4, 5, 11],
+        &[
+            rules::COL_TIME,
+            rules::COL_TIER,
+            rules::COL_BEHAVIOUR,
+            0,
+            rules::COL_TARGET,
+            rules::COL_PROCESS,
+            rules::COL_ATTACK,
+            rules::COL_COUNT,
+            rules::COL_RESULT,
+            rules::COL_SUMMARY,
+        ],
         &rows,
         scan.findings_omitted,
         &[],

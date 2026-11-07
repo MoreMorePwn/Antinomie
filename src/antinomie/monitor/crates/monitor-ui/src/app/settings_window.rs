@@ -3,6 +3,7 @@
 //! mockup's layout). Appearance and the other pages apply at once; the
 //! Recording page applies on Save.
 use super::dialogs::{form_grid, text_size_control};
+use super::widgets::hint_tip;
 use super::*;
 use crate::widgets::{self, chip, Tone};
 
@@ -18,11 +19,12 @@ pub(super) enum SettingsPage {
     NetworkRoutes,
     AnalysisTools,
     Disks,
+    Keyboard,
     Advanced,
 }
 
 impl SettingsPage {
-    pub(super) const ALL: [SettingsPage; 9] = [
+    pub(super) const ALL: [SettingsPage; 10] = [
         SettingsPage::Appearance,
         SettingsPage::Recording,
         SettingsPage::Detection,
@@ -31,6 +33,7 @@ impl SettingsPage {
         SettingsPage::NetworkRoutes,
         SettingsPage::AnalysisTools,
         SettingsPage::Disks,
+        SettingsPage::Keyboard,
         SettingsPage::Advanced,
     ];
 
@@ -44,6 +47,7 @@ impl SettingsPage {
             SettingsPage::NetworkRoutes => "Network routes",
             SettingsPage::AnalysisTools => "Analysis tools",
             SettingsPage::Disks => "Disks",
+            SettingsPage::Keyboard => "Keyboard",
             SettingsPage::Advanced => "Advanced",
         }
     }
@@ -101,6 +105,12 @@ fn nav_item(ui: &mut egui::Ui, label: &str, active: bool) -> egui::Response {
     response
 }
 
+/// The flag Settings sets while it draws a page: its form grids then leave
+/// more room between rows (see `dialogs::form_grid`).
+pub(super) fn roomy_forms() -> egui::Id {
+    egui::Id::new("settings_roomy_forms")
+}
+
 /// A hint line under a control, in the muted color.
 fn hint(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add(egui::Label::new(RichText::new(text).small().color(theme::muted())).wrap())
@@ -132,8 +142,9 @@ impl MonitorApp {
                     if changed {
                         self.settings.analysis_limits.set(field.setting, value);
                     }
-                    hint(
+                    hint_tip(
                         ui,
+                        &format!("Default {} {}", field.default, field.unit),
                         &format!("{} Default {} {}.", field.help, field.default, field.unit),
                     );
                 });
@@ -144,9 +155,8 @@ impl MonitorApp {
                 ui.checkbox(
                     &mut self.settings.analysis_limits.ghidra_disassembly,
                     "List with Ghidra when Decompilation is not selected",
-                );
-                hint(
-                    ui,
+                )
+                .on_hover_text(
                     "A run with Disassembly but without Decompilation also starts Ghidra, which lists \
                      every architecture with labels and cross references. The built-in rows show first. \
                      Needs Ghidra (Manage tools); the time limit and the listing size apply. \
@@ -187,7 +197,7 @@ impl MonitorApp {
         let mut save = false;
         let mut close = false;
         let screen = ctx.content_rect();
-        let width = 820.0_f32.min((screen.width() - 50.0).max(320.0));
+        let width = 900.0_f32.min((screen.width() - 50.0).max(320.0));
         // The page area scrolls; the title and the footer stay visible on a
         // short screen.
         let height = (screen.height() - 190.0).clamp(160.0, 440.0);
@@ -248,7 +258,18 @@ impl MonitorApp {
                                 .max_height(height)
                                 .max_width(content)
                                 .auto_shrink([false, false])
-                                .show(ui, |ui| self.settings_page(ui, ctx));
+                                .show(ui, |ui| {
+                                    // Room at the right, so the scroll bar never lies on
+                                    // a text; and roomier rows than in a dialog.
+                                    ui.data_mut(|data| data.insert_temp(roomy_forms(), true));
+                                    egui::Frame::NONE
+                                        .inner_margin(egui::Margin {
+                                            right: 18,
+                                            ..Default::default()
+                                        })
+                                        .show(ui, |ui| self.settings_page(ui, ctx));
+                                    ui.data_mut(|data| data.remove_temp::<bool>(roomy_forms()));
+                                });
                         },
                     );
                 });
@@ -262,18 +283,16 @@ impl MonitorApp {
                         let room = (ui.available_width() - buttons).max(60.0);
                         ui.scope(|ui| {
                             ui.set_max_width(room);
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(if stopped {
-                                        "Appearance applies at once · other pages apply on Save"
-                                    } else {
-                                        "Stop the VM to save changes · Appearance applies at once"
-                                    })
-                                    .small()
-                                    .color(theme::muted()),
-                                )
-                                .truncate(),
-                            );
+                            if !stopped {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new("Stop the VM to save changes")
+                                            .small()
+                                            .color(theme::muted()),
+                                    )
+                                    .truncate(),
+                                );
+                            }
                         });
                     },
                     |ui| {
@@ -302,6 +321,7 @@ impl MonitorApp {
             SettingsPage::NetworkRoutes => self.routes_page(ui),
             SettingsPage::AnalysisTools => self.tools_page(ui),
             SettingsPage::Disks => self.disks_page(ui),
+            SettingsPage::Keyboard => self.keyboard_page(ui, ctx),
             SettingsPage::Advanced => self.advanced_page(ui),
         }
     }
@@ -342,8 +362,10 @@ impl MonitorApp {
                     let mut filter: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
                     let edit = ui.add(
                         egui::TextEdit::singleline(&mut filter)
+                            .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                             .hint_text(crate::theme::placeholder(ui, "Filter zones")),
                     );
+                    crate::widgets::clear_button(ui, &edit, &mut filter);
                     if !edit.has_focus() && filter.is_empty() {
                         edit.request_focus();
                     }
@@ -440,8 +462,11 @@ impl MonitorApp {
             crate::activity::info(ui, "Stop the VM to change these.");
         }
         ui.add_enabled_ui(self.snapshot.active_vm.is_none(), |ui| {
+            theme::section(ui, "Base and storage");
             form_grid("settings_recording", ui).show(ui, |ui| {
-                ui.label("Installed base");
+                ui.label("Default base for new VMs").on_hover_text(
+                    "The installed base a new VM starts with. Each VM keeps the base it was created with; this only sets the choice offered in New VM and Getting started.",
+                );
                 let mut base = self
                     .snapshot
                     .bases
@@ -461,8 +486,22 @@ impl MonitorApp {
                     egui::DragValue::new(&mut self.settings.quota_gib)
                         .range(1..=4096)
                         .suffix(" GiB"),
-                );
+                )
+                .on_hover_text("The most disk space the recordings may use.");
                 ui.end_row();
+                if let Some(path) = &self.snapshot.capture_dir {
+                    ui.label("Recording");
+                    ui.add(
+                        egui::Label::new(RichText::new(path.display().to_string()).monospace())
+                            .truncate(),
+                    )
+                    .on_hover_text(path.display().to_string());
+                    ui.end_row();
+                }
+            });
+            ui.add_space(12.0);
+            theme::section(ui, "Limits and timing");
+            form_grid("settings_recording_limits", ui).show(ui, |ui| {
                 ui.label("Process cores: default budget");
                 ui.add(
                     egui::DragValue::new(&mut self.settings.core_budget_mib)
@@ -478,17 +517,9 @@ impl MonitorApp {
                     egui::DragValue::new(&mut self.settings.timeout)
                         .range(1..=120)
                         .suffix(" s"),
-                );
+                )
+                .on_hover_text("How long a VM is given to shut down before it is stopped.");
                 ui.end_row();
-                if let Some(path) = &self.snapshot.capture_dir {
-                    ui.label("Recording");
-                    ui.add(
-                        egui::Label::new(RichText::new(path.display().to_string()).monospace())
-                            .truncate(),
-                    )
-                    .on_hover_text(path.display().to_string());
-                    ui.end_row();
-                }
             });
         });
     }
@@ -499,10 +530,10 @@ impl MonitorApp {
             ui.vertical(|ui| {
                 ui.checkbox(
                     &mut self.settings.automatic_detection,
-                    "Scan retained evidence when it is ready",
+                    "Scan runs with IDS and Sigma when they end",
                 )
                 .on_hover_text(
-                    "Runs each engine once per ready input and rule selection. Scan still works when this is off.",
+                    "Scans a run with YARA, IDS and Sigma once its evidence is ready, and again when the installed rule packs change. A run whose VM stopped is scanned with what it recorded, and the result says so. Scan still works when this is off.",
                 );
             });
             ui.end_row();
@@ -523,6 +554,14 @@ impl MonitorApp {
             }
             ui.end_row();
         });
+        ui.add_space(12.0);
+        theme::section(ui, "Time limits");
+        hint_tip(
+            ui,
+            "How long each engine may run.",
+            "How long each engine may run before it is stopped; a scan that runs out of time says so.",
+        );
+        self.detection_timeouts(ui);
     }
 
     fn notifications_page(&mut self, ui: &mut egui::Ui) {
@@ -546,6 +585,24 @@ impl MonitorApp {
                 )
                 .on_hover_text(
                     "One toast per run when its program tree really ends: green for exit 0, neutral for another exit code, a stop or a time limit, a warning for a crash or a kill. It has Open Triage, and Open sample for a library sample. Applies at once.",
+                );
+            });
+            ui.end_row();
+            ui.label("Start");
+            ui.vertical(|ui| {
+                ui.checkbox(
+                    &mut self.settings.warn_no_snapshot,
+                    "Warn before starting a VM with no snapshot",
+                )
+                .on_hover_text(
+                    "Start asks first when the VM has no snapshot, because then nothing can restore the disk and what the program changes stays in it. Turned off by Don't ask me again in that question; turn it back on here. Applies at once.",
+                );
+                ui.checkbox(
+                    &mut self.settings.warn_clear_activity,
+                    "Ask before clearing Activity",
+                )
+                .on_hover_text(
+                    "Clear in Activity asks first, because the saved log cannot be brought back. Turned off by Don't ask me again in that question; turn it back on here. Applies at once.",
                 );
             });
             ui.end_row();
@@ -583,15 +640,18 @@ impl MonitorApp {
                 "Static analysis uses these tools when they are installed on this system. Downloads are checked by SHA-256 and used read-only by the analysis sandbox.",
             );
         ui.add_space(6.0);
+        theme::section(ui, "Tools and their time limits");
         if self.snapshot.analysis_tools.is_empty() {
             theme::loading_weak(ui, "Reading the tool list…");
         }
-        for tool in self
+        let tools: Vec<_> = self
             .snapshot
             .analysis_tools
             .iter()
             .filter(|tool| !antinomie_monitor_core::analysis_tools::is_route_tool(&tool.id))
-        {
+            .cloned()
+            .collect();
+        for tool in &tools {
             ui.separator();
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(&tool.name).strong().color(theme::text()));
@@ -603,21 +663,27 @@ impl MonitorApp {
                 (None, None) => ("Not installed".to_owned(), Tone::Accent),
             };
             chip(ui, text, tone);
+            if let Some(timed) = antinomie_monitor_core::TimedTool::ALL
+                .into_iter()
+                .find(|timed| timed.package() == Some(tool.id.as_str()))
+            {
+                self.timeout_row(ui, timed);
+            }
         }
+        self.built_in_timeouts(ui);
         ui.add_space(8.0);
         if ui.button("Manage tools…").clicked() {
             self.open_library(crate::workspace::LibraryPage::Tools);
         }
-        ui.add_space(10.0);
-        ui.separator();
+        ui.add_space(12.0);
+        theme::section(ui, "Time and size limits");
         form_grid("settings_analysis_limits", ui).show(ui, |ui| {
-            ui.label("Time limit per tool");
-            ui.vertical(|ui| {
-                ui.add(crate::analysis::time_limit_drag(
-                    &mut self.settings.analysis_time_limit_minutes,
-                ));
-                hint(ui, crate::analysis::TIME_LIMIT_HELP);
-            });
+            ui.label("Time limit for every tool")
+                .on_hover_text(crate::analysis::TIME_LIMIT_HELP);
+            ui.add(crate::analysis::time_limit_drag(
+                &mut self.settings.analysis_time_limit_minutes,
+            ))
+            .on_hover_text(crate::analysis::TIME_LIMIT_HELP);
             ui.end_row();
             let label = ui.label("Rebuilt file bytes (Triage)");
             if std::mem::take(&mut self.settings_focus_rebuild) {
@@ -636,8 +702,13 @@ impl MonitorApp {
                             .suffix(" MiB / run"),
                     );
                 });
-                hint(
+                hint_tip(
                     ui,
+                    &format!(
+                        "Defaults {} MiB per file, {} MiB per run.",
+                        crate::triage::DEFAULT_REBUILD_FILE_MIB,
+                        crate::triage::DEFAULT_REBUILD_RUN_MIB
+                    ),
                     &format!(
                         "Most bytes Triage > Files rebuilds of one changed file, and of all files of a run together, \
                          from the writes the recording captured (memory while the run is open). Past a cap the rest \
@@ -650,8 +721,8 @@ impl MonitorApp {
             ui.end_row();
         });
 
-        ui.add_space(6.0);
-        ui.separator();
+        ui.add_space(12.0);
+        theme::section(ui, "Debugger");
         form_grid("settings_debugger_console", ui).show(ui, |ui| {
             ui.label("Debugger console");
             ui.vertical(|ui| {
@@ -671,13 +742,18 @@ impl MonitorApp {
         });
         ui.add_space(6.0);
         ui.label(theme::section_title(ui, "Size limits"));
-        hint(
+        hint_tip(
             ui,
+            "What a check keeps and reads before a bound cuts it short.",
             "What a check keeps and reads before it says a bound cut its result short. A warning's Analysis settings button leads here. A change applies to analyses started afterwards; a check can be run again from its tab.",
         );
         self.analysis_limit_fields(ui);
         ui.add_space(6.0);
-        hint(ui, &antinomie_monitor_core::fixed_limits_text());
+        hint_tip(
+            ui,
+            "Some bounds are fixed.",
+            &antinomie_monitor_core::fixed_limits_text(),
+        );
     }
 
     fn disks_page(&mut self, ui: &mut egui::Ui) {
@@ -727,6 +803,7 @@ impl MonitorApp {
     }
 
     fn advanced_page(&mut self, ui: &mut egui::Ui) {
+        theme::section(ui, "Display");
         form_grid("settings_advanced", ui).show(ui, |ui| {
             ui.label("FPS counter");
             ui.vertical(|ui| {
@@ -737,6 +814,10 @@ impl MonitorApp {
                     );
             });
             ui.end_row();
+        });
+        ui.add_space(12.0);
+        theme::section(ui, "Starting a VM");
+        form_grid("settings_advanced_start", ui).show(ui, |ui| {
             ui.label("VM start and guest connection timeouts");
             ui.vertical(|ui| {
                 ui.horizontal_wrapped(|ui| {
@@ -775,8 +856,12 @@ impl MonitorApp {
                     fallback: None,
                 };
                 let waits = antinomie_monitor_core::accel::Waits::new(&tcg, &self.settings.start);
-                hint(
+                hint_tip(
                     ui,
+                    &format!(
+                        "With TCG a start waits up to {} s for the guest.",
+                        waits.guest_connect().as_secs()
+                    ),
                     &format!(
                         "A VM that runs with TCG waits up to {} s for its guest to connect now (the multiplier, and a host load above one per CPU, stretch every wait of a start; a QMP reply may take {} s). Raise the multiplier when a slow TCG boot is reported as not connecting. Applies to the next start.",
                         waits.guest_connect().as_secs(),
@@ -785,6 +870,10 @@ impl MonitorApp {
                 );
             });
             ui.end_row();
+        });
+        ui.add_space(12.0);
+        theme::section(ui, "Triage");
+        form_grid("settings_advanced_triage", ui).show(ui, |ui| {
             ui.label("Triage: rows per table");
             ui.vertical(|ui| {
                 ui.add(
@@ -792,8 +881,12 @@ impl MonitorApp {
                         .range(crate::triage::PAGE_ROWS_RANGE)
                         .suffix(" rows"),
                 );
-                hint(
+                hint_tip(
                     ui,
+                    &format!(
+                        "Default {}.",
+                        crate::values::thousands(crate::triage::STORED_ROWS as u64)
+                    ),
                     &format!(
                         "Most rows one Triage table (Opened, Read, Changed, Findings, Network) keeps per page and \
                          one report table keeps. A table with more says \"first N of M\"; Next shows the rest. \
@@ -803,6 +896,10 @@ impl MonitorApp {
                 );
             });
             ui.end_row();
+        });
+        ui.add_space(12.0);
+        theme::section(ui, "File activity");
+        form_grid("settings_advanced_files", ui).show(ui, |ui| {
             ui.label("File activity: written content kept");
             ui.vertical(|ui| {
                 ui.horizontal_wrapped(|ui| {
@@ -817,8 +914,9 @@ impl MonitorApp {
                             .suffix(" MiB / run"),
                     );
                 });
-                hint(
+                hint_tip(
                     ui,
+                    "Bytes the run wrote that File activity can give back.",
                     "Bytes the run wrote that File activity can give back exactly. When a cap is \
                      reached the first writes are kept; later ranges are listed as not captured. \
                      The recording itself is limited by the Recording quota.",
@@ -839,8 +937,9 @@ impl MonitorApp {
                             .suffix(" MiB / run"),
                     );
                 });
-                hint(
+                hint_tip(
                     ui,
+                    "Bytes the files had before the run changed them.",
                     "When a run ends, the earlier bytes (before the run changed them) of the \
                      files it changed are copied into its recording, so they stay readable \
                      after the base is gone. A file over a cap keeps its size and SHA-256 and is \

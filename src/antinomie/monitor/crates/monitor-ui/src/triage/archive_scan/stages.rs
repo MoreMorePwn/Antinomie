@@ -234,7 +234,10 @@ pub(super) fn open_scan(
         Ok(journal) => (Some(journal), None),
         Err(error) => (None, Some(error)),
     };
-    let mut files = FdState::default();
+    let mut files = FdState {
+        settled_parents: process_tree::settled_parents(&nodes),
+        ..FdState::default()
+    };
     files.journal.launch_cwd = facts.as_ref().and_then(|facts| facts.launch_cwd.clone());
     files.journal.root_cookie = request.root_cookie;
     files.journal.hashes_writes = facts.as_ref().is_some_and(|facts| facts.hashed_writes);
@@ -815,7 +818,18 @@ impl Scan {
         counts.findings_capped = output.capped;
         let finding_notes = output.notes;
         let suspicious = output.tasks;
+        let mut flagged_paths = crate::triage::file_shown::Flags::new();
         for finding in output.rows {
+            let tier = crate::triage::file_shown::text_of(&finding.values, "finding.tier")
+                .and_then(rules::Tier::from_tag)
+                .filter(|tier| *tier != rules::Tier::Info);
+            if let Some(tier) = tier {
+                let text = |key| crate::triage::file_shown::text_of(&finding.values, key);
+                if let Some(object) = text("finding.object") {
+                    let rule = text("finding.rule").unwrap_or_default();
+                    crate::triage::file_shown::flag(&mut flagged_paths, object, tier, rule);
+                }
+            }
             if let Some(writer) = &mut journal {
                 if let Err(error) = writer.push(&finding) {
                     journal_error = Some(error);
@@ -960,6 +974,7 @@ impl Scan {
             suspicious,
             findings,
             findings_omitted,
+            flagged_paths,
             graph,
             finding_notes,
             opened,

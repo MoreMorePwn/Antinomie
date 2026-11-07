@@ -6,7 +6,11 @@ usage: vm-regress.py quick BASE [options]
        vm-regress.py full  BASE --old-base OLD [--old-host REV|PATH] [options]
        vm-regress.py auto  BASE [--against REF] [--old-base OLD] [...]
 
-quick  the conformance trace suite's oracle groups (user, root, threads)
+quick  the conformance trace suite's oracle groups (user, root, threads) and the
+       in-app VM screen: one VM of BASE started as the app starts it by default
+       (not headless: QEMU's VNC display on a private unix socket), whose
+       vnc.sock must answer the RFB handshake and give a drawn framebuffer
+       update (no host display is needed)
 full   quick, the debugger, audit, io_uring, tracer, stealth, cloud profiles, network routes and snapshot
        checks, the conformance stress groups and interop in both directions
        (an old host on BASE, the current host on OLD); conf-stress-contended
@@ -45,6 +49,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import signal
@@ -117,8 +122,9 @@ ARCH_CC = {"x86_64": "gcc", "arm64": "aarch64-linux-gnu-gcc"}
 # The stealth probe measures arm64 without its CPUID and I/O port checks; the
 # cloud check expects the arm64 instance's identity. Interop has its own arm64
 # check (ARM64_INTEROP). tracer-ia32's 32-bit x86 program runs on x86-64 only.
+# The in-app screen check has no arm64 display device checked yet.
 ARM64_LATER = {"debugger-live", "conf-stress-extreme", "uring-legacy", "tracer-legacy",
-               "tracer-ia32"}
+               "tracer-ia32", "screen"}
 # What an old host (--old-host: 0.8.0, which has no arm64 VMs) says when it is
 # asked to start a VM on an arm64 base: it must refuse before QEMU runs, with
 # its own message, or as a base of a newer revision (0.8.0's base_refusal():
@@ -468,7 +474,10 @@ def plan_x86_64(tier, ctx):
 
     checks = [Check("conf-quick", "quick",
                     example("conformance", "trace", base, runs / "conf-quick", "--groups", QUICK_GROUPS),
-                    mon, 3600, needs=("base",))]
+                    mon, 3600, needs=("base",)),
+              # The in-app screen's VNC launch (guest-run with screen_check; its plan: screen_plan).
+              Check("screen", "quick", example("guest-run", runs / "screen" / "plan.json"), str(ROOT),
+                    1800, needs=("base",))]
     if tier == "quick":
         return checks
 
@@ -746,7 +755,31 @@ def command_for(check, ctx, args):
         argv = ["cargo", "test", "--release", "--locked", "-j", "2", "-p", "antinomie-monitor-ui", "--bin",
                 "antinomie-monitor", "recorded_tracer_triage", "--", "--ignored", "--nocapture"]
         return argv, env
+    if check.name == "screen":
+        path = Path(check.argv[-1])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # The plan may hold the throwaway account's password.
+        with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as plan_file:
+            plan_file.write(json.dumps(screen_plan(ctx), indent=1) + "\n")
     return check.argv, {}
+
+
+def screen_plan(ctx):
+    """guest-run's plan of the screen check: a new VM of BASE (raised to its
+    guest profile's minima, with a throwaway account when the base asks for
+    one) started with the default in-app screen, not headless. guest-run
+    imports BASE into the check's own data folder."""
+    try:
+        guest = json.loads((Path(ctx["base"]) / "bundle.json").read_text()).get("guest") or {}
+    except (OSError, ValueError, AttributeError) as error:
+        raise Failure(f"cannot read {ctx['base']}/bundle.json: {error}")
+    vm = {"name": "vm-regress screen", "cpus": 2, "ram_mib": max(1024, int(guest.get("min_ram_mib") or 0)),
+          "disk_gib": max(1, int(guest.get("min_disk_gib") or 0))}
+    if guest.get("requires_credentials"):
+        vm.update(username="screencheck", password=secrets.token_hex(16))
+    runs = ctx["out"] / "runs" / "screen"
+    return {"data_dir": str(runs / "data"), "headless": False, "import": str(ctx["base"]), "vm": vm,
+            "boot_timeout": 300, "screen_check": True}
 
 
 def input_result(ctx, name):

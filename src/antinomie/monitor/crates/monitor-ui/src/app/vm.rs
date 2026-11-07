@@ -191,8 +191,23 @@ impl MonitorApp {
 
     pub(super) fn new_run(&mut self) {
         if let Some(vm_id) = self.selected.clone() {
+            if self.confirm.is_none() && self.warns_without_snapshot(&vm_id) {
+                self.confirm = Some(Confirm::StartWithoutSnapshot(vm_id));
+                return;
+            }
             self.send(Command::Start { vm_id });
         }
+    }
+
+    /// The VM's snapshots are listed and none is left, and the warning is on.
+    /// A VM whose list has not arrived yet starts without the question.
+    fn warns_without_snapshot(&self, vm_id: &str) -> bool {
+        self.settings.warn_no_snapshot
+            && self
+                .snapshot
+                .vm_snapshot_trees
+                .get(vm_id)
+                .is_some_and(|tree| tree.nodes.iter().all(|node| node.deleted))
     }
 
     pub(super) fn configure_vm(&mut self) {

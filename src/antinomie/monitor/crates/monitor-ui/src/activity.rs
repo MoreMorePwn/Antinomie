@@ -53,12 +53,16 @@ pub(crate) struct Journal {
     /// Warnings and errors logged since the last frame; each becomes a toast.
     #[serde(skip)]
     toast_out: Vec<(Level, String)>,
+    /// Clear was clicked: the app asks (or not) and then calls `clear`.
+    #[serde(skip)]
+    clear_asked: bool,
 }
 impl Default for Journal {
     fn default() -> Self {
         Self {
             entries: VecDeque::new(),
             toast_out: Vec::new(),
+            clear_asked: false,
             info: true,
             warn: true,
             error: true,
@@ -208,6 +212,14 @@ impl Journal {
         }
         job.into()
     }
+    /// Whether Clear was clicked since the last call.
+    pub(crate) fn take_clear_asked(&mut self) -> bool {
+        std::mem::take(&mut self.clear_asked)
+    }
+    /// Empties the saved log, filtered entries included.
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+    }
     fn visible(&self, level: Level) -> bool {
         match level {
             Level::Info => self.info,
@@ -225,7 +237,7 @@ impl Journal {
                         .on_hover_text("Clear the saved Activity log, including filtered entries")
                         .clicked()
                     {
-                        self.entries.clear();
+                        self.clear_asked = true;
                     }
                     ui.checkbox(&mut self.error, "Error");
                     ui.checkbox(&mut self.warn, "Warn");

@@ -233,7 +233,11 @@ impl FileIndex {
                 call: call.call_id,
                 key: trace::key(call),
                 name: file_events::operation_label(call, event),
-                process: process_identity(event.pid, event.tid, process_image(files, event)),
+                process: process_cells::task_label(
+                    event.pid,
+                    event.tid,
+                    process_image(files, event),
+                ),
                 result: result_label(ret),
             });
             self.operation_count += 1;
@@ -257,6 +261,9 @@ impl FileIndex {
         }
         if !failed {
             let created = hits.iter().any(|hit| hit.category == Category::Created);
+            change.create_certain |= hits
+                .iter()
+                .any(|hit| hit.category == Category::Created && !hit.inferred);
             for hit in hits {
                 if hit.category == Category::Truncated && created {
                     continue;
@@ -307,7 +314,12 @@ impl FileIndex {
                 }
             }
             if bytes.len() as u64 != size {
-                change.note_short_capture(trace::key(call), size, bytes.len() as u64);
+                change.note_short_capture(
+                    if writing { "write" } else { "read" },
+                    trace::key(call),
+                    size,
+                    bytes.len() as u64,
+                );
             }
             if !explicit {
                 if let Some((position, _)) =
@@ -454,7 +466,7 @@ pub(super) fn read_cells(
         cell(event.timestamp_ns.to_string(), theme::text(), true),
         cell(path, theme::text(), true),
         cell(
-            process_identity(event.pid, event.tid, process_image(files, event)),
+            process_cells::task_label(event.pid, event.tid, process_image(files, event)),
             theme::text(),
             true,
         ),

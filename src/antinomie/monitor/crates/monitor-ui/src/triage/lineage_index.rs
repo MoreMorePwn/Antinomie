@@ -205,6 +205,7 @@ mod tests {
             renames: Vec::new(),
             in_call: None,
             forked: false,
+            record: Default::default(),
         }
     }
 

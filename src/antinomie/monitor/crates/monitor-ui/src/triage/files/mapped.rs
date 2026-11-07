@@ -104,7 +104,11 @@ impl FileIndex {
                     call: call.call_id,
                     key: trace::key(call),
                     name: format!("{} · mapping", file_events::operation_label(call, event)),
-                    process: process_identity(event.pid, event.tid, process_image(files, event)),
+                    process: process_cells::task_label(
+                        event.pid,
+                        event.tid,
+                        process_image(files, event),
+                    ),
                     result: format!("{} B at 0x{:x}", record.len, record.offset),
                 });
                 self.operation_count += 1;
@@ -165,7 +169,7 @@ impl Change {
         if record.carried < len {
             self.gaps.insert(UNCOPIED_GAP);
         } else if (copied.len() as u64) < len {
-            self.note_short_capture(budget.call, len, copied.len() as u64);
+            self.note_short_capture("mapped write", budget.call, len, copied.len() as u64);
         }
         if record.unlisted > 0 || record.lost > 0 {
             self.gaps.insert(UNLISTED_GAP);

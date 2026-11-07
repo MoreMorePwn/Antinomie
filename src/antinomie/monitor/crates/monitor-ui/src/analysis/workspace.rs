@@ -621,17 +621,20 @@ fn overview(
     // Two columns need room for the categories card (name, state tag, row count
     // and button), which grows with the text size.
     let room = 50.0 * ui.text_style_height(&egui::TextStyle::Body);
+    identity_notice(ui, report);
     if ui.available_width() >= room {
         ui.columns(2, |columns| {
             egui::ScrollArea::vertical()
                 .id_salt("analysis-overview-identity")
                 .auto_shrink([false, false])
-                .show(&mut columns[0], |ui| action = identity(ui, report));
+                .show(&mut columns[0], |ui| {
+                    action = identity(ui, report, Some((&report.id, 0)))
+                });
             egui::ScrollArea::vertical()
                 .id_salt("analysis-overview")
                 .auto_shrink([false, false])
                 .show(&mut columns[1], |ui| {
-                    if let Some(next) = categories(ui, report, state) {
+                    if let Some(next) = categories(ui, report, state, Some((&report.id, 1))) {
                         action = Some(next);
                     }
                 });
@@ -641,9 +644,9 @@ fn overview(
             .id_salt("analysis-overview")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                action = identity(ui, report);
+                action = identity(ui, report, None);
                 ui.add_space(8.0);
-                if let Some(next) = categories(ui, report, state) {
+                if let Some(next) = categories(ui, report, state, None) {
                     action = Some(next);
                 }
             });
@@ -651,10 +654,18 @@ fn overview(
     action
 }
 
-/// The report's state, the file's path and hashes, and its object format.
-/// Triage › Properties shows the same identity for the run; the card links there.
-fn identity(ui: &mut egui::Ui, report: &AnalysisReport) -> Option<ReportAction> {
-    let mut action = None;
+/// Why the report is not complete, above the Identity and Categories cards so
+/// the two start at the same line.
+fn identity_notice(ui: &mut egui::Ui, report: &AnalysisReport) {
+    // What the file's headers say about running it comes first: a cut-off
+    // file is why a launch fails, so it is an error, not a footnote.
+    for note in antinomie_monitor_core::report_notes(report) {
+        if note.starts_with("This ELF is truncated") {
+            crate::activity::error(ui, note);
+        } else {
+            crate::activity::warning(ui, note);
+        }
+    }
     if matches!(
         report.state,
         AnalysisState::Partial | AnalysisState::Unavailable | AnalysisState::Cancelled
@@ -687,6 +698,16 @@ fn identity(ui: &mut egui::Ui, report: &AnalysisReport) -> Option<ReportAction> 
             }
         }
     }
+}
+
+/// The report's state, the file's path and hashes, and its object format.
+/// Triage › Properties shows the same identity for the run; the card links there.
+fn identity(
+    ui: &mut egui::Ui,
+    report: &AnalysisReport,
+    pair: Option<(&str, usize)>,
+) -> Option<ReportAction> {
+    let mut action = None;
     let mut rows = vec![
         ("State".to_owned(), format!("{:?}", report.state)),
         ("Path".to_owned(), report.source_path.clone()),
@@ -732,8 +753,9 @@ fn identity(ui: &mut egui::Ui, report: &AnalysisReport) -> Option<ReportAction> 
         }
     }
     rows.push(("Report".to_owned(), report.id.clone()));
-    crate::widgets::card(
+    paired_card(
         ui,
+        pair,
         "Identity",
         |ui| {
             if crate::widgets::link(ui, "Triage › Properties")
@@ -766,6 +788,39 @@ fn identity(ui: &mut egui::Ui, report: &AnalysisReport) -> Option<ReportAction> 
         },
     );
     action
+}
+
+/// A card that, when `pair` names its slot (0 or 1) among two cards side by
+/// side, is as tall as the taller of the two. Each card's outer height and the
+/// space added under it are kept from the last frame; the next frame moves
+/// each card's space by the difference to the taller one, so the cards meet
+/// whatever their content measures, and a card that shrinks gives its space back.
+pub(super) fn paired_card<R>(
+    ui: &mut egui::Ui,
+    pair: Option<(&str, usize)>,
+    title: &str,
+    header: impl FnOnce(&mut egui::Ui),
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    // (outer height, space under the content) of each card.
+    type Slots = [(f32, f32); 2];
+    let key = egui::Id::new(("analysis-overview-card-heights", pair.map(|(id, _)| id)));
+    let Some((_, slot)) = pair else {
+        return crate::widgets::card_sized(ui, title, header, 0.0, body).0;
+    };
+    let mut slots: Slots = ui.data(|data| data.get_temp(key)).unwrap_or_default();
+    let tallest = slots[0].0.max(slots[1].0);
+    let mut pads = [0, 1].map(|i| (slots[i].1 + tallest - slots[i].0).max(0.0));
+    let shared = pads[0].min(pads[1]);
+    pads.iter_mut().for_each(|pad| *pad -= shared);
+    let (inner, outer) = crate::widgets::card_sized(ui, title, header, pads[slot], body);
+    let before = slots[slot];
+    slots[slot] = (outer, pads[slot]);
+    if (before.0 - outer).abs() > 0.25 || (before.1 - pads[slot]).abs() > 0.25 {
+        ui.ctx().request_repaint();
+    }
+    ui.data_mut(|data| data.insert_temp(key, slots));
+    inner
 }
 
 /// The small Run button of a category; true when it was pressed.

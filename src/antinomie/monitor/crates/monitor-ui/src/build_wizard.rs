@@ -890,9 +890,12 @@ fn pick_list<'a>(
     });
     ui.horizontal(|ui| {
         ui.label("Search");
-        ui.add(
-            egui::TextEdit::singleline(search).desired_width(crate::theme::plain_edit_width(240.0)),
+        let edit = ui.add(
+            egui::TextEdit::singleline(&mut *search)
+                .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
+                .desired_width(crate::theme::plain_edit_width(240.0)),
         );
+        crate::widgets::clear_button(ui, &edit, search);
     });
     let needle = search.to_lowercase();
     egui::ScrollArea::vertical()

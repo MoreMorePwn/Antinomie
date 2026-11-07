@@ -10,6 +10,13 @@ fn hover_errno(response: egui::Response, text: &str) {
     }
 }
 
+/// The pills of a cell, before its text.
+fn cell_badges(ui: &mut egui::Ui, cell: &Cell) {
+    for badge in &cell.badges {
+        crate::widgets::chip(ui, badge.text.clone(), badge.tone).on_hover_text(&badge.hover);
+    }
+}
+
 pub(super) fn cell(text: impl Into<String>, color: egui::Color32, mono: bool) -> Cell {
     Cell {
         text: text.into(),
@@ -17,8 +24,15 @@ pub(super) fn cell(text: impl Into<String>, color: egui::Color32, mono: bool) ->
         theme: theme::theme(),
         mono,
         values: Vec::new(),
+        badges: Vec::new(),
+        note: None,
     }
 }
+
+/// The least height a table's body keeps. A section whose filters and notes
+/// fill the pane leaves less than this under them; the page scrolls (see
+/// `TriageView::show`) instead of squeezing the table out of reach.
+pub(super) const MIN_TABLE_HEIGHT: f32 = 160.0;
 
 /// Characters a table cell shows. A cut cell's hover text is its shown text,
 /// so this also bounds the hover box; Details keeps the whole value.
@@ -60,6 +74,10 @@ pub(super) fn column_widths<'a>(
                 "Endpoint" | "Endpoints" => (360.0_f32, 900.0_f32),
                 "Path" | "URI" | "Hostname" | "Transferred / content" | "Argv" => (250.0, 650.0),
                 "Time" | "First seen" | "Last seen" => (230.0, 500.0),
+                "Behaviour" => (170.0, 260.0),
+                "Target" => (220.0, 560.0),
+                "ATT&CK" => (150.0, 300.0),
+                "When" => (150.0, 320.0),
                 "Host" => (160.0, 400.0),
                 "Summary" => (360.0, 800.0),
                 "Observation" => (260.0, 340.0),
@@ -96,6 +114,11 @@ pub(super) fn column_widths<'a>(
                             .size()
                             .x
                     }) + 24.0
+                        + cell
+                            .badges
+                            .iter()
+                            .map(|badge| 12.0 + 6.0 * badge.text.chars().count() as f32)
+                            .sum::<f32>()
                 });
             content.max(minimum).max(heading).min(maximum.max(heading))
         })
@@ -274,10 +297,6 @@ fn table_rows_with(
     let branches = branches.filter(|_| order.is_none());
     let branch_font = egui::TextStyle::Monospace.resolve(ui.style());
     let branch_char = crate::tree_lines::char_width(ui, &branch_font);
-    // Room for the suspicious-count chip of the process cell.
-    if let (true, Some(first)) = (id == "triage-process", widths.first_mut()) {
-        *first += 40.0;
-    }
     if let (Some(branches), Some(first)) = (branches, widths.first_mut()) {
         let deepest = branches.iter().map(|prefix| prefix.width(branch_char));
         *first += deepest.fold(0.0, f32::max).min(branch_char * 64.0);
@@ -289,7 +308,7 @@ fn table_rows_with(
     let filter_id = ui
         .ctx()
         .data(|data| data.get_temp::<egui::Id>(egui::Id::new(("triage-filter-target", id))));
-    let max_height = ui.available_height().max(60.0);
+    let max_height = ui.available_height().max(MIN_TABLE_HEIGHT);
     // The columns are planned for the width this table really has (see
     // `fit_table`): the text column takes the spare width, the others keep
     // their content width while it fits and give way, cut with an ellipsis,
@@ -365,48 +384,71 @@ fn table_rows_with(
                             .truncate()
                             .selectable(false)
                             .sense(egui::Sense::hover());
+                        // A process cell may carry a note of its own (the full
+                        // path, why a command line is flagged, a time).
+                        let note = (id == "triage-process")
+                            .then(|| process_tree::cell_hover(column, cell, &cells[0]))
+                            .flatten();
+                        let hover = |response: egui::Response| match (&note, &cell.note) {
+                            (Some(note), _) | (None, Some(note)) => {
+                                response.on_hover_text(note);
+                            }
+                            (None, None) => hover_errno(response, &cell.text),
+                        };
                         let draw = |ui: &mut egui::Ui| match indent {
                             Some(width) => {
                                 let mut rect = ui.max_rect();
                                 rect.min.x += width;
                                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                                    hover_errno(ui.add(label), &cell.text);
+                                    cell_badges(ui, cell);
+                                    hover(ui.add(label));
                                 });
                             }
                             None => {
-                                hover_errno(ui.add(label), &cell.text);
+                                cell_badges(ui, cell);
+                                hover(ui.add(label));
                             }
                         };
-                        // The count of suspicious observations is a chip at the
-                        // right of the process cell; the label takes the rest.
-                        let suspect = (column == 0 && id == "triage-process")
-                            .then(|| files::number(&cell.values, "process.suspicious"))
-                            .flatten()
-                            .filter(|count| *count > 0);
+                        // The count of findings is a chip in the Findings column,
+                        // in the colour of the worst tier among them; it lists them.
+                        let suspect = (id == "triage-process" && headers[column] == "Findings")
+                            .then(|| files::number(&cells[0].values, "process.suspicious"))
+                            .flatten();
                         if let Some(count) = suspect {
-                            // The chip wears the colour of the worst tier among
-                            // the process's observations.
-                            let tone = cell
-                                .values
-                                .iter()
-                                .find_map(|(key, value)| match value {
-                                    RowValue::Text(tag) if *key == "process.worst_tier" => {
-                                        rules::Tier::from_tag(tag)
+                            if count > 0 {
+                                let tone = cells[0]
+                                    .values
+                                    .iter()
+                                    .find_map(|(key, value)| match value {
+                                        RowValue::Text(tag) if *key == "process.worst_tier" => {
+                                            rules::Tier::from_tag(tag)
+                                        }
+                                        _ => None,
+                                    })
+                                    .map_or(crate::widgets::Tone::Neutral, rules::Tier::tone);
+                                let chip = crate::widgets::chip(ui, count.to_string(), tone);
+                                let chip = ui.interact(
+                                    chip.rect,
+                                    chip.id.with("list-findings"),
+                                    egui::Sense::click(),
+                                );
+                                if chip
+                                    .on_hover_text("Findings in this process. Click to list them.")
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                    .clicked()
+                                {
+                                    if let Some(pid) =
+                                        files::number(&cells[0].values, "process.pid")
+                                    {
+                                        ui.ctx().data_mut(|data| {
+                                            data.insert_temp(
+                                                egui::Id::new(process_details::PROCESS_SCOPE),
+                                                pid,
+                                            )
+                                        });
                                     }
-                                    _ => None,
-                                })
-                                .map_or(crate::widgets::Tone::Neutral, rules::Tier::tone);
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    crate::widgets::chip(ui, count.to_string(), tone)
-                                        .on_hover_text("Suspicious observations in this process");
-                                    ui.with_layout(
-                                        egui::Layout::left_to_right(egui::Align::Center),
-                                        draw,
-                                    );
-                                },
-                            );
+                                }
+                            }
                         } else {
                             fit_table::aligned_cell(
                                 ui,
@@ -418,19 +460,7 @@ fn table_rows_with(
                 }
                 if row.response().clicked() {
                     details::select(&row.response().ctx, id, headers, cells);
-                    if id == "triage-process" {
-                        // A process opens its Suspicious activity; Details keep it selected.
-                        if let Some(pid) = cells
-                            .first()
-                            .and_then(|cell| files::number(&cell.values, "process.pid"))
-                        {
-                            row.response().ctx.data_mut(|data| {
-                                data.insert_temp(egui::Id::new(process_details::PROCESS_SCOPE), pid)
-                            });
-                        }
-                    } else {
-                        details::clicked(&row.response().ctx, id);
-                    }
+                    details::clicked(&row.response().ctx, id);
                     row.response()
                         .ctx
                         .data_mut(|data| data.insert_temp(selected_id, key));
@@ -456,6 +486,7 @@ fn table_rows_with(
                 );
                 row.response().context_menu(|ui| {
                     file_activity::reconstruct_menu(ui, id, values);
+                    file_shown::copy_hash_menu(ui, values);
                     match filter_id {
                         Some(filter_id) => {
                             query::table_row_menu_with(ui, filter_id, values, extras)
@@ -501,19 +532,18 @@ fn numeric_column(header: &str) -> bool {
             | "Requests"
             | "Rcode"
             | "Evidence"
+            | "Calls"
     )
 }
 
-/// The stored columns of a table in the order they are laid out. Time comes
-/// first in the Suspicious activity table, whose rows keep the order the
-/// filters, sorts and Details know them by.
+/// The stored columns of a table in the order they are laid out. The
+/// Suspicious activity table lays out only [`rules::SHOWN`]; its other columns
+/// stay in the row, where the filters, sorts, exports and Details read them.
 pub(super) fn display_order(id: &str, count: usize) -> Vec<usize> {
-    let mut order: Vec<usize> = (0..count).collect();
     if id == "triage-findings" && count == rules::HEADERS.len() {
-        order.retain(|column| *column != rules::COL_TIME);
-        order.insert(0, rules::COL_TIME);
+        return rules::SHOWN.to_vec();
     }
-    order
+    (0..count).collect()
 }
 
 fn finding_table_rows(
@@ -545,7 +575,7 @@ fn finding_table_rows(
         .data(|data| data.get_temp::<egui::Id>(egui::Id::new(("triage-filter-target", id))));
     let font = ui.text_style_height(&egui::TextStyle::Body).max(14.0);
     let row_height = fit_table::row_height(font);
-    let max_height = ui.available_height().max(60.0);
+    let max_height = ui.available_height().max(MIN_TABLE_HEIGHT);
     let last = shown.len() - 1;
     let cols: Vec<Col> = widths
         .iter()
@@ -600,20 +630,11 @@ fn finding_table_rows(
                         continue;
                     };
                     row.col(|ui| {
-                        let mut text = RichText::new(bounded_cell(&cell.text)).color(cell.color());
-                        if cell.mono {
-                            text = text.monospace();
-                        }
                         let align = fit_table::numeric_align(numeric_column(
                             headers.get(column).copied().unwrap_or_default(),
                         ));
                         fit_table::aligned_cell(ui, align, |ui| {
-                            ui.add(
-                                egui::Label::new(text)
-                                    .truncate()
-                                    .selectable(false)
-                                    .sense(egui::Sense::hover()),
-                            );
+                            finding_cells::draw(ui, column, finding, cell)
                         });
                     });
                 }
@@ -656,17 +677,25 @@ mod display_tests {
     use super::*;
 
     #[test]
-    fn time_leads_the_suspicious_activity_table_and_no_other() {
+    fn the_suspicious_activity_table_lays_out_its_eight_columns_and_no_other_table_does() {
         let count = rules::HEADERS.len();
-        let findings = display_order("triage-findings", count);
-        assert_eq!(findings[0], rules::COL_TIME);
-        assert_eq!(rules::HEADERS[findings[0]], "Time");
-        // Every stored column is shown once, the rest in their old order.
-        let mut sorted = findings.clone();
-        sorted.sort_unstable();
-        assert_eq!(sorted, (0..count).collect::<Vec<_>>());
-        assert_eq!(findings[1], 0, "Rule follows Time");
-        assert_eq!(rules::HEADERS[findings[2]], "Tier");
+        let shown: Vec<&str> = display_order("triage-findings", count)
+            .into_iter()
+            .map(|column| rules::HEADERS[column])
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                "Tier",
+                "Behaviour",
+                "Target",
+                "Process",
+                "ATT&CK",
+                "Count",
+                "Result",
+                "When"
+            ]
+        );
         // Other tables, and a findings table of another width, keep theirs.
         assert_eq!(display_order("triage-opened", 5), vec![0, 1, 2, 3, 4]);
         assert_eq!(display_order("triage-findings", 3), vec![0, 1, 2]);

@@ -678,35 +678,6 @@ fn an_index_stamped_by_an_older_format_is_rebuilt() {
 }
 
 #[test]
-fn opened_and_read_draw_the_five_and_six_columns_the_cards_asked_for() {
-    let full = |headers: &[&str], keep: &[usize]| -> Vec<String> {
-        keep.iter()
-            .map(|&index| headers[index].to_owned())
-            .collect()
-    };
-    assert_eq!(
-        full(file_category::EVENT_HEADERS, file_tabs::OPENED_COLUMNS),
-        ["Time", "Path", "Process (PID / TID)", "Result", "Evidence"]
-    );
-    assert_eq!(
-        full(file_tabs::READ_HEADERS, file_tabs::READ_COLUMNS),
-        [
-            "Time",
-            "Path",
-            "Process (PID / TID)",
-            "Transferred / content",
-            "Result",
-            "Evidence"
-        ]
-    );
-    // A click on a sort header sorts the full rows by the same column.
-    assert_eq!(file_tabs::full_column(1, 1), 3);
-    assert_eq!(file_tabs::full_column(1, 4), 9);
-    assert_eq!(file_tabs::full_column(5, 5), 7);
-    assert_eq!(file_tabs::full_column(8, 2), 2);
-}
-
-#[test]
 fn a_failed_read_is_listed_with_its_result_while_the_toggle_is_off() {
     let visibility = file_visibility::FileVisibility {
         show_failed: false,

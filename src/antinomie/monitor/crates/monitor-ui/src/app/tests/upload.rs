@@ -252,7 +252,9 @@ fn explorer_remains_below_the_library_with_folded_lists_and_large_fonts() {
                 "Analysis tools"
             };
             assert!(rect("Explorer").top() > rect(last).bottom());
-            assert!(rect("Choose folder…").bottom() < size.y);
+            // The folder button is on the Explorer title, so the title in
+            // view is the way to choose a folder.
+            assert!(rect("Explorer").bottom() < size.y);
             click_label(&mut app, &ctx, size, "Explorer");
             assert!(app.settings.explorer_collapsed);
         }

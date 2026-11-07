@@ -30,6 +30,10 @@ impl MonitorApp {
             self.performance.show_fps(ctx);
         }
         self.shortcuts(ctx);
+        antinomie_monitor_core::analysis_tools::set_own_tools(&self.settings.own_tools);
+        antinomie_monitor_core::packet_filter::set_tshark_seconds(
+            self.triage.detection_settings().timeouts.tshark,
+        );
         self.accept_dropped_file(ctx);
         let route_tools = ["tor", "wireproxy"]
             .into_iter()
@@ -51,8 +55,12 @@ impl MonitorApp {
                 install: install.as_ref(),
                 enabled: !self.closing,
                 geoip: self.routes.geoip.status(),
+                own: &self.settings.own_tools,
             },
         );
+        if let Some((id, on)) = outcome.own_tool {
+            crate::tools_page::set_own(&mut self.settings.own_tools, &id, on);
+        }
         if outcome.recheck {
             self.folder_picker.refresh(ctx);
         }
@@ -76,6 +84,12 @@ impl MonitorApp {
         self.dump_pause_banner(root);
         self.health(root);
         self.sidebar(root);
+        // Before the tabs draw: the Debugger tab's console must belong to the
+        // session it shows. Drawn first, a new session's pane started gdb for
+        // it, and the panel reset for that session right after dropped that
+        // gdb, which could still connect, leave, and so let a program held at
+        // its start run (Debug on start then missed its breakpoints).
+        self.debugger_session();
         let mut layout = std::mem::take(&mut self.layout);
         if let Some(panel) = self.focus_panel.take() {
             layout.focus(panel);
@@ -85,6 +99,7 @@ impl MonitorApp {
         self.layout = layout;
         self.dialogs(ctx);
         self.data_windows.show(ctx);
+        self.rules_ui.show_rule_lists(ctx, &self.options.data_dir);
         self.file_drop_overlay(ctx);
         self.activity.ingest(ctx);
         crate::title_bar::resize(ctx);
@@ -103,7 +118,6 @@ impl MonitorApp {
             }
             captures::ProcessPurpose::Attach => self.observer_start_enabled(),
         };
-        self.debugger_session();
         if self
             .process_picker
             .selected

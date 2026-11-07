@@ -92,7 +92,7 @@ fn the_lookup_page_offers_the_three_modes_with_tshark_selected() {
 }
 
 #[test]
-fn the_page_list_has_no_keyboard_page_and_each_page_shows_its_settings() {
+fn the_page_list_has_a_keyboard_page_and_each_page_shows_its_settings() {
     let ctx = context();
     let mut app = app();
     app.settings_open = true;
@@ -101,7 +101,7 @@ fn the_page_list_has_no_keyboard_page_and_each_page_shows_its_settings() {
     for page in SettingsPage::ALL {
         assert!(has(&visible, page.label()), "{}: {visible:?}", page.label());
     }
-    assert!(!has(&visible, "Keyboard"));
+    assert!(has(&visible, "Keyboard"));
     click_label(&mut app, &ctx, size, "Network lookup");
     assert_eq!(app.settings_page, SettingsPage::NetworkLookup);
     for (page, label) in [
@@ -109,12 +109,13 @@ fn the_page_list_has_no_keyboard_page_and_each_page_shows_its_settings() {
         (SettingsPage::Recording, "Process cores: default budget"),
         (
             SettingsPage::Detection,
-            "Scan retained evidence when it is ready",
+            "Scan runs with IDS and Sigma when they end",
         ),
         (SettingsPage::NetworkLookup, "Address lookup"),
         (SettingsPage::NetworkRoutes, "Default route"),
         (SettingsPage::AnalysisTools, "Manage tools…"),
         (SettingsPage::Disks, "Extraction limit"),
+        (SettingsPage::Keyboard, "Reset all"),
         (SettingsPage::Advanced, "Show FPS counter"),
     ] {
         app.settings_page = page;
@@ -140,7 +141,9 @@ fn the_footer_and_the_page_stay_inside_a_short_screen() {
                 let rect = visible
                     .iter()
                     .find(|(text, _)| text == button)
-                    .unwrap_or_else(|| panic!("{button} hidden on {page:?} at {size:?}"))
+                    .unwrap_or_else(|| {
+                        panic!("{button} hidden on {page:?} at {size:?}: {visible:?}")
+                    })
                     .1;
                 assert!(
                     rect.bottom() <= size.y && rect.right() <= size.x,
@@ -340,4 +343,41 @@ fn the_run_form_names_the_fixed_network_of_a_vm_that_is_not_routed() {
         });
     });
     assert_eq!(request.route, None);
+}
+
+#[test]
+fn the_recording_page_names_the_base_as_the_default_for_new_vms_with_a_tooltip() {
+    let ctx = context();
+    let mut app = app();
+    app.settings_open = true;
+    app.settings_page = SettingsPage::Recording;
+    let size = egui::vec2(1280.0, 820.0);
+    let visible = shown(&mut app, &ctx, size);
+    assert!(has(&visible, "Default base for new VMs"), "{visible:?}");
+    assert!(!has(&visible, "Installed base"), "{visible:?}");
+    assert!(!visible
+        .iter()
+        .any(|(text, _)| text.contains("Each VM keeps the base")));
+    ctx.all_styles_mut(|style| style.interaction.tooltip_delay = 0.0);
+    let at = visible
+        .iter()
+        .find(|(text, _)| text == "Default base for new VMs")
+        .unwrap()
+        .1
+        .center();
+    let mut hovered = Vec::new();
+    for _ in 0..6 {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+            events: vec![egui::Event::PointerMoved(at)],
+            ..Default::default()
+        };
+        hovered = texts(&draw_input(&mut app, &ctx, input));
+    }
+    assert!(
+        hovered
+            .iter()
+            .any(|(text, _)| text.contains("Each VM keeps the base it was created with")),
+        "{hovered:?}"
+    );
 }

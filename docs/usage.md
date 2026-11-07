@@ -54,6 +54,20 @@ versions; existing VMs keep their pinned base.
   (`sudo apt install suricata`, listed in App dependencies). Sigma scans use
   pySigma, which **Tools > Analysis tools** installs for Antinomie; it needs
   Python 3.11 or newer with venv support (`python3-venv` on Debian/Ubuntu).
+  The page shows counts under its title (installed packs, how many are enabled,
+  custom groups, string patterns); its long explanations are in tooltips.
+  The YARA packs are YARA-Forge Core, Elastic protections-artifacts and
+  **abuse.ch YARAhub** (community rules shared as TLP:CLEAR at
+  yaraify.abuse.ch/yarahub, downloaded from abuse.ch without an Auth-Key). Each
+  YARAhub rule names its own Creative Commons license in `yarahub_license`:
+  CC0 1.0, CC BY 4.0 and CC BY-SA 4.0 rules are kept, non-commercial and
+  no-derivatives rules and rules that YARA-X cannot compile are removed on
+  your computer, and the install summary counts each. A rule that duplicates a
+  YARA-Forge Core rule (same name, or same strings and condition) is not
+  installed twice. abuse.ch rewrites the archive daily, so the pack is a
+  snapshot; the catalog is regenerated monthly and Check for updates offers the
+  newer snapshot. The pack needs Antinomie 0.8.3 or newer and shows the rule's
+  own license with every finding.
 
 - **Tools > Detection rules > IOC** keeps abuse.ch datasets on your computer
   for matching a run's indicators offline: ThreatFox `full.csv`, the URLhaus
@@ -155,6 +169,21 @@ The **Base images** section in the left sidebar lists installed bases. Use
   it. The firmware of an existing VM cannot be switched between BIOS and UEFI;
   create a new VM instead.
 
+Downloads during a build: the Debian bases pin the archive to one
+snapshot.debian.org date and check every package against the SHA-256 and size
+in that snapshot's signed index. snapshot.debian.org is often slow, so each
+package file is tried at the Debian mirror you chose (the build wizard's
+mirror; a mirror near you from debian.org/mirror/list), then deb.debian.org
+(and security.debian.org for the kernel packages), then snapshot at the pinned
+date; a 404 or a file that is not the pinned one just moves on, because no
+mirror is trusted. Only the signed InRelease comes from snapshot: the other
+index files (Packages.xz) are fetched by hash from the mirrors first and
+checked against it. A failing source is retried up to five times (5, 15, 45 and
+120 s waits, resuming a partial file where the server allows), and the build log
+has a line for every retry and fallback naming the file; the build fails only
+when every source has failed, naming them. A kernel that built is kept in the
+cache even if a later stage fails.
+
 Bases are read-only templates. Right-click a base to make a **New VM from this
 base** or to **Delete base**. Deleting is refused while any VM still uses it.
 
@@ -167,7 +196,7 @@ thread per core). The app says so in several places: the **Device profile**
 window lists them at its top and on the setting itself ("SATA (AHCI) not supported
 by this base: virtio will be used"), with a **Use base** button when another
 installed base supports it; the VM dialog's device profile row shows "N fall back"; the
-VM list and the Summary's **Device profile** card carry a **Device profile fallback**
+VM list and the Overview's **Device profile** card carry a **Device profile fallback**
 badge; and each start warns in **Activity** and adds the same lines as notes to
 every run of that boot, shown under the run's header.
 
@@ -211,8 +240,24 @@ password; the guest account is created for you. Debian Minimal needs at least
 the base never changes.
 
 Right-click a VM for **Rename**, **Duplicate** (the VM must be stopped),
-**Open Directory**, **Settings** (resolution, fullscreen or fit to window,
-acceleration, CPU model) and **Delete**.
+**Open Directory**, **Settings** (resolution, **VM screen**, fullscreen or fit to
+window, acceleration, CPU model) and **Delete**.
+
+**VM screen** says where the VM's display shows and applies at the next start of
+the VM, not to a running one: **In the app (VNC)** (the default) opens the VM
+screen tab, **QEMU window** opens QEMU's own window (fullscreen and fit to window
+are options of that window), and **No screen** runs the VM with no display at all
+(`-display none`, no VNC). With No screen, **View > VM screen** opens a tab that
+says the VM has no screen and how to change it. The guest sees the same devices
+in all three.
+
+The **Overview** (the first tab of the work area) shows the selected VM: its name
+and state dot, the resource cards, the **Compute** card with the vCPU count and
+the RAM side by side, the configuration cards and the **Snapshots** box.
+
+The sidebar's **Explorer** title has a folder button that chooses the folder to
+browse; **File > Open folder…** does the same, and **File > Import sample…** opens
+the Samples page's **Add file** dialog.
 
 **Settings → Telemetry transport…** tunes how records leave the guest (bases
 for Antinomie 0.3.0 and newer):
@@ -222,16 +267,17 @@ for Antinomie 0.3.0 and newer):
 | Guest buffer per vCPU | 256 KiB to 4 MiB of guest memory per virtual CPU (default 1 MiB); bigger buffers ride out longer bursts |
 | When buffers fill | **Never drop** (default): a system call waits until the host has room, so heavy tracing can slow the guest; its wait deadline can still cause counted drops. **Drop new telemetry**: the guest never waits (keeps its timing) and the loss is counted |
 | Longest wait per event | In Never drop mode, how long one call may wait (default 5 s) before its record is dropped after all |
+| Capture All: drop telemetry when the host falls behind | Off (default): Never drop holds under Capture All too, so a busy guest runs slower (a heavy BusyBox load about 10 times slower) and Triage > Summary says it is being slowed. On: while Capture All runs and the host falls behind, the guest drops telemetry instead of waiting, which keeps a desktop guest responsive but loses events; the Summary counts how often and how long. Drop mode ignores it |
 | Host event table | How many calls the host keeps assembling at once (default 16,384) |
 
-The VM's **Summary** shows a **Snapshots** box under **Device profile**: the VM's
+The VM's **Overview** shows a **Snapshots** box under **Device profile**: the VM's
 snapshots as a compact tree (name, whether it is disk only or disk + memory, when
 it was taken, its size, its notes, and a **Current** marker on the one the VM runs
 from) with **Take snapshot…**, **Restore…** (**Resume…** for a disk + memory
 snapshot that can resume, and **Restore disk and boot…**) and **Open Snapshots…**
 for the full window. It uses the Snapshots window's own dialogs and rules, so
 what is allowed while the VM runs is the same in both, and the list refreshes when
-you select the VM and when it starts or stops. The label column of the Summary
+you select the VM and when it starts or stops. The label column of the Overview
 cards is as wide as its longest label.
 
 ## 3. Start it and run a program
@@ -250,11 +296,20 @@ Core strings and saved memory-analysis results also offer direct page entry;
 packet history already has it, and specimen Content supports a byte-offset jump.
 
 1. Select the VM and press **Start VM**. Only one VM runs at a time, and its
-   network is disconnected by default.
+   network is disconnected by default. A VM with no snapshot asks first: there
+   is nothing to restore after the run, so what the program changes stays in the
+   VM's disk (take one in **Snapshots**). **Start anyway** starts it; **Don't ask
+   me again** turns the question off, and **Settings > Notifications > Start**
+   turns it back on.
 2. **Upload file** copies a program from the host (**Host file**) to a path in
    the guest (**Guest path**).
 3. **Run program** runs it. Set the **Executable**, **Arguments**,
-   **Working directory** and **Environment**. Each launch gets its own terminal
+   **Working directory** and **Environment**. **User** is Root, Normal user
+   (1000), Nobody (65534, the unprivileged account every system has) or a custom
+   UID and GID. Under **Dumps**, **Dump when suspicious activity is seen** has
+   a **Minimum tier** of Low, Medium or High: the first finding at that tier or
+   above takes the dump. **Memory Dump on Exit** and **Core Dump on Exit** sit
+   below the trigger's options in the same section. Each launch gets its own terminal
    window for input and output.
    On a VM with a desktop base, **Run in** picks where the program runs:
    **App terminal** (the default), **Guest desktop** (the program joins the
@@ -326,20 +381,6 @@ It cross-compiles the kernel with Debian 13's `aarch64-linux-gnu-gcc-14` (the
 container image and the toolchain chroot have it) and takes its programs from
 Debian's pinned arm64 packages, so no arm64 program runs on the build host.
 A run's details name the guest's architecture.
-
-**Downloads during a build.** The Debian bases pin the archive to one
-snapshot.debian.org date and check every package against the SHA-256 in that
-snapshot's signed index. snapshot.debian.org is often slow, so each package
-file is tried at the Debian mirror you chose (the build wizard's mirror; a
-mirror near you from debian.org/mirror/list), then deb.debian.org, then
-snapshot at the pinned date; a 404 or a file that is not the pinned one just
-moves on, because no mirror is trusted. Only the dated, signed InRelease
-comes from snapshot alone; the other index files (Packages.xz and the like) are
-fetched by the SHA-256 it lists, from the mirrors first. A failing source is retried up to five
-times (5, 15, 45 and 120 s waits, resuming a partial file where the server
-allows), and the build log has a line for every retry and fallback; the build
-fails only when every source has failed, naming them. A kernel that built is
-kept in the cache even if a later stage fails.
 
 **Debian 13 arm64 Minimal.** Its bootstrap runs arm64 maintainer scripts, so
 it needs a CPU emulator for them and is never built natively on an x86-64
@@ -585,26 +626,72 @@ The network capture is the guest's own view on every route.
   its command line, user, status and exit code. The state is coloured (see
   *Run states* below). Double-click a run to open its
   Triage view. Select a trace entry to inspect its recorded call details.
-  The table spans the pane. A run's details list **Analysis enabled** as a tree:
+  The table spans the pane. A run's process tree scrolls inside its own box, which stops short of the details' scroll bar so the two never overlap. A run's details list **Analysis enabled** as a tree:
   the static analysis with its checks below it, then the capture options; a check
   that produced no result, or a capture that was deleted or failed, is greyed.
-  Click a process in the run's recorded process tree to open **Syscall Trace**
-  filtered to that process (`process.pid == N`; clear the filter to see all).
+  In a process's Details, **Show its calls** opens **Syscall Trace**
+  filtered to that process (clear the filter to see all).
 - **Export report…** (right of the Triage tabs): writes the whole Triage as
   HTML, PDF, JSON, MISP or STIX 2.1, with a checkbox per section, optional IoC
   defanging and an optional evidence bundle. See
   [the report guide](triage-report.md).
-- **Triage › Process › Process tree**: click a process to open Suspicious
-  activity filtered to it. The number beside a process is its count of
-  suspicious observations, coloured by the worst tier among them (HIGH red,
-  MEDIUM amber, LOW cyan); in Details each observation wears its own tier.
+- **Triage › Process › Process tree**: one row per task, in the columns
+  **Process** (tree lines, the executable's file name and `(pid · tid)`; the
+  full path on hover; a fork that has not exec'd shows its parent's image
+  greyed with "fork"), **Argv** (every argument shell-quoted, so `sh -c 'curl x | sh'` stays unambiguous; hover numbers them as `argv[0] = sh`, `argv[1] = -c` with the count and any argument cut short; no warning sign: an
+  argv[0] whose file name is not the executable's is the Suspicious activity
+  finding **Hiding the process name: argv[0] rewritten**, counted in Findings; BusyBox applets,
+  interpreters through symlinks such as python3 and python3.13, sh and dash,
+  and a login shell's leading `-` do not count), **Findings** (the count,
+  coloured by the worst tier; click it to list that process's findings),
+  **User ID** (the numeric uid, or uid → euid, from the guest's credential
+  records; hover for the name where it is known, such as root),
+  **Started** (relative to the run start; the absolute time on hover),
+  **Lifetime** ("running" when no exit was recorded), **Outcome** ("exit 0",
+  "killed by SIGKILL", "killed by SIGKILL (from pid N)" when a recorded kill
+  call sent it, "in read() at end"), **Calls** and **Exec chain**
+  (`sh → busybox → demo-all`). The parent pid, working directory and task
+  cookie are not columns; filter on `process.ppid` and `process.cookie`.
+  Click a row to open **Details**: the executable, arguments one per line, the
+  full environment of its last exec (+ added, ~ changed, − removed against its
+  parent's, with the Triage rule that flagged a variable), the working
+  directory when the task changed it, the user and credential changes, the
+  parent and the children (click to jump), the exec chain with times, the
+  outcome and its findings. **Show its calls** opens the Syscall Trace
+  filtered to the process.
 - **Triage › Process › Suspicious activity**: behaviour recognised in the run's
-  calls, kernel records and packets, with the **Time** of each row first. Each row has a tier (HIGH, MEDIUM, LOW;
-  INFO is only counted unless **Show INFO** is on), a category and an ATT&CK
-  reference. Repeats fold into one row with a count, a failed call or a program
-  that does the thing as its job lowers the tier by one, and **Details** says
-  why a row has its tier. The chips narrow the table by tier and category (each
-  category chip carries the icon its markers have in the graph). A row
+  calls, kernel records and packets, worst tier first and each tier in the order
+  it happened. The columns are **Tier** (a coloured H, M, L or I chip: hover it
+  for what the tier means and why this row has it; a flag after it says the
+  evidence is of limited confidence, and why), **Behaviour** (a short title;
+  the rule id and its version are on hover), **Target** (the path, `ip:port` or
+  process the behaviour was aimed at), **Process** (`name (pid · tid)`; click it to
+  open that process in Details), **ATT&CK** (the technique, `T1053.003 Cron`; click it to list the
+  rows that cite it), **Count** (`×12`, or `×40 every ~5.0 s` for a steady
+  loop), **Result** (succeeded, `3 of 5 failed` or `all failed`, greyed) and
+  **When** (the first and last time, as offsets from the start of the run;
+  the clock times are on hover). The category, confidence, evidence, version,
+  source and flags are in Details; every filter key still works. A row has a
+  tier (HIGH, MEDIUM, LOW; INFO is only counted unless **Show INFO** is on).
+  Repeats fold into one row with a count.
+
+  The tiers mean: **High**, something ordinary software essentially never does
+  and that directly gives control, persistence or privilege, so look at these
+  first; **Medium**, often malicious but with legitimate uses, so it needs
+  context; **Low**, unusual but common in normal software, supporting evidence;
+  **Info**, neutral facts that tell the story, hidden by default. Context lowers
+  a tier by one: the program is on the rule's allow-list, every call failed, the
+  process is outside the run's tree, or it was seen only on the network. The
+  same words are in the graph legend and on the tier chips.
+
+  **Details** of a row, top to bottom: the tier, title and rule id with its
+  version; **What happened** in one sentence; **Why it matters** (what the rule
+  saw, and the ATT&CK technique with links to its rows and to the Summary);
+  **Why this tier** (the rule's tier and each step that moved it); **Evidence**
+  (the calls the row kept, with their time, syscall, what they did and result,
+  each with Open in Syscall Trace, or the packet); **Related** (the process, the
+  target in Files or Network, and the other findings of the same process, target
+  or technique); the rule's facts; dumps taken; and the observed fields. A row
   is something to look at, not a verdict. **Evasion** lists every anti-analysis
   check the sample made through system calls (machine identity, CPU, MAC address,
   uptime, `TracerPid`, container markers, long sleeps) with the answer the guest
@@ -676,7 +763,28 @@ The network capture is the guest's own view on every route.
   finding in time, ↑/↓ lane, Enter evidence, `T` spacing, `F` fit, `+`/`-` zoom at the
   selection, Space fold the lane, `H` `M` `L` `I` the tier chips and Show INFO,
   `1`…`9` and `0` the first ten category chips.
-- **Triage › Files › Per-file history** is the first tab of Files, before Opened, with
+- **Triage › Files › By file** is the first tab of Files and opens by default: one row
+  for each file the run touched, with **Path** (the path only) and
+  **Tags** (where it lives, such as `/tmp`, `home`, `system`, `proc`, `hidden`,
+  `persistence` and `credentials`; `+2 names` when it was also seen under other names,
+  listed in Details; and, when a Suspicious activity finding of Low or above names the
+  file as its object, the worst tier with the behaviour's title, `High · Dropped file
+  executed`, or `3 findings · High`), **What happened** (a chain
+  such as `created → written 812 KiB → chmod +x → executed → deleted`), **By** (the process,
+  and how many more), **First → last** (seconds from the start of the run, the absolute
+  time on hover), **Size** (`0 B → 812 KiB`), **Type** (ELF, script, archive, config, text
+  or data, read from the first bytes the run captured; `unknown` when none were) and
+  **SHA-256** (the first twelve digits; the whole digest on hover and in the row menu's
+  **Copy SHA-256**). **Hide stdio**, **Hide library**, **Changed only** and a path
+  filter narrow the list. A click shows the file in Details; the row menu opens its
+  **Per-file history** or its reconstruction. The Opened, Created, Read, Written, Deleted,
+  Renamed, Executed, Attributes, Probed, Other and Changed files tabs stay as the
+  per-operation views, with the same filter keys. They no longer have an Evidence column
+  (Details has **Open original syscall**) or a Location column (it is a tag in the
+  Tags column after Path), their times are seconds from the start of the run (the absolute time on hover),
+  **Process** is `name (pid · tid)`, and Changed files has **Changes** (`3 writes ·
+  4.1 KiB`), **Type** and **SHA-256** where it had Diff count.
+- **Triage › Files › Per-file history** is the second tab of Files, before Opened, with
   the number of files the run touched on it (it was a floating window). The
   left list holds every file the run touched, in order of the first call (also
   those that were only opened, read or probed); **Hide stdio**, **Hide library**
@@ -685,8 +793,11 @@ The network capture is the guest's own view on every route.
   path. Choose a file to see its history as a graph: one box for each stretch of
   the same call by the same process (create, open, read, write ×3, rename, delete),
   joined in the order the calls happened, on a lane for each process involved.
-  Process names stay at the left of the graph while it scrolls, cut to fit (the
-  whole name is the tooltip). A click on a file in the list shows it in Details (its
+  Process names (`name (pid · tid)`) stay at the left of the graph, cut to fit (the
+  whole name is the tooltip). Drag the background of the graph to move it, Ctrl+wheel or a pinch
+  zooms at the pointer, and a double-click puts it back. The title of the history is the
+  file and its SHA-256, `name [sha256]` (a click copies it), or `name [unknown hash]`;
+  **Reconstruct contents…** is at its top right. A click on a file in the list shows it in Details (its
   names, first and last call, steps, state, sizes and hash).
   Click a box to list its calls in a table that spans the pane: time, process, call, result (a rename shows the new
   name, a delete says whether another link remains), and for reads and writes the
@@ -699,7 +810,63 @@ The network capture is the guest's own view on every route.
   size before and after, and the guest's SHA-256 when it took one. An offset the run could not know (an append,
   a descriptor it did not see opened) shows `unknown`, and bytes the kernel did not
   capture show `not captured`; nothing is guessed. In **Changed files**, Details has
-  a **Per-file history** button that opens the tab on that file.
+  a **Per-file history** button that opens the tab on that file. The rebuilt bytes
+  are every byte the recording kept of each write, up to **Rebuilt file bytes** in
+  Settings > Analysis limits (per file and per run); a note about a call that moved
+  more bytes than the recording kept of its buffer says so, and a note about the
+  limit says that instead.
+- **Triage › Summary** reads top to bottom: the **header strip** (the sample's name, ELF
+  type and architecture, static or dynamic, packed when Static analysis found a
+  packer, size and SHA-256 with a copy button; the base, route, run time and exit;
+  the HIGH, MEDIUM, LOW and info counts, each a button that opens
+  Suspicious activity on that tier; **Family candidates** from the detections and the
+  sample's MalwareBazaar record, strongest first, each with its source (an Elastic
+  `Linux_Trojan_<Family>` rule, a `family` or Malpedia metadata, MalwareBazaar's
+  signature and its tags, which may name two families; name fragments such as
+  MassHunt, IoT or Unique are never a family); and behaviour tags), **Key findings** (the six worst by tier and
+  then first time, each with its description on a line below, cut to its first sentence
+  with "…" when there is more: a click on the description shows all of it and another
+  folds it; a click on the row opens the finding's Details, **all N** opens Suspicious activity, **Show more** turns
+  the six rows into one scroll area of every finding, as tall as the six rows
+  were, with its scroll bar always drawn at the right edge; **Show less** puts the six back), **Indicators** (the base image's own clock-sync, DHCP and apt traffic is one muted
+  "Base image background" line at the end of its branch, shut until clicked, and left
+  out of Copy all unless open; an address on a Tor, VPN or SOCKS route's stand-in range
+  shows the name it stands for; a tree of
+  **Endpoints** with country and organization, **DNS names**, **URLs** and **Files**
+  dropped or run with type and SHA-256; each item shows its value in the normal
+  text colour in monospace and its country, organization, type or hash muted
+  (hover underlines it and shows the pointing hand; nothing is link-blue); each
+  branch shows five and **Show N more** turns the five rows into one scroll area of every item,
+  as tall as the five rows were, with its scroll bar always drawn (**Show fewer** puts the five back); the branch titles (Endpoints, DNS names, URLs, Files) are bold, each in a colour of its own that is neither the text colour nor link blue, with a muted count; the one-line rows (MITRE
+  ATT&CK, Processes of interest, Files, Network) show numbers strong and words muted; **Copy all** and **Export**, which writes JSON to the run's `ioc`
+  folder; the header says how many indicators matched the IOC datasets), **Relationships**
+  (a process, file, endpoint and injection graph laid out as a tree from the root
+  at the top left: each process has the processes it started, the files it wrote or
+  ran and the endpoints it contacted to its right, and a process with many children
+  spreads them over several lanes; children of one parent that ran the same image
+  and have no finding are one stacked box (`ps ×120`), and the files one process
+  wrote into one folder are one box (`/tmp/x/ · 1,240 files written`); a click on
+  a stacked box opens it and a click on its header shuts it, and a node with a
+  finding is never grouped; **Compact** shows the 15 best of each kind (a group
+  counts as one) and what joins them, **Full** is a tree you open: it
+  starts with the root, the path to every node with a finding and what is under those
+  nodes, and every other process is closed; a box with something under it has an arrow
+  (▸ closed, ▾ open) and a muted **+N** for the nodes hidden under it, a click on the
+  arrow opens or closes the next level (the box stays where it is on the screen), a
+  click on the box itself opens its details; **Expand all** opens everything (about 800
+  boxes are drawn at most, and the note says so) and **Collapse all** goes back to how
+  Full starts; the open boxes are kept for the run, also when you switch to Compact and
+  in the window; **Laying out…** shows while a big run is
+  placed; the icon beside **Mermaid** opens the graph in a window of its own with the
+  same controls; drag the background to pan, Ctrl and the wheel or the
+  buttons (a small bar that fits its buttons) to zoom, the plain wheel scrolls the page everywhere, over the graph too, and the Key findings and Indicators lists and the Activity graph's lanes take it only while they can still scroll that way; a process whose children sit in several lanes draws its fork and exec edges as one trunk beside each lane with a stub to every child (a child with a finding keeps its tier colour on its stub); click a node to open it,
+  **Mermaid** to copy what is shown; edges read fork, exec, write, run, connect, inject, signal),
+  then one line each for **MITRE ATT&CK**, **Processes of interest**, **Files** and
+  **Network**, the folded **MITRE ATT&CK techniques** list, the **Detection engines**,
+  the notes and the run's last screenshot. The Summary states observations only: no
+  verdict and no score. Family
+  candidates and tags show only what a detection or rule named, so a run nothing
+  matched has none.
 - **Triage › Summary** has a card for each detection engine (YARA, IDS, Sigma). Its
   status reads **Queued** while the scan waits for its turn and **Scanning** while it
   is checked, **Not scanned** only when neither is the case. It also shows the same curve, phases and heat strip for the whole
@@ -713,8 +880,8 @@ The network capture is the guest's own view on every route.
   fill the whole width instead of sitting in a sliver of a long run; it follows
   the Graph's **Events** or **Time** choice. In both, a run with only a few
   findings has them near the left and right edges of the plot.
-- **Triage › Summary › MITRE ATT&CK (N)** shows the techniques as a badge row
-  and **Show all N**. Open, it lists the techniques grouped by tactic in
+- **Triage › Summary › MITRE ATT&CK (N)** counts the techniques by tactic in a
+  one-line row; the folded **MITRE ATT&CK techniques** list below the one-line rows lists the techniques grouped by tactic in
   kill-chain order, one foldable row each: the technique and its name, its
   tactics, the Triage rules that cited it (with tier and count), the YARA, IDS
   and Sigma rules that cited it, and links that open **Suspicious activity** or
@@ -729,6 +896,55 @@ The network capture is the guest's own view on every route.
   names are always in the badge's tooltip and in a folded **Tactic colours**
   legend under the Summary and the sample window's ATT&CK section. The Sigma
   rules of low or informational severity add no techniques to the list.
+- **Triage › Detection** lists each engine's matches as cards under **Matches**.
+  On the YARA page the strong matches (an Elastic rule scored 70 or more, a rule
+  with `family` metadata, a curated pack's non-generic rule) come first; unscored
+  community rules without a family, generic and hunting rules, low-score Elastic
+  rules and rules named for Windows, PE, scripts or web pages sit in a folded
+  **Weak or generic matches (N)** group under them. Nothing is removed and the
+  counts are totals.
+  **Sort by** orders them by risk (the default), name, MITRE technique, engine
+  (rule pack), hit count or first hit (where the first hit was recorded:
+  journal event, call or packet order; matches with no position come last); the
+  choice is saved. A card shows the rule's title, severity tag and hit count, the
+  description, the rule pack and every author, and the MITRE tags. **Details…**
+  opens the rule: description, then the evidence locations as a scrollable
+  table (the full width of the window, twelve rows or more before it scrolls, a long location wraps and shows in full), the rule's metadata and its text (wrapped by default). The page scrolls
+  when a section grows. An empty result says how many inputs were not scanned
+  and why. For IDS, "Rule packs: N rules" counts every rule in the enabled
+  packs and the grey "N rules loaded" text at the right end of that line counts
+  what Suricata loaded; hover it for the difference.
+  The **Scan** and **Result** buttons, the matched-rule count, the state and the
+  "objects · rules evaluated" text sit at the right of the **Scanned inputs**
+  heading (below it in a narrow window). Hover that heading for the note on how
+  Sigma events are converted from the syscall trace, or on the IDS reading the
+  VM-wide capture so its matches name no process. The match filter shares the
+  **Sort by** row. A Sigma or IDS result with rules that did not apply has its
+  toggle ("Show the N rules not applicable") as the title line, the counts under
+  it and the list under them. The **Detection** tab of the Triage strip shows
+  the matched rules of YARA, IDS and Sigma as "x · y · z", each capped at 99+;
+  hover it for the engines by name. A scan that starts by itself and fails never replaces the result
+  on screen, and no scan starts by itself while an engine tool has not answered.
+  **Settings > Detection > Scan runs with IDS and Sigma when they end** (on by
+  default) makes each engine scan a run once its evidence is ready, and again
+  when a rule pack is installed, updated or removed. A run whose VM stopped
+  under its capture (the pcap was never closed) is scanned with the packets it
+  holds, and the engine's row says "scanned the N packets captured so far". An
+  engine that has not scanned the run says **Not scanned** with a **Scan**
+  button; in the tab badge it shows as a dash whose hover says "not scanned"
+  (a zero would mean the engine scanned and found nothing). A result made with
+  an older rule set says "Scanned with an older rule set." with **Rescan**.
+- **Failed launches.** A program the guest could not start because its file is
+  cut off says "This ELF is truncated: its segments need 30.3 MB, the file has
+  2.0 MB. A partial upload or download; get a full copy." in the run's failure
+  message, and Static analysis shows it in red above Identity. A root that exits
+  127 for a missing library gets the run note "Exited 127: the library
+  libhwloc.so.15 is not in the guest."; Metadata/Structures list each **Needed
+  library**. A shared object run as a program is called a shared library, meant
+  for LD_PRELOAD or dlopen, in Identity and on the run. Unpacking says "UPX
+  headers are altered (anti-unpacking); restore the UPX! magic and sizes to
+  unpack it" for a UPX file whose headers were damaged on purpose. A run that
+  failed to start has a digest that says so and why.
 - **Triage › Summary** also names the run's root process from the launch request
   when the recording's launch record cannot (the program and arguments the run
   was asked to start, kept as the first name in its exec history), and the
@@ -790,8 +1006,8 @@ The network capture is the guest's own view on every route.
   never JA3 or certificate fingerprints, never a value a known false positive
   excuses) to threatfox-api.abuse.ch and urlhaus-api.abuse.ch, at most 50 values
   per press; the answers are marked *online* with their time and kept in the run's
-  folder (`ioc-online.json`). **Triage › Summary** has an IOC card with the
-  matched count and the dataset date.
+  folder (`ioc-online.json`). **Triage › Summary** says how many indicators matched
+  and the dataset date in its Indicators header.
 - **Triage › Network** shows **Endpoints**, **Domains**, **URLs** and **TLS**, all
   read from TShark (the capture is VM-wide, so no row names a process), each with
   an IOC column. The 0.7.0 tabs (IPs, Hosts, HTTP, DNS, Sessions) and the switch
@@ -860,6 +1076,7 @@ The network capture is the guest's own view on every route.
   text is decoded and scanned again (two levels deep); the **Inside** column says
   which. The same list opens as a window from **Core dumps > Strings**, where it also lists
   the binary `sockaddr_in` and `sockaddr_in6` structures in the core's memory.
+  In **Library > Detection rules**, the page shows the selected pack's details and buttons; its rules are not a table on the page. The **Rules** button (the open-in-window icon, left of **Export manifest**; custom groups have it too) opens one window per pack or group with the rule list at its left (a filter box, the "N of M rules" count, sortable columns and an on/off box for each rule) and the clicked rule's details at its right, separated by a divider you can drag. There is no window of its own for a rule. The window opens at about 70% by 75% of the content area, can be resized, and both panes scroll inside it. The details show the rule's name as a heading, then a grid of bold labels (ID, File, Author, License, Severity, State, Description, Tags, References as links and more) and the source text on a padded block of the theme's code background. A YARA rule's meta keys are read in any case, so `Description`, `DESCRIPTION` and `description` are all its description (the lowercase key wins when a rule has both). The window stays open when you switch pages until you close it. Core dump list problems of a run are reported to the activity log once each.
   Switch patterns off or add your own in **Library > Detection rules > Strings
   regex** (**Add patterns**: a name, a category, a regular expression that
   fills the rest of the row, and **Add**, all on one row); **Scan again** reads the change. An analysis that was not started
@@ -868,6 +1085,13 @@ The network capture is the guest's own view on every route.
   Disks list uses (`No disk dumps for this VM`): the Core dumps list, a core's threads,
   mappings, strings and notes, the Per-file history list and the guest process list of
   the attach dialog do too, and a filter that matches nothing says that.
+- **Static Analysis > Overview**: the **Identity** and **Categories** cards side by side
+  are the same height; a note about an incomplete analysis sits above both. In
+  **Disassembly** and **Decompilation** the lines sit one font row apart, with no
+  extra space between them. A Symbols, Imports, Exports, Sections, Segments or Headers
+  view with no rows of its kind (a static binary has no imports) reads
+  `0 / N rows` with `No imports in this file; its N rows are in the other views.`
+  instead of calling the listing empty.
 - **Static Analysis > Overview > Categories**: a category the analysis was not
   started with shows **Not requested** and a **Run** button. Run adds that check
   to the same report without starting the analysis again: the specimen kept with
@@ -962,23 +1186,45 @@ state from one palette. The words always stay, so colour is never the only cue.
 |---|---|
 | Running, stopping, or still recording after the terminal was closed or the root exited | Blue |
 | Finished with exit 0 | Green |
-| Finished with another exit code | Neutral |
-| Stopped (by you) | Grey |
+| Finished with another exit code | Amber |
+| Stopped by you (Stop run) | Grey |
 | Ended at its time limit (a `timeout` program: exit 124, or the SIGTERM BusyBox's `timeout` re-raises) | Blue-grey (info) |
-| Crashed or killed by a signal (SIGSEGV and the like), or launch not confirmed | Amber |
+| Finished after a crash or a kill by a signal (SIGSEGV and the like), or launch not confirmed | Amber |
 | Failed to start, or interrupted | Red |
 | Recording incomplete (saving stopped part way) | Amber |
 
 A run is "going" while it still records: a run whose terminal was closed, or whose
 root exited while children live on, shows **Running** in every list and keeps its
-**Stop** button.
+**Stop run** button (toolbar, Run menu, the command palette and the Run History
+row).
+
+**Stop run** ends the whole recorded process tree, every live task of the run and
+not only the root, with SIGTERM and then SIGKILL after the grace period, while
+the VM keeps running. The run then ends the way any run ends: the recording
+closes, the network capture's last segment closes so the pcap is whole, the
+route's counts are written to `artifacts.json` and the journal is complete. Stop
+run is the way to end a run whose program never exits, such as a bot or a
+backdoor; stopping the VM instead cuts the run where it stands.
+
+How a cut or stopped run is worded, in Run History, the sample window's Runs
+list and Summary, Triage's state line and the reports:
+
+- **Stopped by you · root exited 0** (or "root killed by signal 15"): Stop run
+  ended it.
+- **Ended by VM stop · root exited 0 · 1 process still running**: the VM stopped
+  while the tree was alive. The words give what the root did and how many
+  processes were left; the run's pcap is closed at the stop and its route counts
+  are still written.
 
 ## 5. Samples
 
 **Library > Samples** (sidebar) lists every sample across runs and VMs with its
 origins and tags; opening one shows the sample window with the tabs **Summary**,
 **Runs**, **IOCs**, **Custody log** and **Notes**. **Export report…** in its header
-is described in [the sample report guide](sample-report.md).
+is described in [the sample report guide](sample-report.md). The **Runs** list
+fills the window's width: **Arguments** takes the spare width (a long command
+line is cut, the whole of it is on hover) and **Tree status**, **Root exit** and
+**VM** keep a width that fits their usual values.
 
 - **Summary** holds the identity, the **Static analysis** section (each check on a
   line: name, state chip, what it found, **Open**, and the notice to the right of
@@ -1028,6 +1274,16 @@ export is an **Exported** entry in the custody log (file, size, hash and result)
 
 ## 6. Keys, the command palette and Jobs
 
+**Filter and search boxes** (the Triage tables, the rules list, Samples, Run
+History, Detection, Settings and the others) show a small cross at the right
+edge while they hold text. A click on it, or Esc in the focused box, clears the
+text.
+
+**Spawned windows** (a rules window, a rule hit's Details, Relationships and
+the like) never grow past 80 % of the app's content area each way (a window
+still opens at its own size when that fits), and not below a small minimum. What does not fit scrolls inside the window: code scrolls
+sideways in its box, and long text wraps.
+
 Menus: **File**, **VM**, **Run**, **View**, **Tools** and **Help**; the menu bar's
 **Search** button at the right (with its key) opens the command palette. Menus and
 button tooltips show the keys, and a tab's tooltip shows its Ctrl+digit.
@@ -1038,7 +1294,20 @@ library samples; **Enter** runs the highlighted entry through the same code as t
 menu, **Esc** (or Ctrl+K again) closes it, and an action that cannot run now stays
 in the list with the reason ("Start the selected VM first."). A menu item, its
 shortcut and its palette entry share one action list, so they cannot disagree.
-**Help > Keyboard shortcuts** (or **?**) lists every shortcut by area.
+**Help > Keyboard shortcuts** (or **?**) lists every shortcut by area, with a
+**Change shortcuts…** button that opens **Settings > Keyboard**.
+
+**Settings > Keyboard** has one row for every action (each menu item, each view and
+each page or window the palette opens, about 90 rows, under the menu they belong
+to), with a **Find** field. Click a row's key, then press the new one (**Esc**
+cancels). A shortcut must hold **Ctrl** or **Alt** (a lone letter would type), may
+not take **Ctrl+1** to **Ctrl+9** (the tabs) or the copy, paste and undo keys, and
+a key another action already has asks first: **Move it to ...** takes it from the
+other action, **Keep it where it is** leaves both. **Clear** leaves the action
+without a shortcut, **Reset** (per row) and **Reset all** bring the defaults back.
+The choice is saved with the settings (an older settings file just has the
+defaults), and the menus, tooltips, the palette and the Keyboard shortcuts window
+show what is in force.
 
 The rule for who owns the keyboard: a global shortcut never takes a key from a
 text field or the terminal (**Ctrl+K** stays with them too: it deletes to the end
@@ -1050,7 +1319,7 @@ button, table or graph does not block the shortcuts.
 | Ctrl+K | Command palette |
 | ? | Keyboard shortcuts |
 | Ctrl+N | New VM |
-| F5, Shift+F5 | Start VM, Stop VM |
+| Ctrl+Shift+S, Ctrl+Shift+X | Start VM, Stop VM |
 | Ctrl+R | Run program |
 | Ctrl+U | Upload file |
 | Ctrl+D | Attach debugger (the process picker); with the picker open, attach the selected process |
@@ -1058,8 +1327,26 @@ button, table or graph does not block the shortcuts.
 | Ctrl+Comma (the app shows it so) | Settings |
 | Ctrl+Q | Exit |
 | Ctrl+1 to Ctrl+9 | Show the 1st to 9th tab of the work area, in the order the tab bar shows them (they follow a tab you dragged) |
-| Ctrl+Shift+A, Ctrl+Shift+J | Show Activity, show Jobs (the lower bar) |
-| Esc | Close the window on top (not while a field has the keyboard) |
+| Ctrl+J | Fold or open the lower bar (Details, Activity and Jobs); the arrow at the right end of its tab strip does the same |
+| Ctrl+Shift+D, Ctrl+Shift+A, Ctrl+Shift+J | Show Details, Activity, Jobs (the lower bar) |
+| Esc | Close the window on top (not while a field has the keyboard). In a filter or search box, Esc clears the text first |
+
+**Defaults for a 60 % keyboard.** Every default is a Ctrl or Ctrl+Shift chord on a
+letter, the comma or a digit, which a 60 % board has without a Fn layer. Three
+changed in 0.8.3 because they needed keys such a board puts behind Fn or in an awkward
+place:
+
+| Action | Before | Now |
+|---|---|---|
+| Start VM | F5 | Ctrl+Shift+S |
+| Stop VM | Shift+F5 | Ctrl+Shift+X |
+| Fold or open Details, Activity and Jobs | Ctrl+\` | Ctrl+J |
+| Show Details | none | Ctrl+Shift+D |
+
+Ctrl+N, Ctrl+R, Ctrl+U, Ctrl+D, Ctrl+K, Ctrl+B, Ctrl+Q, Ctrl+Comma,
+Ctrl+Shift+Y, Ctrl+Shift+A and Ctrl+Shift+J, and Ctrl+1 to Ctrl+9, were already of
+that kind and stay. The area keys below (arrows, Home, End, PgUp, PgDn) belong to
+the graph, table and terminal that has the focus and are not global shortcuts.
 
 The graph, table, filter and terminal keys (arrows, `F`, `T`, Ctrl+Space, Shift+PgUp
 and the rest) are listed by area in the Keyboard shortcuts window; the Triage
@@ -1090,13 +1377,42 @@ both) and applies each change at once. **Next** keeps what you picked and marks 
 step Ready; **Skip this step** leaves the settings as they are. **Help > Getting
 started: Appearance** is in the palette.
 
+On **Settings > Recording**, **Default base for new VMs** is the base a new VM
+starts with; each VM keeps the base it was created with. Its explanations are
+tooltips.
+
 **Settings** has the pages Appearance, Recording, Detection rules, Notifications,
-Network lookup, Network routes, Analysis tools, Disks and Advanced. It opens
-centred in the window. The settings are kept between starts: text size, theme,
+Network lookup, Network routes, Analysis tools, Disks, Keyboard and Advanced. It
+opens centred in the window, wide enough that the scroll bar never lies on a text,
+with room between the settings; a page with many settings (Recording, Analysis
+tools, Advanced) is split under sub-headings. The settings are kept between starts: text size, theme,
 density and the debugger's remembered choices all survive a restart (0.8.2 fixed
 a bug where an unreadable debugger setting made every start fall back to the
-defaults). **Notifications** has **Toast for live HIGH findings** (off) and **Toast
-when a run finishes** (on). A failed **Open folder** or **Open file** raises an
+defaults). **Analysis tools** lists each tool with its **Time limit**: the seconds the tool
+may run before it is stopped and its check marked Timeout. The field shows the
+tool's default beside it ("Default (240 s)": capa 240, FLOSS 480, binwalk 180,
+YARA scan 60, UPX unpacking 240, Ghidra decompilation 840, Detect It Easy 120),
+and **Reset** puts the default back. A time set for one tool comes before the
+older **Time limit for every tool** below it, which still applies to the tools you
+did not set; a **Run again with twice the time** from a check's tab uses its own
+doubled time for that run. **Settings > Detection rules** has the same **Time
+limits** for the detection engines, each with its "Default (N s)" and a **Reset**:
+the Triage YARA scan (100 s), Suricata (100 s; its retry and the sandbox time follow
+it at twice and 3.6 times), Sigma (110 s) and TShark (300 s per capture, with the
+extra time larger captures already got). The time is carried in the detection
+request to the worker, and an older settings file has the defaults. The detection
+engines have no "Run again with twice the time"; **Scan** runs them again with the
+times in force. **Library > Analysis tools** and **Tools > App
+dependencies** give a tool the system has a **Use Antinomie's own copy instead**
+box: the copy Antinomie installed under its data folder then comes first (until
+it is installed the system's copy is used, and the row offers **Install**).
+**Install all missing** still skips a tool the system has, so installing the own
+copy of such a tool is always your click. The choice is saved per tool.
+**Notifications** has **Toast for live HIGH findings** (off) and **Toast
+when a run finishes** (on), **Start** (on): the question before starting a
+VM that has no snapshot, and **Ask before clearing Activity** (on): the question
+before **Clear** empties the Activity log. Both questions have **Don't ask me
+again**. A failed **Open folder** or **Open file** raises an
 error toast and an **Activity** row.
 
 Layout at narrow windows: a tab bar whose tabs do not fit uses short names
@@ -1109,8 +1425,41 @@ area. Double-click a divider, or right-click it and choose **Fit columns**, to f
 the box again. The dragged widths are kept per table for the session.
 
 The sample **Download** window (**Tools > Download malware samples…**) keeps its
-size while it loads: the results area and the Downloaded list have fixed heights,
+size while it loads: the results area and the Downloaded list have fixed heights
+(the Downloaded list shows at least five rows, and more in a taller window),
 the status is one line, and it scrolls inside when the screen is small.
+
+A MalwareBazaar lookup by hash reads every field on its own: MalwareBazaar sends
+`null` for what it does not know (the last-seen time, the imphash, a comment, a
+YARA rule's author) and puts vendor facts in several shapes, and none of that
+fails the lookup. A missing value shows as "—". Hover the Family cell of a
+result that came from a hash lookup to see its tags, the ClamAV signature names
+and the family Triage named.
+
+### Dump when suspicious activity is seen
+
+In **Run program > Dumps**, a core that cannot be taken because the process
+is gone is not an attempt: it is kept in the run's trigger log as a miss, noted
+in the run's notes and shown in the run's features and in the finding's Details
+with the reason ("The process exited 120 ms after the match, before the core
+could be taken."), and the next match may still dump. A match is judged the
+moment its call arrives and the worker wakes every millisecond while a run waits
+for one, but a program that matches and exits within a few tens of
+milliseconds can still be gone before the guest can pause it.
+
+A core is partial when the guest could not read every page: it copies only the
+pages that are in memory when it reads them (never swapped-out or untouched
+pages) and the thread contexts it could park. The core's message says which part
+is missing, thread contexts or pages, with the counts. There is no setting for
+this policy; reading pages that are not resident needs a guest change.
+
+The dumps a trigger took are listed in the run's `artifacts.json` under
+`trigger_dumps` (the same records as `triggers` in `run.json`); `core_state`
+there describes the exit core (Core dump on exit) only. The guest's refusal is
+explained in plain words ("The process had already exited, or had started over
+...") with its raw state and status in brackets. When the process is still
+running under a new identity (a thread of it called exec, which replaces the
+main thread's start time), the host asks once more for that process.
 
 ### Country and organization of addresses (GeoIP)
 
@@ -1119,15 +1468,16 @@ addresses in the Network tabs get a Country and an Organization. **Address
 lookup** has three choices: **TShark GeoIP only** (the default), **dig and whois
 only**, and **TShark GeoIP, then dig and whois when unavailable**. Local addresses
 are never queried. Below it, **IP geolocation database (TShark)** is about the
-first choice: TShark fills Country and Organization only from MaxMind-format
-(`.mmdb`) databases and ignores the old `GeoIP.dat` files. Antinomie hands its
-own copy to its TShark runs only and never changes your Wireshark settings.
+first choice: TShark needs `.mmdb` databases to fill Country and Organization.
+Older `GeoIP.dat` files (such as `/usr/share/GeoIP` on Debian) do not work with
+TShark 4. Antinomie hands its databases to its own TShark runs only and never
+changes your Wireshark settings.
 
 **Database status.** While it looks, the page says "Looking for databases…". Then
 **Country / city** and **Organization (AS)** each show **Database found** or **No
-database**, followed by one line per database: its file name, where it came from
-("TShark's own folder", "Antinomie's DB-IP Lite copy" or "your folder") and its
-path. When something is missing, an amber warning says which column stays empty
+database**, and nothing more. Hover the chip for one line per database: its file
+name, where it came from ("TShark's own folder", "Antinomie's DB-IP Lite copy" or
+"your folder") and its path. When something is missing, an amber warning says which column stays empty
 and how to fix it (install DB-IP Lite in Library > Analysis tools, or choose a
 folder in Settings > Network lookup).
 
@@ -1155,13 +1505,25 @@ SHA-256 was recorded, not checked against a pin"). A progress bar shows
 
 **Your own GeoLite2 folder.** The text field (or the folder button, **Choose the
 folder**) names a folder with `GeoLite2-Country.mmdb` and `GeoLite2-ASN.mmdb`
-(GeoLite2 or GeoIP2, Country or City, and ASN). The files are read in place; the
-note says they need a MaxMind account to download, which Antinomie does not do. The
+(GeoLite2 or GeoIP2: a Country or City database and an ASN database). MaxMind
+requires a free account to download them, so Antinomie cannot fetch them for you;
+the DB-IP Lite install needs no account. The files are read where they are, not
+copied. The
 **X** button (**Stop using this folder**) clears it.
 
 **Attribution.** DB-IP's licence (CC BY 4.0) asks for credit wherever the data
 appears, so the page ends with "IP geolocation by DB-IP" (linking db-ip.com) and
 "DB-IP Lite databases, CC BY 4.0" (linking the licence).
+
+### Copy as Mermaid
+
+Every diagram can be copied as a Mermaid flowchart to paste into a README or an
+issue. The lineage graph of a sample, the VM snapshot graph and the file
+activity graph have **Copy as Mermaid** in their right-click menu; the Triage
+process tree, the phases of the Graph tab and the MITRE ATT&CK list in
+Summary have a small **Mermaid** button. Labels are escaped and each node's id
+is made from its own key (a hash, a task, a snapshot id), so a copy keeps its
+ids when the diagram grows.
 
 ### Exported tables
 

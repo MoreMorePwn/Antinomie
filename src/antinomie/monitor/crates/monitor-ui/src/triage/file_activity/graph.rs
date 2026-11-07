@@ -106,123 +106,208 @@ fn label(node: &Node) -> String {
     text
 }
 
-/// Where a node sits, relative to the graph's top left.
+/// Where the graph is looked at: dragging its background moves it and
+/// Ctrl + wheel (or a pinch) zooms about the pointer, as in the other graphs;
+/// a double click puts it back.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::triage) struct View {
+    /// Where the graph's origin sits from the top left of the area.
+    pub pan: egui::Vec2,
+    pub zoom: f32,
+}
+
+impl Default for View {
+    fn default() -> Self {
+        Self {
+            pan: egui::Vec2::ZERO,
+            zoom: 1.0,
+        }
+    }
+}
+
+const MIN_ZOOM: f32 = 0.3;
+const MAX_ZOOM: f32 = 3.0;
+/// The tallest the graph's area grows with its lanes.
+const AREA_MAX_HEIGHT: f32 = 320.0;
+
+impl View {
+    /// Zoom by `factor` keeping the graph point under `pivot` (relative to the
+    /// area, past the gutter) where it is.
+    fn zoom_about(&mut self, pivot: egui::Vec2, factor: f32) {
+        let zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+        let factor = zoom / self.zoom;
+        self.pan = pivot - (pivot - self.pan) * factor;
+        self.zoom = zoom;
+    }
+}
+
+/// Where a node sits in the graph's own units, from its top left, with the
+/// gutter not counted: the view moves and scales these.
 fn place(node_index: usize, node: &Node) -> Rect {
-    let x = GUTTER + GAP / 2.0 + node_index as f32 * (NODE_WIDTH + GAP);
+    let x = GAP / 2.0 + node_index as f32 * (NODE_WIDTH + GAP);
     let y = node.lane as f32 * LANE_HEIGHT + (LANE_HEIGHT - NODE_HEIGHT) / 2.0;
     Rect::from_min_size(pos2(x, y), vec2(NODE_WIDTH, NODE_HEIGHT))
 }
 
-/// Draw the graph; a click on a node selects it. Returns the node under the
-/// pointer's click, if any.
+/// Draw the graph; a click on a node selects it and a drag of the background
+/// moves the view. Returns the node under the pointer's click, if any.
 pub(super) fn show(
     ui: &mut egui::Ui,
     activity: &Activity,
     file: &FileActivity,
     layout: &Layout,
     selected: Option<usize>,
+    view: &mut View,
 ) -> Option<usize> {
     let mut clicked = None;
-    let width = GUTTER + GAP + layout.nodes.len() as f32 * (NODE_WIDTH + GAP);
-    let height = layout.lanes.len().max(1) as f32 * LANE_HEIGHT;
-    egui::ScrollArea::horizontal()
-        .id_salt("file-activity-graph")
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            let (area, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-            let origin = area.min.to_vec2();
-            // The names stay at the left edge of what is on screen; nodes that
-            // scroll past them are cut off there instead of running under them.
-            let left = ui.clip_rect().left().max(area.left());
-            let gutter = Rect::from_min_max(
-                pos2(left, area.top()),
-                pos2((left + GUTTER).min(area.right()), area.bottom()),
-            );
-            let plot = ui.painter_at(area).with_clip_rect(Rect::from_min_max(
-                pos2(gutter.right(), area.top()),
-                area.right_bottom(),
-            ));
-            let painter = ui.painter_at(area);
-            for lane in 0..layout.lanes.len() {
-                painter.hline(
-                    area.x_range(),
-                    area.top() + (lane + 1) as f32 * LANE_HEIGHT,
-                    Stroke::new(1.0_f32, theme::line_soft()),
-                );
-            }
-            for (index, pair) in layout.nodes.windows(2).enumerate() {
-                let from = place(index, &pair[0]).translate(origin);
-                let to = place(index + 1, &pair[1]).translate(origin);
-                edge(&plot, from.right_center(), to.left_center());
-            }
-            for (index, node) in layout.nodes.iter().enumerate() {
-                let rect = place(index, node).translate(origin);
-                // A node hidden behind the names cannot be reached.
-                if rect.right() <= gutter.right() {
-                    continue;
-                }
-                let id = ui.id().with(("file-activity-node", index));
-                let response = ui.interact(rect.intersect(plot.clip_rect()), id, Sense::click());
-                let tint = if node.failed {
-                    theme::muted()
-                } else {
-                    tint(node.kind)
-                };
-                let hot = response.hovered() || selected == Some(index);
-                plot.rect(
-                    rect,
-                    6.0,
-                    tint.gamma_multiply(if hot { 0.40 } else { 0.22 }),
-                    Stroke::new(
-                        if selected == Some(index) {
-                            2.0_f32
-                        } else {
-                            1.0
-                        },
-                        tint,
-                    ),
-                    egui::StrokeKind::Inside,
-                );
-                plot.text(
-                    rect.center(),
-                    Align2::CENTER_CENTER,
-                    label(node),
-                    egui::TextStyle::Body.resolve(ui.style()),
-                    theme::text(),
-                );
-                if response.clicked() {
-                    clicked = Some(index);
-                }
-                response.on_hover_text(tooltip(file, node));
-            }
-            // The gutter over the nodes: a solid ground, then one name per lane,
-            // cut to the room with its whole text on hover.
-            painter.rect_filled(gutter, 0.0, ui.visuals().panel_fill);
-            painter.vline(
-                gutter.right(),
-                gutter.y_range(),
-                Stroke::new(1.0_f32, theme::line_soft()),
-            );
-            let font = egui::TextStyle::Small.resolve(ui.style());
-            for (lane, process) in layout.lanes.iter().enumerate() {
-                let top = area.top() + lane as f32 * LANE_HEIGHT;
-                let full = activity.process_label(*process);
-                let shown = fit(&painter, &full, &font, GUTTER - 2.0 * NAME_PAD);
-                let at = pos2(gutter.left() + NAME_PAD, top + LANE_HEIGHT / 2.0);
-                let rect = painter.text(
-                    at,
-                    Align2::LEFT_CENTER,
-                    &shown,
-                    font.clone(),
-                    theme::muted(),
-                );
-                if shown != full {
-                    let id = ui.id().with(("file-activity-lane", lane));
-                    ui.interact(rect.expand2(vec2(NAME_PAD, 4.0)), id, Sense::hover())
-                        .on_hover_text(full);
-                }
-            }
+    let height =
+        (layout.lanes.len().max(1) as f32 * LANE_HEIGHT).clamp(2.0 * LANE_HEIGHT, AREA_MAX_HEIGHT);
+    let (area, background) =
+        ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click_and_drag());
+    let background = background.on_hover_cursor(if ui.input(|input| input.pointer.any_down()) {
+        egui::CursorIcon::Grabbing
+    } else {
+        egui::CursorIcon::Grab
+    });
+    if background.dragged() {
+        view.pan += background.drag_delta();
+    }
+    if background.double_clicked() {
+        *view = View::default();
+    }
+    let gutter = Rect::from_min_max(
+        area.min,
+        pos2((area.left() + GUTTER).min(area.right()), area.bottom()),
+    );
+    if background.hovered() {
+        let pinch = ui.input(|input| input.zoom_delta());
+        if pinch != 1.0 {
+            let pointer = ui.input(|input| input.pointer.hover_pos());
+            let pivot = pointer.map_or(area.size() / 2.0, |at| at - gutter.right_top());
+            view.zoom_about(vec2(pivot.x, pivot.y), pinch);
+        }
+    }
+    background.context_menu(|ui| {
+        crate::mermaid::menu_item(ui, || {
+            mermaid(layout, |process| activity.process_label(process))
         });
+        if ui.button("Reset the view").clicked() {
+            *view = View::default();
+            ui.close();
+        }
+    });
+    let zoom = view.zoom;
+    // The graph's origin: past the gutter, moved by the pan.
+    let origin = pos2(gutter.right(), area.top()).to_vec2() + view.pan;
+    let at = |rect: Rect| {
+        Rect::from_min_size(
+            (rect.min.to_vec2() * zoom + origin).to_pos2(),
+            rect.size() * zoom,
+        )
+    };
+    // The nodes that move past the names are cut off there instead of running
+    // under them.
+    let plot = ui.painter_at(area).with_clip_rect(Rect::from_min_max(
+        pos2(gutter.right(), area.top()),
+        area.right_bottom(),
+    ));
+    let painter = ui.painter_at(area);
+    for lane in 0..layout.lanes.len() {
+        let y = origin.y + (lane + 1) as f32 * LANE_HEIGHT * zoom;
+        plot.hline(
+            plot.clip_rect().x_range(),
+            y,
+            Stroke::new(1.0_f32, theme::line_soft()),
+        );
+    }
+    for (index, pair) in layout.nodes.windows(2).enumerate() {
+        let from = at(place(index, &pair[0]));
+        let to = at(place(index + 1, &pair[1]));
+        edge(&plot, from.right_center(), to.left_center());
+    }
+    let mut body = egui::TextStyle::Body.resolve(ui.style());
+    body.size = (body.size * zoom).clamp(6.0, 40.0);
+    for (index, node) in layout.nodes.iter().enumerate() {
+        let rect = at(place(index, node));
+        // A node out of sight cannot be reached.
+        if rect.right() <= gutter.right() || rect.left() >= area.right() {
+            continue;
+        }
+        let id = ui.id().with(("file-activity-node", index));
+        let response = ui.interact(
+            rect.intersect(plot.clip_rect()),
+            id,
+            Sense::click_and_drag(),
+        );
+        // A drag that began on a node moves the graph too.
+        if response.dragged() {
+            view.pan += response.drag_delta();
+        }
+        let tint = if node.failed {
+            theme::muted()
+        } else {
+            tint(node.kind)
+        };
+        let hot = response.hovered() || selected == Some(index);
+        plot.rect(
+            rect,
+            6.0 * zoom,
+            tint.gamma_multiply(if hot { 0.40 } else { 0.22 }),
+            Stroke::new(
+                if selected == Some(index) {
+                    2.0_f32
+                } else {
+                    1.0
+                },
+                tint,
+            ),
+            egui::StrokeKind::Inside,
+        );
+        plot.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            label(node),
+            body.clone(),
+            theme::text(),
+        );
+        if response.clicked() {
+            clicked = Some(index);
+        }
+        response.on_hover_text(tooltip(file, node));
+    }
+    // The gutter over the nodes: a solid ground, then one name per lane,
+    // cut to the room with its whole text on hover. The names follow the
+    // lanes up and down.
+    painter.rect_filled(gutter, 0.0, ui.visuals().panel_fill);
+    painter.vline(
+        gutter.right(),
+        gutter.y_range(),
+        Stroke::new(1.0_f32, theme::line_soft()),
+    );
+    let names = painter.with_clip_rect(gutter);
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    for (lane, process) in layout.lanes.iter().enumerate() {
+        let top = origin.y + lane as f32 * LANE_HEIGHT * zoom;
+        let full = activity.process_label(*process);
+        let shown = fit(&names, &full, &font, GUTTER - 2.0 * NAME_PAD);
+        let spot = pos2(gutter.left() + NAME_PAD, top + LANE_HEIGHT * zoom / 2.0);
+        let rect = names.text(
+            spot,
+            Align2::LEFT_CENTER,
+            &shown,
+            font.clone(),
+            theme::muted(),
+        );
+        if shown != full {
+            let id = ui.id().with(("file-activity-lane", lane));
+            ui.interact(
+                rect.expand2(vec2(NAME_PAD, 4.0)).intersect(gutter),
+                id,
+                Sense::hover(),
+            )
+            .on_hover_text(full);
+        }
+    }
     clicked
 }
 
@@ -267,6 +352,24 @@ pub(super) fn fit(painter: &egui::Painter, text: &str, font: &egui::FontId, widt
     chars[..low].iter().chain(['…'].iter()).collect()
 }
 
+/// The graph as Mermaid text: each node is one stretch of calls of one
+/// process (its name above the operation), each pointing at the next in time
+/// order, as the picture draws them. `process_label` names a process index.
+pub(super) fn mermaid(layout: &Layout, process_label: impl Fn(u32) -> String) -> String {
+    let mut chart = crate::mermaid::Flowchart::new("LR");
+    let key = |index: usize| format!("call-{index}");
+    for (index, node) in layout.nodes.iter().enumerate() {
+        chart.node(
+            &key(index),
+            &format!("{}\n{}", process_label(node.process), label(node)),
+        );
+    }
+    for index in 1..layout.nodes.len() {
+        chart.edge(&key(index - 1), &key(index), None);
+    }
+    chart.render()
+}
+
 /// What the hover on a node says: how many calls, how many octets.
 pub(super) fn tooltip(file: &FileActivity, node: &Node) -> String {
     let events = &file.events[node.events.clone()];
@@ -284,4 +387,34 @@ pub(super) fn tooltip(file: &FileActivity, node: &Node) -> String {
     }
     text.push_str("\nClick for the calls");
     text
+}
+
+#[cfg(test)]
+mod mermaid_tests {
+    use super::*;
+
+    #[test]
+    fn the_nodes_follow_each_other_with_the_process_named() {
+        let node = |kind, process, count: usize, failed| Node {
+            kind,
+            process,
+            events: 0..count,
+            failed,
+            lane: 0,
+            rest: false,
+        };
+        let layout = Layout {
+            lanes: vec![1, 2],
+            nodes: vec![
+                node(Kind::Open, 1, 1, false),
+                node(Kind::Write, 2, 3, false),
+                node(Kind::Delete, 1, 1, true),
+            ],
+        };
+        let text = mermaid(&layout, |process| format!("proc <{process}>"));
+        assert!(text.starts_with("flowchart LR\n"));
+        assert!(text.contains("proc #lt;2#gt;<br/>"), "{text}");
+        assert_eq!(text.matches(" --> ").count(), 2, "{text}");
+        assert_eq!(text.matches("[\"").count(), 3, "{text}");
+    }
 }

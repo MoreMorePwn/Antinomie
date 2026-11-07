@@ -5,13 +5,15 @@ use super::*;
 
 impl MonitorApp {
     pub(super) fn explorer_sidebar(&mut self, ui: &mut egui::Ui) {
-        let mut choose = section_header(
+        let choose = section_header(
             ui,
             SectionHeader {
                 title: "Explorer",
                 count: None,
                 tooltip: "Host files: click to fold",
+                glyph: egui_phosphor::regular::FOLDER_OPEN,
                 action: "Choose Explorer folder",
+                blocked: "Install Zenity first",
                 enabled: self.folder_picker.available(),
                 open: false,
             },
@@ -55,12 +57,6 @@ impl MonitorApp {
                 }
             } else {
                 ui.add_space(8.0);
-                choose |= ui
-                    .add_enabled(
-                        self.folder_picker.available(),
-                        egui::Button::new("Choose folder…"),
-                    )
-                    .clicked();
                 ui.colored_label(theme::muted(), "Browse files on this computer.");
             }
             if self.folder_picker.checking() {
@@ -85,12 +81,8 @@ impl MonitorApp {
             }
         }
         if choose {
-            if let Err(error) = self.folder_picker.choose(FolderTarget {
-                generation: self.explorer_browser.generation,
-                kind: FolderKind::ExplorerRoot,
-            }) {
-                self.report_error(format!("Explorer folder: {error}"));
-            }
+            let ctx = ui.ctx().clone();
+            self.run_action(&ctx, Action::ExplorerFolder);
         }
     }
 

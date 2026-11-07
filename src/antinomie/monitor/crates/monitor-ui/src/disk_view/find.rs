@@ -94,6 +94,7 @@ impl DiskView {
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.find.query)
                     .desired_width(crate::theme::plain_edit_width(220.0))
+                    .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                     .hint_text(crate::theme::placeholder(
                         ui,
                         if self.find.mode.is_content() {
@@ -103,6 +104,7 @@ impl DiskView {
                         },
                     )),
             );
+            crate::widgets::clear_button(ui, &edit, &mut self.find.query);
             egui::ComboBox::from_id_salt("disk_find_mode")
                 .selected_text(self.find.mode.label())
                 .width(130.0)

@@ -14,7 +14,9 @@ pub(super) fn parse_yara(text: &str) -> Vec<IndexedRule> {
             severity: String::new(),
             license: Some(meta_in(&body, "license"))
                 .filter(|license| !license.is_empty())
+                .or_else(|| Some(meta_in(&body, "yarahub_license")).filter(|l| !l.is_empty()))
                 .unwrap_or_else(|| meta_in(&body, REPOSITORY_LICENSE_META)),
+            author: meta_in(&body, "author"),
             source_url: meta_in(&body, "source_url"),
             condition: clip(&meta_in(&body, "description"), 180),
             references: reference_list(&body),
@@ -25,6 +27,25 @@ pub(super) fn parse_yara(text: &str) -> Vec<IndexedRule> {
             depends_on: yara_dependencies(&body),
         })
         .collect()
+}
+
+/// The value of a well-known rule meta key among `(key, value)` pairs. Keys
+/// are matched in any case, because rules in the wild spell `Description`,
+/// `DESCRIPTION` and `description`; the exact `key` wins when several match.
+pub fn meta_get<'a>(
+    pairs: impl IntoIterator<Item = (&'a str, &'a str)>,
+    key: &str,
+) -> Option<&'a str> {
+    let mut other = None;
+    for (name, value) in pairs {
+        if name == key {
+            return Some(value);
+        }
+        if other.is_none() && name.eq_ignore_ascii_case(key) {
+            other = Some(value);
+        }
+    }
+    other
 }
 
 pub(super) fn yara_blocks(text: &str) -> Vec<(String, String, bool)> {

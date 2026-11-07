@@ -635,10 +635,15 @@ fn run_program(
             &work,
             &read_only,
             &[("ANTINOMIE_ISOLATED_WORKER", "1")],
-            if request.engine == Engine::Ids {
-                super::ids::IDS_SANDBOX
-            } else {
-                Duration::from_secs(180)
+            match request.engine {
+                Engine::Ids => super::ids::sandbox(&request.settings),
+                // The scan or adapter time and the setup around it.
+                Engine::Yara => Duration::from_secs(
+                    180.max(request.settings.timeouts.seconds(super::EngineTime::Yara) + 80),
+                ),
+                Engine::Sigma => Duration::from_secs(
+                    180.max(request.settings.timeouts.seconds(super::EngineTime::Sigma) + 70),
+                ),
             },
             cancel,
         )?;

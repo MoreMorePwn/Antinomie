@@ -140,6 +140,11 @@ fn rows(ui: &mut egui::Ui, id: &str, rows: &[(&str, String)]) {
 
 /// A large figure with a unit, as the resource cards show readings.
 fn figure(ui: &mut egui::Ui, value: &str, unit: &str) {
+    let job = figure_job(ui, value, unit);
+    ui.add(egui::Label::new(job).wrap());
+}
+
+fn figure_job(ui: &egui::Ui, value: &str, unit: &str) -> egui::text::LayoutJob {
     let body = ui.text_style_height(&egui::TextStyle::Body);
     let format = |size: f32, color: Color32| egui::TextFormat {
         font_id: egui::FontId::proportional(size),
@@ -150,18 +155,24 @@ fn figure(ui: &mut egui::Ui, value: &str, unit: &str) {
     let mut job = egui::text::LayoutJob::default();
     job.append(value, 0.0, format(body * 1.9, theme::heading()));
     job.append(&format!(" {unit}"), 0.0, format(body, theme::muted()));
-    ui.add(egui::Label::new(job).wrap());
+    job
 }
 
 fn compute(ui: &mut egui::Ui, vm: &VmConfig) {
     title(ui, icon::CPU, "Compute", theme::blue());
-    figure(ui, &vm.cpus.to_string(), "vCPU");
+    // The vCPU count and the RAM side by side, both in the large figure.
     let ram = crate::values::short_size(u64::from(vm.ram_mib) << 20);
+    let (amount, unit) = ram.split_once(' ').unwrap_or((ram.as_str(), ""));
+    let unit = format!("{unit} RAM");
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = ui.text_style_height(&egui::TextStyle::Body) * 1.5;
+        figure(ui, &vm.cpus.to_string(), "vCPU");
+        figure(ui, amount, unit.trim());
+    });
     rows(
         ui,
         "summary-config-compute",
         &[
-            ("RAM", ram),
             ("CPU model", vm.launch.cpu_model.label().to_owned()),
             ("Acceleration", vm.launch.acceleration.label().to_owned()),
         ],
@@ -179,8 +190,10 @@ fn storage(ui: &mut egui::Ui, vm: &VmConfig, snapshot: &Snapshot) {
                 .unwrap_or_else(|| "Default base".into())
         });
     let mut display = vm.launch.resolution.label().to_owned();
-    if vm.launch.screen == antinomie_monitor_core::VmScreen::QemuWindow {
-        display.push_str(" · QEMU window");
+    match vm.launch.screen {
+        antinomie_monitor_core::VmScreen::QemuWindow => display.push_str(" · QEMU window"),
+        antinomie_monitor_core::VmScreen::NoScreen => display.push_str(" · No screen"),
+        antinomie_monitor_core::VmScreen::InApp => {}
     }
     if vm.launch.fullscreen {
         display.push_str(" · Fullscreen");

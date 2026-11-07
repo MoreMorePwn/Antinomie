@@ -248,6 +248,7 @@ impl Action {
                 }
                 settings_window::SettingsPage::AnalysisTools => "ghidra capa floss tools paths",
                 settings_window::SettingsPage::Disks => "ext4 image partition dump",
+                settings_window::SettingsPage::Keyboard => "shortcut keys bindings hotkeys 60%",
                 settings_window::SettingsPage::Advanced => "rows page limit developer",
             },
             Self::BaseImages => "library bases guest images",
@@ -287,6 +288,7 @@ impl Action {
             Self::NewVm | Self::ImportBase | Self::DownloadBase | Self::BuildBase | Self::Quit => {
                 "File"
             }
+            Self::ExplorerFolder | Self::AddSampleFile => "File",
             Self::StartVm
             | Self::StopVm
             | Self::ConfigureVm
@@ -312,14 +314,11 @@ impl Action {
                 "View"
             }
             Self::SettingsTo(_) => "Settings",
-            Self::BaseImages | Self::SamplesPage | Self::ScreenshotsPage | Self::AddSampleFile => {
-                "Library"
-            }
+            Self::BaseImages | Self::SamplesPage | Self::ScreenshotsPage => "Library",
             Self::RulesEngine(..) => "Rules",
             Self::ImportMemoryDump | Self::PluginCatalog => "Memory",
             Self::ImportDiskImage => "Disks",
             Self::ImportCore => "Core dumps",
-            Self::ExplorerFolder => "Explorer",
             Self::TelemetryTransport | Self::DeviceProfile => "VM",
             Self::OpenTerminal | Self::EditRunTags | Self::DeleteRun | Self::ExportReport => "Run",
             Self::RuleDetails | Self::AbusechPacks => "Rules",
@@ -343,9 +342,10 @@ impl Action {
         }
     }
 
-    /// The shortcut that always means this action. A view's Ctrl+digit moves
-    /// with its tab (`MonitorApp::shortcut_text`).
-    pub(super) fn shortcut(&self) -> Option<egui::KeyboardShortcut> {
+    /// The shortcut this action has until Settings > Keyboard changes it (see
+    /// `MonitorApp::shortcut_of`). A view's Ctrl+digit moves with its tab
+    /// (`MonitorApp::shortcut_text`).
+    pub(super) fn default_shortcut(&self) -> Option<egui::KeyboardShortcut> {
         Some(match self {
             Self::NewVm => keys::NEW_VM,
             Self::StartVm => keys::START_VM,
@@ -361,6 +361,7 @@ impl Action {
             Self::ToggleBottomPane => keys::TOGGLE_BOTTOM_PANE,
             Self::Go(Panel::Activity) => keys::SHOW_ACTIVITY,
             Self::Go(Panel::Jobs) => keys::SHOW_JOBS,
+            Self::Go(Panel::Details) => keys::SHOW_DETAILS,
             _ => return None,
         })
     }
@@ -396,7 +397,7 @@ impl Action {
                 "Capture network"
             }
             .into(),
-            Self::KillRun => "Kill run".into(),
+            Self::KillRun => "Stop run".into(),
             Self::DumpMemory => "Dump memory".into(),
             Self::DumpCore => "Dump core…".into(),
             Self::Go(panel) => panel.title().into(),
@@ -423,7 +424,7 @@ impl Action {
             Self::BaseImages => "Base images".into(),
             Self::SamplesPage => "Samples".into(),
             Self::ScreenshotsPage => "Screenshots".into(),
-            Self::AddSampleFile => "Add file to Samples…".into(),
+            Self::AddSampleFile => "Import sample…".into(),
             Self::RulesEngine(engine, catalog) => {
                 let name = match *engine {
                     "yara" => "YARA rules",
@@ -443,7 +444,7 @@ impl Action {
             Self::PluginCatalog => "Memory plugin catalog…".into(),
             Self::ImportDiskImage => "Import disk image…".into(),
             Self::ImportCore => "Import process core…".into(),
-            Self::ExplorerFolder => "Choose Explorer folder…".into(),
+            Self::ExplorerFolder => "Open folder…".into(),
             Self::TelemetryTransport => "Telemetry transport…".into(),
             Self::DeviceProfile => "Device profile…".into(),
             Self::OpenTerminal => "Open terminal of the selected run".into(),
@@ -594,7 +595,7 @@ impl MonitorApp {
             }
             Action::KillRun => reason(
                 self.kill_target().is_some(),
-                "No active run to kill. Select a live run in Run history.",
+                "No active run to stop. Select a live run in Run history.",
             ),
             Action::DumpMemory => {
                 if !self.running() {
@@ -696,11 +697,14 @@ impl MonitorApp {
                 .layout
                 .tab_key_position(panel)
                 .and_then(keys::tab_shortcut)
-                .or_else(|| action.shortcut())
+                .or_else(|| self.shortcut_of(action))
                 .map(|shortcut| ctx.format_shortcut(&shortcut)),
-            Action::Shortcuts => Some(keys::SHORTCUT_LIST.into()),
-            other => other
-                .shortcut()
+            Action::Shortcuts => Some(
+                self.shortcut_of(action)
+                    .map_or_else(|| keys::SHORTCUT_LIST.into(), |s| ctx.format_shortcut(&s)),
+            ),
+            other => self
+                .shortcut_of(other)
                 .map(|shortcut| ctx.format_shortcut(&shortcut)),
         }
     }
@@ -711,6 +715,17 @@ impl MonitorApp {
             Some(shortcut) => format!("{text} ({shortcut})"),
             None => text.into(),
         }
+    }
+
+    /// The tooltip of the arrow at the right end of the Details, Activity and
+    /// Jobs tab strip, with the shortcut as the user has set it.
+    pub(crate) fn bottom_arrow_tooltip(&self, ctx: &egui::Context, folded: bool) -> String {
+        let text = if folded {
+            "Show Details, Activity and Jobs"
+        } else {
+            "Hide Details, Activity and Jobs"
+        };
+        self.with_shortcut(ctx, text, &Action::ToggleBottomPane)
     }
 
     /// Run `action` if it can run now. Everything that does something for a

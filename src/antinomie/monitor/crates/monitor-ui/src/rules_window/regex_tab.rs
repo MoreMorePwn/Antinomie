@@ -43,7 +43,16 @@ impl RegexState {
         self.config.custom.len().to_string()
     }
 
-    fn load(&mut self, data_dir: &Path) {
+    /// Built-in patterns that are on plus the custom ones that are on.
+    pub(super) fn active_count(&self) -> usize {
+        builtin_patterns()
+            .iter()
+            .filter(|(id, ..)| self.config.is_enabled(id))
+            .count()
+            + self.config.custom.iter().filter(|p| p.enabled).count()
+    }
+
+    pub(super) fn load(&mut self, data_dir: &Path) {
         if self.loaded {
             return;
         }
@@ -119,6 +128,12 @@ impl Model {
         if let Some(error) = &self.regex.error {
             crate::activity::error(ui, error);
         }
+        let total = builtin_patterns().len() + self.regex.config.custom.len();
+        ui.weak(format!(
+            "{} of {total} string patterns in use",
+            self.regex.active_count()
+        ))
+        .on_hover_text("The built-in and custom patterns that are switched on.");
         ui.add_space(4.0);
         theme::section(ui, "Add patterns");
         self.custom_patterns(ui, data_dir);
@@ -224,7 +239,8 @@ impl Model {
             self.regex.add(data_dir);
         }
         ui.horizontal(|ui| {
-            ui.label("Try on");
+            ui.label("Try on")
+                .on_hover_text("Paste a string to see which patterns match it. Nothing is saved.");
             ui.add(
                 egui::TextEdit::singleline(&mut self.regex.sample)
                     .hint_text(crate::theme::placeholder(

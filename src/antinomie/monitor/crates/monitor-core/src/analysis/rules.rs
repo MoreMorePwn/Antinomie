@@ -31,9 +31,6 @@ pub(super) fn compile_sources(
     Ok(compiler.build())
 }
 
-/// The time one scan of the file may take, in seconds.
-const SCAN_SECONDS: u64 = 60;
-
 fn meta_text(value: &yara_x::MetaValue) -> Option<String> {
     match value {
         yara_x::MetaValue::String(text) => Some((*text).to_owned()),
@@ -84,7 +81,7 @@ pub(super) fn scan_at(section: &mut AnalysisSection, specimen: &[u8], directory:
         format!("{} selected rule files", sources.len()),
     ];
     let mut scanner = yara_x::Scanner::new(&rules);
-    let timeout = super::limits::seconds(SCAN_SECONDS);
+    let timeout = super::limits::seconds_for(super::limits::TimedTool::Yara);
     scanner.set_timeout(Duration::from_secs(timeout));
     let results = match scanner.scan(specimen) {
         Ok(results) => results,
@@ -111,10 +108,8 @@ pub(super) fn scan_at(section: &mut AnalysisSection, specimen: &[u8], directory:
             .filter_map(|(name, value)| meta_text(&value).map(|v| (name.to_owned(), v)))
             .collect();
         let meta = |key: &str| {
-            metadata
-                .iter()
-                .find(|(name, _)| name == key)
-                .map(|(_, value)| value.clone())
+            crate::ruleset::meta_get(metadata.iter().map(|(n, v)| (n.as_str(), v.as_str())), key)
+                .map(str::to_owned)
         };
         let mut first = None;
         let mut evidence = Vec::new();
@@ -144,6 +139,7 @@ pub(super) fn scan_at(section: &mut AnalysisSection, specimen: &[u8], directory:
         let author = meta("author").unwrap_or_else(|| "unknown author".into());
         let license = meta("license")
             .or_else(|| meta("malpedia_license"))
+            .or_else(|| meta("yarahub_license"))
             .unwrap_or_default();
         let ruleset = format!("{author}; {license}");
         let mut tags: Vec<String> = rule.tags().map(|t| t.identifier().to_owned()).collect();

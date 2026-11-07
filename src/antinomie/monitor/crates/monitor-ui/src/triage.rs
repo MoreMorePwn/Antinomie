@@ -33,12 +33,14 @@ mod async_files;
 mod attack;
 mod auditd_events;
 mod bpf_attach;
+mod bpf_fields;
 mod bpf_notes;
 mod counts;
 mod descriptors;
 mod details;
 mod detection;
 mod digest;
+pub(crate) mod family;
 mod file_activity;
 mod file_category;
 #[cfg(test)]
@@ -46,12 +48,18 @@ mod file_category_tests;
 mod file_content;
 mod file_events;
 mod file_location;
+mod file_shown;
+#[cfg(test)]
+mod file_shown_tests;
 mod file_tabs;
+mod file_type;
 mod file_visibility;
 pub(crate) const DEFAULT_REBUILD_FILE_MIB: u32 = files::DEFAULT_FILE_MIB;
 pub(crate) const DEFAULT_REBUILD_RUN_MIB: u32 = files::DEFAULT_RUN_MIB;
 mod files;
 mod finding_bar;
+mod finding_cells;
+mod finding_details;
 mod findings;
 mod geoip_fill;
 mod graph;
@@ -71,7 +79,11 @@ mod network_index;
 mod normalized;
 mod pcap_scan;
 mod presentation;
+mod process_cells;
 mod process_details;
+mod process_env;
+mod process_mermaid;
+mod process_record;
 mod process_tree;
 #[cfg(test)]
 mod process_tree_tests;
@@ -204,6 +216,8 @@ pub(crate) struct TriageView {
     file_history: file_activity::Window,
     /// The Per-file history tab is chosen instead of one of [`FileTab`].
     history_tab: bool,
+    /// The Files section shows the per-file table, its first tab.
+    by_file: bool,
     new_tab: NewTab,
     /// The IOC section.
     ioc: ioc_view::View,
@@ -283,6 +297,10 @@ pub(crate) struct TriageView {
     notes: Vec<String>,
     /// Export report: the dialog, its choices and the running export.
     report: report_export::Dialog,
+    /// The Summary's Relationships box and the data derived for it.
+    summary_state: summary::SummaryState,
+    /// The base image and last screenshot of the selected run.
+    run_facts: summary::RunFacts,
 }
 
 impl TriageView {
@@ -302,6 +320,7 @@ impl Default for TriageView {
             files: FileTab::Opened,
             file_history: Default::default(),
             history_tab: false,
+            by_file: true,
             new_tab: NewTab::Endpoints,
             ioc: ioc_view::View::default(),
             selected_call_id: None,
@@ -347,6 +366,8 @@ impl Default for TriageView {
             route: crate::route_ui::RouteText::default(),
             notes: Vec::new(),
             report: report_export::Dialog::default(),
+            summary_state: Default::default(),
+            run_facts: Default::default(),
         }
     }
 }
@@ -480,6 +501,7 @@ impl TriageView {
         self.section = Section::Files;
         self.files = FileTab::Changed;
         self.history_tab = false;
+        self.by_file = false;
         // A quote or backslash cannot be written in the filter's string.
         if !path.contains(['"', '\\']) && !path.chars().any(char::is_control) {
             let draft = format!("file.path == \"{path}\"");
@@ -497,6 +519,7 @@ impl TriageView {
     pub(crate) fn show_file_history(&mut self, path: &str, reconstruct: bool) {
         self.section = Section::Files;
         self.history_tab = true;
+        self.by_file = false;
         if reconstruct {
             self.file_history.reconstruct(path);
         } else {
@@ -576,6 +599,7 @@ impl TriageView {
     pub(crate) fn show_finding_windows(&mut self, ctx: &egui::Context) {
         self.detection.show_windows(ctx);
         self.show_graph_window(ctx);
+        self.show_relations_window(ctx);
         self.show_report_dialog(ctx);
     }
 
@@ -612,27 +636,43 @@ impl TriageView {
         if self.section == Section::Bpf {
             self.refresh_row(ui, &input);
         }
-        let jump = match self.section {
-            Section::Summary | Section::Properties | Section::Detection | Section::Ioc => None,
-            Section::Process => self.process(ui, &input),
-            Section::Files => {
-                self.files(ui, &input);
-                None
-            }
-            Section::Network => {
-                crate::widgets::fact_line(ui, "Route", &self.route.headline);
-                self.new_network(ui, &input);
-                None
-            }
-            Section::Bpf => {
-                let indexed = self.scan.as_ref().map(|scan| scan.bpf.as_slice());
-                if self.scan.as_ref().is_some_and(|scan| scan.bpf_omitted > 0) {
-                    crate::activity::info(ui, "Some BPF observations exceed the preview limit; original syscall evidence remains available.");
+        // The body of a table section is a page that scrolls when its filters
+        // and notes leave a table under `MIN_TABLE_HEIGHT` of room: the pane
+        // itself has no scroll area, so a table pushed below its bottom edge
+        // could not be reached. The tables keep their own scroll area, sized
+        // to what is left of the pane.
+        let viewport = ui.available_height();
+        let page = egui::Id::new(("triage-page", std::mem::discriminant(&self.section)));
+        let jump = egui::ScrollArea::vertical()
+            .id_salt(page)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_max_height(viewport);
+                match self.section {
+                    Section::Summary | Section::Properties | Section::Detection | Section::Ioc => {
+                        None
+                    }
+                    Section::Process => self.process(ui, &input),
+                    Section::Files => {
+                        self.files(ui, &input);
+                        None
+                    }
+                    Section::Network => {
+                        crate::widgets::fact_line(ui, "Route", &self.route.headline);
+                        self.new_network(ui, &input);
+                        None
+                    }
+                    Section::Bpf => {
+                        let indexed = self.scan.as_ref().map(|scan| scan.bpf.as_slice());
+                        if self.scan.as_ref().is_some_and(|scan| scan.bpf_omitted > 0) {
+                            crate::activity::info(ui, "Some BPF observations exceed the preview limit; original syscall evidence remains available.");
+                        }
+                        bpf_view(ui, &input, indexed);
+                        None
+                    }
                 }
-                bpf_view(ui, &input, indexed);
-                None
-            }
-        };
+            })
+            .inner;
         jump.or_else(|| self.take_navigation(ui.ctx()))
     }
 
@@ -770,6 +810,7 @@ impl TriageView {
         match self.process {
             ProcessTab::Tree => {
                 if let Some(scan) = &self.scan {
+                    process_mermaid::copy_button(ui, &scan.process);
                     process_tree_nodes(
                         ui,
                         &scan.process,
@@ -779,12 +820,9 @@ impl TriageView {
                 } else {
                     let suspicious =
                         suspicious_output(input.invocations, rules::Options::default()).tasks;
-                    process_tree_nodes(
-                        ui,
-                        &process_nodes(input.invocations),
-                        input.clock_anchor,
-                        &suspicious,
-                    );
+                    let nodes = process_nodes(input.invocations);
+                    process_mermaid::copy_button(ui, &nodes);
+                    process_tree_nodes(ui, &nodes, input.clock_anchor, &suspicious);
                 }
                 None
             }
@@ -840,11 +878,9 @@ impl TriageView {
             .as_ref()
             .and_then(|scan| scan.clock_anchor)
             .or(self.scan_request.clock_anchor);
+        let start = self.run_start();
         for finding in &mut findings {
-            finding.cells[rules::COL_TIME].text = crate::time_format::guest_ns(
-                clock,
-                files::number(&finding.values, "event.time_ns"),
-            );
+            rules::stamp(finding, clock, start);
         }
         let rows = if self.scan.is_some() {
             findings
@@ -862,6 +898,7 @@ impl TriageView {
             self.selected_call_id,
             self.table_focus.take(),
         );
+        self.finding_requests(ui.ctx());
         if let Some(call_id) = clicked {
             self.selected_call_id = Some(call_id);
         }
@@ -1024,6 +1061,20 @@ struct Cell {
     theme: theme::Theme,
     mono: bool,
     values: Vec<(&'static str, RowValue)>,
+    /// Small pills drawn before the text (a path's location, how many other
+    /// names it has, a finding that involves it). They are made when the row
+    /// is shown, from its values, and are not stored.
+    badges: Vec<Badge>,
+    /// Said on hover instead of the text: a relative time's absolute one.
+    note: Option<String>,
+}
+
+/// A pill in a table cell.
+#[derive(Clone, Debug, PartialEq)]
+struct Badge {
+    text: String,
+    tone: crate::widgets::Tone,
+    hover: String,
 }
 
 impl Cell {
@@ -1122,6 +1173,7 @@ struct TaskNode {
     forked: bool,
     /// An exec committed here and no image name was recorded for it.
     exec_unnamed: bool,
+    record: process_record::ProcessRecord,
 }
 
 enum Spawn {
@@ -1131,6 +1183,7 @@ enum Spawn {
     Skip,
 }
 
+#[cfg_attr(test, derive(Clone))]
 struct ProcessNode {
     parent: Option<TaskKey>,
     call_id: Option<trace::InvocationKey>,
@@ -1158,10 +1211,13 @@ struct ProcessNode {
     in_call: Option<(String, u64)>,
     /// The image is the parent's: a fork that has not run an exec of its own.
     forked: bool,
+    /// The environment, execs, credentials and call count of the task.
+    record: process_record::ProcessRecord,
 }
 
 const FINDING_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("finding.rule", "Stable activity rule"),
+    FieldSpec::text("finding.title", "The rule's short title"),
     FieldSpec::number("finding.version", "Rule version"),
     FieldSpec::text("finding.tier", "high, medium, low or info, after context"),
     FieldSpec::text("finding.severity", "Same as finding.tier"),
@@ -1377,6 +1433,9 @@ struct ArchiveScan {
     suspicious: Suspicious,
     findings: Vec<Finding>,
     findings_omitted: u64,
+    /// Paths a finding above Info names as its object, whatever the findings
+    /// table is filtered to, with what they say: the tag of those files in Files.
+    flagged_paths: file_shown::Flags,
     /// The same rows as lanes and buckets, and the run's overview.
     graph: graph::GraphScan,
     /// Rules the scan could not evaluate, and why.
@@ -1444,6 +1503,9 @@ struct PacketIndex {
 struct FdState {
     /// Images tracked in observation order, keyed by stable task identity.
     process_images: std::collections::BTreeMap<TaskKey, TaskNode>,
+    /// Task → its parent process as the whole recording settled it (see
+    /// `process_tree::settled_parents`); empty while only a prefix is known.
+    settled_parents: std::collections::BTreeMap<TaskKey, TaskKey>,
     /// `(owner cookie, owner pid, fd)` → path text captured for that descriptor.
     opened: std::collections::BTreeMap<(u64, u32, u64), String>,
     /// Child task → the task whose descriptor table it shares (`CLONE_FILES`).

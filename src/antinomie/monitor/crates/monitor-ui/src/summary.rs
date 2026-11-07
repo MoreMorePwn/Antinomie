@@ -275,13 +275,14 @@ pub(crate) fn show(
                         .wrap(),
                     );
                 }
+                // Room between the name and the state; the vCPU count and the
+                // network are in the cards below.
+                ui.add_space(16.0);
                 indicator(
                     ui,
                     state_label(snapshot, active),
                     crate::widgets::fg_or_muted(state_tone(snapshot, active)),
                 );
-                ui.colored_label(theme::muted(), format!("{} vCPU", vm.cpus));
-                ui.colored_label(theme::muted(), format!("Network: {}", network_label(vm)));
             });
             if let Some(base) = crate::app::selected_base(snapshot, vm.base_identity.as_deref()) {
                 ui.add(
@@ -471,11 +472,20 @@ pub(crate) fn show(
                         "The recording writer was behind the disk, so the host took no telemetry and the guest's sends waited. Nothing was dropped by this.",
                     );
                 }
+                if let Some(shed) = health::shed_text(&snapshot.health) {
+                    crate::widgets::fact_line(ui, "Capture All shed telemetry", &shed)
+                        .on_hover_text(
+                            "This VM lets Capture All drop telemetry when the host falls behind (Telemetry transport): the guest dropped it instead of waiting on every system call, so that it stayed responsive. These drops are in the transport loss count.",
+                        );
+                }
                 if snapshot.health.shedding {
                     crate::activity::warning(
                         ui,
                         "Active — telemetry is being dropped by Capture All shedding",
                     );
+                }
+                if snapshot.health.never_drop_slowing {
+                    crate::activity::info(ui, health::SLOWING_NOTE);
                 }
                 crate::run_recording::health_errors(ui, snapshot);
                 capture_health.show(ui, snapshot);
@@ -1042,7 +1052,11 @@ fn trend(
     }
 }
 fn indicator(ui: &mut egui::Ui, label: &str, color: Color32) {
-    ui.add(egui::Label::new(RichText::new(format!("● {label}")).color(color)).wrap());
+    ui.add(
+        crate::widgets::dot::DotLabel::new(color, label)
+            .text_color(color)
+            .wrap(),
+    );
 }
 fn meter(ui: &mut egui::Ui, ratio: Option<f64>, color: Color32, unavailable: &str) {
     let (response, painter) =
@@ -1527,7 +1541,7 @@ mod tests {
             .1;
         let health = texts.iter().find(|(text, _)| text == "Health").unwrap().1;
         assert!(configuration.bottom() < health.top());
-        for expected in ["6 vCPU", "host", "3.0 GiB", "24 GiB disk"] {
+        for expected in ["6 vCPU", "host", "3.0 GiB RAM", "24 GiB disk"] {
             assert!(
                 texts.iter().any(|(text, _)| text == expected),
                 "missing {expected}"

@@ -57,6 +57,26 @@ impl NameChoice {
 }
 
 impl FileActivity {
+    /// The file's SHA-256: the guest's hash of it, else the last one it took
+    /// in the run, else the starting disk's for a file the run only read.
+    pub(in crate::triage) fn sha256(&self) -> Option<String> {
+        use antinomie_monitor_core::file_before::StartHash;
+        self.contents
+            .hash
+            .as_ref()
+            .and_then(|hash| hash.sha256_hex())
+            .or_else(|| {
+                self.hashes
+                    .iter()
+                    .rev()
+                    .find_map(|note| note.sha256.clone())
+            })
+            .or_else(|| match &self.start_hash {
+                Some(StartHash::Hashed { sha256, .. }) => Some(sha256.clone()),
+                _ => None,
+            })
+    }
+
     /// The name the file had after its last successful rename, if it was
     /// renamed.
     pub(super) fn last_name(&self) -> Option<&str> {
@@ -88,6 +108,8 @@ pub(in crate::triage) struct Window {
     /// The chosen file: its path and first call, which survive a new index.
     selected: Option<(String, u64)>,
     node: Option<usize>,
+    /// Where the graph is looked at; a new file starts at the beginning.
+    graph_view: graph::View,
     /// The File Reconstruction window, when open.
     reconstruction: Option<reconstruct::Open>,
     /// Open it for the chosen file as soon as the index has it.
@@ -105,6 +127,7 @@ impl Default for Window {
             name_choice: NameChoice::Last,
             selected: None,
             node: None,
+            graph_view: graph::View::default(),
             reconstruction: None,
             want_reconstruction: false,
         }
@@ -117,6 +140,7 @@ impl Window {
         self.filter.clear();
         self.selected = Some((path.to_owned(), 0));
         self.node = None;
+        self.graph_view = graph::View::default();
     }
 
     /// Show the file at `path` with its reconstruction open (the Files tabs'
@@ -144,6 +168,12 @@ impl Window {
     #[cfg(test)]
     pub(super) fn reconstruction(&mut self) -> Option<&mut reconstruct::Open> {
         self.reconstruction.as_mut()
+    }
+
+    /// Where the graph is looked at, for the tests.
+    #[cfg(test)]
+    pub(super) fn graph_view(&self) -> graph::View {
+        self.graph_view
     }
 
     /// The path of the chosen file and the chosen node, for the tests.
@@ -437,6 +467,7 @@ impl Window {
         if chosen.is_some() {
             self.selected = chosen;
             self.node = None;
+            self.graph_view = graph::View::default();
             // A click shows the file in Details, as a click on a row of any
             // other Triage table does.
             if let Some(file) = self.selected_file(activity) {
@@ -449,11 +480,13 @@ impl Window {
 
     /// The body of the Filters section of the file list.
     fn filters(&mut self, ui: &mut egui::Ui) {
-        ui.add(
+        let edit = ui.add(
             egui::TextEdit::singleline(&mut self.filter)
                 .hint_text(crate::theme::placeholder(ui, "Filter by path"))
+                .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
                 .desired_width(f32::INFINITY),
         );
+        crate::widgets::clear_button(ui, &edit, &mut self.filter);
         ui.horizontal_wrapped(|ui| {
             for (label, flag, hover) in [
                 ("Hide stdio", &mut self.hide_standard_io, "Hide stdin, stdout, stderr"),
@@ -510,7 +543,38 @@ impl Window {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 let (name, other) = file.names_by(self.name_choice);
-                ui.add(egui::Label::new(egui::RichText::new(name).strong().monospace()).wrap());
+                // The title is the file and its SHA-256 (click to copy it);
+                // the button that opens the reconstruction sits at the top
+                // right of this pane.
+                egui::Sides::new().shrink_left().show(
+                    ui,
+                    |ui| {
+                        let title = ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(title_text(file, name))
+                                    .strong()
+                                    .monospace(),
+                            )
+                            .wrap()
+                            .sense(egui::Sense::click()),
+                        );
+                        match file.sha256() {
+                            Some(hash) => {
+                                if title
+                                    .on_hover_text("SHA-256. Click to copy it")
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                    .clicked()
+                                {
+                                    ui.ctx().copy_text(hash);
+                                }
+                            }
+                            None => {
+                                title.on_hover_text("The run recorded no SHA-256 for this file");
+                            }
+                        }
+                    },
+                    |ui| self.reconstruct_entry(ui, file),
+                );
                 ui.horizontal_wrapped(|ui| {
                     if file.created {
                         widgets::chip(ui, "created by the run", Tone::Good);
@@ -538,7 +602,9 @@ impl Window {
                 file_written(ui, file);
                 let layout = graph::layout(file);
                 ui.add_space(6.0);
-                if let Some(clicked) = graph::show(ui, activity, file, &layout, self.node) {
+                if let Some(clicked) =
+                    graph::show(ui, activity, file, &layout, self.node, &mut self.graph_view)
+                {
                     self.node = Some(clicked);
                 }
                 if file.omitted > 0 {
@@ -552,25 +618,22 @@ impl Window {
                 }
                 self.calls(ui, activity, file, &layout, clock);
                 contents(ui, file, clock);
-                self.reconstruct_entry(ui, file);
+                if file.timeline.is_empty() {
+                    ui.add_space(6.0);
+                    ui.weak("No call showed or changed this file's bytes.");
+                }
             });
     }
 
-    /// The button under Content changes that opens the reconstruction.
+    /// The button at the top right of the history that opens the reconstruction.
     fn reconstruct_entry(&mut self, ui: &mut egui::Ui, file: &FileActivity) {
-        ui.add_space(8.0);
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .button("Reconstruct contents…")
-                .on_hover_text("Replay this file's calls over what it held at the start of the run and see what each byte is")
-                .clicked()
-            {
-                self.reconstruction = Some(reconstruct::Open::new(file));
-            }
-            if file.timeline.is_empty() {
-                ui.weak("No call showed or changed this file's bytes.");
-            }
-        });
+        if ui
+            .button("Reconstruct contents…")
+            .on_hover_text("Replay this file's calls over what it held at the start of the run and see what each byte is")
+            .clicked()
+        {
+            self.reconstruction = Some(reconstruct::Open::new(file));
+        }
     }
 
     /// The calls behind the chosen node, or all of them.
@@ -627,6 +690,14 @@ impl Window {
     }
 }
 
+/// The history's title: "name [sha256]", or "name [unknown hash]".
+pub(super) fn title_text(file: &FileActivity, name: &str) -> String {
+    match file.sha256() {
+        Some(hash) => format!("{name} [{hash}]"),
+        None => format!("{name} [unknown hash]"),
+    }
+}
+
 /// Narrower than this, the file list sits above the history.
 const STACK_BELOW: f32 = 700.0;
 
@@ -640,7 +711,7 @@ pub(in crate::triage) const FILE_TABLE: &str = "triage-file-history";
 const CALL_HEADERS: &[&str] = &[
     "Time", "Process", "Call", "Result", "Offset", "Length", "Content",
 ];
-const FILE_HEADERS: &[&str] = &[
+pub(super) const FILE_HEADERS: &[&str] = &[
     "Path",
     "Also seen as",
     "First touched",
@@ -648,8 +719,8 @@ const FILE_HEADERS: &[&str] = &[
     "Calls",
     "Steps",
     "State",
-    "Size before",
-    "Size at the end",
+    "Size",
+    "Type",
     "SHA-256",
 ];
 
@@ -703,12 +774,11 @@ pub(super) fn call_cells(
 }
 
 /// The chosen file as Details shows it.
-pub(super) fn file_cells(
+pub(in crate::triage) fn file_cells(
     file: &FileActivity,
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
 ) -> Vec<Cell> {
     use crate::triage::table::cell;
-    let size = |size: Option<u64>| size.map_or("unknown".to_owned(), |size| format!("{size} B"));
     let mut state = Vec::new();
     if file.created {
         state.push("created by the run");
@@ -723,12 +793,7 @@ pub(super) fn file_cells(
         state.push("every call refused");
     }
     let calls = file.events.len() as u64 + file.omitted;
-    let hash = file
-        .contents
-        .hash
-        .as_ref()
-        .and_then(|hash| hash.sha256_hex())
-        .unwrap_or_default();
+    let hash = file.sha256().unwrap_or_default();
     vec![
         cell(&file.path, theme::text(), true),
         cell(file.names.join(", "), theme::text(), true),
@@ -745,8 +810,8 @@ pub(super) fn file_cells(
         cell(calls.to_string(), theme::text(), true),
         cell(file.summary(), theme::text(), false),
         cell(state.join(", "), theme::text(), false),
-        cell(size(file.contents.original_size), theme::text(), true),
-        cell(size(file.contents.final_size), theme::text(), true),
+        cell(super::overview::size_change(file), theme::text(), true),
+        cell(super::overview::type_of(file), theme::text(), false),
         cell(hash, theme::text(), true),
     ]
 }
@@ -954,13 +1019,13 @@ fn contents(
     {
         return;
     }
+    let size = |size: Option<u64>| size.map_or("unknown".to_owned(), |size| format!("{size} B"));
     ui.add_space(8.0);
     ui.label(
         egui::RichText::new("Content changes")
             .strong()
             .color(theme::heading()),
     );
-    let size = |size: Option<u64>| size.map_or("unknown".to_owned(), |size| format!("{size} B"));
     ui.weak(format!(
         "Size {} → {}",
         size(known.original_size),

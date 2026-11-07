@@ -43,6 +43,7 @@ impl MonitorApp {
             self.triage.run_ended_ms(),
             self.triage.alive_processes(),
         ));
+        route.run_state_tip = crate::run_state_line::times(&run, self.triage.run_ended_ms());
         route.run_state_color = Some(crate::run_state_line::color(&run));
         if crate::run_state_line::ticks(&run) {
             // Only the clock moves: the Triage index is not read again.
@@ -54,6 +55,14 @@ impl MonitorApp {
         notes.extend(route.note.clone());
         self.triage.set_notes(notes);
         self.triage.set_route_text(route);
+        let screenshot = self.last_run_screenshot(ui.ctx(), &run, self.triage.run_ended_ms());
+        self.triage.set_run_facts(
+            run.environment
+                .as_ref()
+                .map(|environment| environment.base_name.clone())
+                .filter(|name| !name.is_empty()),
+            screenshot,
+        );
         if let Some(error) = &self.archive_error {
             crate::activity::error(ui, error);
         }
@@ -116,6 +125,9 @@ impl MonitorApp {
         // Row menus file a note about a row under this run's sample.
         crate::query::NoteRun::set(ui.ctx(), &run);
         let jump = self.triage.show(ui, input);
+        if let Some(path) = self.triage.take_open_screenshot() {
+            self.open_screenshot_path(ui.ctx(), path);
+        }
         self.settings.triage_detection = self.triage.detection_settings().clone();
         self.settings.triage_detection.rules_root.clear();
         if self.triage.take_details_focus(ui.ctx()) {

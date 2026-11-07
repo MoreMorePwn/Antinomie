@@ -75,7 +75,13 @@ fn record(
                         _ => None,
                     })
                     .collect();
-                let meta = |name: &str| metadata.get(name).cloned().unwrap_or_default();
+                let find = |name: &str| {
+                    crate::ruleset::meta_get(
+                        metadata.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                        name,
+                    )
+                };
+                let meta = |name: &str| find(name).unwrap_or_default().to_owned();
                 let tags = rule
                     .tags()
                     .map(|tag| tag.identifier())
@@ -102,16 +108,13 @@ fn record(
                 report.findings.push(Finding {
                     rule_id,
                     title: rule.identifier().into(),
-                    severity: metadata
-                        .get("severity")
-                        .cloned()
-                        .unwrap_or_else(|| "indicator".into()),
+                    severity: find("severity").unwrap_or("indicator").to_owned(),
                     source: namespace.into(),
-                    license: metadata
-                        .get("license")
-                        .or_else(|| metadata.get("malpedia_license"))
-                        .or_else(|| metadata.get(crate::ruleset::REPOSITORY_LICENSE_META))
-                        .cloned()
+                    license: find("license")
+                        .or_else(|| find("malpedia_license"))
+                        .or_else(|| find("yarahub_license"))
+                        .or_else(|| find(crate::ruleset::REPOSITORY_LICENSE_META))
+                        .map(str::to_owned)
                         .unwrap_or_else(|| {
                             if namespace == "antinomie" {
                                 "MIT".into()
@@ -521,8 +524,11 @@ pub(super) fn scan(staged: &Staged, work: &Path) -> Result<Report, String> {
     progress.set_rules(loaded);
     progress.stage(ScanTarget::Specimen);
     let mut scanner = yara_x::Scanner::new(&rules);
-    scanner.set_timeout(Duration::from_secs(15));
-    let deadline = Instant::now() + Duration::from_secs(100);
+    // The whole scan has the time set for YARA; one scan of one input gets
+    // the same share of it as before (15 of 100 seconds).
+    let total = request.settings.timeouts.seconds(super::EngineTime::Yara);
+    scanner.set_timeout(Duration::from_secs((total * 15 / 100).max(5)));
+    let deadline = Instant::now() + Duration::from_secs(total);
     let mut total = 0;
     let analysis = request.directory.join("analysis");
     let mut executable = ScannedInput::new(InputKind::Executable, &analysis);

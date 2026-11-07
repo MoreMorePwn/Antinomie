@@ -189,7 +189,7 @@ impl Viewer {
             Bytes::Failed(error) => Some(error.clone()),
             _ => None,
         };
-        egui::Window::new(self.title())
+        crate::widgets::capped(egui::Window::new(self.title()), ctx)
             .id(egui::Id::new("sample_viewer"))
             .open(&mut open)
             .default_size(egui::vec2(780.0, 540.0) + crate::widgets::frame_extra(ctx))

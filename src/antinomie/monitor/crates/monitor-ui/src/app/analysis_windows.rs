@@ -220,12 +220,16 @@ impl MonitorApp {
                     return;
                 };
                 let run_id = self.run_of_report(&report_id);
+                // The longer time is for this one run: the times set for the
+                // tools one by one would otherwise win over it.
+                let mut limits = self.settings.analysis_limits;
+                limits.timeouts = antinomie_monitor_core::ToolTimeouts::default();
                 self.send(Command::AnalyzeMore {
                     directory,
                     run_id,
                     checks: vec![kind],
                     time_limit_seconds: Some(seconds),
-                    limits: self.settings.analysis_limits,
+                    limits,
                 });
             }
             Some(crate::analysis::ReportAction::OpenAnalysisSettings) => {

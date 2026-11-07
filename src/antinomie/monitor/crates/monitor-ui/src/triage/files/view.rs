@@ -52,7 +52,7 @@ impl Change {
             ),
             cell(&self.path, theme::text(), true),
             cell(
-                process_identity(self.pid, self.tid, self.process_image.as_deref()),
+                process_cells::task_label(self.pid, self.tid, self.process_image.as_deref()),
                 theme::text(),
                 true,
             ),
@@ -68,6 +68,19 @@ impl Change {
             ),
             file_category::location_cell(&self.locations),
             cell(format!("call {}", self.call), theme::text(), true),
+            cell(
+                file_type::of(&self.head(), &self.path),
+                theme::text(),
+                false,
+            ),
+            cell(
+                self.hash
+                    .as_ref()
+                    .and_then(FileHash::sha256_hex)
+                    .unwrap_or_default(),
+                theme::text(),
+                true,
+            ),
         ];
         row[0].values = vec![
             (
@@ -236,7 +249,7 @@ impl Change {
                 row[0].values = vec![("event.id", RowValue::Number(i128::from(op.call))), ("stream.id", RowValue::Number(i128::from(op.key.0))), ("process.cookie", RowValue::Number(i128::from(op.key.1)))]; row
             }).collect();
             egui::ScrollArea::horizontal().id_salt("file-operation-timeline-columns").auto_shrink([false,true]).show(ui,|ui| {
-                table_rows(ui, "file-operation-timeline", &["Time", "Operation", "Process (PID / TID)", "Result", "Evidence"], &rows);
+                table_rows(ui, "file-operation-timeline", &["Time", "Operation", "Process", "Result", "Evidence"], &rows);
             });
         });
     }

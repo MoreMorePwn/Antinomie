@@ -505,7 +505,7 @@ fn launch_options(
             }
         })
         .response
-        .on_hover_text("Applies at the next start of this VM, not to a running one.");
+        .on_hover_text("Applies at the next start of this VM, not to a running one. No screen runs the VM without any display.");
     ui.end_row();
     // Fullscreen and Fit to window are options of QEMU's own window.
     if launch.screen == VmScreen::QemuWindow {
@@ -670,6 +670,21 @@ fn transport_options(
                     .suffix(" ms"),
             );
             ui.end_row();
+            ui.label("Capture All");
+            ui.add_enabled(
+                transport.lossless,
+                egui::Checkbox::new(
+                    &mut transport.capture_all_shed,
+                    "Drop telemetry when the host falls behind",
+                ),
+            )
+            .on_hover_text(
+                "Under Capture All, drop telemetry while the host falls behind \
+                 instead of slowing the guest. Keeps a desktop guest responsive; \
+                 the recording loses events. Off: never drop also holds under \
+                 Capture All, and the guest runs slower.",
+            );
+            ui.end_row();
             ui.label("Host event table");
             ui.add(
                 egui::DragValue::new(&mut transport.event_table)
@@ -683,9 +698,11 @@ fn transport_options(
     ui.label(
         RichText::new(
             "Never drop makes a guest system call wait while the host saves \
-             telemetry, so heavy tracing runs slower but nothing is lost. The \
-             event table holds calls still being assembled; finished calls \
-             leave it first. Settings apply at the next VM start.",
+             telemetry, so heavy tracing runs slower but nothing is lost, \
+             Capture All included unless it may drop when the host falls \
+             behind. The event table holds calls still being assembled; \
+             finished calls leave it first. Settings apply at the next VM \
+             start.",
         )
         .small()
         .color(theme::muted()),

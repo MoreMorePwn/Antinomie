@@ -403,6 +403,19 @@ Full-tier checks that failed now and then on this shared host, and why.
   run from its entry; the check now uses the pane's own gdb for Debug on start
   and presses Restart in the attach case. The first VM of a fresh data folder
   imports the base (about 20 s on this disk): the check gives it 120 s.
+* **`debugger-live`: Debug on start ran past its breakpoint (0.8.3).** The
+  console's gdb found the program asleep in its loop, not at its entry, and
+  `continue` ran it to its end ("exited normally"); the session had served two
+  clients. The frame drew the tabs before `debugger_session()` followed the new
+  session, so the Debugger tab's console started a gdb for it, and the panel
+  reset right after dropped that gdb (Ctrl-C, `quit`, a kill after 3 s) and the
+  next frame started another. The dropped gdb could still connect first, and a
+  gdb that leaves releases the process. Present since the console came (0.7.0);
+  it failed when the dropped gdb won the race to connect, which a loaded host
+  makes likelier (the 0.8.3 tier ran it right after the stress groups; on a
+  quiet host 0.8.2 and 0.8.3 each passed 2 of 2). The session is now followed before the tabs draw
+  (`app/panels.rs`); `a_new_session_starts_its_console_gdb_once` checks that a
+  new session starts gdb once.
 * **`.gdb_history` in the working directory.** pwndbg turns history saving on and
   gdb's default file is `.gdb_history` in the working directory, the app's; the
   live check left one in `crates/monitor-ui`. The console's history goes to its

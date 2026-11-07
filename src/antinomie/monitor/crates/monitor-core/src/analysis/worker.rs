@@ -36,7 +36,7 @@ struct RowSink {
 pub(super) const DECOMPILER_SECONDS: u64 = 840;
 /// The decompiler's budget for this run.
 pub(super) fn decompiler_seconds() -> u64 {
-    super::limits::seconds(DECOMPILER_SECONDS)
+    super::limits::seconds_for(super::limits::TimedTool::Ghidra)
 }
 
 /// Dispatch the monitor's private, sandbox-only analysis entry point before CLI parsing.
@@ -100,7 +100,10 @@ fn worker_main() -> Result<(), String> {
         };
     // A longer time limit than the tools' own needs the CPU budget to follow.
     let cpu = cpu.max(
-        report.time_limit_seconds.unwrap_or(0)
+        report
+            .time_limit_seconds
+            .unwrap_or(0)
+            .max(u64::from(super::limits::longest_timeout(&report)))
             * if has(AnalysisKind::Decompilation) || ghidra_listing.is_some() {
                 6
             } else {

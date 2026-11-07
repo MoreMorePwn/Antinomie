@@ -8,6 +8,7 @@ fn run(id: &str, boot: &str) -> RunSummary {
         reduced: None,
         boot_wait: None,
         triggers: None,
+        stopped_by_user: false,
         started_ms: None,
         clock_anchor: None,
         id: id.into(),
@@ -229,6 +230,23 @@ fn the_writer_hold_time_is_shown_only_when_there_was_one() {
         held_text(&health).as_deref(),
         Some("4 ms in all, 3 ms at the longest")
     );
+}
+
+#[test]
+fn capture_all_shedding_is_shown_only_when_it_happened() {
+    let mut health = Health::default();
+    assert_eq!(shed_text(&health), None);
+    health.shed_count = 1;
+    health.shedding = true;
+    assert_eq!(shed_text(&health).as_deref(), Some("once, still shedding"));
+    health.shed_count = 3;
+    health.shed_ns = 2_340_000_000;
+    assert_eq!(
+        shed_text(&health).as_deref(),
+        Some("3 times, 2.3 s in all (shedding now)")
+    );
+    health.shedding = false;
+    assert_eq!(shed_text(&health).as_deref(), Some("3 times, 2.3 s in all"));
 }
 
 #[test]

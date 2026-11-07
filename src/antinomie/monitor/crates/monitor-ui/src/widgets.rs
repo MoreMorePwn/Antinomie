@@ -28,6 +28,8 @@
 
 pub(crate) mod attack;
 mod card;
+mod clear;
+pub(crate) mod dot;
 mod facts;
 mod fit;
 pub mod fit_table;
@@ -38,14 +40,17 @@ mod wheel;
 mod window;
 mod written;
 
-pub use card::{back_link, bounded_menu, card, detail_block, link};
+pub use card::{back_link, bounded_menu, card, card_sized, detail_block, link};
+pub use clear::{clear_button, clear_margin};
 pub use facts::{fact_line, facts, titled};
 pub use fit::fit_middle;
 pub use info_panel::{info_panel, InfoPanel};
 pub use tabs::{segmented, tab, tab_row, tabs, tight_tabs, TabItem, TIGHT_SAVING};
 pub use tone::{chip, chip_wide, chip_width, fg_or_muted, toggle_chip, toggle_chip_with, Tone};
 pub(crate) use wheel::raw_delta;
-pub use window::{columns, fixed_width_body, footer, footer_split, frame_extra, window};
+pub use window::{
+    cap_size, capped, columns, fixed_width_body, footer, footer_split, frame_extra, window,
+};
 pub use written::{short_name, written_files};
 
 #[cfg(test)]

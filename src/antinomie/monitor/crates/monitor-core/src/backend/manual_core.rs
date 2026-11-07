@@ -8,7 +8,8 @@ use super::{
     *,
 };
 use crate::core_limits::{
-    CORE_MAX_SUPPORTED, CoreLimits, CoreOutcome, CoreReason, CoreReasonCode, guest_reason,
+    CORE_MAX_SUPPORTED, CoreLimits, CoreOutcome, CoreReason, CoreReasonCode, ended_without_core,
+    guest_reason,
 };
 use crate::{ProcessCoreCapture, ProcessCorePhase, ProcessCoreRequest, core_capture};
 use sha2::{Digest, Sha256};
@@ -53,6 +54,10 @@ pub(super) struct Owner {
     /// The copy to the host has been checked against the host disk and quota.
     preflighted: bool,
     copy_started: Option<Instant>,
+    /// Ask the guest for the core while the first disk write is still going,
+    /// not after it: a dump trigger's process may exit within milliseconds.
+    /// The disk is ready before any byte is copied either way.
+    pub(super) eager: bool,
 }
 impl Owner {
     fn new(request: ProcessCoreRequest, directory: PathBuf, id: String) -> Self {
@@ -111,6 +116,7 @@ impl Owner {
             disk_failed: false,
             preflighted: false,
             copy_started: None,
+            eager: false,
         }
     }
     /// The first reason sticks: a later one is usually its consequence.
@@ -118,6 +124,39 @@ impl Owner {
         if self.summary.reason.is_none() {
             self.summary.reason = Some(CoreReason::new(code, errno, text));
         }
+    }
+    /// The guest ended with no core (state 5 or 6): say why in plain words
+    /// (`ended_without_core`), keeping the raw state and status at the end.
+    fn finish_without_core(&mut self, reason: CoreReason) {
+        let text = reason.text.clone();
+        self.summary.reason.get_or_insert(reason);
+        self.finish(RunArtifactState::Failed, text);
+    }
+    /// A core the guest called incomplete for coverage says which part is
+    /// missing, thread contexts or pages, with the counts the file holds.
+    fn say_what_is_missing(&mut self) {
+        if self.summary.state != RunArtifactState::Partial {
+            return;
+        }
+        let Some(reason) = self.summary.reason.as_mut() else {
+            return;
+        };
+        if reason.code != CoreReasonCode::Coverage {
+            return;
+        }
+        let threads = self.status.as_ref().map_or(0, |status| status.thread_count);
+        if let Some(file) = &self.summary.file
+            && let Some(detail) = crate::core_dump::coverage_detail(file, threads)
+        {
+            reason.text = detail.chars().take(2048).collect();
+            if let Some(issue) = self.summary.issue.as_mut() {
+                *issue = reason.text.clone();
+            }
+        }
+    }
+    /// The core was asked for and the guest has not taken it yet.
+    pub(super) fn starting(&self) -> bool {
+        !self.done && !self.known_absent && self.desired.is_none() && self.status.is_none()
     }
     /// A terminal guest status is being copied to the host.
     pub(super) fn transferring(&self) -> bool {
@@ -504,6 +543,7 @@ impl Session {
                     .ok_or("manual core final disk state missing")?
             };
             owner.summary.phase = ProcessCorePhase::Finished;
+            owner.say_what_is_missing();
             owner.done = !owner.guest_busy();
         } else {
             owner.activity = Instant::now();
@@ -624,30 +664,21 @@ impl Session {
             return Ok(());
         }
         if matches!(status.state, 5 | 6) {
-            // The guest's errno has a clear reading (a refused AArch32 or ia32
-            // program, a budget, a deadline): say it, not the raw state.
-            let reason = guest_reason(&CoreOutcome {
-                state: status.state,
-                status: status.status,
-                expected: status.expected_size,
-                size: status.size,
-                stored: status.stored,
-                flags: status.flags,
-                budget: u64::from(owner.summary.max_size),
-                limits: self.core_limits.unwrap_or(CoreLimits::LEGACY),
-            });
-            let text = match reason {
-                Some(reason) => {
-                    let text = reason.text.clone();
-                    owner.summary.reason.get_or_insert(reason);
-                    text
-                }
-                None => format!(
-                    "manual guest capture unavailable/canceled (state {}, status {})",
-                    status.state, status.status
-                ),
-            };
-            owner.finish(RunArtifactState::Failed, text);
+            // Plain words (a gone or busy process, a refused AArch32 or ia32
+            // program, a deadline), the raw state and status kept at the end.
+            owner.finish_without_core(ended_without_core(
+                &CoreOutcome {
+                    state: status.state,
+                    status: status.status,
+                    expected: status.expected_size,
+                    size: status.size,
+                    stored: status.stored,
+                    flags: status.flags,
+                    budget: u64::from(owner.summary.max_size),
+                    limits: self.core_limits.unwrap_or(CoreLimits::LEGACY),
+                },
+                true,
+            ));
             return Ok(());
         }
         owner.summary.phase = ProcessCorePhase::Transfer;
@@ -795,9 +826,14 @@ impl Session {
             owner.sink.submit(Action::Init {
                 metadata: owner.metadata(None)?,
             })?;
-            return Ok(());
+            if !owner.eager {
+                return Ok(());
+            }
         }
-        if !owner.disk_failed && (!owner.initialized || owner.sink.pending()) {
+        if !owner.disk_failed
+            && (!owner.initialized || owner.sink.pending())
+            && !(owner.eager && !owner.admission_sent)
+        {
             return Ok(());
         }
         if let Some(sender) = sender
@@ -1108,6 +1144,37 @@ mod tests {
         invalid.max_size = 64 << 20;
         invalid.timeout_ms = 60_001;
         assert!(control::core_capture(&invalid, [11, 12]).is_err());
+    }
+    #[test]
+    fn a_core_the_guest_could_not_take_is_explained_in_plain_words() {
+        let mut owner = Owner::new(
+            request(),
+            std::env::temp_dir().join("unused-manual-refusal"),
+            "capture".into(),
+        );
+        owner.finish_without_core(ended_without_core(
+            &CoreOutcome {
+                state: 5,
+                status: -3,
+                expected: 0,
+                size: 0,
+                stored: None,
+                flags: 0,
+                budget: 64 << 20,
+                limits: CoreLimits::LEGACY,
+            },
+            true,
+        ));
+        let issue = owner.summary.issue.clone().unwrap();
+        assert!(
+            issue.starts_with("The process had already exited"),
+            "{issue}"
+        );
+        assert!(issue.contains("guest state 5, status -3"));
+        assert!(!issue.contains("unavailable/canceled"));
+        let reason = owner.summary.reason.as_ref().unwrap();
+        assert_eq!(reason.code, crate::core_limits::CoreReasonCode::ProcessGone);
+        assert_eq!(reason.errno, Some(-3));
     }
     #[test]
     fn only_explicit_lookup_esrch_proves_absence() {

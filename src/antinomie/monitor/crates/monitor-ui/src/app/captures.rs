@@ -830,8 +830,11 @@ pub(super) fn process_tree_tinted(
                         if let Some(color) = tinted {
                             let spacing = ui.spacing().item_spacing;
                             ui.painter().rect_filled(
-                                ui.max_rect()
-                                    .expand2(egui::vec2(spacing.x / 2.0, spacing.y / 2.0)),
+                                crate::widgets::fit_table::snapped(
+                                    ui.painter(),
+                                    ui.max_rect()
+                                        .expand2(egui::vec2(spacing.x / 2.0, spacing.y / 2.0)),
+                                ),
                                 0.0,
                                 color.gamma_multiply(0.18),
                             );

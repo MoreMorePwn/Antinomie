@@ -3,52 +3,58 @@
 use super::*;
 use antinomie_monitor_core::analysis::detection::{Engine, State};
 mod attack_list;
+mod header;
+mod indicators;
+mod insight;
+mod panels;
+mod relations;
 mod report;
+mod rows;
+mod rule_text;
+mod sample;
+mod state;
+mod thumb;
+
+#[cfg(test)]
+pub(super) use state::Mode as SummaryMode;
+pub(super) use state::State as SummaryState;
+
+/// What the app knows about the run that Triage does not read from the
+/// recording: the base image's name and the run's last screenshot.
+#[derive(Clone, Default)]
+pub(super) struct RunFacts {
+    pub base: Option<String>,
+    pub screenshot: Option<std::path::PathBuf>,
+}
+
+/// What a click in the Summary asks for, applied once the frame is drawn.
+enum Act {
+    Go(Destination),
+    /// Suspicious activity with only this tier.
+    Tier(rules::Tier),
+    /// The finding at this place in the scan's findings: its Details.
+    Finding(usize),
+    Process((u32, u64)),
+    File,
+    Endpoint,
+    /// A double click on a Key finding: the call that made it.
+    Evidence(usize),
+    ExportIndicators,
+    Screenshot(std::path::PathBuf),
+}
 
 #[derive(Clone, Copy)]
 enum Destination {
-    Properties,
     Tasks,
     Findings,
     Graph,
-    Opened,
-    Reads,
     Changed,
+    Executed,
     Ips,
-    Hosts,
     Http,
     Dns,
     Ioc,
     Detection(Engine),
-}
-
-fn metric(ui: &mut egui::Ui, title: &str, value: Option<u64>) -> bool {
-    metric_hover(ui, title, value, "")
-}
-
-/// `metric` with a tooltip on its title.
-fn metric_hover(ui: &mut egui::Ui, title: &str, value: Option<u64>, hover: &str) -> bool {
-    let label = ui.add(egui::Label::new(title).wrap());
-    if !hover.is_empty() {
-        label.on_hover_text(hover);
-    }
-    let clicked = ui
-        .add_enabled(
-            value.is_some(),
-            egui::Button::new(
-                RichText::new(value.map_or("Unavailable".into(), |value| value.to_string()))
-                    .strong()
-                    .color(if value.is_some() {
-                        theme::text()
-                    } else {
-                        theme::muted()
-                    }),
-            )
-            .frame(false),
-        )
-        .clicked();
-    ui.end_row();
-    clicked
 }
 
 pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, input: &TriageInput<'_>) {
@@ -72,60 +78,173 @@ pub(super) fn show(view: &mut TriageView, ui: &mut egui::Ui, input: &TriageInput
         }
     }
     if let Some(destination) = destination {
+        view.go_to(ui.ctx(), destination);
+    }
+}
+
+impl TriageView {
+    /// Open the section a Summary click leads to.
+    fn go_to(&mut self, ctx: &egui::Context, destination: Destination) {
         match destination {
-            Destination::Properties => view.section = Section::Properties,
             Destination::Tasks => {
-                view.section = Section::Process;
-                view.process = ProcessTab::Tree;
+                self.section = Section::Process;
+                self.process = ProcessTab::Tree;
             }
             Destination::Findings => {
-                view.section = Section::Process;
-                view.process = ProcessTab::Suspicious;
+                self.section = Section::Process;
+                self.process = ProcessTab::Suspicious;
             }
             Destination::Graph => {
-                view.section = Section::Process;
-                view.process = ProcessTab::Graph;
-                view.clear_finding_filters(ui.ctx());
-            }
-            Destination::Opened => {
-                view.section = Section::Files;
-                view.files = FileTab::Opened;
-                view.history_tab = false;
-            }
-            Destination::Reads => {
-                view.section = Section::Files;
-                view.files = FileTab::Read;
-                view.history_tab = false;
+                self.section = Section::Process;
+                self.process = ProcessTab::Graph;
+                self.clear_finding_filters(ctx);
             }
             Destination::Changed => {
-                view.section = Section::Files;
-                view.files = FileTab::Changed;
-                view.history_tab = false;
+                self.section = Section::Files;
+                self.files = FileTab::Changed;
+                self.history_tab = false;
+                self.by_file = false;
+            }
+            Destination::Executed => {
+                self.section = Section::Files;
+                self.files = FileTab::Executed;
+                self.history_tab = false;
+                self.by_file = false;
             }
             Destination::Ips => {
-                view.section = Section::Network;
-                view.new_tab = NewTab::Endpoints;
-            }
-            Destination::Hosts => {
-                view.section = Section::Network;
-                view.new_tab = NewTab::Domains;
+                self.section = Section::Network;
+                self.new_tab = NewTab::Endpoints;
             }
             Destination::Http => {
-                view.section = Section::Network;
-                view.new_tab = NewTab::Urls;
+                self.section = Section::Network;
+                self.new_tab = NewTab::Urls;
             }
             Destination::Dns => {
-                view.section = Section::Network;
-                view.new_tab = NewTab::Domains;
+                self.section = Section::Network;
+                self.new_tab = NewTab::Domains;
             }
-            Destination::Ioc => view.section = Section::Ioc,
+            Destination::Ioc => self.section = Section::Ioc,
             Destination::Detection(engine) => {
-                view.section = Section::Detection;
-                view.detection.selected = engine;
+                self.section = Section::Detection;
+                self.detection.selected = engine;
             }
         }
     }
+
+    /// Carry out a click of the Summary that needs the whole view.
+    fn apply_act(&mut self, ctx: &egui::Context, act: Act, destination: &mut Option<Destination>) {
+        match act {
+            Act::Go(target) => *destination = Some(target),
+            Act::Tier(tier) => {
+                self.clear_finding_filters(ctx);
+                self.toggle_tier_chip(tier);
+                *destination = Some(Destination::Findings);
+            }
+            Act::Finding(index) => {
+                let Some(finding) = self.scan.as_ref().and_then(|scan| scan.findings.get(index))
+                else {
+                    return;
+                };
+                let mut cells = finding.cells.clone();
+                if let Some(first) = cells.first_mut() {
+                    first.values.clone_from(&finding.values);
+                }
+                details::select(ctx, "triage-findings", rules::HEADERS, &cells);
+                details::clicked(ctx, "triage-findings");
+            }
+            Act::Evidence(index) => {
+                if let Some(finding) = self.scan.as_ref().and_then(|scan| scan.findings.get(index))
+                {
+                    request_evidence_jump(ctx, &finding.values);
+                }
+            }
+            Act::Process((pid, cookie)) => {
+                self.section = Section::Process;
+                self.process = ProcessTab::Tree;
+                process_details::open_process(self, ctx, pid, cookie);
+                details::clicked(ctx, "triage-process");
+            }
+            Act::File => *destination = Some(Destination::Changed),
+            Act::Endpoint => *destination = Some(Destination::Ips),
+            Act::ExportIndicators => self.export_indicators(),
+            Act::Screenshot(path) => self.summary_state.open_screenshot = Some(path),
+        }
+    }
+
+    /// Write the Summary's indicators as JSON beside the run's files.
+    fn export_indicators(&mut self) {
+        let (Some(dir), Some(built)) = (
+            self.details_directory.clone(),
+            self.summary_state.built.as_ref(),
+        ) else {
+            self.summary_state.status = Some("This run has no folder to write to.".into());
+            return;
+        };
+        let name = format!(
+            "summary-indicators-{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_secs())
+        );
+        self.summary_state.status = Some(
+            match write_new(&dir.join("ioc"), &name, built.indicators.json().as_bytes()) {
+                Ok(path) => format!(
+                    "Exported {} indicators to {}",
+                    built.indicators.total(),
+                    path.display()
+                ),
+                Err(error) => error,
+            },
+        );
+    }
+
+    /// The run's last screenshot was clicked in the Summary.
+    pub(crate) fn take_open_screenshot(&mut self) -> Option<std::path::PathBuf> {
+        self.summary_state.open_screenshot.take()
+    }
+
+    /// The base image and last screenshot of the selected run.
+    pub(crate) fn set_run_facts(
+        &mut self,
+        base: Option<String>,
+        screenshot: Option<std::path::PathBuf>,
+    ) {
+        if self.run_facts.base != base || self.run_facts.screenshot != screenshot {
+            self.run_facts = RunFacts { base, screenshot };
+        }
+    }
 }
+
+/// Create `dir/name` (private, never replacing a file) and write `bytes`.
+fn write_new(
+    dir: &std::path::Path,
+    name: &str,
+    bytes: &[u8],
+) -> Result<std::path::PathBuf, String> {
+    use std::{
+        io::Write,
+        os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    };
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .map_err(|error| format!("{}: {error}", dir.display()))?;
+    let path = dir.join(name);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    Ok(path)
+}
+
+#[cfg(test)]
+mod ui_tests;
 
 #[cfg(test)]
 mod tests {
@@ -147,7 +266,7 @@ mod tests {
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
-                        egui::vec2(1100.0, 1600.0),
+                        egui::vec2(1100.0, 3000.0),
                     )),
                     time: Some(time),
                     events,
@@ -164,7 +283,7 @@ mod tests {
         let output = draw(vec![], 0.01);
         let position = crate::app::tests::texts(&output)
             .into_iter()
-            .find(|(text, _)| text == "memory.rwx")
+            .find(|(text, _)| text == rules::rule_title("memory.rwx"))
             .expect("visible observation")
             .1
             .center();
@@ -211,7 +330,7 @@ mod tests {
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
-                            egui::vec2(1100.0, 1600.0),
+                            egui::vec2(1100.0, 3000.0),
                         )),
                         time: Some(time),
                         ..Default::default()
@@ -228,10 +347,10 @@ mod tests {
         };
         // A view nobody has told the route yet reads as not recorded.
         let before = draw(&mut view);
-        assert!(before.iter().any(|(t, _)| t == "Network route"));
-        assert!(before
-            .iter()
-            .any(|(t, _)| t == crate::route_ui::NOT_RECORDED));
+        assert!(
+            before.iter().any(|(t, _)| t.contains("route not recorded")),
+            "{before:?}"
+        );
         let route = antinomie_monitor_core::route::RouteRecord {
             kind: antinomie_monitor_core::route::RouteKind::Tor,
             label: "Tor via 127.0.0.1:9050".into(),
@@ -243,12 +362,12 @@ mod tests {
         view.set_route_text(crate::route_ui::describe(Some(&route), None));
         let after = draw(&mut view);
         assert!(
-            after.iter().any(|(t, _)| t == "Tor via 127.0.0.1:9050"),
+            after
+                .iter()
+                .any(|(t, _)| t.contains("route Tor via 127.0.0.1:9050")),
             "{after:?}"
         );
-        assert!(!after
-            .iter()
-            .any(|(t, _)| t == crate::route_ui::NOT_RECORDED));
+        assert!(!after.iter().any(|(t, _)| t.contains("route not recorded")));
     }
 
     #[test]
@@ -269,7 +388,7 @@ mod tests {
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
-                            egui::vec2(1100.0, 1600.0),
+                            egui::vec2(1100.0, 3000.0),
                         )),
                         time: Some(time),
                         ..Default::default()
@@ -301,7 +420,7 @@ mod tests {
                 .min
                 .y
         };
-        assert!(y("Notes") > y("Open suspicious activity"));
+        assert!(y("Notes") > y("Open results"));
         assert!(y(note) > y("Notes"));
     }
 

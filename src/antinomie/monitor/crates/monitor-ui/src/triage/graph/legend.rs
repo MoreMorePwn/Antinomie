@@ -55,6 +55,10 @@ pub(in crate::triage) fn body(ui: &mut egui::Ui) {
             ui.label(tier.tag().to_uppercase());
         }
     });
+    for tier in rules::Tier::ALL {
+        row(ui, &format!("{}: {}", tier.label(), tier.meaning()));
+    }
+    row(ui, rules::CONTEXT_NOTE);
     heading(ui, "Category icons");
     egui::Grid::new("graph-legend-categories")
         .num_columns(4)

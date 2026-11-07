@@ -15,16 +15,18 @@ fn scan() -> (PacketSpool, ArchiveScan) {
     (temp, scan)
 }
 
-fn view(section: Section) -> (PacketSpool, TriageView) {
+pub(super) fn view(section: Section) -> (PacketSpool, TriageView) {
     let (temp, scan) = scan();
     let mut view = TriageView::default();
+    // The tests look at the per-operation tables; By file has its own.
+    view.by_file = false;
     view.scan = Some(scan);
     view.section = section;
     view.context_key = Some("vm\nboot\nrun\n".into());
     (temp, view)
 }
 
-fn draw(
+pub(super) fn draw(
     ctx: &egui::Context,
     view: &mut TriageView,
     events: Vec<egui::Event>,
@@ -53,7 +55,7 @@ fn draw(
 }
 
 /// Draw until the layout settles; returns the last output.
-fn settle(ctx: &egui::Context, view: &mut TriageView) -> egui::FullOutput {
+pub(super) fn settle(ctx: &egui::Context, view: &mut TriageView) -> egui::FullOutput {
     let mut out = draw(ctx, view, vec![], 0.0);
     for n in 1..4 {
         out = draw(ctx, view, vec![], f64::from(n) * 0.02);
@@ -61,7 +63,7 @@ fn settle(ctx: &egui::Context, view: &mut TriageView) -> egui::FullOutput {
     out
 }
 
-fn context() -> egui::Context {
+pub(super) fn context() -> egui::Context {
     let ctx = egui::Context::default();
     theme::install(&ctx);
     ctx
@@ -71,7 +73,7 @@ fn open_packets_label() -> String {
     format!("{} Open Packets", egui_phosphor::regular::NETWORK)
 }
 
-fn find(out: &egui::FullOutput, text: &str) -> egui::Rect {
+pub(super) fn find(out: &egui::FullOutput, text: &str) -> egui::Rect {
     texts(out)
         .into_iter()
         .find(|(shown, _)| shown == text)
@@ -79,11 +81,11 @@ fn find(out: &egui::FullOutput, text: &str) -> egui::Rect {
         .1
 }
 
-fn has(out: &egui::FullOutput, text: &str) -> bool {
+pub(super) fn has(out: &egui::FullOutput, text: &str) -> bool {
     texts(out).iter().any(|(shown, _)| shown == text)
 }
 
-fn click(ctx: &egui::Context, view: &mut TriageView, at: egui::Pos2) {
+pub(super) fn click(ctx: &egui::Context, view: &mut TriageView, at: egui::Pos2) {
     let mut time = 1.0;
     for pressed in [true, false] {
         draw(
@@ -218,7 +220,7 @@ fn file_categories_are_tabs_with_counts() {
     // The Opened column set is kept.
     view.files = FileTab::Opened;
     let out = settle(&ctx, &mut view);
-    for header in ["Time", "Path", "Process (PID / TID)", "Result", "Evidence"] {
+    for header in ["Time", "Path", "Process", "Result"] {
         assert!(has(&out, header) || texts(&out).iter().any(|(t, _)| t.starts_with(header)));
     }
 }
@@ -608,17 +610,14 @@ fn an_opened_row_keeps_every_value_under_its_own_column() {
         at("Path")
     );
     assert_eq!(at("Operation"), "open");
-    assert!(at("Process (PID / TID)").contains(" \u{b7} TID "));
+    assert!(at("Process").contains(" \u{b7} "));
     assert!(at("Evidence").starts_with("call "));
     // The shown columns are the Opened table's, each from its own header.
     let shown: Vec<&str> = file_tabs::OPENED_COLUMNS
         .iter()
         .map(|&column| headers[column])
         .collect();
-    assert_eq!(
-        shown,
-        ["Time", "Path", "Process (PID / TID)", "Result", "Evidence"]
-    );
+    assert_eq!(shown, ["Time", "Path", "Process", "Result"]);
 }
 
 #[test]
@@ -759,7 +758,7 @@ fn the_details_of_an_evasion_row_list_each_check_the_answer_and_why_it_has_its_t
         .find(|row| row.cells[0].text == "evasion.sandbox_probe")
         .expect("a sandbox probe row")
         .clone();
-    let label = probe.cells[0].text.clone();
+    let label = probe.cells[rules::COL_BEHAVIOUR].text.clone();
     let mut view = TriageView::default();
     let mut draw = |events, time| {
         ctx.run_ui(
@@ -836,18 +835,215 @@ fn tier_tones_follow_the_tier_colours() {
     assert_eq!(rules::Tier::from_tag("nope"), None);
 }
 
-#[test]
-fn clicking_a_process_opens_its_suspicious_activity() {
-    let ctx = context();
-    let (_temp, mut view) = view(Section::Process);
+/// A view of the Process tree whose process 55 is a stand-in: it runs
+/// /tmp/demo-all and calls itself "ps".
+fn demo_view() -> (PacketSpool, TriageView) {
+    let (temp, mut view) = view(Section::Process);
     view.process = ProcessTab::Tree;
+    let scan = view.scan.as_mut().unwrap();
+    let node = scan.process.iter_mut().find(|node| node.pid == 55).unwrap();
+    node.comm = "/tmp/demo-all".into();
+    node.argv = vec!["ps".into(), "aux".into()];
+    node.record.envp = vec!["PATH=/tmp".into(), "LD_PRELOAD=/tmp/x.so".into()];
+    node.record.execs = vec![("/tmp/demo-all".into(), node.first_ns.unwrap_or(0))];
+    (temp, view)
+}
+
+pub(super) fn tooltip_context() -> egui::Context {
+    let ctx = context();
+    ctx.global_style_mut(|style| style.interaction.tooltip_delay = 0.0);
+    ctx
+}
+
+#[test]
+fn the_process_tree_columns_are_in_the_requested_order() {
+    let ctx = context();
+    let (_temp, mut view) = demo_view();
     let out = settle(&ctx, &mut view);
-    let at = find(&out, "PID 55 · TID 55 (main)").center();
-    click(&ctx, &mut view, at);
+    let found: Vec<(f32, &str)> = process_tree::PROCESS_HEADERS
+        .iter()
+        .skip(1)
+        .map(|title| (find(&out, title).min.x, *title))
+        .collect();
+    let sorted = {
+        let mut sorted = found.clone();
+        sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+        sorted
+    };
+    assert_eq!(found, sorted);
+    for gone in ["Executable", "TID", "First seen", "Exec history"] {
+        assert!(!texts(&out).iter().any(|(text, _)| text.starts_with(gone)));
+    }
+    assert!(has(&out, "demo-all (55 \u{b7} 55)"), "{:?}", texts(&out));
+}
+
+#[test]
+fn a_mismatched_command_line_has_no_warning_sign_and_the_findings_column_is_the_way_in() {
+    let ctx = tooltip_context();
+    let (_temp, mut view) = demo_view();
+    let out = settle(&ctx, &mut view);
+    assert!(has(&out, "ps aux"), "{:?}", texts(&out));
+    assert!(
+        !texts(&out)
+            .iter()
+            .any(|(text, _)| text.contains('\u{26a0}')),
+        "{:?}",
+        texts(&out)
+    );
+    assert!(has(&out, "Findings"));
+}
+
+#[test]
+fn the_user_column_is_the_user_id_with_the_effective_one_after_an_arrow() {
+    let ctx = context();
+    let (_temp, mut view) = demo_view();
+    view.scan
+        .as_mut()
+        .unwrap()
+        .process
+        .iter_mut()
+        .for_each(|node| {
+            node.record.creds.push(process_record::CredStep {
+                ns: 1,
+                uid: 1000,
+                euid: 0,
+                gid: 1000,
+                egid: 1000,
+                change: antinomie_monitor_core::kernel_notes::CredentialChange::SetUid,
+            });
+        });
+    let out = settle(&ctx, &mut view);
+    assert!(has(&out, "User ID"), "{:?}", texts(&out));
+    assert!(!has(&out, "User"), "{:?}", texts(&out));
+    assert!(has(&out, "1000 \u{2192} 0"), "{:?}", texts(&out));
+}
+
+pub(super) fn details_output(ctx: &egui::Context, view: &mut TriageView) -> egui::FullOutput {
+    ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1500.0, 2600.0),
+            )),
+            time: Some(9.0),
+            ..Default::default()
+        },
+        |root| {
+            egui::CentralPanel::default().show(root, |ui| {
+                view.details(ui);
+            });
+        },
+    )
+}
+
+#[test]
+fn clicking_a_process_opens_its_details_with_the_environment() {
+    let ctx = context();
+    let (_temp, mut view) = demo_view();
+    let out = settle(&ctx, &mut view);
+    click(
+        &ctx,
+        &mut view,
+        find(&out, "demo-all (55 \u{b7} 55)").center(),
+    );
     settle(&ctx, &mut view);
-    assert!(view.section == Section::Process);
+    // The click stays in the tree: it does not jump to another list.
+    assert!(view.process == ProcessTab::Tree);
+    details_output(&ctx, &mut view);
+    let out = details_output(&ctx, &mut view);
+    for text in [
+        "Executable",
+        "/tmp/demo-all",
+        "Environment (2 variables)",
+        "Show its calls",
+    ] {
+        assert!(has(&out, text), "{text}: {:?}", texts(&out));
+    }
+    assert!(texts(&out)
+        .iter()
+        .any(|(t, _)| t.ends_with("LD_PRELOAD=/tmp/x.so")));
+}
+
+#[test]
+fn show_its_calls_filters_the_syscall_trace_to_the_process() {
+    let ctx = context();
+    let (_temp, mut view) = demo_view();
+    let out = settle(&ctx, &mut view);
+    click(
+        &ctx,
+        &mut view,
+        find(&out, "demo-all (55 \u{b7} 55)").center(),
+    );
+    settle(&ctx, &mut view);
+    details_output(&ctx, &mut view);
+    let out = details_output(&ctx, &mut view);
+    let at = find(&out, "Show its calls").center();
+    for pressed in [true, false] {
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1500.0, 2600.0),
+                )),
+                events: vec![
+                    egui::Event::PointerMoved(at),
+                    egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                time: Some(9.5),
+                ..Default::default()
+            },
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
+                    view.details(ui);
+                });
+            },
+        );
+    }
+    let cookie = view
+        .scan
+        .as_ref()
+        .unwrap()
+        .process
+        .iter()
+        .find(|node| node.pid == 55)
+        .unwrap()
+        .cookie;
+    assert_eq!(
+        view.take_trace_scope().as_deref(),
+        Some(process_details::trace_filter(55, cookie).as_str())
+    );
+}
+
+#[test]
+fn the_findings_count_lists_that_process_findings() {
+    let ctx = context();
+    let (_temp, mut view) = demo_view();
+    let out = settle(&ctx, &mut view);
+    let count = view
+        .scan
+        .as_ref()
+        .unwrap()
+        .suspicious
+        .iter()
+        .find(|((_, pid), _)| *pid == 55)
+        .map(|(_, (count, _))| *count)
+        .expect("findings");
+    // The chip is the Findings cell: the text is its number.
+    let chips: Vec<_> = texts(&out)
+        .into_iter()
+        .filter(|(t, _)| *t == count.to_string())
+        .collect();
+    let header = find(&out, "Findings");
+    let chip = chips
+        .iter()
+        .find(|(_, rect)| (rect.min.x - header.min.x).abs() < 40.0)
+        .expect("a chip under Findings");
+    click(&ctx, &mut view, chip.1.center());
+    settle(&ctx, &mut view);
     assert!(view.process == ProcessTab::Suspicious);
-    let draft =
-        ctx.data(|data| data.get_temp::<String>(egui::Id::new(("triage-filter-draft", 0usize))));
-    assert_eq!(draft.as_deref(), Some("process.pid == 55"));
 }

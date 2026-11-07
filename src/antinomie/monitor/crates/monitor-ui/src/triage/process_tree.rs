@@ -31,37 +31,73 @@ pub(super) fn process_rows(
 ) -> Vec<Vec<Cell>> {
     // The latest moment any task was recorded: how long a call had been in progress.
     let end = nodes.iter().filter_map(|node| node.last_ns).max();
+    // The start of the run: when its first task was first seen.
+    let start = nodes.iter().filter_map(|node| node.first_ns).min();
     nodes
         .iter()
         .map(|node| {
+            let ended = node.state.starts_with("task exit");
+            let mut command = cell(process_cells::argv_line(&node.argv), theme::text(), false);
+            if let Some(hover) = process_cells::argv_hover(&node.argv) {
+                tip(&mut command, hover);
+            }
+            let mut findings = cell(
+                suspicious
+                    .get(&(node.cookie, node.pid))
+                    .map_or_else(String::new, |(count, _)| count.to_string()),
+                theme::text(),
+                true,
+            );
+            tip(
+                &mut findings,
+                "Triage findings in this process. Click to list them.".into(),
+            );
+            let mut started = cell(
+                process_cells::relative(node.first_ns, start),
+                theme::text(),
+                true,
+            );
+            tip(
+                &mut started,
+                crate::time_format::guest_ns(clock, node.first_ns),
+            );
+            let mut user = cell(
+                process_cells::user(node.record.creds.last()),
+                theme::text(),
+                true,
+            );
+            if let Some(step) = node.record.creds.last() {
+                tip(&mut user, process_cells::user_hover(step));
+            }
             let mut row = vec![
                 cell(
                     process_label(node),
-                    theme::value(theme::ValueKind::Pointer),
-                    true,
-                ),
-                cell(
                     if node.forked {
-                        format!("{} (fork)", node.comm)
+                        theme::muted()
                     } else {
-                        node.comm.clone()
+                        theme::value(theme::ValueKind::Pointer)
                     },
-                    theme::value(theme::ValueKind::Name),
                     true,
                 ),
-                cell(node.tid.to_string(), theme::text(), true),
-                cell(node.argv.join(" "), theme::text(), false),
+                command,
+                findings,
+                user,
+                started,
                 cell(
-                    crate::time_format::guest_ns(clock, node.first_ns),
+                    process_cells::lifetime(node.first_ns, node.last_ns, ended),
                     theme::text(),
                     true,
                 ),
                 cell(
-                    crate::time_format::guest_ns(clock, node.last_ns),
+                    process_cells::outcome(
+                        &node.state,
+                        node.in_call.as_ref().map(|call| call.0.as_str()),
+                        node.record.killed_by,
+                    ),
                     theme::text(),
-                    true,
+                    false,
                 ),
-                cell(state_text(node, end, clock), theme::text(), false),
+                cell(node.record.calls.to_string(), theme::text(), true),
                 cell(history_text(node), theme::text(), false),
             ];
             row[0].values = vec![
@@ -88,6 +124,20 @@ pub(super) fn process_rows(
                         .map_or(RowValue::Missing, |(_, tier)| {
                             RowValue::Text(tier.tag().to_owned())
                         }),
+                ),
+                ("process.forked", RowValue::Bool(node.forked)),
+                (
+                    "process.calls",
+                    RowValue::Number(i128::from(node.record.calls)),
+                ),
+                (
+                    "process.lifetime_ns",
+                    match (node.first_ns, node.last_ns) {
+                        (Some(first), Some(last)) if ended => {
+                            RowValue::Number(i128::from(last.saturating_sub(first)))
+                        }
+                        _ => RowValue::Missing,
+                    },
                 ),
                 ("process.depth", RowValue::Number(node.depth as i128)),
                 (
@@ -143,6 +193,50 @@ pub(super) fn process_rows(
             row
         })
         .collect::<Vec<_>>()
+}
+
+/// The Process tree's columns, in order.
+pub(super) const PROCESS_HEADERS: [&str; 9] = [
+    "Process",
+    "Argv",
+    "Findings",
+    "User ID",
+    "Started",
+    "Lifetime",
+    "Outcome",
+    "Calls",
+    "Exec chain",
+];
+
+/// Key of a cell's hover text among its values.
+const TIP: &str = "cell.tooltip";
+
+fn tip(cell: &mut Cell, text: String) {
+    cell.values.push((TIP, RowValue::Text(text)));
+}
+
+/// The text shown when the pointer rests on a cell of the Process tree: the
+/// full executable path in the first column, the cell's own note elsewhere.
+pub(super) fn cell_hover(column: usize, cell: &Cell, first: &Cell) -> Option<String> {
+    if column == 0 {
+        let path = match first.values.iter().find(|(key, _)| *key == "process.exe") {
+            Some((_, RowValue::Text(path))) => path.clone(),
+            _ => return None,
+        };
+        let forked = first
+            .values
+            .iter()
+            .any(|(key, value)| *key == "process.forked" && matches!(value, RowValue::Bool(true)));
+        return Some(if forked {
+            format!("{path}\nNot exec'd yet: still its parent's image.")
+        } else {
+            path
+        });
+    }
+    cell.values.iter().find_map(|(key, value)| match value {
+        RowValue::Text(text) if *key == TIP => Some(text.clone()),
+        _ => None,
+    })
 }
 
 /// Thread tasks from which the Process tree folds them into "+N threads".
@@ -220,16 +314,7 @@ pub(super) fn process_tree_nodes(
     table_with(
         ui,
         "triage-process",
-        &[
-            "Process",
-            "Executable",
-            "TID",
-            "Argv",
-            "First seen",
-            "Last seen",
-            "Task outcome",
-            "Exec history",
-        ],
+        &PROCESS_HEADERS,
         &filtered,
         Some(&crate::tree_lines::prefixes(&depths)),
     );
@@ -261,6 +346,7 @@ pub(super) fn observe_processes(
         let key = adopt_task(nodes, event);
         if let Some(node) = nodes.get_mut(&key) {
             node.tid = event.tid;
+            node.record.observe(invocation, event);
             if invocation.call_id != 0 {
                 node.call_id.get_or_insert(trace::key(invocation));
             }
@@ -333,6 +419,7 @@ pub(super) fn observe_processes(
                     node.argv.clear();
                     node.command_line = None;
                     node.proctitle = None;
+                    node.record.envp.clear();
                 }
             }
             if let Some(comm) = named {
@@ -351,6 +438,12 @@ pub(super) fn observe_processes(
                     }
                 }
                 node.argv = exec_argv(invocation, event);
+                let image = node.comm.clone();
+                node.record.exec(
+                    Some(&image),
+                    event.timestamp_ns,
+                    process_record::exec_envp(invocation, &event.syscall_name),
+                );
                 node.renames.clear();
                 node.command_line = normalized::command_line(invocation, event);
                 node.proctitle = normalized::complete_argv(invocation, event);
@@ -389,6 +482,19 @@ pub(super) fn finish_processes(
 ) -> Vec<ProcessNode> {
     inherit_fork_images(&mut nodes);
     let threads = attach_threads(&mut nodes);
+    // A child cloned by one thread of a process belongs to the process: the
+    // Process tree and the Relationships graph show processes, not threads.
+    let leaders: Vec<(TaskKey, TaskKey)> = nodes
+        .iter()
+        .filter_map(|(key, node)| Some((*key, node.parent.filter(|p| threads.contains(p))?)))
+        .collect();
+    for (key, thread) in leaders {
+        let leader = nodes.get(&thread).and_then(|node| node.parent);
+        if let Some(node) = nodes.get_mut(&key) {
+            node.parent = leader;
+        }
+    }
+    process_record::match_killers(&mut nodes);
     let mut children: std::collections::BTreeMap<TaskKey, Vec<TaskKey>> =
         std::collections::BTreeMap::new();
     let mut roots = Vec::new();
@@ -439,6 +545,13 @@ pub(super) fn finish_processes(
                 renames: node.renames.clone(),
                 in_call: node.in_call.clone(),
                 forked: node.forked,
+                record: {
+                    let mut record = node.record.clone();
+                    if record.envp.is_empty() && (node.forked || threads.contains(&key)) {
+                        record.envp = inherited_env(nodes, key);
+                    }
+                    record
+                },
             });
             if let Some(kids) = children.get(&key) {
                 for child in kids.iter().rev() {
@@ -457,6 +570,25 @@ pub(super) fn finish_processes(
         }
     }
     found
+}
+
+/// The environment a task that never ran an exec still has: its parent's.
+fn inherited_env(
+    nodes: &std::collections::BTreeMap<TaskKey, TaskNode>,
+    key: TaskKey,
+) -> Vec<String> {
+    let mut at = key;
+    for _ in 0..16 {
+        let Some(parent) = nodes.get(&at).and_then(|node| node.parent) else {
+            break;
+        };
+        match nodes.get(&parent) {
+            Some(node) if !node.record.envp.is_empty() => return node.record.envp.clone(),
+            Some(_) if parent != at => at = parent,
+            _ => break,
+        }
+    }
+    Vec::new()
 }
 
 /// A forked child that never ran an exec of its own is still its parent's
@@ -533,6 +665,37 @@ fn adopt_task(
         node.provisional = false;
     }
     key
+}
+
+/// Every task's parent as the whole recording settled it, with a parent that
+/// is a thread of a process replaced by the process's main task. A task that
+/// starts running (a `vfork` child that execs at once) is seen before the
+/// call that created it returns, so this is read from a full pass and not
+/// from the calls seen so far.
+pub(super) fn settled_parents(
+    nodes: &std::collections::BTreeMap<TaskKey, TaskNode>,
+) -> std::collections::BTreeMap<TaskKey, TaskKey> {
+    let mut main: std::collections::BTreeMap<u32, TaskKey> = Default::default();
+    for (key, node) in nodes {
+        if key.cookie != 0 && node.tid == key.pid {
+            main.entry(key.pid).or_insert(*key);
+        }
+    }
+    nodes
+        .iter()
+        .filter_map(|(key, node)| {
+            let parent = node.parent?;
+            let is_thread = nodes
+                .get(&parent)
+                .is_some_and(|node| node.tid != 0 && node.tid != parent.pid);
+            let parent = if is_thread {
+                main.get(&parent.pid).copied().unwrap_or(parent)
+            } else {
+                parent
+            };
+            Some((*key, parent))
+        })
+        .collect()
 }
 
 fn link_child(
@@ -728,14 +891,21 @@ pub(super) fn process_identity(pid: u32, tid: u32, image: Option<&str>) -> Strin
 /// A task as the user reads it: the process and the thread, never the
 /// recording's internal task cookie (that is in the details).
 pub(super) fn process_label(node: &ProcessNode) -> String {
-    let mut text = format!("PID {}", node.pid);
-    match node.tid {
-        0 => text.push_str(" \u{b7} TID unknown"),
-        tid if tid == node.pid => text.push_str(&format!(" \u{b7} TID {tid} (main)")),
-        tid => text.push_str(&format!(" \u{b7} TID {tid}")),
-    }
-    if node.thread {
-        text.push_str("  thread");
+    let ids = match node.tid {
+        0 => format!("({} \u{b7} ?)", node.pid),
+        tid => format!("({} \u{b7} {tid})", node.pid),
+    };
+    let mut text = if node.thread {
+        format!("{ids}  thread")
+    } else {
+        let name = match node.comm.as_str() {
+            "?" | "" => "unknown",
+            comm => process_cells::file_name(comm),
+        };
+        format!("{name} {ids}")
+    };
+    if node.forked {
+        text.push_str("  fork");
     }
     if node.parent_missing {
         text.push_str("  parent not in this trace");
@@ -752,6 +922,24 @@ pub(super) fn task_id_text(cookie: u64) -> String {
     }
 }
 
+/// The spelled-out label the tree-shape tests read.
+#[cfg(test)]
+fn plain_label(node: &ProcessNode) -> String {
+    let mut text = format!("PID {}", node.pid);
+    match node.tid {
+        0 => text.push_str(" \u{b7} TID unknown"),
+        tid if tid == node.pid => text.push_str(&format!(" \u{b7} TID {tid} (main)")),
+        tid => text.push_str(&format!(" \u{b7} TID {tid}")),
+    }
+    if node.thread {
+        text.push_str("  thread");
+    }
+    if node.parent_missing {
+        text.push_str("  parent not in this trace");
+    }
+    text
+}
+
 #[cfg(test)]
 pub(super) fn process_tree_lines(invocations: &[InvocationSummary]) -> Vec<String> {
     process_nodes(invocations)
@@ -760,7 +948,7 @@ pub(super) fn process_tree_lines(invocations: &[InvocationSummary]) -> Vec<Strin
             format!(
                 "{}{}  {}",
                 "  ".repeat(node.depth),
-                process_label(&node),
+                plain_label(&node),
                 node.comm
             )
         })
@@ -907,7 +1095,7 @@ fn state_text(
 
 /// The exec history, then the names the task took after the last exec.
 fn history_text(node: &ProcessNode) -> String {
-    let mut text = node.exec_history.join(" \u{2192} ");
+    let mut text = process_cells::exec_chain(&node.exec_history);
     for name in &node.renames {
         if !text.is_empty() {
             text.push_str("; ");

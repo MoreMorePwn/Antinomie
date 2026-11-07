@@ -6,6 +6,7 @@
 mod actions;
 mod analysis_windows;
 mod bases;
+mod bindings;
 mod capture;
 mod captures;
 mod clipboard;
@@ -37,10 +38,12 @@ mod run_labels;
 mod run_selector;
 mod run_state_text;
 mod samples_page;
-mod screenshots_page;
+pub(crate) mod screenshots_page;
 mod session;
+mod settings_timeouts;
 mod settings_window;
 mod shortcut_list;
+mod shortcut_settings;
 mod sidebar;
 mod sidebar_rail;
 mod start_error;
@@ -128,6 +131,12 @@ struct Settings {
     analysis_time_limit_minutes: u32,
     /// Static analysis: the sizes and counts a check may reach.
     analysis_limits: antinomie_monitor_core::AnalysisLimits,
+    /// Tools the system has but whose copy Antinomie installed is used
+    /// (Library > Analysis tools, Tools > App dependencies).
+    own_tools: std::collections::BTreeSet<String>,
+    /// Keyboard shortcuts changed in Settings > Keyboard: the action's name
+    /// and the shortcut's text ("Ctrl+Shift+A"), empty for no shortcut.
+    shortcuts: std::collections::BTreeMap<String, String>,
     /// Triage Changed files: most MiB of one file's bytes rebuilt.
     rebuild_file_mib: u32,
     /// Triage Changed files: most MiB rebuilt over all files of a run.
@@ -190,6 +199,12 @@ struct Settings {
     toast_high_findings: bool,
     /// Toast when a run ends ("Run 3 finished"). On by default.
     toast_run_finished: bool,
+    /// Start on a VM with no snapshot asks first (Settings > Notifications).
+    /// The question's "Don't ask me again" turns it off. On by default.
+    warn_no_snapshot: bool,
+    /// Clear in Activity asks first (Settings > Notifications). The question's
+    /// "Don't ask me again" turns it off. On by default.
+    warn_clear_activity: bool,
     /// The size the activity graph's window opened at last, in points.
     graph_window: [f32; 2],
     /// How the activity graph spaces findings along its time axis.
@@ -288,6 +303,8 @@ impl Default for Settings {
             core_budget_mib: crate::core_budget::default_mib(),
             analysis_time_limit_minutes: 0,
             analysis_limits: antinomie_monitor_core::AnalysisLimits::default(),
+            own_tools: Default::default(),
+            shortcuts: Default::default(),
             rebuild_file_mib: crate::triage::DEFAULT_REBUILD_FILE_MIB,
             rebuild_run_mib: crate::triage::DEFAULT_REBUILD_RUN_MIB,
             triage_page_rows: crate::triage::STORED_ROWS as u32,
@@ -318,6 +335,8 @@ impl Default for Settings {
             vm_screen_closed: false,
             toast_high_findings: false,
             toast_run_finished: true,
+            warn_no_snapshot: true,
+            warn_clear_activity: true,
             graph_window: crate::triage::GRAPH_WINDOW_SIZE,
             graph_spacing: Default::default(),
             report_export: Default::default(),
@@ -348,8 +367,13 @@ enum Confirm {
     },
     /// Detach the debugger and kill the debugged process.
     DebugKill,
+    /// Start a VM that has no snapshot: what the program changes stays in
+    /// its disk. Holds the VM's id.
+    StartWithoutSnapshot(String),
     /// Quit while jobs run: the list shows what would stop.
     Quit,
+    /// Clear the Activity log.
+    ClearActivity,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -999,11 +1023,18 @@ enum BaseAction {
 /// A sidebar entry: a colored mark, the name, an optional state on the
 /// right, then detail lines in small text. The whole row is one target.
 struct SidebarRow<'a> {
-    mark: (&'a str, egui::Color32),
+    mark: RowMark<'a>,
     name: &'a str,
     state: Option<(&'a str, egui::Color32)>,
     details: Vec<Vec<(String, egui::Color32)>>,
     selected: bool,
+}
+
+/// What leads a sidebar row: a state dot, drawn on the middle of the name, or
+/// an icon glyph.
+enum RowMark<'a> {
+    Dot(egui::Color32),
+    Icon(&'a str, egui::Color32),
 }
 
 struct SectionHeader<'a> {
@@ -1011,7 +1042,11 @@ struct SectionHeader<'a> {
     /// The muted number after the title; none for a section that has no count.
     count: Option<usize>,
     tooltip: &'a str,
+    /// The icon of the action on the right ("+" to add, a folder to choose one).
+    glyph: &'a str,
     action: &'a str,
+    /// Why the action is off, for its tooltip ("(stop the running VM first)").
+    blocked: &'a str,
     enabled: bool,
     open: bool,
 }

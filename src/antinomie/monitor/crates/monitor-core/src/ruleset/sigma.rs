@@ -39,6 +39,7 @@ pub(super) fn parse_sigma(text: &str) -> Vec<IndexedRule> {
                 tags: sigma_tags(doc),
                 severity: meta_line(doc, "level").unwrap_or_default(),
                 license: meta_line(doc, "license").unwrap_or_default(),
+                author: meta_line(doc, "author").unwrap_or_default(),
                 source_url: String::new(),
                 condition: clip(&meta_line(doc, "description").unwrap_or_default(), 180),
                 references: sigma_refs(doc),
@@ -191,32 +192,40 @@ pub(super) fn meta_line(doc: &str, key: &str) -> Option<String> {
     None
 }
 
+/// A YARA rule's meta value for `key`, read from the rule text. The key is
+/// matched in any case (`Description`, `DESCRIPTION`); the exact spelling of
+/// `key` wins when the rule sets both. Empty when there is none.
 pub(super) fn meta_in(body: &str, key: &str) -> String {
-    let marker = format!("{key} =");
-    body.lines()
-        .find_map(|line| {
-            let trimmed = line.trim().trim_end_matches(',');
-            trimmed.strip_prefix(&marker).map(|value| {
-                value
-                    .trim()
-                    .trim_matches(|c| c == '"' || c == '\'')
-                    .to_owned()
-            })
-        })
-        .unwrap_or_default()
+    let mut other = None;
+    for line in body.lines() {
+        let trimmed = line.trim().trim_end_matches(',');
+        let Some((name, value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        let name = name.trim();
+        if !name.eq_ignore_ascii_case(key) {
+            continue;
+        }
+        let value = value
+            .trim()
+            .trim_matches(|c| c == '"' || c == '\'')
+            .to_owned();
+        if value.is_empty() {
+            continue;
+        }
+        if name == key {
+            return value;
+        }
+        other.get_or_insert(value);
+    }
+    other.unwrap_or_default()
 }
 
 pub(super) fn reference_list(body: &str) -> Vec<String> {
-    let mut refs = Vec::new();
-    if let Some(value) = body.lines().find_map(|line| {
-        line.trim()
-            .strip_prefix("reference =")
-            .map(|value| value.trim().trim_matches('"').to_owned())
-    }) && !value.is_empty()
-    {
-        refs.push(value);
-    }
-    refs
+    Some(meta_in(body, "reference"))
+        .filter(|value| !value.is_empty())
+        .into_iter()
+        .collect()
 }
 
 fn sigma_tags(doc: &str) -> Vec<String> {

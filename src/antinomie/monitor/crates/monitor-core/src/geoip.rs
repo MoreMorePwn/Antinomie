@@ -108,7 +108,7 @@ impl Status {
     pub fn warning(&self) -> Option<String> {
         const FIX: &str = "Install the DB-IP Lite databases in Library > Analysis tools, \
             or choose a folder with GeoLite2 .mmdb files in Settings > Network lookup. \
-            TShark 4.x ignores the old GeoIP.dat files.";
+            Older GeoIP.dat files do not work with TShark 4.";
         match (self.has_location(), self.has_asn()) {
             (true, true) => None,
             (false, false) => Some(format!(

@@ -11,8 +11,6 @@ use std::{
 const MANAGED: &str = "/opt/antinomie-tools/capa/capa";
 const RULES: &[u8] = include_bytes!("../../assets/rules/capa-rules-v9.4.0.tar.gz");
 pub(super) const RULES_RELEASE: &str = "capa-rules v9.4.0";
-/// capa's own time limit, in seconds.
-pub(super) const TIMEOUT_SECONDS: u64 = 240;
 /// Where the sandbox mounts capa's compiled-rule cache.
 pub(super) const CACHE_MOUNT: &str = "/cache/capa";
 /// The cache is emptied when it grows past this many octets.
@@ -97,8 +95,21 @@ pub(super) fn explain_failure(base: String, specimen: &[u8]) -> String {
     )
 }
 
+/// What a capa that ran out of time says. A Go program carries its whole
+/// runtime and a large call graph, so capa takes far longer on it than the
+/// limit allows for an ordinary program, and the way out is the limit.
+pub(super) fn timed_out_text(seconds: u64, specimen: &[u8]) -> String {
+    if super::ident::go_supported(specimen) {
+        format!(
+            "capa timed out after {seconds} s (Go binaries are slow; raise the limit in Settings > Analysis)"
+        )
+    } else {
+        "Statically linked programs take capa much longer because it also analyses the bundled C library.".into()
+    }
+}
+
 pub(super) fn capabilities(section: &mut AnalysisSection, specimen: &[u8]) {
-    let Some(capa) = tools::find_tool(crate::analysis_tools::CAPA_SYSTEM, MANAGED) else {
+    let Some(capa) = tools::find_tool("capa", crate::analysis_tools::CAPA_SYSTEM, MANAGED) else {
         section.state = AnalysisSectionState::Unavailable;
         section.summary = format!(
             "capa is not installed; install it from Tools > Analysis tools (or on the system) and Antinomie runs it with the bundled {RULES_RELEASE}"
@@ -128,7 +139,7 @@ pub(super) fn capabilities(section: &mut AnalysisSection, specimen: &[u8]) {
         section.summary = format!("capa rules unavailable: {error}");
         return;
     }
-    let timeout = Duration::from_secs(super::limits::seconds(TIMEOUT_SECONDS));
+    let timeout = Duration::from_secs(super::limits::seconds_for(super::limits::TimedTool::Capa));
     // A cache folder mounted by the host keeps the compiled rules from one
     // run to the next; without it capa compiles them every time.
     let cache = Path::new(CACHE_MOUNT).is_dir();
@@ -164,7 +175,7 @@ pub(super) fn capabilities(section: &mut AnalysisSection, specimen: &[u8]) {
                 section,
                 "capa",
                 timeout.as_secs(),
-                "Statically linked programs take capa much longer because it also analyses the bundled C library.",
+                timed_out_text(timeout.as_secs(), specimen),
             );
         } else if run.truncated {
             section.state = AnalysisSectionState::Unavailable;
@@ -284,6 +295,20 @@ pub(super) fn capabilities(section: &mut AnalysisSection, specimen: &[u8]) {
 mod failure_tests {
     use super::*;
     use crate::analysis::elf_facts::fixtures::elf64;
+
+    #[test]
+    fn a_capa_timeout_on_a_go_binary_names_the_limit_setting() {
+        let mut go = elf64(0x800, 0x800, 0x100, false);
+        go[0x300..0x30e].copy_from_slice(b"\xff Go buildinf:");
+        go[0x500..0x50c].copy_from_slice(b"runtime.main");
+        let text = timed_out_text(240, &go);
+        assert_eq!(
+            text,
+            "capa timed out after 240 s (Go binaries are slow; raise the limit in Settings > Analysis)"
+        );
+        let c = timed_out_text(240, &elf64(0x800, 0x800, 0x100, false));
+        assert!(c.starts_with("Statically linked programs"), "{c}");
+    }
 
     #[test]
     fn a_failure_names_what_the_headers_show() {

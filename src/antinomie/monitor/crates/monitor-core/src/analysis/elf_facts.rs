@@ -10,6 +10,17 @@ const PT_DYNAMIC: u32 = 2;
 const PT_INTERP: u32 = 3;
 /// Longest program interpreter path read.
 const INTERP_MAX: usize = 256;
+const ET_DYN: u16 = 3;
+const DT_NULL: u64 = 0;
+const DT_NEEDED: u64 = 1;
+const DT_STRTAB: u64 = 5;
+const DT_SONAME: u64 = 14;
+const DT_FLAGS_1: u64 = 0x6fff_fffb;
+/// `DF_1_PIE`: the linker marked the file a position-independent executable.
+const DF_1_PIE: u64 = 0x0800_0000;
+/// Dynamic entries and string lengths read, so a hostile table cannot stall.
+const DYNAMIC_MAX: usize = 4096;
+const NAME_MAX: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Segment {
@@ -160,7 +171,129 @@ pub(crate) fn parse(bytes: &[u8]) -> Option<Elf> {
     })
 }
 
+/// What the dynamic section names: the libraries the loader must find, the
+/// file's own library name, and whether it was linked as a program.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Dynamic {
+    pub needed: Vec<String>,
+    pub soname: Option<String>,
+    pub pie: bool,
+}
+
+/// A size as the notes say it: "30.3 MB" (decimal, one place).
+fn megabytes(bytes: u64) -> String {
+    format!("{:.1} MB", bytes as f64 / 1_000_000.0)
+}
+
 impl Elf {
+    /// Where the loader would find virtual address `vaddr` in the file.
+    fn file_offset_of(&self, vaddr: u64) -> Option<u64> {
+        self.segments
+            .iter()
+            .filter(|s| s.kind == PT_LOAD && s.filesz > 0)
+            .find(|s| vaddr >= s.vaddr && vaddr - s.vaddr < s.filesz)
+            .map(|s| s.offset + (vaddr - s.vaddr))
+    }
+
+    /// The dynamic section: needed libraries, SONAME and the PIE flag.
+    pub(crate) fn dynamic(&self, bytes: &[u8]) -> Dynamic {
+        let mut found = Dynamic::default();
+        let Some(segment) = self.segments.iter().find(|s| s.kind == PT_DYNAMIC) else {
+            return found;
+        };
+        let little = bytes.get(5) != Some(&2);
+        let r = Reader { bytes, little };
+        let width = if self.is_64 { 16 } else { 8 };
+        let start = usize::try_from(segment.offset).unwrap_or(usize::MAX);
+        let count = usize::try_from(segment.filesz / width as u64)
+            .unwrap_or(0)
+            .min(DYNAMIC_MAX);
+        let (mut needed, mut soname, mut strtab) = (Vec::new(), None, None);
+        for index in 0..count {
+            let at = start.saturating_add(index * width);
+            let (tag, value) = if self.is_64 {
+                match (r.u64(at), r.u64(at + 8)) {
+                    (Some(tag), Some(value)) => (tag, value),
+                    _ => break,
+                }
+            } else {
+                match (r.u32(at), r.u32(at + 4)) {
+                    (Some(tag), Some(value)) => (u64::from(tag), u64::from(value)),
+                    _ => break,
+                }
+            };
+            match tag {
+                DT_NULL => break,
+                DT_NEEDED => needed.push(value),
+                DT_SONAME => soname = Some(value),
+                DT_STRTAB => strtab = Some(value),
+                DT_FLAGS_1 => found.pie = value & DF_1_PIE != 0,
+                _ => {}
+            }
+        }
+        let Some(table) = strtab.and_then(|vaddr| self.file_offset_of(vaddr)) else {
+            return found;
+        };
+        let name = |offset: u64| -> Option<String> {
+            let from = usize::try_from(table.checked_add(offset)?).ok()?;
+            let raw = bytes.get(from..)?;
+            let raw = &raw[..raw.len().min(NAME_MAX)];
+            let text = raw.split(|b| *b == 0).next()?;
+            (!text.is_empty()).then(|| String::from_utf8_lossy(text).into_owned())
+        };
+        found.needed = needed.into_iter().filter_map(name).collect();
+        found.soname = soname.and_then(name);
+        found
+    }
+
+    /// Whether this is a shared library run as if it were a program: a
+    /// shared object (`ET_DYN`) that asks for no interpreter, is not marked
+    /// as a PIE and names a library (its own SONAME, or libraries it needs).
+    /// A static-PIE program has none of those, and a dynamic PIE has an
+    /// interpreter, so neither is taken for a library.
+    pub(crate) fn is_shared_library(&self, bytes: &[u8]) -> bool {
+        if self.kind != ET_DYN || self.segments.iter().any(|s| s.kind == PT_INTERP) {
+            return false;
+        }
+        let dynamic = self.dynamic(bytes);
+        !dynamic.pie && (dynamic.soname.is_some() || !dynamic.needed.is_empty())
+    }
+
+    /// The bytes the loadable segments need: the end of the furthest one.
+    pub(crate) fn segments_need(&self) -> u64 {
+        self.segments
+            .iter()
+            .filter(|s| s.kind == PT_LOAD)
+            .map(|s| s.offset.saturating_add(s.filesz))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// The sentence for a file that ends before its headers say, or `None`
+    /// for a whole one. Loadable segments past the end are the loader's
+    /// reason to refuse the file; section headers past the end only hide the
+    /// section table.
+    pub(crate) fn truncation_note(&self) -> Option<String> {
+        let need = self.segments_need();
+        if need > self.len {
+            return Some(format!(
+                "This ELF is truncated: its segments need {}, the file has {}. A partial upload or download; get a full copy.",
+                megabytes(need),
+                megabytes(self.len)
+            ));
+        }
+        if let Some((_, end)) = self.section_table
+            && end > self.len
+        {
+            return Some(format!(
+                "This ELF is truncated: its section headers need {}, the file has {}. A partial upload or download; get a full copy.",
+                megabytes(end),
+                megabytes(self.len)
+            ));
+        }
+        None
+    }
+
     /// The loader's view of the linking: program headers only.
     pub(crate) fn linking(&self, bytes: &[u8]) -> Linking {
         if let Some(interp) = self.segments.iter().find(|s| s.kind == PT_INTERP) {
@@ -251,6 +384,57 @@ pub(crate) fn tool_obstacles(bytes: &[u8]) -> Vec<String> {
     facts
 }
 
+/// How much of a file's front is read to judge its headers.
+const HEAD_MAX: u64 = 256 * 1024;
+
+/// The truncation sentence for the ELF at `path`, reading only its front;
+/// `None` for a whole file, a file that is no ELF or one that cannot be read.
+pub(crate) fn file_truncation_note(path: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let mut head = Vec::new();
+    file.take(HEAD_MAX).read_to_end(&mut head).ok()?;
+    let mut elf = parse(&head)?;
+    // The headers were read from the front; the length is the file's.
+    elf.len = len;
+    elf.truncation_note()
+}
+
+/// The notes a file earns from its own headers, one sentence each: a
+/// truncated ELF and a shared library run as a program.
+pub(crate) fn file_notes(bytes: &[u8]) -> Vec<String> {
+    let Some(elf) = parse(bytes) else {
+        return Vec::new();
+    };
+    let mut notes = Vec::new();
+    notes.extend(elf.truncation_note());
+    if elf.is_shared_library(bytes) {
+        notes.push(SHARED_LIBRARY_NOTE.to_owned());
+    }
+    notes
+}
+
+/// The notes a report's Metadata rows carry about the file itself: a
+/// truncated ELF, a shared library. Empty for a report made before they
+/// existed or for a file with none.
+pub fn report_notes(report: &super::AnalysisReport) -> Vec<String> {
+    report
+        .sections
+        .iter()
+        .filter(|section| section.kind == super::AnalysisKind::Metadata)
+        .flat_map(|section| &section.entries)
+        .filter(|entry| entry.label == NOTE_LABEL)
+        .map(|entry| entry.value.clone())
+        .collect()
+}
+
+/// The label of a Metadata row that is a note about the file, not a fact.
+pub(crate) const NOTE_LABEL: &str = "Note";
+
+/// The note for a shared library, without a name.
+pub(crate) const SHARED_LIBRARY_NOTE: &str = "This is a shared library, not a program; it is meant to be loaded by another process (LD_PRELOAD or dlopen).";
+
 #[cfg(test)]
 pub(crate) mod fixtures {
     /// A small x86-64 ELF with one PT_LOAD, `len` bytes of file and the
@@ -332,5 +516,125 @@ mod tests {
         assert!(facts[0].starts_with("the file is truncated"));
         assert!(parse(b"not an elf").is_none());
         assert!(parse(&cut[..30]).is_none());
+    }
+
+    /// A tiny ET_DYN built here: one PT_LOAD over the whole file, a dynamic
+    /// section at 0x100 and its string table at 0x200.
+    fn shared_object(soname: Option<&str>, needed: &[&str], interp: bool, pie: bool) -> Vec<u8> {
+        let mut file = vec![0u8; 0x400];
+        file[..4].copy_from_slice(b"\x7fELF");
+        file[4] = 2;
+        file[5] = 1;
+        file[0x10..0x12].copy_from_slice(&3u16.to_le_bytes());
+        file[0x20..0x28].copy_from_slice(&64u64.to_le_bytes());
+        file[0x36..0x38].copy_from_slice(&56u16.to_le_bytes());
+        let headers: u16 = 2 + u16::from(interp);
+        file[0x38..0x3a].copy_from_slice(&headers.to_le_bytes());
+        let mut at = 64;
+        let mut header = |file: &mut Vec<u8>, kind: u32, offset: u64, filesz: u64| {
+            file[at..at + 4].copy_from_slice(&kind.to_le_bytes());
+            file[at + 8..at + 16].copy_from_slice(&offset.to_le_bytes());
+            file[at + 16..at + 24].copy_from_slice(&offset.to_le_bytes());
+            file[at + 32..at + 40].copy_from_slice(&filesz.to_le_bytes());
+            at += 56;
+        };
+        header(&mut file, 1, 0, 0x400);
+        header(&mut file, 2, 0x100, 0x100);
+        if interp {
+            header(&mut file, 3, 0x300, 8);
+            file[0x300..0x306].copy_from_slice(b"/ld.so");
+        }
+        let mut strings = vec![0u8];
+        let entry = |tag: u64, value: u64, at: &mut usize, file: &mut Vec<u8>| {
+            file[*at..*at + 8].copy_from_slice(&tag.to_le_bytes());
+            file[*at + 8..*at + 16].copy_from_slice(&value.to_le_bytes());
+            *at += 16;
+        };
+        let mut dynamic = 0x100;
+        for name in needed {
+            entry(1, strings.len() as u64, &mut dynamic, &mut file);
+            strings.extend_from_slice(name.as_bytes());
+            strings.push(0);
+        }
+        if let Some(name) = soname {
+            entry(14, strings.len() as u64, &mut dynamic, &mut file);
+            strings.extend_from_slice(name.as_bytes());
+            strings.push(0);
+        }
+        entry(5, 0x200, &mut dynamic, &mut file);
+        if pie {
+            entry(0x6fff_fffb, 0x0800_0000, &mut dynamic, &mut file);
+        }
+        file[0x200..0x200 + strings.len()].copy_from_slice(&strings);
+        file
+    }
+
+    #[test]
+    fn the_truncation_note_says_how_much_the_segments_need_and_the_file_has() {
+        // 2.0 MB on disk, segments that reach 30.3 MB.
+        let mut cut = elf64(0x400, 30_300_000, 0x100, false);
+        cut.truncate(0x400);
+        let mut elf = parse(&cut).unwrap();
+        elf.len = 2_000_000;
+        assert_eq!(
+            elf.truncation_note().as_deref(),
+            Some(
+                "This ELF is truncated: its segments need 30.3 MB, the file has 2.0 MB. A partial upload or download; get a full copy."
+            )
+        );
+        // A whole file says nothing.
+        let whole = elf64(0x400, 0x400, 0x100, false);
+        assert_eq!(parse(&whole).unwrap().truncation_note(), None);
+        assert!(file_notes(&whole).is_empty());
+    }
+
+    #[test]
+    fn section_headers_past_the_end_are_a_truncation_too() {
+        let mut file = elf64(0x400, 0x400, 0x100, false);
+        // e_shoff 0x3f0, 4 headers of 64 bytes: the table ends at 0x4f0.
+        file[0x28..0x30].copy_from_slice(&0x3f0u64.to_le_bytes());
+        file[0x3a..0x3c].copy_from_slice(&64u16.to_le_bytes());
+        file[0x3c..0x3e].copy_from_slice(&4u16.to_le_bytes());
+        let note = parse(&file).unwrap().truncation_note().unwrap();
+        assert!(note.contains("section headers need"), "{note}");
+    }
+
+    #[test]
+    fn needed_libraries_and_the_soname_are_read_from_the_dynamic_section() {
+        let file = shared_object(
+            Some("libx.so.1"),
+            &["libhwloc.so.15", "libc.so.6"],
+            false,
+            false,
+        );
+        let dynamic = parse(&file).unwrap().dynamic(&file);
+        assert_eq!(dynamic.needed, ["libhwloc.so.15", "libc.so.6"]);
+        assert_eq!(dynamic.soname.as_deref(), Some("libx.so.1"));
+        assert!(!dynamic.pie);
+        // A file with no dynamic segment names nothing.
+        let fixed = elf64(0x400, 0x400, 0x100, false);
+        assert_eq!(parse(&fixed).unwrap().dynamic(&fixed), Dynamic::default());
+    }
+
+    #[test]
+    fn a_shared_object_is_told_from_a_pie_and_a_static_pie() {
+        // Library: ET_DYN, no interpreter, a SONAME or needed libraries.
+        let library = shared_object(Some("exp.so"), &["libc.so.6"], false, false);
+        assert!(parse(&library).unwrap().is_shared_library(&library));
+        assert_eq!(file_notes(&library), [SHARED_LIBRARY_NOTE]);
+        let unnamed = shared_object(None, &["libc.so.6"], false, false);
+        assert!(parse(&unnamed).unwrap().is_shared_library(&unnamed));
+        // A dynamic PIE program has an interpreter.
+        let pie = shared_object(None, &["libc.so.6"], true, false);
+        assert!(!parse(&pie).unwrap().is_shared_library(&pie));
+        // A PIE the linker marked as one, whatever it needs.
+        let marked = shared_object(None, &["libc.so.6"], false, true);
+        assert!(!parse(&marked).unwrap().is_shared_library(&marked));
+        // A static-PIE: ET_DYN, a dynamic segment, but no SONAME and no libraries.
+        let static_pie = shared_object(None, &[], false, false);
+        assert!(!parse(&static_pie).unwrap().is_shared_library(&static_pie));
+        // A plain executable (ET_EXEC) is never one.
+        let exec = elf64(0x400, 0x400, 0x100, false);
+        assert!(!parse(&exec).unwrap().is_shared_library(&exec));
     }
 }

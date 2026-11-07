@@ -823,12 +823,14 @@ fn plugin_choices(
     font_size: f32,
 ) -> Option<String> {
     let mut chosen = None;
-    ui.add(
-        egui::TextEdit::singleline(filter.search)
+    let edit = ui.add(
+        egui::TextEdit::singleline(&mut *filter.search)
             .hint_text(crate::theme::placeholder(ui, "Search plugins"))
+            .margin(crate::widgets::clear_margin(egui::Margin::symmetric(4, 2)))
             .desired_width(f32::INFINITY),
-    )
-    .request_focus();
+    );
+    edit.request_focus();
+    crate::widgets::clear_button(ui, &edit, filter.search);
     ui.checkbox(filter.show_deprecated, "Show deprecated names");
     ui.separator();
     let needle = filter.search.trim().to_lowercase();

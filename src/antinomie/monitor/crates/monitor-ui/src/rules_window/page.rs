@@ -8,7 +8,7 @@ use crate::widgets::fit_table::{Col, FitBuilder};
 use crate::widgets::{self, fit_table, TabItem, Tone};
 use antinomie_monitor_core::ruleset::{self, IndexedRule};
 use eframe::egui::{self, RichText};
-use std::{path::Path, sync::mpsc, thread};
+use std::path::Path;
 
 /// The two tabs inside an engine.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -18,14 +18,6 @@ pub(super) enum Tab {
     Catalog,
     /// The IDS engine's abuse.ch packs, with update checks.
     Abusech,
-}
-
-/// The source text of the rule shown in the details.
-pub(super) struct RuleText {
-    /// The rule set and rule it was read for.
-    pub key: (String, String),
-    /// `None` while it is read.
-    pub text: Option<Result<String, String>>,
 }
 
 /// An installed pack or custom group, as the table lists it.
@@ -40,12 +32,12 @@ struct SetRow {
 
 /// Room above and below the status lines under the toolbar.
 const NOTICE_GAP: f32 = 6.0;
-/// Extra row height and column spacing of the pack and rule tables, so the
-/// text has room around it.
+/// Extra row height of the pack and rule tables, so the text has room around
+/// it. The column spacing stays the theme's: a wider one made each cell's
+/// fill and the header rule stick out past the table by half of it.
 pub(super) const ROW_PAD: f32 = 8.0;
-pub(super) const CELL_PAD: f32 = 8.0;
 
-fn severity_rank(severity: &str) -> u8 {
+pub(super) fn severity_rank(severity: &str) -> u8 {
     match severity {
         "informational" | "info" => 1,
         "low" => 2,
@@ -56,7 +48,7 @@ fn severity_rank(severity: &str) -> u8 {
     }
 }
 
-fn severity_tone(severity: &str) -> Tone {
+pub(super) fn severity_tone(severity: &str) -> Tone {
     match severity_rank(severity) {
         4 | 5 => Tone::Error,
         3 => Tone::Warn,
@@ -76,11 +68,19 @@ impl Model {
         if !self.loaded {
             self.ensure(data_dir);
         }
-        ui.label(
-            RichText::new("Detection rules")
-                .size(ui.text_style_height(&egui::TextStyle::Heading))
-                .color(theme::heading()),
-        );
+        self.regex.load(data_dir);
+        // The counts sit in the heading row like the IOC tab's "x of y loaded"
+        // sits in its button row; each tab repeats them for its own rules.
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new("Detection rules")
+                    .size(ui.text_style_height(&egui::TextStyle::Heading))
+                    .color(theme::heading()),
+            );
+            ui.weak(self.counts_line()).on_hover_text(
+                "Installed packs and how many are enabled, custom groups, and the string patterns that are switched on. Each tab counts its own rules.",
+            );
+        });
         ui.label(RichText::new("Scans never use the network.").color(theme::muted()))
             .on_hover_text("Installed packs and custom groups are the only production rules. Scans do not download rules or upload evidence.");
         let mut engine = ENGINES
@@ -192,9 +192,10 @@ impl Model {
         self.tab = Tab::Abusech;
     }
 
-    /// A rule is selected, so the details pane has something to show.
+    /// A rule is selected in an open rule list, so "Rule details" has
+    /// something to show.
     pub(crate) fn has_rule_selected(&self) -> bool {
-        self.detail.is_some_and(|index| index < self.rows.len())
+        self.rule_lists.iter().any(|list| list.has_selection())
     }
 
     /// Forget the selected pack or group and the rules listed for it.
@@ -207,11 +208,7 @@ impl Model {
 
     fn clear_rules(&mut self) {
         self.rows.clear();
-        self.visible.clear();
         self.rows_key.clear();
-        self.detail = None;
-        self.rule_text = None;
-        self.list_gen += 1;
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui, data_dir: &Path, outbound: bool) {
@@ -219,6 +216,7 @@ impl Model {
             let busy = self.job.is_some();
             if ui
                 .add_enabled(!busy, egui::Button::new("Reload local rules"))
+                .on_hover_text("Read the installed packs and groups from the rules folder again. No network.")
                 .clicked()
             {
                 self.loaded = false;
@@ -228,17 +226,30 @@ impl Model {
             }
             if ui
                 .add_enabled(!busy, egui::Button::new("Check for updates"))
+                .on_hover_text("Read the rule catalog from the network. Needs Allow downloads; scans stay offline.")
                 .clicked()
             {
                 self.refresh_catalog(data_dir, outbound);
             }
-            if busy && ui.button("Cancel").clicked() {
+            if busy
+                && ui
+                    .button("Cancel")
+                    .on_hover_text("Stop the running job; nothing is changed.")
+                    .clicked()
+            {
                 self.cancel_job();
             }
-            if ui.button("Open rules directory").clicked() {
+            if ui
+                .button("Open rules directory")
+                .on_hover_text("Show the folder where the installed rules are kept.")
+                .clicked()
+            {
                 let root = ruleset::rules_root(data_dir);
                 crate::folders::show_created_detached(root);
             }
+            ui.weak(self.engine_counts()).on_hover_text(
+                "The packs of this engine that are switched on, and its custom groups. Rules are counted per pack in the Installed list.",
+            );
         });
     }
 
@@ -246,9 +257,22 @@ impl Model {
     /// running job. They sit on the content's left edge with room above and
     /// below, between the buttons and the table.
     pub(super) fn notices(&mut self, ui: &mut egui::Ui, outbound: &mut bool) {
+        // A status line belongs to the page it happened on: a failed ThreatFox
+        // download does not stay on the Sigma page. A finished job's line
+        // takes the page the job was started from.
+        if self.status_scope.0 != self.status {
+            let owner = if self.status_scope.0.is_empty() && !self.status_scope.1.is_empty() {
+                std::mem::take(&mut self.status_scope.1)
+            } else {
+                self.engine.clone()
+            };
+            self.status_scope = (self.status.clone(), owner);
+        }
+        let here = self.status_scope.1 == self.engine;
         // A failure was raised as a toast when it arrived.
-        let status =
-            self.status_error.as_deref() != Some(self.status.as_str()) && !self.status.is_empty();
+        let status = self.status_error.as_deref() != Some(self.status.as_str())
+            && !self.status.is_empty()
+            && here;
         if *outbound && !status && self.job.is_none() {
             return;
         }
@@ -371,8 +395,6 @@ impl Model {
         };
         ui.separator();
         self.set_actions(ui, data_dir, outbound, row);
-        ui.add_space(4.0);
-        self.rules_area(ui, data_dir);
         if self.rows_key == self.rule_key() {
             return;
         }
@@ -392,7 +414,6 @@ impl Model {
             self.group_id.clear();
         }
         self.clear_rules();
-        self.filter.clear();
         if self.job.is_none() {
             self.load_rules(data_dir);
         }
@@ -434,7 +455,6 @@ impl Model {
         };
         let height = row_height * (rows.len().min(5) as f32 + 1.5) + 8.0;
         ui.scope(|ui| {
-            ui.spacing_mut().item_spacing.x += CELL_PAD;
             FitBuilder::new(ui)
                 .id_salt("rules_sets")
                 .sense(egui::Sense::click())
@@ -536,7 +556,7 @@ impl Model {
             }
         });
         if set.group {
-            self.group_actions(ui, data_dir, &set.id);
+            self.group_actions(ui, data_dir, &set.id, &set.name);
             return;
         }
         let Some(pack) = self.registry.packs.iter().find(|p| p.id == set.id).cloned() else {
@@ -561,6 +581,7 @@ impl Model {
                     });
                 }
             }
+            self.rules_button(ui, data_dir, false, &pack.id, &set.name);
             if ui.button("Export manifest").clicked() {
                 self.export_manifest(data_dir, &pack);
             }
@@ -591,6 +612,28 @@ impl Model {
             } else if pack.source.is_none() {
                 ui.weak("This installed version is not in the current catalog.");
             }
+        }
+    }
+
+    /// Opens the floating list of the set's rules.
+    fn rules_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        data_dir: &Path,
+        group: bool,
+        id: &str,
+        name: &str,
+    ) {
+        let clicked = ui
+            .button(format!("{} Rules", egui_phosphor::regular::ARROW_SQUARE_OUT))
+            .on_hover_text(
+                "Opens every rule of this set in a window of its own, with a filter, sorting, an on/off box per rule and the rule's details. The window stays open while you use other pages.",
+            )
+            .clicked();
+        if clicked {
+            let engine = self.engine.clone();
+            let (pack, group_id) = if group { ("", id) } else { (id, "") };
+            self.open_rule_list(data_dir, &engine, pack, group_id, name);
         }
     }
 
@@ -658,8 +701,9 @@ impl Model {
         });
     }
 
-    fn group_actions(&mut self, ui: &mut egui::Ui, data_dir: &Path, id: &str) {
+    fn group_actions(&mut self, ui: &mut egui::Ui, data_dir: &Path, id: &str, name: &str) {
         ui.horizontal_wrapped(|ui| {
+            self.rules_button(ui, data_dir, true, id, name);
             if ui.button("Rename").clicked() {
                 let dir = data_dir.to_path_buf();
                 let id = id.to_owned();
@@ -729,348 +773,14 @@ impl Model {
 
     // ---- Rules of the selected set ----
 
-    fn rule_state(&self, rule: &IndexedRule) -> &'static str {
+    /// The state of a rule of the set `key` (`pack:<id>` or `group:<id>`).
+    pub(super) fn state_in(&self, key: &str, rule: &IndexedRule) -> &'static str {
         if !rule.compatible {
             "incompatible"
-        } else if self.rule_disabled(rule) {
+        } else if self.rule_disabled(key, rule) {
             "disabled"
         } else {
             "enabled"
-        }
-    }
-
-    fn rule_order(&mut self, ctx: &egui::Context) {
-        let spec = crate::triage::sort_current(ctx, "rules_list")
-            .map(|spec| (spec.column, spec.descending));
-        let key = (spec, self.list_gen);
-        if self.sorted_for == Some(key) {
-            return;
-        }
-        let mut order = self.visible.clone();
-        if let Some((column, descending)) = spec {
-            order.sort_by(|&a, &b| {
-                let (a, b) = (&self.rows[a], &self.rows[b]);
-                let ordering = match column {
-                    1 => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-                    2 => severity_rank(&a.severity).cmp(&severity_rank(&b.severity)),
-                    3 => self.rule_state(a).cmp(self.rule_state(b)),
-                    _ => a.file.to_lowercase().cmp(&b.file.to_lowercase()),
-                };
-                if descending {
-                    ordering.reverse()
-                } else {
-                    ordering
-                }
-            });
-        }
-        self.sorted = order;
-        self.sorted_for = Some(key);
-    }
-
-    fn rules_area(&mut self, ui: &mut egui::Ui, data_dir: &Path) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Rules").strong().color(theme::heading()));
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.filter)
-                    .desired_width(crate::theme::plain_edit_width(260.0))
-                    .hint_text(crate::theme::placeholder(ui, "filter e.g. credential")),
-            );
-            if response.changed() || self.applied != self.filter {
-                self.apply_filter();
-            }
-            ui.label(
-                RichText::new(format!(
-                    "{} of {} rules",
-                    self.visible.len(),
-                    self.rows.len()
-                ))
-                .color(theme::muted()),
-            );
-        });
-        if self.rows_key != self.rule_key() {
-            theme::loading(ui, "Reading the rules…");
-            return;
-        }
-        self.rule_order(ui.ctx());
-        let total = ui.available_width();
-        let gap = 12.0;
-        // Side by side only when the table keeps room for its five columns
-        // and a readable rule name; otherwise the details go under it.
-        let wide = total >= 1000.0;
-        let left = if wide { (total - gap) * 0.56 } else { total };
-        let height = (ui.clip_rect().bottom() - ui.cursor().top()).clamp(240.0, 640.0);
-        let mut picked = None;
-        let mut toggle = None;
-        ui.horizontal_top(|ui| {
-            ui.allocate_ui_with_layout(
-                egui::vec2(left, height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    ui.set_width(left);
-                    self.rules_table(ui, height, &mut picked, &mut toggle);
-                },
-            );
-            if wide {
-                ui.add_space(gap);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(total - left - gap, height),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        ui.set_width(total - left - gap);
-                        self.rule_detail(ui, height, data_dir);
-                    },
-                );
-            }
-        });
-        if !wide {
-            self.rule_detail(ui, 320.0, data_dir);
-        }
-        if let Some(index) = picked {
-            self.pick_rule(index, data_dir);
-        }
-        if let Some((id, on)) = toggle {
-            let dir = data_dir.to_path_buf();
-            let key = self.rule_key();
-            self.spawn(move |_| {
-                ruleset::set_rule_enabled(&dir, &key, &id, on)?;
-                let registry = ruleset::load_registry(&dir)?;
-                Ok(Done::Registry(registry, format!("Updated rule {id}.")))
-            });
-        }
-    }
-
-    fn rules_table(
-        &self,
-        ui: &mut egui::Ui,
-        height: f32,
-        picked: &mut Option<usize>,
-        toggle: &mut Option<(String, bool)>,
-    ) {
-        let font = ui.text_style_height(&egui::TextStyle::Body);
-        let row_height = fit_table::row_height(font) + ROW_PAD;
-        // The table fits the width it is given: no horizontal scroll area,
-        // whose content width fed the Rule column's width back to it every
-        // frame (item 21: the table shrank and grew by a few points). Long
-        // names are cut and the tooltip has them whole.
-        ui.scope(|ui| {
-            let width = ui.available_width();
-            ui.set_max_width(width);
-            ui.spacing_mut().item_spacing.x += CELL_PAD;
-            FitBuilder::new(ui)
-                .id_salt("rules_list")
-                .sense(egui::Sense::click())
-                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                .striped(true)
-                .column(Col::fixed(34.0))
-                .column(Col::rest(80.0).at_least(120.0).clip(true))
-                .column(Col::fixed(84.0))
-                .column(Col::fixed(84.0))
-                .column(Col::flex(100.0).at_least(40.0).resizable(true).clip(true))
-                .max_scroll_height(height)
-                .min_scrolled_height(0.0)
-                .header(fit_table::header_height(font), |mut header| {
-                    header.col(|ui| fit_table::head(ui, "On"));
-                    for (column, title) in ["Rule", "Severity", "State", "File"]
-                        .into_iter()
-                        .enumerate()
-                    {
-                        header.col(|ui| {
-                            crate::table_sort::header(ui, "rules_list", column + 1, title)
-                        });
-                    }
-                })
-                .body(|body| {
-                    body.rows(row_height, self.sorted.len(), |mut row| {
-                        let index = self.sorted[row.index()];
-                        let rule = &self.rows[index];
-                        let state = self.rule_state(rule);
-                        let selected = self.detail == Some(index);
-                        row.set_selected(selected);
-                        row.col(|ui| {
-                            fit_table::row_mark(
-                                ui,
-                                if selected {
-                                    fit_table::Mark::Selected
-                                } else {
-                                    fit_table::Mark::None
-                                },
-                            );
-                            let mut on = state == "enabled";
-                            if ui
-                                .add_enabled(rule.compatible, egui::Checkbox::new(&mut on, ""))
-                                .changed()
-                            {
-                                *toggle = Some((rule.id.clone(), on));
-                            }
-                        });
-                        row.col(|ui| {
-                            fit_table::cell_click(ui, fit_table::Cell::Mono, &rule.name)
-                                .on_hover_text(&rule.name);
-                        });
-                        row.col(|ui| {
-                            if !rule.severity.is_empty() {
-                                widgets::chip(ui, &rule.severity, severity_tone(&rule.severity));
-                            }
-                        });
-                        row.col(|ui| {
-                            fit_table::cell_click(ui, fit_table::Cell::Text, state);
-                        });
-                        row.col(|ui| {
-                            fit_table::cell_click(ui, fit_table::Cell::Text, &rule.file)
-                                .on_hover_text(&rule.file);
-                        });
-                        if row.response().clicked() {
-                            *picked = Some(index);
-                        }
-                    });
-                });
-        });
-    }
-
-    fn pick_rule(&mut self, index: usize, data_dir: &Path) {
-        self.detail = Some(index);
-        let Some(rule) = self.rows.get(index).cloned() else {
-            return;
-        };
-        let key = (self.rule_key(), rule.id.clone());
-        let (tx, rx) = mpsc::channel();
-        self.rule_text = Some(RuleText { key, text: None });
-        self.rule_text_rx = Some(rx);
-        let dir = data_dir.to_path_buf();
-        let engine = self.engine.clone();
-        let (pack, group) = (self.pack_id.clone(), self.group_id.clone());
-        let started = thread::Builder::new()
-            .name("rule-text".into())
-            .spawn(move || {
-                let text = if group.is_empty() {
-                    ruleset::pack_rule_source(&dir, &engine, &pack, &rule)
-                } else {
-                    ruleset::group_rule_source(&dir, &group, &rule)
-                };
-                let _ = tx.send(text);
-            });
-        if let Err(error) = started {
-            if let Some(shown) = &mut self.rule_text {
-                shown.text = Some(Err(error.to_string()));
-            }
-        }
-    }
-
-    fn rule_detail(&mut self, ui: &mut egui::Ui, height: f32, data_dir: &Path) {
-        let Some(rule) = self.detail.and_then(|index| self.rows.get(index)).cloned() else {
-            ui.weak("Select a rule.");
-            return;
-        };
-        let state = self.rule_state(&rule);
-        let mut remove = false;
-        egui::ScrollArea::vertical()
-            .id_salt("rule-detail")
-            .max_height(height)
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                ui.add(
-                    egui::Label::new(RichText::new(&rule.name).strong().color(theme::heading()))
-                        .wrap(),
-                );
-                ui.horizontal_wrapped(|ui| {
-                    if !rule.severity.is_empty() {
-                        widgets::chip(ui, &rule.severity, severity_tone(&rule.severity));
-                    }
-                    widgets::chip(
-                        ui,
-                        state,
-                        match state {
-                            "enabled" => Tone::Good,
-                            "incompatible" => Tone::Warn,
-                            _ => Tone::Neutral,
-                        },
-                    );
-                    if rule.helper {
-                        widgets::chip(ui, "helper", Tone::Neutral);
-                    }
-                });
-                let tags = rule.tags.join(", ");
-                let evidence = rule.evidence.join(", ");
-                let references = rule.references.join(", ");
-                let depends = rule.depends_on.join(", ");
-                for (label, value) in [
-                    ("Id", rule.id.as_str()),
-                    ("File", rule.file.as_str()),
-                    ("License", rule.license.as_str()),
-                    ("Source", rule.source_url.as_str()),
-                    ("Description", rule.condition.as_str()),
-                    ("Tags", tags.as_str()),
-                    ("Evidence", evidence.as_str()),
-                    ("References", references.as_str()),
-                    ("Uses rules", depends.as_str()),
-                    (
-                        "Compatibility",
-                        if rule.compatible {
-                            "compatible"
-                        } else {
-                            rule.reason.as_str()
-                        },
-                    ),
-                ] {
-                    if !value.is_empty() {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(format!("{label}: {value}")).color(theme::text()),
-                            )
-                            .wrap(),
-                        );
-                    }
-                }
-                if !self.group_id.is_empty() && ui.button("Remove from group").clicked() {
-                    remove = true;
-                }
-                theme::section(ui, "Source text");
-                match self
-                    .rule_text
-                    .as_ref()
-                    .filter(|shown| shown.key == (self.rule_key(), rule.id.clone()))
-                {
-                    Some(RuleText {
-                        text: Some(Ok(text)),
-                        ..
-                    }) => {
-                        if ui.small_button("Copy").clicked() {
-                            ui.ctx().copy_text(text.clone());
-                        }
-                        let mut shown = text.as_str();
-                        ui.add(
-                            egui::TextEdit::multiline(&mut shown)
-                                .code_editor()
-                                .desired_width(f32::INFINITY),
-                        );
-                    }
-                    Some(RuleText {
-                        text: Some(Err(error)),
-                        ..
-                    }) => {
-                        crate::activity::error(
-                            ui,
-                            format!("The rule text could not be read: {error}"),
-                        );
-                    }
-                    _ => {
-                        theme::loading(ui, "Reading the rule…");
-                    }
-                }
-            });
-        if remove {
-            let dir = data_dir.to_path_buf();
-            let id = self.group_id.clone();
-            let removed = rule.id.clone();
-            self.spawn(move |_| {
-                let revision = ruleset::revise_group(&dir, &id, None, &[removed])?;
-                let registry = ruleset::load_registry(&dir)?;
-                Ok(Done::Registry(
-                    registry,
-                    format!("Removed a rule from {id} as revision {revision}."),
-                ))
-            });
-            self.rows_key.clear();
         }
     }
 }

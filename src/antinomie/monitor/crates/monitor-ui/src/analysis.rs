@@ -135,7 +135,11 @@ fn capture_selection(
 ) {
     let core_supported = capabilities.core_on_exit;
     ui.add_space(12.0);
-    crate::theme::section(ui, "Memory");
+    crate::theme::section(ui, "Dumps");
+    // The trigger comes first; the dumps taken when the program exits sit
+    // below its options.
+    trigger_selection(ui, request, capabilities);
+    ui.add_space(6.0);
     ui.checkbox(&mut request.memory_dump_on_exit, "Memory Dump on Exit")
         .on_hover_text("Dump VM RAM after the process tree exits. This is post-exit VM memory, not a process core.");
     let core_enabled = core_supported && request.run_in == RunIn::AppTerminal;
@@ -161,7 +165,6 @@ fn capture_selection(
                 .wrap(),
         );
     }
-    trigger_selection(ui, request, capabilities);
     ui.add_space(12.0);
     crate::theme::section(ui, "Network");
     // A VM without a network card has nothing to capture: the box is off
@@ -259,8 +262,6 @@ fn trigger_selection(
     capabilities: LaunchCapabilities,
 ) {
     use antinomie_monitor_core::dump_trigger::{DumpTrigger, TriggerTier};
-    ui.add_space(12.0);
-    crate::theme::section(ui, "Triggers");
     let mut on = request.dump_trigger.is_some();
     ui.checkbox(&mut on, "Dump when suspicious activity is seen")
         .on_hover_text("While the program runs, the Triage rules judge each call as it arrives. The first match at or above the chosen tier takes the dump you pick, within the budget below. The program is not stopped; a memory dump pauses the VM while QEMU writes it.");
@@ -274,20 +275,16 @@ fn trigger_selection(
     let core_ok = capabilities.core_on_exit;
     ui.indent("dump-trigger", |ui| {
         ui.horizontal_wrapped(|ui| {
-            ui.label("At tier");
+            ui.label("Minimum tier");
             egui::ComboBox::from_id_salt("dump-trigger-tier")
-                .selected_text(format!("{} or higher", plan.min_tier.label()))
+                .selected_text(plan.min_tier.label())
                 .show_ui(ui, |ui| {
                     for tier in TriggerTier::ALL {
-                        ui.selectable_value(
-                            &mut plan.min_tier,
-                            tier,
-                            format!("{} or higher", tier.label()),
-                        );
+                        ui.selectable_value(&mut plan.min_tier, tier, tier.label());
                     }
                 })
                 .response
-                .on_hover_text("The tiers Triage gives its findings; there is nothing above High.");
+                .on_hover_text("The lowest Triage tier that takes a dump: this tier and every tier above it. Triage tiers are Low, Medium and High; there is nothing above High.");
         });
         ui.checkbox(&mut plan.memory, "Memory dump")
             .on_hover_text("Dump the VM's RAM. Skipped when the VM has more RAM than the cap below or the disk is too full.");
@@ -295,7 +292,7 @@ fn trigger_selection(
             core_ok,
             egui::Checkbox::new(&mut plan.core, "Core of the process that triggered it"),
         )
-        .on_hover_text("A core of the process whose call matched, taken while it runs. Native programs on x86-64 and arm64 guests, and 32-bit ARM programs on an arm64 guest (not ia32 or x32 on an x86-64 guest); bounded by the budget.")
+        .on_hover_text("A core of the process whose call matched, taken while it runs. Native programs on x86-64 and arm64 guests, and 32-bit ARM programs on an arm64 guest (not ia32 or x32 on an x86-64 guest); bounded by the budget. The guest copies only pages that are in memory when it reads them (not swapped-out or untouched ones), so the core is usually marked Partial, and its message says which part is missing. A process that exits within milliseconds of the match can be gone before the core is taken; the run says so. Reading pages that are not resident would need a guest change.")
         .on_disabled_hover_text(core_unavailable_reason(core_ok));
         if !core_ok {
             plan.core = false;
@@ -417,12 +414,13 @@ fn identity_fields(ui: &mut egui::Ui, request: &mut ExecRequest) {
         let selected = match (request.uid, request.gid) {
             (0, 0) => "Root",
             (1000, 1000) => "Normal user",
+            (65534, 65534) => "Nobody",
             _ => "Custom",
         };
         egui::ComboBox::from_id_salt("launch-user-preset")
             .selected_text(selected)
             .show_ui(ui, |ui| {
-                for (label, id) in [("Root", 0), ("Normal user", 1000)] {
+                for (label, id) in [("Root", 0), ("Normal user", 1000), ("Nobody", 65534)] {
                     if ui
                         .selectable_label(request.uid == id && request.gid == id, label)
                         .on_hover_text(format!("UID {id}, GID {id}"))
@@ -604,7 +602,8 @@ pub(crate) fn time_limit_drag(minutes: &mut u32) -> egui::DragValue<'_> {
 
 /// What the time limit does, for the field's tooltip and Settings.
 pub(crate) const TIME_LIMIT_HELP: &str = "How long each analysis tool may run before it is stopped and its check is marked Timeout. \
-Each tool's own limit is 4 minutes for capa, 8 for FLOSS, 3 for binwalk and 14 for the decompiler. \
+Each tool's own limit is 4 minutes for capa, 8 for FLOSS, 3 for binwalk and 14 for the decompiler; \
+a time set for one tool in Tools > Settings > Analysis tools comes before this value. \
 The same value is in Run program and in Tools > Settings > Analysis tools. A check that timed out can be run again with twice the time from its tab.";
 
 /// Under a selected category whose tool is missing: what it needs and a way
@@ -905,6 +904,8 @@ pub(crate) fn other_progress<'a>(
 
 #[cfg(test)]
 mod identity_tests;
+#[cfg(test)]
+mod trigger_tests;
 
 #[cfg(test)]
 mod tests {

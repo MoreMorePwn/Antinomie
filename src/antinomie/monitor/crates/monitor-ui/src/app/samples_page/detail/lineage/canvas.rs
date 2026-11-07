@@ -489,13 +489,14 @@ pub(super) fn show(
             });
     }
     response.context_menu(|ui| {
-        match context
+        if let Some(node) = context
             .as_ref()
             .and_then(|id| graph.nodes.iter().find(|node| node.id == *id))
         {
-            Some(node) => menu(ui, node),
-            None => ui.close(),
+            menu(ui, node);
+            ui.separator();
         }
+        crate::mermaid::menu_item(ui, || super::mermaid::of(graph));
     });
     resolve_clicks(
         &mut hits,

@@ -143,8 +143,12 @@ fn filter_edit_iter<'a>(
         .id(id.with("edit"))
         .hint_text(crate::theme::placeholder(ui, format!("filter e.g. {hint}")))
         .desired_width(width)
-        .margin(crate::theme::TEXT_EDIT_MARGIN)
+        .margin(crate::widgets::clear_margin(crate::theme::TEXT_EDIT_MARGIN))
         .show(ui);
+    let cleared = crate::widgets::clear_button(ui, &output.response, text);
+    if cleared {
+        output.response.mark_changed();
+    }
     if let Some(caret) = caret {
         let mut state = output.state.clone();
         state

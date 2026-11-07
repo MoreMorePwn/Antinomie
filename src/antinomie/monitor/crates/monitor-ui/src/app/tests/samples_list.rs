@@ -177,11 +177,12 @@ fn the_list_is_flat_latest_run_first_with_counts_and_a_never_run_mark() {
         "never run",
         "– / 1",
         "1 / –",
-        // A verdict tag is one pill: its dot and word (round 6 item 7).
-        "● malicious",
+        // A verdict tag is one pill: its word, with its dot drawn as a
+        // circle on the text's middle since ANT-T0305 (no glyph to match).
+        "malicious",
         "dropper",
         "+1",
-        "● benign",
+        "benign",
     ] {
         assert!(
             shown.iter().any(|(text, _)| text == expected),

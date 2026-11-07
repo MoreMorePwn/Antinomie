@@ -92,7 +92,7 @@ pub(super) fn event_row(
             true,
         ),
         cell(
-            process_identity(event.pid, event.tid, process_image(files, event)),
+            process_cells::task_label(event.pid, event.tid, process_image(files, event)),
             theme::text(),
             true,
         ),

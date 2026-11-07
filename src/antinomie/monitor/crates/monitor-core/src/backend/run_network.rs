@@ -27,6 +27,13 @@ impl Session {
         }
         // The program did not run, so nothing will ever acquire its specimen.
         run.settle_unstarted_analysis(&error);
+        // Say why in the run's digest, so no view waits for a Triage that has
+        // nothing to read.
+        if run.summary.state == RunState::FailedToStart {
+            let _ = crate::run_digest::RunDigest::update(&run.summary.directory, |digest| {
+                *digest = crate::run_digest::RunDigest::for_failed_launch(&error);
+            });
+        }
         let mut issues = vec![error];
         owner.tree_complete = true;
         self.release_run_route(&mut owner);
@@ -107,6 +114,45 @@ impl Session {
             owner.summary.network_state = RunArtifactState::Complete;
         }
         owner.save()
+    }
+    /// The VM is about to stop while runs still hold a capture or a route (a
+    /// child outlives the root, or the program simply runs on). QEMU still
+    /// answers: the capture is closed here, so its pcap is whole as far as it
+    /// goes instead of cut by the exit of QEMU, and the route gives back what
+    /// the gateway counted, which the host has and the guest cannot lose.
+    /// The runs are marked interrupted: their process trees did not end.
+    pub(super) fn close_run_artifacts_for_vm_stop(&mut self, snapshot: &mut Snapshot) {
+        let cookies: Vec<_> = self.run_artifacts.keys().copied().collect();
+        for cookie in cookies {
+            let Some(mut owner) = self.run_artifacts.remove(&cookie) else {
+                continue;
+            };
+            let mut touched = false;
+            if owner.network.is_some() {
+                match self.stop_run_network(&mut owner) {
+                    Ok(()) => {
+                        owner.summary.network_state = RunArtifactState::Interrupted;
+                        owner.issue(
+                            "the VM was stopped while the run's process tree was still alive; \
+                             the capture was closed at the stop and holds the traffic until then"
+                                .into(),
+                        );
+                    }
+                    Err(error) => {
+                        owner.issue(error.clone());
+                        snapshot.last_error = Some(error);
+                    }
+                }
+                touched = true;
+            }
+            if self.release_run_route(&mut owner) {
+                touched = true;
+            }
+            if touched && let Err(error) = owner.save() {
+                snapshot.last_error = Some(error);
+            }
+            self.run_artifacts.insert(cookie, owner);
+        }
     }
     pub(super) fn suspend_run_network(&mut self, reason: &str) -> Result<(), String> {
         let cookies: Vec<_> = self.run_artifacts.keys().copied().collect();

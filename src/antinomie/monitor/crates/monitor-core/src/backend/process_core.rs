@@ -6,7 +6,7 @@ use super::core_stream::{self, Assembled};
 use super::*;
 use crate::core_limits::{
     CORE_LEGACY_SIZE, CORE_MAX_SUPPORTED, CoreLimits, CoreOutcome, CoreReason, CoreReasonCode,
-    guest_reason,
+    ended_without_core, guest_reason,
 };
 
 const STATUS: u32 = 0x1060;
@@ -246,8 +246,8 @@ impl Transfer {
         summary.core_logical_size = Some(self.offset);
         summary.core_reason.clone_from(&self.reason);
     }
-    fn guest_reason(&self, status: &CoreStatus, limits: &CoreLimits) -> Option<CoreReason> {
-        guest_reason(&CoreOutcome {
+    fn outcome(&self, status: &CoreStatus, limits: &CoreLimits) -> CoreOutcome {
+        CoreOutcome {
             state: status.state,
             status: status.status,
             expected: status.expected_size,
@@ -256,7 +256,10 @@ impl Transfer {
             flags: status.flags,
             budget: self.max_size,
             limits: *limits,
-        })
+        }
+    }
+    fn guest_reason(&self, status: &CoreStatus, limits: &CoreLimits) -> Option<CoreReason> {
+        guest_reason(&self.outcome(status, limits))
     }
     /// The recording quota ended the copy before the core was whole.
     fn quota_error(&mut self, size: u64) -> String {
@@ -581,20 +584,13 @@ impl Session {
                 return Ok(());
             }
             if state >= 5 {
-                // The guest's own errno has a clear reading (a refused AArch32 or
-                // ia32 program, a budget, a deadline): say it, not the raw state.
+                // Plain words (a refused AArch32 or ia32 program, a deadline),
+                // the raw state and status kept at the end.
                 let status = core.status.clone().ok_or("core status missing")?;
-                return Err(match core.guest_reason(&status, &limits) {
-                    Some(reason) => {
-                        let text = reason.text.clone();
-                        core.reason.get_or_insert(reason);
-                        text
-                    }
-                    None => format!(
-                        "guest core unavailable or canceled (state {state}, status {})",
-                        status.status
-                    ),
-                });
+                let reason = ended_without_core(&core.outcome(&status, &limits), false);
+                let text = reason.text.clone();
+                core.reason.get_or_insert(reason);
+                return Err(text);
             }
             owner.summary.core_state = RunArtifactState::InProgress;
             queue_artifacts(owner)?;
@@ -977,6 +973,7 @@ mod tests {
             reduced: None,
             boot_wait: None,
             triggers: None,
+            stopped_by_user: false,
             started_ms: None,
             clock_anchor: None,
             id: "run-one".into(),

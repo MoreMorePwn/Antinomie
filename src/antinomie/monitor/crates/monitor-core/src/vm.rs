@@ -146,6 +146,11 @@ fn qemu_path(path: &Path) -> Result<String, String> {
         .ok_or("QEMU composite paths must be UTF-8")?
         .replace(',', ",,"))
 }
+/// Whether the VM gets QEMU's VNC display for the in-app screen tab; QEMU's
+/// own window and No screen run with `-display` alone.
+fn in_app_screen(options: &BackendOptions, launch: &VmLaunchOptions) -> bool {
+    !options.headless && launch.screen == crate::api::VmScreen::InApp
+}
 fn initial_size(options: &BackendOptions, launch: &VmLaunchOptions) -> Option<(u16, u16)> {
     (!options.headless
         && launch.screen == crate::api::VmScreen::QemuWindow
@@ -775,8 +780,8 @@ impl VmProcess {
         // private folder), never TCP. The display backend itself is `none`.
         // lock-key-sync=off: the app sends the key (with Shift held), not a
         // keysym's case, so QEMU must not fix Caps Lock to match a keysym.
-        let screen_socket = (!options.headless && vm.launch.screen == crate::api::VmScreen::InApp)
-            .then(|| qmp_path.with_file_name("vnc.sock"));
+        let screen_socket =
+            in_app_screen(options, &vm.launch).then(|| qmp_path.with_file_name("vnc.sock"));
         if let Some(socket) = &screen_socket {
             cmd.arg("-vnc").arg(format!(
                 "unix:{},lossy=off,lock-key-sync=off",
@@ -1354,6 +1359,63 @@ mod tests {
         assert!(failed.load_state(&corrupt).is_err());
         failed.force_stop().unwrap();
     }
+    /// A QEMU started for a restore (`-incoming defer`) may create its
+    /// monitor socket seconds later on a busy host: loading the state waits
+    /// for it instead of failing on the missing socket (ENOENT).
+    #[test]
+    fn loading_a_state_waits_for_a_monitor_socket_made_late() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::net::UnixListener;
+        let root = std::env::temp_dir().join(format!("antinomie-late-qmp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        private_dir(&root).unwrap();
+        let state = root.join("state.bin");
+        std::fs::write(&state, b"state").unwrap();
+        let qmp_path = root.join("qmp.sock");
+        let waits = crate::accel::Waits::kvm_default();
+        let late = waits.qmp_connect() + Duration::from_millis(1500);
+        let socket = qmp_path.clone();
+        let server = std::thread::spawn(move || {
+            std::thread::sleep(late);
+            let listener = UnixListener::bind(&socket).unwrap();
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            stream.write_all(b"{\"QMP\":{}}\n").unwrap();
+            let mut asked = Vec::new();
+            for answer in [
+                &b"{\"return\":{}}\n"[..],
+                b"{\"error\":{\"class\":\"GenericError\",\"desc\":\"late test server\"}}\n",
+            ] {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                asked.push(line);
+                stream.write_all(answer).unwrap();
+            }
+            asked
+        });
+        let process = VmProcess {
+            child: Command::new("sleep").arg("60").spawn().unwrap(),
+            ram_path: "/nonexistent/ram".into(),
+            _ram_memory: None,
+            runtime_dir: root.clone(),
+            bootstrap: 0,
+            ram_layout: RamLayout::q35(0),
+            machine: Machine::Pc,
+            qmp_path,
+            screen_socket: None,
+            gateway: None,
+            net_dir: None,
+            stealth_fallbacks: Vec::new(),
+            accel: kvm_choice(),
+            waits,
+        };
+        let error = process.load_state(&state).unwrap_err();
+        let asked = server.join().unwrap();
+        assert!(error.contains("late test server"), "{error}");
+        assert!(asked[0].contains("qmp_capabilities") && asked[1].contains("getfd"));
+        drop(process);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
     use crate::api::{DisplayResolution, GuestProfile};
 
     #[test]
@@ -1660,6 +1722,46 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn no_screen_runs_without_a_display_or_vnc_and_the_other_choices_keep_theirs() {
+        use crate::api::VmScreen;
+        for headless in [false, true] {
+            for graphical in [false, true] {
+                let options = BackendOptions {
+                    headless,
+                    ..BackendOptions::default()
+                };
+                let launch = |screen| VmLaunchOptions {
+                    screen,
+                    ..VmLaunchOptions::default()
+                };
+                let none = launch_args(&options, &launch(VmScreen::NoScreen), graphical).unwrap();
+                let in_app = launch_args(&options, &launch(VmScreen::InApp), graphical).unwrap();
+                let window =
+                    launch_args(&options, &launch(VmScreen::QemuWindow), graphical).unwrap();
+                assert_eq!(value(&none, "-display"), Some("none"));
+                assert_eq!(value(&in_app, "-display"), Some("none"));
+                assert_eq!(
+                    value(&window, "-display"),
+                    Some(if headless {
+                        "none"
+                    } else {
+                        "gtk,zoom-to-fit=off"
+                    })
+                );
+                // The guest sees the same devices without the window.
+                assert_eq!(none, in_app);
+                assert_eq!(in_app_screen(&options, &launch(VmScreen::InApp)), !headless);
+                assert!(!in_app_screen(&options, &launch(VmScreen::NoScreen)));
+                assert!(!in_app_screen(&options, &launch(VmScreen::QemuWindow)));
+            }
+        }
+        let saved: VmLaunchOptions = serde_json::from_str("{}").unwrap();
+        assert_eq!(saved.screen, VmScreen::InApp);
+        let saved: VmLaunchOptions = serde_json::from_str(r#"{"screen":"no_screen"}"#).unwrap();
+        assert_eq!(saved.screen, VmScreen::NoScreen);
     }
 
     #[test]

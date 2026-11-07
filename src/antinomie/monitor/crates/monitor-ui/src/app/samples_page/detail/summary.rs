@@ -296,9 +296,34 @@ fn yara_family(data: &Data) -> Option<&antinomie_monitor_core::samples::RuleRow>
         .find(|rule| rule.engine.eq_ignore_ascii_case("yara") && !rule.family.trim().is_empty())
 }
 
+/// The families the download source's record names: its signature and its
+/// tags, when they name different ones.
+fn bazaar_families(data: &Data) -> Vec<(String, &'static str)> {
+    crate::triage::family::bazaar_families(
+        data.record.info.signature.as_deref(),
+        &data.record.info.tags,
+    )
+}
+
 /// The Family field: the family name (the download source's signature, else a
 /// YARA rule's), else the sample's malware-category tags, else "Unknown".
 fn family(ui: &mut egui::Ui, data: &Data) {
+    let both = bazaar_families(data);
+    if both.len() > 1 {
+        let names = both
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(" \u{b7} ");
+        let sources = both
+            .iter()
+            .map(|(name, source)| format!("{name}: {source}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        ui.label(RichText::new(names).strong())
+            .on_hover_text(sources);
+        return;
+    }
     let named = data.record.family.trim();
     if !named.is_empty() {
         ui.label(RichText::new(named).strong());
@@ -325,6 +350,9 @@ fn family(ui: &mut egui::Ui, data: &Data) {
 /// rule, or both when they agree. Nothing when the field shows tags.
 fn family_source(data: &Data) -> Option<String> {
     use antinomie_monitor_core::samples::OriginKind;
+    if bazaar_families(data).len() > 1 {
+        return Some("MalwareBazaar signature and tags".into());
+    }
     let named = data.record.family.trim();
     let yara = yara_family(data);
     let downloaded = data
@@ -346,13 +374,15 @@ fn family_source(data: &Data) -> Option<String> {
 }
 
 /// The outcome of a run in words that carry its state where the exit alone
-/// would not ("Interrupted · Exit 0"), since the colour is never the only cue.
+/// would not ("Ended by VM stop · root exited 0 · 1 process still running"), since the colour is never the only cue.
 fn outcome_words(run: &RunSummary) -> String {
     let exit = super::super::exit_label(run);
     match run.state {
         RunState::FailedToStart | RunState::LaunchUnconfirmed => run_status(run).to_owned(),
         RunState::Interrupted | RunState::Finalized | RunState::Stopped => {
-            format!("{} · {exit}", run_status(run))
+            // The root's exit and what was left, where the guest said.
+            let how = crate::run_state_line::detail(run).unwrap_or(exit);
+            format!("{} · {how}", run_status(run))
         }
         _ if run.recording_error.is_some() && !run.state.never_recorded() => {
             format!("{exit} · incomplete")

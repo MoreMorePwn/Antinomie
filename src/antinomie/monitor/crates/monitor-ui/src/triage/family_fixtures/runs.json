@@ -1,0 +1,684 @@
+[
+{
+"run": "2cc90edd",
+"expected": "BPFDoor",
+"hits": [
+{
+"engine": "YARA",
+"rule_id": "s580::LIN_Sample_Unique_77c0c768",
+"title": "LIN_Sample_Unique_77c0c768",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/LIN_Sample_Unique_77c0c768.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1072::TH_Generic_MassHunt_Linux_Malware_2026_CYFARE",
+"title": "TH_Generic_MassHunt_Linux_Malware_2026_CYFARE",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/TH_Generic_MassHunt_Linux_Malware_2026_CYFARE.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1616::meth_stackstrings",
+"title": "meth_stackstrings",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/meth_stackstrings.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1838::Linux_Trojan_BPFDoor_f690fe3b",
+"title": "Linux_Trojan_BPFDoor_f690fe3b",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_BPFDoor.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s2756::SEKOIA_Backdoor_Lin_Bpfdoor",
+"title": "SEKOIA_Backdoor_Lin_Bpfdoor",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/yara-forge-core/sekoia.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s2757::SIGNATURE_BASE_APT_MAL_LNX_Redmenshen_Bpfdoor_Controller_May22_1",
+"title": "SIGNATURE_BASE_APT_MAL_LNX_Redmenshen_Bpfdoor_Controller_May22_1",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/yara-forge-core/signature-base.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s2757::SIGNATURE_BASE_APT_MAL_LNX_Redmenshen_Bpfdoor_Controller_Generic_May22_1",
+"title": "SIGNATURE_BASE_APT_MAL_LNX_Redmenshen_Bpfdoor_Controller_Generic_May22_1",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/yara-forge-core/signature-base.yar"
+},
+{
+"engine": "Sigma",
+"rule_id": "312b42b1-bded-4441-8b58-163a3af58775",
+"title": "Potentially Suspicious Execution From Tmp Folder",
+"severity": "medium",
+"family": "",
+"source": "selection/pack/sigmahq-linux/rules/linux/process_creation/proc_creation_lnx_susp_execution_tmp_folder.yml"
+},
+{
+"engine": "Sigma",
+"rule_id": "30bcce26-51c5-49f2-99c8-7b59e3af36c7",
+"title": "Execution Of Script Located In Potentially Suspicious Directory",
+"severity": "medium",
+"family": "",
+"source": "selection/pack/sigmahq-linux/rules/linux/process_creation/proc_creation_lnx_susp_shell_script_exec_from_susp_location.yml"
+}
+]
+},
+{
+"run": "2d7fb330",
+"expected": "Tsunami",
+"hits": [
+{
+"engine": "YARA",
+"rule_id": "s146::ELF_IoT_Persistence_Hunt",
+"title": "ELF_IoT_Persistence_Hunt",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/ELF_IoT_Persistence_Hunt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1072::TH_Generic_MassHunt_Linux_Malware_2026_CYFARE",
+"title": "TH_Generic_MassHunt_Linux_Malware_2026_CYFARE",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/TH_Generic_MassHunt_Linux_Malware_2026_CYFARE.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1919::Linux_Trojan_Tsunami_30c039e2",
+"title": "Linux_Trojan_Tsunami_30c039e2",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Tsunami.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1919::Linux_Trojan_Tsunami_55a80ab6",
+"title": "Linux_Trojan_Tsunami_55a80ab6",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Tsunami.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1919::Linux_Trojan_Tsunami_ad60d7e8",
+"title": "Linux_Trojan_Tsunami_ad60d7e8",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Tsunami.yar"
+},
+{
+"engine": "IDS",
+"rule_id": "1:2028675:3",
+"title": "ET DYN_DNS DNS Query to DynDNS Domain *.ddns .net",
+"severity": "2",
+"family": "",
+"source": "Suricata / selected local corpus"
+},
+{
+"engine": "IDS",
+"rule_id": "1:2039856:3",
+"title": "ET DYN_DNS DYNAMIC_DNS Query to a *.csproject .org Domain",
+"severity": "2",
+"family": "",
+"source": "Suricata / selected local corpus"
+},
+{
+"engine": "IDS",
+"rule_id": "1:2000345:18",
+"title": "ET INFO IRC Nick change on non-standard port",
+"severity": "3",
+"family": "",
+"source": "Suricata / selected local corpus"
+},
+{
+"engine": "Sigma",
+"rule_id": "a39d7fa7-3fbd-4dc2-97e1-d87f546b1bbc",
+"title": "Program Executions in Suspicious Folders",
+"severity": "medium",
+"family": "",
+"source": "selection/pack/sigmahq-linux/rules/linux/auditd/syscall/lnx_auditd_susp_exe_folders.yml"
+},
+{
+"engine": "Sigma",
+"rule_id": "312b42b1-bded-4441-8b58-163a3af58775",
+"title": "Potentially Suspicious Execution From Tmp Folder",
+"severity": "medium",
+"family": "",
+"source": "selection/pack/sigmahq-linux/rules/linux/process_creation/proc_creation_lnx_susp_execution_tmp_folder.yml"
+}
+]
+},
+{
+"run": "4435fcd6",
+"expected": "Rekoobe",
+"hits": [
+{
+"engine": "YARA",
+"rule_id": "s1772::Linux_Generic_Threat_80aea077",
+"title": "Linux_Generic_Threat_80aea077",
+"severity": "50",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Generic_Threat.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1772::Linux_Generic_Threat_1e047045",
+"title": "Linux_Generic_Threat_1e047045",
+"severity": "50",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Generic_Threat.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1896::Linux_Trojan_Rekoobe_b41f70c2",
+"title": "Linux_Trojan_Rekoobe_b41f70c2",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Rekoobe.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s2757::SIGNATURE_BASE_EXT_HKTL_MAL_Tinyshell_Backdoor",
+"title": "SIGNATURE_BASE_EXT_HKTL_MAL_Tinyshell_Backdoor",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/yara-forge-core/signature-base.yar"
+},
+{
+"engine": "Sigma",
+"rule_id": "312b42b1-bded-4441-8b58-163a3af58775",
+"title": "Potentially Suspicious Execution From Tmp Folder",
+"severity": "medium",
+"family": "",
+"source": "selection/pack/sigmahq-linux/rules/linux/process_creation/proc_creation_lnx_susp_execution_tmp_folder.yml"
+}
+]
+},
+{
+"run": "6d58d777",
+"expected": "Merlin",
+"hits": [
+{
+"engine": "YARA",
+"rule_id": "s111::DetectEncryptedVariants",
+"title": "DetectEncryptedVariants",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/DetectEncryptedVariants.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s112::DetectGoMethodSignatures",
+"title": "DetectGoMethodSignatures",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/DetectGoMethodSignatures.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s574::LIN_Sample_Unique_4c099562",
+"title": "LIN_Sample_Unique_4c099562",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/LIN_Sample_Unique_4c099562.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s706::MULTI_Malware_RemcosRAT_ForgeAuto_4785f0c3",
+"title": "MULTI_Malware_RemcosRAT_ForgeAuto_4785f0c3",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/MULTI_Malware_RemcosRAT_ForgeAuto_4785f0c3.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s833::NSVPS_Hydra_SSH_Bruteforce",
+"title": "NSVPS_Hydra_SSH_Bruteforce",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/NSVPS_Hydra_SSH_Bruteforce.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s885::RANSOMWARE",
+"title": "RANSOMWARE",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/RANSOMWARE.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s918::SCRIPT_Dropper_Unknown_ForgeAuto_0507f067_Script",
+"title": "SCRIPT_Dropper_Unknown_ForgeAuto_0507f067_Script",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/SCRIPT_Dropper_Unknown_ForgeAuto_0507f067_Script.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1011::SUSP_HTML_XMLHTTP_Redirect_Kit",
+"title": "SUSP_HTML_XMLHTTP_Redirect_Kit",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/SUSP_HTML_XMLHTTP_Redirect_Kit.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1072::TH_Generic_MassHunt_Linux_Malware_2026_CYFARE",
+"title": "TH_Generic_MassHunt_Linux_Malware_2026_CYFARE",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/TH_Generic_MassHunt_Linux_Malware_2026_CYFARE.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1580::dependsonpythonailib",
+"title": "dependsonpythonailib",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/dependsonpythonailib.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1642::test_Malaysia",
+"title": "test_Malaysia",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/test_Malaysia.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s2004::Multi_Trojan_Merlin_32643f4c",
+"title": "Multi_Trojan_Merlin_32643f4c",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Multi_Trojan_Merlin.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s2024::Windows_Generic_Threat_820fe9c9",
+"title": "Windows_Generic_Threat_820fe9c9",
+"severity": "50",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Windows_Generic_Threat.yar"
+},
+{
+"engine": "Sigma",
+"rule_id": "a39d7fa7-3fbd-4dc2-97e1-d87f546b1bbc",
+"title": "Program Executions in Suspicious Folders",
+"severity": "medium",
+"family": "",
+"source": "selection/pack/sigmahq-linux/rules/linux/auditd/syscall/lnx_auditd_susp_exe_folders.yml"
+},
+{
+"engine": "Sigma",
+"rule_id": "312b42b1-bded-4441-8b58-163a3af58775",
+"title": "Potentially Suspicious Execution From Tmp Folder",
+"severity": "medium",
+"family": "",
+"source": "selection/pack/sigmahq-linux/rules/linux/process_creation/proc_creation_lnx_susp_execution_tmp_folder.yml"
+}
+]
+},
+{
+"run": "d1cdeea8",
+"expected": "RotaJakiro",
+"hits": [
+{
+"engine": "YARA",
+"rule_id": "s1072::TH_Generic_MassHunt_Linux_Malware_2026_CYFARE",
+"title": "TH_Generic_MassHunt_Linux_Malware_2026_CYFARE",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/TH_Generic_MassHunt_Linux_Malware_2026_CYFARE.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1899::Linux_Trojan_Rotajakiro_fb24f399",
+"title": "Linux_Trojan_Rotajakiro_fb24f399",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Rotajakiro.yar"
+},
+{
+"engine": "Sigma",
+"rule_id": "2625cc59-0634-40d0-821e-cb67382a3dd7",
+"title": "Service Reload or Start - Linux",
+"severity": "low",
+"family": "",
+"source": "selection/pack/sigmahq-linux/rules/linux/auditd/execve/lnx_auditd_susp_service_reload_or_restart.yml"
+},
+{
+"engine": "Sigma",
+"rule_id": "312b42b1-bded-4441-8b58-163a3af58775",
+"title": "Potentially Suspicious Execution From Tmp Folder",
+"severity": "medium",
+"family": "",
+"source": "selection/pack/sigmahq-linux/rules/linux/process_creation/proc_creation_lnx_susp_execution_tmp_folder.yml"
+}
+]
+},
+{
+"run": "e546ae52",
+"expected": "Kaiten",
+"hits": [
+{
+"engine": "YARA",
+"rule_id": "s1919::Linux_Trojan_Tsunami_30c039e2",
+"title": "Linux_Trojan_Tsunami_30c039e2",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Tsunami.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1919::Linux_Trojan_Tsunami_55a80ab6",
+"title": "Linux_Trojan_Tsunami_55a80ab6",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Tsunami.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1919::Linux_Trojan_Tsunami_ad60d7e8",
+"title": "Linux_Trojan_Tsunami_ad60d7e8",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Tsunami.yar"
+},
+{
+"engine": "IDS",
+"rule_id": "1:2000345:18",
+"title": "ET INFO IRC Nick change on non-standard port",
+"severity": "3",
+"family": "",
+"source": "Suricata / selected local corpus"
+},
+{
+"engine": "IDS",
+"rule_id": "1:2000348:18",
+"title": "ET INFO IRC Channel JOIN on non-standard port",
+"severity": "2",
+"family": "",
+"source": "Suricata / selected local corpus"
+},
+{
+"engine": "Sigma",
+"rule_id": "a39d7fa7-3fbd-4dc2-97e1-d87f546b1bbc",
+"title": "Program Executions in Suspicious Folders",
+"severity": "medium",
+"family": "",
+"source": "selection/pack/sigmahq-linux/rules/linux/auditd/syscall/lnx_auditd_susp_exe_folders.yml"
+},
+{
+"engine": "Sigma",
+"rule_id": "312b42b1-bded-4441-8b58-163a3af58775",
+"title": "Potentially Suspicious Execution From Tmp Folder",
+"severity": "medium",
+"family": "",
+"source": "selection/pack/sigmahq-linux/rules/linux/process_creation/proc_creation_lnx_susp_execution_tmp_folder.yml"
+}
+]
+},
+{
+"run": "f47a73d4",
+"expected": "Gafgyt",
+"hits": [
+{
+"engine": "YARA",
+"rule_id": "s111::DetectEncryptedVariants",
+"title": "DetectEncryptedVariants",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/DetectEncryptedVariants.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s148::ELF_Mirai",
+"title": "ELF_Mirai",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/ELF_Mirai.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s153::ELF_Toriilike_persist",
+"title": "ELF_Toriilike_persist",
+"severity": "indicator",
+"family": "Torii",
+"source": "selection/pack/abuse-ch-yarahub/ELF_Toriilike_persist.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s557::LIN_Downloader_Unknown_WgetChmodExecute",
+"title": "LIN_Downloader_Unknown_WgetChmodExecute",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/LIN_Downloader_Unknown_WgetChmodExecute.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s834::NSVPS_Mirai_Busybox_Staging",
+"title": "NSVPS_Mirai_Busybox_Staging",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/NSVPS_Mirai_Busybox_Staging.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s885::RANSOMWARE",
+"title": "RANSOMWARE",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/RANSOMWARE.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1072::TH_Generic_MassHunt_Linux_Malware_2026_CYFARE",
+"title": "TH_Generic_MassHunt_Linux_Malware_2026_CYFARE",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/TH_Generic_MassHunt_Linux_Malware_2026_CYFARE.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_a6a2adb9",
+"title": "Linux_Trojan_Gafgyt_a6a2adb9",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_9e9530a7",
+"title": "Linux_Trojan_Gafgyt_9e9530a7",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_f3d83a74",
+"title": "Linux_Trojan_Gafgyt_f3d83a74",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_807911a2",
+"title": "Linux_Trojan_Gafgyt_807911a2",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_e0673a90",
+"title": "Linux_Trojan_Gafgyt_e0673a90",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_31796a40",
+"title": "Linux_Trojan_Gafgyt_31796a40",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_a0a4de11",
+"title": "Linux_Trojan_Gafgyt_a0a4de11",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_d4227dbf",
+"title": "Linux_Trojan_Gafgyt_d4227dbf",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_09c3070e",
+"title": "Linux_Trojan_Gafgyt_09c3070e",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_d996d335",
+"title": "Linux_Trojan_Gafgyt_d996d335",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_d0c57a2e",
+"title": "Linux_Trojan_Gafgyt_d0c57a2e",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_656bf077",
+"title": "Linux_Trojan_Gafgyt_656bf077",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_148b91a2",
+"title": "Linux_Trojan_Gafgyt_148b91a2",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_620087b9",
+"title": "Linux_Trojan_Gafgyt_620087b9",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_dd0d6173",
+"title": "Linux_Trojan_Gafgyt_dd0d6173",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_779e142f",
+"title": "Linux_Trojan_Gafgyt_779e142f",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_0cd591cd",
+"title": "Linux_Trojan_Gafgyt_0cd591cd",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_33b4111a",
+"title": "Linux_Trojan_Gafgyt_33b4111a",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_32eb0c81",
+"title": "Linux_Trojan_Gafgyt_32eb0c81",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1857::Linux_Trojan_Gafgyt_a33a8363",
+"title": "Linux_Trojan_Gafgyt_a33a8363",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Gafgyt.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1883::Linux_Trojan_Mirai_b9a9d04b",
+"title": "Linux_Trojan_Mirai_b9a9d04b",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Mirai.yar"
+},
+{
+"engine": "Sigma",
+"rule_id": "a39d7fa7-3fbd-4dc2-97e1-d87f546b1bbc",
+"title": "Program Executions in Suspicious Folders",
+"severity": "medium",
+"family": "",
+"source": "selection/pack/sigmahq-linux/rules/linux/auditd/syscall/lnx_auditd_susp_exe_folders.yml"
+},
+{
+"engine": "Sigma",
+"rule_id": "312b42b1-bded-4441-8b58-163a3af58775",
+"title": "Potentially Suspicious Execution From Tmp Folder",
+"severity": "medium",
+"family": "",
+"source": "selection/pack/sigmahq-linux/rules/linux/process_creation/proc_creation_lnx_susp_execution_tmp_folder.yml"
+}
+]
+}
+]

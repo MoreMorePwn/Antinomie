@@ -91,6 +91,16 @@ pub(super) struct Thread {
     pub ended: bool,
 }
 
+/// Files the C library's name resolution reads on every lookup. Reading them
+/// again and again is a program resolving names, not looking at the machine.
+const RESOLVER_CONFIG: &[&str] = &[
+    "/etc/resolv.conf",
+    "/etc/hosts",
+    "/etc/nsswitch.conf",
+    "/etc/host.conf",
+    "/etc/gai.conf",
+];
+
 /// One process's counters (all its threads together, keyed by the thread group
 /// id): a program that spreads its work over worker threads is still one
 /// program. A flag that ends in `_done` means the rule already fired.
@@ -100,6 +110,8 @@ pub(super) struct Task {
     /// Under `/proc`: pids whose process files were opened.
     pub proc_pids: BTreeSet<u32>,
     proc_done: bool,
+    /// Reads of the resolver's configuration (see `RESOLVER_CONFIG`).
+    resolver_reads: u32,
     pub dirs: Window<String>,
     search_done: bool,
     documents: BTreeSet<String>,
@@ -551,10 +563,18 @@ impl State {
             "/etc/os-release"
             | "/usr/lib/os-release"
             | "/proc/version"
-            | "/proc/meminfo"
             | "/etc/hostname"
-            | "/etc/issue"
-            | "/proc/cpuinfo" => Some(("discovery.system_info", "system details")),
+            | "/etc/issue" => Some(("discovery.system_info", "OS and kernel")),
+            "/proc/meminfo" | "/proc/cpuinfo" => Some(("discovery.system_info", "hardware")),
+            p if p.starts_with("/sys/class/dmi/id/")
+                || p.starts_with("/sys/hypervisor")
+                || hardware_cpu_file(p) =>
+            {
+                Some(("discovery.system_info", "hardware"))
+            }
+            "/proc/self/mountinfo" | "/proc/1/mountinfo" => {
+                Some(("discovery.system_info", "mounts and container"))
+            }
             "/etc/resolv.conf" | "/proc/net/route" | "/proc/net/arp" | "/proc/net/dev"
             | "/proc/net/if_inet6" | "/proc/net/fib_trie" => {
                 Some(("discovery.network_config", "network configuration"))
@@ -568,8 +588,20 @@ impl State {
             _ => None,
         };
         if let Some((rule, what)) = class {
-            if cx.ok || cx.failed {
-                out.push(Hit::new(rule, what, format!("{} reads {path}", cx.name)));
+            // The C library's resolver reads these again and again while a
+            // program looks names up (Tsunami's DNS loop read resolv.conf
+            // 1,242 times). The first read says the program looked at its
+            // resolver; the rest is name resolution, not discovery.
+            let repeated = RESOLVER_CONFIG.contains(&path) && {
+                let task = self.task(cx);
+                task.resolver_reads = task.resolver_reads.saturating_add(1);
+                task.resolver_reads > 1
+            };
+            if (cx.ok || cx.failed) && !repeated {
+                out.push(
+                    Hit::new(rule, what, format!("{} reads {path}", cx.name))
+                        .detail(format!("Read {path}")),
+                );
             }
         }
         if let Some(rest) = path.strip_prefix("/proc/") {
@@ -632,6 +664,20 @@ impl State {
             ));
         }
     }
+}
+
+/// A CPU sysfs file a program reads to learn what the processor is. The
+/// counts and cache sizes the C library and runtimes read at startup
+/// (`online`, `possible`, `present`, `cpu*/cache/`) are not discovery.
+fn hardware_cpu_file(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/sys/devices/system/cpu/") else {
+        return false;
+    };
+    !(matches!(
+        rest,
+        "online" | "offline" | "possible" | "present" | "kernel_max"
+    ) || rest.contains("/cache/")
+        || rest.is_empty())
 }
 
 fn task_ended(cx: &Ctx) -> bool {

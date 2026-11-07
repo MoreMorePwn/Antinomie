@@ -15,6 +15,10 @@ mod disasm;
 mod disasm_aarch64;
 mod disasm_arm;
 mod elf_facts;
+pub(crate) use elf_facts::file_truncation_note;
+#[cfg(test)]
+pub(crate) use elf_facts::fixtures::elf64 as elf64_fixture;
+pub use elf_facts::report_notes;
 mod floss;
 mod ghidra_listing;
 mod ident;
@@ -35,7 +39,8 @@ pub use disasm::{ARCHITECTURE_MARK, DecodedInstruction, decode_window};
 pub use disasm_aarch64::decode_window_aarch64;
 pub use disasm_arm::{ArmMode, decode_span_arm, decode_window_arm, thumb_len};
 pub use limits::{
-    AnalysisLimits, LIMIT_FIELDS, LimitField, LimitSetting, duration_text, fixed_limits_text,
+    AnalysisLimits, LIMIT_FIELDS, LimitField, LimitSetting, TIMEOUT_MAX_SECONDS, TimedTool,
+    ToolTimeouts, duration_text, fixed_limits_text,
 };
 pub use listing::{
     LISTING_PAGE_MAX_ROWS, ghidra_row_of, read_ghidra_disassembly_page, read_listing_page,

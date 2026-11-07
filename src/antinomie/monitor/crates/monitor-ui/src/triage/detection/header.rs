@@ -105,26 +105,30 @@ impl ScanActivity {
 }
 
 impl View {
-    fn tab_count(&self, index: usize) -> super::super::counts::Count {
+    pub(in crate::triage) fn tab_count(&self, index: usize) -> super::super::counts::Count {
         use super::super::counts::Count;
         if self.is_scanning(index) || (self.rx.is_some() && self.busy.is_none()) {
             return Count::Pending;
         }
-        if self.results[index]
-            .as_ref()
-            .is_some_and(|result| match result {
-                Err(_) => true,
-                Ok(report) => matches!(
-                    report.state,
-                    State::Unavailable | State::Missing | State::NoRules | State::Skipped
-                ),
-            })
-        {
-            return Count::Unavailable;
+        match &self.results[index] {
+            None => {
+                return match &self.counts[index] {
+                    Some(counts) => Count::Ready(counts.rules),
+                    None if self.phase[index] == "preparing" => Count::Pending,
+                    // An engine that has not scanned this run is not a zero.
+                    None => Count::NotScanned,
+                };
+            }
+            Some(Err(_)) => return Count::NotScanned,
+            Some(Ok(report)) => match report.state {
+                State::Unavailable | State::Missing | State::NoRules => return Count::NotScanned,
+                State::Skipped => return Count::Unavailable,
+                State::Complete | State::Partial => {}
+            },
         }
         self.counts[index]
             .as_ref()
-            .map_or(Count::Unavailable, |counts| Count::Ready(counts.rules))
+            .map_or(Count::NotScanned, |counts| Count::Ready(counts.rules))
     }
 
     pub(super) fn engine_tabs(&mut self, ui: &mut egui::Ui) {
@@ -156,10 +160,15 @@ impl View {
         };
         let mut manager = false;
         let mut toggle = false;
+        // The IDS's "N rules loaded" text rides at the right end of this line.
+        let loaded = self.loaded_line(index);
+        let loaded_width = loaded.as_ref().map_or(0.0, |(line, _)| {
+            (line.chars().count() as f32 * 6.0).min(ui.available_width() * 0.6)
+        });
         egui::Sides::new().show(
             ui,
             |ui| {
-                ui.set_max_width((ui.available_width() - 140.0).max(80.0));
+                ui.set_max_width((ui.available_width() - 150.0 - loaded_width).max(80.0));
                 if loading {
                     theme::spinner(ui);
                 }
@@ -171,10 +180,24 @@ impl View {
                         .frame(false)
                         .truncate(),
                     )
-                    .on_hover_text("Show or hide the installed rule packs")
+                    .on_hover_text(
+                        "Show or hide the installed rule packs. The rule count is every rule in \
+                         the enabled packs; a scan can load fewer, and the line under Scan says how many and why.",
+                    )
                     .clicked();
             },
-            |ui| manager = ui.button("Detection rules").clicked(),
+            |ui| {
+                manager = ui.button("Detection rules").clicked();
+                if let Some((line, note)) = &loaded {
+                    let label = ui.add(
+                        egui::Label::new(RichText::new(line).small().color(theme::muted()))
+                            .truncate(),
+                    );
+                    if let Some(note) = note {
+                        label.on_hover_text(note);
+                    }
+                }
+            },
         );
         self.open_manager |= manager;
         if toggle {
@@ -248,6 +271,51 @@ impl View {
                 },
             );
         }
+    }
+
+    /// The same controls as [`Self::scan_controls`], as the right-hand block of
+    /// the Scanned inputs heading: the buttons, then the status to their right.
+    pub(super) fn scan_controls_right(
+        &mut self,
+        ui: &mut egui::Ui,
+        index: usize,
+        scan: Option<&ArchiveScan>,
+        scanning: bool,
+    ) {
+        let parts = self.status_parts(index, scanning);
+        // Right-to-left: the first item added is the rightmost.
+        for part in parts.iter().rev() {
+            part.show(ui);
+        }
+        ui.horizontal(|ui| self.scan_buttons(ui, index, scan));
+    }
+
+    /// The line of an engine that has not scanned this run: it says so, with
+    /// the reason when it is waiting, and offers the scan.
+    pub(super) fn not_scanned_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        index: usize,
+        scan: Option<&ArchiveScan>,
+    ) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Not scanned.").color(theme::muted()));
+            let ready = self.rx.is_none() && self.identity.is_some();
+            if ui
+                .add_enabled(ready, egui::Button::new("Scan"))
+                .on_hover_text("Scan this run with the installed rules.")
+                .clicked()
+            {
+                self.scan_now(ui.ctx(), index, scan);
+            }
+            if !self.notes[index].is_empty() {
+                ui.label(
+                    RichText::new(&self.notes[index])
+                        .small()
+                        .color(theme::muted()),
+                );
+            }
+        });
     }
 
     fn scan_buttons(&mut self, ui: &mut egui::Ui, index: usize, scan: Option<&ArchiveScan>) {
@@ -369,6 +437,7 @@ impl View {
     pub(super) fn notes_line(&self, ui: &mut egui::Ui, index: usize) {
         let mut short = Vec::new();
         let mut long = Vec::new();
+        let mut why: Vec<String> = Vec::new();
         let mut note = |brief: String, full: String| {
             short.push(brief);
             long.push(full);
@@ -388,18 +457,13 @@ impl View {
             if let Some(line) = limitation_line(&report.state).filter(|_| !says_why) {
                 note(line.to_owned(), line.to_owned());
             }
+            // The engine's own words, whole: they name the pack, the
+            // requirement and why it was not met, and a cut line hides that.
             if says_why {
-                if let Some(first) = warnings.first() {
-                    let more = warnings.len() - 1;
-                    note(
-                        if more == 0 {
-                            first.clone()
-                        } else {
-                            format!("{first} (+{more} more)")
-                        },
-                        warnings.join("\n"),
-                    );
-                }
+                why = warnings.clone();
+            }
+            if !self.kept_note[index].is_empty() {
+                note(self.kept_note[index].clone(), self.kept_note[index].clone());
             }
             if report.omitted_evidence > 0 {
                 note(
@@ -429,15 +493,8 @@ impl View {
         if !info_notes.is_empty() {
             crate::activity::notice(ui, crate::activity::Level::Info, info_notes.join(" "));
         }
-        if self.selected == Engine::Ids {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(IDS_PCAP_NOTE)
-                        .small()
-                        .color(theme::muted()),
-                )
-                .wrap(),
-            );
+        if !why.is_empty() {
+            crate::activity::warning(ui, why.join("\n"));
         }
         if short.is_empty() {
             return;
@@ -452,8 +509,9 @@ impl View {
     }
 }
 
-/// A fixed limit of the IDS engine, said once in its view and not in every scan.
-const IDS_PCAP_NOTE: &str =
+/// A fixed limit of the IDS engine, said once: the hover text of its Scanned
+/// inputs line, not in every scan.
+pub(super) const IDS_PCAP_NOTE: &str =
     "The IDS reads the VM-wide capture, so its matches are not attributed to a process.";
 
 /// An engine note that is a setup fact and no limit of the result.
@@ -583,20 +641,28 @@ mod tests {
         for label in ["YARA", "IDS", "Sigma", "1,234", "0", "…"] {
             assert!(texts.contains(label), "{texts}");
         }
-        for state in [
-            State::Missing,
-            State::Unavailable,
-            State::NoRules,
-            State::Skipped,
-        ] {
+        for state in [State::Missing, State::Unavailable, State::NoRules] {
             let mut missing = report(Vec::new());
             missing.state = state;
             view.results[1] = Some(Ok(missing));
             assert_eq!(
                 view.tab_count(1),
-                super::super::super::counts::Count::Unavailable
+                super::super::super::counts::Count::NotScanned
             );
         }
+        let mut skipped = report(Vec::new());
+        skipped.state = State::Skipped;
+        view.results[1] = Some(Ok(skipped));
+        assert_eq!(
+            view.tab_count(1),
+            super::super::super::counts::Count::Unavailable
+        );
+        view.results[1] = None;
+        view.counts[1] = None;
+        assert_eq!(
+            view.tab_count(1),
+            super::super::super::counts::Count::NotScanned
+        );
     }
 
     #[test]
@@ -668,6 +734,34 @@ mod tests {
         rendered_text(&frames(&ctx, 1, |root| {
             egui::CentralPanel::default().show(root, |ui| view.show(ui, None));
         }))
+    }
+
+    #[test]
+    fn an_engine_that_has_not_scanned_says_so_and_offers_the_scan() {
+        let mut view = View::default();
+        let shown = panel_text(&mut view);
+        assert!(shown.contains("Not scanned."), "{shown}");
+        assert!(shown.contains("Scan"), "{shown}");
+        assert!(!shown.contains('—'), "{shown}");
+    }
+
+    #[test]
+    fn a_result_of_an_older_rule_set_says_so_and_offers_a_rescan() {
+        let mut view = View::default();
+        let mut old = report(Vec::new());
+        old.selection = "old-digest".into();
+        view.results[0] = Some(Ok(old));
+        view.digest_cache[0] = "new-digest".into();
+        let shown = panel_text(&mut view);
+        assert!(shown.contains("Scanned with an older rule set."), "{shown}");
+        assert!(shown.contains("Rescan"), "{shown}");
+        // The same rules: no note.
+        view.digest_cache[0] = "old-digest".into();
+        let shown = panel_text(&mut view);
+        assert!(!shown.contains("older rule set"), "{shown}");
+        // Rules not read yet: no note either.
+        view.digest_cache[0].clear();
+        assert!(!panel_text(&mut view).contains("older rule set"));
     }
 
     fn input(outcome: InputOutcome) -> ScannedInput {
@@ -920,15 +1014,22 @@ mod tests {
             title.max.y <= size.y && details.max.y <= size.y,
             "card title {title:?}"
         );
-        assert!(title.min.y < size.y * 0.7, "card title {title:?}");
+        // The filter gap and the Sort by row (asked for) push the first card down;
+        // it still starts in the upper four fifths of the pane.
+        assert!(title.min.y < size.y * 0.8, "card title {title:?}");
     }
 
     #[test]
-    fn status_and_counts_sit_right_of_the_scan_button_on_one_row() {
+    fn status_and_counts_sit_right_of_scanned_inputs_on_its_row() {
         let mut view = scanned_view();
         view.phase[0] = "canceled".into();
-        let texts = pane_texts(&mut view, egui::vec2(900.0, 600.0), 0.0);
+        let texts = pane_texts(&mut view, egui::vec2(1400.0, 600.0), 0.0);
+        let heading = rect_of(&texts, "Scanned inputs (3)");
         let scan = rect_of(&texts, "Scan");
+        assert!(
+            scan.min.x > heading.max.x,
+            "Scan is not right of the heading"
+        );
         for needle in [
             "Scan: canceled",
             "1 matched rule",
@@ -937,15 +1038,14 @@ mod tests {
             let item = rect_of(&texts, needle);
             assert!(item.min.x > scan.max.x, "{needle} is not right of Scan");
             assert!(
-                (item.center().y - scan.center().y).abs() < 6.0,
-                "{needle} is on another row: {item:?} vs {scan:?}"
+                (item.center().y - heading.center().y).abs() < 8.0,
+                "{needle} is on another row: {item:?} vs {heading:?}"
             );
         }
-        // Counts are the rightmost item; the separate counts block is gone.
-        assert!(rect_of(&texts, "rules evaluated").min.x > rect_of(&texts, "1 matched rule").max.x);
-        assert!(!texts
-            .iter()
-            .any(|(text, _)| text.contains("objects evaluated")));
+        // The counts are the rightmost item, and the block is right-aligned.
+        let counts = rect_of(&texts, "rules evaluated");
+        assert!(counts.min.x > rect_of(&texts, "1 matched rule").max.x);
+        assert!(counts.max.x > 1400.0 * 0.8, "not right-aligned: {counts:?}");
         // The rule-set title and the manager button share a row.
         let sets = rect_of(&texts, "Rule packs");
         let manager = rect_of(&texts, "Detection rules");
@@ -953,13 +1053,86 @@ mod tests {
     }
 
     #[test]
-    fn a_narrow_pane_wraps_the_status_below_the_scan_buttons() {
+    fn a_narrow_pane_wraps_the_status_below_scanned_inputs() {
         let mut view = scanned_view();
         view.phase[0] = "canceled".into();
         let size = egui::vec2(420.0, 600.0);
         let texts = pane_texts(&mut view, size, 0.0);
         let counts = rect_of(&texts, "rules evaluated");
         assert!(counts.max.x <= size.x, "counts are clipped: {counts:?}");
+        assert!(counts.min.y > rect_of(&texts, "Scanned inputs (3)").max.y);
         assert!(counts.min.y > rect_of(&texts, "Scan").max.y);
+    }
+
+    #[test]
+    fn the_filter_sits_beside_sort_by_under_the_matches_heading() {
+        let mut view = scanned_view();
+        let texts = pane_texts(&mut view, egui::vec2(1400.0, 700.0), 0.0);
+        let matches = rect_of(&texts, "Matches");
+        let sort = rect_of(&texts, "Sort by");
+        let filter = rect_of(&texts, "finding.severity == high");
+        assert!(matches.max.y <= sort.min.y + 1.0, "{matches:?} {sort:?}");
+        assert!(filter.min.x > sort.max.x, "{filter:?} {sort:?}");
+        assert!(
+            (filter.center().y - sort.center().y).abs() < 8.0,
+            "{filter:?} {sort:?}"
+        );
+    }
+
+    #[test]
+    fn the_engine_notes_are_only_in_tooltips() {
+        for (index, engine) in [(1, Engine::Ids), (2, Engine::Sigma)] {
+            let mut view = scanned_view();
+            view.selected = engine;
+            let mut result = report(Vec::new());
+            result.engine = engine;
+            result.inputs = Some(vec![ScannedInput {
+                warning: antinomie_monitor_core::analysis::detection::SIGMA_COVERAGE_WARNING.into(),
+                ..input(InputOutcome::Succeeded)
+            }]);
+            view.results[index] = Some(Ok(result));
+            view.inputs_open[index] = true;
+            let text = panel_text(&mut view);
+            assert!(text.contains("Scanned inputs (1)"), "{text}");
+            assert!(!text.contains("Sysmon or auditd"), "{text}");
+            assert!(!text.contains("not attributed to a process"), "{text}");
+        }
+    }
+
+    #[test]
+    fn the_ids_rules_loaded_text_is_on_the_rule_packs_line() {
+        let mut view = scanned_view();
+        view.selected = Engine::Ids;
+        view.sets[1] = view.sets[0].clone();
+        let mut result = report(Vec::new());
+        result.engine = Engine::Ids;
+        let mut coverage = antinomie_monitor_core::analysis::detection::Coverage {
+            evaluated: 2094,
+            ..Default::default()
+        };
+        coverage.add(
+            antinomie_monitor_core::analysis::detection::CoverageReason::Dataset,
+            "sid 1",
+            "reason text",
+        );
+        result.coverage = Some(coverage);
+        view.results[1] = Some(Ok(result));
+        let texts = pane_texts(&mut view, egui::vec2(1400.0, 600.0), 0.0);
+        let packs = rect_of(&texts, "Rule packs");
+        let loaded = rect_of(&texts, "2,094 rules loaded");
+        assert!(loaded.min.x > packs.max.x, "{loaded:?} {packs:?}");
+        assert!((loaded.center().y - packs.center().y).abs() < 6.0);
+        let manager = rect_of(&texts, "Detection rules");
+        assert!(
+            loaded.max.x <= manager.min.x + 1.0,
+            "right end, left of the button"
+        );
+        assert_eq!(
+            texts
+                .iter()
+                .filter(|(text, _)| text.contains("2,094 rules loaded"))
+                .count(),
+            1
+        );
     }
 }

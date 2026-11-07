@@ -145,6 +145,8 @@ pub struct AnalysisLimits {
     /// A run with Disassembly but not Decompilation starts Ghidra for its
     /// listing when Ghidra is installed (Settings > Analysis).
     pub ghidra_disassembly: bool,
+    /// Seconds each tool may run; a 0 leaves the tool its default.
+    pub timeouts: ToolTimeouts,
 }
 
 impl Default for AnalysisLimits {
@@ -164,6 +166,7 @@ impl AnalysisLimits {
         floss_strings: 50_000,
         floss_file_mib: 16,
         ghidra_disassembly: true,
+        timeouts: ToolTimeouts::DEFAULT,
     };
 
     /// The value of one setting.
@@ -203,6 +206,11 @@ impl AnalysisLimits {
     pub fn clamped(mut self) -> Self {
         for field in &LIMIT_FIELDS {
             self.set(field.setting, self.get(field.setting));
+        }
+        for tool in TimedTool::ALL {
+            let seconds = self.timeouts.get(tool);
+            self.timeouts
+                .set(tool, seconds.clamp(0, TIMEOUT_MAX_SECONDS));
         }
         self
     }
@@ -297,11 +305,30 @@ pub(super) fn set_time_limit(seconds: Option<u64>) {
     TIME_LIMIT.set(seconds.unwrap_or(0));
 }
 
-/// Seconds a tool whose own limit is `default` may run.
+/// Seconds a tool whose own limit is `default` may run, when it is none of
+/// the tools Settings sets a time for.
 pub(super) fn seconds(default: u64) -> u64 {
     match TIME_LIMIT.get() {
         0 => default,
         limit => limit,
+    }
+}
+
+/// Seconds `tool` may run: the time set for it in Settings, else the run's
+/// time limit for every tool, else `tool`'s default.
+pub(super) fn seconds_for(tool: TimedTool) -> u64 {
+    match ACTIVE.get().timeouts.get(tool) {
+        0 => seconds(tool.default_seconds()),
+        own => u64::from(own),
+    }
+}
+
+/// `seconds_for` for a report that has not been through [`set_time_limit`]
+/// and [`set_limits`]: the host sizes its own deadlines from the report alone.
+pub(super) fn seconds_for_in(report: &AnalysisReport, tool: TimedTool) -> u64 {
+    match report.limits.unwrap_or_default().timeouts.get(tool) {
+        0 => seconds_in(report, tool.default_seconds()),
+        own => u64::from(own),
     }
 }
 
@@ -312,6 +339,134 @@ pub(super) fn seconds_in(report: &AnalysisReport, default: u64) -> u64 {
         .time_limit_seconds
         .filter(|&s| s > 0)
         .unwrap_or(default)
+}
+
+/// The longest time Settings gives any one tool for this report, in seconds
+/// (0 when none is set): the worker's CPU budget has to follow it.
+pub(super) fn longest_timeout(report: &AnalysisReport) -> u32 {
+    let timeouts = report.limits.unwrap_or_default().timeouts;
+    TimedTool::ALL
+        .into_iter()
+        .map(|tool| timeouts.get(tool))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Longest time a tool may be given, in seconds.
+pub const TIMEOUT_MAX_SECONDS: u32 = 8 * 60 * 60;
+
+/// The tools whose time Settings sets one by one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimedTool {
+    Capa,
+    Floss,
+    Binwalk,
+    Yara,
+    Unpack,
+    Ghidra,
+    Identify,
+}
+
+impl TimedTool {
+    pub const ALL: [Self; 7] = [
+        Self::Capa,
+        Self::Floss,
+        Self::Binwalk,
+        Self::Yara,
+        Self::Unpack,
+        Self::Ghidra,
+        Self::Identify,
+    ];
+
+    /// The tool's id in `analysis_tools::PACKAGES`, when it has one.
+    pub fn package(self) -> Option<&'static str> {
+        match self {
+            Self::Capa => Some("capa"),
+            Self::Floss => Some("floss"),
+            Self::Unpack => Some("upx"),
+            Self::Ghidra => Some("ghidra"),
+            Self::Identify => Some("die"),
+            Self::Binwalk | Self::Yara => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Capa => "capa (Capabilities)",
+            Self::Floss => "FLOSS (Strings)",
+            Self::Binwalk => "binwalk (Embedded files)",
+            Self::Yara => "YARA (Rule scan)",
+            Self::Unpack => "UPX (Unpacking, all layers)",
+            Self::Ghidra => "Ghidra (Decompilation)",
+            Self::Identify => "Detect It Easy (Identification)",
+        }
+    }
+
+    /// The seconds the tool had before this was a setting.
+    pub const fn default_seconds(self) -> u64 {
+        match self {
+            Self::Capa => 240,
+            // Emulating every candidate routine of a statically linked program
+            // takes far longer, and is cut off.
+            Self::Floss => 480,
+            Self::Binwalk => 180,
+            Self::Yara => 60,
+            Self::Unpack => 240,
+            Self::Ghidra => 840,
+            Self::Identify => 120,
+        }
+    }
+}
+
+/// The seconds set for each tool; 0 is the tool's default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToolTimeouts {
+    pub capa: u32,
+    pub floss: u32,
+    pub binwalk: u32,
+    pub yara: u32,
+    pub unpack: u32,
+    pub ghidra: u32,
+    pub identify: u32,
+}
+
+impl ToolTimeouts {
+    pub const DEFAULT: Self = Self {
+        capa: 0,
+        floss: 0,
+        binwalk: 0,
+        yara: 0,
+        unpack: 0,
+        ghidra: 0,
+        identify: 0,
+    };
+
+    pub fn get(&self, tool: TimedTool) -> u32 {
+        match tool {
+            TimedTool::Capa => self.capa,
+            TimedTool::Floss => self.floss,
+            TimedTool::Binwalk => self.binwalk,
+            TimedTool::Yara => self.yara,
+            TimedTool::Unpack => self.unpack,
+            TimedTool::Ghidra => self.ghidra,
+            TimedTool::Identify => self.identify,
+        }
+    }
+
+    pub fn set(&mut self, tool: TimedTool, seconds: u32) {
+        let slot = match tool {
+            TimedTool::Capa => &mut self.capa,
+            TimedTool::Floss => &mut self.floss,
+            TimedTool::Binwalk => &mut self.binwalk,
+            TimedTool::Yara => &mut self.yara,
+            TimedTool::Unpack => &mut self.unpack,
+            TimedTool::Ghidra => &mut self.ghidra,
+            TimedTool::Identify => &mut self.identify,
+        };
+        *slot = seconds;
+    }
 }
 
 /// "4 minutes", "90 seconds" or "1 minute 30 seconds".
@@ -419,6 +574,45 @@ pub(super) fn stop_running(report: &mut AnalysisReport, overall: std::time::Dura
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tools_own_time_wins_over_the_run_time_and_the_default() {
+        // Nothing set: each tool has the time it had before.
+        set_time_limit(None);
+        set_limits(None);
+        for tool in TimedTool::ALL {
+            assert_eq!(seconds_for(tool), tool.default_seconds());
+        }
+        assert_eq!(seconds_for(TimedTool::Capa), 240);
+        assert_eq!(seconds_for(TimedTool::Floss), 480);
+        // The time limit for every tool replaces the defaults...
+        set_time_limit(Some(600));
+        assert_eq!(seconds_for(TimedTool::Binwalk), 600);
+        // ...and a time set for one tool wins over it, for that tool only.
+        let mut limits = AnalysisLimits::default();
+        limits.timeouts.set(TimedTool::Capa, 900);
+        set_limits(Some(limits));
+        assert_eq!(seconds_for(TimedTool::Capa), 900);
+        assert_eq!(seconds_for(TimedTool::Floss), 600);
+        set_time_limit(None);
+        set_limits(None);
+    }
+
+    #[test]
+    fn tool_times_are_kept_in_range_and_old_reports_have_none() {
+        let mut limits = AnalysisLimits::default();
+        assert!(limits.is_default());
+        limits.timeouts.set(TimedTool::Yara, u32::MAX);
+        let clamped = limits.clamped();
+        assert_eq!(clamped.timeouts.yara, TIMEOUT_MAX_SECONDS);
+        assert!(!clamped.is_default());
+        // A report made before the times existed reads as the defaults.
+        let old: AnalysisLimits = serde_json::from_str(r#"{"rows": 4096}"#).unwrap();
+        assert_eq!(old.timeouts, ToolTimeouts::DEFAULT);
+        let text = serde_json::to_string(&clamped).unwrap();
+        let back: AnalysisLimits = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.timeouts.yara, TIMEOUT_MAX_SECONDS);
+    }
 
     #[test]
     fn durations_read_as_minutes_and_seconds() {

@@ -145,7 +145,7 @@ fn toolbar_keeps_the_main_actions_and_menus_reach_the_rest() {
         [
             "Stop",
             "Snapshots",
-            "Kill",
+            "Stop run",
             "Run program",
             "Capture all",
             "Capture network",
@@ -248,12 +248,24 @@ fn toolbar_keeps_the_main_actions_and_menus_reach_the_rest() {
     assert!(app.launch_open);
     press(&mut app, &ctx, size, egui::Key::U, egui::Modifiers::COMMAND);
     assert!(app.upload_open);
-    press(&mut app, &ctx, size, egui::Key::F5, egui::Modifiers::SHIFT);
+    press(
+        &mut app,
+        &ctx,
+        size,
+        egui::Key::X,
+        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+    );
     assert!(matches!(app.submitted.as_slice(), [Command::Stop]));
-    // F5 starts the selected VM once none runs.
+    // Ctrl+Shift+S starts the selected VM once none runs.
     app.snapshot.active_vm = None;
     app.snapshot.state = VmState::Stopped;
-    press(&mut app, &ctx, size, egui::Key::F5, egui::Modifiers::NONE);
+    press(
+        &mut app,
+        &ctx,
+        size,
+        egui::Key::S,
+        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+    );
     assert!(matches!(app.submitted.last(), Some(Command::Start { vm_id }) if vm_id == "vm"));
 }
 
@@ -310,9 +322,9 @@ fn sidebar_shows_each_vm_state_resources_and_latest_run() {
     assert_eq!(text_color(&output, "Running"), Some(theme::good()));
     let details: Vec<&String> = sidebar.iter().map(|(text, _)| text).collect();
     assert!(
-        details.iter().any(|text| text.starts_with("Linux 6.12.94")
-            && text.contains("2 CPU")
-            && text.contains("1024 MiB")),
+        details
+            .iter()
+            .any(|text| text.as_str() == "Linux 6.12.94 · x86-64"),
         "{details:?}"
     );
     assert!(
