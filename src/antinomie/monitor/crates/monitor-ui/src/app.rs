@@ -648,6 +648,8 @@ pub struct MonitorApp {
     run_list_cache: Option<(u64, Arc<Vec<RunSummary>>)>,
     /// The run dropdowns' listing, with the key of the runs it was built from.
     run_selector_cache: std::cell::RefCell<Option<(u64, Arc<Vec<RunSummary>>)>>,
+    /// The Triage picker's list: the runs plus the ones that never started.
+    triage_page_cache: std::cell::RefCell<Option<(u64, Arc<Vec<RunSummary>>)>>,
     started: Instant,
     smoke: Option<Duration>,
     closing: bool,

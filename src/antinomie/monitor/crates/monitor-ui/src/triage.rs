@@ -77,6 +77,7 @@ mod net_tabs;
 mod network;
 mod network_index;
 mod normalized;
+mod not_started;
 mod pcap_scan;
 mod presentation;
 mod process_cells;
@@ -94,6 +95,7 @@ mod refresh_tests;
 mod report_export;
 mod rules;
 mod run_end;
+mod scan_progress;
 
 /// The system calls the suspicious-activity rules read: what the recorder keeps
 /// once the recording quota is nearly full.
@@ -559,16 +561,7 @@ impl TriageView {
     }
 
     pub(crate) fn tick(&mut self, ctx: &egui::Context, input: TriageInput<'_>) {
-        let key = format!(
-            "{}\n{}\n{}\n{}",
-            input.vm_id.unwrap_or(""),
-            input.boot_id.unwrap_or(""),
-            input.run_id.unwrap_or(""),
-            input
-                .archive
-                .map(|path| path.display().to_string())
-                .unwrap_or_default()
-        );
+        let key = report_export::context_key(&input);
         if self.context_key.as_deref() != Some(&key) {
             self.stop_scan();
             details::clear(ctx);
@@ -595,6 +588,7 @@ impl TriageView {
             .zip(input.boot_id)
             .zip(input.run_id)
             .map(|((vm, boot), run)| (vm.into(), boot.into(), run.into()));
+        self.follow_report(&input);
         if input.archive.is_some() {
             self.schedule_refresh(ctx, input.run_finished);
         }
@@ -1052,6 +1046,9 @@ impl TriageView {
     }
 }
 
+pub(crate) use not_started::not_started_panel;
+pub(crate) use report_export::NotStartedRun;
+
 /// Triage without a run selected: what it shows and how to get a run.
 pub(crate) fn no_run(ui: &mut egui::Ui) {
     crate::widgets::info_panel(
@@ -1351,6 +1348,27 @@ struct ScanRequest {
     /// Set while the earlier bytes of a finished boot are copied into its
     /// recording: each changed file asked about is added to it.
     before_copy: Option<Arc<std::sync::Mutex<antinomie_monitor_core::file_before_store::Writer>>>,
+    /// Written by the scan as it goes, for a screen that waits for it (the
+    /// export dialog); `None` for the index the tables show.
+    progress: Option<Arc<scan_progress::ScanProgress>>,
+    /// An index of exactly this recording that is already made and current:
+    /// the scan answers with it instead of reading the recording again.
+    reuse: Option<ArchiveScan>,
+}
+
+impl ScanRequest {
+    /// A phase begins.
+    fn phase(&self, phase: scan_progress::Phase, total: u64) {
+        if let Some(progress) = &self.progress {
+            progress.begin(phase, total);
+        }
+    }
+    /// `units` more of the phase are done.
+    fn advance(&self, units: usize) {
+        if let Some(progress) = &self.progress {
+            progress.advance(units as u64);
+        }
+    }
 }
 
 /// The copy of a finished boot's earlier file bytes into its recording, run
@@ -1425,9 +1443,38 @@ struct FileRows {
     omitted: u64,
 }
 
-struct ArchiveScan {
+/// A finished index. It is shared: the index on screen and a report export
+/// that finds it current hold the same one, so the export does not read the
+/// recording a second time. It is only changed while it is not shared (a test
+/// setting up its fixture).
+#[derive(Clone)]
+struct ArchiveScan(Arc<ScanData>);
+
+impl ArchiveScan {
+    fn new(data: ScanData) -> Self {
+        Self(Arc::new(data))
+    }
+}
+
+impl std::ops::Deref for ArchiveScan {
+    type Target = ScanData;
+    fn deref(&self) -> &ScanData {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ArchiveScan {
+    fn deref_mut(&mut self) -> &mut ScanData {
+        Arc::get_mut(&mut self.0).expect("an index is changed only while it is not shared")
+    }
+}
+
+struct ScanData {
     /// [`source_stamp`] of the recording when this index began.
     stamp: String,
+    /// The index was made with no filter, sort, page or toggle: the whole run
+    /// as a report reads it.
+    whole_run: bool,
     /// When the run's process tree ended, recorded or estimated from its last call (host Unix ms).
     ended_ms: Option<u64>,
     event_cache: Option<normalized::Cache>,

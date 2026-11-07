@@ -2,7 +2,7 @@
 //! Optional presentation filters; never discard file reconstruction evidence.
 use super::*;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct FileVisibility {
     pub hide_standard_io: bool,
     pub hide_libraries: bool,

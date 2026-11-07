@@ -23,8 +23,34 @@ tier") and says so.
 | Sections | One checkbox each: Summary, Indicators of compromise, ATT&CK techniques, Processes, Suspicious activity, Files (every tab), File activity and reconstruction, Network, Detection engines, Evidence references, Custody log head. An unchecked section is absent from every format. |
 | Formats | HTML, PDF, JSON, MISP, STIX 2.1. |
 | Evidence bundle | A `.zip` next to the report (see below). |
-| Defang indicators | HTML and PDF only: `hxxp://example[.]com`, `203[.]0[.]113[.]5`. JSON, MISP and STIX keep raw values. |
+| Defang indicators | On by default, like the sample report's. HTML and PDF only: `hxxp://example[.]com`, `203[.]0[.]113[.]5`. JSON, MISP and STIX keep raw values. |
 | Folder | Where the files go. Empty means `<recording>/report/`. |
+
+The window's title names the sample and the first eight characters of the run
+it writes (`Export report: elf-9701ae72 [43b0b44a]`). It stays bound to that
+run: pick another run in Triage with the window open and it follows the new
+run (its list of written files is cleared), so Export always writes the run in
+its title. The window sits where it opened, so its close button does not move
+as the list of written files appears; **Close** and Escape close it, and its
+✕ and Escape do nothing while an export is writing (**Cancel** stops it). The
+list of written files shows every file, with the folder, **Copy path** and
+**Open folder**. After an export, **Export** stays off until a choice changes,
+so one click never writes a second set.
+
+While the report is being made the window says what it is doing and for how
+long: `Indexing the telemetry: 1.2 GiB of 3.3 GiB (36%)`, `Reading the calls,
+pass 1 of 2: 82,000 of 1,791,320 (4%)`, then `Building the report...`. When
+Triage has already indexed the whole run (no filter, sort or page set on its
+tables) and the recording has not changed since, the export builds from that
+index and says `Using the index Triage already made...`; it does not read the
+recording a second time. Cancel stops at the next step and the files are not
+written.
+
+A run that never started (the guest refused the launch, the Tor route did not
+come up) has no recording: it is in the run picker as `(not started)`, Triage
+shows why, and **Export report…** there writes a short report with the failure,
+the request, the route, the static analysis there is and the sample's identity,
+in HTML, PDF, JSON, MISP or STIX (Formats, Defang and Folder only).
 
 The choices are remembered between exports. Files are never overwritten (a
 counter is added to the name), are owner-only (0600) and are named

@@ -323,6 +323,34 @@ fn archive_index_path(directory: &Path) -> Result<PathBuf, RecordingError> {
 /// appends to the index rewrites the row without it, which forces a rebuild.
 const INDEX_VERSION: i64 = 3;
 
+/// Told `(bytes indexed, bytes in all)`.
+type IndexProgress = Box<dyn Fn(u64, u64)>;
+
+thread_local! {
+    /// Told how far an archive index built on this thread has got.
+    static INDEX_PROGRESS: std::cell::RefCell<Option<IndexProgress>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `read`; while it builds or extends an archive index on this thread,
+/// `report(bytes_indexed, bytes_total)` is called about every 16 MiB. A first
+/// index of a multi-GiB recording takes minutes, and its reader has nothing
+/// else to show for them.
+pub fn with_index_progress<R>(report: impl Fn(u64, u64) + 'static, read: impl FnOnce() -> R) -> R {
+    INDEX_PROGRESS.with(|slot| *slot.borrow_mut() = Some(Box::new(report)));
+    let result = read();
+    INDEX_PROGRESS.with(|slot| *slot.borrow_mut() = None);
+    result
+}
+
+fn report_index_progress(done: u64, total: u64) {
+    INDEX_PROGRESS.with(|slot| {
+        if let Some(report) = slot.borrow().as_ref() {
+            report(done, total);
+        }
+    });
+}
+
 /// Bytes of the archive indexed per transaction. A first index of a large
 /// archive commits at this pace, so a crash or a cancel keeps what was indexed
 /// and the next open resumes from the cursor, and other readers are not held
@@ -432,6 +460,7 @@ fn index_archive(
             return Ok((connection, identity));
         }
         let mut indexed = start;
+        let mut reported = start;
         let mut finished = true;
         {
             let mut invocation = transaction.prepare(
@@ -471,6 +500,10 @@ fn index_archive(
                     break;
                 }
                 indexed = reader.stream_position()?;
+                if indexed - reported >= 16 * 1024 * 1024 {
+                    reported = indexed;
+                    report_index_progress(indexed, length);
+                }
                 if let Some((header, key)) = packet_key(&packet) {
                     let key = key_blob(key);
                     let offset = i64::try_from(offset).map_err(|_| {

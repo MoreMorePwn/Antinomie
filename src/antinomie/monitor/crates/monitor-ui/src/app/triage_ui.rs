@@ -5,7 +5,7 @@ use super::*;
 
 impl MonitorApp {
     pub(super) fn show_triage(&mut self, ui: &mut egui::Ui) {
-        let runs = self.triage_runs();
+        let runs = self.triage_page_runs();
         let view = RunSelector {
             id_salt: "triage-run-selector",
             clear_label: None,
@@ -17,6 +17,16 @@ impl MonitorApp {
         let Some(run) = self.selected_triage_run() else {
             self.triage
                 .tick(ui.ctx(), crate::triage::TriageInput::empty());
+            // A run that never started has no recording: say why, and let its
+            // short report be exported.
+            if let Some(failed) = self.selected_failed_run() {
+                let run = crate::triage::NotStartedRun::of(&failed);
+                self.triage.follow_report_not_started(&run);
+                if crate::triage::not_started_panel(ui, &run) {
+                    self.triage.open_report_not_started(run);
+                }
+                return;
+            }
             crate::triage::no_run(ui);
             return;
         };
