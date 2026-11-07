@@ -500,6 +500,24 @@ fn state_chip(status: &FeedStatus, now: u64) -> (&'static str, Tone) {
     }
 }
 
+/// The datasets whose last update failed for want of a usable abuse.ch
+/// Auth-Key (missing, refused with 401 or 403), and the ones that failed for
+/// another reason, which is the network.
+fn failed_updates(statuses: &[FeedStatus]) -> (Vec<&'static str>, Vec<&'static str>) {
+    let (mut need_key, mut other) = (Vec::new(), Vec::new());
+    for status in statuses {
+        let Some(error) = status.last_error.as_deref() else {
+            continue;
+        };
+        if error.contains("Auth-Key") {
+            need_key.push(status.feed.name);
+        } else {
+            other.push(status.feed.name);
+        }
+    }
+    (need_key, other)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -795,22 +813,4 @@ mod tests {
         assert!(shown.contains("No entries yet"), "{shown}");
         assert!(known_fp::load(&fixture.dir).is_empty());
     }
-}
-
-/// The datasets whose last update failed for want of a usable abuse.ch
-/// Auth-Key (missing, refused with 401 or 403), and the ones that failed for
-/// another reason, which is the network.
-fn failed_updates(statuses: &[FeedStatus]) -> (Vec<&'static str>, Vec<&'static str>) {
-    let (mut need_key, mut other) = (Vec::new(), Vec::new());
-    for status in statuses {
-        let Some(error) = status.last_error.as_deref() else {
-            continue;
-        };
-        if error.contains("Auth-Key") {
-            need_key.push(status.feed.name);
-        } else {
-            other.push(status.feed.name);
-        }
-    }
-    (need_key, other)
 }
