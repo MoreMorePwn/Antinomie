@@ -2,7 +2,7 @@
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! Writing the chosen formats and the evidence bundle to a folder. Files are
 //! created new (never overwritten), owner-only, and named
-//! `antinomie-report-<run>-<time>` plus the format's suffix.
+//! `antinomie-report-<run>-<time>Z` (the time is UTC) plus the format's suffix.
 use super::bundle::{self, BundleInput, Bundled};
 use super::{Choices, Format, Report, html, layout, misp, pdf, stix};
 use std::io::Write;
@@ -26,7 +26,7 @@ pub fn render(report: &Report, format: Format, defang: bool) -> Result<Vec<u8>, 
     })
 }
 
-/// The base name of a run's files: `antinomie-report-<run8>-<yyyymmdd-hhmmss>`.
+/// The base name of a run's files: `antinomie-report-<run8>-<yyyymmdd-hhmmss>Z`, the time in UTC.
 pub fn base_name(report: &Report) -> String {
     let run: String = report
         .run
@@ -39,7 +39,7 @@ pub fn base_name(report: &Report) -> String {
         .replace(['-', ':'], "")
         .replace(' ', "-");
     format!(
-        "antinomie-report-{}-{time}",
+        "antinomie-report-{}-{time}Z",
         if run.is_empty() { "run" } else { &run }
     )
 }

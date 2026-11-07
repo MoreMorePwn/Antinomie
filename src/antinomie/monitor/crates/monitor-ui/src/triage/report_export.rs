@@ -11,8 +11,10 @@ use std::path::PathBuf;
 mod build;
 #[cfg(test)]
 mod dialog_tests;
-mod families;
 mod not_started;
+#[cfg(test)]
+mod reexport_tests;
+mod run_facts;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -35,6 +37,7 @@ pub(super) fn context_key(input: &TriageInput<'_>) -> String {
 pub(crate) use not_started::NotStartedRun;
 
 /// Everything the worker needs, owned.
+#[derive(Clone)]
 pub(super) struct Job {
     pub archive: PathBuf,
     pub pcap: Option<PathBuf>,
@@ -192,6 +195,8 @@ pub(super) fn run_job(
         return Err("cancelled".into());
     }
     status("Building the report...");
+    // The run's state, command, sample and environment come from its record.
+    let job = &run_facts::apply(job, &scan);
     let mut built = build::build(&scan, job)?;
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
@@ -268,6 +273,7 @@ impl TriageView {
                     .unwrap_or_default(),
                 sha256,
                 size: analysis.specimen_len,
+                role: String::new(),
             })
         });
         let run_id = input.run_id.unwrap_or_default();
@@ -298,6 +304,7 @@ impl TriageView {
                 run_id: run_id.into(),
                 started_ms: input.started_ms,
                 finished: input.run_finished,
+                ..Default::default()
             },
             sample,
             clock: input.clock_anchor,

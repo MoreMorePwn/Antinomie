@@ -82,15 +82,47 @@ pub(super) fn winansi(c: char) -> Option<u8> {
     }
 }
 
-/// The bytes `text` is drawn with: WinAnsi, `?` for what it lacks, spaces for
-/// tabs and line ends.
+/// Characters the base-14 fonts lack that have a plain ASCII spelling: the
+/// arrow of a lifecycle cell prints as `->`, not `?`.
+fn ascii_spelling(c: char) -> Option<&'static str> {
+    Some(match c {
+        '\u{2192}' | '\u{21d2}' | '\u{2794}' | '\u{279c}' => "->",
+        '\u{2190}' | '\u{21d0}' => "<-",
+        '\u{2194}' => "<->",
+        '\u{2248}' => "~",
+        '\u{2264}' => "<=",
+        '\u{2265}' => ">=",
+        '\u{2260}' => "!=",
+        '\u{2212}' | '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2015}' => "-",
+        '\u{2032}' => "'",
+        '\u{2033}' => "\"",
+        '\u{2713}' | '\u{2714}' => "ok",
+        '\u{2717}' | '\u{2718}' => "x",
+        '\u{25cf}' | '\u{25aa}' => "*",
+        '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{feff}' => "",
+        _ => return None,
+    })
+}
+
+/// The codes `c` is drawn with: its WinAnsi code, its ASCII spelling, or `?`.
+fn codes(c: char) -> Vec<u8> {
+    match c {
+        '\t' | '\n' | '\r' => vec![b' '],
+        c => match winansi(c) {
+            Some(code) => vec![code],
+            None => match ascii_spelling(c) {
+                Some(text) => text.bytes().collect(),
+                None => vec![b'?'],
+            },
+        },
+    }
+}
+
+/// The bytes `text` is drawn with: WinAnsi, an ASCII spelling for the few
+/// symbols that have one (`->` for an arrow), `?` for what the font lacks,
+/// spaces for tabs and line ends.
 pub(super) fn encode(text: &str) -> Vec<u8> {
-    text.chars()
-        .map(|c| match c {
-            '\t' | '\n' | '\r' => b' ',
-            c => winansi(c).unwrap_or(b'?'),
-        })
-        .collect()
+    text.chars().flat_map(codes).collect()
 }
 
 /// The width of one WinAnsi code in `font`, in 1/1000 em.
@@ -119,11 +151,10 @@ pub(super) fn width(font: Font, size: f32, text: &str) -> f32 {
 
 /// The width of one character.
 pub(super) fn char_width(font: Font, size: f32, c: char) -> f32 {
-    let code = match c {
-        '\t' | '\n' | '\r' => b' ',
-        c => winansi(c).unwrap_or(b'?'),
-    };
-    f32::from(code_width(font, code)) * size / 1000.0
+    codes(c)
+        .into_iter()
+        .map(|code| f32::from(code_width(font, code)) * size / 1000.0)
+        .sum()
 }
 
 #[cfg(test)]
@@ -138,5 +169,15 @@ mod tests {
         assert_eq!(HELVETICA.len(), 95);
         assert_eq!(HELVETICA_BOLD.len(), 95);
         assert_eq!(encode("a\u{4e2d}\u{e9}"), vec![b'a', b'?', 0xe9]);
+    }
+
+    #[test]
+    fn an_arrow_prints_as_an_ascii_arrow_not_a_question_mark() {
+        assert_eq!(encode("created \u{2192} deleted"), b"created -> deleted");
+        assert_eq!(encode("a \u{2248} b \u{2264} c"), b"a ~ b <= c");
+        assert!(
+            (char_width(Font::Mono, 10.0, '\u{2192}') - 12.0).abs() < 0.01,
+            "its width is the two characters it prints"
+        );
     }
 }

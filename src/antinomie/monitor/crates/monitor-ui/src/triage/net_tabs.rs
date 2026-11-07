@@ -18,6 +18,9 @@ pub(super) const ENDPOINT_HEADERS: &[&str] = &[
     "First seen",
     "Last seen",
 ];
+/// The columns of the Endpoints table that hold the geolocation.
+pub(super) const ENDPOINT_COUNTRY: usize = 5;
+pub(super) const ENDPOINT_ORGANIZATION: usize = 6;
 pub(super) const DOMAIN_HEADERS: &[&str] = &[
     "Domain",
     "IOC",
@@ -307,5 +310,13 @@ mod tests {
         journal.ingest(&ctx);
         assert_eq!(journal.counts(), (1, 0));
         assert_eq!(journal.messages().len(), 2);
+    }
+
+    #[test]
+    fn the_geolocation_columns_are_the_countries_and_organizations() {
+        // The Summary's indicator export reads these two (a shift by one put
+        // the byte count under "country").
+        assert_eq!(ENDPOINT_HEADERS[ENDPOINT_COUNTRY], "Country");
+        assert_eq!(ENDPOINT_HEADERS[ENDPOINT_ORGANIZATION], "Organization");
     }
 }

@@ -94,7 +94,7 @@ mod refresh;
 mod refresh_tests;
 mod report_export;
 mod rules;
-mod run_end;
+pub(crate) mod run_end;
 mod scan_progress;
 
 /// The system calls the suspicious-activity rules read: what the recorder keeps

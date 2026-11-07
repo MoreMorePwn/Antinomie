@@ -109,6 +109,50 @@ pub(crate) fn describe(
     }
 }
 
+/// How the run ended in a line for a list or a report: "Not started", "Stopped
+/// by you at 6 min 25 s · root exited 0", "Ended by VM stop", "Exit 255",
+/// "Signal 11 (SIGSEGV)". Without the clock-dependent words of [`describe`].
+pub(crate) fn exit_summary(run: &RunSummary) -> String {
+    let root = run
+        .execution
+        .as_ref()
+        .and_then(|status| status.root_exit.as_ref());
+    let exit = || match root {
+        Some(WaitStatus::Exited { code }) => format!("Exit {code}"),
+        Some(WaitStatus::Signaled { signal, .. }) => format!(
+            "Signal {signal} ({})",
+            crate::triage::run_end::signal_name(*signal)
+        ),
+        None => "Unknown".to_owned(),
+    };
+    match run.state {
+        RunState::FailedToStart => "Not started".into(),
+        RunState::LaunchUnconfirmed => "Not recorded".into(),
+        _ if run.state.is_live() => "Running".into(),
+        RunState::Stopped => {
+            let at = run
+                .started_ms
+                .zip(run.stopped_at_ms)
+                .map(|(start, stopped)| {
+                    format!(
+                        " at {}",
+                        crate::time_format::duration_ms(stopped.saturating_sub(start))
+                    )
+                })
+                .unwrap_or_default();
+            match detail(run) {
+                Some(detail) => format!("Stopped by you{at} · {detail}"),
+                None => format!("Stopped by you{at}"),
+            }
+        }
+        _ if ended_by_vm_stop(run) => match detail(run) {
+            Some(detail) => format!("Ended by VM stop · {detail}"),
+            None => "Ended by VM stop".into(),
+        },
+        _ => exit(),
+    }
+}
+
 /// Whether the VM stopped (or the app closed) while the run's process tree was
 /// still alive: the recording was cut there, whatever the root had done.
 pub(crate) fn ended_by_vm_stop(run: &RunSummary) -> bool {

@@ -54,7 +54,7 @@ in HTML, PDF, JSON, MISP or STIX (Formats, Defang and Folder only).
 
 The choices are remembered between exports. Files are never overwritten (a
 counter is added to the name), are owner-only (0600) and are named
-`antinomie-report-<run>-<yyyymmdd-hhmmss>` plus `.html`, `.pdf`, `.json`,
+`antinomie-report-<run>-<yyyymmdd-hhmmss>Z` (the time is UTC) plus `.html`, `.pdf`, `.json`,
 `.misp.json`, `.stix.json` or `-evidence.zip`.
 
 ## Formats
@@ -81,12 +81,33 @@ counter is added to the name), are owner-only (0600) and are named
   numbers and the document title. It is written by Antinomie itself with the
   standard Helvetica and Courier fonts: no browser, no network and no embedded
   font. Characters outside Latin-1 (and the few Windows-1252 extras) print as
-  `?` in the PDF; the JSON keeps them. A table cell is cut after 24 lines.
-  HTML and PDF show at most 1 000 rows per table; the JSON keeps all the rows
-  the index held.
+  `?` in the PDF, except a few symbols that have a plain spelling (`->` for the
+  arrow of a lifecycle cell, `~`, `<=`, `>=`); the JSON keeps them all. A table
+  cell is cut after 24 lines. HTML and PDF show at most 1 000 rows per table
+  (200 for each Files tab, where identical rows are folded into one with a
+  count and the first and last time); the JSON keeps all the rows the index held.
+  The PDF has the report's kind, subject and keywords in its properties, a
+  running header after the first page, and "Generated <time> - Page N of M" as
+  its footer.
+- Times in a document are in the zone the app shows (the overview says which),
+  with the date; a time marked `~` is estimated from the guest clock and `+N s`
+  is the time since the run's first call. File names carry the UTC time and a
+  trailing `Z`.
+- The overview says how the run ended in the app's words ("Stopped by you at 6
+  min 25 s · root exited 0", "Ran for 1 min 20 s · exit 255", "Ended by VM
+  stop"), when and for how long, what it ran (the sample, or the command when the
+  run started a program that is not a library sample, with a preloaded library
+  named as such) and the environment it was recorded on (base image, kernel,
+  VM, stealth profile, route, rule packs, tools). The Summary names the families
+  the way Triage's Summary does (Elastic and curated rule names, `family`
+  metadata, IDS messages, the sample's MalwareBazaar record), counts findings by
+  tier and lists the key findings. The Files > Read files table keeps the size of
+  each read, not what was read.
 - **JSON** is the versioned machine-readable form, described below.
 - **MISP** is one event in MISP's core format (`{"Event": {...}}`): the sample
-  as `sha256` and `filename`, each indicator as an attribute (`ip-dst|port`,
+  as a `file` object (`sha256`, `filename`, `size-in-bytes`; `to_ids` only when
+  a dataset matched or a rule named a family), an `antinomie:family="..."` tag
+  for each family, each indicator as an attribute (`ip-dst|port`,
   `domain`, `url`, `hostname`, `ja3-fingerprint-md5`, `x509-fingerprint-sha1`,
   `sha256`, `filename|sha256`) with `to_ids` true only for indicators a stored
   dataset matched, a `misp-galaxy:mitre-attack-pattern="Name - Txxxx"` tag and
@@ -104,9 +125,17 @@ counter is added to the name), are owner-only (0600) and are named
   or certificate hash, file hash; JA3 and JA4 have no standard pattern and are
   left out), an `attack-pattern` with a `mitre-attack` external reference for
   each technique, and `relationship`s (indicator `indicates` malware, malware
-  `uses` attack-pattern), and a `note` for each matching detection rule that
-  names the rule's author, licence and source. Object ids are version-5 UUIDs of the content, so a
-  second export of the same run has the same ids.
+  `uses` attack-pattern), a `note` for each matching detection rule that
+  names the rule's author, licence and source, and a `report` that lists the
+  objects. When the rules name a family, the `malware` object is that family
+  (`is_family` true) and the sample is its `file`. Object ids are version-5
+  UUIDs of the content, so a second export of the same run has the same ids; an
+  indicator pattern appears once, with the paths it was seen at in its
+  description. MISP and STIX carry only indicators a consumer can match: the
+  guest's own resolver, the Tor gateway's stand-in addresses (198.18.0.0/15; the
+  name they stand for is the indicator), other private addresses, files with no
+  content kept and programs of the base image the run only started stay in the
+  document and the JSON (`not_shared` says why) but not in these two.
 
 ## Evidence bundle
 
@@ -124,6 +153,7 @@ counter is added to the name), are owner-only (0600) and are named
 - `custody/` the sample's custody record as JSON, with its verifier script
   (the same export the Samples page makes; the export is noted in the custody
   log);
+- `README.txt` (what each file is, how to check the manifest, the password, and why the archive's member times are zero);
 - `manifest.json` (every file with its size and SHA-256, the dropped files and
   their entries, what was skipped) and `manifest.sha256`
   (`sha256sum -c` format; extract the bundle and run
@@ -138,16 +168,16 @@ does not change it, so read with unknown fields ignored.
 
 | Key | Content |
 |---|---|
-| `generated_ms`, `app`, `run` | When, by which version, for which run (`vm_id`, `boot_id`, `run_id`, `started_ms`, `finished`). |
-| `sample` | `name`, `sha256`, `size` of the sample the run executed, when known. |
-| `summary` | `assessment` (`matched_indicators`, `suspicious_behaviour`, `observed_only`, `no_findings`), `statement`, `highest_tier`, `families` (named by dataset matches, YARA rule metadata or IDS signature messages) with `family_sources` (who named each), `key_behaviours` (HIGH and MEDIUM rules), `counts`. |
-| `indicators` | `kind` (`endpoint`, `domain`, `url`, `tls`, `file`), `value`, the dataset answer (`verdict`, `matched`, `dataset`, `record_id`, `family`, `confidence`, `reference`), where it was seen, and per kind `url`, `sni`/`ja3`/`ja4`/`cert_sha1`, `sha256`/`md5`/`sha1`/`path`, and `base_noise` (the reason, when the row is the base image's own clock sync, DHCP or apt traffic; such rows are left out of the document tables, MISP and STIX). Raw values. |
+| `generated_ms`, `app`, `run` | When, by which version, for which run (`vm_id`, `boot_id`, `run_id`, `started_ms`, `finished`, and when known `state` in the app's words, `exit`, `stopped_by_user`, `ended_ms`, `duration_ms`, `command`, `route`, `environment` as name and value pairs). |
+| `sample` | `name`, `sha256`, `size` of the library sample the run executed, when there is one; `role` is `preloaded library` when the run started another program with this library in `LD_PRELOAD`. A run that started a command which is no library sample has `null` and `run.command`. |
+| `summary` | `assessment` (`matched_indicators`, `suspicious_behaviour`, `observed_only`, `no_findings`), `statement`, `highest_tier`, `families` (named by dataset matches and Triage's family candidates) with `family_sources` (who named each), `tiers` (findings by tier), `key_findings` (the sentences of the Summary's Key findings), `key_behaviours` (HIGH and MEDIUM rules), `counts`. |
+| `indicators` | `kind` (`endpoint`, `domain`, `url`, `tls`, `file`), `value`, the dataset answer (`verdict`, `matched`, `dataset`, `record_id`, `family`, `confidence`, `reference`), where it was seen, and per kind `url`, `sni`/`ja3`/`ja4`/`cert_sha1`, `sha256`/`md5`/`sha1`/`path`, `stand_in` (the name a Tor stand-in address was handed out for), `not_shared` (why MISP and STIX leave it out) and `base_noise` (the reason, when the row is the base image's own clock sync, DHCP, apt traffic or the guest's resolver; such rows are left out of the document tables, MISP and STIX). Raw values. |
 | `attack` | Techniques the run's rules cite: `id`, `name`, `rules`, `count`. |
 | `processes`, `findings` | A table: `columns`, `rows` (text), `omitted`, `indicator_columns`. |
 | `files` | `tabs`: one named table for each Files tab. |
 | `file_activity` | Per created or changed file: `path`, `created`, `changed`, `deleted`, `final_size`, `guest_sha256`, `reconstruction` (`complete` or `incomplete`), `bytes_written`, `bytes_not_captured`, `bytes_unknown`, `bundle_entry`. |
 | `network` | Named tables: Endpoints, Domains, URLs, TLS. |
-| `detections` | Matches of the YARA, IDS and Sigma engines whose reports are complete (from the run's Triage digest): `engine`, `rule_id`, `title`, `severity`, `mitre`, `count`, and the rule's `author` (as the rule gives it), `license`, `source` (the rule pack) and `reference` (the rule's own link). A rule's licence asks that its author stay with every message that reports a match, so every format carries them (the HTML and PDF write the reference without its scheme, as they hold no links). |
+| `detections` | Matches of the YARA, IDS and Sigma engines whose reports are complete (from the run's Triage digest): `engine`, `rule_id`, `title`, `severity`, `mitre`, `count`, and the rule's `author` (as the rule gives it), `license`, `source` (the rule pack) and `reference` (the rule's own link) and, for YARA, `strength` (`strong`, `weak`, `wrong platform`). A rule's licence asks that its author stay with every message that reports a match, so every format carries them (the HTML and PDF show the pack's own `sNNN::` number only in the JSON). |
 | `evidence` | The run folder's files and folders: `kind`, `path`, `size`, `sha256` (files up to 64 MiB). |
 | `custody` | The sample's custody log head hash, entry count and whether the chain verified. |
 | `notes` | What the report could not say. |

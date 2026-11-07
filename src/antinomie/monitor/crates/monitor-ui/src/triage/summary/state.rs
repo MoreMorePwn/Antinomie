@@ -2,7 +2,7 @@
 //! What the Summary keeps between frames: the Relationships box's choices, the
 //! lists' open states and the derived data (graph, layout, indicators,
 //! candidates), rebuilt only when the scan or the detections change.
-use super::super::{digest, rules::Tier, ArchiveScan, TriageView};
+use super::super::{digest, net_tabs, rules::Tier, ArchiveScan, TriageView};
 use super::indicators::Indicators;
 use super::insight::{self, Key as KeyFinding};
 use super::relations::{
@@ -136,7 +136,10 @@ impl Built {
                 .find(|row| row.first().is_some_and(|cell| cell.text == endpoint))
                 .map(|row| {
                     let text = |at: usize| row.get(at).map(|c| c.text.clone()).unwrap_or_default();
-                    (text(4), text(5))
+                    (
+                        text(net_tabs::ENDPOINT_COUNTRY),
+                        text(net_tabs::ENDPOINT_ORGANIZATION),
+                    )
                 })
                 .unwrap_or_default()
         };

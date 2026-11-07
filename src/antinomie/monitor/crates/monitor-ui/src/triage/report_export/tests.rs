@@ -2,6 +2,7 @@
 use super::super::tests::{call, captured, http_pcap, path_call, write_rwx_calls};
 use super::*;
 use antinomie_monitor_core::report::bundle::{self, BundleInput};
+use std::collections::BTreeSet;
 
 fn have_tshark() -> bool {
     std::process::Command::new("tshark")
@@ -56,11 +57,13 @@ fn job(temp: &PacketSpool, pcap: &Path, choices: Choices) -> Job {
             run_id: "run-fixture-1".into(),
             started_ms: Some(1_792_000_000_000),
             finished: true,
+            ..Default::default()
         },
         sample: Some(report::SampleInfo {
             name: "fixture.elf".into(),
             sha256: "ab".repeat(32),
             size: Some(100),
+            role: String::new(),
         }),
         clock: None,
         data_dir: None,
@@ -599,4 +602,68 @@ fn the_summary_and_the_export_agree_on_the_attack_techniques() {
     assert!(ids.contains(&"T1486") && ids.contains(&"T1036"), "{ids:?}");
     let masq = shown.iter().find(|t| t.id == "T1036").unwrap();
     assert_eq!(masq.rules, ["Sigma: Masquerading"]);
+}
+
+fn read_table() -> report::Table {
+    let row = |path: &str, text: &str| {
+        vec![
+            "17:00:01".to_owned(),
+            path.to_owned(),
+            "cat".to_owned(),
+            text.to_owned(),
+            "ok".to_owned(),
+        ]
+    };
+    report::Table {
+        columns: ["Time", "Path", "Process", "Transferred / content", "Result"]
+            .map(String::from)
+            .to_vec(),
+        rows: vec![
+            row(
+                "/etc/shadow",
+                "4096 B: root:$6$salt$hash:19000:0:99999:7:::",
+            ),
+            row("/usr/share/dict/words", "4096 B: aardvark\\nabacus"),
+            row("/tmp/own-copy", "29863 B: \\x7fELF\\x02\\x01"),
+            row(
+                "/proc/1/environ",
+                "9 B: kernel transfer; bytes not captured",
+            ),
+        ],
+        ..report::Table::default()
+    }
+}
+
+#[test]
+fn what_a_sample_read_is_not_copied_into_the_report() {
+    let written: BTreeSet<String> = ["/tmp/own-copy".to_owned()].into();
+    let mut table = read_table();
+    build::transferred(&mut table, false, &written);
+    assert_eq!(table.columns[3], "Transferred");
+    let text = format!("{:?}", table.rows);
+    for secret in ["root:$6$", "aardvark", "ELF"] {
+        assert!(!text.contains(secret), "{secret} was copied");
+    }
+    assert_eq!(table.rows[0][3], "4096 B");
+    assert_eq!(table.rows[3][3], "9 B");
+}
+
+#[test]
+fn the_option_keeps_a_clipped_escaped_preview_but_never_of_a_file_the_run_wrote() {
+    let written: BTreeSet<String> = ["/tmp/own-copy".to_owned()].into();
+    let mut table = read_table();
+    table.rows[1][3] = format!("4096 B: {}", "a\u{1}".repeat(100));
+    build::transferred(&mut table, true, &written);
+    assert!(table.rows[0][3].contains("root:$6$"), "asked for");
+    assert!(
+        table.rows[1][3].ends_with("..."),
+        "clipped: {}",
+        table.rows[1][3]
+    );
+    assert!(table.rows[1][3].contains("\\x01") && !table.rows[1][3].contains('\u{1}'));
+    assert_eq!(
+        table.rows[2][3], "29863 B",
+        "a file the run wrote is never copied"
+    );
+    assert!(table.rows[3][3].contains("kernel transfer"));
 }

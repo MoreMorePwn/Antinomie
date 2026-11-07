@@ -29,7 +29,7 @@ pub fn render(report: &SampleReport, format: Format, defang: bool) -> Result<Vec
     })
 }
 
-/// `antinomie-sample-report-<sha8>-<yyyymmdd-hhmmss>`.
+/// `antinomie-sample-report-<sha8>-<yyyymmdd-hhmmss>Z`, the time in UTC.
 pub fn base_name(report: &SampleReport) -> String {
     let short: String = report
         .sample
@@ -42,7 +42,7 @@ pub fn base_name(report: &SampleReport) -> String {
         .replace(['-', ':'], "")
         .replace(' ', "-");
     format!(
-        "antinomie-sample-report-{}-{time}",
+        "antinomie-sample-report-{}-{time}Z",
         if short.is_empty() { "sample" } else { &short }
     )
 }

@@ -66,6 +66,7 @@ pub fn identity(
         file_type: record.file_type.clone(),
         arch: record.arch.clone(),
         family: record.family.clone(),
+        family_candidates: Vec::new(),
         added_ms: record.added_ms,
         removed_ms: record.removed_ms,
         archived,
@@ -105,7 +106,12 @@ pub fn identity(
                 source: origin.source.clone(),
                 detail: origin.detail.clone(),
                 name: origin.name.clone(),
-                path: origin.path.clone(),
+                // An added file's path is on this computer; the others are guest paths.
+                path: if origin.kind == crate::samples::OriginKind::Added {
+                    crate::samples::host_file(&origin.path)
+                } else {
+                    origin.path.clone()
+                },
                 vm: if origin.vm_name.is_empty() {
                     origin.vm_id.clone()
                 } else {
@@ -209,7 +215,7 @@ pub fn static_analysis(found: Option<(&AnalysisReport, usize)>) -> (StaticAnalys
                 (
                     AnalysisData::RuleMatch {
                         rule,
-                        namespace,
+                        namespace: _,
                         ruleset,
                         ..
                     },
@@ -222,14 +228,15 @@ pub fn static_analysis(found: Option<(&AnalysisReport, usize)>) -> (StaticAnalys
                     hits.push(RuleHit {
                         engine: "YARA (static)".into(),
                         rule_id: rule.clone(),
-                        title: namespace.clone(),
+                        // The rule's name; the namespace is the pack's number.
+                        title: rule.clone(),
                         author: if author == "unknown author" {
                             String::new()
                         } else {
                             author.into()
                         },
                         license: license.into(),
-                        source: namespace.clone(),
+                        source: String::new(),
                         count: 1,
                         ..RuleHit::default()
                     });
@@ -352,8 +359,10 @@ pub fn in_data_dir(data_dir: &std::path::Path, path: &std::path::Path) -> String
     }
 }
 
-/// The newest report file a run's Triage export wrote: `report/antinomie-report-*.html`
-/// in the run's folder. Empty when the run has none.
+/// The fullest report file a run's Triage export wrote: of
+/// `report/antinomie-report-*.html` in the run's folder, the largest (an
+/// export with its sections turned off is a few KB beside the full one), the
+/// newest of equals. Empty when the run has none.
 pub fn latest_run_report(data_dir: &std::path::Path, run_directory: &std::path::Path) -> String {
     let Ok(listing) = std::fs::read_dir(run_directory.join("report")) else {
         return String::new();
@@ -362,10 +371,11 @@ pub fn latest_run_report(data_dir: &std::path::Path, run_directory: &std::path::
         .flatten()
         .filter_map(|item| {
             let name = item.file_name().to_string_lossy().into_owned();
-            (name.starts_with("antinomie-report-") && name.ends_with(".html")).then_some(name)
+            (name.starts_with("antinomie-report-") && name.ends_with(".html"))
+                .then(|| (item.metadata().map_or(0, |meta| meta.len()), name))
         })
         .max()
-        .map(|name| in_data_dir(data_dir, &run_directory.join("report").join(name)))
+        .map(|(_, name)| in_data_dir(data_dir, &run_directory.join("report").join(name)))
         .unwrap_or_default()
 }
 
@@ -573,7 +583,7 @@ pub fn custody(check: &ChainCheck, events: &[EventRow]) -> (CustodySection, u64)
             at_ms: event.at_ms,
             by: event.by.clone(),
             event: event.event.label().into(),
-            detail: plain(&event.event.detail()),
+            detail: plain(&event.event.detail_exported()),
             state: match check.state_of(event.seq) {
                 crate::samples::EntryState::Verified => "verified",
                 crate::samples::EntryState::Changed => "changed",

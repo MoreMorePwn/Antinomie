@@ -56,6 +56,7 @@ impl NotStartedRun {
                 name: sample.name.clone(),
                 sha256: sample.sha256.clone(),
                 size: run.analysis.as_ref().and_then(|a| a.specimen_len),
+                ..report::SampleInfo::default()
             })
             .or_else(|| {
                 let analysis = run.analysis.as_ref()?;
@@ -66,6 +67,7 @@ impl NotStartedRun {
                         .unwrap_or_default(),
                     sha256: analysis.specimen_sha256.clone()?,
                     size: analysis.specimen_len,
+                    ..report::SampleInfo::default()
                 })
             });
         let mut reason = without_host_paths(
@@ -116,12 +118,26 @@ impl NotStartedRun {
             })
             .unwrap_or_default();
         Self {
-            run: report::RunInfo {
-                vm_id: run.vm_id.clone(),
-                boot_id: run.boot_id.clone(),
-                run_id: run.id.clone(),
-                started_ms: run.started_ms,
-                finished: true,
+            // The shared run block, so the state reads "Not started: <reason>"
+            // like the run report's own wording.
+            run: {
+                let base = report::RunInfo {
+                    vm_id: run.vm_id.clone(),
+                    boot_id: run.boot_id.clone(),
+                    run_id: run.id.clone(),
+                    started_ms: run.started_ms,
+                    finished: true,
+                    ..report::RunInfo::default()
+                };
+                let mut info =
+                    super::run_facts::run_info(&base, run, None, 0, run.started_ms.unwrap_or(0));
+                info.vm_id = base.vm_id;
+                info.boot_id = base.boot_id;
+                info.run_id = base.run_id;
+                info.finished = true;
+                // The failure text can name host files (the Tor log).
+                info.state = without_host_paths(&info.state);
+                info
             },
             sample,
             reason,
@@ -196,6 +212,7 @@ mod tests {
                 name: "elf-6168f5d053f4".into(),
                 sha256: "6168f5d053f4c3d413327947c37b927a759b316d68ac341908695879edcda246".into(),
                 size: Some(2048),
+                ..Default::default()
             }),
             reason: "launch rejected by the guest, nothing was started".into(),
             request: "/tmp/x -a".into(),

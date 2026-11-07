@@ -34,18 +34,23 @@ const STYLE: &str = "\
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}\
 main{max-width:1200px;margin:0 auto;padding:24px 20px 60px}\
 h1{font-size:24px;margin:0 0 4px}h2{font-size:18px;margin:32px 0 8px;padding-bottom:4px;border-bottom:1px solid var(--line)}\
-h3{font-size:14px;margin:18px 0 6px;color:var(--muted)}\
+p.back{font-size:12px;margin:2px 0 0}p.back a{color:var(--muted)}h3{font-size:14px;margin:18px 0 6px;color:var(--muted)}\
 .sub{color:var(--muted);margin:0 0 16px}\
 nav ul{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:4px 14px;margin:0 0 8px}\
 nav a{color:var(--accent);text-decoration:none}\
 table{border-collapse:collapse;width:100%;margin:6px 0 10px;font-size:13px}\
-th,td{border:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top;overflow-wrap:anywhere}\
+th,td{border:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top;overflow-wrap:normal}\
+td.mono,td.long{overflow-wrap:anywhere}td.nw{white-space:nowrap}\
 th{background:var(--head);overflow-wrap:normal;word-break:keep-all;hyphens:none;white-space:normal}\
 table.t12{font-size:12px}table.t11{font-size:11px}table.t10{font-size:10px}table.t9{font-size:9px}\
 .facts th{width:14em;font-weight:600}\
 .mono,code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}\
 .note{color:var(--note);font-size:13px;margin:4px 0 10px}\
-.wide{overflow-x:auto}\
+.wide{overflow-x:auto}.wide:focus{outline:2px solid var(--accent)}\
+.tier{font-weight:600;white-space:nowrap}.tier.high{color:#b3261e}.tier.medium{color:#a15c00}.tier.low{color:#0b5cad}.tier.info{color:var(--muted)}\
+@media (prefers-color-scheme:dark){.tier.high{color:#ff8a80}.tier.medium{color:#ffb74d}.tier.low{color:#6cb2ff}}\
+caption{caption-side:top;text-align:left;color:var(--muted);font-size:12px;padding:2px 0}\
+@media (min-width:900px){nav{position:sticky;top:0;background:var(--bg);padding:6px 0;z-index:1}}\
 .tac{display:inline-block;margin:1px 3px 1px 0;padding:0 6px;border:1px solid var(--c);border-left-width:6px;border-radius:4px;white-space:nowrap}\
 @page{size:landscape;margin:12mm}\
 @media print{body{font-size:11px}main{max-width:none;padding:0}h2{break-after:avoid}tr{break-inside:avoid}.wide{overflow:visible}}";
@@ -84,6 +89,17 @@ fn tactic_cell(cell: &str) -> String {
     } else {
         chips.join(" ")
     }
+}
+
+/// A short cell with no long text in it (an enum word, a count, a time) is not
+/// broken across lines: "succeeded" never reads "succee/ded".
+fn no_wrap(text: &str) -> bool {
+    let chars = text.chars().count();
+    chars <= 14 && !text.contains(' ')
+        || chars <= 36
+            && text.len() >= 10
+            && text.as_bytes()[..4].iter().all(u8::is_ascii_digit)
+            && text.as_bytes()[4] == b'-'
 }
 
 /// A cell that looks like a hash, a path or an address reads better in monospace.
@@ -136,7 +152,13 @@ fn groups(columns: &[String]) -> Vec<Vec<usize>> {
     out
 }
 
-fn one_table(out: &mut String, columns: &[&String], rows: &[Vec<&String>], size: u32) {
+fn one_table(
+    out: &mut String,
+    columns: &[&String],
+    rows: &[Vec<&String>],
+    size: u32,
+    caption: &str,
+) {
     let class = if size >= SIZES[0] {
         String::new()
     } else {
@@ -145,18 +167,38 @@ fn one_table(out: &mut String, columns: &[&String], rows: &[Vec<&String>], size:
     let tactics = columns
         .iter()
         .position(|column| column.as_str() == super::TACTIC_COLUMN);
-    out.push_str(&format!("<div class=\"wide\"><table{class}><thead><tr>"));
+    out.push_str(&format!(
+        "<div class=\"wide\" tabindex=\"0\" role=\"region\" aria-label=\"{}\"><table{class}><caption>{}</caption><thead><tr>",
+        escape(caption),
+        escape(caption)
+    ));
     for column in columns {
-        out.push_str(&format!("<th>{}</th>", escape(column)));
+        out.push_str(&format!("<th scope=\"col\">{}</th>", escape(column)));
     }
+    let tiers = columns.iter().position(|column| column.as_str() == "Tier");
     out.push_str("</tr></thead><tbody>\n");
     for row in rows {
         out.push_str("<tr>");
         for (column, cell) in row.iter().enumerate() {
+            let tier = Some(column) == tiers
+                && matches!(
+                    cell.to_ascii_lowercase().as_str(),
+                    "high" | "medium" | "low" | "info"
+                );
             if Some(column) == tactics {
                 out.push_str(&format!("<td>{}</td>", tactic_cell(cell)));
+            } else if tier {
+                out.push_str(&format!(
+                    "<td><span class=\"tier {}\">{}</span></td>",
+                    cell.to_ascii_lowercase(),
+                    escape(cell)
+                ));
             } else if mono(cell) {
                 out.push_str(&format!("<td class=\"mono\">{}</td>", escape(cell)));
+            } else if cell.chars().count() > 40 {
+                out.push_str(&format!("<td class=\"long\">{}</td>", escape(cell)));
+            } else if no_wrap(cell) {
+                out.push_str(&format!("<td class=\"nw\">{}</td>", escape(cell)));
             } else {
                 out.push_str(&format!("<td>{}</td>", escape(cell)));
             }
@@ -170,14 +212,14 @@ fn one_table(out: &mut String, columns: &[&String], rows: &[Vec<&String>], size:
 /// words side by side are wider than a page the table takes a smaller font a
 /// step at a time, and past that is split in column groups with the first
 /// column repeated.
-fn table(out: &mut String, table: &DocTable) {
+fn table(out: &mut String, table: &DocTable, caption: &str) {
     let all: Vec<&String> = table.columns.iter().collect();
     if let Some(size) = SIZES
         .into_iter()
         .find(|&size| header_width(&all, size) <= TABLE_WIDTH)
     {
         let rows: Vec<Vec<&String>> = table.rows.iter().map(|row| row.iter().collect()).collect();
-        one_table(out, &all, &rows, size);
+        one_table(out, &all, &rows, size, caption);
         return;
     }
     let parts = groups(&table.columns);
@@ -193,7 +235,7 @@ fn table(out: &mut String, table: &DocTable) {
             .iter()
             .map(|row| part.iter().filter_map(|&i| row.get(i)).collect())
             .collect();
-        one_table(out, &columns, &rows, SPLIT_SIZE);
+        one_table(out, &columns, &rows, SPLIT_SIZE, caption);
     }
 }
 
@@ -210,7 +252,7 @@ pub(super) fn render(document: &Document) -> String {
         tactic_style()
     ));
     out.push_str(&format!(
-        "<h1>{}</h1><p class=\"sub\">{}</p>\n<nav><ul>",
+        "<h1 id=\"top\">{}</h1><p class=\"sub\">{}</p>\n<nav aria-label=\"Sections\"><ul>",
         escape(&document.title),
         escape(&document.subtitle)
     ));
@@ -228,29 +270,40 @@ pub(super) fn render(document: &Document) -> String {
             escape(&section.id),
             escape(&section.title)
         ));
+        let mut caption = section.title.clone();
         for block in &section.blocks {
             match block {
                 Block::Paragraph(text) => out.push_str(&format!("<p>{}</p>\n", escape(text))),
                 Block::Note(text) => {
                     out.push_str(&format!("<p class=\"note\">{}</p>\n", escape(text)))
                 }
-                Block::Sub(text) => out.push_str(&format!("<h3>{}</h3>\n", escape(text))),
+                Block::Sub(text) => {
+                    caption.clone_from(text);
+                    out.push_str(&format!("<h3>{}</h3>\n", escape(text)));
+                }
+                Block::List(items) => {
+                    out.push_str("<ul>\n");
+                    for item in items {
+                        out.push_str(&format!("<li>{}</li>\n", escape(item)));
+                    }
+                    out.push_str("</ul>\n");
+                }
                 Block::Facts(facts) => {
                     out.push_str("<table class=\"facts\"><tbody>\n");
                     for (name, value) in facts {
                         let class = if mono(value) { " class=\"mono\"" } else { "" };
                         out.push_str(&format!(
-                            "<tr><th>{}</th><td{class}>{}</td></tr>\n",
+                            "<tr><th scope=\"row\">{}</th><td{class}>{}</td></tr>\n",
                             escape(name),
                             escape(value)
                         ));
                     }
                     out.push_str("</tbody></table>\n");
                 }
-                Block::Table(t) => table(&mut out, t),
+                Block::Table(t) => table(&mut out, t, &caption),
             }
         }
-        out.push_str("</section>\n");
+        out.push_str("<p class=\"back\"><a href=\"#top\">Back to the top</a></p>\n</section>\n");
     }
     out.push_str("</main></body></html>\n");
     out

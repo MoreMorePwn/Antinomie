@@ -4,6 +4,7 @@
 //! paragraphs, fact lists, tables and notes, in the same order for both. A
 //! [`Report`] becomes a [`Document`] here, with indicators defanged on
 //! request and long tables cut to [`DOCUMENT_ROWS`].
+use super::fold::{FOLDED_ROWS, fold_events};
 use super::{DOCUMENT_ROWS, Indicator, IndicatorKind, NamedTable, Report, Table, defang};
 
 /// One drawn element.
@@ -17,6 +18,8 @@ pub enum Block {
     Sub(String),
     /// A remark in a quieter style: what is missing or cut.
     Note(String),
+    /// Short statements, one per line (the Summary's key findings).
+    List(Vec<String>),
 }
 
 /// A table ready to draw: every cell final text.
@@ -42,11 +45,28 @@ pub struct Document {
     pub subtitle: String,
     pub defanged: bool,
     pub sections: Vec<Section>,
+    /// What the PDF says of itself and draws on every page.
+    pub meta: Meta,
+}
+
+/// Document metadata for the PDF's info record and its page header and footer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Meta {
+    /// The kind of report (`Antinomie Triage report`).
+    pub creator: String,
+    pub subject: String,
+    pub keywords: String,
+    /// The running header of pages after the first.
+    pub header: String,
+    /// The footer's left part (when it was generated).
+    pub footer: String,
 }
 
 struct Builder {
     defang: bool,
     sections: Vec<Section>,
+    /// Credits (the geolocation database's) for the closing Notes section.
+    credits: Vec<String>,
 }
 
 impl Builder {
@@ -127,6 +147,53 @@ impl Builder {
         }
     }
 
+    /// The Files tabs: repeated rows folded into one with a count, and each
+    /// tab cut to [`FOLDED_ROWS`] rows. The JSON keeps every row.
+    fn files(&self, tabs: &[NamedTable], blocks: &mut Vec<Block>) {
+        for named in tabs {
+            let (folded, gone) = if named.name == "Changed files" {
+                (named.table.clone(), 0)
+            } else {
+                fold_events(&named.table)
+            };
+            let total = named.table.rows.len() as u64 + named.table.omitted;
+            blocks.push(Block::Sub(format!("{} ({})", named.name, thousands(total))));
+            if folded.rows.is_empty() {
+                blocks.push(Block::Note("No rows.".into()));
+                continue;
+            }
+            let shown = folded.rows.len().min(FOLDED_ROWS);
+            let mut table = folded.clone();
+            table.rows.truncate(FOLDED_ROWS);
+            table.omitted = 0;
+            let (doc, _) = self.doc_table(&table);
+            blocks.push(Block::Table(doc));
+            let mut said = Vec::new();
+            if gone > 0 {
+                said.push(format!(
+                    "{} repeated rows are folded into the count of the row they repeat.",
+                    thousands(gone)
+                ));
+            }
+            if folded.rows.len() > shown {
+                said.push(format!(
+                    "The first {shown} of {} distinct rows are shown.",
+                    thousands(folded.rows.len() as u64)
+                ));
+            }
+            if named.table.omitted > 0 {
+                said.push(format!(
+                    "{} more matching rows were not kept by the index.",
+                    thousands(named.table.omitted)
+                ));
+            }
+            if !said.is_empty() {
+                said.push("The JSON export keeps every row the index held.".into());
+                blocks.push(Block::Note(said.join(" ")));
+            }
+        }
+    }
+
     fn section(&mut self, id: &str, title: &str, blocks: Vec<Block>) {
         self.sections.push(Section {
             id: id.into(),
@@ -139,39 +206,86 @@ impl Builder {
 impl Builder {
     /// The overview: when, what ran, and the notes of the report.
     fn overview_section(&mut self, report: &Report) {
+        let run = &report.run;
         let mut head = vec![
             ("Generated".to_owned(), super::shown(report.generated_ms)),
             ("Application".to_owned(), report.app.clone()),
-            ("Run".to_owned(), report.run.run_id.clone()),
-            ("Boot".to_owned(), report.run.boot_id.clone()),
-            ("VM".to_owned(), report.run.vm_id.clone()),
+            ("Run".to_owned(), run.run_id.clone()),
+            ("Boot".to_owned(), run.boot_id.clone()),
+            ("VM".to_owned(), run.vm_id.clone()),
         ];
-        if let Some(started) = report.run.started_ms {
+        if let Some(started) = run.started_ms {
             head.push(("Run started".into(), super::shown(started)));
         }
         head.push((
             "Run state".into(),
-            if report.run.finished {
-                "finished"
+            if !run.state.is_empty() {
+                let mut text = run.state.clone();
+                if !run.finished {
+                    text.push_str(" when read");
+                }
+                text
+            } else if run.finished {
+                "finished".into()
             } else {
-                "still running when read"
-            }
-            .into(),
+                "still running when read".into()
+            },
         ));
-        if let Some(sample) = &report.sample {
-            head.push(("Sample".into(), sample.name.clone()));
-            head.push(("Sample SHA-256".into(), sample.sha256.clone()));
-            if sample.size.is_some() {
+        if let Some(ended) = run.ended_ms {
+            head.push(("Run ended".into(), super::shown(ended)));
+        }
+        if let Some(ms) = run.duration_ms {
+            head.push(("Duration".into(), duration(ms)));
+        }
+        if !run.exit.is_empty() {
+            head.push(("Root program".into(), run.exit.clone()));
+        }
+        match &report.sample {
+            Some(sample) => {
+                let label = if sample.role.is_empty() {
+                    "Sample".to_owned()
+                } else {
+                    format!("Sample ({})", sample.role)
+                };
+                head.push((label, sample.name.clone()));
+                head.push(("Sample SHA-256".into(), sample.sha256.clone()));
+                if sample.size.is_some() {
+                    head.push((
+                        "Sample size".into(),
+                        sample
+                            .size
+                            .map_or(String::new(), crate::byte_size::file_size),
+                    ));
+                }
+            }
+            None if !run.command.is_empty() => {
                 head.push((
-                    "Sample size".into(),
-                    sample
-                        .size
-                        .map_or(String::new(), crate::byte_size::file_size),
+                    "Sample".into(),
+                    "none recorded: the run started a command, not a library sample".into(),
                 ));
             }
+            None => {}
+        }
+        if !run.command.is_empty() {
+            head.push(("Command".into(), run.command.clone()));
         }
         head.retain(|(_, value)| !value.is_empty());
         let mut blocks = vec![Block::Facts(head)];
+        let mut environment: Vec<(String, String)> = run
+            .environment
+            .iter()
+            .map(|fact| (fact.name.clone(), fact.value.clone()))
+            .collect();
+        if run.route.is_empty() || environment.iter().any(|(name, _)| name == "Network route") {
+            // The route is already one of the facts.
+        } else {
+            environment.push(("Network route".into(), run.route.clone()));
+        }
+        if !environment.is_empty() {
+            blocks.push(Block::Sub("Environment".into()));
+            blocks.push(Block::Facts(environment));
+        }
+        blocks.push(Block::Note(zone_note(report.generated_ms)));
         if self.defang {
             blocks.push(Block::Note(
                 "Indicators in this document are defanged (hxxp, [.]) so they cannot be opened by \
@@ -179,21 +293,39 @@ impl Builder {
                     .into(),
             ));
         }
-        for note in &report.notes {
+        // The geolocation credit closes the document; the rest are about the run.
+        let (credits, notes): (Vec<&String>, Vec<&String>) =
+            report.notes.iter().partition(|note| note.contains("DB-IP"));
+        for note in notes {
             blocks.push(Block::Note(self.free(note)));
         }
         self.section("overview", "Run overview", blocks);
+        self.credits = credits.into_iter().map(|note| self.free(note)).collect();
     }
 
     /// The summary section: the statement, the counts and the key behaviours.
     fn summary_section(&mut self, report: &Report) {
         if let Some(summary) = &report.summary {
             let mut blocks = vec![Block::Paragraph(self.free(&summary.statement))];
-            let mut facts = vec![(
-                "Highest tier".to_owned(),
-                summary.highest_tier.to_uppercase(),
-            )];
+            let tiers = &summary.tiers;
+            let mut facts = vec![
+                (
+                    "Highest tier".to_owned(),
+                    summary.highest_tier.to_uppercase(),
+                ),
+                (
+                    "Findings by tier".to_owned(),
+                    format!(
+                        "{} HIGH, {} MEDIUM, {} LOW, {} INFO",
+                        thousands(tiers.high),
+                        thousands(tiers.medium),
+                        thousands(tiers.low),
+                        thousands(tiers.info)
+                    ),
+                ),
+            ];
             if !summary.families.is_empty() {
+                facts.push(("Family".into(), summary.families.join(", ")));
                 facts.push((
                     "Family named by".into(),
                     if summary.family_sources.is_empty() {
@@ -204,23 +336,35 @@ impl Builder {
                 ));
             }
             let c = &summary.counts;
+            let many = |n: u64, one: &str, more: &str| {
+                format!("{} {}", thousands(n), if n == 1 { one } else { more })
+            };
             facts.push((
-            "Observed".into(),
-            format!(
-                "{} processes, {} findings, {} indicators ({} matched a dataset), {} ATT&CK techniques, \
-                 {} files changed of {} opened, {} endpoints, {} domains",
-                c.processes,
-                c.findings,
-                c.indicators,
-                c.indicators_matched,
-                c.techniques,
-                c.files_changed,
-                c.files_opened,
-                c.endpoints,
-                c.domains
-            ),
-        ));
+                "Observed".into(),
+                format!(
+                    "{}, {}, {} ({} matched a dataset), {}, {} changed of {} opened, {}, {}",
+                    many(c.processes, "process", "processes"),
+                    many(c.findings, "finding", "findings"),
+                    many(c.indicators, "indicator", "indicators"),
+                    thousands(c.indicators_matched),
+                    many(c.techniques, "ATT&CK technique", "ATT&CK techniques"),
+                    many(c.files_changed, "file", "files"),
+                    thousands(c.files_opened),
+                    many(c.endpoints, "endpoint", "endpoints"),
+                    many(c.domains, "domain", "domains"),
+                ),
+            ));
             blocks.push(Block::Facts(facts));
+            if !summary.key_findings.is_empty() {
+                blocks.push(Block::Sub("Key findings".into()));
+                blocks.push(Block::List(
+                    summary
+                        .key_findings
+                        .iter()
+                        .map(|line| self.free(line))
+                        .collect(),
+                ));
+            }
             if !summary.key_behaviours.is_empty() {
                 blocks.push(Block::Sub("Key behaviours".into()));
                 blocks.push(Block::Table(DocTable {
@@ -235,7 +379,7 @@ impl Builder {
                                 behaviour.tier.to_uppercase(),
                                 behaviour.category.clone(),
                                 behaviour.rule.clone(),
-                                behaviour.count.to_string(),
+                                thousands(behaviour.count),
                             ]
                         })
                         .collect(),
@@ -245,16 +389,54 @@ impl Builder {
         }
     }
 
-    /// The indicators of compromise table.
+    /// The indicators of compromise table. Files with one hash are one row
+    /// with their paths listed; a Tor stand-in address names the domain it
+    /// stands for.
     fn indicators_section(&mut self, report: &Report) {
         if let Some(all) = &report.indicators {
             let indicators: Vec<&Indicator> =
                 all.iter().filter(|i| i.base_noise.is_empty()).collect();
             let noisy = all.len() - indicators.len();
+            let unshared = indicators
+                .iter()
+                .filter(|i| !i.not_shared.is_empty())
+                .count();
             let mut blocks = Vec::new();
             if indicators.is_empty() {
                 blocks.push(Block::Note("The run produced no indicators.".into()));
             } else {
+                // Group the files that have one hash.
+                let mut order: Vec<Vec<&Indicator>> = Vec::new();
+                let mut by_hash: std::collections::HashMap<&str, usize> =
+                    std::collections::HashMap::new();
+                for indicator in &indicators {
+                    if indicator.kind == "file" && !indicator.sha256.is_empty() {
+                        if let Some(&at) = by_hash.get(indicator.sha256.as_str()) {
+                            order[at].push(indicator);
+                            continue;
+                        }
+                        by_hash.insert(indicator.sha256.as_str(), order.len());
+                    }
+                    order.push(vec![indicator]);
+                }
+                let rows: Vec<Vec<String>> = order
+                    .iter()
+                    .take(DOCUMENT_ROWS)
+                    .map(|group| {
+                        let indicator = group[0];
+                        let kind = IndicatorKind::from_id(&indicator.kind);
+                        vec![
+                            indicator.kind.clone(),
+                            self.value(kind, &indicator_text(group)),
+                            indicator.verdict.clone(),
+                            indicator.dataset.clone(),
+                            indicator.family.clone(),
+                            self.free(&indicator.process),
+                            shown_iso(&indicator.first_seen),
+                            indicator_seen(group),
+                        ]
+                    })
+                    .collect();
                 blocks.push(Block::Table(DocTable {
                     columns: [
                         "Type",
@@ -264,44 +446,32 @@ impl Builder {
                         "Family",
                         "Process",
                         "First seen",
-                        "Count",
+                        "Seen as / count",
                     ]
                     .map(String::from)
                     .to_vec(),
-                    rows: indicators
-                        .iter()
-                        .take(DOCUMENT_ROWS)
-                        .map(|indicator| {
-                            let kind = IndicatorKind::from_id(&indicator.kind);
-                            let shown = if indicator.path.is_empty() {
-                                indicator.value.clone()
-                            } else {
-                                format!("{} {}", indicator.value, indicator.path)
-                            };
-                            vec![
-                                indicator.kind.clone(),
-                                self.value(kind, &shown),
-                                indicator.verdict.clone(),
-                                indicator.dataset.clone(),
-                                indicator.family.clone(),
-                                self.free(&indicator.process),
-                                indicator.first_seen.clone(),
-                                indicator.count.clone(),
-                            ]
-                        })
-                        .collect(),
+                    rows,
                 }));
-                if indicators.len() > DOCUMENT_ROWS {
+                if order.len() > DOCUMENT_ROWS {
                     blocks.push(Block::Note(format!(
                         "{} more indicators are in the JSON, MISP and STIX exports.",
-                        indicators.len() - DOCUMENT_ROWS
+                        order.len() - DOCUMENT_ROWS
                     )));
                 }
+            }
+            if unshared > 0 {
+                blocks.push(Block::Note(format!(
+                    "{unshared} of these are not in the MISP and STIX exports: Tor stand-in \
+                     addresses (the domain they stand for is), private addresses of the sandbox, \
+                     files with no content kept, and programs of the base image the run only \
+                     started."
+                )));
             }
             if noisy > 0 {
                 blocks.push(Block::Note(format!(
                     "{noisy} more are the base image's own traffic (clock sync, DHCP, package \
-                 indexes), not the sample's. They are in the JSON export under base_noise."
+                 indexes, the guest's resolver), not the sample's. They are in the JSON export \
+                 under base_noise."
                 )));
             }
             self.section("indicators", "Indicators of compromise", blocks);
@@ -396,7 +566,9 @@ impl Builder {
         }
     }
 
-    /// The detection engines' matches.
+    /// The detection engines' matches. Severity is said in one vocabulary
+    /// (how much a YARA match says, an IDS or Sigma level), the pack's own
+    /// id stays in the JSON, and the rule's reference is a column of its own.
     fn detections_section(&mut self, report: &Report) {
         if let Some(detections) = &report.detections {
             let blocks = if detections.is_empty() {
@@ -407,8 +579,16 @@ impl Builder {
             } else {
                 vec![Block::Table(DocTable {
                     columns: [
-                        "Engine", "Rule", "Title", "Severity", "ATT&CK", "Count", "Author",
-                        "License", "Source",
+                        "Engine",
+                        "Rule",
+                        "Title",
+                        "Severity",
+                        "ATT&CK",
+                        "Count",
+                        "Author",
+                        "License",
+                        "Source",
+                        "Reference",
                     ]
                     .map(String::from)
                     .to_vec(),
@@ -417,14 +597,21 @@ impl Builder {
                         .map(|hit| {
                             vec![
                                 hit.engine.clone(),
-                                hit.rule_id.clone(),
-                                hit.title.clone(),
-                                hit.severity.clone(),
+                                plain_rule(&hit.rule_id).to_owned(),
+                                plain_rule(&hit.title).to_owned(),
+                                severity_text(hit),
                                 hit.mitre.join(", "),
-                                hit.count.to_string(),
+                                thousands(hit.count),
                                 or_unknown(&hit.author),
                                 hit.license.clone(),
-                                source_text(hit),
+                                hit.source.clone(),
+                                // No scheme: the HTML holds no link or address
+                                // outside itself; the JSON, MISP and STIX keep it.
+                                self.free(
+                                    hit.reference
+                                        .split_once("://")
+                                        .map_or(hit.reference.as_str(), |(_, rest)| rest),
+                                ),
                             ]
                         })
                         .collect(),
@@ -434,25 +621,30 @@ impl Builder {
         }
     }
 
-    /// The evidence files of the run folder.
+    /// The evidence files of the run folder: the recordings, not the small
+    /// logs and records that sit beside them.
     fn evidence_section(&mut self, report: &Report) {
         if let Some(evidence) = &report.evidence {
+            let main: Vec<_> = evidence
+                .iter()
+                .filter(|item| item.kind != "other")
+                .collect();
             let blocks = if evidence.is_empty() {
                 vec![Block::Note(
                     "The run folder holds no evidence files.".into(),
                 )]
             } else {
-                vec![Block::Table(DocTable {
+                let mut blocks = vec![Block::Table(DocTable {
                     columns: ["Kind", "Path", "Size", "SHA-256"]
                         .map(String::from)
                         .to_vec(),
-                    rows: evidence
+                    rows: main
                         .iter()
                         .map(|item| {
                             vec![
                                 item.kind.clone(),
                                 item.path.clone(),
-                                item.size.to_string(),
+                                crate::byte_size::file_size(item.size),
                                 if item.sha256.is_empty() {
                                     "not hashed (large)".into()
                                 } else {
@@ -461,7 +653,15 @@ impl Builder {
                             ]
                         })
                         .collect(),
-                })]
+                })];
+                let other = evidence.len() - main.len();
+                if other > 0 {
+                    blocks.push(Block::Note(format!(
+                        "{other} smaller file(s) of the run folder (terminal records, manifests) \
+                         are listed in the JSON export."
+                    )));
+                }
+                blocks
             };
             self.section("evidence", "Evidence references", blocks);
         }
@@ -507,6 +707,7 @@ pub fn document(report: &Report, defang: bool) -> Document {
     let mut b = Builder {
         defang,
         sections: Vec::new(),
+        credits: Vec::new(),
     };
     b.overview_section(report);
     b.summary_section(report);
@@ -524,7 +725,7 @@ pub fn document(report: &Report, defang: bool) -> Document {
     }
     if let Some(files) = &report.files {
         let mut blocks = Vec::new();
-        b.named(&files.tabs, &mut blocks);
+        b.files(&files.tabs, &mut blocks);
         b.section("files", "Files", blocks);
     }
     b.file_activity_section(report);
@@ -536,6 +737,10 @@ pub fn document(report: &Report, defang: bool) -> Document {
     b.detections_section(report);
     b.evidence_section(report);
     b.custody_section(report);
+    if !b.credits.is_empty() {
+        let blocks = b.credits.iter().cloned().map(Block::Note).collect();
+        b.section("notes", "Notes", blocks);
+    }
 
     let name = report
         .sample
@@ -552,6 +757,27 @@ pub fn document(report: &Report, defang: bool) -> Document {
         ),
         defanged: defang,
         sections: b.sections,
+        meta: Meta {
+            creator: "Antinomie Triage report".into(),
+            subject: match &report.sample {
+                Some(sample) => format!("Run {} of {}", report.run.run_id, sample.sha256),
+                None => format!("Run {}", report.run.run_id),
+            },
+            keywords: {
+                let mut words = vec!["Antinomie".to_owned(), "triage".into()];
+                words.extend(report.summary.iter().flat_map(|s| s.families.clone()));
+                words.push(format!(
+                    "run {}",
+                    report.run.run_id.get(..8).unwrap_or(&report.run.run_id)
+                ));
+                words.join(", ")
+            },
+            header: format!(
+                "Antinomie Triage report: {name} - run {}",
+                report.run.run_id.get(..8).unwrap_or(&report.run.run_id)
+            ),
+            footer: format!("Generated {}", super::shown(report.generated_ms)),
+        },
     }
 }
 
@@ -565,17 +791,157 @@ fn or_unknown(author: &str) -> String {
     }
 }
 
-/// The rule pack and the rule's own reference. The HTML holds no link, so the
-/// reference is written without its scheme here; the JSON, MISP and STIX keep
-/// the full address.
-fn source_text(hit: &super::Detection) -> String {
-    let reference = hit
-        .reference
-        .split_once("://")
-        .map_or(hit.reference.as_str(), |(_, rest)| rest);
-    match (hit.source.is_empty(), reference.is_empty()) {
-        (_, true) => hit.source.clone(),
-        (true, false) => reference.to_owned(),
-        (false, false) => format!("{} ({reference})", hit.source),
+/// A rule id or title without the pack's own number (`s1919::Name` is `Name`).
+pub(crate) fn plain_rule(text: &str) -> &str {
+    if let Some((pack, rest)) = text.split_once("::")
+        && pack.len() > 1
+        && pack.starts_with('s')
+        && pack[1..].bytes().all(|b| b.is_ascii_digit())
+    {
+        return rest;
+    }
+    text
+}
+
+/// How strong a match is, in the words the app's cards use: a YARA match as
+/// strong or weak (with an Elastic score), a Sigma or IDS match by its level.
+fn severity_text(hit: &super::Detection) -> String {
+    let score: Option<u32> = hit.severity.trim().parse().ok();
+    if !hit.strength.is_empty() {
+        return match score {
+            Some(score) => format!("{} (score {score})", hit.strength),
+            None => hit.strength.clone(),
+        };
+    }
+    match (hit.engine.as_str(), hit.severity.is_empty()) {
+        (_, true) => String::new(),
+        (engine, false) if engine.eq_ignore_ascii_case("sigma") => {
+            format!("Sigma {}", hit.severity)
+        }
+        (engine, false) if engine.eq_ignore_ascii_case("ids") => format!("IDS {}", hit.severity),
+        _ => hit.severity.clone(),
+    }
+}
+
+/// What the Indicator cell of a row says: the value, a stand-in's name, a
+/// file's path (with the paths of every file of one hash).
+fn indicator_text(group: &[&Indicator]) -> String {
+    let first = group[0];
+    if !first.stand_in.is_empty() {
+        return format!("{} \u{2192} {} (Tor stand-in)", first.value, first.stand_in);
+    }
+    if first.kind != "file" {
+        return if first.path.is_empty() {
+            first.value.clone()
+        } else {
+            format!("{} {}", first.value, first.path)
+        };
+    }
+    let mut paths: Vec<&str> = group
+        .iter()
+        .map(|i| {
+            if i.path.is_empty() {
+                i.value.as_str()
+            } else {
+                i.path.as_str()
+            }
+        })
+        .collect();
+    paths.sort_unstable();
+    paths.dedup();
+    let listed: Vec<&str> = paths.iter().take(5).copied().collect();
+    let more = paths.len() - listed.len();
+    let paths_text = format!(
+        "{}{}",
+        listed.join(", "),
+        if more > 0 {
+            format!(" (+{more} more)")
+        } else {
+            String::new()
+        }
+    );
+    if first.sha256.is_empty() || first.value == "(no content kept)" {
+        return paths_text;
+    }
+    if paths.len() == 1 {
+        format!("{} {}", first.value, paths_text)
+    } else {
+        format!("{} at {} paths: {paths_text}", first.value, paths.len())
+    }
+}
+
+/// The Count cell: the frames or connections of a network row, or what the
+/// run did to a file, over the whole group.
+fn indicator_seen(group: &[&Indicator]) -> String {
+    let first = group[0];
+    if first.kind != "file" {
+        return first.count.clone();
+    }
+    let mut roles: Vec<&str> = Vec::new();
+    for item in group {
+        for role in item.count.split(", ").filter(|r| !r.is_empty()) {
+            if !roles.contains(&role) {
+                roles.push(role);
+            }
+        }
+    }
+    roles.join(", ")
+}
+
+/// A count with thousands separators: `167,040`.
+pub(crate) fn thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (at, c) in digits.chars().enumerate() {
+        if at > 0 && (digits.len() - at).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// A duration as a person reads it: `385 ms`, `6 min 25 s`, `1 h 05 min`.
+fn duration(ms: u64) -> String {
+    let seconds = ms / 1000;
+    match seconds {
+        0 => format!("{ms} ms"),
+        1..=59 => format!("{seconds} s"),
+        60..=3599 => format!("{} min {} s", seconds / 60, seconds % 60),
+        _ => format!("{} h {:02} min", seconds / 3600, seconds / 60 % 60),
+    }
+}
+
+/// The footnote that says which zone every time is in, and what `~` means.
+fn zone_note(at_ms: u64) -> String {
+    let text = super::shown(at_ms);
+    let zone = text.rfind('(').map_or("the display zone", |at| {
+        text[at..].trim_matches(|c| c == '(' || c == ')')
+    });
+    format!(
+        "All times are {zone}, the zone the app shows. A time marked ~ is estimated from the \
+         guest clock; +N s is the time since the run's first call."
+    )
+}
+
+/// An ISO time of the JSON (`2026-11-07T10:40:42.662Z`) in the document's
+/// zone and notation; other text is left as it is.
+pub(crate) fn shown_iso(text: &str) -> String {
+    let bytes = text.as_bytes();
+    if bytes.len() < 20 || bytes[4] != b'-' || bytes[10] != b'T' || !text.ends_with('Z') {
+        return text.to_owned();
+    }
+    let number = |from: usize, to: usize| text.get(from..to)?.parse::<i64>().ok();
+    let parsed = (|| {
+        let days = crate::date::days_from_civil(
+            number(0, 4)? as i32,
+            number(5, 7)? as u32,
+            number(8, 10)? as u32,
+        )?;
+        Some(days * 86_400 + number(11, 13)? * 3600 + number(14, 16)? * 60 + number(17, 19)?)
+    })();
+    match parsed {
+        Some(seconds) if seconds >= 0 => super::shown(seconds as u64 * 1000),
+        _ => text.to_owned(),
     }
 }

@@ -98,8 +98,13 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
         }
     }
     let mut seen = std::collections::BTreeSet::new();
-    for item in &report.indicators {
-        for attr in attributes(&as_indicator(item), &seed, at) {
+    for item in report
+        .indicators
+        .iter()
+        .map(as_indicator)
+        .filter(|i| i.shared())
+    {
+        for attr in attributes(&item, &seed, at) {
             if seen.insert((attr["type"].to_string(), attr["value"].to_string())) {
                 attrs.push(attr);
             }
@@ -209,6 +214,17 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
         tags.push(json!({
             "name": format!("antinomie:{}=\"{}\"", tag.kind, tag.value.replace('"', "")),
             "colour": "#5c6670",
+        }));
+    }
+    let mut named: Vec<&str> = std::iter::once(sample.family.as_str())
+        .chain(sample.family_candidates.iter().map(|c| c.name.as_str()))
+        .filter(|name| !name.is_empty())
+        .collect();
+    named.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    for family in named {
+        tags.push(json!({
+            "name": format!("antinomie:family=\"{}\"", family.replace('"', "")),
+            "colour": "#7a1f5c",
         }));
     }
     let mut cluster = Vec::new();

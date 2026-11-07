@@ -130,7 +130,7 @@ pub(super) fn build_report(
                 &vm_name(&entry.run.vm_id),
                 &entry.run.id,
                 entry.run.started_ms,
-                &super::exit_label(&entry.run),
+                &crate::run_state_line::exit_summary(&entry.run),
                 data_dir,
                 &entry.run.directory,
                 entry.folder,

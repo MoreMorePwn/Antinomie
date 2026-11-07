@@ -32,13 +32,46 @@ fn inline(text: &str) -> String {
                 out.push('\\');
                 out.push(c);
             }
+            // A bare `>` and `&` are plain text except where `&` would start
+            // an entity; `<` is the one that can open a tag.
             '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '&' => out.push_str("&amp;"),
+            '&' if entity_follows(&chars[at + 1..]) => out.push_str("\\&"),
             c => out.push(c),
         }
     }
     out
+}
+
+/// Whether `rest` (the text after a `&`) spells an entity: `amp;`, `#38;`.
+fn entity_follows(rest: &[char]) -> bool {
+    let name: String = rest
+        .iter()
+        .take_while(|c| c.is_ascii_alphanumeric() || **c == '#')
+        .collect();
+    !name.is_empty() && rest.get(name.chars().count()) == Some(&';')
+}
+
+/// Whether a line, as it would start a block, reads as markup: a heading
+/// (`#` and a space), a quote (`>`), a list item (`-`, `+`, `*` and a space), an
+/// ordered one (`1.` or `1)` and a space), a rule or a setext underline.
+fn block_marker(line: &str) -> bool {
+    let first = line.chars().next();
+    let followed_by_space = |at: usize| matches!(line.chars().nth(at), None | Some(' '));
+    match first {
+        Some('#') => {
+            line.trim_start_matches('#').starts_with(' ') || line.chars().all(|c| c == '#')
+        }
+        Some('>') => true,
+        Some('-' | '+') => followed_by_space(1) || line.chars().all(|c| matches!(c, '-' | '=')),
+        Some('=') => line.chars().all(|c| c == '='),
+        Some(c) if c.is_ascii_digit() => {
+            let digits = line.chars().take_while(char::is_ascii_digit).count();
+            digits <= 9
+                && matches!(line.chars().nth(digits), Some('.' | ')'))
+                && followed_by_space(digits + 1)
+        }
+        _ => false,
+    }
 }
 
 /// A paragraph that may span lines: each line escaped, a leading `#`, `>`,
@@ -47,12 +80,16 @@ fn paragraph(text: &str) -> String {
     text.lines()
         .map(|line| {
             let line = inline(line.trim_end());
-            if line.starts_with(['#', '>', '-', '+', '='])
-                || line.starts_with(|c: char| c.is_ascii_digit())
-            {
-                format!("\\{line}")
+            if !block_marker(&line) {
+                return line;
+            }
+            // Escape the marker's own punctuation, which is what CommonMark
+            // allows: `1\. text`, `\# text`, `\> text`.
+            if line.starts_with(|c: char| c.is_ascii_digit()) {
+                let digits = line.chars().take_while(char::is_ascii_digit).count();
+                format!("{}\\{}", &line[..digits], &line[digits..])
             } else {
-                line
+                format!("\\{line}")
             }
         })
         .collect::<Vec<_>>()
@@ -99,6 +136,12 @@ pub fn render(document: &Document) -> String {
                     out.push_str(&format!("*{}*\n\n", paragraph(text).replace('\n', " ")))
                 }
                 Block::Sub(text) => out.push_str(&format!("### {}\n\n", inline(text))),
+                Block::List(items) => {
+                    for item in items {
+                        out.push_str(&format!("- {}\n", inline(item)));
+                    }
+                    out.push('\n');
+                }
                 Block::Facts(facts) => {
                     out.push_str("| Field | Value |\n| --- | --- |\n");
                     for (name, value) in facts {

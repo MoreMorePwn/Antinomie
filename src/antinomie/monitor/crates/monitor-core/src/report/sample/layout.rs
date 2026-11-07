@@ -4,7 +4,7 @@
 //! as a run report (and by [`super::markdown`]): a title, then sections of
 //! paragraphs, fact lists, tables and notes. Indicators are defanged on
 //! request; tables are cut at [`DOCUMENT_ROWS`] with a note.
-use super::super::layout::{Block, DocTable, Document, Section};
+use super::super::layout::{Block, DocTable, Document, Section, plain_rule};
 use super::super::{DOCUMENT_ROWS, IndicatorKind, defang};
 use super::*;
 
@@ -140,6 +140,17 @@ fn overview_section(b: &mut Builder, report: &SampleReport) {
         ("Architecture".into(), sample.arch.clone()),
         ("Size".into(), format!("{} bytes", sample.size)),
         ("Family".into(), b.free(&sample.family)),
+        (
+            "Family named by rules".into(),
+            b.free(
+                &sample
+                    .family_candidates
+                    .iter()
+                    .map(|candidate| format!("{} ({})", candidate.name, candidate.source))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            ),
+        ),
         (
             "Tags".into(),
             sample
@@ -346,13 +357,23 @@ fn static_section(b: &mut Builder, report: &SampleReport) {
     b.section("static", "Static analysis", blocks);
 }
 
+/// Where a rule matched: the static scan, the runs, or both.
+fn seen_in(hit: &RuleHit) -> String {
+    let runs = runs_text(&hit.runs);
+    match (hit.in_static_scan, runs.is_empty()) {
+        (true, true) => "static scan".into(),
+        (true, false) => format!("static scan + runs {runs}"),
+        (false, _) => runs,
+    }
+}
+
 /// YARA, Sigma and IDS matches, with each rule's credit.
 fn rules_section(b: &mut Builder, report: &SampleReport) {
     let mut blocks = Vec::new();
     table(
         &[
-            "Engine", "Rule", "Title", "Severity", "Runs", "Count", "ATT&CK", "Family", "Author",
-            "License", "Source",
+            "Engine", "Rule", "Title", "Severity", "Seen in", "Count", "ATT&CK", "Family",
+            "Author", "License", "Source",
         ],
         report
             .detections
@@ -360,10 +381,10 @@ fn rules_section(b: &mut Builder, report: &SampleReport) {
             .map(|hit| {
                 vec![
                     hit.engine.clone(),
-                    hit.rule_id.clone(),
-                    b.free(&hit.title),
+                    plain_rule(&hit.rule_id).to_owned(),
+                    b.free(plain_rule(&hit.title)),
                     hit.severity.clone(),
-                    runs_text(&hit.runs),
+                    seen_in(hit),
                     hit.count.to_string(),
                     hit.mitre.join(", "),
                     hit.family.clone(),
@@ -704,6 +725,23 @@ pub fn document(report: &SampleReport, defang: bool) -> Document {
         ),
         defanged: defang,
         sections: b.sections,
+        meta: crate::report::layout::Meta {
+            creator: "Antinomie Sample report".into(),
+            subject: format!("Sample {}", sample.sha256),
+            keywords: {
+                let mut words = vec!["Antinomie".to_owned(), "sample".into()];
+                words.extend(sample.family_candidates.iter().map(|c| c.name.clone()));
+                if !sample.family.is_empty() {
+                    words.push(sample.family.clone());
+                }
+                words.join(", ")
+            },
+            header: format!(
+                "Antinomie Sample report: {name} - {}",
+                sample.sha256.get(..8).unwrap_or(&sample.sha256)
+            ),
+            footer: format!("Generated {}", crate::report::shown(report.generated_ms)),
+        },
     }
 }
 

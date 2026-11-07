@@ -37,6 +37,7 @@ fn time_the_export_job() {
             run_id: text("id"),
             started_ms: run["started_ms"].as_u64(),
             finished: true,
+            ..report::RunInfo::default()
         },
         sample: None,
         clock: None,

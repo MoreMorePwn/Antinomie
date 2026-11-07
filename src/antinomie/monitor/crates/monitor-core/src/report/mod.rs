@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 pub mod bundle;
 pub mod defang;
 pub mod export;
+pub mod fold;
 mod html;
 pub mod layout;
 pub mod misp;
@@ -22,6 +23,7 @@ mod pdf;
 mod pdf_font;
 mod pdf_layout;
 pub mod sample;
+pub mod shared;
 pub mod stix;
 
 /// The schema name every JSON export carries in `schema`.
@@ -99,6 +101,43 @@ pub struct RunInfo {
     pub started_ms: Option<u64>,
     /// Whether the run had finished when the index was read.
     pub finished: bool,
+    /// The run's state in the app's words: "Stopped by you at 6 min 25 s ·
+    /// root exited 0", "Ran for 1 min 20 s · exit 255", "Ended by VM stop".
+    pub state: String,
+    /// How the root program ended, "exit 0" or "signal 11 (SIGSEGV)"; empty
+    /// when the guest never reported it.
+    pub exit: String,
+    /// The run was ended with Stop run.
+    pub stopped_by_user: bool,
+    /// When the run's process tree ended, ms since the epoch, when known.
+    pub ended_ms: Option<u64>,
+    /// Start to end (or to the Stop press), in ms, when both are known.
+    pub duration_ms: Option<u64>,
+    /// The command the run started when the run has no library sample (a
+    /// shell running a one-liner, a preloaded library): path and arguments.
+    pub command: String,
+    /// The network route the run used, as the app words it.
+    pub route: String,
+    /// What the run was recorded on: base image, kernel, route, stealth
+    /// profile, rule packs and tools.
+    pub environment: Vec<Fact>,
+}
+
+/// A name and a value of a facts list.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Fact {
+    pub name: String,
+    pub value: String,
+}
+
+impl Fact {
+    pub fn new(name: &str, value: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            value: value.into(),
+        }
+    }
 }
 
 /// The sample the run executed.
@@ -108,6 +147,9 @@ pub struct SampleInfo {
     pub name: String,
     pub sha256: String,
     pub size: Option<u64>,
+    /// `preloaded library` when the run started another program (a shell)
+    /// with this library in `LD_PRELOAD`; empty for the program itself.
+    pub role: String,
 }
 
 /// One rule of the behaviour engine that matched.
@@ -136,6 +178,16 @@ pub struct Counts {
     pub domains: u64,
 }
 
+/// Rules of the run that fired, by tier.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TierCounts {
+    pub high: u64,
+    pub medium: u64,
+    pub low: u64,
+    pub info: u64,
+}
+
 /// What the run showed, in a sentence and the numbers behind it. This is an
 /// observation summary, not a verdict on the sample.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +206,10 @@ pub struct Summary {
     pub family_sources: Vec<String>,
     /// HIGH and MEDIUM rules that matched, worst first.
     pub key_behaviours: Vec<Behaviour>,
+    /// Behaviour rules that fired, by tier.
+    pub tiers: TierCounts,
+    /// The sentences the app's Summary lists under Key findings.
+    pub key_findings: Vec<String>,
     pub counts: Counts,
 }
 
@@ -195,6 +251,21 @@ pub struct Indicator {
     /// the sample's; empty for the run's indicators. Such rows are listed in the
     /// JSON only, not in the document tables, MISP or STIX.
     pub base_noise: String,
+    /// For an endpoint on the Tor gateway's stand-in range: the name the
+    /// run's DNS answers handed that address out for.
+    pub stand_in: String,
+    /// Why this indicator is in the document and the JSON but not in MISP and
+    /// STIX (a stand-in address, a private one, a file with no content); empty
+    /// for an indicator worth sharing.
+    pub not_shared: String,
+}
+
+impl Indicator {
+    /// Whether MISP and STIX carry it: the run's own, with something a
+    /// consumer could match.
+    pub fn shared(&self) -> bool {
+        self.base_noise.is_empty() && self.not_shared.is_empty()
+    }
 }
 
 /// An ATT&CK technique the run's rules cite.
@@ -246,6 +317,9 @@ pub struct Detection {
     pub source: String,
     /// The rule's own reference link, when it names one.
     pub reference: String,
+    /// For a YARA match: how much it says about the sample (`strong`, `weak`,
+    /// `wrong platform`), as Triage's detection cards judge it.
+    pub strength: String,
 }
 
 /// What the Files > File activity window knows of one file.
@@ -438,6 +512,10 @@ pub struct Choices {
     pub formats: Vec<Format>,
     pub bundle: bool,
     pub defang: bool,
+    /// Keep the bytes a sample read in the JSON's Read files rows (clipped to
+    /// 120 characters, never for a file the run wrote). Off by default: they
+    /// can carry guest secrets and the sample's own bytes.
+    pub include_content: bool,
     /// Where the files go; empty means `<recording>/report`.
     pub folder: String,
 }
@@ -450,6 +528,7 @@ impl Default for Choices {
             bundle: false,
             // The readable formats defang by default, like the sample report.
             defang: true,
+            include_content: false,
             folder: String::new(),
         }
     }
@@ -525,5 +604,7 @@ pub fn uuid5(name: &str) -> String {
     )
 }
 
+#[cfg(test)]
+mod format_tests;
 #[cfg(test)]
 mod tests;
