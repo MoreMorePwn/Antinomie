@@ -399,9 +399,9 @@ impl MonitorApp {
                     true,
                 ),
                 Confirm::KillRun(_) => (
-                    "Kill program run",
-                    "Terminate the selected run and its descendants? Recording remains active while termination is collected. The VM keeps running.",
-                    "Kill run",
+                    "Stop program run",
+                    "Stop the selected run and every process it started, including children left after the root exited? The recording closes normally: the network capture is saved whole, the route's counts are written and the journal is complete. The VM keeps running.",
+                    "Stop run",
                     true,
                 ),
                 Confirm::Reset(_) => (

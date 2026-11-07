@@ -56,7 +56,7 @@ fn toolbar_kill_opens_confirmation_and_cancel_keeps_run_untouched() {
     let output = render(&mut app, &ctx, size);
     let label = texts(&output)
         .into_iter()
-        .find(|(text, _)| text.ends_with("Kill"))
+        .find(|(text, _)| text.ends_with("Stop run"))
         .unwrap()
         .0;
     click_label(&mut app, &ctx, size, &label);
@@ -131,4 +131,74 @@ fn a_confirmation_is_a_plain_window_with_no_dim_that_the_title_drags() {
         "the window follows the drag: {before:?} -> {after:?}"
     );
     assert!(app.confirm.is_some(), "dragging does not cancel it");
+}
+
+pub(super) fn orphaned(id: &str, live: u64) -> RunSummary {
+    use antinomie_monitor_core::{RunExecution, WaitStatus};
+    let mut run = run(id);
+    run.execution = Some(RunExecution {
+        generation: 3,
+        live_task_count: live,
+        pending_async_count: 0,
+        flags: 9,
+        root_wait_status: Some(0),
+        root_exit: Some(WaitStatus::Exited { code: 0 }),
+        async_loss_count: 0,
+        total_task_count: 2,
+    });
+    run
+}
+
+#[test]
+fn stop_run_stays_available_while_a_child_lives_after_the_root_exited() {
+    let mut app = app();
+    observer_fixture(&mut app);
+    // The root exited 0 and one child runs on: the run is still going.
+    app.snapshot.runs = vec![orphaned("orphan", 1)];
+    assert_eq!(app.kill_target().unwrap().id, "orphan");
+    app.request_kill(None);
+    let Some(Confirm::KillRun(target)) = app.confirm.take() else {
+        panic!("stop confirmation");
+    };
+    app.submit_kill(target);
+    assert!(matches!(&app.submitted[..], [Command::StopRun { run_id }] if run_id == "orphan"));
+    // The terminal closed with the root: the run is still stoppable.
+    app.submitted.clear();
+    app.snapshot.runs[0].state = RunState::TerminalClosed;
+    app.pending_kill = None;
+    assert_eq!(app.kill_target().unwrap().id, "orphan");
+    // Once the guest reports no live task the run has ended and cannot be stopped.
+    app.snapshot.runs[0].state = RunState::Finished;
+    assert!(app.kill_target().is_none());
+}
+
+#[test]
+fn the_action_and_the_toolbar_call_it_stop_run() {
+    let mut app = app();
+    observer_fixture(&mut app);
+    app.snapshot.runs = vec![orphaned("orphan", 1)];
+    assert_eq!(Action::KillRun.label(&app), "Stop run");
+}
+
+#[test]
+fn run_lists_say_who_ended_the_run() {
+    use super::super::run_state_text::run_status;
+    // The VM stopped under a live child: not "Interrupted", not a failure.
+    for state in [RunState::Interrupted, RunState::Finalized] {
+        let mut cut = orphaned("cut", 1);
+        cut.state = state;
+        assert_eq!(run_status(&cut), "Ended by VM stop");
+    }
+    // Stop run is the user's own act.
+    let mut stopped = orphaned("stopped", 0);
+    stopped.state = RunState::Stopped;
+    assert_eq!(run_status(&stopped), "Stopped by you");
+    // A recording that ended with nothing alive keeps its plain words.
+    let mut quiet = orphaned("quiet", 0);
+    quiet.state = RunState::Finalized;
+    assert_eq!(run_status(&quiet), "Recording ended");
+    // And an interruption with no status from the guest stays "Interrupted".
+    let mut unknown = run("unknown");
+    unknown.state = RunState::Interrupted;
+    assert_eq!(run_status(&unknown), "Interrupted");
 }

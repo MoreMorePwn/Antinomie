@@ -53,6 +53,7 @@ mod start_warning;
 mod startup;
 mod stealth;
 mod stealth_shots;
+mod stop_run_shots;
 mod tcg_fallback;
 mod tcg_shots;
 mod terminal_windows;
@@ -333,6 +334,7 @@ pub(super) fn run(id: &str) -> RunSummary {
         reduced: None,
         boot_wait: None,
         triggers: None,
+        stopped_by_user: false,
         started_ms: None,
         clock_anchor: None,
         id: id.into(),

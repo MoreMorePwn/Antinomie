@@ -298,6 +298,15 @@ pub(super) fn dump_taken(ui: &mut egui::Ui, values: &[(&'static str, RowValue)])
         let f = &record.finding;
         key == (Some(f.stream_id), Some(f.task_cookie), Some(f.call_id))
     }) else {
+        // The match came too late for a dump: say so plainly.
+        if let Some(miss) = log.missed.iter().find(|miss| {
+            let f = &miss.finding;
+            key == (Some(f.stream_id), Some(f.task_cookie), Some(f.call_id))
+        }) {
+            ui.label(theme::bold(ui, "No dump taken").color(theme::text()));
+            ui.colored_label(theme::warn(), &miss.reason);
+            ui.add_space(8.0);
+        }
         return;
     };
     ui.label(theme::bold(ui, "Dumps taken").color(theme::text()));

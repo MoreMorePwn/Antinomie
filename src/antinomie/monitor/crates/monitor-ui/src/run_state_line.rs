@@ -39,11 +39,16 @@ pub(crate) fn describe(
         .execution
         .as_ref()
         .map_or(0, |status| status.live_task_count);
+    let with_detail = |head: String| match detail(run) {
+        Some(detail) => format!("{head} · {detail}"),
+        None => head,
+    };
     let running = |word: &str| match elapsed(now_ms) {
         Some(time) => format!("{word} · {time} elapsed"),
         None => word.to_owned(),
     };
     match run.state {
+        RunState::StopRequested => running("Stopping"),
         // The root program is gone and its children keep the run open.
         _ if run.state.is_live() && root.is_some() && live.max(alive.unwrap_or(0)) > 0 => {
             let count = live.max(alive.unwrap_or(0));
@@ -53,7 +58,6 @@ pub(crate) fn describe(
             format!("Still recording: {count} {plural} alive{time}")
         }
         RunState::Running => running("Running"),
-        RunState::StopRequested => running("Stop requested"),
         RunState::TerminalClosed => running("PTY closed"),
         RunState::Finished => {
             let ran = match run.started_ms.zip(ended_ms) {
@@ -68,7 +72,10 @@ pub(crate) fn describe(
                 None => ran,
             }
         }
-        RunState::Stopped => after("Stopped by the user"),
+        RunState::Stopped => with_detail(after("Stopped by you")),
+        RunState::Finalized | RunState::Interrupted if ended_by_vm_stop(run) => {
+            with_detail(after("Ended by VM stop"))
+        }
         RunState::Finalized => after("Recording ended"),
         RunState::Interrupted => after("Interrupted"),
         RunState::FailedToStart => format!(
@@ -80,6 +87,34 @@ pub(crate) fn describe(
         RunState::LaunchUnconfirmed => "Launch unconfirmed".into(),
         RunState::Unknown => "State unknown".into(),
     }
+}
+
+/// Whether the VM stopped (or the app closed) while the run's process tree was
+/// still alive: the recording was cut there, whatever the root had done.
+pub(crate) fn ended_by_vm_stop(run: &RunSummary) -> bool {
+    matches!(run.state, RunState::Finalized | RunState::Interrupted)
+        && run
+            .execution
+            .as_ref()
+            .is_some_and(|status| status.live_task_count > 0 || status.root_exit.is_none())
+}
+
+/// What the root did and what was left, for a run Stop run or a VM stop ended:
+/// "root exited 0 · 1 process still running". `None` when the guest never
+/// reported the run's status.
+pub(crate) fn detail(run: &RunSummary) -> Option<String> {
+    let status = run.execution.as_ref()?;
+    let root = match status.root_exit.as_ref() {
+        Some(WaitStatus::Exited { code }) => format!("root exited {code}"),
+        Some(WaitStatus::Signaled { signal, .. }) => format!("root killed by signal {signal}"),
+        None => "root had not exited".to_owned(),
+    };
+    let left = status.live_task_count;
+    if left == 0 {
+        return Some(root);
+    }
+    let plural = if left == 1 { "process" } else { "processes" };
+    Some(format!("{root} · {left} {plural} still running"))
 }
 
 /// The start and end times of `run` for the tooltip of its state line, in the
@@ -199,6 +234,7 @@ mod tests {
             reduced: None,
             boot_wait: None,
             triggers: None,
+            stopped_by_user: false,
             started_ms: Some(1_700_000_000_000),
             clock_anchor: None,
             id: "r".into(),
@@ -244,7 +280,75 @@ mod tests {
         };
         assert_eq!(
             describe(&stopped, end, Some(end), None),
-            "Stopped by the user after 3 min 52 s"
+            "Stopped by you after 3 min 52 s · root exited 0"
+        );
+    }
+
+    fn with_live(state: RunState, root: Option<WaitStatus>, live: u64) -> RunSummary {
+        let mut run = finished();
+        run.state = state;
+        let execution = run.execution.as_mut().unwrap();
+        execution.root_exit = root;
+        execution.live_task_count = live;
+        run
+    }
+
+    #[test]
+    fn a_vm_stop_over_a_live_child_says_what_happened() {
+        // The report's "Interrupted · Exit 0": the root exited 0, a child lived.
+        let end = 1_700_000_060_000;
+        for state in [RunState::Interrupted, RunState::Finalized] {
+            let run = with_live(state, Some(WaitStatus::Exited { code: 0 }), 1);
+            assert!(ended_by_vm_stop(&run));
+            assert_eq!(
+                describe(&run, end, Some(end), None),
+                "Ended by VM stop after 1 min 0 s · root exited 0 · 1 process still running"
+            );
+        }
+        let many = with_live(RunState::Finalized, Some(WaitStatus::Exited { code: 3 }), 4);
+        assert_eq!(
+            describe(&many, 0, None, None),
+            "Ended by VM stop · root exited 3 · 4 processes still running"
+        );
+        let running = with_live(RunState::Interrupted, None, 2);
+        assert_eq!(
+            describe(&running, 0, None, None),
+            "Ended by VM stop · root had not exited · 2 processes still running"
+        );
+        // A recording that ended with nothing alive is only that.
+        let quiet = with_live(RunState::Finalized, Some(WaitStatus::Exited { code: 0 }), 0);
+        assert!(!ended_by_vm_stop(&quiet));
+        assert_eq!(describe(&quiet, 0, None, None), "Recording ended");
+    }
+
+    #[test]
+    fn stop_run_reads_as_the_users_act_even_when_the_root_had_exited() {
+        let run = with_live(RunState::Stopped, Some(WaitStatus::Exited { code: 0 }), 0);
+        assert_eq!(
+            describe(&run, 0, None, None),
+            "Stopped by you · root exited 0"
+        );
+        let signalled = with_live(
+            RunState::Stopped,
+            Some(WaitStatus::Signaled {
+                signal: 15,
+                core_dumped: false,
+            }),
+            0,
+        );
+        assert_eq!(
+            describe(&signalled, 0, None, None),
+            "Stopped by you · root killed by signal 15"
+        );
+        // Waiting for the guest to report the end.
+        let stopping = with_live(
+            RunState::StopRequested,
+            Some(WaitStatus::Exited { code: 0 }),
+            1,
+        );
+        assert_eq!(
+            describe(&stopping, 1_700_000_005_000, None, None),
+            "Stopping · 5 s elapsed"
         );
     }
 

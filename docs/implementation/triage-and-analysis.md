@@ -419,8 +419,36 @@ Views no longer list `RunState` variants to ask whether a run is going (ANT-T026
 | Helper | True for | Used by |
 |---|---|---|
 | `is_live()` | `Running`, `StopRequested`, `TerminalClosed`: the run still records. `Unknown` is not live (a record waiting for its first status has no proof of a program; the callers that list it test it themselves). | Run History, the sample window's Runs list and detail, Jobs, the run-state line, the run-finished toast, run deletion, `forgettable` |
-| `can_stop()` | `Running`, `TerminalClosed`: what the guest accepts (`StopRun`); `StopRequested` already has a Stop under way. | every Stop and Kill button, `StopRun` |
+| `can_stop()` | `Running`, `TerminalClosed`: what the guest accepts (`StopRun`); `StopRequested` already has a Stop under way. | every Stop run button (formerly Kill), `StopRun` |
 | `ended_normally()` | `Finished`, `Stopped`, `Finalized`. `Interrupted` and runs that never ran are left out on purpose: they leave nothing new to show in the history. | `history_sync` |
+
+### Stop run and how a run ended (0.8.3, ANT-T0332)
+
+`Command::StopRun` is the whole action (the UI calls it Stop run; it was Kill). It
+sends SIGTERM to the run's tree (the guest's STOP_RUN signals every task of the
+run, not only the root) and, on a revision-17 guest, SIGKILL after the grace
+period. `RunSummary::stopped_by_user` is set when the guest accepts it, so that a
+tree that ended afterwards reads `Stopped` (`execution::state_after_stop`) even
+when the root had already exited 0. The run then ends like any run: the tree-end
+status makes `check_run_artifacts` close the capture segment (`stop_run_network`)
+and release the route (`release_run_route`, which writes the gateway's counts to
+`artifacts.json`).
+
+A VM stop used to cut both: `Worker::stop` now calls
+`Session::close_run_artifacts_for_vm_stop` before it sends SHUTDOWN (QEMU and the
+gateway still answer), which closes the capture (`network_state` stays
+`Interrupted`, with the reason in `issues`) and releases the route; `seal` also
+releases any claim still held (QEMU ended on its own).
+
+Words (`run_state_line::{describe, detail, ended_by_vm_stop}`, `run_status`):
+`Stopped by you · root exited 0`, `Ended by VM stop · root exited 0 · 1 process
+still running` (state `Interrupted` or `Finalized` with a live task or no root
+exit; with nothing alive the plain "Recording ended" stays).
+
+`artifacts.json` gained `trigger_dumps`: the dump trigger's `TriggerRecord`s, the
+same as `run.json` `triggers.records`, written by `save_trigger`. `core_state`
+and `core_dump` stay about the exit core (Core dump on exit) only: a trigger takes
+up to eight cores and memory dumps, which one state field cannot hold.
 
 `TerminalClosed` is set only by `Run::eof` when the PTY ends before any execution
 status exists; once a status arrived the state stays `Running` with `terminal_eof`.

@@ -129,6 +129,15 @@ impl Session {
                 );
                 match run.assembler.ingest(&packet) {
                     Ok(event) => {
+                        if let (Some(watch), Some(exited)) = (run.watch.as_mut(), event.as_ref())
+                            && exited.tid == exited.pid
+                            && exited
+                                .fields
+                                .iter()
+                                .any(|field| field.key == "lifecycle.task_exit")
+                        {
+                            watch.exit(exited.pid, exited.timestamp_ns);
+                        }
                         if run.assembler.just_finished
                             && let (Some(watch), Some(done)) = (run.watch.as_mut(), event.as_ref())
                         {
@@ -585,7 +594,11 @@ impl Session {
         self.seal_process_cores(state, snapshot);
         // QEMU has ended (or host ownership is being sealed at a restore boundary).
         // A queued post-exit dump cannot be claimed to have succeeded here.
-        for owner in self.run_artifacts.values_mut() {
+        let mut owners = std::mem::take(&mut self.run_artifacts);
+        for owner in owners.values_mut() {
+            // A VM that ended on its own (or at a reconnect boundary) still
+            // gives back what the gateway counted for a run that held a route.
+            self.release_run_route(owner);
             if let Some(capture) = owner.network.take() {
                 // At VM exit QEMU already closed it; no object-del is necessary.
                 if let Err(error) = finish_network_summary(capture) {
@@ -617,6 +630,7 @@ impl Session {
                 }),
             ));
         }
+        self.run_artifacts = owners;
         // Host-side analyses (specimen already on the host) go on without the
         // VM: the worker takes them from here (`Worker::carry_analyses`).
         if let Some(carried) = self.analysis.detach_host_side() {

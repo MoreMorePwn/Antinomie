@@ -397,7 +397,7 @@ impl Action {
                 "Capture network"
             }
             .into(),
-            Self::KillRun => "Kill run".into(),
+            Self::KillRun => "Stop run".into(),
             Self::DumpMemory => "Dump memory".into(),
             Self::DumpCore => "Dump core…".into(),
             Self::Go(panel) => panel.title().into(),
@@ -595,7 +595,7 @@ impl MonitorApp {
             }
             Action::KillRun => reason(
                 self.kill_target().is_some(),
-                "No active run to kill. Select a live run in Run history.",
+                "No active run to stop. Select a live run in Run history.",
             ),
             Action::DumpMemory => {
                 if !self.running() {

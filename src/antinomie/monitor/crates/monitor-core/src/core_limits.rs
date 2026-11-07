@@ -307,7 +307,7 @@ pub fn guest_reason(outcome: &CoreOutcome) -> Option<CoreReason> {
         61 => CoreReason::new(
             CoreReasonCode::Coverage,
             Some(-61),
-            "thread contexts were lost or pages are unavailable under the resident-only policy",
+            "thread contexts were lost, or pages were not resident: the guest copies only pages that are in memory when it reads them, never swapped-out or untouched ones",
         ),
         4 => CoreReason::new(
             CoreReasonCode::Interrupted,

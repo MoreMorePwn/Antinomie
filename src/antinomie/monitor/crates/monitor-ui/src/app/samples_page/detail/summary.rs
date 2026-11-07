@@ -374,13 +374,15 @@ fn family_source(data: &Data) -> Option<String> {
 }
 
 /// The outcome of a run in words that carry its state where the exit alone
-/// would not ("Interrupted · Exit 0"), since the colour is never the only cue.
+/// would not ("Ended by VM stop · root exited 0 · 1 process still running"), since the colour is never the only cue.
 fn outcome_words(run: &RunSummary) -> String {
     let exit = super::super::exit_label(run);
     match run.state {
         RunState::FailedToStart | RunState::LaunchUnconfirmed => run_status(run).to_owned(),
         RunState::Interrupted | RunState::Finalized | RunState::Stopped => {
-            format!("{} · {exit}", run_status(run))
+            // The root's exit and what was left, where the guest said.
+            let how = crate::run_state_line::detail(run).unwrap_or(exit);
+            format!("{} · {how}", run_status(run))
         }
         _ if run.recording_error.is_some() && !run.state.never_recorded() => {
             format!("{exit} · incomplete")

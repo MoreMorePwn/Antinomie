@@ -1027,7 +1027,7 @@ state from one palette. The words always stay, so colour is never the only cue.
 | Running, stopping, or still recording after the terminal was closed or the root exited | Blue |
 | Finished with exit 0 | Green |
 | Finished with another exit code | Neutral |
-| Stopped (by you) | Grey |
+| Stopped by you (Stop run) | Grey |
 | Ended at its time limit (a `timeout` program: exit 124, or the SIGTERM BusyBox's `timeout` re-raises) | Blue-grey (info) |
 | Crashed or killed by a signal (SIGSEGV and the like), or launch not confirmed | Amber |
 | Failed to start, or interrupted | Red |
@@ -1035,7 +1035,26 @@ state from one palette. The words always stay, so colour is never the only cue.
 
 A run is "going" while it still records: a run whose terminal was closed, or whose
 root exited while children live on, shows **Running** in every list and keeps its
-**Stop** button.
+**Stop run** button (toolbar, Run menu, the command palette and the Run History
+row).
+
+**Stop run** ends the whole recorded process tree, every live task of the run and
+not only the root, with SIGTERM and then SIGKILL after the grace period, while
+the VM keeps running. The run then ends the way any run ends: the recording
+closes, the network capture's last segment closes so the pcap is whole, the
+route's counts are written to `artifacts.json` and the journal is complete. Stop
+run is the way to end a run whose program never exits, such as a bot or a
+backdoor; stopping the VM instead cuts the run where it stands.
+
+How a cut or stopped run is worded, in Run History, the sample window's Runs
+list and Summary, Triage's state line and the reports:
+
+- **Stopped by you · root exited 0** (or "root killed by signal 15"): Stop run
+  ended it.
+- **Ended by VM stop · root exited 0 · 1 process still running**: the VM stopped
+  while the tree was alive. The words give what the root did and how many
+  processes were left; the run's pcap is closed at the stop and its route counts
+  are still written.
 
 ## 5. Samples
 
@@ -1248,8 +1267,23 @@ and the family Triage named.
 ### Dump when suspicious activity is seen
 
 In **Run program > Triggers**, a core that cannot be taken because the process
-is gone is not an attempt: it is counted as skipped, noted in the run's notes
-with the reason, and the next match may still dump. The guest's refusal is
+is gone is not an attempt: it is kept in the run's trigger log as a miss, noted
+in the run's notes and shown in the run's features and in the finding's Details
+with the reason ("The process exited 120 ms after the match, before the core
+could be taken."), and the next match may still dump. A match is judged the
+moment its call arrives and the worker wakes every millisecond while a run waits
+for one, but a program that matches and exits within a few tens of
+milliseconds can still be gone before the guest can pause it.
+
+A core is partial when the guest could not read every page: it copies only the
+pages that are in memory when it reads them (never swapped-out or untouched
+pages) and the thread contexts it could park. The core's message says which part
+is missing, thread contexts or pages, with the counts. There is no setting for
+this policy; reading pages that are not resident needs a guest change.
+
+The dumps a trigger took are listed in the run's `artifacts.json` under
+`trigger_dumps` (the same records as `triggers` in `run.json`); `core_state`
+there describes the exit core (Core dump on exit) only. The guest's refusal is
 explained in plain words ("The process had already exited, or had started over
 ...") with its raw state and status in brackets. When the process is still
 running under a new identity (a thread of it called exec, which replaces the

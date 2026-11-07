@@ -402,6 +402,9 @@ impl Worker {
             }
             Err(e) => issues.push(format!("final recorder stats unavailable: {e}")),
         }
+        // Runs whose trees are still alive: close their captures and take
+        // the route's counts now, while QEMU and the gateway still answer.
+        session.close_run_artifacts_for_vm_stop(&mut self.snapshot);
         // A guest that powers off on SHUTDOWN can end QEMU before its
         // acknowledgement is read; the exit status then decides, not the race.
         let mut exited_before_ack = false;

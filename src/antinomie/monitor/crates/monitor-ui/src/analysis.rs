@@ -258,7 +258,7 @@ fn trigger_selection(
             core_ok,
             egui::Checkbox::new(&mut plan.core, "Core of the process that triggered it"),
         )
-        .on_hover_text("A core of the process whose call matched, taken while it runs. Linux x86-64; bounded by the budget.")
+        .on_hover_text("A core of the process whose call matched, taken while it runs. Linux x86-64; bounded by the budget. The guest copies only pages that are in memory when it reads them (not swapped-out or untouched ones), so the core is usually marked Partial, and its message says which part is missing. A process that exits within milliseconds of the match can be gone before the core is taken; the run says so. Reading pages that are not resident would need a guest change.")
         .on_disabled_hover_text(core_unavailable_reason(core_ok));
         if !core_ok {
             plan.core = false;
