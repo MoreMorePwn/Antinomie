@@ -253,6 +253,31 @@ pub(crate) fn format_segments(format: DataFormat, segments: &[(u64, Vec<u8>)]) -
     out
 }
 
+/// Copying `segments` as `format` gives back exactly the bytes. The two text
+/// views are not exact for bytes that are not text: UTF-8 puts U+FFFD in place
+/// of an invalid sequence and ASCII a dot in place of a control byte.
+pub(crate) fn copy_is_exact(format: DataFormat, segments: &[(u64, Vec<u8>)]) -> bool {
+    match format {
+        DataFormat::Utf8 => segments
+            .iter()
+            .all(|(_, data)| std::str::from_utf8(data).is_ok()),
+        DataFormat::Ascii => segments
+            .iter()
+            .all(|(_, data)| data.iter().all(|&b| printable(b) || b == b'\n')),
+        _ => true,
+    }
+}
+
+/// The format the Copy button copies: the one shown, or Hex when the shown
+/// text view would change the bytes.
+pub(crate) fn copy_format(shown: DataFormat, segments: &[(u64, Vec<u8>)]) -> DataFormat {
+    if copy_is_exact(shown, segments) {
+        shown
+    } else {
+        DataFormat::Hex
+    }
+}
+
 /// Display rows of `text`: its lines, each cut into rows of at most
 /// [`ROW_CHARS`] characters.
 fn rows(text: &str) -> Vec<Range<usize>> {
@@ -703,19 +728,37 @@ impl DataWindow {
                 .response
                 .labelled_by(label.id)
                 .on_hover_text(self.format.hint());
+            let copying = copy_format(self.format, &self.segments);
             if ui
                 .button(format!("{} Copy", egui_phosphor::regular::COPY))
-                .on_hover_text(format!("Copy as {}", self.format.label()))
+                .on_hover_text(if copying == self.format {
+                    format!("Copy as {}", self.format.label())
+                } else {
+                    format!(
+                        "These bytes are not {} text, so Copy gives them as Hex; \
+                         copying them as text would change them",
+                        self.format.label()
+                    )
+                })
                 .clicked()
             {
-                let text = self.rendered().text.clone();
+                let text = if copying == self.format {
+                    self.rendered().text.clone()
+                } else {
+                    format_segments(copying, &self.segments)
+                };
                 ui.ctx().copy_text(text);
             }
             ui.menu_button("Copy as", |ui| {
                 for format in DataFormat::ALL {
+                    let exact = copy_is_exact(format, &self.segments);
                     if ui
-                        .button(format.label())
+                        .add_enabled(exact, egui::Button::new(format.label()))
                         .on_hover_text(format.hint())
+                        .on_disabled_hover_text(
+                            "These bytes are not text in this form: copying them would \
+                             change them. Copy as Hex, Base64 or an escaped string.",
+                        )
                         .clicked()
                     {
                         let text = format_segments(format, &self.segments);
@@ -945,6 +988,16 @@ mod tests {
             "ok\u{FFFD}ok"
         );
         assert_eq!(format_bytes(DataFormat::Utf8, "é".as_bytes(), 0), "é");
+        // Copy never changes bytes: text views that would are not offered.
+        let binary = vec![(0u64, b"ok\xffok".to_vec())];
+        let text = vec![(0u64, "é\n".as_bytes().to_vec())];
+        assert!(!copy_is_exact(DataFormat::Utf8, &binary));
+        assert!(!copy_is_exact(DataFormat::Ascii, &binary));
+        assert!(copy_is_exact(DataFormat::Utf8, &text));
+        assert!(copy_is_exact(DataFormat::Hex, &binary));
+        assert_eq!(copy_format(DataFormat::Utf8, &binary), DataFormat::Hex);
+        assert_eq!(copy_format(DataFormat::Utf8, &text), DataFormat::Utf8);
+        assert_eq!(copy_format(DataFormat::Base64, &binary), DataFormat::Base64);
         assert_eq!(format_bytes(DataFormat::Hex, b"\x00\xab", 0), "00 ab");
         assert_eq!(format_bytes(DataFormat::Decimal, b"\x00\xab", 0), "0 171");
         assert_eq!(
