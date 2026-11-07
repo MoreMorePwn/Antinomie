@@ -24,6 +24,11 @@ pub(super) struct State {
     /// The key is saved (read with the statuses, never the key itself).
     key_masked: Option<String>,
     loaded: bool,
+    /// [`api_keys::generation`] the statuses and the key line were read at.
+    key_generation: u64,
+    /// The key was saved, changed or removed since the last update ran, so a
+    /// recorded "needs the Auth-Key" failure no longer describes the key.
+    key_changed: bool,
     /// Re-read the statuses on the next frame.
     stale: bool,
     pick: Option<&'static str>,
@@ -47,6 +52,7 @@ impl Model {
         };
         self.ioc.loaded = true;
         self.ioc.stale = false;
+        self.ioc.key_generation = api_keys::generation();
     }
 
     /// A job finished: read the datasets again.
@@ -54,9 +60,15 @@ impl Model {
         self.status_done = Some(text.clone());
         self.status = text;
         self.ioc.stale = true;
+        self.ioc.key_changed = false;
     }
 
     pub(super) fn ioc_tab(&mut self, ui: &mut egui::Ui, data_dir: &Path, outbound: &mut bool) {
+        // One signal for every key change: no download is needed to see it.
+        if self.ioc.loaded && self.ioc.key_generation != api_keys::generation() {
+            self.ioc.stale = true;
+            self.ioc.key_changed = true;
+        }
         if !self.ioc.loaded || self.ioc.stale {
             self.refresh_ioc(data_dir);
         }
@@ -172,7 +184,12 @@ impl Model {
                 ),
             );
         }
-        let (need_key, failed) = failed_updates(&self.ioc.statuses);
+        let (mut need_key, failed) =
+            failed_updates(&self.ioc.statuses, self.ioc.key_masked.is_some());
+        if self.ioc.key_changed {
+            // The key changed after those updates failed; the next update will tell.
+            need_key.clear();
+        }
         if !need_key.is_empty() {
             crate::activity::error(
                 ui,
@@ -503,13 +520,20 @@ fn state_chip(status: &FeedStatus, now: u64) -> (&'static str, Tone) {
 /// The datasets whose last update failed for want of a usable abuse.ch
 /// Auth-Key (missing, refused with 401 or 403), and the ones that failed for
 /// another reason, which is the network.
-fn failed_updates(statuses: &[FeedStatus]) -> (Vec<&'static str>, Vec<&'static str>) {
+fn failed_updates(
+    statuses: &[FeedStatus],
+    has_key: bool,
+) -> (Vec<&'static str>, Vec<&'static str>) {
     let (mut need_key, mut other) = (Vec::new(), Vec::new());
     for status in statuses {
         let Some(error) = status.last_error.as_deref() else {
             continue;
         };
         if error.contains("Auth-Key") {
+            // "Needs a key" is answered once one is set; a refused key stays.
+            if has_key && !error.contains("rejected") {
+                continue;
+            }
             need_key.push(status.feed.name);
         } else {
             other.push(status.feed.name);
@@ -530,13 +554,53 @@ mod tests {
             enabled: true,
             last_error: Some(error.to_owned()),
         };
-        let (key, network) = failed_updates(&[
-            status("ThreatFox", "abuse.ch now requires an Auth-Key"),
-            status("URLhaus dump", "abuse.ch rejected the Auth-Key (HTTP 403)"),
-            status("SSLBL JA3", "could not connect"),
-        ]);
+        let (key, network) = failed_updates(
+            &[
+                status("ThreatFox", "abuse.ch now requires an Auth-Key"),
+                status("URLhaus dump", "abuse.ch rejected the Auth-Key (HTTP 403)"),
+                status("SSLBL JA3", "could not connect"),
+            ],
+            false,
+        );
         assert_eq!(key, ["ThreatFox", "URLhaus dump"]);
         assert_eq!(network, ["SSLBL JA3"]);
+        // Once a key is set, "needs a key" is answered; a refused key is not.
+        let (key, _) = failed_updates(
+            &[
+                status("ThreatFox", "abuse.ch now requires an Auth-Key"),
+                status("URLhaus dump", "abuse.ch rejected the Auth-Key (HTTP 403)"),
+            ],
+            true,
+        );
+        assert_eq!(key, ["URLhaus dump"]);
+    }
+
+    /// Saving or removing the Auth-Key changes every place that shows what can
+    /// be downloaded at once, with no Download press in between.
+    #[test]
+    fn saving_or_removing_the_key_updates_the_section_without_a_download() {
+        let mut fixture = Fixture::new("keychange");
+        fixture.outbound = true;
+        let server = Arc::new(served(&[]));
+        fixture.model.ioc.fetcher = Some(server);
+        fixture.frame();
+        // No key: a download is attempted and the key feeds say what they need.
+        fixture.click("Download / Update all");
+        let shown = fixture.until("need a free abuse.ch Auth-Key");
+        assert!(shown.contains("not set"), "{shown}");
+        // The key is saved elsewhere (Tools > API keys): the next frames show it.
+        api_keys::set(&fixture.dir, ApiKey::Abusech, "ioc-test-key-0002").unwrap();
+        fixture.frame();
+        let shown = fixture.frame();
+        assert!(shown.contains("(…0002)"), "{shown}");
+        assert!(!shown.contains("need a free abuse.ch Auth-Key"), "{shown}");
+        assert!(!shown.contains("not set"), "{shown}");
+        // Removed again: back to not set, still without a download.
+        api_keys::clear(&fixture.dir, ApiKey::Abusech).unwrap();
+        fixture.frame();
+        let shown = fixture.frame();
+        assert!(shown.contains("not set"), "{shown}");
+        assert!(!shown.contains("(…0002)"), "{shown}");
     }
     use crate::rules_window::source_tests::{click, joined, render};
     use std::{
