@@ -64,6 +64,13 @@ impl RawCapture {
             message
         })
     }
+    /// Every packet appended so far is in the file: nothing is buffered and
+    /// the writer has finished the last block. Hands the buffer over first;
+    /// never waits.
+    pub(crate) fn drained(&mut self) -> bool {
+        self.flush();
+        self.error.is_none() && self.buffer.is_empty() && crate::writer::is_done(self.ticket)
+    }
     pub(crate) fn quota(&self) -> u64 {
         self.quota
     }

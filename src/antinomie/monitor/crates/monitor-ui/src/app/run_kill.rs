@@ -6,6 +6,9 @@ pub(super) struct Target {
     vm_id: String,
     boot_id: String,
     run_id: String,
+    /// How many runs were live when the target was picked; more than one means
+    /// the newest was chosen and the dialog says so.
+    live_count: usize,
 }
 
 impl Target {
@@ -15,11 +18,16 @@ impl Target {
             .iter()
             .find(|run| run.id == self.run_id)
             .map_or("Program", |run| run.request.path.as_str());
-        format!(
+        let which = format!(
             "{} · {}",
             name,
             self.run_id.chars().take(12).collect::<String>()
-        )
+        );
+        if self.live_count > 1 {
+            format!("{which} (the newest of {} live runs)", self.live_count)
+        } else {
+            which
+        }
     }
 
     pub fn current(&self, snapshot: &Snapshot) -> bool {
@@ -50,16 +58,32 @@ impl MonitorApp {
         {
             return None;
         }
-        let mut active = self
+        let active: Vec<&RunSummary> = self
             .snapshot
             .runs
             .iter()
-            .filter(|run| actionable(run, &self.snapshot));
+            .filter(|run| actionable(run, &self.snapshot))
+            .collect();
+        // The selected run when it is live; otherwise the newest live run, from
+        // any page. The confirmation names the run it will stop.
         if let Some(selected) = &self.selected_run {
-            return active.find(|run| &run.id == selected);
+            if let Some(run) = active.iter().find(|run| &run.id == selected) {
+                return Some(run);
+            }
         }
-        let first = active.next()?;
-        active.next().is_none().then_some(first)
+        active
+            .iter()
+            .enumerate()
+            .max_by_key(|(order, run)| (run.started_ms.unwrap_or(0), *order))
+            .map(|(_, run)| *run)
+    }
+
+    fn live_count(&self) -> usize {
+        self.snapshot
+            .runs
+            .iter()
+            .filter(|run| actionable(run, &self.snapshot))
+            .count()
     }
 
     pub(super) fn request_kill(&mut self, run_id: Option<&str>) {
@@ -88,6 +112,11 @@ impl MonitorApp {
                 vm_id: run.vm_id.clone(),
                 boot_id: run.boot_id.clone(),
                 run_id: run.id.clone(),
+                live_count: if self.selected_run.as_deref() == Some(run.id.as_str()) {
+                    1
+                } else {
+                    self.live_count()
+                },
             }));
         }
     }

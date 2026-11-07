@@ -94,6 +94,9 @@ impl View {
             Engine::Ids => match (input.pcap, input.pcap_open) {
                 (None, _) => "missing:pcap".into(),
                 (Some(_), true) => "wait:pcap".into(),
+                // The run's recording is not saved yet: the capture may still
+                // be closing and the run's own totals are not written.
+                (Some(_), false) if self.waits_for_saving() => "wait:saved".into(),
                 (Some(path), false) => {
                     let Some(digest) = self.cached_file_digest(ctx, path) else {
                         return "wait:digest".into();
@@ -112,6 +115,24 @@ impl View {
                 let Some(archive) = input.archive else {
                     return format!("ready:journal:{}:no-archive", input.run_id.unwrap_or(""));
                 };
+                if self.index == IndexState::Saving {
+                    return "wait:saved".into();
+                }
+                let journal_present = self
+                    .stat(
+                        &archive.join(engine::JOURNAL_FILE).display().to_string(),
+                        &archive.join(engine::JOURNAL_FILE),
+                    )
+                    .is_some();
+                if !journal_present {
+                    // No journal to scan: say why in words, never scan a
+                    // missing file.
+                    return match &self.index {
+                        IndexState::Failed(why) => format!("failed:index:{why}"),
+                        IndexState::Ready => "missing:journal".into(),
+                        _ => "wait:index".into(),
+                    };
+                }
                 let Some(digest) =
                     self.cached_file_digest(ctx, &archive.join(engine::JOURNAL_FILE))
                 else {
@@ -120,6 +141,15 @@ impl View {
                 format!("ready:journal:{}:{digest}", input.run_id.unwrap_or(""))
             }
         }
+    }
+    /// The run is on a VM that is up and its recording is not saved yet (the
+    /// index has not seen it saved), so a scan would only see a prefix.
+    pub(super) fn waits_for_saving(&self) -> bool {
+        self.current_boot
+            && matches!(
+                self.index,
+                IndexState::Unknown | IndexState::Building | IndexState::Saving
+            )
     }
     pub(super) fn consider_auto(&mut self, ctx: &egui::Context, input: &TriageInput<'_>) {
         if self.seen_generation != self.rules_generation {
@@ -412,5 +442,104 @@ impl View {
                 self.progress[index] = Some(progress);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_input<'a>(archive: &'a Path, pcap: Option<&'a Path>) -> TriageInput<'a> {
+        TriageInput {
+            run_id: Some("run"),
+            vm_id: Some("vm"),
+            boot_id: Some("boot"),
+            archive: Some(archive),
+            pcap,
+            run_finished: true,
+            ..TriageInput::empty()
+        }
+    }
+
+    #[test]
+    fn sigma_waits_for_the_saved_recording_and_never_scans_a_missing_journal() {
+        let dir = std::env::temp_dir().join(format!("ant-sigma-key-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let mut input = run_input(&dir, None);
+        input.current_boot = true;
+        view.current_boot = true;
+        let key = |view: &mut View, input: &TriageInput| {
+            view.evidence_identity(&ctx, Engine::Sigma, input)
+        };
+        // Built from a recording the VM still holds open and has not saved.
+        view.index = IndexState::Saving;
+        assert_eq!(key(&mut view, &input), "wait:saved");
+        assert_eq!(
+            header::evidence_note("wait:saved"),
+            "Waiting for the recording to be saved."
+        );
+        // Saved, but no journal file: in words, not "No such file or directory".
+        view.index = IndexState::Building;
+        assert_eq!(key(&mut view, &input), "wait:index");
+        view.index = IndexState::Failed("the journal grew past its size limit".into());
+        let failed = key(&mut view, &input);
+        assert!(failed.starts_with("failed:index:"), "{failed}");
+        let note = header::evidence_note(&failed);
+        assert!(note.contains("event journal is incomplete"), "{note}");
+        assert!(
+            note.contains("size limit") && !note.contains("os error"),
+            "{note}"
+        );
+        view.index = IndexState::Ready;
+        assert_eq!(key(&mut view, &input), "missing:journal");
+        // None of these keys starts a scan.
+        for key in [
+            "wait:saved",
+            "wait:index",
+            "missing:journal",
+            "failed:index:x",
+        ] {
+            assert!(!key.starts_with("ready:"));
+        }
+        // An unfinished run still waits for its journal first.
+        input.run_finished = false;
+        assert_eq!(key(&mut view, &input), "wait:journal");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ids_waits_for_the_saved_recording_of_a_run_on_a_running_vm() {
+        let dir = std::env::temp_dir().join(format!("ant-ids-key-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pcap = dir.join("net.pcap");
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let input = run_input(&dir, Some(&pcap));
+        view.current_boot = true;
+        view.index = IndexState::Building;
+        assert_eq!(
+            view.evidence_identity(&ctx, Engine::Ids, &input),
+            "wait:saved"
+        );
+        view.index = IndexState::Saving;
+        assert_eq!(
+            view.evidence_identity(&ctx, Engine::Ids, &input),
+            "wait:saved"
+        );
+        // Saved (or the VM stopped, which saves everything): the scan goes on.
+        view.index = IndexState::Ready;
+        assert_ne!(
+            view.evidence_identity(&ctx, Engine::Ids, &input),
+            "wait:saved"
+        );
+        view.index = IndexState::Building;
+        view.current_boot = false;
+        assert_ne!(
+            view.evidence_identity(&ctx, Engine::Ids, &input),
+            "wait:saved"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

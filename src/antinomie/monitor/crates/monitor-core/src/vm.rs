@@ -774,21 +774,32 @@ impl VmProcess {
     /// Runs one QMP command (a `{"execute": ...}` object) and returns its
     /// return value.
     pub fn qmp(&self, command: &serde_json::Value) -> Result<serde_json::Value, String> {
-        // Questions can be asked again after a timeout; commands that change
-        // something are sent once (a timeout leaves their outcome unknown).
-        let query = command["execute"]
-            .as_str()
-            .is_some_and(|name| name.starts_with("query-"));
-        let attempts = if query { QMP_ATTEMPTS } else { 1 };
+        // Questions, stop and cont can be asked again after a timeout; other
+        // commands that change something are sent once (a timeout leaves their
+        // outcome unknown), but wait longer for their reply.
+        let repeatable = repeatable(command);
+        let attempts = if repeatable { QMP_ATTEMPTS } else { 1 };
         let mut attempt = 1;
         loop {
-            let result = Qmp::connect_with(
+            let result = Qmp::connect_retrying(
                 &self.qmp_path,
                 self.waits.qmp_connect(),
                 self.waits.qmp_reply(),
+                QMP_ATTEMPTS,
             )
-            .map_err(|error| format!("QMP connect: {error}"))
-            .and_then(|mut qmp| qmp.reply(&format!("{command}\n")));
+            .map_err(|error| {
+                format!(
+                    "QMP connect: {error}{}{}",
+                    qemu_log_hint(&self.runtime_dir),
+                    self.slow_hint()
+                )
+            })
+            .and_then(|mut qmp| {
+                if !repeatable {
+                    qmp.set_reply_wait(self.waits.qmp_command())?;
+                }
+                qmp.reply(&format!("{command}\n"))
+            });
             match result {
                 Ok(reply) => return Ok(reply.get("return").cloned().unwrap_or_default()),
                 Err(error) if is_timeout(&error) && attempt < attempts => attempt += 1,
@@ -1910,6 +1921,70 @@ FlatView #1
             .expect("a longer reply wait covers the stall");
         server.join().unwrap();
         let _ = std::fs::remove_dir_all(root);
+    }
+    /// The first connection of a QEMU under load greets late; a second one is
+    /// answered at once. The first command no longer fails on the first miss.
+    #[test]
+    fn a_late_greeting_is_retried_and_a_dead_qemu_is_named() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::net::UnixListener;
+        use std::thread;
+        let root = std::env::temp_dir().join(format!("ant-qmp-retry-{}", unique_id()));
+        private_dir(&root).unwrap();
+        let path = root.join("qmp.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = thread::spawn(move || {
+            // The first connection never greets within the wait.
+            let (silent, _) = listener.accept().unwrap();
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.write_all(b"{\"QMP\":{}}\n").unwrap();
+            let mut line = String::new();
+            BufReader::new(socket.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            socket.write_all(b"{\"return\":{}}\n").unwrap();
+            thread::sleep(Duration::from_millis(300));
+            drop(silent);
+        });
+        Qmp::connect_retrying(&path, Duration::from_millis(300), Duration::from_secs(5), 3)
+            .expect("the second connection is answered");
+        server.join().unwrap();
+        // Nothing answers any attempt: the error says how often it was tried.
+        let listener = UnixListener::bind(root.join("dead.sock")).unwrap();
+        let hold = thread::spawn(move || {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept() {
+                held.push(socket);
+                if held.len() == 2 {
+                    break;
+                }
+            }
+            held
+        });
+        let error = match Qmp::connect_retrying(
+            &root.join("dead.sock"),
+            Duration::from_millis(200),
+            Duration::from_secs(5),
+            2,
+        ) {
+            Ok(_) => panic!("nothing greeted"),
+            Err(error) => error,
+        };
+        assert!(
+            is_timeout(&error) && error.contains("tried 2 times"),
+            "{error}"
+        );
+        drop(hold.join().unwrap());
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn only_commands_that_are_safe_to_repeat_are_sent_again() {
+        for name in ["query-status", "query-block", "stop", "cont"] {
+            assert!(repeatable(&serde_json::json!({"execute": name})), "{name}");
+        }
+        for name in ["system_reset", "blockdev-snapshot-sync", "migrate", "quit"] {
+            assert!(!repeatable(&serde_json::json!({"execute": name})), "{name}");
+        }
     }
     #[test]
     fn a_slow_tcg_timeout_says_why_and_what_to_do() {

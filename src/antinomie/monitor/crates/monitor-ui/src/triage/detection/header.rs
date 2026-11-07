@@ -605,6 +605,15 @@ pub(super) fn evidence_note(key: &str) -> String {
         "wait:pcap" => "Waiting for the PCAP segment to finish.".into(),
         "wait:journal" => "Waiting for the run to finish its event journal.".into(),
         "wait:digest" => "Hashing retained evidence before the scan.".into(),
+        "wait:saved" => "Waiting for the recording to be saved.".into(),
+        "wait:index" => "Waiting for the run's event index to be built.".into(),
+        "missing:journal" => {
+            "The run's event journal was not built, so Sigma has nothing to scan. This is not a clean result.".into()
+        }
+        key if key.starts_with("failed:index:") => format!(
+            "The run's event journal is incomplete: {}. Sigma was not run; this is not a clean result.",
+            &key["failed:index:".len()..]
+        ),
         "missing:pcap" => {
             "Collection disabled or no PCAP was saved. This is not a clean result.".into()
         }

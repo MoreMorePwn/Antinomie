@@ -593,10 +593,7 @@ impl MonitorApp {
                     Some(self.network_toggle_label().into())
                 }
             }
-            Action::KillRun => reason(
-                self.kill_target().is_some(),
-                "No active run to stop. Select a live run in Run history.",
-            ),
+            Action::KillRun => reason(self.kill_target().is_some(), "No live run to stop."),
             Action::DumpMemory => {
                 if !self.running() {
                     Some(self.not_running_reason())

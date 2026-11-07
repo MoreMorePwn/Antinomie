@@ -129,6 +129,30 @@ mod graphics_option_tests {
     }
 }
 
+/// An absolute, canonical data directory. Helpers (Sigma's interpreter, the
+/// capa and IDS workers) are started from other working directories, so a
+/// relative path would resolve to something else there.
+fn absolute_data_dir(path: &std::path::Path) -> PathBuf {
+    std::fs::canonicalize(path)
+        .or_else(|_| std::path::absolute(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+#[cfg(test)]
+mod data_dir_tests {
+    use super::*;
+
+    #[test]
+    fn a_relative_data_dir_becomes_absolute() {
+        let relative = absolute_data_dir(std::path::Path::new("data/not-yet-created"));
+        assert!(relative.is_absolute());
+        assert!(relative.ends_with("data/not-yet-created"));
+        let dot = absolute_data_dir(std::path::Path::new("."));
+        assert!(dot.is_absolute());
+        assert!(!dot.ends_with("."));
+    }
+}
+
 fn hexadecimal(value: &str) -> Result<u64, String> {
     u64::from_str_radix(value.trim_start_matches("0x"), 16).map_err(|error| error.to_string())
 }
@@ -164,7 +188,7 @@ fn main() -> eframe::Result<()> {
         options.bundle_dir = bundle;
     }
     if let Some(data_dir) = args.data_dir {
-        options.data_dir = data_dir;
+        options.data_dir = absolute_data_dir(&data_dir);
     }
     options.bootstrap_gpa = args.bootstrap_gpa;
     options.force_tcg = args.tcg;

@@ -203,9 +203,16 @@ impl Waits {
         self.scaled(Duration::from_secs(60))
     }
 
-    /// A QMP connection to a running QEMU (2 s at KVM speed).
+    /// A QMP connection to a running QEMU (5 s at KVM speed): a loaded host
+    /// can delay the greeting by seconds.
     pub fn qmp_connect(&self) -> Duration {
-        self.scaled(Duration::from_secs(2))
+        self.scaled(Duration::from_secs(5))
+    }
+
+    /// The reply to a command that changes something and is sent once
+    /// (30 s at KVM speed).
+    pub fn qmp_command(&self) -> Duration {
+        self.scaled(Duration::from_secs(30))
     }
 
     /// The host side of the snapshot state stream (30 s at KVM speed).

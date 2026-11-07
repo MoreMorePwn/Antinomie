@@ -108,6 +108,72 @@ pub(super) fn timed_out_text(seconds: u64, specimen: &[u8]) -> String {
     }
 }
 
+/// capa 9.4's exit codes (`capa/main.py`) in plain words, with what the user
+/// can do. `None` for a code that is not a capa error status.
+pub(super) fn exit_text(code: i32) -> Option<&'static str> {
+    Some(match code {
+        10 => {
+            "capa found no rules to run; the bundled rules could not be read. Other analyses are not affected."
+        }
+        11 => "capa could not open the file. Other analyses are not affected.",
+        12 => "capa rejected one of its rules as invalid. Other analyses are not affected.",
+        13 => "capa's ELF loader could not parse this file. The other analyses are not affected.",
+        14 => {
+            "capa cannot analyse this file: it is outside what capa supports (for example too large or too unusual). The other analyses are not affected."
+        }
+        15 => "capa could not read its library signatures. Other analyses are not affected.",
+        16 => {
+            "capa does not support this file type; it analyses PE, ELF and .NET programs and shellcode. The other analyses are not affected."
+        }
+        17 => {
+            "capa does not support this file's CPU architecture. The other analyses are not affected."
+        }
+        18 => {
+            "capa does not support the operating system this file is for. The other analyses are not affected."
+        }
+        _ => return None,
+    })
+}
+
+/// Whether the ELF carries the sections `prelink` adds, which capa's loader
+/// (vivisect) does not handle.
+pub(super) fn is_prelinked(specimen: &[u8]) -> bool {
+    [&b".gnu.prelink_undo"[..], b".gnu.conflict", b".gnu.liblist"]
+        .iter()
+        .any(|name| specimen.windows(name.len()).any(|window| window == *name))
+}
+
+/// The sentence for a capa that exited with an error status, with the
+/// prelink hint where it applies.
+pub(super) fn exit_summary(code: i32, specimen: &[u8]) -> Option<String> {
+    let mut text = exit_text(code)?.to_owned();
+    if matches!(code, 13 | 14) && is_prelinked(specimen) {
+        text.push_str(" This file is prelinked, which capa's loader does not handle.");
+    }
+    Some(text)
+}
+
+/// Where a Ghidra install is mounted in the sandbox, with the environment
+/// capa's Ghidra backend needs to find it and its Java.
+fn ghidra_environment() -> Option<Vec<(&'static str, String)>> {
+    let managed = "/opt/antinomie-tools/ghidra/ghidra";
+    let home = [managed, "/usr/share/ghidra", "/usr/local/share/ghidra"]
+        .into_iter()
+        .find(|home| Path::new(home).join("support/analyzeHeadless").is_file())?;
+    let mut environment = vec![
+        ("HOME", "/tmp".to_owned()),
+        ("GHIDRA_INSTALL_DIR", home.to_owned()),
+    ];
+    if home == managed {
+        environment.push(("JAVA_HOME", "/opt/antinomie-tools/ghidra/jdk".to_owned()));
+        environment.push((
+            "PATH",
+            "/opt/antinomie-tools/ghidra/jdk/bin:/usr/bin:/bin".to_owned(),
+        ));
+    }
+    Some(environment)
+}
+
 pub(super) fn capabilities(section: &mut AnalysisSection, specimen: &[u8]) {
     let Some(capa) = tools::find_tool("capa", crate::analysis_tools::CAPA_SYSTEM, MANAGED) else {
         section.state = AnalysisSectionState::Unavailable;
@@ -147,7 +213,7 @@ pub(super) fn capabilities(section: &mut AnalysisSection, specimen: &[u8]) {
     if cache {
         environment.push(("XDG_CACHE_HOME", CACHE_MOUNT));
     }
-    let run = match tools::run_with(
+    let mut run = match tools::run_with(
         capa,
         &["--json", "-r", "/tmp/capa-rules", "/input/specimen"],
         &environment,
@@ -163,6 +229,40 @@ pub(super) fn capabilities(section: &mut AnalysisSection, specimen: &[u8]) {
         }
     };
     section.tools = vec![tools::version(capa, &["--version"]), RULES_RELEASE.into()];
+    // Vivisect rejected the file (13) or met a limit (14): capa's own Ghidra
+    // backend reads files it cannot, when a Ghidra install is mounted here.
+    if matches!(run.code, Some(13 | 14))
+        && let Some(ghidra) = ghidra_environment()
+    {
+        let environment: Vec<(&str, &str)> = ghidra
+            .iter()
+            .map(|(name, value)| (*name, value.as_str()))
+            .collect();
+        if let Ok(second) = tools::run_with(
+            capa,
+            &[
+                "--json",
+                "-b",
+                "ghidra",
+                "-r",
+                "/tmp/capa-rules",
+                "/input/specimen",
+            ],
+            &environment,
+            timeout,
+            super::limits::large_output(),
+            true,
+        ) && serde_json::from_str::<serde_json::Value>(&second.stdout).is_ok()
+        {
+            run = second;
+            section
+                .tools
+                .push("capa backend: Ghidra (vivisect could not read the file)".into());
+        }
+    }
+    if run.code == Some(0) || run.code.is_none() {
+        section.tools.push("capa backend: vivisect".into());
+    }
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&run.stdout) else {
         eprintln!(
             "capa output did not parse ({} octets, success {}): {}",
@@ -205,7 +305,21 @@ pub(super) fn capabilities(section: &mut AnalysisSection, specimen: &[u8]) {
                     )
                 }
             });
-            section.summary = explain_failure(base, specimen);
+            match run.code.and_then(|code| exit_summary(code, specimen)) {
+                // The plain sentence is the headline; capa's own line stays
+                // as an entry for whoever wants it.
+                Some(plain) => {
+                    section.summary =
+                        explain_failure(plain.trim_end_matches('.').to_owned(), specimen);
+                    section.entries.push(AnalysisEntry {
+                        label: "capa said".into(),
+                        value: base,
+                        offset: None,
+                        record: None,
+                    });
+                }
+                None => section.summary = explain_failure(base, specimen),
+            }
         }
         return;
     };
@@ -295,6 +409,31 @@ pub(super) fn capabilities(section: &mut AnalysisSection, specimen: &[u8]) {
 mod failure_tests {
     use super::*;
     use crate::analysis::elf_facts::fixtures::elf64;
+
+    #[test]
+    fn capa_exit_codes_read_as_plain_sentences_with_the_prelink_hint() {
+        assert!(
+            exit_text(13)
+                .unwrap()
+                .starts_with("capa's ELF loader could not parse this file")
+        );
+        assert!(exit_text(16).unwrap().contains("file type"));
+        for code in [10, 11, 12, 14, 15, 17, 18] {
+            assert!(exit_text(code).unwrap().starts_with("capa "), "{code}");
+        }
+        assert!(exit_text(0).is_none() && exit_text(1).is_none() && exit_text(99).is_none());
+        let plain = b"\x7fELF .text .symtab";
+        let prelinked = b"\x7fELF .gnu.prelink_undo .gnu.conflict";
+        assert!(!is_prelinked(plain) && is_prelinked(prelinked));
+        assert!(!exit_summary(13, plain).unwrap().contains("prelinked"));
+        let hint = exit_summary(13, prelinked).unwrap();
+        assert!(
+            hint.ends_with("This file is prelinked, which capa's loader does not handle."),
+            "{hint}"
+        );
+        // Only the loader's own failures earn the hint.
+        assert!(!exit_summary(16, prelinked).unwrap().contains("prelinked"));
+    }
 
     #[test]
     fn a_capa_timeout_on_a_go_binary_names_the_limit_setting() {

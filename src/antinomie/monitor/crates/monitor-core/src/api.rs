@@ -966,6 +966,10 @@ pub struct RunSummary {
     /// finish. Absent in runs saved before it existed and in runs not stopped.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stopped_by_user: bool,
+    /// Host Unix milliseconds when Stop run was pressed, so the run reads
+    /// "Stopped by you at 5 min 9 s" whatever time the tree took to end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped_at_ms: Option<u64>,
 }
 
 impl RunSummary {

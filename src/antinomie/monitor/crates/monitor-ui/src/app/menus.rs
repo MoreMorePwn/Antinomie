@@ -362,7 +362,7 @@ impl MonitorApp {
         vec![
             self.vm_power_spec(&shortcut),
             ToolSpec::new(ToolAction::Snapshots, 1, icon::CLOCK_COUNTER_CLOCKWISE, "Snapshots", "Save, restore and branch this VM's disk and memory".into(), self.selected.is_some() && !self.closing, theme::blue(), false, false),
-            ToolSpec::new(ToolAction::Kill, 2, icon::X_CIRCLE, "Stop run", "End the selected run: the program and every process it started, even after the root exited. The recording closes normally (network capture, route counts, journal) and the VM keeps running. Select a live run in Run history when several are active.".into(), self.kill_target().is_some(), theme::error(), false, false),
+            ToolSpec::new(ToolAction::Kill, 2, icon::X_CIRCLE, "Stop run", "End the selected live run, or the newest live run when none is selected (the confirmation names it): the program and every process it started, even after the root exited. The recording closes normally (network capture, route counts, journal) and the VM keeps running.".into(), self.kill_target().is_some(), theme::error(), false, false),
             ToolSpec::new(ToolAction::RunProgram, 2, icon::TERMINAL_WINDOW, "Run program", shortcut("Run a program in the VM and record it", Action::RunProgram), self.running(), theme::blue(), false, self.launch_open),
             ToolSpec::new(
                 ToolAction::CaptureAll,

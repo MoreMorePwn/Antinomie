@@ -22,7 +22,10 @@ fn multiple_runs_require_selection_and_stale_confirmation_is_rejected() {
     let mut app = app();
     observer_fixture(&mut app);
     app.snapshot.runs = vec![run("first"), run("second")];
-    assert!(app.kill_target().is_none());
+    // No selection: the newest live run (the later one when start times tie).
+    assert_eq!(app.kill_target().unwrap().id, "second");
+    app.selected_run = Some("first".into());
+    assert_eq!(app.kill_target().unwrap().id, "first");
     app.selected_run = Some("second".into());
     assert_eq!(app.kill_target().unwrap().id, "second");
     app.request_kill(None);
@@ -33,13 +36,28 @@ fn multiple_runs_require_selection_and_stale_confirmation_is_rejected() {
     app.submit_kill(target);
     assert!(app.submitted.is_empty());
     app.snapshot.boot_id = Some("boot".into());
+    // A run already being stopped is not a target; the other live one is.
     app.snapshot.runs[1].state = RunState::StopRequested;
+    assert_eq!(app.kill_target().unwrap().id, "first");
+    app.snapshot.runs[0].state = RunState::StopRequested;
     assert!(app.kill_target().is_none());
+    app.snapshot.runs[0].state = RunState::Running;
+    app.snapshot.runs[1].state = RunState::Running;
+    app.snapshot.runs[1].started_ms = Some(5);
+    app.snapshot.runs[0].started_ms = Some(9);
     app.selected_run = Some("past".into());
-    assert!(
-        app.kill_target().is_none(),
-        "never substitute another run for a historical selection"
+    assert_eq!(
+        app.kill_target().unwrap().id,
+        "first",
+        "a historical selection does not grey Stop run; the newest live run is stopped"
     );
+    app.request_kill(None);
+    let Some(Confirm::KillRun(target)) = app.confirm.take() else {
+        panic!("kill confirmation");
+    };
+    assert!(target
+        .label(&app.snapshot)
+        .contains("newest of 2 live runs"));
 }
 
 #[test]

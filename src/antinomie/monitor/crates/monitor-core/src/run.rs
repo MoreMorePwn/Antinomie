@@ -38,6 +38,9 @@ pub(crate) struct ProgramRun {
     pending_screen: Option<Result<Vec<u8>, String>>,
     started_ms: u64,
     ended_ms: Option<u64>,
+    /// The run's recording was handed to the writer whole once its tree ended
+    /// and its terminal closed, so its manifest says "saved" while the VM runs.
+    sealed: bool,
     /// The library sample this run runs, whose custody log the run writes to.
     pub custody: Option<crate::samples::RunLog>,
     /// Packets of the run that never arrived, from the guest's numbering.
@@ -81,6 +84,7 @@ impl ProgramRun {
             pending_screen: None,
             started_ms,
             ended_ms: None,
+            sealed: false,
             custody: None,
             telemetry_loss: Default::default(),
             watch: None,
@@ -156,7 +160,27 @@ impl ProgramRun {
         run.and(manifest)
     }
     fn manifest(&self) -> serde_json::Value {
-        serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity,"tracer_hashing":self.tracer_hashing,"started_ms":self.started_ms,"ended_ms":self.ended_ms})
+        let mut manifest = serde_json::json!({"format":"ANTT run raw LE32","run":self.summary,"packets":self.capture.packets,"bytes":self.stored_len(),"persistence_error":self.summary.recording_error,"boot_bundle_identity":self.boot_bundle_identity,"disk_base_identity":self.disk_base_identity,"tracer_hashing":self.tracer_hashing,"started_ms":self.started_ms,"ended_ms":self.ended_ms});
+        if self.sealed {
+            // The recording is whole before the VM stops: the totals a reader
+            // needs to call it complete (or say what was lost) are here.
+            manifest["saved"] = true.into();
+            manifest["terminal_complete"] = self.terminal_complete().into();
+            manifest["telemetry_loss"] =
+                serde_json::to_value(self.telemetry_loss.totals()).unwrap_or_default();
+        }
+        manifest
+    }
+    /// Once the tree ended, the terminal closed and every raw byte is in the
+    /// file, mark the recording saved. Returns true when it just became so and
+    /// the summary should be persisted again. Never waits: called again later
+    /// while the writer is still behind.
+    pub(crate) fn seal_if_complete(&mut self) -> bool {
+        if self.sealed || self.summary.recording_error.is_some() || !self.recording_complete() {
+            return false;
+        }
+        self.sealed = self.capture.drained();
+        self.sealed
     }
     /// The guest's status reply could not be used. A recorded root exit is
     /// final, so it keeps the status the run already has: its identity, its
@@ -180,7 +204,9 @@ impl ProgramRun {
         Ok(())
     }
     pub(crate) fn record_tree_completion(&mut self) {
-        if self.summary.state == RunState::Finished {
+        // A run the user stopped ended with its tree too, not at the VM stop
+        // that closed the recording much later.
+        if matches!(self.summary.state, RunState::Finished | RunState::Stopped) {
             self.ended_ms.get_or_insert_with(unix_ms);
         }
     }
@@ -378,6 +404,7 @@ impl ProgramRun {
         // The summary records the closed terminal even when the journal refuses
         // its end mark, so a run whose saving stopped is not left looking open.
         let journal = self.journal(3, &[], available);
+        self.seal_if_complete();
         let persisted = self.persist_summary();
         journal.and(persisted)
     }
@@ -502,6 +529,7 @@ mod tests {
             boot_wait: None,
             triggers: None,
             stopped_by_user: false,
+            stopped_at_ms: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -569,6 +597,7 @@ mod tests {
             boot_wait: None,
             triggers: None,
             stopped_by_user: false,
+            stopped_at_ms: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -628,6 +657,7 @@ mod tests {
             boot_wait: None,
             triggers: None,
             stopped_by_user: false,
+            stopped_at_ms: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -684,6 +714,7 @@ mod tests {
             boot_wait: None,
             triggers: None,
             stopped_by_user: false,
+            stopped_at_ms: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -744,6 +775,85 @@ mod tests {
         crate::storage::settle_json_under(&directory);
         std::fs::remove_dir_all(directory).unwrap();
     }
+    /// A run whose tree ended is saved while the VM keeps running: its
+    /// manifest says so, with the losses counted so far, and a run the user
+    /// stopped records when its tree ended, not when the VM stopped later.
+    #[test]
+    fn a_run_whose_tree_ended_is_saved_without_a_vm_stop() {
+        let directory =
+            std::env::temp_dir().join(format!("ant-run-saved-{}", storage::unique_id()));
+        let summary = RunSummary {
+            environment: None,
+            reduced: None,
+            boot_wait: None,
+            triggers: None,
+            stopped_by_user: true,
+            stopped_at_ms: Some(1),
+            started_ms: None,
+            clock_anchor: None,
+            id: "run".into(),
+            vm_id: "vm".into(),
+            boot_id: "boot".into(),
+            session_id: 1,
+            root_task_cookie: 2,
+            pid: 3,
+            request: ExecRequest::default(),
+            directory: directory.clone(),
+            terminal_eof: false,
+            state: RunState::Running,
+            notes: Vec::new(),
+            machine: None,
+            route: None,
+            recording_error: None,
+            execution: Some(RunExecution {
+                generation: 1,
+                live_task_count: 0,
+                pending_async_count: 0,
+                flags: 11,
+                root_wait_status: Some(0),
+                root_exit: Some(WaitStatus::Exited { code: 0 }),
+                async_loss_count: 0,
+                total_task_count: 2,
+            }),
+            analysis: None,
+        };
+        let mut run = ProgramRun::new(summary, 65536).unwrap();
+        assert!(run.capture.append(b"telemetry"));
+        // Not saved while the terminal is open.
+        assert!(!run.seal_if_complete());
+        run.eof(65536).unwrap();
+        run.summary.state = RunState::Stopped;
+        run.record_tree_completion();
+        assert!(
+            run.ended_ms.is_some(),
+            "a stopped run's tree end is its end"
+        );
+        // The writer may still be behind; the seal is retried until it is not.
+        let mut sealed = run.sealed || run.seal_if_complete();
+        for _ in 0..200 {
+            if sealed {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            sealed = run.seal_if_complete();
+        }
+        assert!(sealed);
+        run.persist_summary().unwrap();
+        crate::storage::flush_json().unwrap();
+        let facts = crate::recording::run_filter_facts(&directory, "run", "vm", "boot").unwrap();
+        assert!(facts.saved);
+        assert_eq!(facts.complete, Some(true));
+        assert_eq!(facts.transport_loss, Some(0));
+        assert_eq!(
+            std::fs::metadata(directory.join("telemetry.raw"))
+                .unwrap()
+                .len(),
+            run.capture.bytes
+        );
+        drop(run);
+        crate::storage::settle_json_under(&directory);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
     #[test]
     fn unanswered_terminal_reads_make_the_terminal_incomplete_even_after_eof() {
         let directory =
@@ -754,6 +864,7 @@ mod tests {
             boot_wait: None,
             triggers: None,
             stopped_by_user: false,
+            stopped_at_ms: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -800,6 +911,7 @@ mod tests {
             boot_wait: None,
             triggers: None,
             stopped_by_user: false,
+            stopped_at_ms: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),
@@ -868,6 +980,7 @@ mod tests {
             boot_wait: None,
             triggers: None,
             stopped_by_user: false,
+            stopped_at_ms: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),

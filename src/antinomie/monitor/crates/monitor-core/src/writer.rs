@@ -301,6 +301,17 @@ pub(crate) fn wait_for(ticket: u64) {
     drop(wait_while(writer, state, |state| state.done < ticket));
 }
 
+/// Whether the write with `ticket` and every write before it has been
+/// written; ticket 0, "nothing submitted", always is. Never waits.
+pub(crate) fn is_done(ticket: u64) -> bool {
+    ticket == 0
+        || writer()
+            .state
+            .lock()
+            .map(|state| state.done >= ticket)
+            .unwrap_or_default()
+}
+
 /// Whether the queue holds more than half of its limit: the transport owner
 /// takes no more telemetry until the disk has caught up.
 pub(crate) fn backlogged() -> bool {

@@ -140,6 +140,25 @@ impl TriageView {
         })
     }
 
+    /// Where the event index of the selected run stands, for the Detection
+    /// scans that wait on it.
+    pub(super) fn index_state(&self, has_run: bool) -> detection::IndexState {
+        use detection::IndexState;
+        if !has_run {
+            return IndexState::Unknown;
+        }
+        let Some(scan) = self.scan.as_ref() else {
+            return IndexState::Building;
+        };
+        if self.scan_waits_for_saving() {
+            IndexState::Saving
+        } else if let Some(error) = &scan.event_error {
+            IndexState::Failed(error.clone())
+        } else {
+            IndexState::Ready
+        }
+    }
+
     /// Decide whether the index of the selected run is read again now.
     ///
     /// | Run | Pane | Re-read |

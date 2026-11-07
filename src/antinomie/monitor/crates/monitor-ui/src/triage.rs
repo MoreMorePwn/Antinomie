@@ -557,6 +557,8 @@ impl TriageView {
         self.details_directory = input.archive.map(Path::to_path_buf);
         self.ioc_tick(ctx);
         self.properties.tick(ctx, &input);
+        self.detection
+            .set_index(self.index_state(input.archive.is_some()));
         self.detection.tick(ctx, &input);
         self.scan_request.clock_anchor = input.clock_anchor;
         self.scan_request.started_ms = input.started_ms;
