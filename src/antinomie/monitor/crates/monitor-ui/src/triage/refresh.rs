@@ -291,23 +291,40 @@ impl TriageView {
         if text.chars().count() > 64 {
             text = text.chars().take(63).collect::<String>() + "…";
         }
-        let rich = RichText::new(text).small().color(theme::muted());
         if let Some(room) = room {
-            let width = ui.fonts_mut(|fonts| {
-                fonts
-                    .layout_no_wrap(
-                        rich.text().to_owned(),
-                        egui::TextStyle::Small.resolve(ui.style()),
-                        theme::muted(),
-                    )
-                    .size()
-                    .x
-            });
+            let measure = |ui: &egui::Ui, text: &str| {
+                ui.fonts_mut(|fonts| {
+                    fonts
+                        .layout_no_wrap(
+                            text.to_owned(),
+                            egui::TextStyle::Small.resolve(ui.style()),
+                            theme::muted(),
+                        )
+                        .size()
+                        .x
+                })
+            };
             // The label, the menu button's padding and the spinner.
-            if width + 56.0 > room {
-                return false;
+            let room = room - 56.0;
+            if measure(ui, &text) > room {
+                // Cut the state in the middle, so the interval stays at the
+                // end, before the status goes under the tab bar.
+                let (state, interval) = text.rsplit_once(" · ").unwrap_or((text.as_str(), ""));
+                let mut state: Vec<char> = state.chars().collect();
+                let fitted = loop {
+                    if state.len() < 14 {
+                        return false;
+                    }
+                    state.pop();
+                    let cut = format!("{}… · {interval}", state.iter().collect::<String>());
+                    if measure(ui, &cut) <= room {
+                        break cut;
+                    }
+                };
+                text = fitted;
             }
         }
+        let rich = RichText::new(text).small().color(theme::muted());
         ui.scope(|ui| {
             let widgets = &mut ui.visuals_mut().widgets;
             for style in [&mut widgets.inactive, &mut widgets.noninteractive] {
