@@ -9,11 +9,14 @@ use antinomie_monitor_core::report::{self, export::Written, Choices, Format, Par
 use std::path::PathBuf;
 
 mod build;
-mod families;
+#[cfg(test)]
+mod reexport_tests;
+mod run_facts;
 #[cfg(test)]
 mod tests;
 
 /// Everything the worker needs, owned.
+#[derive(Clone)]
 pub(super) struct Job {
     pub archive: PathBuf,
     pub pcap: Option<PathBuf>,
@@ -133,6 +136,8 @@ pub(super) fn run_job(
         return Err("cancelled".into());
     }
     status("Building the report...");
+    // The run's state, command, sample and environment come from its record.
+    let job = &run_facts::apply(job, &scan);
     let mut built = build::build(&scan, job)?;
     let mut scratch = None;
     if let Some(input) = &mut built.bundle {
@@ -204,6 +209,7 @@ impl TriageView {
                     .unwrap_or_default(),
                 sha256,
                 size: analysis.specimen_len,
+                role: String::new(),
             })
         });
         self.report.target = Some(Target {
@@ -216,6 +222,7 @@ impl TriageView {
                 run_id: input.run_id.unwrap_or_default().into(),
                 started_ms: input.started_ms,
                 finished: input.run_finished,
+                ..Default::default()
             },
             sample,
             clock: input.clock_anchor,

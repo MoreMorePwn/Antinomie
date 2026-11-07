@@ -97,6 +97,24 @@ fn indicators(job: &Job, scan: &ArchiveScan) -> Vec<(report::Indicator, bool)> {
             let tls = indicator.tls.clone().unwrap_or_default();
             let hashes = indicator.hashes.clone().unwrap_or_default();
             let primary = verdict.primary();
+            let stand_in = indicator.stand_in.clone().unwrap_or_default();
+            let mut noise = indicator.noise.clone().unwrap_or_default();
+            // The guest's own resolver: a private address on the DNS port. Its
+            // lookups are the names, which are indicators of their own.
+            if noise.is_empty() {
+                if let Some(why) = antinomie_monitor_core::report::shared::resolver_noise(
+                    indicator.ty.id(),
+                    &indicator.value,
+                ) {
+                    noise = why.into();
+                }
+            }
+            let not_shared = antinomie_monitor_core::report::shared::not_shared_reason(
+                indicator.ty.id(),
+                &indicator.value,
+                &indicator.roles,
+                indicator.not_checked.as_deref().unwrap_or_default(),
+            );
             let item = report::Indicator {
                 kind: indicator.ty.id().to_owned(),
                 value: indicator.value.clone(),
@@ -132,7 +150,9 @@ fn indicators(job: &Job, scan: &ArchiveScan) -> Vec<(report::Indicator, bool)> {
                 sha256: hashes.sha256,
                 md5: hashes.md5,
                 sha1: hashes.sha1,
-                base_noise: indicator.noise.clone().unwrap_or_default(),
+                base_noise: noise,
+                stand_in,
+                not_shared,
             };
             (item, matched)
         })
@@ -143,30 +163,41 @@ fn summary(
     scan: &ArchiveScan,
     behaviour: &digest_types::Behaviour,
     indicators: &[(report::Indicator, bool)],
-    detections: &[antinomie_monitor_core::run_digest::DetectionHit],
+    candidates: &[super::super::family::Candidate],
     techniques: usize,
 ) -> Summary {
     let matched = indicators.iter().filter(|(_, m)| *m).count();
-    // Families come from matched indicators (stored datasets), from YARA rule
-    // metadata and from IDS signature messages; each with who named it.
-    let mut named: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Families come from matched indicators (stored datasets) and from the
+    // same candidates the app's Summary shows: Elastic and curated YARA rule
+    // names, `family` metadata, IDS messages and the sample's MalwareBazaar
+    // record; each with who named it.
+    let mut named: Vec<(String, String)> = Vec::new();
+    let mut add = |family: &str, source: String| {
+        if let Some((_, known)) = named
+            .iter_mut()
+            .find(|(name, _)| name.eq_ignore_ascii_case(family))
+        {
+            if !known.contains(&source) {
+                known.push_str("; ");
+                known.push_str(&source);
+            }
+        } else {
+            named.push((family.to_owned(), source));
+        }
+    };
     for (indicator, _) in indicators.iter().filter(|(_, m)| *m) {
         if !indicator.family.is_empty() {
-            let sources = named.entry(indicator.family.clone()).or_default();
-            let source = format!("dataset {}", indicator.dataset);
-            if !sources.contains(&source) {
-                sources.push(source);
-            }
+            add(&indicator.family, format!("dataset {}", indicator.dataset));
         }
     }
-    for (family, sources) in families::from_detections(detections) {
-        named.entry(family).or_default().extend(sources);
+    for candidate in candidates {
+        add(&candidate.name, candidate.source.clone());
     }
     let family_sources: Vec<String> = named
         .iter()
-        .map(|(family, sources)| format!("{family}: {}", sources.join("; ")))
+        .map(|(family, sources)| format!("{family}: {sources}"))
         .collect();
-    let families: BTreeSet<String> = named.keys().cloned().collect();
+    let families: Vec<String> = named.iter().map(|(family, _)| family.clone()).collect();
     // One row per rule: the same rule fires once per object it was seen on
     // (binary_replace 44, 2 and 1), so the counts are added and the highest
     // tier of its rows is kept.
@@ -247,8 +278,18 @@ fn summary(
         } else {
             behaviour.highest.clone()
         },
-        families: families.into_iter().collect(),
+        families,
         family_sources,
+        tiers: {
+            let counts = super::super::summary::tier_counts(&scan.findings);
+            report::TierCounts {
+                high: counts[0],
+                medium: counts[1],
+                low: counts[2],
+                info: counts[3],
+            }
+        },
+        key_findings: super::super::summary::key_finding_lines(&scan.findings, 8),
         key_behaviours: key,
         counts: Counts {
             processes: scan.process.len() as u64,
@@ -340,9 +381,74 @@ fn findings(scan: &ArchiveScan, clock: Option<antinomie_monitor_core::HostClockA
     )
 }
 
+/// The paths the run created or changed.
+fn written_paths(scan: &ArchiveScan) -> BTreeSet<String> {
+    scan.changed
+        .iter()
+        .filter_map(|row| row.get(1).map(|cell| cell.text.clone()))
+        .collect()
+}
+
+/// The Read files table without what was read. A cell reads `4096 B: <bytes>`;
+/// the report keeps the size, and the bytes only when asked (clipped, with
+/// control characters escaped, and never for a file the run wrote): what a
+/// sample reads can be the guest's secrets or its own bytes.
+pub(super) fn transferred(table: &mut Table, include_content: bool, written: &BTreeSet<String>) {
+    let Some(at) = table
+        .columns
+        .iter()
+        .position(|name| name == "Transferred / content")
+    else {
+        return;
+    };
+    let path = table.columns.iter().position(|name| name == "Path");
+    table.columns[at] = if include_content {
+        "Transferred / content".into()
+    } else {
+        "Transferred".into()
+    };
+    for row in &mut table.rows {
+        let own = path
+            .and_then(|path| row.get(path))
+            .is_some_and(|path| written.contains(path));
+        let Some(cell) = row.get_mut(at) else {
+            continue;
+        };
+        let (size, rest) = cell.split_once(": ").unwrap_or((cell.as_str(), ""));
+        let size = size.to_owned();
+        let rest = rest.to_owned();
+        *cell = if !include_content || own || rest.is_empty() {
+            size
+        } else if rest.starts_with("kernel transfer") {
+            format!("{size}: {rest}")
+        } else {
+            let clipped: String = rest.chars().take(120).collect();
+            let escaped: String = clipped
+                .chars()
+                .flat_map(|c| {
+                    if c.is_control() {
+                        format!("\\x{:02x}", c as u32).chars().collect::<Vec<_>>()
+                    } else {
+                        vec![c]
+                    }
+                })
+                .collect();
+            format!(
+                "{size}: {escaped}{}",
+                if rest.chars().count() > 120 {
+                    "..."
+                } else {
+                    ""
+                }
+            )
+        };
+    }
+}
+
 fn file_tabs_section(
     scan: &ArchiveScan,
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
+    include_content: bool,
 ) -> FilesSection {
     let mut tabs = Vec::new();
     for tab in FileTab::ALL {
@@ -355,13 +461,17 @@ fn file_tabs_section(
                 omitted,
                 &[],
             ),
-            FileTab::Read => table(
-                file_tabs::READ_HEADERS,
-                file_tabs::READ_COLUMNS,
-                &file_category::with_time(&scan.read, clock),
-                omitted,
-                &[],
-            ),
+            FileTab::Read => {
+                let mut read = table(
+                    file_tabs::READ_HEADERS,
+                    file_tabs::READ_COLUMNS,
+                    &file_category::with_time(&scan.read, clock),
+                    omitted,
+                    &[],
+                );
+                transferred(&mut read, include_content, &written_paths(scan));
+                read
+            }
             FileTab::Opened => table(
                 file_category::EVENT_HEADERS,
                 file_tabs::OPENED_COLUMNS,
@@ -439,6 +549,21 @@ fn detections(run_dir: &Path) -> Vec<Detection> {
         .unwrap_or_default()
         .into_iter()
         .map(|hit| Detection {
+            strength: if hit.engine.eq_ignore_ascii_case("yara") {
+                match super::super::family::strength(
+                    &hit.rule_id,
+                    &hit.severity,
+                    &hit.source,
+                    &hit.family,
+                ) {
+                    super::super::family::Strength::Strong => "strong",
+                    super::super::family::Strength::Weak => "weak",
+                    super::super::family::Strength::WrongPlatform => "wrong platform",
+                }
+                .to_owned()
+            } else {
+                String::new()
+            },
             engine: hit.engine,
             rule_id: hit.rule_id,
             title: hit.title,
@@ -541,6 +666,10 @@ fn custody(job: &Job) -> Result<Custody, String> {
         .zip(job.data_dir.as_ref())
         .ok_or("the run has no sample record to read a custody log for")?;
     let library = antinomie_monitor_core::samples::Library::open(data_dir)?;
+    // A file that is not a library sample has no custody log to report.
+    if library.get(&sample.sha256)?.is_none() {
+        return Err("the file is not a library sample, so there is no custody log".into());
+    }
     let (value, _) = library.custody_record(&sample.sha256)?;
     Ok(Custody {
         sample_sha256: sample.sha256.clone(),
@@ -658,27 +787,37 @@ pub(super) fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
         digest_detections.as_deref().unwrap_or_default(),
     );
     if choices.has(Part::Summary) {
+        let bazaar = job
+            .sample
+            .as_ref()
+            .zip(job.data_dir.as_deref())
+            .and_then(|(sample, dir)| {
+                antinomie_monitor_core::samples::recorded_info(dir, &sample.sha256)
+            });
+        let candidates = super::super::family::family_candidates(
+            digest_detections.as_deref().unwrap_or_default(),
+            bazaar
+                .as_ref()
+                .map(|info| super::super::family::Bazaar {
+                    signature: info.signature.as_deref(),
+                    tags: &info.tags,
+                })
+                .unwrap_or_default(),
+        );
         report.summary = Some(summary(
             scan,
             &behaviour,
             &indicator_rows,
-            digest_detections.as_deref().unwrap_or_default(),
+            &candidates,
             techniques.len(),
         ));
-        if let (Some(summary), Some(crash)) = (report.summary.as_mut(), &scan.root_crash) {
-            summary.statement = format!(
-                "The sample crashed before its first system call: {crash}. {}",
-                summary.statement
-            );
-        }
     }
     if let Some(note) = schema_gap_note(scan) {
         report.notes.push(note);
     }
+    // Said once, in the overview's notes; the Summary's statement keeps to the
+    // assessment.
     if let Some(end) = super::super::run_end::run_end(scan) {
-        if let Some(summary) = report.summary.as_mut().filter(|_| end.short_tree) {
-            summary.statement = format!("{} {}", end.text, summary.statement);
-        }
         report.notes.push(end.text);
     }
     if let Some(crash) = &scan.root_crash {
@@ -706,7 +845,7 @@ pub(super) fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
         report.findings = Some(findings(scan, clock));
     }
     if choices.has(Part::Files) {
-        report.files = Some(file_tabs_section(scan, clock));
+        report.files = Some(file_tabs_section(scan, clock, choices.include_content));
     }
     let mut dropped = Vec::new();
     let mut skipped = Vec::new();
