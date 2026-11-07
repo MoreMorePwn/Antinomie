@@ -378,6 +378,36 @@ impl TriageView {
                     .any(|other| other == id)
             }));
         }
+        // The two ways of renaming a process are one story: link them.
+        let own_rule = text(values, "finding.rule").unwrap_or_default();
+        let partner = match own_rule {
+            "evasion.process_rename" => Some("evasion.argv_masquerade"),
+            "evasion.argv_masquerade" => Some("evasion.process_rename"),
+            _ => None,
+        };
+        if let Some(partner) = partner.filter(|_| pid != 0) {
+            let title = self
+                .scan
+                .iter()
+                .flat_map(|scan| scan.findings.iter())
+                .filter(|other| other.key != me)
+                .find(|other| {
+                    text(&other.values, "finding.rule") == Some(partner)
+                        && files::number(&other.values, "process.pid").unwrap_or(0) == pid
+                        && files::number(&other.values, "process.cookie").unwrap_or(0) == cookie
+                })
+                .and_then(|other| text(&other.values, "finding.title").map(str::to_owned));
+            if let Some(title) = title {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Same process").small().color(theme::muted()));
+                    if link(ui, format!("{title}: the other way this process hid its name"))
+                        .clicked()
+                    {
+                        self.filter_findings_by(ui.ctx(), format!("process.pid == {pid}"));
+                    }
+                });
+            }
+        }
         let others = |ui: &mut egui::Ui, count: usize, what: String| -> bool {
             count > 0
                 && link(
