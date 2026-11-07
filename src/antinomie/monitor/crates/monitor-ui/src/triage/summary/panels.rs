@@ -470,6 +470,7 @@ pub(super) fn interest_row(
             let response = ui
                 .add(
                     egui::Label::new(RichText::new(name).color(theme::text()))
+                        .wrap_mode(egui::TextWrapMode::Extend)
                         .selectable(false)
                         .sense(egui::Sense::click()),
                 )
@@ -484,6 +485,7 @@ pub(super) fn interest_row(
             if ui
                 .add(
                     egui::Label::new(RichText::new(more).color(theme::muted()))
+                        .wrap_mode(egui::TextWrapMode::Extend)
                         .selectable(false)
                         .sense(egui::Sense::click()),
                 )

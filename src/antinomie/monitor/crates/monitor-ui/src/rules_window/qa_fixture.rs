@@ -40,7 +40,7 @@ fn native_rules_window_fixture() {
             }
             if self.frame == 60 && self.select {
                 if let Some(list) = self.model.rule_lists.first_mut() {
-                    list.select(1);
+                    list.select(if self.filter.is_empty() { 1 } else { 2 });
                 }
             }
             if self.frame == 70 && !self.filter.is_empty() {
