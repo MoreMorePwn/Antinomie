@@ -7,6 +7,11 @@
 //! `antinomie-monitor-ui` (checked by `crates/cli/tests/dependency_tree.rs`).
 //! It is a skeleton; later cards fill the modules below.
 
+// `ApiError` is the contract's error type and the design's trait signatures
+// return it by value (`Result<_, ApiError>`, design 2.8, 5.12.1); it carries
+// its `details` map, so it is larger than clippy likes.
+#![allow(clippy::result_large_err)]
+
 /// The version of the job and query contract (`"api_version"` in every CLI
 /// and socket reply, design 3.2 and 5.2).
 pub const API_VERSION: u32 = 1;
@@ -15,3 +20,5 @@ pub const API_VERSION: u32 = 1;
 pub mod api;
 /// `QueryApi`, the read-only recording queries (cards Q-1 and later).
 pub mod query;
+/// The JSON Schema generated from the types above.
+pub mod schema;
