@@ -31,6 +31,30 @@ impl Change {
     pub fn real(&self) -> bool {
         self.changes
     }
+    /// A write, cut, copy into the file or shared mapping of it succeeded.
+    pub(super) fn wrote(&self) -> bool {
+        ["Written", "Truncated / resized", "Copied", "Mapped"]
+            .iter()
+            .any(|name| self.categories.contains(name))
+    }
+    /// The file was there before the run opened it with `O_CREAT`: it was not
+    /// created. Drops the inferred creation, and the change if nothing else
+    /// changed the file.
+    pub(super) fn settle(&mut self) {
+        let Some(size) = self.existed else { return };
+        self.categories.remove("Created");
+        for (label, _) in &mut self.lifecycle {
+            if label.starts_with("created") {
+                *label = format!("opened with O_CREAT; already existed ({size} bytes)");
+            }
+        }
+        let other = self.categories.iter().any(|name| {
+            !matches!(*name, "Opened" | "Read" | "Probed" | "Directory listing" | "Watched / locked")
+        });
+        if !other && !self.deleted && !self.modified {
+            self.changes = false;
+        }
+    }
     pub(super) fn step(&mut self, label: String) {
         if let Some((last, count)) = self.lifecycle.last_mut() {
             if *last == label {
@@ -93,8 +117,18 @@ impl Change {
     /// The guest hashed the file: it says what the file held then, or why it
     /// has no digest.
     pub(super) fn record_hash(&mut self, hash: FileHash) {
+        let wrote = self.wrote();
+        if hash.kind == HashKind::Write
+            && !wrote
+            && self.categories.contains("Created")
+            && !self.create_certain
+            && hash.size > 0
+        {
+            self.existed = Some(hash.size);
+        }
         let moment = match hash.kind {
             HashKind::Delete => "hashed before delete",
+            _ if !wrote => "closed, nothing written",
             _ => "closed after write",
         };
         let what = match (hash.sha256_hex(), hash.skipped()) {

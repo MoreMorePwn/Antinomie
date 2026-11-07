@@ -73,6 +73,13 @@ pub(super) struct Change {
     lifecycle: Vec<(String, u32)>,
     lifecycle_cut: bool,
     categories: BTreeSet<&'static str>,
+    /// A call proved the file new (`O_EXCL`, `mkdir`, `O_TMPFILE`); without
+    /// one, "created" is only inferred from the path not being seen before.
+    create_certain: bool,
+    /// The size the file already had when this run opened it with `O_CREAT`:
+    /// the guest's hash at close held bytes the run never wrote, so the open
+    /// created nothing.
+    existed: Option<u64>,
     /// Change attempts the kernel refused. They are not changes.
     failed: u32,
     /// Last mode a successful chmod set, to tell a new `+x` from a repeat.
@@ -175,11 +182,22 @@ impl FileIndex {
     ) {
         for hash in kernel_records::write_hashes(call) {
             let Some(file) = hash.file else { continue };
+            // The guest hashes a file when its last writer closes it, written
+            // or not: say "after write" only when the run did write it.
+            let wrote = self
+                .by_identity
+                .get(&file.key)
+                .and_then(|group| self.changes.get(group))
+                .is_some_and(Change::wrote);
             self.activity.hash(
                 Some(file.key),
                 None,
                 event.timestamp_ns,
-                "closed after write",
+                if wrote {
+                    "closed after write"
+                } else {
+                    "closed, nothing written"
+                },
                 &hash,
             );
             if let Some(change) = self
@@ -571,7 +589,14 @@ impl FileIndex {
 
     /// The changed files, and the activity of every file the run touched with
     /// what the changes know of each one's contents.
-    pub fn finish_all(self) -> (Vec<Change>, file_activity::Activity) {
+    pub fn finish_all(mut self) -> (Vec<Change>, file_activity::Activity) {
+        let mut existing: Vec<(Option<FileKey>, String)> = Vec::new();
+        for change in self.changes.values_mut() {
+            if change.existed.is_some() {
+                change.settle();
+                existing.push((change.identity, change.path.clone()));
+            }
+        }
         let by_path: BTreeMap<&str, &Change> = self
             .changes
             .values()
@@ -588,6 +613,20 @@ impl FileIndex {
                 .or_else(|| by_path.get(file.path.as_str()))
                 .map(|change| change.contents())
         });
+        let mut activity = activity;
+        for file in &mut activity.files {
+            let proved = existing
+                .iter()
+                .any(|(key, path)| key.is_some() && key == &file.identity || *path == file.path);
+            if proved {
+                file.created = false;
+                for event in &mut file.events {
+                    if event.kind == file_activity::Kind::Create {
+                        event.kind = file_activity::Kind::Open;
+                    }
+                }
+            }
+        }
         let changes = self
             .changes
             .into_values()
@@ -1264,6 +1303,34 @@ mod tests {
         ];
         let changes = index_with_hashes(&refused, &[]).finish();
         assert!(changes[0].lifecycle_text().contains("no hash: file is"));
+    }
+
+    #[test]
+    fn an_o_creat_open_of_a_file_with_content_and_no_write_created_nothing() {
+        // openat(O_RDWR|O_CREAT) on a name the run never saw, then close; the
+        // guest's hash at close finds 5 bytes the run did not write.
+        let calls = [
+            create(2, "/etc/hosts", 60, 1),
+            with_write_hash(operation(3, 3, "close", 0, [3, 0, 0, 0, 0, 0], b""), 60, 0),
+        ];
+        let (changes, activity) = index_with_hashes(&calls, &[]).finish_all();
+        assert!(
+            changes.iter().all(|change| change.path != "/etc/hosts"),
+            "an open that wrote nothing is not a changed file"
+        );
+        let file = activity.files.iter().find(|f| f.path == "/etc/hosts").unwrap();
+        assert!(!file.created);
+        assert_eq!(file.hashes[0].moment, "closed, nothing written");
+        // With a write, the same file is written at close, and the file still
+        // was not created by the open.
+        let calls = [
+            create(2, "/etc/hosts", 60, 1),
+            operation(3, 1, "write", 5, [3, 0, 5, 0, 0, 0], b"hello"),
+            with_write_hash(operation(4, 3, "close", 0, [3, 0, 0, 0, 0, 0], b""), 60, 0),
+        ];
+        let changes = index_with_hashes(&calls, &[]).finish();
+        let change = changes.iter().find(|c| c.path == "/etc/hosts").unwrap();
+        assert!(change.ioc_file().unwrap().roles.contains(&"written at close"));
     }
 
     #[test]
