@@ -36,8 +36,12 @@ fn multiple_runs_require_selection_and_stale_confirmation_is_rejected() {
     app.submit_kill(target);
     assert!(app.submitted.is_empty());
     app.snapshot.boot_id = Some("boot".into());
+    // A run already being stopped is not a target; the other live one is.
     app.snapshot.runs[1].state = RunState::StopRequested;
+    assert_eq!(app.kill_target().unwrap().id, "first");
+    app.snapshot.runs[0].state = RunState::StopRequested;
     assert!(app.kill_target().is_none());
+    app.snapshot.runs[0].state = RunState::Running;
     app.snapshot.runs[1].state = RunState::Running;
     app.snapshot.runs[1].started_ms = Some(5);
     app.snapshot.runs[0].started_ms = Some(9);
