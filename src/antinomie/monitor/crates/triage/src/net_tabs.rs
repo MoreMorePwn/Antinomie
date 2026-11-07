@@ -98,4 +98,3 @@ pub fn stored_column(slot: usize, shown: usize) -> usize {
         std::cmp::Ordering::Greater => shown - 1,
     }
 }
-

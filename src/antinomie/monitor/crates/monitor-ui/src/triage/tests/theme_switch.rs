@@ -95,25 +95,6 @@ fn rows_built_in_one_theme_are_painted_in_the_palette_now_active() {
 }
 
 #[test]
-fn every_slot_of_a_palette_translates_to_the_same_slot_of_another() {
-    for (from, to) in [(Theme::Dark, Theme::Light), (Theme::Light, Theme::Blue)] {
-        let (a, b) = (from.palette(), to.palette());
-        for (old, new) in [
-            (a.text, b.text),
-            (a.muted, b.muted),
-            (a.error, b.error),
-            (a.warn, b.warn),
-            (a.good, b.good),
-            (a.number, b.number),
-            (a.pointer, b.pointer),
-        ] {
-            assert_eq!(theme::translate(old, from, to), new, "{from:?} -> {to:?}");
-        }
-        assert_eq!(theme::translate(a.text, from, from), a.text);
-    }
-}
-
-#[test]
 fn packet_and_syscall_tints_are_read_from_the_active_palette_when_drawn() {
     // These tables hold a kind (PacketColor, SyscallGroup), not a color.
     let ctx = egui::Context::default();

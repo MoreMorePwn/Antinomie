@@ -536,10 +536,7 @@ pub fn strength(rule: &str, severity: &str, source: &str, family: &str) -> Stren
 /// type, an architecture, a packer, a kind of malware) and not the signature
 /// again. A sample with signature `Mirai` and tags `elf`, `Mirai`, `Prometei`
 /// gives Mirai (signature) and Prometei (tag).
-pub fn bazaar_families(
-    signature: Option<&str>,
-    tags: &[String],
-) -> Vec<(String, &'static str)> {
+pub fn bazaar_families(signature: Option<&str>, tags: &[String]) -> Vec<(String, &'static str)> {
     let mut out: Vec<(String, &'static str)> = Vec::new();
     let add = |name: String, source: &'static str, out: &mut Vec<(String, &'static str)>| {
         if !out

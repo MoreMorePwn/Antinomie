@@ -40,8 +40,6 @@ pub fn push_limited(limited: &mut LimitedRows, row: Vec<Cell>) -> bool {
     true
 }
 
-
-
 pub fn evidence_key(row: &[Cell]) -> String {
     let identity = evidence_values_key(
         row.first()

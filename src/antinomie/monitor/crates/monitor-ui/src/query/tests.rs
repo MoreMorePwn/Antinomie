@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use super::*;
-use antinomie_monitor_core::{EventSummary, FieldSummary, InvocationSummary};
 
 const TABLE_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("name", "Displayed name"),
@@ -8,7 +7,6 @@ const TABLE_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::boolean("complete", "Completeness"),
     FieldSpec::tags("tag", "Annotation tags"),
 ];
-
 
 #[test]
 fn incomplete_table_drafts_keep_the_last_applied_filter() {

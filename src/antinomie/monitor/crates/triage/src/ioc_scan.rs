@@ -554,11 +554,7 @@ pub fn disk_hashes(
 
 /// The verdicts under the person's false-positive list and the online answers
 /// kept with the run.
-pub fn verdicts(
-    ioc: &IocScan,
-    fp: &[known_fp::Entry],
-    online: &OnlineResults,
-) -> Vec<Verdict> {
+pub fn verdicts(ioc: &IocScan, fp: &[known_fp::Entry], online: &OnlineResults) -> Vec<Verdict> {
     verdict::evaluate_all(&ioc.indicators, &ioc.scan, fp, online)
 }
 
@@ -696,12 +692,7 @@ pub fn text_of<'a>(values: &'a [(&'static str, RowValue)], name: &str) -> &'a st
 
 /// Add the IOC column to the rebuilt Network tabs, and build the URLs tab
 /// from the HTTP rows.
-pub fn annotate(
-    tabs: &mut NewTabs,
-    http: &[Vec<Cell>],
-    ioc: &IocScan,
-    verdicts: &[Verdict],
-) {
+pub fn annotate(tabs: &mut NewTabs, http: &[Vec<Cell>], ioc: &IocScan, verdicts: &[Verdict]) {
     use antinomie_monitor_core::ioc::indicator::{domain_key, endpoint_key, tls_key, url_key};
     let index: std::collections::HashMap<(Type, &str), usize> = ioc
         .indicators

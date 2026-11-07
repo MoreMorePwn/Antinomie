@@ -97,11 +97,7 @@ pub fn finding_tag(flag: &PathFlag) -> Badge {
 }
 
 /// The tags of a path: where it lives, its other names, and a finding.
-pub fn path_tags(
-    locations: &[String],
-    names: &[String],
-    flagged: Option<&PathFlag>,
-) -> Vec<Badge> {
+pub fn path_tags(locations: &[String], names: &[String], flagged: Option<&PathFlag>) -> Vec<Badge> {
     let mut badges: Vec<Badge> = locations
         .iter()
         .map(|tag| Badge {

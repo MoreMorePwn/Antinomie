@@ -2,7 +2,6 @@
 //! The filter bar: the edit box, its completions and its history.
 use super::*;
 
-
 pub fn filter_edit(
     ui: &mut egui::Ui,
     text: &mut String,
@@ -40,7 +39,6 @@ pub fn filter_edit_fields(
     assert_example_compiles(hint, fields);
     filter_edit_field_iter(ui, text, hint, width, fields.iter().copied(), known_values)
 }
-
 
 /// Borrow large external field registries without allocating a per-frame adapter vector.
 pub fn filter_edit_field_iter<'a>(

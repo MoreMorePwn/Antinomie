@@ -35,7 +35,6 @@ impl Order {
     }
 }
 
-
 pub(in crate::triage) struct Window {
     pub(super) filter: String,
     pub(super) hide_standard_io: bool,

@@ -89,7 +89,6 @@ impl ChangeView for files::Change {
     }
 }
 
-
 /// One thing said about a file's rebuild. A limit leads to its setting, and a
 /// note about a call's bytes to that call's syscall evidence.
 pub fn gap_note(ui: &mut egui::Ui, note: &retention::GapNote) {

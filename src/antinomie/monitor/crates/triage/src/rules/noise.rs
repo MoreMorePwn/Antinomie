@@ -336,9 +336,7 @@ pub struct Overflow {
 }
 
 /// Apply the caps in first-seen order. Returns the rows kept and the overflow.
-pub fn cap(
-    rows: Vec<Agg>,
-) -> (Vec<Agg>, std::collections::BTreeMap<&'static str, Overflow>) {
+pub fn cap(rows: Vec<Agg>) -> (Vec<Agg>, std::collections::BTreeMap<&'static str, Overflow>) {
     let mut per_pair = std::collections::BTreeMap::<(&str, u64), usize>::new();
     let mut per_rule = std::collections::BTreeMap::<&str, usize>::new();
     let mut per_task = std::collections::BTreeMap::<u64, usize>::new();

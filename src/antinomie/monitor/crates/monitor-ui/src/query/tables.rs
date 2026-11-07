@@ -3,7 +3,6 @@
 //! language (the compiler of table filters is in `antinomie_triage::query`).
 use super::*;
 
-
 /// Retain the last valid filter while a draft is incomplete. State is scoped by the caller's UI id.
 pub(crate) fn applied_table(
     ui: &mut egui::Ui,

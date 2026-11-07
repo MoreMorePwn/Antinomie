@@ -3,7 +3,7 @@
 //! value lines. The model (capture sizes, flags, the trace line parts of a
 //! call) is in `antinomie_triage::trace`.
 use super::*;
-use antinomie_monitor_core::typed_fields::{self, Call, Decoded};
+use antinomie_monitor_core::typed_fields::{self, Call};
 
 pub(crate) use antinomie_triage::trace::*;
 
@@ -15,7 +15,6 @@ pub(crate) fn tone_color(tone: Tone) -> Color32 {
         Tone::Note => theme::warn(),
     }
 }
-
 
 #[derive(Default)]
 pub(super) struct FieldNode<'a> {

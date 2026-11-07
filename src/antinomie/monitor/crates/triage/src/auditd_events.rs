@@ -143,7 +143,11 @@ pub fn cwd(files: &FdState, call: &InvocationSummary, event: &EventSummary) -> O
 /// arguments; any other call the ones its process was last seen to start with.
 /// Without a complete argument vector there is no record: a partial one would
 /// be a different title.
-pub fn proctitle(files: &FdState, call: &InvocationSummary, event: &EventSummary) -> Option<Record> {
+pub fn proctitle(
+    files: &FdState,
+    call: &InvocationSummary,
+    event: &EventSummary,
+) -> Option<Record> {
     let arguments = if matches!(event.syscall_name.as_str(), "execve" | "execveat") {
         normalized::complete_argv(call, event)?
     } else {

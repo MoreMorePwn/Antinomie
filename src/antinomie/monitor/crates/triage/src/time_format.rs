@@ -44,7 +44,10 @@ pub fn local_seconds(seconds: u64) -> String {
 }
 
 /// [`local_seconds`] with the zone chosen by `zone`, so tests can fix it.
-pub fn local_seconds_at(seconds: u64, zone: impl Fn(DateTime<Utc>) -> DateTime<FixedOffset>) -> String {
+pub fn local_seconds_at(
+    seconds: u64,
+    zone: impl Fn(DateTime<Utc>) -> DateTime<FixedOffset>,
+) -> String {
     i64::try_from(seconds)
         .ok()
         .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))

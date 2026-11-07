@@ -6,8 +6,10 @@ use crate::{
     theme::{self, ValueKind},
     values,
 };
+#[cfg(test)]
+use antinomie_monitor_core::FieldEncoding;
 use antinomie_monitor_core::{
-    syscalls, typed_fields, FieldEncoding, FieldSummary, InvocationSummary, Recapture, WaitStatus,
+    syscalls, typed_fields, FieldSummary, InvocationSummary, Recapture, WaitStatus,
 };
 use eframe::egui::{self, Color32, RichText};
 
@@ -20,13 +22,10 @@ mod full_field;
 mod record_tree;
 pub(crate) use record_tree::call_json as record_call_json;
 mod tree_row;
-use call_tree::tree_header;
 pub(crate) use antinomie_triage::trace::{key, representative, InvocationKey};
+use call_tree::tree_header;
 pub(crate) use fields::*;
 use tree_row::{note_row, section_row, tree_row, Row};
-
-
-
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Selection {

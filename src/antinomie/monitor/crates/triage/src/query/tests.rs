@@ -2,7 +2,6 @@
 use super::*;
 use antinomie_monitor_core::{EventSummary, FieldSummary, InvocationSummary};
 
-
 pub const TABLE_FIELDS: &[FieldSpec<'static>] = &[
     FieldSpec::text("name", "Displayed name"),
     FieldSpec::number("address", "Address"),

@@ -12,12 +12,12 @@ use super::*;
 mod input;
 mod legend;
 mod mermaid;
-mod watch;
 mod paint;
 mod ruler;
 mod strip;
 mod tab;
 mod view;
+mod watch;
 mod widget;
 mod window;
 
@@ -39,9 +39,12 @@ mod tests;
 #[cfg(test)]
 mod window_tests;
 
+#[cfg(test)]
+use antinomie_triage::graph::notify;
+#[cfg(test)]
+pub(super) use antinomie_triage::graph::Lanes;
 pub(crate) use antinomie_triage::graph::Spacing;
-use antinomie_triage::graph::{axis, filter, index, lanes, notify, phases};
-pub(super) use antinomie_triage::graph::{Builder, Collector, GraphIndex, GraphScan, HighRule, Lanes};
+use antinomie_triage::graph::{axis, filter, index, lanes, phases};
 pub(super) use strip::Strip;
 pub(super) use view::State;
 pub(super) use watch::HighWatch;

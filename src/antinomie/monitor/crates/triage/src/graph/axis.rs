@@ -210,4 +210,3 @@ pub fn fitted_findings(findings: (u64, u64)) -> (f64, f64) {
     let pad = ((hi - lo) * 0.06).max(500_000.0);
     (lo - pad, hi + pad)
 }
-

@@ -83,11 +83,7 @@ pub fn succeeded(invocation: &InvocationSummary) -> bool {
         .is_some_and(|result| result >= 0)
 }
 
-pub fn remember_open(
-    files: &mut FdState,
-    invocation: &InvocationSummary,
-    event: &EventSummary,
-) {
+pub fn remember_open(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
     if event.syscall_name == "memfd_create" && succeeded(invocation) {
         if let Some(fd) = invocation.exit.as_ref().and_then(|exit| exit.result) {
             let owner = table_owner(files, invocation.task_cookie, event.tid);
@@ -131,11 +127,7 @@ pub fn remember_open(
     }
 }
 
-pub fn remember_cwd(
-    files: &mut FdState,
-    invocation: &InvocationSummary,
-    event: &EventSummary,
-) {
+pub fn remember_cwd(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
     if !matches!(event.syscall_name.as_str(), "chdir" | "fchdir" | "getcwd") {
         return;
     }
@@ -260,9 +252,7 @@ pub fn apply_dup(files: &mut FdState, invocation: &InvocationSummary, event: &Ev
 /// One cookie per pid when every event for that pid shares it. Two cookies
 /// for one pid are not a guess: the caller uses 0.
 #[cfg(any(test, feature = "test-support"))]
-pub fn task_cookies(
-    invocations: &[InvocationSummary],
-) -> std::collections::BTreeMap<u32, u64> {
+pub fn task_cookies(invocations: &[InvocationSummary]) -> std::collections::BTreeMap<u32, u64> {
     let mut sets: std::collections::BTreeMap<u32, std::collections::BTreeSet<u64>> =
         std::collections::BTreeMap::new();
     for invocation in invocations {
@@ -288,11 +278,7 @@ pub fn task_cookies(
 }
 
 /// A successful `close` drops that task's descriptor only.
-pub fn forget_closed(
-    files: &mut FdState,
-    invocation: &InvocationSummary,
-    event: &EventSummary,
-) {
+pub fn forget_closed(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
     if matches!(event.syscall_name.as_str(), "execve" | "execveat") && succeeded(invocation) {
         detach_files(files, invocation.task_cookie, event.tid);
         let owner = table_owner(files, invocation.task_cookie, event.tid);
@@ -546,7 +532,11 @@ pub fn displayed_path(
 /// Remember the name of a file the guest identified, when a call opened it or
 /// renamed it, so a later call that reaches the same file by no descriptor of
 /// the run (a slot of an io_uring registered table) can still be named.
-pub fn remember_identity(files: &mut FdState, invocation: &InvocationSummary, event: &EventSummary) {
+pub fn remember_identity(
+    files: &mut FdState,
+    invocation: &InvocationSummary,
+    event: &EventSummary,
+) {
     let Some(id) = kernel_records::file_id(invocation) else {
         return;
     };
@@ -573,10 +563,7 @@ pub fn remember_identity(files: &mut FdState, invocation: &InvocationSummary, ev
 
 /// The name of the file a call acted on, from the identity the guest recorded
 /// for it, when an earlier open or rename of the run named that file.
-pub fn identity_path<'a>(
-    files: &'a FdState,
-    invocation: &InvocationSummary,
-) -> Option<&'a str> {
+pub fn identity_path<'a>(files: &'a FdState, invocation: &InvocationSummary) -> Option<&'a str> {
     kernel_records::file_id(invocation)
         .and_then(|id| files.identity_paths.get(&id.key))
         .map(String::as_str)

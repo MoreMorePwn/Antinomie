@@ -296,11 +296,7 @@ pub fn resolved(
 
 /// The paths a call names, resolved as far as the trace allows. A path that
 /// cannot be resolved keeps the text the call was given, as auditd records it.
-pub fn paths(
-    files: &FdState,
-    call: &InvocationSummary,
-    event: &EventSummary,
-) -> Vec<PathUse> {
+pub fn paths(files: &FdState, call: &InvocationSummary, event: &EventSummary) -> Vec<PathUse> {
     let name = event.syscall_name.as_str();
     let args = call_args(call);
     let arg = |index: usize| args.map(|args| args[index]);

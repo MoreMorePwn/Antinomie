@@ -159,7 +159,12 @@ pub fn bpf_notes(input: &TriageInput<'_>) -> Vec<BpfNote> {
 
 /// One line of what happened, for the Observation column: the step and its
 /// result first, then the call and thread that made it.
-pub fn summary(event: &EventSummary, command: &str, outcome: &str, lifecycle: Option<&str>) -> String {
+pub fn summary(
+    event: &EventSummary,
+    command: &str,
+    outcome: &str,
+    lifecycle: Option<&str>,
+) -> String {
     let mut text = lifecycle.map_or_else(|| format!("{command}: {outcome}"), str::to_owned);
     if let Some(first) = text.get_mut(0..1) {
         first.make_ascii_uppercase();

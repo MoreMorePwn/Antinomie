@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The process table: threads, forked children, arguments and renames.
 use super::rules::tests::support::{creds, exec, exec_env, fork, sys, with_entry};
-use crate::tests::{call, captured, path_call};
 use super::*;
+use crate::tests::{call, captured, path_call};
 
 pub const CLONE_NR: u64 = 56;
 pub const CLONE3_NR: u64 = 435;

@@ -256,4 +256,3 @@ fn draw(
     table_rows(ui, tab.table_id(), &shown_headers, &shown);
     details::refresh(ui.ctx(), tab.table_id(), headers, rows);
 }
-

@@ -16,12 +16,7 @@ pub const APPLIED_KEPT: usize = 64;
 impl Change {
     /// The parts of the `len` bytes at `from` that writes applied after the
     /// one at `position` hold (none for a read, which has no order).
-    pub fn newer(
-        &self,
-        position: Option<FilePosition>,
-        from: u64,
-        len: u64,
-    ) -> Vec<(u64, u64)> {
+    pub fn newer(&self, position: Option<FilePosition>, from: u64, len: u64) -> Vec<(u64, u64)> {
         self.newer_than(
             position.and_then(|p| p.order),
             from,

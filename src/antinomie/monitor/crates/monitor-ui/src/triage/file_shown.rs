@@ -4,7 +4,6 @@ use super::*;
 
 pub(super) use antinomie_triage::file_shown::*;
 
-
 /// The run's SHA-256 note in a row's menu: copy the whole digest.
 pub fn copy_hash_menu(ui: &mut egui::Ui, values: &[(&str, RowValue)]) {
     let hash = values.iter().find_map(|(name, value)| match value {

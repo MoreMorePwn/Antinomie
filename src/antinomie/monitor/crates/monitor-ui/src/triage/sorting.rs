@@ -7,7 +7,6 @@ pub(super) use antinomie_triage::sorting::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-
 pub fn header(ui: &mut egui::Ui, table: &str, column: usize, title: &str) {
     crate::query::note_head(ui, title);
     crate::widgets::fit_table::head_bg(ui);

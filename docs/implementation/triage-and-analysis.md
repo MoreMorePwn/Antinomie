@@ -97,7 +97,7 @@ optional, so an older guest and an older host both keep working.
 
 ### Suspicious activity: tiers, categories, noise and the Evasion category (0.7.1)
 
-The rules live in `monitor-ui/src/triage/rules/`; `findings.rs` runs them over a
+The rules live in `triage/src/rules/` (the `antinomie-triage` crate); `findings.rs` runs them over a
 list of calls for the live view and the scan runs them through the same
 `rules::Engine`. Host only: nothing here needs a guest change.
 

@@ -16,7 +16,8 @@ pub(in crate::triage) const MIN_HEIGHT: f32 = 420.0;
 pub(super) const MIN_BUCKET_PX: f64 = 3.0;
 /// Individual findings are drawn when the window holds fewer than this.
 pub(super) const INDIVIDUAL_BELOW: usize = 5_000;
-use super::axis::{fitted, fitted_findings, MIN_SPAN_NS};
+#[cfg(test)]
+use super::axis::{fitted, MIN_SPAN_NS};
 
 /// How tall each part is. The embedded and the windowed graph size their lanes
 /// and bands to the room they are given; the Summary strip is compact.

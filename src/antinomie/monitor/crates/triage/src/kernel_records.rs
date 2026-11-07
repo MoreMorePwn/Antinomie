@@ -128,10 +128,7 @@ pub fn sysmon_user(
 }
 
 /// Sysmon `Hashes`, or `HashSkipped` when the guest recorded none.
-pub fn sysmon_hashes(
-    fields: &mut BTreeMap<String, serde_json::Value>,
-    hash: Option<&FileHash>,
-) {
+pub fn sysmon_hashes(fields: &mut BTreeMap<String, serde_json::Value>, hash: Option<&FileHash>) {
     let Some(hash) = hash else { return };
     match (hash.sysmon(), hash.skipped()) {
         (Some(hashes), _) => {

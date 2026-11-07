@@ -324,10 +324,7 @@ pub fn hold_creations(
 /// The creations still waiting at the end of the scan: no last close of the
 /// file was seen (it was still open when the recording ended, or its last
 /// writer was not a task of the run).
-pub fn flush_creations(
-    journal: &mut EventJournal,
-    files: &mut FdState,
-) -> Result<(), String> {
+pub fn flush_creations(journal: &mut EventJournal, files: &mut FdState) -> Result<(), String> {
     let held = std::mem::take(&mut files.journal.held);
     let mut held: Vec<_> = held.into_values().collect();
     held.sort_by_key(|event| match event.time {

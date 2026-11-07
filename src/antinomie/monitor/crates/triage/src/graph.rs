@@ -16,7 +16,6 @@ pub mod lanes;
 pub mod notify;
 pub mod phases;
 
-
 pub use axis::Spacing;
 pub use index::{Builder, GraphIndex};
 pub use lanes::Lanes;

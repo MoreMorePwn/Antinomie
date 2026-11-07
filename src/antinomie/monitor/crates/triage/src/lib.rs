@@ -8,7 +8,6 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use antinomie_monitor_core::{syscalls, EventSummary, InvocationSummary};
 use query::{FieldSpec, RowValue};
@@ -30,10 +29,14 @@ pub mod descriptors;
 pub mod family;
 pub mod file_activity;
 pub mod file_category;
+#[cfg(test)]
+pub mod file_category_tests;
 pub mod file_content;
 pub mod file_events;
 pub mod file_location;
 pub mod file_shown;
+#[cfg(test)]
+pub mod file_shown_tests;
 pub mod file_tabs;
 pub mod file_type;
 pub mod file_visibility;
@@ -50,38 +53,36 @@ pub mod network;
 pub mod network_index;
 pub mod normalized;
 pub mod pcap_scan;
-pub mod refresh;
 pub mod process_cells;
 pub mod process_env;
 pub mod process_record;
 pub mod process_tree;
+#[cfg(test)]
+pub mod process_tree_tests;
+pub mod refresh;
 pub mod rules;
 pub mod run_end;
 pub mod segments;
 pub mod sigma_events;
-pub mod sorting;
-pub mod table;
-pub mod tone;
-#[cfg(any(test, feature = "test-support"))]
-pub mod tests;
-#[cfg(test)]
-pub mod file_category_tests;
-#[cfg(test)]
-pub mod file_shown_tests;
-#[cfg(test)]
-pub mod process_tree_tests;
 #[cfg(test)]
 pub mod sigma_events_tests;
+pub mod sorting;
+pub mod table;
+#[cfg(any(test, feature = "test-support"))]
+pub mod tests;
+pub mod tone;
 #[cfg(test)]
 pub mod tracer_qa;
 #[cfg(test)]
 pub mod uring_qa;
-pub use tone::{Tone, ValueKind};
-pub use network::AddressLookup;
+#[cfg(test)]
+use self::archive_scan::*;
 use self::{
-    archive_scan::*, bpf_attach::BpfFds, bpf_notes::*, descriptors::*, file_category::FILE_FIELDS,
-    file_events::*, findings::*, pcap_scan::*, process_tree::*, refresh::*, table::*,
+    bpf_attach::BpfFds, bpf_notes::*, descriptors::*, file_category::FILE_FIELDS, file_events::*,
+    findings::*, pcap_scan::*, process_tree::*, refresh::*, table::*,
 };
+pub use network::AddressLookup;
+pub use tone::{Tone, ValueKind};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FileTab {
@@ -97,7 +98,6 @@ pub enum FileTab {
     Other,
     Changed,
 }
-
 
 #[derive(Clone)]
 pub struct Cell {
@@ -365,9 +365,9 @@ pub struct ScanRequest {
     pub launch: Option<(u32, String, Vec<String>)>,
     /// Set while the earlier bytes of a finished boot are copied into its
     /// recording: each changed file asked about is added to it.
-    pub before_copy: Option<Arc<std::sync::Mutex<antinomie_monitor_core::file_before_store::Writer>>>,
+    pub before_copy:
+        Option<Arc<std::sync::Mutex<antinomie_monitor_core::file_before_store::Writer>>>,
 }
-
 
 /// The default most rows one Triage table keeps per page.
 pub const STORED_ROWS: usize = 2000;
@@ -641,4 +641,3 @@ impl<'a> TriageInput<'a> {
         }
     }
 }
-

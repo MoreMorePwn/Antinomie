@@ -16,7 +16,14 @@ pub fn base(frame: u64, time_us: u64) -> Values {
     ]
 }
 
-pub fn dns(frame: u64, time_us: u64, name: &str, rcode: i128, answers: &[&str], kind: &str) -> Values {
+pub fn dns(
+    frame: u64,
+    time_us: u64,
+    name: &str,
+    rcode: i128,
+    answers: &[&str],
+    kind: &str,
+) -> Values {
     let mut values = base(frame, time_us);
     values.extend([
         ("dns.name", RowValue::Text(name.into())),
@@ -62,6 +69,7 @@ pub struct Capture {
     pub files: FdState,
 }
 
+#[allow(clippy::new_without_default)]
 impl Capture {
     pub fn new() -> Self {
         Self {

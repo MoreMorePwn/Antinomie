@@ -2,8 +2,8 @@
 //! Bounded evidence tables and the jump from a row to its evidence.
 use super::*;
 
-pub(super) use antinomie_triage::table::*;
 use crate::widgets::fit_table;
+pub(super) use antinomie_triage::table::*;
 
 /// An outcome cell "failed (EACCES)" gets the errno number on hover.
 fn hover_errno(response: egui::Response, text: &str) {

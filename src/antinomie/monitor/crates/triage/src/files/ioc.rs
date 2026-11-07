@@ -87,9 +87,7 @@ impl Change {
 impl Change {
     /// The file as the Samples window lists the files a sample wrote, or
     /// `None` for one the run did not change or with no usable path.
-    pub fn written_file(
-        &self,
-    ) -> Option<antinomie_monitor_core::run_digest::WrittenFile> {
+    pub fn written_file(&self) -> Option<antinomie_monitor_core::run_digest::WrittenFile> {
         if !self.changes || !self.path_known || !self.path.starts_with('/') || self.standard_io {
             return None;
         }

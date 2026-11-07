@@ -798,10 +798,7 @@ impl Builder {
 
     /// The files in order of first call. `contents` gives what the change
     /// reconstruction knows of a file.
-    pub fn finish(
-        self,
-        mut contents: impl FnMut(&FileActivity) -> Option<Contents>,
-    ) -> Activity {
+    pub fn finish(self, mut contents: impl FnMut(&FileActivity) -> Option<Contents>) -> Activity {
         let mut files: Vec<_> = self
             .files
             .into_values()

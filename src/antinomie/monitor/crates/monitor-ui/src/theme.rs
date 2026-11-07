@@ -9,7 +9,7 @@ use eframe::egui::{self, Color32, FontData, FontFamily, FontId, Stroke, TextStyl
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 mod palettes;
-pub use palettes::{translate, Palette, Theme, TREE_COLOR_COUNT};
+pub use palettes::{Palette, Theme, TREE_COLOR_COUNT};
 #[cfg(test)]
 pub use palettes::{BLUE, DARK, LIGHT};
 

@@ -104,6 +104,7 @@ impl Iterator for Bytes<'_> {
 
 impl CapturedPayload {
     /// Bytes of the transfer the recording captured and that read back.
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         let lost = self.unread.load(Ordering::Relaxed);
         usize::try_from(self.captured_size.saturating_sub(lost)).unwrap_or(usize::MAX)
@@ -349,11 +350,7 @@ pub fn field_stretches(
 }
 
 /// The bytes of one field, as [`capture`] reads a transfer's.
-pub fn field_capture(
-    field: &FieldSummary,
-    directory: Option<&Path>,
-    size: u64,
-) -> CapturedPayload {
+pub fn field_capture(field: &FieldSummary, directory: Option<&Path>, size: u64) -> CapturedPayload {
     let mut result = CapturedPayload {
         logical_size: size,
         ..Default::default()

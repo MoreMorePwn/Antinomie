@@ -7,8 +7,14 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::{bpf, query::{self, FieldSpec, RowValue}, theme, trace};
-use antinomie_monitor_core::{syscalls, EventSummary, InvocationSummary};
+use crate::{
+    bpf,
+    query::{self, FieldSpec, RowValue},
+    theme, trace,
+};
+#[cfg(test)]
+use antinomie_monitor_core::EventSummary;
+use antinomie_monitor_core::InvocationSummary;
 use eframe::egui::{self, RichText};
 
 // The scan, the activity rules and the other models are in `antinomie_triage`;
@@ -18,11 +24,12 @@ pub(crate) use antinomie_triage::family;
 #[allow(unused_imports)]
 use antinomie_triage::*;
 use antinomie_triage::{
-    archive_scan, async_files, auditd_events, bpf_attach, descriptors, file_category,
-    file_content, file_events, file_location, file_type, file_visibility, files, findings, geoip_fill,
-    ioc_scan, kernel_records, lineage_index, live_judge, network_index, normalized, pcap_scan, process_cells,
-    process_env, process_record, rules, run_end, segments, sigma_events,
+    archive_scan, file_category, file_location, file_type, file_visibility, files, findings,
+    ioc_scan, lineage_index, live_judge, pcap_scan, process_cells, process_env, process_record,
+    rules, run_end,
 };
+#[cfg(test)]
+use antinomie_triage::{async_files, descriptors, file_content, kernel_records};
 
 /// Where a row of Detection > Scanned inputs opens.
 #[derive(Clone, Debug, PartialEq)]
@@ -93,14 +100,16 @@ mod summary;
 mod table;
 #[cfg(test)]
 mod workload_qa;
-pub(crate) use antinomie_triage::tone;
-pub(crate) use tone::{Tone, ValueKind};
 use self::{
-    archive_scan::*, bpf_attach::BpfFds, bpf_notes::*, descriptors::*, file_category::FILE_FIELDS,
-    file_events::*, findings::*, pcap_scan::*, process_tree::*, refresh::*, table::*,
+    archive_scan::*, bpf_notes::*, file_category::FILE_FIELDS, findings::*, process_tree::*,
+    table::*,
 };
+#[cfg(test)]
+use self::{descriptors::*, pcap_scan::*};
 pub(crate) use antinomie_triage::network::AddressLookup;
+pub(crate) use antinomie_triage::tone;
 pub(crate) use antinomie_triage::{TriageInput, PAGE_ROWS_RANGE, STORED_ROWS};
+pub(crate) use tone::Tone;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {

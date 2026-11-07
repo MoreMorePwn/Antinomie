@@ -60,8 +60,6 @@ fn grouped(count: u64) -> String {
     grouped
 }
 
-pub(super) use antinomie_triage::trace::partial_note;
-
 impl Inspector {
     /// A page the app should read now, if the user asked for one.
     pub(crate) fn take_async_read(&mut self) -> Option<AsyncRead> {

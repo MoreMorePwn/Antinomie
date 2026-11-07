@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Builders for the calls the rule tests feed the engine.
-pub use crate::tests::{call, captured, path_call};
-pub use crate::Finding;
-pub use antinomie_monitor_core::{EventSummary, InvocationSummary};
 use super::super::*;
 pub use super::super::{view_keeps, View};
+pub use crate::tests::{call, captured, path_call};
+pub use crate::Finding;
 use antinomie_monitor_core::kernel_notes::{
     CREDS_KEY, EXEC_IMAGE_KEY, FILE_ID_KEY, FILE_ID_LAYOUT,
 };
+pub use antinomie_monitor_core::{EventSummary, InvocationSummary};
 
 pub type Calls = Vec<InvocationSummary>;
 pub const POINTER: &str = "linux-6.12.94/x86_64/pointer";
@@ -101,19 +101,12 @@ pub fn count(row: &Finding) -> u64 {
     files::number(&row.values, "finding.count").unwrap_or(0)
 }
 
-pub fn with_args(
-    mut row: InvocationSummary,
-    args: [u64; 6],
-) -> InvocationSummary {
+pub fn with_args(mut row: InvocationSummary, args: [u64; 6]) -> InvocationSummary {
     row.entry.as_mut().unwrap().args = Some(args);
     row
 }
 
-pub fn with_path(
-    mut row: InvocationSummary,
-    key: &str,
-    path: &str,
-) -> InvocationSummary {
+pub fn with_path(mut row: InvocationSummary, key: &str, path: &str) -> InvocationSummary {
     let mut bytes = path.as_bytes().to_vec();
     bytes.push(0);
     row.entry
@@ -124,11 +117,7 @@ pub fn with_path(
     row
 }
 
-pub fn with_entry(
-    mut row: InvocationSummary,
-    key: &str,
-    data: &[u8],
-) -> InvocationSummary {
+pub fn with_entry(mut row: InvocationSummary, key: &str, data: &[u8]) -> InvocationSummary {
     row.entry
         .as_mut()
         .unwrap()
@@ -137,11 +126,7 @@ pub fn with_entry(
     row
 }
 
-pub fn with_exit(
-    mut row: InvocationSummary,
-    key: &str,
-    data: &[u8],
-) -> InvocationSummary {
+pub fn with_exit(mut row: InvocationSummary, key: &str, data: &[u8]) -> InvocationSummary {
     row.exit
         .as_mut()
         .unwrap()
@@ -150,10 +135,7 @@ pub fn with_exit(
     row
 }
 
-pub fn with_notes(
-    mut row: InvocationSummary,
-    notes: Vec<EventSummary>,
-) -> InvocationSummary {
+pub fn with_notes(mut row: InvocationSummary, notes: Vec<EventSummary>) -> InvocationSummary {
     row.kernel_notes = notes;
     row
 }
@@ -186,12 +168,7 @@ pub fn exec(pid: u32, path: &str, argv: &[&str]) -> InvocationSummary {
     exec_env(pid, path, argv, &[])
 }
 
-pub fn exec_env(
-    pid: u32,
-    path: &str,
-    argv: &[&str],
-    envp: &[&str],
-) -> InvocationSummary {
+pub fn exec_env(pid: u32, path: &str, argv: &[&str], envp: &[&str]) -> InvocationSummary {
     let mut row = path_call(pid, 59, "execve", 0, path);
     strings(&mut row, 1, argv);
     if !envp.is_empty() {
@@ -252,13 +229,7 @@ pub fn close(pid: u32, fd: u64) -> InvocationSummary {
     with_args(call(pid, 3, "close", 0), [fd, 0, 0, 0, 0, 0])
 }
 
-pub fn sys(
-    pid: u32,
-    nr: u64,
-    name: &str,
-    args: [u64; 6],
-    result: i64,
-) -> InvocationSummary {
+pub fn sys(pid: u32, nr: u64, name: &str, args: [u64; 6], result: i64) -> InvocationSummary {
     with_args(call(pid, nr, name, result), args)
 }
 

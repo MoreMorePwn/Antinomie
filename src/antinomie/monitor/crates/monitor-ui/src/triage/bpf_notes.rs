@@ -4,7 +4,6 @@ use super::*;
 
 pub(super) use antinomie_triage::bpf_notes::*;
 
-
 pub fn bpf_view(ui: &mut egui::Ui, input: &TriageInput<'_>, indexed: Option<&[BpfNote]>) {
     let page_notes;
     let notes = if let Some(notes) = indexed {

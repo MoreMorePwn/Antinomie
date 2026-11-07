@@ -9,7 +9,6 @@ mod scroll;
 mod suspicious;
 mod theme_switch;
 
-
 #[test]
 #[ignore = "requires X11 native rendering; synthetic triage evidence fixture"]
 fn native_triage_fixture() {

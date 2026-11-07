@@ -212,11 +212,7 @@ pub fn lock_command(command: u64) -> bool {
 /// the call to have succeeded, because only success shows the file was made.
 /// Call before the call is tracked: the Created inference needs the path as
 /// it was before this call.
-pub fn classify(
-    files: &FdState,
-    call: &InvocationSummary,
-    event: &EventSummary,
-) -> Vec<Hit> {
+pub fn classify(files: &FdState, call: &InvocationSummary, event: &EventSummary) -> Vec<Hit> {
     let name = event.syscall_name.as_str();
     let args = call_args(call);
     let arg = |index: usize| args.map_or(0, |args| args[index]);
@@ -365,12 +361,7 @@ pub fn script_note(call: &InvocationSummary) -> Option<String> {
 }
 
 /// Words for a row's Detail column. Empty when the syscall name says it all.
-pub fn detail(
-    files: &FdState,
-    call: &InvocationSummary,
-    event: &EventSummary,
-    hit: Hit,
-) -> String {
+pub fn detail(files: &FdState, call: &InvocationSummary, event: &EventSummary, hit: Hit) -> String {
     let name = event.syscall_name.as_str();
     let args = call_args(call);
     let arg = |index: usize| args.map_or(0, |args| args[index]);
@@ -629,11 +620,7 @@ pub fn own_images(files: &FdState) -> Vec<String> {
 }
 
 /// The classes of every path a call names.
-pub fn locations(
-    files: &FdState,
-    call: &InvocationSummary,
-    event: &EventSummary,
-) -> Vec<Location> {
+pub fn locations(files: &FdState, call: &InvocationSummary, event: &EventSummary) -> Vec<Location> {
     let own = own_images(files);
     let mut names: Vec<String> = sigma_events::paths(files, call, event)
         .into_iter()

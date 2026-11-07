@@ -4,7 +4,6 @@ use super::*;
 
 pub(super) use antinomie_triage::process_tree::*;
 
-
 pub fn process_tree_nodes(
     ui: &mut egui::Ui,
     nodes: &[ProcessNode],

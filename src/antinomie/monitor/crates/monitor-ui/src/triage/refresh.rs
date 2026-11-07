@@ -5,7 +5,6 @@ use super::*;
 
 pub(super) use antinomie_triage::refresh::*;
 
-
 /// How often a live run is read while its pane is hidden and the HIGH toast is on.
 pub(super) const HIDDEN_POLL: Duration = Duration::from_secs(15);
 

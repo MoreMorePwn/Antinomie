@@ -36,7 +36,12 @@ pub fn hits(files: &FdState, call: &InvocationSummary) -> Vec<Hit> {
 }
 
 /// What the scan does with one call: classify, then track it.
-pub fn step(files: &mut FdState, index: &mut files::FileIndex, call: &mut InvocationSummary, id: u64) {
+pub fn step(
+    files: &mut FdState,
+    index: &mut files::FileIndex,
+    call: &mut InvocationSummary,
+    id: u64,
+) {
     call.call_id = id;
     for event in call.entry.iter_mut().chain(call.exit.iter_mut()) {
         event.call_id = id;

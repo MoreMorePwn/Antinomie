@@ -2,7 +2,6 @@
 //! Reading the text of a filter being edited: its tokens and the one at the cursor.
 use super::*;
 
-
 pub fn operator_prefix(prefix: &str) -> bool {
     prefix.starts_with(['=', '!', '<', '>', '&', '|', 'c', 'i', 'e', 'm'])
 }

@@ -705,7 +705,11 @@ pub fn link_child(
     }
 }
 
-pub fn spawn_kind(invocation: &InvocationSummary, name: &str, args: Option<[u64; 6]>) -> Option<Spawn> {
+pub fn spawn_kind(
+    invocation: &InvocationSummary,
+    name: &str,
+    args: Option<[u64; 6]>,
+) -> Option<Spawn> {
     match name {
         "fork" | "vfork" => Some(Spawn::Process),
         "clone" => Some(
@@ -744,10 +748,7 @@ pub fn clone3_is_thread(invocation: &InvocationSummary) -> Option<bool> {
     Some(flags & CLONE_THREAD != 0)
 }
 
-pub fn program_name(
-    entry: Option<&EventSummary>,
-    exit: Option<&EventSummary>,
-) -> Option<String> {
+pub fn program_name(entry: Option<&EventSummary>, exit: Option<&EventSummary>) -> Option<String> {
     entry.into_iter().chain(exit).find_map(|event| {
         event
             .fields

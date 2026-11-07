@@ -5,7 +5,6 @@ use super::*;
 
 pub(super) use antinomie_triage::network::*;
 
-
 /// Temp-data key Open Packets leaves for the app.
 pub const OPEN_PACKETS: &str = "triage-open-packets";
 

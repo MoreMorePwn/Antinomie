@@ -142,7 +142,7 @@ RULES       all               c2.bpf_backdoor,c2.bind_shell,...   (sorted union 
 ## Scenarios and the rules they should fire
 
 The ids are those of the 0.7.1 rule table
-(`src/antinomie/monitor/crates/monitor-ui/src/triage/rules/table.rs`);
+(`src/antinomie/monitor/crates/triage/src/rules/table.rs`);
 `tests/monitor/test-sinkhole.py` checks that every id in the registry
 exists there. A tier is the rule's own; failed or allow-listed matches are lower.
 

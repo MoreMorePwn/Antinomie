@@ -2,13 +2,10 @@
 //! How a call is read from the recording, without drawing it: keys, captured
 //! fields and their previews, the trace line parts of a call and the text
 //! filters read.
-use antinomie_monitor_core::typed_fields::{self, Call, Decoded};
-use antinomie_monitor_core::{
-    syscalls, typed_fields as _typed, FieldEncoding, FieldSummary, InvocationSummary, Recapture, WaitStatus,
-};
-use crate::values;
 pub use crate::tone::ValueKind;
-
+use crate::values;
+use antinomie_monitor_core::typed_fields::{self, Call, Decoded};
+use antinomie_monitor_core::{syscalls, FieldEncoding, FieldSummary, InvocationSummary, Recapture};
 
 pub type InvocationKey = (u64, u64, u64);
 
@@ -61,9 +58,7 @@ pub fn nothing_returned(invocation: &InvocationSummary, nr: u64, index: usize) -
             .is_some_and(|argument| argument.pointer)
 }
 
-pub fn argument_data<'a>(
-    fields: &[(u8, &'a FieldSummary)],
-) -> Option<(u8, &'a FieldSummary)> {
+pub fn argument_data<'a>(fields: &[(u8, &'a FieldSummary)]) -> Option<(u8, &'a FieldSummary)> {
     // The argument's own object: its key past the first component ("arg1",
     // "address", "signal") is not nested ("arg1.iov[0].data", "msghdr.name").
     let top_level = |field: &FieldSummary| {
@@ -824,12 +819,11 @@ pub fn partial_note(invocation: &InvocationSummary) -> Option<String> {
     })
 }
 
-
 pub fn grouped_count(count: u64) -> String {
     let digits = count.to_string();
     let mut out = String::new();
     for (at, digit) in digits.chars().enumerate() {
-        if at > 0 && (digits.len() - at) % 3 == 0 {
+        if at > 0 && (digits.len() - at).is_multiple_of(3) {
             out.push(',');
         }
         out.push(digit);

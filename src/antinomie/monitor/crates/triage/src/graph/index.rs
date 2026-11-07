@@ -302,13 +302,7 @@ impl GraphIndex {
     }
 
     /// The cells of `lane` in kept level `slot` whose bucket is in `low..=high`.
-    pub fn lane_cells(
-        &self,
-        slot: usize,
-        lane: u32,
-        low: u32,
-        high: u32,
-    ) -> &[Cell] {
+    pub fn lane_cells(&self, slot: usize, lane: u32, low: u32, high: u32) -> &[Cell] {
         let Some(cells) = self.cells.get(slot) else {
             return &[];
         };
@@ -465,13 +459,7 @@ impl Builder {
     }
 
     /// One INFO match of an anti-analysis or discovery rule, counted at its time.
-    pub fn count_info(
-        &mut self,
-        ns: u64,
-        count: u32,
-        rule: &str,
-        category: Category,
-    ) {
+    pub fn count_info(&mut self, ns: u64, count: u32, rule: &str, category: Category) {
         if phases::phase_of(rule, category) == Some(Phase::Recon) {
             self.counted.push(Counted { ns, count });
         }

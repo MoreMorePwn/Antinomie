@@ -670,11 +670,7 @@ impl Attributed {
 
     /// The calls due before `call` of `segment`: all of an earlier segment,
     /// and those of this one recorded no later than the call.
-    pub fn due(
-        &mut self,
-        segment: usize,
-        call: &InvocationSummary,
-    ) -> Vec<InvocationSummary> {
+    pub fn due(&mut self, segment: usize, call: &InvocationSummary) -> Vec<InvocationSummary> {
         let Some(at) = trace::representative(call).map(|event| event.timestamp_ns) else {
             return Vec::new();
         };

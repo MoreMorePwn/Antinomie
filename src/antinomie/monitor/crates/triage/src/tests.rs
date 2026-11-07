@@ -3,7 +3,6 @@
 use super::*;
 use antinomie_monitor_core::{EventSummary, FieldSummary, InvocationSummary};
 
-
 // x86-64 numbers of the calls the process-tree fixtures build by number.
 pub const CLONE: u64 = 56;
 pub const FORK: u64 = 57;
@@ -1248,13 +1247,7 @@ pub fn write_fd_copied_at_fork_is_not_shared_with_parent() {
     assert!(!rows.rows[0][0].text.contains("/etc/passwd"));
 }
 
-pub fn path_call(
-    pid: u32,
-    nr: u64,
-    name: &str,
-    result: i64,
-    path: &str,
-) -> InvocationSummary {
+pub fn path_call(pid: u32, nr: u64, name: &str, result: i64, path: &str) -> InvocationSummary {
     let mut row = call(pid, nr, name, result);
     let mut bytes = path.as_bytes().to_vec();
     bytes.push(0);

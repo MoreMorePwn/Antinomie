@@ -2,7 +2,6 @@
 //! When an index of a recording is out of date.
 use super::*;
 
-
 /// The answer of an index thread that found the recording as the last index saw it.
 pub const UNCHANGED: &str = "unchanged";
 

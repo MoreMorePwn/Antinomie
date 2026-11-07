@@ -379,7 +379,12 @@ impl TaskProbes {
     }
 }
 
-pub fn new_probe(cx: &Ctx, class: Class, what: &str, answer: Option<(String, Option<bool>)>) -> Probe {
+pub fn new_probe(
+    cx: &Ctx,
+    class: Class,
+    what: &str,
+    answer: Option<(String, Option<bool>)>,
+) -> Probe {
     let (answer, shows) = answer.map_or((None, None), |(text, shows)| (Some(text), shows));
     let mut gaps = Gaps::default();
     gaps.add(cx.time());
