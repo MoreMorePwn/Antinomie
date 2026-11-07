@@ -68,8 +68,8 @@ pub use kept::{
     artifact_sha256, record_saved, saved_items, short_hash,
 };
 pub use library::{
-    Alias, CATEGORIES, EventRow, Library, NewOrigin, Origin, OriginKind, RunStats, SampleRecord,
-    SeenRun, TAG_COLORS, Tag, TagKind, VERDICTS,
+    Alias, CATEGORIES, DATABASE, EventRow, Library, NewOrigin, Origin, OriginKind, RunStats,
+    SampleRecord, SeenRun, TAG_COLORS, Tag, TagKind, VERDICTS,
 };
 pub use lineage::{
     Edge as LineageEdge, EdgeKind, Graph as LineageGraph, Known, Link, Node as LineageNode,

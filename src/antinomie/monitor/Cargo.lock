@@ -171,6 +171,7 @@ dependencies = [
  "antinomie-monitor-core",
  "antinomie-service",
  "clap",
+ "rusqlite",
  "rustix 1.1.5",
  "serde",
  "serde_json",

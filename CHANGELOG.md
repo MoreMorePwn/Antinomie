@@ -26,6 +26,10 @@ x86 programs by their own table.
   output formats human, json and ndjson, and fixed exit codes. It does not link
   the GUI libraries. See "Command line" in docs/usage.md.
 
+- **Samples and custody from the command line.** `antinomie-cli sample add, list,
+  show, tag, verify, remove` and `custody verify` (with export and signing) work
+  on the sample library without the engine lock, so they run beside the window.
+
 - **Clock model for the boot age.** A new Clock model setting in a VM's Device
   profile (Auto, Always running, Suspend) chooses whether the boot age steps
   both guest clocks or only CLOCK_BOOTTIME. Auto picks Suspend on Debian bases,

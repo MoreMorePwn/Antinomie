@@ -7,7 +7,10 @@ use clap::Subcommand;
 
 mod capabilities;
 mod config;
+mod custody;
 mod doctor;
+mod library;
+mod sample;
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -18,6 +21,12 @@ pub enum Command {
     /// Paths and settings of the data directory.
     #[command(subcommand)]
     Config(config::Config),
+    /// Samples in the library; no engine lock needed.
+    #[command(subcommand)]
+    Sample(sample::Sample),
+    /// Custody chains of the samples; no engine lock needed.
+    #[command(subcommand)]
+    Custody(custody::Custody),
 }
 
 pub fn run(command: &Command, context: &Context) -> Result<Reply, CliError> {
@@ -25,5 +34,7 @@ pub fn run(command: &Command, context: &Context) -> Result<Reply, CliError> {
         Command::Doctor(arguments) => doctor::run(arguments, context),
         Command::Capabilities => capabilities::run(context),
         Command::Config(config) => config::run(config, context),
+        Command::Sample(sample) => sample::run(sample, context),
+        Command::Custody(custody) => custody::run(custody, context),
     }
 }

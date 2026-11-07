@@ -20,3 +20,4 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 
 [dev-dependencies]
 rustix = { version = "1", features = ["fs"] }
+rusqlite = "0.41.0"

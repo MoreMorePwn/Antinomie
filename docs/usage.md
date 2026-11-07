@@ -1227,6 +1227,23 @@ per line: a list command prints its items and then a last line
 - `doctor` also reports who owns the data directory (`data_dir.owner`, from
   `run/owner.json`, ignored when its process is gone). A command that needs the
   engine while the window owns the directory exits 21 and names the window.
+- `sample add FILE... [--name N] [--tag K=V] [--delete-original]` hashes and archives
+  files in the library (never runs them) and prints the SHA-256 of each; a tag is
+  `verdict=`, `category=`, `technique=` or `custom=` plus a value, or a bare custom
+  value. `sample list [--q TEXT] [--tag K=V] [--limit N] [--cursor C] [--all]
+  [--custody]`, `sample show SHA256 [--origins] [--events] [--runs]`,
+  `sample tag SHA256 TAG... [--remove]`, `sample verify [SHA256]` (exit 1 when an
+  archive does not match its hash) and `sample remove SHA256 --yes` (deletes the
+  archive; the record and its custody log stay). A sample is the `Sample` object
+  of the job API: `sha256`, `size`, `type`, `architecture`, `name`, `tags`,
+  `first_seen_ms`, `run_count`, `last_job`, `custody_ok` (null unless
+  `--custody` or `show`). These commands and `custody verify` need no engine
+  lock, so they work while the window is open.
+- `custody verify [SHA256] [--export PATH] [--sign minisign|ssh --key KEY]` checks
+  the custody chain of one sample, or every chain and the library index when no
+  SHA-256 is given (exit 1 when something does not verify). `--export` writes the
+  custody record of the sample (JSON with `verify-custody.py` beside it, or a
+  readable page for a `.html` path), optionally signed with your own key.
 - `config path` prints the paths of `settings.json`, `service.toml` and `policies/`.
 
 ## Troubleshooting
