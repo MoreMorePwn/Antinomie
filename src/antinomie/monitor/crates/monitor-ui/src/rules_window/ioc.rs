@@ -582,12 +582,25 @@ mod tests {
         let mut fixture = Fixture::new("keychange");
         fixture.outbound = true;
         let server = Arc::new(served(&[]));
-        fixture.model.ioc.fetcher = Some(server);
+        fixture.model.ioc.fetcher = Some(server.clone());
         fixture.frame();
         // No key: a download is attempted and the key feeds say what they need.
         fixture.click("Download / Update all");
         let shown = fixture.until("need a free abuse.ch Auth-Key");
         assert!(shown.contains("not set"), "{shown}");
+        // The message stands once however many frames and refreshes show it.
+        let mut journal = crate::activity::Journal::default();
+        for _ in 0..30 {
+            fixture.frame();
+            fixture.model.ioc.stale = true;
+            journal.ingest(&fixture.ctx);
+        }
+        let said = journal
+            .messages()
+            .iter()
+            .filter(|message| message.contains("need a free abuse.ch Auth-Key"))
+            .count();
+        assert_eq!(said, 1, "{:?}", journal.messages());
         // The key is saved elsewhere (Tools > API keys): the next frames show it.
         api_keys::set(&fixture.dir, ApiKey::Abusech, "ioc-test-key-0002").unwrap();
         fixture.frame();
@@ -595,6 +608,21 @@ mod tests {
         assert!(shown.contains("(…0002)"), "{shown}");
         assert!(!shown.contains("need a free abuse.ch Auth-Key"), "{shown}");
         assert!(!shown.contains("not set"), "{shown}");
+        // The very next fetch carries the key just saved, and replaces the
+        // failed state when it succeeds.
+        server.calls.lock().unwrap().clear();
+        fixture.click("Download / Update all");
+        let shown = fixture.until("6 of 6 loaded");
+        assert!(!shown.contains("need a free abuse.ch Auth-Key"), "{shown}");
+        let calls = server.calls.lock().unwrap().clone();
+        let with_key = calls
+            .iter()
+            .filter(|url| url.contains("ioc-test-key-0002"))
+            .count();
+        assert_eq!(
+            with_key, 3,
+            "the switched-on feeds that need the key: {calls:?}"
+        );
         // Removed again: back to not set, still without a download.
         api_keys::clear(&fixture.dir, ApiKey::Abusech).unwrap();
         fixture.frame();
