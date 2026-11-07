@@ -72,11 +72,10 @@ impl ScanProgress {
         let done = self.done.load(Ordering::Relaxed);
         let total = self.total.load(Ordering::Relaxed);
         let share = |done: u64, total: u64| {
-            if total > 0 {
-                format!(" ({}%)", (done.min(total) * 100 / total))
-            } else {
-                String::new()
-            }
+            done.min(total)
+                .checked_mul(100)
+                .and_then(|scaled| scaled.checked_div(total))
+                .map_or_else(String::new, |percent| format!(" ({percent}%)"))
         };
         match self.phase() {
             Phase::Idle => None,
@@ -109,7 +108,7 @@ fn count(value: u64) -> String {
     let digits = value.to_string();
     let mut out = String::new();
     for (at, digit) in digits.chars().enumerate() {
-        if at > 0 && (digits.len() - at) % 3 == 0 {
+        if at > 0 && (digits.len() - at).is_multiple_of(3) {
             out.push(',');
         }
         out.push(digit);
