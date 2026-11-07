@@ -283,11 +283,15 @@ impl TriageView {
         input: &TriageInput<'_>,
         room: Option<f32>,
     ) -> bool {
-        let mut text = format!(
-            "{} · every {} s",
-            self.refresh_status(input),
-            self.refresh_seconds
-        );
+        let mut text = if self.auto_refreshing(input) {
+            format!(
+                "{} · every {} s",
+                self.refresh_status(input),
+                self.refresh_seconds
+            )
+        } else {
+            self.refresh_status(input)
+        };
         if text.chars().count() > 64 {
             text = text.chars().take(63).collect::<String>() + "…";
         }
@@ -356,6 +360,12 @@ impl TriageView {
         })
     }
 
+    /// A timer reads the index again: the run is still going, or its
+    /// recording has not yet saved its totals.
+    fn auto_refreshing(&self, input: &TriageInput<'_>) -> bool {
+        !input.run_finished || self.scan_waits_for_saving()
+    }
+
     pub(super) fn refresh_status(&self, input: &TriageInput<'_>) -> String {
         if self.scan_rx.is_some() {
             return self.last_refresh.map_or_else(
@@ -372,15 +382,22 @@ impl TriageView {
             return format!("Refresh failed: {error}");
         }
         if let Some(when) = self.last_refresh {
-            return format!(
-                "Refreshed {} s ago{}",
-                self.clock.now().saturating_duration_since(when).as_secs(),
-                if self.scan.as_ref().is_some_and(|scan| scan.partial) {
-                    "; incomplete"
-                } else {
-                    ""
-                }
-            );
+            let incomplete = if self.scan.as_ref().is_some_and(|scan| scan.partial) {
+                "; incomplete"
+            } else {
+                ""
+            };
+            let age = self.clock.now().saturating_duration_since(when);
+            // A finished run is read once and not again by a timer: a counter
+            // of seconds since that read would only grow. Say when it was read.
+            if !self.auto_refreshing(input) {
+                let read = (crate::time_format::now_ms() / 1000).saturating_sub(age.as_secs());
+                return format!(
+                    "Read at {}{incomplete}",
+                    crate::time_format::time_of_day(read)
+                );
+            }
+            return format!("Refreshed {} s ago{incomplete}", age.as_secs());
         }
         if input.archive.is_some() {
             "Waiting to index the saved recording".into()
