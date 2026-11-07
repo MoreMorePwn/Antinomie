@@ -531,7 +531,10 @@ impl Session {
         }
         if run.summary.execution.as_ref() != Some(&execution) {
             run.execution_generation = execution.generation;
-            run.summary.state = crate::execution::state(&execution);
+            // A Stop run that ended the tree reads as stopped even when the
+            // root had exited before it, or obeyed the signal with exit 0.
+            run.summary.state =
+                crate::execution::state_after_stop(&execution, run.summary.stopped_by_user);
             run.summary.execution = Some(execution);
             run.record_async_loss();
             run.record_tree_completion();
@@ -623,6 +626,7 @@ mod forget_tests {
             reduced: None,
             boot_wait: None,
             triggers: None,
+            stopped_by_user: false,
         }
     }
 

@@ -4,12 +4,17 @@
 use antinomie_monitor_core::{RunState, RunSummary, WaitStatus};
 
 pub(super) fn run_status(run: &RunSummary) -> &'static str {
+    // The words say what happened: a VM stop that cut a live tree is not a
+    // failure of the sample, and Stop run is the user's own act.
+    if crate::run_state_line::ended_by_vm_stop(run) {
+        return "Ended by VM stop";
+    }
     match run.state {
         RunState::Unknown => "Unknown",
         RunState::Running => "Running",
         RunState::StopRequested => "Stop requested",
         RunState::Finished => "Finished",
-        RunState::Stopped => "Stopped",
+        RunState::Stopped => "Stopped by you",
         RunState::TerminalClosed => "PTY closed",
         RunState::Finalized => "Recording ended",
         RunState::FailedToStart => "Failed to start",

@@ -663,6 +663,12 @@ pub struct RunArtifacts {
     /// releases, which list no core for the run.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub core_deleted: bool,
+    /// The dumps the run's dump trigger took, the same records `run.json`
+    /// keeps under `triggers`. `core_state` above describes the exit core only
+    /// (Core dump on exit), so a run whose exit core is off but whose trigger
+    /// took a core no longer reads as having no core at all.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub trigger_dumps: Vec<crate::dump_trigger::TriggerRecord>,
 }
 
 impl RunArtifacts {
@@ -955,6 +961,11 @@ pub struct RunSummary {
     /// nothing matched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triggers: Option<crate::dump_trigger::TriggerLog>,
+    /// The user ended the run with Stop run. A root that had already exited,
+    /// or one that obeyed the signal, would otherwise read as an ordinary
+    /// finish. Absent in runs saved before it existed and in runs not stopped.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stopped_by_user: bool,
 }
 
 impl RunSummary {

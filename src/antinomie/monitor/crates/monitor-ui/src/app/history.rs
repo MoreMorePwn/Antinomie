@@ -646,6 +646,7 @@ pub(super) fn listed(run: &RunSummary) -> RunSummary {
         reduced: run.reduced.clone(),
         boot_wait: run.boot_wait.clone(),
         triggers: run.triggers.clone(),
+        stopped_by_user: run.stopped_by_user,
         recording_error: run.recording_error.clone(),
         execution: run.execution.clone(),
         analysis: run
@@ -881,6 +882,18 @@ pub(super) fn feature_tree(run: &RunSummary, labels: Option<run_labels::Labels>)
                 feature.hover = dump.error.clone();
                 features.push(feature);
             }
+        }
+        for miss in log.iter().flat_map(|log| &log.missed) {
+            let mut feature = Feature::new(
+                1,
+                format!(
+                    "{} matched in pid {}: no dump, too late",
+                    miss.finding.rule, miss.finding.pid
+                ),
+            );
+            feature.available = false;
+            feature.hover = Some(miss.reason.clone());
+            features.push(feature);
         }
         if let Some(log) = log
             && log.skipped > 0

@@ -4,7 +4,9 @@
 //! within the run's budget, and keeps the record in `run.json`.
 use super::worker_guest::GUEST_REPLY_TIMEOUT;
 use super::*;
-use crate::dump_trigger::{LiveFinding, RECORDS_MAX, TriggerDump, TriggerLog, TriggerRecord};
+use crate::dump_trigger::{
+    LiveFinding, RECORDS_MAX, TriggerDump, TriggerLog, TriggerMiss, TriggerRecord,
+};
 use crate::observation::GuestProcessIdentity;
 
 /// Free disk space that must remain after a memory dump, bytes.
@@ -29,12 +31,24 @@ fn failed(error: impl Into<String>) -> TriggerDump {
 }
 
 /// A core that cannot be taken because the process is gone is not an attempt:
-/// its record goes, so the run's budget is kept, and it counts as skipped.
-fn drop_unattempted(log: &mut TriggerLog, index: Option<usize>) {
+/// its record goes, so the run's budget is kept, and the log keeps the match
+/// with the reason it came too late.
+fn drop_unattempted(
+    log: &mut TriggerLog,
+    index: Option<usize>,
+    finding: &LiveFinding,
+    reason: String,
+) {
     if let Some(index) = index {
         log.records.remove(index);
     }
-    log.skipped += 1;
+    if log.missed.len() < RECORDS_MAX {
+        log.missed.push(TriggerMiss {
+            at_ms: unix_ms(),
+            finding: finding.clone(),
+            reason,
+        });
+    }
 }
 
 impl Worker {
@@ -84,10 +98,17 @@ impl Worker {
                 .at_ms
                 .saturating_add(u64::from(plan.cooldown_secs) * 1000)
         });
-        if !run.summary.state.is_live()
-            || log.records.len() >= plan.max_dumps.min(RECORDS_MAX as u32) as usize
-            || cooling
-        {
+        if !run.summary.state.is_live() {
+            // The run ended before the match was handled: the process is gone
+            // too, and a note says by how much the dump was late.
+            let reason = match run.watch.as_ref() {
+                Some(watch) => format!("The run had already ended. {}", watch.too_late(&finding)),
+                None => "The run had already ended before the core could be taken.".into(),
+            };
+            self.record_too_late(cookie, &finding, reason);
+            return;
+        }
+        if log.records.len() >= plan.max_dumps.min(RECORDS_MAX as u32) as usize || cooling {
             log.skipped += 1;
             if log.skipped == 1
                 && let Err(error) = run.persist_summary()
@@ -108,24 +129,16 @@ impl Worker {
                 run.summary.request.core_max_size,
                 run.summary.request.core_timeout_ms,
             );
-            let (core, gone) = self.queue_trigger_core(pid, &run_id, root_pid, request, None);
+            let (mut core, gone) = self.queue_trigger_core(pid, &run_id, root_pid, request, None);
+            if gone && core.error.as_deref() == Some("") {
+                // The exit is seen while the guest answers the process list.
+                core.error = Some(self.too_late_for(cookie, &finding));
+            }
             if gone && !plan.memory {
                 // Nothing can be taken from a process that is gone: not an
                 // attempt, so the budget is kept for the next match.
                 let error = core.error.unwrap_or_default();
-                if let Some(run) = self
-                    .session
-                    .as_mut()
-                    .and_then(|session| session.runs.get_mut(&cookie))
-                {
-                    run.add_note(format!(
-                        "Dump skipped for {} ({}, process {}): {error}.",
-                        finding.rule,
-                        finding.tier.label(),
-                        finding.pid
-                    ));
-                }
-                self.save_trigger(cookie, |log| log.skipped += 1);
+                self.record_too_late(cookie, &finding, error);
                 return;
             }
             record.core = Some(core);
@@ -169,6 +182,8 @@ impl Worker {
             run.add_note(note);
         }
         self.save_trigger(cookie, |log| log.records.push(record));
+        // Start the core now: the first step asks the guest for it.
+        self.check_manual_cores();
         let what = self
             .session
             .as_ref()
@@ -192,6 +207,38 @@ impl Worker {
             id: 0,
             success: true,
             message: what,
+        });
+    }
+
+    /// Why a dump of `finding`'s process came too late, from what the run saw.
+    fn too_late_for(&self, cookie: u64, finding: &LiveFinding) -> String {
+        self.session
+            .as_ref()
+            .and_then(|session| session.runs.get(&cookie))
+            .and_then(|run| run.watch.as_ref())
+            .map_or_else(
+                || crate::dump_trigger::too_late_text(finding, None),
+                |watch| watch.too_late(finding),
+            )
+    }
+
+    /// A match whose process was gone before its core could be taken: the
+    /// run's notes and its trigger log say so plainly, and the budget is kept.
+    fn record_too_late(&mut self, cookie: u64, finding: &LiveFinding, reason: String) {
+        if let Some(run) = self
+            .session
+            .as_mut()
+            .and_then(|session| session.runs.get_mut(&cookie))
+        {
+            run.add_note(format!(
+                "Dump skipped for {} ({}, process {}): {reason}",
+                finding.rule,
+                finding.tier.label(),
+                finding.pid
+            ));
+        }
+        self.save_trigger(cookie, |log| {
+            drop_unattempted(log, None, finding, reason);
         });
     }
 
@@ -219,12 +266,8 @@ impl Worker {
             Err(error) => return (failed(format!("process list: {error}")), false),
         };
         let Some(process) = page.processes.iter().find(|p| p.identity.tgid == pid) else {
-            return (
-                failed(format!(
-                    "process {pid} had already exited, so no core could be taken"
-                )),
-                true,
-            );
+            // The caller words it once the exit has been seen.
+            return (failed(""), true);
         };
         if refused == Some(&process.identity) {
             // The guest already said no to exactly this process.
@@ -238,14 +281,19 @@ impl Worker {
             timeout_ms: timeout_ms.unwrap_or(5000),
         };
         match session.queue_manual_core(request) {
-            Ok(id) => (
-                TriggerDump {
-                    state: RunArtifactState::Queued,
-                    capture_id: Some(id),
-                    ..TriggerDump::default()
-                },
-                false,
-            ),
+            Ok(id) => {
+                if let Some(owner) = session.manual_cores.get_mut(&id) {
+                    owner.eager = true;
+                }
+                (
+                    TriggerDump {
+                        state: RunArtifactState::Queued,
+                        capture_id: Some(id),
+                        ..TriggerDump::default()
+                    },
+                    false,
+                )
+            }
             Err(error) => (failed(error), false),
         }
     }
@@ -287,16 +335,31 @@ impl Worker {
 
     /// Change one run's log and save `run.json`.
     fn save_trigger(&mut self, cookie: u64, change: impl FnOnce(&mut TriggerLog)) {
-        let Some(run) = self
-            .session
-            .as_mut()
-            .and_then(|session| session.runs.get_mut(&cookie))
-        else {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let Some(run) = session.runs.get_mut(&cookie) else {
             return;
         };
         change(run.summary.triggers.get_or_insert_with(TriggerLog::default));
         if let Err(error) = run.persist_summary() {
             self.snapshot.last_error = Some(error);
+        }
+        // The run's artifacts say the same: a trigger's cores are listed there,
+        // beside the exit core, so the two files agree on what was taken.
+        let taken = run
+            .summary
+            .triggers
+            .as_ref()
+            .map(|log| log.records.clone())
+            .unwrap_or_default();
+        if let Some(owner) = session.run_artifacts.get_mut(&cookie)
+            && owner.summary.trigger_dumps != taken
+        {
+            owner.summary.trigger_dumps = taken;
+            if let Err(error) = owner.save() {
+                self.snapshot.last_error = Some(error);
+            }
         }
     }
 
@@ -443,8 +506,11 @@ impl Worker {
             root_pid,
             limits,
         } = gone;
-        let (core, still_gone) =
+        let (mut core, still_gone) =
             self.queue_trigger_core(finding.pid, &run_id, root_pid, limits, Some(&target));
+        if still_gone && core.error.as_deref() == Some("") {
+            core.error = Some(self.too_late_for(cookie, &finding));
+        }
         let Some(run) = self
             .session
             .as_mut()
@@ -465,7 +531,7 @@ impl Worker {
             return;
         }
         let why = core.error.unwrap_or_default();
-        drop_unattempted(log, found);
+        drop_unattempted(log, found, &finding, why.clone());
         run.add_note(format!(
             "Dump skipped for {} ({}, process {}): {why}",
             finding.rule,
@@ -536,9 +602,12 @@ mod tests {
         log.records.push(record(1160));
         let max_dumps = 1usize;
         assert!(log.records.len() >= max_dumps);
-        drop_unattempted(&mut log, Some(0));
+        let finding = log.records[0].finding.clone();
+        drop_unattempted(&mut log, Some(0), &finding, "too late".into());
         assert!(log.records.is_empty());
-        assert_eq!(log.skipped, 1);
+        assert_eq!(log.missed.len(), 1);
+        assert_eq!(log.missed[0].reason, "too late");
+        assert_eq!(log.skipped, 0);
         // The next match finds room again.
         assert!(log.records.len() < max_dumps);
     }

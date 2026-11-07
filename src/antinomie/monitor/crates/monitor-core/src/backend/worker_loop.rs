@@ -406,6 +406,8 @@ impl Worker {
                 continue;
             }
             let exited = self.watch_session();
+            // A trigger is acted on the moment its call has been received.
+            self.check_triggers();
             self.query_session(exited);
             if exited {
                 self.end_exited_session();
@@ -482,7 +484,9 @@ impl Worker {
             })
         } else if self.debug.is_busy()
             || self.session.as_ref().is_some_and(|session| {
-                session.core_transfer_active() || session.analysis.transferring()
+                session.core_transfer_active()
+                    || session.analysis.transferring()
+                    || session.trigger_hot()
             })
         {
             // A debugger's, a core's or a specimen's round trips each wait for this loop.

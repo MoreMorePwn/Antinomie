@@ -145,7 +145,7 @@ fn toolbar_keeps_the_main_actions_and_menus_reach_the_rest() {
         [
             "Stop",
             "Snapshots",
-            "Kill",
+            "Stop run",
             "Run program",
             "Capture all",
             "Capture network",

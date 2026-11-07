@@ -49,7 +49,7 @@ fn words(number: usize, ending: &Ending) -> (Level, bool, String, String) {
             Level::Info,
             false,
             format!("{run} stopped"),
-            "stopped by the user".into(),
+            "stopped by you".into(),
         ),
         Ending::Signal { signal, core } => {
             let name = format!("{} ({signal})", signal_name(u64::from(*signal)));

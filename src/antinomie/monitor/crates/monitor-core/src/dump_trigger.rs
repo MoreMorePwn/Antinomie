@@ -125,6 +125,53 @@ pub struct LiveFinding {
     pub syscall: String,
 }
 
+/// The words for a dump that came after its process was gone; `exit_ns` is
+/// when the process exited on the guest clock, if it was seen.
+pub fn too_late_text(finding: &LiveFinding, exit_ns: Option<u64>) -> String {
+    match exit_ns {
+        Some(exit) => format!(
+            "The process exited {} ms after the match, before the core could be taken.",
+            exit.saturating_sub(finding.guest_ns) / 1_000_000
+        ),
+        None => {
+            "The process had already exited when the core was requested, before it could be taken."
+                .into()
+        }
+    }
+}
+
+#[cfg(test)]
+mod late_tests {
+    use super::*;
+
+    fn finding(pid: u32, guest_ns: u64) -> LiveFinding {
+        LiveFinding {
+            rule: "persistence.cron".into(),
+            summary: String::new(),
+            tier: TriggerTier::High,
+            pid,
+            tid: pid,
+            task_cookie: 1,
+            stream_id: 1,
+            call_id: 1,
+            guest_ns,
+            syscall: "openat".into(),
+        }
+    }
+
+    #[test]
+    fn a_late_dump_says_how_late() {
+        let found = finding(7, 5_000_000_000);
+        assert_eq!(
+            too_late_text(&found, Some(5_189_000_000)),
+            "The process exited 189 ms after the match, before the core could be taken."
+        );
+        assert!(too_late_text(&found, None).contains("had already exited"));
+        // An exit stamped before the match never reads as negative.
+        assert!(too_late_text(&found, Some(1)).contains("exited 0 ms after"));
+    }
+}
+
 /// The Triage rule engine, fed one call at a time. Implemented by the UI.
 pub trait LiveJudge: Send {
     /// Judge one call; returns the rows that are new, or that a repeat raised
@@ -178,11 +225,25 @@ impl TriggerRecord {
     }
 }
 
+/// A match that took no dump because it was too late, with the reason in the
+/// words a user reads ("The process exited 120 ms after the match, before the
+/// core could be taken.").
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TriggerMiss {
+    pub at_ms: u64,
+    pub finding: LiveFinding,
+    pub reason: String,
+}
+
 /// What a run's triggers did, in `run.json`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct TriggerLog {
     pub records: Vec<TriggerRecord>,
+    /// Matches whose dump came too late: the process (or the run) was gone.
+    /// They are not attempts, so they do not use the budget.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missed: Vec<TriggerMiss>,
     /// Matches that reached the tier but took no dump: over the budget, or
     /// inside the cooldown.
     pub skipped: u64,
@@ -200,6 +261,9 @@ pub(crate) struct Watch {
     order: VecDeque<((u64, u64, u64), Instant)>,
     pub queue: VecDeque<LiveFinding>,
     pub lost: u64,
+    /// When each process was last seen to exit, by thread group id, on the
+    /// guest clock: says how late a dump was.
+    exits: HashMap<u32, u64>,
 }
 
 impl Watch {
@@ -216,7 +280,21 @@ impl Watch {
             order: VecDeque::new(),
             queue: VecDeque::new(),
             lost: 0,
+            exits: HashMap::new(),
         })
+    }
+
+    /// The leader of thread group `pid` exited at `guest_ns`.
+    pub(crate) fn exit(&mut self, pid: u32, guest_ns: u64) {
+        if self.exits.len() >= PENDING_MAX {
+            self.exits.clear();
+        }
+        self.exits.insert(pid, guest_ns);
+    }
+
+    /// Why a dump of the process `finding` named came too late.
+    pub(crate) fn too_late(&self, finding: &LiveFinding) -> String {
+        too_late_text(finding, self.exits.get(&finding.pid).copied())
     }
 
     /// An entry or exit that has been received whole.

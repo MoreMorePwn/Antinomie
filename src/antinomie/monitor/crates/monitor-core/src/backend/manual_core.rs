@@ -53,6 +53,10 @@ pub(super) struct Owner {
     /// The copy to the host has been checked against the host disk and quota.
     preflighted: bool,
     copy_started: Option<Instant>,
+    /// Ask the guest for the core while the first disk write is still going,
+    /// not after it: a dump trigger's process may exit within milliseconds.
+    /// The disk is ready before any byte is copied either way.
+    pub(super) eager: bool,
 }
 impl Owner {
     fn new(request: ProcessCoreRequest, directory: PathBuf, id: String) -> Self {
@@ -111,6 +115,7 @@ impl Owner {
             disk_failed: false,
             preflighted: false,
             copy_started: None,
+            eager: false,
         }
     }
     /// The first reason sticks: a later one is usually its consequence.
@@ -126,6 +131,32 @@ impl Owner {
         let text = reason.text.clone();
         self.summary.reason.get_or_insert(reason);
         self.finish(RunArtifactState::Failed, text);
+    }
+    /// A core the guest called incomplete for coverage says which part is
+    /// missing, thread contexts or pages, with the counts the file holds.
+    fn say_what_is_missing(&mut self) {
+        if self.summary.state != RunArtifactState::Partial {
+            return;
+        }
+        let Some(reason) = self.summary.reason.as_mut() else {
+            return;
+        };
+        if reason.code != CoreReasonCode::Coverage {
+            return;
+        }
+        let threads = self.status.as_ref().map_or(0, |status| status.thread_count);
+        if let Some(file) = &self.summary.file
+            && let Some(detail) = crate::core_dump::coverage_detail(file, threads)
+        {
+            reason.text = detail.chars().take(2048).collect();
+            if let Some(issue) = self.summary.issue.as_mut() {
+                *issue = reason.text.clone();
+            }
+        }
+    }
+    /// The core was asked for and the guest has not taken it yet.
+    pub(super) fn starting(&self) -> bool {
+        !self.done && !self.known_absent && self.desired.is_none() && self.status.is_none()
     }
     /// A terminal guest status is being copied to the host.
     pub(super) fn transferring(&self) -> bool {
@@ -512,6 +543,7 @@ impl Session {
                     .ok_or("manual core final disk state missing")?
             };
             owner.summary.phase = ProcessCorePhase::Finished;
+            owner.say_what_is_missing();
             owner.done = !owner.guest_busy();
         } else {
             owner.activity = Instant::now();
@@ -776,9 +808,14 @@ impl Session {
             owner.sink.submit(Action::Init {
                 metadata: owner.metadata(None)?,
             })?;
-            return Ok(());
+            if !owner.eager {
+                return Ok(());
+            }
         }
-        if !owner.disk_failed && (!owner.initialized || owner.sink.pending()) {
+        if !owner.disk_failed
+            && (!owner.initialized || owner.sink.pending())
+            && !(owner.eager && !owner.admission_sent)
+        {
             return Ok(());
         }
         if let Some(sender) = sender

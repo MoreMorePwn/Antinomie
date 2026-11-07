@@ -536,6 +536,72 @@ impl CoreRecord {
     }
 }
 /// List metadata only, with bounded directory and JSON budgets; no core reads.
+#[cfg(test)]
+mod coverage_tests {
+    use super::coverage_text;
+
+    #[test]
+    fn a_partial_core_says_which_part_is_missing() {
+        // Contexts all there, pages missing.
+        let text = coverage_text(3, 3, 100 * 4096, 60 * 4096);
+        assert!(
+            text.contains("all 3 thread contexts were captured"),
+            "{text}"
+        );
+        assert!(text.contains("40 of 100 mapped pages"), "{text}");
+        // Contexts lost, pages all there.
+        let text = coverage_text(2, 5, 8 * 4096, 8 * 4096);
+        assert!(
+            text.contains("2 of 5 thread contexts were captured (3 lost)"),
+            "{text}"
+        );
+        assert!(text.contains("every mapped page has its bytes"), "{text}");
+        let one = coverage_text(1, 1, 4096, 0);
+        assert!(one.contains("all 1 thread context was captured"), "{one}");
+    }
+}
+
+/// Which part of a core is missing, in words, for a core the guest called
+/// incomplete for coverage: the thread contexts against the `expected_threads`
+/// the guest counted, and the mapped pages the file holds no bytes for. `None`
+/// when the file cannot be read as a process core.
+pub fn coverage_detail(path: &Path, expected_threads: u32) -> Option<String> {
+    let core = CoreDump::open(path).ok()?;
+    let threads = u32::try_from(core.threads.len()).unwrap_or(u32::MAX);
+    let mapped: u64 = core.mappings.iter().map(|m| m.memory_size).sum();
+    let stored: u64 = core.mappings.iter().map(|m| m.captured_size).sum();
+    Some(coverage_text(threads, expected_threads, mapped, stored))
+}
+
+/// The wording of [`coverage_detail`].
+pub fn coverage_text(threads: u32, expected_threads: u32, mapped: u64, stored: u64) -> String {
+    const PAGE: u64 = 4096;
+    let contexts = if expected_threads > threads {
+        format!(
+            "{threads} of {expected_threads} thread contexts were captured ({} lost)",
+            expected_threads - threads
+        )
+    } else {
+        format!(
+            "all {threads} thread context{} captured",
+            if threads == 1 { " was" } else { "s were" }
+        )
+    };
+    let missing = mapped.saturating_sub(stored);
+    let pages = if missing == 0 {
+        "every mapped page has its bytes".to_owned()
+    } else {
+        format!(
+            "{} of {} mapped pages ({} of {}) have no bytes: not resident when read (the guest reads resident pages only), or left out by the kernel's core filter",
+            missing.div_ceil(PAGE),
+            mapped.div_ceil(PAGE),
+            crate::byte_size::short_size(missing),
+            crate::byte_size::short_size(mapped),
+        )
+    };
+    format!("Partial: {contexts}; {pages}.")
+}
+
 pub fn list_records(roots: &[PathBuf]) -> Result<Vec<CoreRecord>> {
     let mut records = Vec::new();
     let mut total_size = 0u64;

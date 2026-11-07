@@ -194,6 +194,16 @@ impl Session {
             .any(|owner| owner.core.as_ref().is_some_and(|core| core.transferring()))
             || self.manual_cores.values().any(|owner| owner.transferring())
     }
+
+    /// Whether the worker should answer in a millisecond rather than ten: a
+    /// live run watches for a trigger (a process that matches may exit within
+    /// milliseconds), or a core the trigger asked for is still being started.
+    pub(super) fn trigger_hot(&self) -> bool {
+        self.runs
+            .values()
+            .any(|run| run.watch.is_some() && run.summary.state.is_live())
+            || self.manual_cores.values().any(|owner| owner.starting())
+    }
 }
 
 #[cfg(test)]

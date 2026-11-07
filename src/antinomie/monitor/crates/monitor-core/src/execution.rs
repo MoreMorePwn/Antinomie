@@ -81,9 +81,29 @@ pub(crate) fn state(execution: &RunExecution) -> RunState {
     }
 }
 
+/// [`state`], with the user's Stop run counted: a tree that ended after the
+/// user stopped it is stopped, whether the root had exited before the stop or
+/// obeyed it with exit 0.
+pub(crate) fn state_after_stop(execution: &RunExecution, stopped_by_user: bool) -> RunState {
+    match state(execution) {
+        RunState::Finished if stopped_by_user => RunState::Stopped,
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_tree_ended_after_stop_run_is_stopped_even_with_root_exit_zero() {
+        // ROOT | TREE | ASYNC, exit 0: the root left first, a child was stopped.
+        let ended = decode(&reply(11, 0, 0, 0), 7, 1).unwrap();
+        assert_eq!(state_after_stop(&ended, false), RunState::Finished);
+        assert_eq!(state_after_stop(&ended, true), RunState::Stopped);
+        // Still going: the user's stop changes nothing until the tree ends.
+        let going = decode(&reply(9, 1, 0, 0), 7, 1).unwrap();
+        assert_eq!(state_after_stop(&going, true), RunState::Running);
+    }
     fn reply(flags: u32, live: u64, pending: u64, raw: i32) -> Vec<u8> {
         let mut data = vec![0; 64];
         for (offset, value) in [(0, 7u64), (8, 2), (16, live), (24, pending), (48, 3)] {

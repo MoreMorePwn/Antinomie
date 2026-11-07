@@ -427,6 +427,7 @@ mod tests {
                 reduced: None,
                 boot_wait: None,
                 triggers: None,
+                stopped_by_user: false,
                 started_ms: None,
                 clock_anchor: None,
                 id: id.into(),

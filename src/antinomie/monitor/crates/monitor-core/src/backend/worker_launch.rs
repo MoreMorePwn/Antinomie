@@ -280,6 +280,7 @@ impl Worker {
             reduced: None,
             boot_wait: None,
             triggers: None,
+            stopped_by_user: false,
             execution: None,
             analysis: selected
                 .then(|| crate::analysis::jobs::new_report(&request.path, &request.analysis)),
