@@ -235,6 +235,8 @@ pub(super) struct View {
     bytes: Option<BytePreview>,
     pending_byte: Option<Evidence>,
     pub automatic: bool,
+    /// The engine whose stale result asked for a rescan this frame.
+    rescan: Option<usize>,
     pub profile: String,
     pub open_manager: bool,
     /// A rule the Matches table is to be filtered to when it next shows (set
@@ -412,6 +414,15 @@ impl View {
         Some(format!(
             "A background re-scan did not complete ({why}). The earlier result is kept; press Scan to try again."
         ))
+    }
+    /// Whether `report` was made with a rule selection other than the one
+    /// installed now (a pack was installed, updated or removed since).
+    pub(super) fn stale_selection(&self, index: usize, report: &Report) -> bool {
+        let current = &self.digest_cache[index];
+        self.digest_generation == self.rules_generation
+            && !current.is_empty()
+            && report.state != State::Skipped
+            && report.selection != *current
     }
     pub(super) fn rows(&mut self, index: usize) {
         self.counts[index] = self.results[index]
@@ -749,6 +760,11 @@ impl View {
             .id_salt("detection-page")
             .auto_shrink([false, false])
             .show(ui, |ui| self.show_page(ui, scan));
+        // The Rescan button of a result shown above sets this; the result is
+        // borrowed while it is drawn, so the scan starts here.
+        if let Some(index) = self.rescan.take() {
+            self.scan_now(ui.ctx(), index, scan);
+        }
     }
     fn show_page(&mut self, ui: &mut egui::Ui, scan: Option<&ArchiveScan>) {
         if self.fresh_registry().is_none() {
@@ -778,7 +794,7 @@ impl View {
         }
         let Some(result) = &self.results[index] else {
             if !scanning {
-                ui.weak("Not scanned.");
+                self.not_scanned_row(ui, index, scan);
             }
             return;
         };
@@ -789,6 +805,19 @@ impl View {
                 return;
             }
         };
+        if self.stale_selection(index, report) {
+            let mut rescan = false;
+            ui.horizontal_wrapped(|ui| {
+                crate::activity::warning(ui, "Scanned with an older rule set.");
+                rescan = ui
+                    .add_enabled(self.rx.is_none(), egui::Button::new("Rescan"))
+                    .on_hover_text("Scan again with the rule packs installed now.")
+                    .clicked();
+            });
+            if rescan {
+                self.rescan = Some(index);
+            }
+        }
         if self.selected == Engine::Sigma
             && report
                 .source_digest

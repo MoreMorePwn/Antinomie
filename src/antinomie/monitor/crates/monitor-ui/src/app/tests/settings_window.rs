@@ -109,7 +109,7 @@ fn the_page_list_has_a_keyboard_page_and_each_page_shows_its_settings() {
         (SettingsPage::Recording, "Process cores: default budget"),
         (
             SettingsPage::Detection,
-            "Scan retained evidence when it is ready",
+            "Scan runs with IDS and Sigma when they end",
         ),
         (SettingsPage::NetworkLookup, "Address lookup"),
         (SettingsPage::NetworkRoutes, "Default route"),

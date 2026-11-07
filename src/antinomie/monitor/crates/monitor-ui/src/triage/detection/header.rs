@@ -110,21 +110,25 @@ impl View {
         if self.is_scanning(index) || (self.rx.is_some() && self.busy.is_none()) {
             return Count::Pending;
         }
-        if self.results[index]
-            .as_ref()
-            .is_some_and(|result| match result {
-                Err(_) => true,
-                Ok(report) => matches!(
-                    report.state,
-                    State::Unavailable | State::Missing | State::NoRules | State::Skipped
-                ),
-            })
-        {
-            return Count::Unavailable;
+        match &self.results[index] {
+            None => {
+                return match &self.counts[index] {
+                    Some(counts) => Count::Ready(counts.rules),
+                    None if self.phase[index] == "preparing" => Count::Pending,
+                    // An engine that has not scanned this run is not a zero.
+                    None => Count::NotScanned,
+                };
+            }
+            Some(Err(_)) => return Count::NotScanned,
+            Some(Ok(report)) => match report.state {
+                State::Unavailable | State::Missing | State::NoRules => return Count::NotScanned,
+                State::Skipped => return Count::Unavailable,
+                State::Complete | State::Partial => {}
+            },
         }
         self.counts[index]
             .as_ref()
-            .map_or(Count::Unavailable, |counts| Count::Ready(counts.rules))
+            .map_or(Count::NotScanned, |counts| Count::Ready(counts.rules))
     }
 
     pub(super) fn engine_tabs(&mut self, ui: &mut egui::Ui) {
@@ -284,6 +288,34 @@ impl View {
             part.show(ui);
         }
         ui.horizontal(|ui| self.scan_buttons(ui, index, scan));
+    }
+
+    /// The line of an engine that has not scanned this run: it says so, with
+    /// the reason when it is waiting, and offers the scan.
+    pub(super) fn not_scanned_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        index: usize,
+        scan: Option<&ArchiveScan>,
+    ) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Not scanned.").color(theme::muted()));
+            let ready = self.rx.is_none() && self.identity.is_some();
+            if ui
+                .add_enabled(ready, egui::Button::new("Scan"))
+                .on_hover_text("Scan this run with the installed rules.")
+                .clicked()
+            {
+                self.scan_now(ui.ctx(), index, scan);
+            }
+            if !self.notes[index].is_empty() {
+                ui.label(
+                    RichText::new(&self.notes[index])
+                        .small()
+                        .color(theme::muted()),
+                );
+            }
+        });
     }
 
     fn scan_buttons(&mut self, ui: &mut egui::Ui, index: usize, scan: Option<&ArchiveScan>) {
@@ -609,20 +641,28 @@ mod tests {
         for label in ["YARA", "IDS", "Sigma", "1,234", "0", "…"] {
             assert!(texts.contains(label), "{texts}");
         }
-        for state in [
-            State::Missing,
-            State::Unavailable,
-            State::NoRules,
-            State::Skipped,
-        ] {
+        for state in [State::Missing, State::Unavailable, State::NoRules] {
             let mut missing = report(Vec::new());
             missing.state = state;
             view.results[1] = Some(Ok(missing));
             assert_eq!(
                 view.tab_count(1),
-                super::super::super::counts::Count::Unavailable
+                super::super::super::counts::Count::NotScanned
             );
         }
+        let mut skipped = report(Vec::new());
+        skipped.state = State::Skipped;
+        view.results[1] = Some(Ok(skipped));
+        assert_eq!(
+            view.tab_count(1),
+            super::super::super::counts::Count::Unavailable
+        );
+        view.results[1] = None;
+        view.counts[1] = None;
+        assert_eq!(
+            view.tab_count(1),
+            super::super::super::counts::Count::NotScanned
+        );
     }
 
     #[test]
@@ -694,6 +734,34 @@ mod tests {
         rendered_text(&frames(&ctx, 1, |root| {
             egui::CentralPanel::default().show(root, |ui| view.show(ui, None));
         }))
+    }
+
+    #[test]
+    fn an_engine_that_has_not_scanned_says_so_and_offers_the_scan() {
+        let mut view = View::default();
+        let shown = panel_text(&mut view);
+        assert!(shown.contains("Not scanned."), "{shown}");
+        assert!(shown.contains("Scan"), "{shown}");
+        assert!(!shown.contains('—'), "{shown}");
+    }
+
+    #[test]
+    fn a_result_of_an_older_rule_set_says_so_and_offers_a_rescan() {
+        let mut view = View::default();
+        let mut old = report(Vec::new());
+        old.selection = "old-digest".into();
+        view.results[0] = Some(Ok(old));
+        view.digest_cache[0] = "new-digest".into();
+        let shown = panel_text(&mut view);
+        assert!(shown.contains("Scanned with an older rule set."), "{shown}");
+        assert!(shown.contains("Rescan"), "{shown}");
+        // The same rules: no note.
+        view.digest_cache[0] = "old-digest".into();
+        let shown = panel_text(&mut view);
+        assert!(!shown.contains("older rule set"), "{shown}");
+        // Rules not read yet: no note either.
+        view.digest_cache[0].clear();
+        assert!(!panel_text(&mut view).contains("older rule set"));
     }
 
     fn input(outcome: InputOutcome) -> ScannedInput {

@@ -257,9 +257,22 @@ impl Model {
     /// running job. They sit on the content's left edge with room above and
     /// below, between the buttons and the table.
     pub(super) fn notices(&mut self, ui: &mut egui::Ui, outbound: &mut bool) {
+        // A status line belongs to the page it happened on: a failed ThreatFox
+        // download does not stay on the Sigma page. A finished job's line
+        // takes the page the job was started from.
+        if self.status_scope.0 != self.status {
+            let owner = if self.status_scope.0.is_empty() && !self.status_scope.1.is_empty() {
+                std::mem::take(&mut self.status_scope.1)
+            } else {
+                self.engine.clone()
+            };
+            self.status_scope = (self.status.clone(), owner);
+        }
+        let here = self.status_scope.1 == self.engine;
         // A failure was raised as a toast when it arrived.
-        let status =
-            self.status_error.as_deref() != Some(self.status.as_str()) && !self.status.is_empty();
+        let status = self.status_error.as_deref() != Some(self.status.as_str())
+            && !self.status.is_empty()
+            && here;
         if *outbound && !status && self.job.is_none() {
             return;
         }

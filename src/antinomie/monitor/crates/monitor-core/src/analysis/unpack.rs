@@ -40,6 +40,10 @@ pub(crate) const TOTAL_MAX_SIZE: u64 = 3 * LAYER_MAX_SIZE;
 /// time in Settings > Analysis tools).
 const RUN_SECONDS: u64 = 60;
 
+/// What to do about a UPX file whose headers were damaged on purpose.
+pub(super) const UPX_ALTERED_HINT: &str =
+    "UPX headers are altered (anti-unpacking); restore the UPX! magic and sizes to unpack it";
+
 /// Whether the file shows UPX's own marks, however damaged its headers are.
 /// Identification and Unpacking share this, so they cannot disagree.
 pub(super) fn upx_marker(bytes: &[u8]) -> Option<&'static str> {
@@ -108,7 +112,7 @@ fn unpack_with(
             {
                 layers[at].packer = Some("UPX (headers too damaged to locate)".into());
                 problem = Some(format!(
-                    "{sign} is in the file but UPX's headers are altered beyond repair, so it cannot be unpacked here; unpack it by running it in the VM or with a dumped memory image"
+                    "{UPX_ALTERED_HINT}. {sign} is in the file but UPX's headers are altered beyond repair, so it cannot be unpacked here; unpack it by running it in the VM or with a dumped memory image"
                 ));
             }
             break;
@@ -164,7 +168,13 @@ fn unpack_with(
                 if error.contains("timed out after") {
                     out_of_time = Some(run_seconds);
                 }
-                problem = Some(error);
+                // A header that had to be changed and still would not unpack
+                // was altered on purpose to stop `upx -d`.
+                problem = Some(if !found.changes.is_empty() && out_of_time.is_none() {
+                    format!("{error}; {UPX_ALTERED_HINT}")
+                } else {
+                    error
+                });
                 break;
             }
         };

@@ -27,6 +27,13 @@ impl Session {
         }
         // The program did not run, so nothing will ever acquire its specimen.
         run.settle_unstarted_analysis(&error);
+        // Say why in the run's digest, so no view waits for a Triage that has
+        // nothing to read.
+        if run.summary.state == RunState::FailedToStart {
+            let _ = crate::run_digest::RunDigest::update(&run.summary.directory, |digest| {
+                *digest = crate::run_digest::RunDigest::for_failed_launch(&error);
+            });
+        }
         let mut issues = vec![error];
         owner.tree_complete = true;
         self.release_run_route(&mut owner);

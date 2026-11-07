@@ -44,7 +44,7 @@ fn go_evidence(specimen: &[u8], file: Option<&object::File>) -> bool {
 }
 
 /// What the file's own structure says about "Go", for a tool that claims it.
-fn go_supported(specimen: &[u8]) -> bool {
+pub(super) fn go_supported(specimen: &[u8]) -> bool {
     let file = object::File::parse(specimen).ok();
     go_evidence(specimen, file.as_ref())
 }

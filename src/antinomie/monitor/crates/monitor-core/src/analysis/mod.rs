@@ -13,6 +13,10 @@ mod decompile;
 pub mod detection;
 mod disasm;
 mod elf_facts;
+pub(crate) use elf_facts::file_truncation_note;
+#[cfg(test)]
+pub(crate) use elf_facts::fixtures::elf64 as elf64_fixture;
+pub use elf_facts::report_notes;
 mod floss;
 mod ghidra_listing;
 mod ident;

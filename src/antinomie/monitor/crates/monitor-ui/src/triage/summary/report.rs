@@ -60,7 +60,7 @@ fn detector(
                             RichText::new(
                                 view.detection.counts[index]
                                     .as_ref()
-                                    .map_or("—".into(), |counts| {
+                                    .map_or("–".into(), |counts| {
                                         format!("{} matches", counts.rules)
                                     }),
                             )
@@ -106,7 +106,8 @@ fn detector(
                     .color(theme::muted()),
                 );
             } else {
-                ui.label(RichText::new("—").size(27.0).color(theme::muted()));
+                ui.label(RichText::new("–").size(27.0).color(theme::muted()))
+                    .on_hover_text("Not scanned");
                 ui.label(
                     RichText::new(match activity {
                         Some(detection::ScanActivity::Running) => "Scan in progress",
@@ -118,6 +119,7 @@ fn detector(
                             {
                                 "Not available: open Results for why"
                             }
+                            None => "Not scanned: open Results to scan",
                             _ => "No evaluated result",
                         },
                     })

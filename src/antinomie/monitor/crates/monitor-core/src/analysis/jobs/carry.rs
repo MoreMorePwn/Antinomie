@@ -8,6 +8,9 @@ impl Jobs {
     /// still has to do reads the guest.
     fn host_side(job: &Job) -> bool {
         job.child.is_some()
+            // The guest vouched for the host copy of the file: the transfer
+            // it replaces is not needed, so a VM stop must not end the job.
+            || (job.report.state == AnalysisState::Acquiring && job.host_copy_vouched())
             || (job.handle.is_none()
                 && job.received_len >= job.total_len
                 && matches!(
@@ -56,6 +59,15 @@ impl Jobs {
         for carried in &mut self.carried {
             // Carried jobs never ask for guest reads or handle releases.
             let _ = carried.next();
+            // A job that still wanted the guest cannot go on without it.
+            if let Some(mut job) = carried.acquiring.take() {
+                fail(
+                    &mut job.report,
+                    AnalysisState::Unavailable,
+                    "VM ended during specimen acquisition",
+                );
+                carried.finish(job);
+            }
         }
         let updates: Vec<_> = self.carried.iter_mut().flat_map(Jobs::updates).collect();
         self.updates.extend(updates);

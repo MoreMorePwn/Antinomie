@@ -142,6 +142,40 @@ fn limits_report(app: &mut MonitorApp) {
     ];
 }
 
+/// The static scene's report with the notes a cut-off ELF and a shared
+/// library earn in Identity (ANTINOMIE_QA_REPORT = notes).
+fn notes_report(app: &mut MonitorApp) {
+    use antinomie_monitor_core::{AnalysisData, AnalysisEntry, AnalysisRecord};
+    let Some(report) = app.history[0].analysis.as_mut() else {
+        return;
+    };
+    report.source_path = "/tmp/redtail".into();
+    for section in report
+        .sections
+        .iter_mut()
+        .filter(|section| section.kind == AnalysisKind::Metadata)
+    {
+        for (id, text) in [
+            (9_001, "This ELF is truncated: its segments need 30.3 MB, the file has 2.0 MB. A partial upload or download; get a full copy."),
+            (9_002, "This is a shared library, not a program; it is meant to be loaded by another process (LD_PRELOAD or dlopen)."),
+        ] {
+            section.entries.push(AnalysisEntry {
+                label: "Note".into(),
+                value: text.into(),
+                offset: None,
+                record: Some(AnalysisRecord {
+                    revision: 1,
+                    id,
+                    location: None,
+                    data: AnalysisData::Field {
+                        group: "Notes".into(),
+                    },
+                }),
+            });
+        }
+    }
+}
+
 #[test]
 #[ignore = "requires X11 native rendering; exits after the given seconds"]
 fn native_ui_polish_fixture() {
@@ -245,6 +279,9 @@ fn native_ui_polish_fixture() {
                 app.selected_analysis = Some("report-1".into());
                 if var("ANTINOMIE_QA_REPORT") == "limits" {
                     limits_report(&mut app);
+                }
+                if var("ANTINOMIE_QA_REPORT") == "notes" {
+                    notes_report(&mut app);
                 }
             }
             // ANTINOMIE_QA_OPEN = strings | regex | routes | rules | about | started

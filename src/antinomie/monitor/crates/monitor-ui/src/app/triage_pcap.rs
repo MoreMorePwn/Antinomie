@@ -113,11 +113,43 @@ impl MonitorApp {
         match artifacts {
             Artifacts::Mismatch => return None,
             Artifacts::Found { file, complete } => {
-                return Some((file, self.live_history_run(run) || !complete));
+                // A capture its writer left unclosed (the VM stopped under
+                // it) is final: nothing will grow it, so scans take what it
+                // holds and say so instead of waiting for a segment that
+                // never closes.
+                let writing = live.is_some_and(|capture| {
+                    capture.boot_id == run.boot_id && capture.stopped_ms.is_none()
+                });
+                return Some((
+                    file,
+                    pcap_open(self.live_history_run(run), complete, writing),
+                ));
             }
             Artifacts::Absent | Artifacts::NoCapture => {}
         }
         live.filter(|capture| capture.boot_id == run.boot_id && live_file)
             .map(|capture| (capture.file.clone(), capture.stopped_ms.is_none()))
+    }
+}
+
+/// Whether a run's pcap can still grow. A capture its writer left unclosed
+/// (the VM stopped under it) is final: nothing will add to it, so a scan takes
+/// what it holds and says so, not waiting for a segment that never closes.
+fn pcap_open(run_live: bool, complete: bool, writing: bool) -> bool {
+    run_live || (!complete && writing)
+}
+
+#[cfg(test)]
+mod open_tests {
+    use super::pcap_open;
+
+    #[test]
+    fn a_pcap_nothing_writes_to_any_more_is_final_even_when_unclosed() {
+        // A live run, or a capture its writer still holds, can grow.
+        assert!(pcap_open(true, true, false));
+        assert!(pcap_open(false, false, true));
+        // Closed properly, or left unclosed by a VM stop: final.
+        assert!(!pcap_open(false, true, true));
+        assert!(!pcap_open(false, false, false));
     }
 }

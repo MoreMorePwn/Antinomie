@@ -256,6 +256,30 @@ impl ProgramRun {
             self.add_note(line.clone());
         }
     }
+    /// A root that exited 127 because the loader found no library says which
+    /// one, from the front of the terminal transcript.
+    fn note_missing_library(&mut self) {
+        use std::io::Read;
+        let exit = self
+            .summary
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.root_exit.as_ref());
+        if !matches!(exit, Some(crate::WaitStatus::Exited { code: 127 })) {
+            return;
+        }
+        let mut head = Vec::new();
+        let read = std::fs::File::open(self.summary.directory.join("terminal-transcript.raw"))
+            .and_then(|file| {
+                file.take(crate::launch_notes::TRANSCRIPT_HEAD)
+                    .read_to_end(&mut head)
+            });
+        if read.is_ok()
+            && let Some(note) = crate::launch_notes::exit_127_note(exit, &head)
+        {
+            self.add_note(note);
+        }
+    }
     /// The program tree has ended and its terminal is closed: no more telemetry
     /// or output is expected, so the run's archive is complete as it stands.
     pub fn recording_complete(&self) -> bool {
@@ -397,6 +421,7 @@ impl ProgramRun {
     /// (raw packets, objects, screen, terminal journal and transcript) before
     /// `run.json` and `manifest.json` say it is final. Runs on a flush thread.
     pub fn complete_finalize(&mut self, state: &str, health: &Health) -> Result<(), String> {
+        self.note_missing_library();
         let screen = self
             .pending_screen
             .take()

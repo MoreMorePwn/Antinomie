@@ -59,6 +59,19 @@ pub(super) fn metadata_rows(section: &mut AnalysisSection, specimen: &[u8]) {
             None,
         ),
     }
+    // What the file's own headers say about running it: a cut-off download, a
+    // library that is no program. Identity shows these above its rows.
+    for note in super::super::elf_facts::file_notes(specimen) {
+        structured_entry(
+            section,
+            super::super::elf_facts::NOTE_LABEL,
+            note,
+            None,
+            AnalysisData::Field {
+                group: "Notes".into(),
+            },
+        );
+    }
 }
 
 /// Whole-file entropy and up to 64 measured regions.
@@ -116,11 +129,33 @@ fn structure_rows(section: &mut AnalysisSection, file: &object::File<'_>, specim
             group: "Object header".into(),
         },
     );
+    needed_rows(section, specimen);
     section_rows(section, file, specimen);
     segment_rows(section, file, specimen);
     symbol_rows(section, file, specimen);
     import_rows(section, file);
     export_rows(section, file);
+}
+
+/// One row per library an ELF's dynamic section needs, so a program that
+/// stops at "cannot open shared object file" shows what it was missing.
+fn needed_rows(section: &mut AnalysisSection, specimen: &[u8]) {
+    let Some(elf) = super::super::elf_facts::parse(specimen) else {
+        return;
+    };
+    for library in elf.dynamic(specimen).needed {
+        structured_entry(
+            section,
+            "Needed library",
+            library.clone(),
+            None,
+            AnalysisData::Import {
+                name: None,
+                library: Some(library),
+                ordinal: None,
+            },
+        );
+    }
 }
 
 /// One row per object section.

@@ -366,7 +366,14 @@ impl Worker {
                     &self.sender,
                     timeout,
                 )
-                .map_err(|error| launch_failure(error, &request.path, &request.cwd))?;
+                .map_err(|error| {
+                    launch_failure(
+                        error,
+                        &request.path,
+                        &request.cwd,
+                        request.host_copy.as_deref(),
+                    )
+                })?;
             (|| {
                 if reply.len()
                     != 24

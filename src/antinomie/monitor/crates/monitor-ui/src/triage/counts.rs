@@ -7,6 +7,8 @@ use crate::widgets::{self, TabItem, Tone};
 pub(super) enum Count {
     Pending,
     Unavailable,
+    /// The engine has not scanned this run (or could not): never a zero.
+    NotScanned,
     Ready(u64),
     /// A table with chips on: the rows it lists out of all the run has.
     Shown {
@@ -20,6 +22,7 @@ impl Count {
         match self {
             Self::Pending => "…".into(),
             Self::Unavailable => "—".into(),
+            Self::NotScanned => "–".into(),
             Self::Ready(count) => antinomie_monitor_core::analysis::detection::group_digits(count),
             Self::Shown { shown, total } => {
                 let group = antinomie_monitor_core::analysis::detection::group_digits;
@@ -57,6 +60,7 @@ impl Count {
         match self {
             Self::Pending => "updating".into(),
             Self::Unavailable => "no count".into(),
+            Self::NotScanned => "not scanned".into(),
             Self::Ready(_) | Self::Shown { .. } => format!("{} matched", self.label()),
         }
     }
@@ -67,7 +71,10 @@ impl Count {
 /// no badge until an engine has a count.
 pub(super) fn detection_tab(counts: [Count; 3]) -> TabItem {
     let item = TabItem::new("Detection");
-    if counts.iter().all(|count| *count == Count::Unavailable) {
+    if counts
+        .iter()
+        .all(|count| matches!(count, Count::Unavailable))
+    {
         return item;
     }
     let any = counts
@@ -97,6 +104,7 @@ pub(super) fn tab(
         .tooltip(match count {
             Count::Pending => "Updating the whole-run count",
             Count::Unavailable => "No whole-run count is available",
+            Count::NotScanned => "Not scanned: scan this run to get a count",
             Count::Ready(_) => "Whole-run count before table filters and pagination",
             Count::Shown { .. } => {
                 "Rows listed with the Hide chips on, out of all the run recorded. Turn a chip off to list the hidden rows"
@@ -293,6 +301,8 @@ mod detection_tab_tests {
         );
         let text = painted([Count::Ready(100), Count::Pending, Count::Unavailable]);
         assert!(text.contains("99+ · … · —"), "{text}");
+        let text = painted([Count::Ready(2), Count::NotScanned, Count::NotScanned]);
+        assert!(text.contains("2 · – · –"), "{text}");
         assert!(!text.contains("100"), "{text}");
     }
 
@@ -306,5 +316,12 @@ mod detection_tab_tests {
             "{tip}"
         );
         assert!(detection_tab([Count::Unavailable; 3]).badge.is_none());
+        let tip = detection_tab([Count::Ready(1), Count::NotScanned, Count::NotScanned])
+            .tooltip
+            .unwrap();
+        assert!(
+            tip.contains("IDS not scanned") && tip.contains("Sigma not scanned"),
+            "{tip}"
+        );
     }
 }

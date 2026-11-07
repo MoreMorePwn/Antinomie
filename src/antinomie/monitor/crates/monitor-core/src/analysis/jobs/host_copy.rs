@@ -233,6 +233,14 @@ impl Job {
         }
     }
 
+    /// The staged host copy is the specimen, or only waits to take its place:
+    /// the guest vouched for its hash, so nothing that remains reads the guest.
+    pub(super) fn host_copy_vouched(&self) -> bool {
+        self.host_copy
+            .as_ref()
+            .is_some_and(|host| matches!(host.verdict, Verdict::Matched | Verdict::Adopted))
+    }
+
     /// SHA-256 of the specimen when the host copy is it.
     pub(super) fn adopted_sha256(&self) -> Option<String> {
         self.host_copy
@@ -340,6 +348,35 @@ mod tests {
         assert!(!root.join("analysis/specimen.partial").exists());
         // The guest handle is released unread.
         assert!(matches!(jobs.next(), Some(Action::Release(7))));
+        settle(jobs, &root);
+    }
+
+    #[test]
+    fn a_vm_stop_lets_a_vouched_host_copy_finish_and_ends_an_unvouched_one() {
+        let root = directory("stop");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("uploaded"), b"abc").unwrap();
+        let mut jobs = Jobs::default();
+        let id = submit(&mut jobs, &root, 3);
+        jobs.offer_host_copy(&id, &root.join("uploaded")).unwrap();
+        // The guest's hash has not come: the job still needs the guest.
+        assert!(jobs.detach_host_side().is_none());
+        let guest = format!("{:x}", Sha256::digest(b"abc"));
+        jobs.guest_hash(RUN, Some(&guest));
+        let carried = jobs
+            .detach_host_side()
+            .expect("the vouched copy is host-side");
+        jobs.adopt(carried);
+        jobs.shutdown();
+        assert!(jobs.tracks(&id), "the analysis survives the VM stop");
+        let carried = jobs.take_carried();
+        assert_eq!(carried.len(), 1);
+        assert!(carried[0].queue[0].host_copy_vouched());
+        assert_eq!(
+            fs::read(root.join("analysis/specimen.host")).unwrap(),
+            b"abc"
+        );
+        drop(carried);
         settle(jobs, &root);
     }
 
