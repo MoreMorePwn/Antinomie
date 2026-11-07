@@ -400,8 +400,11 @@ impl TriageView {
             if let Some(title) = title {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("Same process").small().color(theme::muted()));
-                    if link(ui, format!("{title}: the other way this process hid its name"))
-                        .clicked()
+                    if link(
+                        ui,
+                        format!("{title}: the other way this process hid its name"),
+                    )
+                    .clicked()
                     {
                         self.filter_findings_by(ui.ctx(), format!("process.pid == {pid}"));
                     }

@@ -94,7 +94,11 @@ pub(super) fn rules(cx: &Ctx, st: &mut State, out: &mut Vec<Hit>) {
             network_ioctl(cx, out);
         }
         "sendto" => netlink_query(cx, out),
-        "uname" if cx.ok && !matches!(cx.image_name(), "uname") && !cx.image_name().starts_with("ld-") => {
+        "uname"
+            if cx.ok
+                && !matches!(cx.image_name(), "uname")
+                && !cx.image_name().starts_with("ld-") =>
+        {
             out.push(
                 Hit::new(
                     "discovery.system_info",
@@ -285,7 +289,11 @@ fn renamed(cx: &Ctx, name: &str, how: &str, imitates: bool, out: &mut Vec<Hit>) 
     };
     let mut hit = Hit::new(
         "evasion.process_rename",
-        if name.is_empty() { "(not recorded)" } else { name },
+        if name.is_empty() {
+            "(not recorded)"
+        } else {
+            name
+        },
         format!("{how} renames {} to {shown}", cx.image_name()),
     )
     .detail(format!("Program: {}", cx.image_name()));
@@ -315,7 +323,13 @@ fn comm_write(cx: &Ctx, out: &mut Vec<Hit>) {
         let name = name.trim_end_matches(['\n', '\0']).to_owned();
         let before = out.len();
         masquerade(&name, cx.image_name(), "write to comm", out);
-        renamed(cx, &name, "a write to /proc/self/comm", out.len() > before, out);
+        renamed(
+            cx,
+            &name,
+            "a write to /proc/self/comm",
+            out.len() > before,
+            out,
+        );
     } else if path.starts_with("/proc/self/attr/") {
         out.push(
             Hit::new(
@@ -356,7 +370,11 @@ fn network_ioctl(cx: &Ctx, out: &mut Vec<Hit>) {
 /// (`RTM_GETLINK`, `RTM_GETADDR`, `RTM_GETROUTE`), as `ip` and `getifaddrs` ask.
 fn netlink_query(cx: &Ctx, out: &mut Vec<Hit>) {
     const AF_NETLINK: u64 = 16;
-    if !cx.ok || cx.socket(cx.args[0]).is_none_or(|socket| socket.domain != AF_NETLINK) {
+    if !cx.ok
+        || cx
+            .socket(cx.args[0])
+            .is_none_or(|socket| socket.domain != AF_NETLINK)
+    {
         return;
     }
     let Some(kind) = cx

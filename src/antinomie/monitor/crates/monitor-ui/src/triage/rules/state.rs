@@ -548,7 +548,10 @@ impl State {
             return;
         }
         let class = match path {
-            "/etc/os-release" | "/usr/lib/os-release" | "/proc/version" | "/etc/hostname"
+            "/etc/os-release"
+            | "/usr/lib/os-release"
+            | "/proc/version"
+            | "/etc/hostname"
             | "/etc/issue" => Some(("discovery.system_info", "OS and kernel")),
             "/proc/meminfo" | "/proc/cpuinfo" => Some(("discovery.system_info", "hardware")),
             p if p.starts_with("/sys/class/dmi/id/")
@@ -649,8 +652,10 @@ fn hardware_cpu_file(path: &str) -> bool {
     let Some(rest) = path.strip_prefix("/sys/devices/system/cpu/") else {
         return false;
     };
-    !(matches!(rest, "online" | "offline" | "possible" | "present" | "kernel_max")
-        || rest.contains("/cache/")
+    !(matches!(
+        rest,
+        "online" | "offline" | "possible" | "present" | "kernel_max"
+    ) || rest.contains("/cache/")
         || rest.is_empty())
 }
 

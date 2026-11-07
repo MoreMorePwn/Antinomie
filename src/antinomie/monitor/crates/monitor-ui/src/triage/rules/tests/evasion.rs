@@ -643,9 +643,15 @@ fn a_process_that_renames_itself_is_low_and_an_imitation_is_medium() {
         run(all)
     };
     let plain = run_with(vec![prctl_name(Some("worker-1"))]);
-    assert_eq!(tier(&plain, "evasion.process_rename").as_deref(), Some("low"));
     assert_eq!(
-        list(rows(&plain, "evasion.process_rename")[0], "finding.technique"),
+        tier(&plain, "evasion.process_rename").as_deref(),
+        Some("low")
+    );
+    assert_eq!(
+        list(
+            rows(&plain, "evasion.process_rename")[0],
+            "finding.technique"
+        ),
         ["T1036.005"]
     );
     assert!(!has(&plain, "evasion.masquerade_daemon"));
@@ -661,7 +667,10 @@ fn a_process_that_renames_itself_is_low_and_an_imitation_is_medium() {
     // A name the recording did not capture still fires, and says so.
     let blind = run_with(vec![prctl_name(None)]);
     let row = rows(&blind, "evasion.process_rename")[0];
-    assert!(text(row, "finding.summary").contains("not recorded") || text(row, "finding.object").contains("not recorded"));
+    assert!(
+        text(row, "finding.summary").contains("not recorded")
+            || text(row, "finding.object").contains("not recorded")
+    );
     // A failed prctl renamed nothing.
     let failed = run_with(vec![with_path(
         sys(1, 157, "prctl", [15, 0, 0, 0, 0, 0], -22),
@@ -703,14 +712,20 @@ fn a_write_to_the_own_comm_file_renames_the_process() {
     ]);
     assert!(!has(&other, "evasion.process_rename"));
     // Reading comm is not renaming.
-    let read_only = run(vec![exec(1, "/tmp/x", &["x"]), open_read(1, "/proc/self/comm", 3)]);
+    let read_only = run(vec![
+        exec(1, "/tmp/x", &["x"]),
+        open_read(1, "/proc/self/comm", 3),
+    ]);
     assert!(!has(&read_only, "evasion.process_rename"));
     let attr = run(vec![
         exec(1, "/tmp/x", &["x"]),
         open(1, "/proc/self/attr/exec", 1, 3),
         write(1, 3, b"unconfined"),
     ]);
-    assert_eq!(tier(&attr, "evasion.process_rename").as_deref(), Some("low"));
+    assert_eq!(
+        tier(&attr, "evasion.process_rename").as_deref(),
+        Some("low")
+    );
 }
 
 #[test]

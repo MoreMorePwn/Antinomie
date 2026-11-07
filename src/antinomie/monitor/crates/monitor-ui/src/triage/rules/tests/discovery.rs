@@ -233,7 +233,12 @@ fn hardware_files_are_one_row_with_the_files_listed_and_startup_reads_are_not_di
         .collect();
     assert_eq!(hardware.len(), 1, "one finding for the category");
     let detail = list(hardware[0], "finding.detail").join("\n");
-    for file in ["/proc/cpuinfo", "core_id", "product_name", "/sys/hypervisor/type"] {
+    for file in [
+        "/proc/cpuinfo",
+        "core_id",
+        "product_name",
+        "/sys/hypervisor/type",
+    ] {
         assert!(detail.contains(file), "{file}: {detail}");
     }
     // What the C library and language runtimes read as they start.
@@ -245,7 +250,11 @@ fn hardware_files_are_one_row_with_the_files_listed_and_startup_reads_are_not_di
         open_read(1, "/proc/self/auxv", 7),
         open_read(1, "/proc/self/maps", 8),
     ]);
-    assert!(!has(&startup, "discovery.system_info"), "{:?}", rules_of(&startup));
+    assert!(
+        !has(&startup, "discovery.system_info"),
+        "{:?}",
+        rules_of(&startup)
+    );
     let mounts = run(vec![open_read(1, "/proc/self/mountinfo", 3)]);
     assert!(has(&mounts, "discovery.system_info"));
 }
@@ -288,13 +297,21 @@ fn interface_ioctls_and_route_queries_are_network_configuration() {
     request[4..6].copy_from_slice(&22u16.to_le_bytes());
     let netlink = run(vec![
         socket(1, 16, 3, 3),
-        with_entry(sys(1, 44, "sendto", [3, 0x2000, 20, 0, 0, 0], 20), "arg1.data", &request),
+        with_entry(
+            sys(1, 44, "sendto", [3, 0x2000, 20, 0, 0, 0], 20),
+            "arg1.data",
+            &request,
+        ),
     ]);
     assert!(has(&netlink, "discovery.network_config"));
     request[4..6].copy_from_slice(&16u16.to_le_bytes());
     let new_link = run(vec![
         socket(1, 16, 3, 3),
-        with_entry(sys(1, 44, "sendto", [3, 0x2000, 20, 0, 0, 0], 20), "arg1.data", &request),
+        with_entry(
+            sys(1, 44, "sendto", [3, 0x2000, 20, 0, 0, 0], 20),
+            "arg1.data",
+            &request,
+        ),
     ]);
     assert!(!has(&new_link, "discovery.network_config"));
 }

@@ -49,7 +49,10 @@ impl Change {
             }
         }
         let other = self.categories.iter().any(|name| {
-            !matches!(*name, "Opened" | "Read" | "Probed" | "Directory listing" | "Watched / locked")
+            !matches!(
+                *name,
+                "Opened" | "Read" | "Probed" | "Directory listing" | "Watched / locked"
+            )
         });
         if !other && !self.deleted && !self.modified {
             self.changes = false;

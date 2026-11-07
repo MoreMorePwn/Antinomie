@@ -1318,7 +1318,11 @@ mod tests {
             changes.iter().all(|change| change.path != "/etc/hosts"),
             "an open that wrote nothing is not a changed file"
         );
-        let file = activity.files.iter().find(|f| f.path == "/etc/hosts").unwrap();
+        let file = activity
+            .files
+            .iter()
+            .find(|f| f.path == "/etc/hosts")
+            .unwrap();
         assert!(!file.created);
         assert_eq!(file.hashes[0].moment, "closed, nothing written");
         // With a write, the same file is written at close, and the file still
@@ -1330,7 +1334,11 @@ mod tests {
         ];
         let changes = index_with_hashes(&calls, &[]).finish();
         let change = changes.iter().find(|c| c.path == "/etc/hosts").unwrap();
-        assert!(change.ioc_file().unwrap().roles.contains(&"written at close"));
+        assert!(change
+            .ioc_file()
+            .unwrap()
+            .roles
+            .contains(&"written at close"));
     }
 
     #[test]
