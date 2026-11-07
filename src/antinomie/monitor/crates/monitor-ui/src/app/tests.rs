@@ -225,6 +225,7 @@ pub(crate) fn app() -> MonitorApp {
         backend_disconnected: false,
         run_list_cache: None,
         run_selector_cache: Default::default(),
+        triage_page_cache: Default::default(),
         started: Instant::now(),
         smoke: None,
         closing: false,

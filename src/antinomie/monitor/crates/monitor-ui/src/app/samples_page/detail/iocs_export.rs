@@ -48,11 +48,9 @@ impl MonitorApp {
                     .color(theme::muted()),
                 );
                 ui.label(
-                    egui::RichText::new(if state.defang {
-                        "Values are defanged in CSV and JSON; MISP and STIX keep raw values"
-                    } else {
-                        "Values are written raw"
-                    })
+                    egui::RichText::new(
+                        "Values are written raw in every file. The Defanged chip changes the table and Copy only",
+                    )
                     .small()
                     .color(theme::muted()),
                 );
@@ -75,7 +73,10 @@ impl MonitorApp {
             Ok(result) => {
                 state.job = None;
                 state.status = Some(match result {
-                    Ok(text) => (text, false),
+                    Ok(text) => {
+                        crate::activity::report(ctx, crate::activity::Level::Info, text.clone());
+                        (text, false)
+                    }
                     Err(error) => (error, true),
                 });
                 // The custody log has a new entry.
@@ -117,7 +118,9 @@ impl MonitorApp {
         let (tx, rx) = std::sync::mpsc::channel();
         state.job = Some(rx);
         state.status = None;
-        let defanged = state.defang;
+        // The files are for tools: CSV and JSON keep the raw values, like MISP
+        // and STIX. The Defanged chip is for the table and Copy.
+        let defanged = false;
         let data = Arc::clone(data);
         let folder = self.options.data_dir.join("sample-reports");
         let data_dir = self.options.data_dir.clone();

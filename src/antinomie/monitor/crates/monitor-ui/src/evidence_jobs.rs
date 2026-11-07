@@ -47,6 +47,7 @@ impl EvidenceJobs {
         report_id: String,
         kind: Option<AnalysisKind>,
         format: AnalysisExportFormat,
+        folder: PathBuf,
     ) {
         if self.receiver.is_some() {
             self.result = Some(Err("An evidence action is already running".into()));
@@ -57,10 +58,7 @@ impl EvidenceJobs {
             AnalysisExportFormat::Json => "json",
             AnalysisExportFormat::GhidraProject => "ghidra-project",
         };
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        let destination = home
+        let destination = folder
             .join(format!(
                 "antinomie-{}-{}.{}",
                 report_id,
@@ -85,6 +83,7 @@ impl EvidenceJobs {
         directory: PathBuf,
         report_id: String,
         tools_directory: PathBuf,
+        folder: PathBuf,
     ) {
         if self.receiver.is_some() {
             self.result = Some(Err("An evidence action is already running".into()));
@@ -95,6 +94,7 @@ impl EvidenceJobs {
             report_id,
             Some(AnalysisKind::Decompilation),
             AnalysisExportFormat::GhidraProject,
+            folder,
         );
         if let Some(export) = &mut self.export {
             export.open_tools = Some(tools_directory);
@@ -140,7 +140,14 @@ impl EvidenceJobs {
             match receiver.try_recv() {
                 Ok(result) => {
                     self.receiver = None;
-                    self.result = Some(result);
+                    // A success is a toast and an Activity row, not a window
+                    // that stays until it is closed.
+                    match result {
+                        Ok(text) => {
+                            crate::activity::report(ctx, crate::activity::Level::Info, text)
+                        }
+                        error => self.result = Some(error),
+                    }
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.receiver = None;
@@ -182,7 +189,8 @@ impl EvidenceJobs {
                         if let Some(tools) = export.open_tools {
                             Self::launch_project(path.join("antinomie.gpr"), tools)
                         } else {
-                            Ok(format!("Exported {}", path.display()))
+                            crate::export_dirs::remember(&path);
+                            Ok(crate::export_dirs::wrote_text("Analysis result", &path))
                         }
                     });
                 }

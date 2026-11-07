@@ -169,8 +169,10 @@ impl MonitorApp {
                 format,
             }) => {
                 if let Some(directory) = self.analysis_directory(&report_id) {
+                    let folder =
+                        crate::export_dirs::default_folder(&self.options.data_dir, "static");
                     self.evidence_jobs
-                        .export(directory, report_id, kind, format);
+                        .export(directory, report_id, kind, format, folder);
                 } else {
                     self.report_error("Retained result directory is unavailable".into());
                 }
@@ -188,6 +190,7 @@ impl MonitorApp {
                         directory,
                         report_id,
                         self.options.data_dir.join("tools"),
+                        crate::export_dirs::default_folder(&self.options.data_dir, "static"),
                     );
                 } else {
                     self.report_error("Retained result directory is unavailable".into());

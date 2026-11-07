@@ -504,6 +504,7 @@ impl MonitorApp {
                 self.samples_page.export = Some(super::export::ExportDialog::new(
                     &data.record,
                     data.chain.clone(),
+                    crate::export_dirs::default_folder(&self.options.data_dir, "custody"),
                 ));
             }
             Some(Action::Report) => self
@@ -832,6 +833,7 @@ impl SamplesPage {
             self.export = Some(super::export::ExportDialog::new(
                 &data.record,
                 data.chain.clone(),
+                std::env::temp_dir().join("antinomie-custody-test"),
             ));
         }
     }

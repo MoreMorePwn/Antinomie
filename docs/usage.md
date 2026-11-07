@@ -476,6 +476,18 @@ The network capture is the guest's own view on every route.
   HTML, PDF, JSON, MISP or STIX 2.1, with a checkbox per section, optional IoC
   defanging and an optional evidence bundle. See
   [the report guide](triage-report.md).
+- **Other exports** (Summary > Indicators **Export**, the IOC tab's CSV and JSON,
+  eBPF **Export binary and JSON**, Static analysis **Export**, **Export custody
+  record…**) name what they write `antinomie-<kind>-<run or sample, 8
+  characters>-<yyyymmdd-hhmmss in UTC>.<ext>` (the Static analysis export keeps
+  its analysis id and the eBPF export its program hash), tell you in a toast and
+  an Activity row (file, size and folder), and open in a folder that is not your
+  home folder: the run's `ioc` or `bpf` folder, or `exports/static` and
+  `exports/custody` in the data folder, or the folder the last export of that
+  kind went to. A run's Data window **Copy** copies the format shown, and Hex
+  for bytes the text views would change (UTF-8 for bytes that are not valid
+  UTF-8, ASCII for control bytes); **Copy as** switches those two off for such
+  bytes.
 - **Triage › Process › Process tree**: one row per task, in the columns
   **Process** (tree lines, the executable's file name and `(pid · tid)`; the
   full path on hover; a fork that has not exec'd shows its parent's image
@@ -1126,8 +1138,8 @@ line is cut, the whole of it is on hover) and **Tree status**, **Root exit** and
   otherwise opens the run's Triage on the row, where the existing lookup with its
   **Cancel** and rate limits is. **Export** writes the rows listed (or the
   selected row) as CSV, JSON, a MISP event or a STIX 2.1 bundle into the data
-  folder's `sample-reports`, defanged in CSV and JSON on request, and notes it in
-  the sample's custody log. Runs Triage has not read are named in a note: open the
+  folder's `sample-reports`, with raw values in every file (the **Defanged** chip
+  changes the table and Copy only), and notes it in the sample's custody log. Runs Triage has not read are named in a note: open the
   run in Triage once to fill them in. IDS, YARA and Sigma rules match runs, not
   single indicators, and stay in Summary > Detections.
 - **Custody log** and **Notes**: the sample's history and notes; a note chip jumps

@@ -133,7 +133,7 @@ fn a_whole_run_exports_every_format_whatever_the_screen_filters_say() {
     );
     let html = read(&path("HTML"));
     assert!(html.contains("Jane Rule") && html.contains("DRL 1.1"));
-    assert!(html.contains("<h2>Processes</h2>") && html.contains("example.com"));
+    assert!(html.contains("<h2>Processes</h2>") && html.contains("example[.]com"));
     let pdf = std::fs::read(path("PDF")).unwrap();
     assert!(pdf.starts_with(b"%PDF-1.4"));
     let misp: serde_json::Value = serde_json::from_str(&read(&path("MISP"))).unwrap();

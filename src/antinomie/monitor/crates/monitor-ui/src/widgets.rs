@@ -49,7 +49,8 @@ pub use tabs::{segmented, tab, tab_row, tabs, tight_tabs, TabItem, TIGHT_SAVING}
 pub use tone::{chip, chip_wide, chip_width, fg_or_muted, toggle_chip, toggle_chip_with, Tone};
 pub(crate) use wheel::raw_delta;
 pub use window::{
-    cap_size, capped, columns, fixed_width_body, footer, footer_split, frame_extra, window,
+    cap_size, capped, columns, escape_closes, fixed_width_body, footer, footer_split, frame_extra,
+    top_anchor, window,
 };
 pub use written::{short_name, written_files};
 
