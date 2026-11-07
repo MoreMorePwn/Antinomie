@@ -1493,9 +1493,12 @@ fn many_long_processes_of_interest_stay_a_compact_row() {
             ));
         }
         let line = ctx.global_style().spacing.interact_size.y;
-        // Six items and the count fit in two or three lines at most.
+        // Six items and the count fit in two lines on a wide row and wrap to
+        // four in a narrow one (760); an item with a line of its own would
+        // take seven or more.
+        let lines = if width > 1000.0 { 3.4 } else { 5.8 };
         assert!(
-            height <= line * 3.4,
+            height <= line * lines,
             "{height} tall at {width}: a gap under the row"
         );
         for (text, rect) in texts(&out.unwrap()) {

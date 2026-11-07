@@ -213,7 +213,15 @@ impl<'open> Dialog<'open> {
             // A window never takes more than `MAX_SHARE` of the content
             // area unless its caller asked for a different cap, and never
             // less room than a usable minimum.
-            let cap = cap_size(area);
+            // A window still opens at the size its caller chose when the
+            // area has room for it, even above the share.
+            let mut cap = cap_size(area);
+            if let Some(width) = sizes.default.map(|size| size.x).or(sizes.default_width) {
+                cap.x = cap.x.max(width.min(area.width() - 24.0));
+            }
+            if let Some(height) = sizes.default.map(|size| size.y).or(sizes.default_height) {
+                cap.y = cap.y.max(height.min(area.height() - 24.0));
+            }
             let max = egui::vec2(
                 max_width.map_or(cap.x, |width| width.min(area.width() - 24.0)),
                 max_height.map_or(cap.y, |height| height.min(area.height() - 24.0)),

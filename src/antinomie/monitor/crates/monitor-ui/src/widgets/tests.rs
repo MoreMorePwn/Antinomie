@@ -638,7 +638,7 @@ fn a_filter_box_shows_its_cross_only_with_text_and_the_cross_and_esc_clear_it() 
             let mut value = text.borrow_mut();
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut *value)
-                    .hint_text("Filter")
+                    .hint_text(crate::theme::placeholder(ui, "Filter"))
                     .margin(clear_margin(crate::theme::TEXT_EDIT_MARGIN))
                     .desired_width(300.0),
             );

@@ -1121,8 +1121,8 @@ edge while they hold text. A click on it, or Esc in the focused box, clears the
 text.
 
 **Spawned windows** (a rules window, a rule hit's Details, Relationships and
-the like) never grow past 80 % of the app's content area each way, and not
-below a small minimum. What does not fit scrolls inside the window: code scrolls
+the like) never grow past 80 % of the app's content area each way (a window
+still opens at its own size when that fits), and not below a small minimum. What does not fit scrolls inside the window: code scrolls
 sideways in its box, and long text wraps.
 
 Menus: **File**, **VM**, **Run**, **View**, **Tools** and **Help**; the menu bar's
