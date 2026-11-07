@@ -20,7 +20,6 @@ use antinomie_monitor_core::{
     VmCheckpoint, VmConfig,
 };
 use eframe::egui;
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
@@ -48,46 +47,8 @@ pub(crate) use source::Pick;
 /// Largest file Extract to view loads into the viewer.
 const VIEW_CAP: u64 = crate::data_view::DATA_WINDOW_CAP;
 
-/// Persisted settings of the tab (serde-default, so older files load).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub(crate) struct DiskSettings {
-    /// Largest file extracted without asking, in MiB.
-    pub extract_cap_mib: u32,
-    /// Largest file hashed on demand, in MiB.
-    pub hash_cap_mib: u32,
-    pub hide_dotfiles: bool,
-    /// Show modes as octal numbers instead of `rwx`.
-    pub numeric_modes: bool,
-    /// Compute the SHA-256 of a disk dump (views are never hashed).
-    pub dump_hash: bool,
-    /// Also record the SHA-256 of every layer of the chain a dump was read
-    /// from: doubles the time of a dump, for evidence-grade provenance.
-    pub source_digests: bool,
-}
-
-impl Default for DiskSettings {
-    fn default() -> Self {
-        Self {
-            extract_cap_mib: 256,
-            hash_cap_mib: 64,
-            hide_dotfiles: false,
-            numeric_modes: false,
-            dump_hash: true,
-            source_digests: false,
-        }
-    }
-}
-
-impl DiskSettings {
-    pub(crate) fn extract_cap(&self) -> u64 {
-        u64::from(self.extract_cap_mib) * 1024 * 1024
-    }
-
-    pub(crate) fn hash_cap(&self) -> u64 {
-        u64::from(self.hash_cap_mib) * 1024 * 1024
-    }
-}
+/// Persisted settings of the tab; they live in `settings.json` (core).
+pub(crate) use antinomie_monitor_core::settings::DiskSettings;
 
 /// What the tab asks the application to do.
 #[derive(Clone, Debug, PartialEq)]

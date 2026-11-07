@@ -84,6 +84,7 @@ pub mod run_environment;
 pub mod samples;
 mod sandbox_process;
 mod sandbox_profile;
+pub mod settings;
 pub mod snapshots;
 pub mod stealth;
 pub mod storage;
