@@ -79,7 +79,7 @@ pub struct Backend {
     receive_cursor: AtomicUsize,
     thread: Option<JoinHandle<()>>,
     /// Exclusive lifetime ownership protects snapshot journals from another app.
-    data_owner: Option<File>,
+    data_owner: Option<crate::data_owner::OwnerGuard>,
     closing: Arc<AtomicBool>,
     stopping: Arc<AtomicBool>,
     owner_failed: Arc<AtomicBool>,
@@ -124,10 +124,15 @@ impl Backend {
         mut options: BackendOptions,
         wake: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> Result<Self, String> {
+        // Ownership is checked before anything moves: a directory another
+        // process owns is never migrated into or changed (design 2.3).
+        if let Some(owner) = crate::data_owner::current_owner(&options.data_dir)? {
+            return Err(crate::data_owner::in_use_message(&owner));
+        }
         storage::migrate_default_data(&options)?;
         storage::private_dir(&options.data_dir).map_err(|e| e.to_string())?;
         options.data_dir = fs::canonicalize(&options.data_dir).map_err(|e| e.to_string())?;
-        let data_owner = acquire_data_owner(&options.data_dir)?;
+        let data_owner = acquire_data_owner(&options.data_dir, &options.owner)?;
         // wireproxy or tor left running by a session that was killed.
         for line in crate::route::reap_stale_helpers(&options.data_dir) {
             eprintln!("{line}");
@@ -397,7 +402,10 @@ impl Drop for Backend {
     }
 }
 
-fn acquire_data_owner(directory: &std::path::Path) -> Result<File, String> {
+fn acquire_data_owner(
+    directory: &std::path::Path,
+    claim: &crate::data_owner::OwnerClaim,
+) -> Result<crate::data_owner::OwnerGuard, String> {
     use std::os::unix::fs::OpenOptionsExt;
     let owner = fs::OpenOptions::new()
         .read(true)
@@ -422,17 +430,31 @@ fn acquire_data_owner(directory: &std::path::Path) -> Result<File, String> {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         match rustix::fs::flock(&owner, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
-            Ok(()) => return Ok(owner),
+            Ok(()) => break,
             Err(rustix::io::Errno::WOULDBLOCK) if Instant::now() < deadline => {
                 thread::sleep(Duration::from_millis(10));
             }
+            Err(rustix::io::Errno::WOULDBLOCK) => {
+                let owner = crate::data_owner::current_owner(directory)
+                    .ok()
+                    .flatten()
+                    .unwrap_or(crate::data_owner::DataOwner { record: None });
+                return Err(crate::data_owner::in_use_message(&owner));
+            }
             Err(error) => {
-                return Err(format!(
-                    "data folder is already in use or cannot be locked: {error}"
-                ));
+                return Err(format!("data folder cannot be locked: {error}"));
             }
         }
     }
+    // The lock is ours; say so. A record that cannot be written costs only the
+    // friendly message of the next process, never the session.
+    let guard = crate::data_owner::OwnerGuard::new(directory.to_path_buf(), owner);
+    if let Err(error) =
+        crate::data_owner::write_record(directory, &crate::data_owner::record_for(claim))
+    {
+        eprintln!("could not write the data folder owner record: {error}");
+    }
+    Ok(guard)
 }
 
 /// Guest host-liveness timeout in never-drop mode (the default is 250 ms).

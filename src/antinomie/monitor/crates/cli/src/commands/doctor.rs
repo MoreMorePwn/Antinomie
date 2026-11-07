@@ -2,7 +2,7 @@
 //! `doctor`: the tool checks of `dependencies::check`, exit 20 when a required
 //! one is missing.
 use crate::{
-    context::Context,
+    context::{Context, data_dir_value},
     error::{CliError, ErrorCode},
     output::{Reply, table},
 };
@@ -129,15 +129,35 @@ pub fn run(arguments: &Doctor, context: &Context) -> Result<Reply, CliError> {
     context.logger.debug("probing runtime dependencies");
     let report = dependencies::check(&context.options);
     let (values, missing) = evaluate(&report, &explicit);
-    let text = human(&values);
+    let data_dir = data_dir_value(context.data_dir());
+    let mut text = human(&values);
+    if let Some(owner) = data_dir["owner"]
+        .as_object()
+        .filter(|_| data_dir["owned"] == true)
+    {
+        text.push_str(&format!(
+            "\ndata directory {} is owned by pid {} ({})\n",
+            context.data_dir().display(),
+            owner["pid"],
+            owner["kind"].as_str().unwrap_or("?")
+        ));
+    } else if data_dir["owned"] == true {
+        text.push_str(&format!(
+            "\ndata directory {} is owned by a process without an owner record\n",
+            context.data_dir().display()
+        ));
+    }
     if missing.is_empty() {
-        return Ok(Reply::value(json!({"ready": true, "checks": values})).with_human(text));
+        return Ok(
+            Reply::value(json!({"ready": true, "checks": values, "data_dir": data_dir}))
+                .with_human(text),
+        );
     }
     Err(CliError::new(
         ErrorCode::DependencyMissing,
         format!("missing: {}", missing.join(", ")),
     )
-    .with_details(json!({"missing": missing, "checks": values}))
+    .with_details(json!({"missing": missing, "checks": values, "data_dir": data_dir}))
     .with_human_output(text))
 }
 

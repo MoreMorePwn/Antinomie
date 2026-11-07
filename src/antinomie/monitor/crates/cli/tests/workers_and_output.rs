@@ -102,3 +102,60 @@ fn capabilities_has_the_api_version_and_a_usage_error_is_exit_2() {
     let value: serde_json::Value = serde_json::from_slice(&bad.stdout).unwrap();
     assert_eq!(value["ok"], false);
 }
+
+/// A directory whose lock another process holds is reported by `doctor` with
+/// the record that process wrote, and a stale record is ignored.
+#[test]
+fn doctor_names_the_owner_of_the_data_directory() {
+    use antinomie_monitor_core::data_owner::{self, OwnerClaim, OwnerKind};
+    let root = std::env::temp_dir().join(format!("ant-cli-owner-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let data = root.to_str().unwrap();
+    let report = |args: &[&str]| -> serde_json::Value {
+        let mut all = vec![
+            "-o",
+            "json",
+            "--data-dir",
+            data,
+            "doctor",
+            "--require",
+            "curl",
+        ];
+        all.extend_from_slice(args);
+        let output = cli(&all);
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        if value["ok"] == true {
+            value["result"]["data_dir"].clone()
+        } else {
+            value["error"]["details"]["data_dir"].clone()
+        }
+    };
+    // A stale record and no lock: ignored.
+    let mut stale = data_owner::record_for(&OwnerClaim {
+        kind: OwnerKind::Gui,
+        socket: None,
+    });
+    stale.pid = 4_000_000_000;
+    data_owner::write_record(&root, &stale).unwrap();
+    assert_eq!(report(&["--qemu", "/bin/true"])["owned"], false);
+    // Hold the lock as this test process and record it.
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(root.join(".app-owner.lock"))
+        .unwrap();
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive).unwrap();
+    let mut record = data_owner::record_for(&OwnerClaim {
+        kind: OwnerKind::Daemon,
+        socket: None,
+    });
+    record.pid = std::process::id();
+    data_owner::write_record(&root, &record).unwrap();
+    let owned = report(&["--qemu", "/bin/true"]);
+    assert_eq!(owned["owned"], true);
+    assert_eq!(owned["owner"]["pid"], std::process::id());
+    assert_eq!(owned["owner"]["kind"], "daemon");
+    std::fs::remove_dir_all(&root).unwrap();
+}

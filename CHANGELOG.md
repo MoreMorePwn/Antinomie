@@ -14,6 +14,13 @@ x86 programs by their own table.
 
 ### Host
 
+- **The data folder says who owns it.** The process that takes the data folder
+  writes `run/owner.json` (its pid, whether it is the window, a daemon or a
+  command, when it started) and removes it on a clean exit. A second Antinomie
+  that finds the folder in use now names the owner instead of only saying it is
+  in use, and the ownership is checked before an old data folder is migrated.
+  `antinomie-cli doctor` shows the owner too.
+
 - **`antinomie-cli`, a headless command line.** A new binary beside the window
   (`antinomie-cli --help`) with `doctor`, `capabilities` and `config path`, the
   output formats human, json and ndjson, and fixed exit codes. It does not link

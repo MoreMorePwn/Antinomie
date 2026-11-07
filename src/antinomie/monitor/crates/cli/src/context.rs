@@ -48,6 +48,23 @@ impl Context {
     }
 }
 
+/// The data directory and who owns it, for `doctor` and error details. The
+/// lock is probed without waiting; the directory may not exist yet.
+pub fn data_dir_value(data_dir: &std::path::Path) -> serde_json::Value {
+    use antinomie_monitor_core::data_owner;
+    let (owned, owner, problem) = match data_owner::current_owner(data_dir) {
+        Ok(Some(owner)) => (true, owner.record, None),
+        Ok(None) => (false, None, None),
+        Err(error) => (false, None, Some(error)),
+    };
+    serde_json::json!({
+        "path": data_dir,
+        "owned": owned,
+        "owner": owner,
+        "problem": problem,
+    })
+}
+
 /// The engine options the global flags select. The CLI is headless unless
 /// `--no-headless` is given (design 3.1).
 pub fn backend_options(global: &Global, home: Option<&std::path::Path>) -> BackendOptions {

@@ -17,3 +17,6 @@ clap = { version = "4", features = ["derive"] }
 serde.workspace = true
 # Result objects print their members in the order a command built them.
 serde_json = { workspace = true, features = ["preserve_order"] }
+
+[dev-dependencies]
+rustix = { version = "1", features = ["fs"] }

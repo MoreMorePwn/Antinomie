@@ -936,10 +936,17 @@ fn snapshot_epoch_cancels_queued_guest_effects_and_keeps_host_actions() {
 fn data_owner_excludes_other_app_and_releases_on_drop() {
     let root = std::env::temp_dir().join(format!("ant-owner-{}", storage::unique_id()));
     fs::create_dir(&root).unwrap();
-    let owner = acquire_data_owner(&root).unwrap();
-    assert!(acquire_data_owner(&root).is_err());
+    let claim = crate::data_owner::OwnerClaim::default();
+    let owner = acquire_data_owner(&root, &claim).unwrap();
+    // The owner leaves a record, and a second claimant is told who owns it.
+    let error = acquire_data_owner(&root, &claim).err().unwrap();
+    assert!(error.starts_with(crate::data_owner::IN_USE), "{error}");
+    assert!(error.contains(&std::process::id().to_string()), "{error}");
+    assert!(crate::data_owner::read_record(&root).is_some());
     drop(owner);
-    assert!(acquire_data_owner(&root).is_ok());
+    // A clean release removes the record and frees the lock.
+    assert!(crate::data_owner::read_record(&root).is_none());
+    assert!(acquire_data_owner(&root, &claim).is_ok());
     fs::remove_dir_all(root).unwrap();
 }
 #[test]

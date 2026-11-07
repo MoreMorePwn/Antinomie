@@ -1224,6 +1224,9 @@ per line: a list command prints its items and then a last line
   `tshark`, `prlimit`, `suricata`, `python-venv`, `wireshark`, `file-chooser`.
 - `capabilities` prints the API version, the app version and revision, the lane
   count, the report formats and the accelerator (`kvm` or `tcg`).
+- `doctor` also reports who owns the data directory (`data_dir.owner`, from
+  `run/owner.json`, ignored when its process is gone). A command that needs the
+  engine while the window owns the directory exits 21 and names the window.
 - `config path` prints the paths of `settings.json`, `service.toml` and `policies/`.
 
 ## Troubleshooting

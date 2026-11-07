@@ -25,6 +25,9 @@ pub enum ErrorCode {
     Unsupported,
     /// A required tool is missing (CLI only; exit 20).
     DependencyMissing,
+    /// A check ran and found damage: a sample archive that does not match its
+    /// hash, a custody chain that does not verify (CLI only; exit 1).
+    VerificationFailed,
     Internal,
 }
 
@@ -42,6 +45,7 @@ impl ErrorCode {
             ErrorCode::Unavailable => "unavailable",
             ErrorCode::Unsupported => "unsupported",
             ErrorCode::DependencyMissing => "dependency_missing",
+            ErrorCode::VerificationFailed => "verification_failed",
             ErrorCode::Internal => "internal",
         }
     }
@@ -58,7 +62,9 @@ impl ErrorCode {
             ErrorCode::QuotaExceeded => Exit::Quota,
             ErrorCode::Unavailable => Exit::Busy,
             ErrorCode::DependencyMissing => Exit::Dependency,
-            ErrorCode::Unsupported | ErrorCode::Internal => Exit::Failed,
+            ErrorCode::Unsupported | ErrorCode::Internal | ErrorCode::VerificationFailed => {
+                Exit::Failed
+            }
         }
     }
 }
@@ -136,6 +142,19 @@ impl CliError {
         Self::new(code, format!("{}: {error}", path.display()))
     }
 
+    /// A failure of `Backend::new`: a data directory owned by another process
+    /// is `unavailable` (exit 21) and names the owner; anything else is a
+    /// plain failure carrying the engine's text.
+    pub fn from_engine_start(data_dir: &std::path::Path, message: &str) -> Self {
+        use antinomie_monitor_core::data_owner;
+        if message.starts_with(data_owner::IN_USE) {
+            let owner = data_owner::read_record(data_dir);
+            return Self::new(ErrorCode::Unavailable, message)
+                .with_details(json!({"data_dir": data_dir, "owner": owner}));
+        }
+        Self::internal(message)
+    }
+
     pub fn with_field(mut self, field: impl Into<String>) -> Self {
         self.field = Some(field.into());
         self
@@ -197,6 +216,7 @@ mod tests {
             (ErrorCode::DependencyMissing, 20),
             (ErrorCode::Unsupported, 1),
             (ErrorCode::Internal, 1),
+            (ErrorCode::VerificationFailed, 1),
         ];
         for (code, exit) in table {
             assert_eq!(code.exit().code(), exit, "{}", code.as_str());
@@ -223,6 +243,23 @@ mod tests {
         );
         let plain = CliError::internal("boom").to_value();
         assert!(plain.get("field").is_none());
+    }
+
+    #[test]
+    fn a_directory_in_use_is_exit_21_and_names_the_owner() {
+        use antinomie_monitor_core::data_owner;
+        let message = format!("{} by the Antinomie window (pid 7)", data_owner::IN_USE);
+        let error = CliError::from_engine_start(std::path::Path::new("/nonexistent"), &message);
+        assert_eq!(error.exit.code(), 21);
+        assert_eq!(error.code, ErrorCode::Unavailable);
+        assert!(error.message.contains("pid 7"));
+        assert!(error.details["owner"].is_null());
+        assert_eq!(
+            CliError::from_engine_start(std::path::Path::new("/x"), "disk full")
+                .exit
+                .code(),
+            1
+        );
     }
 
     #[test]
