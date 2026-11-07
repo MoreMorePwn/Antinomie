@@ -12,8 +12,21 @@ pub fn card<R>(
     header: impl FnOnce(&mut egui::Ui),
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
+    card_sized(ui, title, header, 0.0, body).0
+}
+
+/// A [`card`] with `pad` points of empty space under its content, for cards
+/// side by side that should end at the same height. Also returns the card's
+/// outer height, which the caller compares between the cards to set `pad`.
+pub fn card_sized<R>(
+    ui: &mut egui::Ui,
+    title: &str,
+    header: impl FnOnce(&mut egui::Ui),
+    pad: f32,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> (R, f32) {
     let palette = theme::palette();
-    egui::Frame::new()
+    let out = egui::Frame::new()
         .fill(palette.panel)
         .stroke(Stroke::new(1.0_f32, palette.line_soft))
         .corner_radius(6)
@@ -28,9 +41,13 @@ pub fn card<R>(
                 header,
             );
             ui.add_space(4.0);
-            body(ui)
-        })
-        .inner
+            let inner = body(ui);
+            if pad > 0.0 {
+                ui.allocate_space(egui::vec2(0.0, pad));
+            }
+            inner
+        });
+    (out.inner, out.response.rect.height())
 }
 
 /// A link in the accent color that navigates to another view: a frameless

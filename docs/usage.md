@@ -893,6 +893,13 @@ The network capture is the guest's own view on every route.
   Disks list uses (`No disk dumps for this VM`): the Core dumps list, a core's threads,
   mappings, strings and notes, the Per-file history list and the guest process list of
   the attach dialog do too, and a filter that matches nothing says that.
+- **Static Analysis > Overview**: the **Identity** and **Categories** cards side by side
+  are the same height; a note about an incomplete analysis sits above both. In
+  **Disassembly** and **Decompilation** the lines sit one font row apart, with no
+  extra space between them. A Symbols, Imports, Exports, Sections, Segments or Headers
+  view with no rows of its kind (a static binary has no imports) reads
+  `0 / N rows` with `No imports in this file; its N rows are in the other views.`
+  instead of calling the listing empty.
 - **Static Analysis > Overview > Categories**: a category the analysis was not
   started with shows **Not requested** and a **Run** button. Run adds that check
   to the same report without starting the analysis again: the specimen kept with

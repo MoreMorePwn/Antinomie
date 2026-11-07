@@ -9,6 +9,7 @@ pub(super) fn categories(
     ui: &mut egui::Ui,
     report: &AnalysisReport,
     state: &mut WorkspaceState,
+    pair: Option<(&str, usize)>,
 ) -> Option<ReportAction> {
     use crate::widgets::Tone;
     let mut action = None;
@@ -71,8 +72,9 @@ pub(super) fn categories(
             + 24.0;
         wanted.min((ui.available_width() - others).max(90.0))
     };
-    crate::widgets::card(
+    paired_card(
         ui,
+        pair,
         "Categories",
         |_| {},
         |ui| {

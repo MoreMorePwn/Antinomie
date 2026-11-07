@@ -3389,3 +3389,145 @@ fn row_keys_and_section_names_round_trip() {
     assert!(row_key(&nothing).is_none());
     assert!(key_query("none").is_none() && key_query("id:x").is_none());
 }
+
+/// The painted card frames (fill rectangles of the panel color) of one frame.
+fn card_frames(output: &egui::FullOutput) -> Vec<egui::Rect> {
+    fn walk(shape: &egui::epaint::Shape, fill: egui::Color32, out: &mut Vec<egui::Rect>) {
+        match shape {
+            egui::epaint::Shape::Rect(rect) if rect.fill == fill => out.push(rect.rect),
+            egui::epaint::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, fill, out)),
+            _ => {}
+        }
+    }
+    let fill = crate::theme::palette().panel;
+    let mut out = Vec::new();
+    for shape in &output.shapes {
+        walk(&shape.shape, fill, &mut out);
+    }
+    out
+}
+
+#[test]
+fn categories_and_identity_cards_end_at_the_same_height() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let report = fixture();
+    let mut state = WorkspaceState::default();
+    let size = egui::vec2(1280.0, 820.0);
+    let mut output = egui::FullOutput::default();
+    for _ in 0..5 {
+        output = frame(
+            &ctx,
+            &report,
+            &mut state,
+            None,
+            size,
+            Vec::new(),
+            (None, None),
+        )
+        .0;
+    }
+    let shown = texts(&output);
+    let top = |label: &str| shown.iter().find(|(text, _)| text == label).unwrap().1;
+    let (identity, categories) = (top("Identity"), top("Categories"));
+    assert!(identity.left() < categories.left(), "side by side");
+    let frames = card_frames(&output);
+    let around = |title: egui::Rect| {
+        *frames
+            .iter()
+            .filter(|rect| rect.contains(title.center()))
+            .min_by(|a, b| a.area().total_cmp(&b.area()))
+            .unwrap_or_else(|| panic!("no card around {title:?}: {frames:?}"))
+    };
+    let (left, right) = (around(identity), around(categories));
+    assert!(
+        (left.top() - right.top()).abs() < 0.5 && (left.bottom() - right.bottom()).abs() < 0.5,
+        "identity {left:?} vs categories {right:?}"
+    );
+    assert!(left.height() > 60.0);
+}
+
+#[test]
+fn decompilation_lines_sit_one_font_row_apart() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let (report, page) = code_report(AnalysisKind::Decompilation, &[("main", 0x2000, 8)]);
+    let shown = shown_in(&ctx, &report, AnalysisKind::Decompilation, &page);
+    // Each source line has its number in the first column: "1".."8".
+    let mut numbers: Vec<egui::Rect> = (1..=8)
+        .map(|line| {
+            let text = line.to_string();
+            shown
+                .iter()
+                .filter(|(shown, rect)| *shown == text && rect.left() > 200.0)
+                .map(|(_, rect)| *rect)
+                .next()
+                .unwrap_or_else(|| panic!("line {line}: {shown:?}"))
+        })
+        .collect();
+    numbers.sort_by(|a, b| a.top().total_cmp(&b.top()));
+    // A number's text rect is one row of the monospace font.
+    let font_row = numbers[0].height();
+    for pair in numbers.windows(2) {
+        let step = pair[1].top() - pair[0].top();
+        assert!(
+            step <= font_row + 0.5 && step > 0.0,
+            "lines {step} apart, font row {font_row}"
+        );
+    }
+}
+
+#[test]
+fn an_empty_structures_view_does_not_call_a_listing_with_rows_empty() {
+    // A file with 21 rows and none of them an import: the Imports view reads
+    // "0 / 21 rows" and says where the rows are, not that the listing is empty.
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let report = with_listing(fixture(), AnalysisKind::Structures, 21);
+    let mut state = WorkspaceState::default();
+    let page: Listing = Ok(AnalysisListingPage {
+        report_id: report.id.clone(),
+        kind: AnalysisKind::Structures,
+        ghidra: false,
+        query: Structure::Imports.kind_query().into(),
+        sort: None,
+        start: 0,
+        total: 0,
+        rows: Vec::new(),
+        functions: Vec::new(),
+    });
+    let size = egui::vec2(1280.0, 820.0);
+    let mut output = egui::FullOutput::default();
+    // The first frame binds the state to the report; then pick the view.
+    frame(
+        &ctx,
+        &report,
+        &mut state,
+        None,
+        size,
+        Vec::new(),
+        (None, None),
+    );
+    state.tab = Tab::Symbols;
+    state.symbols = Structure::Imports;
+    for _ in 0..3 {
+        output = frame(
+            &ctx,
+            &report,
+            &mut state,
+            None,
+            size,
+            Vec::new(),
+            (None, Some(&page)),
+        )
+        .0;
+    }
+    let shown = texts(&output);
+    let has = |text: &str| shown.iter().any(|(shown, _)| shown == text);
+    assert!(has("0 / 21 rows"), "{shown:?}");
+    assert!(
+        has("No imports in this file; its 21 rows are in the other views."),
+        "{shown:?}"
+    );
+    assert!(!has("This listing is empty."), "{shown:?}");
+}
