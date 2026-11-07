@@ -682,12 +682,12 @@ The network capture is the guest's own view on every route.
   (hover underlines it and shows the pointing hand; nothing is link-blue); each
   branch shows five and **Show N more** turns the five rows into one scroll area of every item,
   as tall as the five rows were, with its scroll bar always drawn (**Show fewer** puts the five back); the branch titles (Endpoints, DNS names, URLs, Files) are bold, each in a colour of its own that is neither the text colour nor link blue, with a muted count; the one-line rows (MITRE
-  ATT&CK, Processes of interest, Files, Network) show numbers strong and words muted; **Copy all** and **Export**, which writes JSON to the run's `ioc`
+  ATT&CK, Processes of interest, Files, Network) show numbers strong and words muted, stay one line each and scroll sideways when wider than the box (a scroll bar shows then, and Shift and the wheel scroll it; the plain wheel still scrolls the page); **Copy all** and **Export**, which writes JSON to the run's `ioc`
   folder; the header says how many indicators matched the IOC datasets), **Relationships**
   (a process, file, endpoint and injection graph laid out as a tree from the root
   at the top left: each process has the processes it started, the files it wrote or
-  ran and the endpoints it contacted to its right, and a process with many children
-  spreads them over several lanes; children of one parent that ran the same image
+  ran and the endpoints it contacted to its right, and every level is one column however
+  many children there are (a tall column is reached by scrolling or panning); children of one parent that ran the same image
   and have no finding are one stacked box (`ps ×120`), and the files one process
   wrote into one folder are one box (`/tmp/x/ · 1,240 files written`); a click on
   a stacked box opens it and a click on its header shuts it, and a node with a
@@ -703,10 +703,10 @@ The network capture is the guest's own view on every route.
   in the window; **Laying out…** shows while a big run is
   placed; the icon beside **Mermaid** opens the graph in a window of its own with the
   same controls; drag the background to pan, Ctrl and the wheel or the
-  buttons (a small bar that fits its buttons) to zoom, the plain wheel scrolls the page everywhere, over the graph too, and the Key findings and Indicators lists and the Activity graph's lanes take it only while they can still scroll that way; a process whose children sit in several lanes draws its fork and exec edges as one trunk beside each lane with a stub to every child (a child with a finding keeps its tier colour on its stub); click a node to open it,
+  buttons (a small bar that fits its buttons: **Fit** shows the whole graph when it can be read, else its top as wide as the box; **Fit all** shows every box, however small) to zoom, the plain wheel scrolls the page everywhere, over the graph too, and the Key findings and Indicators lists and the Activity graph's lanes take it only while they can still scroll that way; click a node to open it,
   **Mermaid** to copy what is shown; edges read fork, exec, write, run, connect, inject, signal),
   then one line each for **MITRE ATT&CK**, **Processes of interest**, **Files** and
-  **Network**, the folded **MITRE ATT&CK techniques** list, the **Detection engines**,
+  **Network**, the folded **MITRE ATT&CK techniques** list, the **Detection engines** (three cards of one height, so the state tag and **Open results** line up),
   the notes and the run's last screenshot. The Summary states observations only: no
   verdict and no score. Family
   candidates and tags show only what a detection or rule named, so a run nothing
@@ -1152,7 +1152,7 @@ text.
 **Spawned windows** (a rules window, a rule hit's Details, Relationships and
 the like) never grow past 80 % of the app's content area each way (a window
 still opens at its own size when that fits), and not below a small minimum. What does not fit scrolls inside the window: code scrolls
-sideways in its box, and long text wraps.
+sideways in its box, and long text wraps. A rules window opens with the list at 40 % and the details at 60 % of its width (drag the divider to change it).
 
 Menus: **File**, **VM**, **Run**, **View**, **Tools** and **Help**; the menu bar's
 **Search** button at the right (with its key) opens the command palette. Menus and

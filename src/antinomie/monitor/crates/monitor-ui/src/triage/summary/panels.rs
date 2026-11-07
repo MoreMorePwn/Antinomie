@@ -462,12 +462,24 @@ pub(super) fn tactic_counts(details: &[attack::Detail]) -> Vec<(&'static str, us
         .collect()
 }
 
-/// A one-line row: a title, what it counts, and its way in.
+/// A one-line row: a title, what it counts, and its way in. The row never
+/// wraps: when its content is wider than the box it scrolls sideways (the
+/// wheel with Shift, or the bar that shows then), and a plain wheel over it
+/// still scrolls the page.
 fn line(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 10.0;
-        ui.label(RichText::new(title).strong().color(theme::heading()));
-        body(ui);
+    ui.scope(|ui| {
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+        egui::ScrollArea::horizontal()
+            .id_salt(("summary-line", title))
+            .auto_shrink([false, true])
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    ui.label(RichText::new(title).strong().color(theme::heading()));
+                    body(ui);
+                });
+            });
     });
 }
 

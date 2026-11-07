@@ -72,12 +72,20 @@ fn detector(
                     })
                     .inner;
             }
-            ui.set_min_height(ui.text_style_height(&egui::TextStyle::Body) * 5.4);
             ui.label(
                 RichText::new(detection::name(engine))
                     .strong()
                     .color(theme::heading()),
             );
+            // The same height in every card: the figures, a line for the
+            // occurrences and a line for YARA's strong/weak split, which
+            // IDS and Sigma leave empty, so the tag and the button sit at
+            // the same height in all three.
+            let small = ui.text_style_height(&egui::TextStyle::Small);
+            let big = ui.fonts_mut(|fonts| fonts.row_height(&egui::FontId::proportional(27.0)));
+            let spacing = ui.spacing().item_spacing.y;
+            let body_height = big + 2.0 * small + 3.0 * spacing;
+            let start = ui.cursor().top();
             if let Some(counts) = &view.detection.counts[index] {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(
@@ -118,13 +126,16 @@ fn detector(
                         })
                         .count();
                     if weak > 0 {
-                        ui.label(
-                            RichText::new(format!(
-                                "{} strong \u{b7} {weak} weak or generic",
-                                report.findings.len() - weak
-                            ))
-                            .small()
-                            .color(theme::muted()),
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!(
+                                    "{} strong \u{b7} {weak} weak or generic",
+                                    report.findings.len() - weak
+                                ))
+                                .small()
+                                .color(theme::muted()),
+                            )
+                            .truncate(),
                         )
                         .on_hover_text(
                             "Weak or generic: unscored community rules without a family, \
@@ -136,25 +147,33 @@ fn detector(
             } else {
                 ui.label(RichText::new("–").size(27.0).color(theme::muted()))
                     .on_hover_text("Not scanned");
-                ui.label(
-                    RichText::new(match activity {
-                        Some(detection::ScanActivity::Running) => "Scan in progress",
-                        Some(detection::ScanActivity::Queued) => "Waiting for its turn",
-                        // Why an engine could not run is said in the Detection view.
-                        None => match view.detection.results[index].as_ref() {
-                            Some(Ok(report))
-                                if matches!(report.state, State::Unavailable | State::Missing) =>
-                            {
-                                "Not available: open Results for why"
-                            }
-                            None => "Not scanned: open Results to scan",
-                            _ => "No evaluated result",
-                        },
-                    })
-                    .small()
-                    .color(theme::muted()),
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(match activity {
+                            Some(detection::ScanActivity::Running) => "Scan in progress",
+                            Some(detection::ScanActivity::Queued) => "Waiting for its turn",
+                            // Why an engine could not run is said in the Detection view.
+                            None => match view.detection.results[index].as_ref() {
+                                Some(Ok(report))
+                                    if matches!(
+                                        report.state,
+                                        State::Unavailable | State::Missing
+                                    ) =>
+                                {
+                                    "Not available: open Results for why"
+                                }
+                                None => "Not scanned: open Results to scan",
+                                _ => "No evaluated result",
+                            },
+                        })
+                        .small()
+                        .color(theme::muted()),
+                    )
+                    .truncate(),
                 );
             }
+            let used = ui.cursor().top() - start;
+            ui.add_space((body_height - used).max(0.0));
             ui.horizontal_wrapped(|ui| {
                 presentation::badge(ui, status, color);
                 ui.button("Open results").clicked()

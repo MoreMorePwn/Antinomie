@@ -1110,3 +1110,70 @@ fn a_long_rule_neither_widens_nor_lengthens_the_window_and_its_code_scrolls() {
         assert!(window.width() >= 280.0, "{window:?}");
     }
 }
+
+/// A rule with a long name, a long reference and a source line of 600 characters.
+fn long_name_rule() -> String {
+    let long = "x".repeat(600);
+    let name = format!("Long_Rule_{}", "n".repeat(120));
+    format!("rule {name}\n{{\n  meta:\n    description = \"{long}\"\n    reference = \"https://example.test/{long}\"\n  strings:\n    $a = \"{long}\"\n  condition:\n    $a\n}}\n")
+}
+
+#[test]
+fn a_long_rule_never_takes_the_window_past_its_cap_and_the_list_takes_40_percent() {
+    for size in [egui::vec2(1280.0, 800.0), egui::vec2(1920.0, 1080.0)] {
+        let mut f = Fixture::new("long-rule");
+        f.size = size;
+        f.pack("fixture", "yara", "rules.yar", &long_name_rule());
+        f.open_list();
+        f.until("Long_Rule_");
+        f.settle();
+        f.model.rule_lists[0].select(0);
+        f.until("Compatibility");
+        for _ in 0..30 {
+            f.frame();
+        }
+        let area = crate::title_bar::content_rect(&f.ctx);
+        let cap = crate::widgets::cap_size(area) + crate::widgets::frame_extra(&f.ctx);
+        let window = window_rect(&f);
+        assert!(
+            window.width() <= cap.x + 0.5 && window.height() <= cap.y + 0.5,
+            "{size:?}: {window:?} over {cap:?}"
+        );
+        assert!(
+            area.expand(0.5).contains_rect(window),
+            "{window:?} in {area:?}"
+        );
+        let before = window.size();
+        for _ in 0..30 {
+            f.frame();
+        }
+        assert_eq!(window_rect(&f).size(), before);
+        // Nothing the window draws reaches past its edge.
+        let shown = f.frame();
+        for (text, rect, clip) in &shown {
+            if text.starts_with("xxx")
+                || text.starts_with("https://example.test/")
+                || text.starts_with("Long_Rule_")
+            {
+                assert!(
+                    clip.right() <= window.right() + 0.5,
+                    "{size:?}: {text:?} {rect:?} clip {clip:?} past {window:?}"
+                );
+            }
+        }
+        // 40:60: the divider sits at about 40% of the window's contents.
+        let shown = f.frame();
+        let at = |label: &str| {
+            shown
+                .iter()
+                .find(|(text, _, _)| text == label)
+                .unwrap_or_else(|| panic!("no {label}: {}", joined(&shown)))
+                .1
+        };
+        let share = (at("ID").left() - window.left()) / window.width();
+        assert!(
+            (0.38..=0.46).contains(&share),
+            "{size:?}: details start at {share}"
+        );
+    }
+}
