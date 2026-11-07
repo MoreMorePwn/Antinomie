@@ -90,12 +90,9 @@ pub(crate) fn show_removable(ui: &mut egui::Ui, run: &RunSummary, in_run_list: b
         }
     }
     show_loss(ui, run);
-    for note in quiet_notes(run) {
+    for note in note_lines(run) {
         ui.add(
-            egui::Label::new(
-                RichText::new(format!("Note: {}", run_note_text(note))).color(theme::muted()),
-            )
-            .wrap(),
+            egui::Label::new(RichText::new(format!("Note: {note}")).color(theme::muted())).wrap(),
         );
     }
     remove
@@ -141,9 +138,15 @@ fn quiet_notes(run: &RunSummary) -> impl Iterator<Item = &String> {
 
 /// The run's notes but the telemetry loss (a warning), one line each, as plain text.
 pub(crate) fn note_lines(run: &RunSummary) -> Vec<String> {
-    quiet_notes(run)
+    let mut lines: Vec<String> = quiet_notes(run)
         .map(|note| run_note_text(note).to_owned())
-        .collect()
+        .collect();
+    // What the static analysis found in the file's headers: a cut-off
+    // download, a library run as if it were a program.
+    if let Some(report) = &run.analysis {
+        lines.extend(antinomie_monitor_core::report_notes(report));
+    }
+    lines
 }
 
 /// Shared run identity keeps Activity and inline dismissal in sync without

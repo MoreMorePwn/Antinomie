@@ -58,6 +58,8 @@ enum Done {
 }
 
 struct Job {
+    /// The engine page the job was started from.
+    engine: String,
     cancel: Arc<AtomicBool>,
     /// The latest status line of a long job, such as a download.
     progress: Arc<Mutex<String>>,
@@ -77,6 +79,9 @@ pub(crate) struct Model {
     group_id: String,
     status: String,
     status_error: Option<String>,
+    /// The page (engine tab) the status line belongs to, with the text it was
+    /// noted for: a result shows only where it happened.
+    status_scope: (String, String),
     /// The status text of a job that finished well (installed, saved, read):
     /// shown in the success green.
     status_done: Option<String>,
@@ -197,6 +202,7 @@ impl Model {
         for list in &mut self.rule_lists {
             list.poll();
         }
+        let job_engine = self.job.as_ref().map(|job| job.engine.clone());
         let finished = self.job.as_ref().and_then(|job| match job.rx.try_recv() {
             Ok(result) => Some(result),
             Err(mpsc::TryRecvError::Empty) => None,
@@ -206,6 +212,7 @@ impl Model {
         });
         if let Some(result) = finished {
             self.job = None;
+            self.status_scope = (String::new(), job_engine.unwrap_or_default());
             match result {
                 Ok(Done::Catalog(catalog)) => {
                     self.catalog = Some(catalog);
@@ -539,6 +546,7 @@ impl Model {
             return;
         }
         self.job = Some(Job {
+            engine: self.engine.clone(),
             cancel,
             progress,
             rx,

@@ -765,6 +765,26 @@ The network capture is the guest's own view on every route.
   the matched rules of YARA, IDS and Sigma as "x · y · z", each capped at 99+;
   hover it for the engines by name. A scan that starts by itself and fails never replaces the result
   on screen, and no scan starts by itself while an engine tool has not answered.
+  **Settings > Detection > Scan runs with IDS and Sigma when they end** (on by
+  default) makes each engine scan a run once its evidence is ready, and again
+  when a rule pack is installed, updated or removed. A run whose VM stopped
+  under its capture (the pcap was never closed) is scanned with the packets it
+  holds, and the engine's row says "scanned the N packets captured so far". An
+  engine that has not scanned the run says **Not scanned** with a **Scan**
+  button; in the tab badge it shows as a dash whose hover says "not scanned"
+  (a zero would mean the engine scanned and found nothing). A result made with
+  an older rule set says "Scanned with an older rule set." with **Rescan**.
+- **Failed launches.** A program the guest could not start because its file is
+  cut off says "This ELF is truncated: its segments need 30.3 MB, the file has
+  2.0 MB. A partial upload or download; get a full copy." in the run's failure
+  message, and Static analysis shows it in red above Identity. A root that exits
+  127 for a missing library gets the run note "Exited 127: the library
+  libhwloc.so.15 is not in the guest."; Metadata/Structures list each **Needed
+  library**. A shared object run as a program is called a shared library, meant
+  for LD_PRELOAD or dlopen, in Identity and on the run. Unpacking says "UPX
+  headers are altered (anti-unpacking); restore the UPX! magic and sizes to
+  unpack it" for a UPX file whose headers were damaged on purpose. A run that
+  failed to start has a digest that says so and why.
 - **Triage › Summary** also names the run's root process from the launch request
   when the recording's launch record cannot (the program and arguments the run
   was asked to start, kept as the first name in its exec history), and the

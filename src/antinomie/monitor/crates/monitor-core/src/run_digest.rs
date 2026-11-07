@@ -251,6 +251,11 @@ pub struct RunDigest {
     /// Every file the run changed (up to [`MAX_ROWS`]); `None` for a digest
     /// written before 0.8.2.
     pub files: Option<Vec<WrittenFile>>,
+    /// Why the program never started, for a run whose launch failed. Such a
+    /// run has nothing for Triage to read; its digest says so, with empty
+    /// findings, so it is a run that did not start and not one still unread.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launch_failure: Option<String>,
 }
 
 /// Serialises read-modify-write cycles: the UI updates a digest from short
@@ -262,6 +267,19 @@ fn path(run_directory: &Path) -> PathBuf {
 }
 
 impl RunDigest {
+    /// The digest of a run whose launch failed: nothing was recorded, so
+    /// every part is empty and `reason` says why.
+    pub fn for_failed_launch(reason: &str) -> Self {
+        Self {
+            behaviour: Some(Behaviour::default()),
+            detections: Some(Vec::new()),
+            indicators: Some(Vec::new()),
+            files: Some(Vec::new()),
+            launch_failure: Some(reason.to_owned()),
+            ..Self::default()
+        }
+    }
+
     /// The run's digest, or `None` when it has none, it is unreadable or it
     /// is of another version.
     pub fn read(run_directory: &Path) -> Option<Self> {

@@ -528,10 +528,10 @@ impl MonitorApp {
             ui.vertical(|ui| {
                 ui.checkbox(
                     &mut self.settings.automatic_detection,
-                    "Scan retained evidence when it is ready",
+                    "Scan runs with IDS and Sigma when they end",
                 )
                 .on_hover_text(
-                    "Runs each engine once per ready input and rule selection. Scan still works when this is off.",
+                    "Scans a run with YARA, IDS and Sigma once its evidence is ready, and again when the installed rule packs change. A run whose VM stopped is scanned with what it recorded, and the result says so. Scan still works when this is off.",
                 );
             });
             ui.end_row();

@@ -657,6 +657,15 @@ fn overview(
 /// Why the report is not complete, above the Identity and Categories cards so
 /// the two start at the same line.
 fn identity_notice(ui: &mut egui::Ui, report: &AnalysisReport) {
+    // What the file's headers say about running it comes first: a cut-off
+    // file is why a launch fails, so it is an error, not a footnote.
+    for note in antinomie_monitor_core::report_notes(report) {
+        if note.starts_with("This ELF is truncated") {
+            crate::activity::error(ui, note);
+        } else {
+            crate::activity::warning(ui, note);
+        }
+    }
     if matches!(
         report.state,
         AnalysisState::Partial | AnalysisState::Unavailable | AnalysisState::Cancelled

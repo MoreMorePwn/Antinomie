@@ -191,6 +191,25 @@ fn engines_have_installed_and_catalog_tabs_and_keep_the_chosen_one() {
 }
 
 #[test]
+fn a_status_line_stays_on_the_page_it_happened_on() {
+    let mut f = Fixture::new("scope");
+    f.settle();
+    f.click("IOC");
+    f.model.status = "The last update of ThreatFox failed".into();
+    assert!(joined(&f.frame()).contains("ThreatFox failed"));
+    f.click("Sigma");
+    let shown = joined(&f.frame());
+    assert!(!shown.contains("ThreatFox failed"), "{shown}");
+    // It is still the IOC page's when the person goes back.
+    f.click("IOC");
+    assert!(joined(&f.frame()).contains("ThreatFox failed"));
+    // A result the next job writes shows where that job started.
+    f.click("Sigma");
+    f.model.status = "Catalog updated.".into();
+    assert!(joined(&f.frame()).contains("Catalog updated."));
+}
+
+#[test]
 fn a_pack_lists_all_its_rules_and_a_rule_shows_its_details_and_source() {
     let mut f = Fixture::new("pack");
     f.pack("fixture", "yara", "rules.yar", YARA);
