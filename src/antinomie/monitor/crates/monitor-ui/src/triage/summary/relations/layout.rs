@@ -23,6 +23,7 @@ pub(in crate::triage) struct Layout {
     pub shown: Vec<usize>,
     pub bounds: Rect,
     /// The node the view opens on: the run's root.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub root: Option<usize>,
     /// Which layout this is: a new one has a new number, so a view can tell
     /// that the nodes moved.
