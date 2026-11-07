@@ -11,6 +11,7 @@ mod app;
 mod args;
 mod commands;
 mod context;
+mod engine;
 mod error;
 mod exit;
 mod logging;

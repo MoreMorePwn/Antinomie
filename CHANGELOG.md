@@ -30,6 +30,10 @@ x86 programs by their own table.
   show, tag, verify, remove` and `custody verify` (with export and signing) work
   on the sample library without the engine lock, so they run beside the window.
 
+- **Static analysis and rule selection from the command line.** `antinomie-cli
+  analyze FILE` runs the static analysis of a host file and prints a summary;
+  `rules list, enable, disable` use the rule registry of the data directory.
+
 - **Clock model for the boot age.** A new Clock model setting in a VM's Device
   profile (Auto, Always running, Suspend) chooses whether the boot age steps
   both guest clocks or only CLOCK_BOOTTIME. Auto picks Suspend on Debian bases,

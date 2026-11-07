@@ -402,7 +402,7 @@ impl Drop for Backend {
     }
 }
 
-fn acquire_data_owner(
+pub(crate) fn acquire_data_owner(
     directory: &std::path::Path,
     claim: &crate::data_owner::OwnerClaim,
 ) -> Result<crate::data_owner::OwnerGuard, String> {

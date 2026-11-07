@@ -176,6 +176,17 @@ pub fn in_use_message(owner: &DataOwner) -> String {
     format!("{IN_USE} by {}", owner.describe())
 }
 
+/// Take the lock of `data_dir` and write the owner record without starting the
+/// engine, for a command that edits data the engine reads (the rules registry)
+/// and must not race a window or a daemon. The directory must exist. Fails with
+/// [`IN_USE`] text when another process owns it.
+pub fn lock_data_dir(data_dir: &Path, claim: &OwnerClaim) -> Result<OwnerGuard, String> {
+    if let Some(owner) = current_owner(data_dir)? {
+        return Err(in_use_message(&owner));
+    }
+    crate::backend::acquire_data_owner(data_dir, claim)
+}
+
 /// Held by the process that owns the directory: the lock file, plus the duty to
 /// remove the record. Dropping it removes the record first, then releases the
 /// lock, so a new owner never sees the old record.
@@ -328,6 +339,20 @@ mod tests {
         drop(OwnerGuard::new(root.clone(), lock));
         assert!(!record_path(&root).exists());
         assert_eq!(current_owner(&root).unwrap(), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn lock_data_dir_excludes_a_second_owner_and_names_the_first() {
+        let root = scratch("lock");
+        let first = lock_data_dir(&root, &claim(OwnerKind::Cli)).unwrap();
+        let error = lock_data_dir(&root, &claim(OwnerKind::Gui)).err().unwrap();
+        assert!(
+            error.starts_with(IN_USE) && error.contains("antinomie-cli"),
+            "{error}"
+        );
+        drop(first);
+        assert!(lock_data_dir(&root, &claim(OwnerKind::Gui)).is_ok());
         fs::remove_dir_all(root).unwrap();
     }
 

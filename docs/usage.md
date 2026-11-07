@@ -1244,6 +1244,20 @@ per line: a list command prints its items and then a last line
   SHA-256 is given (exit 1 when something does not verify). `--export` writes the
   custody record of the sample (JSON with `verify-custody.py` beside it, or a
   readable page for a `.html` path), optionally signed with your own key.
+- `analyze FILE [--checks LIST] [--time-limit-min N] [--out DIR] [--vm ID]` runs
+  the static analysis of a file on the host, with no VM, and prints a summary of
+  each check. It starts the engine itself (so it needs the data directory to be
+  free: exit 21 names the owner) and needs bubblewrap. The report folder is
+  `<data>/<ID>/analyses/<report id>` (`ID` defaults to `cli-analysis`, which is
+  not a VM); `--out` also copies the report folder, and the folders of any
+  unpacked layers, into `DIR`. `--checks` takes the names metadata, structures,
+  strings, regex, entropy, hardening, rules, identification, capabilities,
+  disassembly, decompilation, embedded, floss, unpacking; the default is the
+  triage set.
+- `rules list [--engine yara|sigma|ids]` lists the installed rule packs and
+  custom groups with their state; `rules enable ID` and `rules disable ID` switch
+  one (`pack:ID` or `group:ID` when an id names both). Changing the selection
+  takes the data-directory lock; listing does not.
 - `config path` prints the paths of `settings.json`, `service.toml` and `policies/`.
 
 ## Troubleshooting
