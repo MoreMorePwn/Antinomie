@@ -21,28 +21,12 @@ mod record_tree;
 pub(crate) use record_tree::call_json as record_call_json;
 mod tree_row;
 use call_tree::tree_header;
+pub(crate) use antinomie_triage::trace::{key, representative, InvocationKey};
 pub(crate) use fields::*;
 use tree_row::{note_row, section_row, tree_row, Row};
 
-pub(crate) type InvocationKey = (u64, u64, u64);
 
-pub(crate) fn representative(
-    invocation: &InvocationSummary,
-) -> Option<&antinomie_monitor_core::EventSummary> {
-    invocation
-        .entry
-        .as_ref()
-        .or(invocation.exit.as_ref())
-        .or(invocation.async_events.first())
-}
 
-pub(crate) fn key(invocation: &InvocationSummary) -> InvocationKey {
-    (
-        invocation.stream_id,
-        invocation.task_cookie,
-        invocation.call_id,
-    )
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Selection {

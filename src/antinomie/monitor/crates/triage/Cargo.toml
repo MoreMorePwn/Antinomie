@@ -1,0 +1,20 @@
+[package]
+name = "antinomie-triage"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+authors.workspace = true
+description = "Triage of a recorded run: the scan, activity rules, indicators and filter language (UI-free)"
+
+[dependencies]
+antinomie-monitor-core = { path = "../monitor-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+rusqlite = { version = "0.41.0", features = ["hooks"] }
+rustix = { version = "1", features = ["fs", "process", "time"] }
+
+[lints.clippy]
+# Moved from the GUI crate as written: edition 2024 asks for let chains, the
+# code is still formatted (see rustfmt.toml) the 2021 way.
+collapsible_if = "allow"
