@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use super::support::*;
+use crate::query::RowValue;
 
 #[test]
 fn walking_the_process_list_is_low_after_ten_processes_or_with_ps() {
@@ -217,4 +218,23 @@ fn many_hosts_or_ports_within_seconds_is_a_scan_and_failure_does_not_lower_it() 
         )]),
         "discovery.network_scan"
     ));
+}
+
+#[test]
+fn a_dns_loop_reading_resolv_conf_again_and_again_is_flagged_once() {
+    let mut calls = Vec::new();
+    for _ in 0..300 {
+        calls.push(open_read(1, "/etc/resolv.conf", 3));
+        calls.push(close(1, 3));
+    }
+    let out = run(calls);
+    let found = rows(&out, "discovery.network_config");
+    assert_eq!(found.len(), 1, "one row");
+    assert!(
+        found[0]
+            .values
+            .iter()
+            .any(|(name, value)| *name == "finding.count" && matches!(value, RowValue::Number(1))),
+        "the reads after the first are name resolution, not counted"
+    );
 }

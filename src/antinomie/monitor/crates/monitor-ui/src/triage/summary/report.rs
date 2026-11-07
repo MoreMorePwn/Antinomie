@@ -105,6 +105,34 @@ fn detector(
                     .small()
                     .color(theme::muted()),
                 );
+                if let Some(Ok(report)) = view.detection.results[index]
+                    .as_ref()
+                    .filter(|_| engine == Engine::Yara)
+                {
+                    let weak = report
+                        .findings
+                        .iter()
+                        .filter(|finding| {
+                            detection::yara_strength(report, finding)
+                                != crate::triage::family::Strength::Strong
+                        })
+                        .count();
+                    if weak > 0 {
+                        ui.label(
+                            RichText::new(format!(
+                                "{} strong \u{b7} {weak} weak or generic",
+                                report.findings.len() - weak
+                            ))
+                            .small()
+                            .color(theme::muted()),
+                        )
+                        .on_hover_text(
+                            "Weak or generic: unscored community rules without a family, \
+                             generic or hunting rules, low-score Elastic rules and rules for \
+                             another platform. The count above is the total.",
+                        );
+                    }
+                }
             } else {
                 ui.label(RichText::new("—").size(27.0).color(theme::muted()));
                 ui.label(
@@ -295,7 +323,14 @@ pub(super) fn content(
                 .as_ref()
                 .is_some_and(|built| built.current(view, scan))
             {
-                state.built = Some(Built::of(view, scan, view.scan_request.packed.is_some()));
+                state.built = Some(Built::of(
+                    view,
+                    scan,
+                    view.scan_request.packed.is_some(),
+                    input
+                        .analysis
+                        .and_then(|report| report.specimen_sha256.as_deref()),
+                ));
             }
             let ioc_line = view.ioc_headline();
             let sample = input.analysis.map(SampleInfo::of);

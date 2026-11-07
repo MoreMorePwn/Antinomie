@@ -659,13 +659,19 @@ The network capture is the guest's own view on every route.
   type and architecture, static or dynamic, packed when Static analysis found a
   packer, size and SHA-256 with a copy button; the base, route, run time and exit;
   the HIGH, MEDIUM, LOW and info counts, each a button that opens
-  Suspicious activity on that tier; **Family candidates** from the detections, each
-  with its source; and behaviour tags), **Key findings** (the six worst by tier and
+  Suspicious activity on that tier; **Family candidates** from the detections and the
+  sample's MalwareBazaar record, strongest first, each with its source (an Elastic
+  `Linux_Trojan_<Family>` rule, a `family` or Malpedia metadata, MalwareBazaar's
+  signature and its tags, which may name two families; name fragments such as
+  MassHunt, IoT or Unique are never a family); and behaviour tags), **Key findings** (the six worst by tier and
   then first time, each with its description on a line below, cut to its first sentence
   with "…" when there is more: a click on the description shows all of it and another
   folds it; a click on the row opens the finding's Details, **all N** opens Suspicious activity, **Show more** turns
   the six rows into one scroll area of every finding, as tall as the six rows
-  were, with its scroll bar always drawn at the right edge; **Show less** puts the six back), **Indicators** (a tree of
+  were, with its scroll bar always drawn at the right edge; **Show less** puts the six back), **Indicators** (the base image's own clock-sync, DHCP and apt traffic is one muted
+  "Base image background" line at the end of its branch, shut until clicked, and left
+  out of Copy all unless open; an address on a Tor, VPN or SOCKS route's stand-in range
+  shows the name it stands for; a tree of
   **Endpoints** with country and organization, **DNS names**, **URLs** and **Files**
   dropped or run with type and SHA-256; each item shows its value in the normal
   text colour in monospace and its country, organization, type or hash muted
@@ -731,6 +737,12 @@ The network capture is the guest's own view on every route.
   legend under the Summary and the sample window's ATT&CK section. The Sigma
   rules of low or informational severity add no techniques to the list.
 - **Triage › Detection** lists each engine's matches as cards under **Matches**.
+  On the YARA page the strong matches (an Elastic rule scored 70 or more, a rule
+  with `family` metadata, a curated pack's non-generic rule) come first; unscored
+  community rules without a family, generic and hunting rules, low-score Elastic
+  rules and rules named for Windows, PE, scripts or web pages sit in a folded
+  **Weak or generic matches (N)** group under them. Nothing is removed and the
+  counts are totals.
   **Sort by** orders them by risk (the default), name, MITRE technique, engine
   (rule pack), hit count or first hit (where the first hit was recorded:
   journal event, call or packet order; matches with no position come last); the

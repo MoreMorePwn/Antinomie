@@ -296,9 +296,34 @@ fn yara_family(data: &Data) -> Option<&antinomie_monitor_core::samples::RuleRow>
         .find(|rule| rule.engine.eq_ignore_ascii_case("yara") && !rule.family.trim().is_empty())
 }
 
+/// The families the download source's record names: its signature and its
+/// tags, when they name different ones.
+fn bazaar_families(data: &Data) -> Vec<(String, &'static str)> {
+    crate::triage::family::bazaar_families(
+        data.record.info.signature.as_deref(),
+        &data.record.info.tags,
+    )
+}
+
 /// The Family field: the family name (the download source's signature, else a
 /// YARA rule's), else the sample's malware-category tags, else "Unknown".
 fn family(ui: &mut egui::Ui, data: &Data) {
+    let both = bazaar_families(data);
+    if both.len() > 1 {
+        let names = both
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(" \u{b7} ");
+        let sources = both
+            .iter()
+            .map(|(name, source)| format!("{name}: {source}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        ui.label(RichText::new(names).strong())
+            .on_hover_text(sources);
+        return;
+    }
     let named = data.record.family.trim();
     if !named.is_empty() {
         ui.label(RichText::new(named).strong());
@@ -325,6 +350,9 @@ fn family(ui: &mut egui::Ui, data: &Data) {
 /// rule, or both when they agree. Nothing when the field shows tags.
 fn family_source(data: &Data) -> Option<String> {
     use antinomie_monitor_core::samples::OriginKind;
+    if bazaar_families(data).len() > 1 {
+        return Some("MalwareBazaar signature and tags".into());
+    }
     let named = data.record.family.trim();
     let yara = yara_family(data);
     let downloaded = data

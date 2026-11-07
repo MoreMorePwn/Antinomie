@@ -175,6 +175,34 @@ impl SampleInfo {
     }
 }
 
+/// The MalwareBazaar record the library keeps of a sample (its `signature`
+/// and `tags`), read without opening the library for writing. None when the
+/// library, the sample or its record is missing; a sample added from a local
+/// file has none.
+pub fn recorded_info(data_dir: &std::path::Path, sha256: &str) -> Option<SampleInfo> {
+    let database = super::samples_dir(data_dir).join(super::library::DATABASE);
+    if !database.is_file() {
+        return None;
+    }
+    let connection = rusqlite::Connection::open_with_flags(
+        &database,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    connection
+        .busy_timeout(std::time::Duration::from_secs(2))
+        .ok()?;
+    let json: String = connection
+        .query_row(
+            "SELECT info FROM sample WHERE sha256=?1",
+            [sha256.to_ascii_lowercase()],
+            |row| row.get(0),
+        )
+        .ok()?;
+    let info: SampleInfo = serde_json::from_str(&json).ok()?;
+    (info.signature.is_some() || !info.tags.is_empty()).then_some(info)
+}
+
 /// The records of a reply's `data`: a list, or one record. Anything else is
 /// no records.
 pub(super) fn records(data: &Value) -> Vec<SampleInfo> {

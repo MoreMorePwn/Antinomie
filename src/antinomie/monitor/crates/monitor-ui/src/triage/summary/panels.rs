@@ -266,6 +266,46 @@ fn category(
         });
 }
 
+fn background_key(group: usize) -> egui::Id {
+    egui::Id::new(("summary-background-open", group))
+}
+
+/// Whether the analyst has opened a group's background list.
+fn background_open(ui: &egui::Ui, group: usize) -> bool {
+    ui.data(|data| data.get_temp::<bool>(background_key(group)))
+        .unwrap_or(false)
+}
+
+/// The base image's own traffic of a group as one muted line at its end;
+/// a click lists it. Not among the rows above and not in Copy all unless open.
+fn background_line(ui: &mut egui::Ui, found: &super::indicators::Indicators, group: usize) {
+    let Some(label) = found.background_label(group) else {
+        return;
+    };
+    let reply = egui::CollapsingHeader::new(RichText::new(label).small().color(theme::muted()))
+        .id_salt(("summary-background", group))
+        .default_open(false)
+        .show(ui, |ui| {
+            for item in found.background.iter().filter(|item| item.group == group) {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new(&item.value)
+                            .monospace()
+                            .small()
+                            .color(theme::muted()),
+                    );
+                    ui.label(RichText::new(&item.why).small().color(theme::muted()));
+                });
+            }
+        });
+    reply.header_response.on_hover_text(
+        "The base image's own traffic (clock sync, apt), not the sample's. The Network \
+         tab lists every row.",
+    );
+    let open = reply.body_response.is_some();
+    ui.data_mut(|data| data.insert_temp(background_key(group), open));
+}
+
 pub(super) fn indicators(
     ui: &mut egui::Ui,
     built: &Built,
@@ -328,12 +368,25 @@ pub(super) fn indicators(
                     let row = &found.endpoints[at];
                     let place = super::indicators::Indicators::place(row);
                     let mut parts = vec![Part::Value(&row.endpoint)];
+                    let arrow = row.stand_in.as_ref().map(|name| format!("\u{2192} {name}"));
+                    if let Some(arrow) = &arrow {
+                        parts.push(Part::Value(arrow));
+                    }
                     if !place.is_empty() {
                         parts.push(Part::Note(&place));
                     }
-                    rows::item(ui, &parts, "Open the Endpoints tab")
+                    let hint = match &row.stand_in {
+                        Some(name) => format!(
+                            "{} is the gateway's stand-in address for {name}: the route's DNS \
+                             answered the name with it. Open the Endpoints tab.",
+                            row.endpoint
+                        ),
+                        None => "Open the Endpoints tab".to_owned(),
+                    };
+                    rows::item(ui, &parts, &hint)
                 },
             );
+            background_line(ui, found, 0);
             category(
                 ui,
                 ("DNS names", theme::category(1)),
@@ -349,6 +402,7 @@ pub(super) fn indicators(
                     )
                 },
             );
+            background_line(ui, found, 1);
             category(
                 ui,
                 ("URLs", theme::category(2)),
@@ -358,6 +412,7 @@ pub(super) fn indicators(
                 acts,
                 |ui, at| rows::item(ui, &[Part::Value(&found.urls[at])], "Open the URLs tab"),
             );
+            background_line(ui, found, 2);
             category(
                 ui,
                 ("Files", theme::category(3)),
@@ -386,7 +441,8 @@ pub(super) fn indicators(
         },
     );
     if copy {
-        ui.ctx().copy_text(found.copy_text());
+        let opened: [bool; 3] = std::array::from_fn(|group| background_open(ui, group));
+        ui.ctx().copy_text(found.copy_text_with(&opened));
         *status = Some(format!("Copied {} indicators", found.total()));
     }
     if export {

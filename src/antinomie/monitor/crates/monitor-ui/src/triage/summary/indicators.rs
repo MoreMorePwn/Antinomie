@@ -15,6 +15,21 @@ pub(super) struct EndpointRow {
     pub organization: String,
     /// How the endpoint was seen ("tcp", "udp").
     pub note: String,
+    /// The name the gateway's stand-in address (198.18.x.x on a proxied route)
+    /// was handed out for.
+    pub stand_in: Option<String>,
+}
+
+/// An endpoint, name or URL that is the base image's own traffic: kept out of
+/// the lists, counted in one muted line at the end of its group.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Background {
+    /// 0 endpoints, 1 DNS names, 2 URLs (the order of the Indicators box).
+    pub group: usize,
+    pub value: String,
+    /// What it is: "NTP", "DHCP", "apt".
+    pub kind: &'static str,
+    pub why: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,6 +46,24 @@ pub(super) struct Indicators {
     pub domains: Vec<String>,
     pub urls: Vec<String>,
     pub files: Vec<FileRow>,
+    pub background: Vec<Background>,
+}
+
+/// What kind of base image traffic a noise tag is about.
+fn background_kind(value: &str, why: &str) -> &'static str {
+    let text = format!("{value} {why}").to_ascii_lowercase();
+    if text.contains("ntp") || text.contains("clock sync") {
+        "NTP"
+    } else if text.contains("dhcp") {
+        "DHCP"
+    } else if ["debian", "apt", "ubuntu"]
+        .iter()
+        .any(|word| text.contains(word))
+    {
+        "apt"
+    } else {
+        "system"
+    }
 }
 
 /// What a file is, from its name and what the run did to it. The recording
@@ -52,7 +85,23 @@ impl Indicators {
     /// `geo` gives the country and organization of an `ip:port`.
     pub(super) fn of(indicators: &[Indicator], geo: impl Fn(&str) -> (String, String)) -> Self {
         let mut out = Indicators::default();
-        for indicator in indicators.iter().filter(|i| i.noise.is_none()) {
+        for indicator in indicators {
+            if let Some(why) = &indicator.noise {
+                let group = match indicator.ty {
+                    Type::Endpoint => 0,
+                    Type::Domain => 1,
+                    Type::Url => 2,
+                    // A TLS session is the same traffic as its name and address.
+                    _ => continue,
+                };
+                out.background.push(Background {
+                    group,
+                    value: indicator.value.clone(),
+                    kind: background_kind(&indicator.value, why),
+                    why: why.clone(),
+                });
+                continue;
+            }
             match indicator.ty {
                 Type::Endpoint => {
                     let (country, organization) = geo(&indicator.value);
@@ -61,6 +110,7 @@ impl Indicators {
                         country,
                         organization,
                         note: indicator.sub.clone(),
+                        stand_in: indicator.stand_in.clone(),
                     });
                 }
                 Type::Domain => out.domains.push(indicator.value.clone()),
@@ -126,8 +176,30 @@ impl Indicators {
             .join(" \u{b7} ")
     }
 
+    /// "Base image background: NTP, apt (4)" for a group, when it has any.
+    pub(super) fn background_label(&self, group: usize) -> Option<String> {
+        let mut kinds: Vec<&str> = Vec::new();
+        let mut count = 0;
+        for item in self.background.iter().filter(|item| item.group == group) {
+            count += 1;
+            if !kinds.contains(&item.kind) {
+                kinds.push(item.kind);
+            }
+        }
+        const ORDER: [&str; 4] = ["NTP", "DHCP", "apt", "system"];
+        kinds.sort_by_key(|kind| ORDER.iter().position(|known| known == kind));
+        (count > 0).then(|| format!("Base image background: {} ({count})", kinds.join(", ")))
+    }
+
     /// Plain text, one indicator per line, grouped.
+    #[cfg(test)]
     pub(super) fn copy_text(&self) -> String {
+        self.copy_text_with(&[false; 3])
+    }
+
+    /// [`Self::copy_text`] with the background lines of the groups the
+    /// analyst has opened.
+    pub(super) fn copy_text_with(&self, shown: &[bool; 3]) -> String {
         let mut text = String::new();
         let mut group = |title: &str, lines: Vec<String>| {
             if lines.is_empty() {
@@ -146,14 +218,35 @@ impl Indicators {
             "Endpoints",
             self.endpoints
                 .iter()
-                .map(|row| match Self::place(row) {
-                    place if place.is_empty() => row.endpoint.clone(),
-                    place => format!("{} ({place})", row.endpoint),
+                .map(|row| {
+                    let name = row
+                        .stand_in
+                        .as_ref()
+                        .map_or(String::new(), |name| format!(" \u{2192} {name}"));
+                    match Self::place(row) {
+                        place if place.is_empty() => format!("{}{name}", row.endpoint),
+                        place => format!("{}{name} ({place})", row.endpoint),
+                    }
                 })
+                .chain(self.background_lines(0, shown[0]))
                 .collect(),
         );
-        group("DNS names", self.domains.clone());
-        group("URLs", self.urls.clone());
+        group(
+            "DNS names",
+            self.domains
+                .iter()
+                .cloned()
+                .chain(self.background_lines(1, shown[1]))
+                .collect(),
+        );
+        group(
+            "URLs",
+            self.urls
+                .iter()
+                .cloned()
+                .chain(self.background_lines(2, shown[2]))
+                .collect(),
+        );
         group(
             "Files",
             self.files
@@ -167,12 +260,21 @@ impl Indicators {
         text
     }
 
+    fn background_lines(&self, group: usize, shown: bool) -> Vec<String> {
+        self.background
+            .iter()
+            .filter(|item| shown && item.group == group)
+            .map(|item| format!("{} (base image: {})", item.value, item.kind))
+            .collect()
+    }
+
     pub(super) fn json(&self) -> String {
         let value = json!({
             "endpoints": self.endpoints.iter().map(|row| json!({
                 "endpoint": row.endpoint,
                 "country": row.country,
                 "organization": row.organization,
+                "stand_in_for": row.stand_in,
             })).collect::<Vec<_>>(),
             "dns": self.domains,
             "urls": self.urls,
@@ -214,6 +316,7 @@ pub(in crate::triage::summary) mod tests {
             not_checked: None,
             hash_note: None,
             noise: None,
+            stand_in: None,
         }
     }
 
@@ -297,5 +400,51 @@ pub(in crate::triage::summary) mod tests {
         assert_eq!(value["dns"][0], "pool.minexmr.com");
         assert_eq!(value["urls"].as_array().unwrap().len(), 2);
         assert_eq!(value["files"][0]["type"], "executable");
+    }
+
+    fn background() -> Vec<Indicator> {
+        let mut ntp = indicator(Type::Endpoint, "198.18.0.2:123");
+        ntp.noise = Some("NTP, the base image's clock sync".into());
+        let mut apt = indicator(Type::Endpoint, "198.18.0.7:443");
+        apt.noise = Some("198.18.0.7 is the address the base image's lookup of metadata.ftp-master.debian.org got".into());
+        let mut name = indicator(Type::Domain, "metadata.ftp-master.debian.org");
+        name.noise = Some("metadata.ftp-master.debian.org is looked up by the base image".into());
+        let mut c2 = indicator(Type::Endpoint, "198.18.0.1:8443");
+        c2.stand_in = Some("apache-update.ddns.net".into());
+        vec![c2, ntp, apt, name]
+    }
+
+    #[test]
+    fn background_traffic_is_one_counted_line_per_branch_and_stays_out_of_copy_all() {
+        let found = Indicators::of(&background(), geo);
+        assert_eq!(
+            found.endpoints.len(),
+            1,
+            "only the sample's endpoint is a row"
+        );
+        assert_eq!(
+            found.background_label(0).as_deref(),
+            Some("Base image background: NTP, apt (2)")
+        );
+        assert_eq!(
+            found.background_label(1).as_deref(),
+            Some("Base image background: apt (1)")
+        );
+        assert_eq!(found.background_label(2), None);
+        let closed = found.copy_text();
+        assert!(
+            !closed.contains("198.18.0.2") && !closed.contains("metadata"),
+            "{closed}"
+        );
+        assert!(
+            closed.contains("198.18.0.1:8443 \u{2192} apache-update.ddns.net"),
+            "{closed}"
+        );
+        let open = found.copy_text_with(&[true, false, false]);
+        assert!(open.contains("198.18.0.2:123 (base image: NTP)"), "{open}");
+        assert!(
+            !open.contains("metadata"),
+            "only the opened branch is added"
+        );
     }
 }

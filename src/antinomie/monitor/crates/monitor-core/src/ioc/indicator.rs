@@ -186,6 +186,11 @@ pub struct Indicator {
     /// (clock sync, DHCP, apt); `None` for the run's indicators.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub noise: Option<String>,
+    /// For an endpoint on the gateway's stand-in range (198.18.0.0/16, handed
+    /// out by the proxied routes' DNS): the name or names the run's DNS
+    /// answers gave that address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stand_in: Option<String>,
 }
 
 impl Indicator {
@@ -211,6 +216,7 @@ impl Indicator {
             not_checked: None,
             hash_note: None,
             noise: None,
+            stand_in: None,
         }
     }
 
@@ -575,6 +581,15 @@ impl Collector {
                 }
             }
         }
+        // The names the run's DNS answers gave each address.
+        let mut names_at: BTreeMap<IpAddr, BTreeSet<String>> = BTreeMap::new();
+        for ((ty, key), entry) in &self.entries {
+            if *ty == Type::Domain && entry.via.contains(&Via::Dns) {
+                for ip in &entry.addresses {
+                    names_at.entry(*ip).or_default().insert(key.clone());
+                }
+            }
+        }
         let mut out = Vec::new();
         for ((ty, _), mut entry) in self.entries {
             let mut indicator = entry.indicator.take().expect("entry holds its indicator");
@@ -614,6 +629,7 @@ impl Collector {
             set_lookups(&mut indicator, &entry);
             out.push(indicator);
         }
+        join_endpoints_to_names(&mut out, &names_at);
         out.sort_by(|a, b| {
             (a.ty, a.first_us.is_none(), a.first_us, &a.key).cmp(&(
                 b.ty,
@@ -623,6 +639,51 @@ impl Collector {
             ))
         });
         out
+    }
+}
+
+/// The address of an endpoint indicator (`1.2.3.4:53`, `[::1]:53`).
+fn endpoint_ip(value: &str) -> Option<IpAddr> {
+    value
+        .rsplit_once(':')?
+        .0
+        .trim_matches(['[', ']'])
+        .parse()
+        .ok()
+}
+
+/// What the run's DNS answers say about its endpoints: an endpoint that only
+/// the base image's lookups led to (apt's mirror) is the base image's too, and
+/// a stand-in address of the gateway's DNS shows the name it stands for.
+fn join_endpoints_to_names(out: &mut [Indicator], names_at: &BTreeMap<IpAddr, BTreeSet<String>>) {
+    let background: BTreeSet<String> = out
+        .iter()
+        .filter(|i| i.ty == Type::Domain && i.noise.is_some())
+        .map(|i| i.value.clone())
+        .collect();
+    for indicator in out.iter_mut().filter(|i| i.ty == Type::Endpoint) {
+        let Some(ip) = endpoint_ip(&indicator.value) else {
+            continue;
+        };
+        let Some(names) = names_at.get(&ip).filter(|names| !names.is_empty()) else {
+            continue;
+        };
+        if indicator.noise.is_none()
+            && indicator.process.is_none()
+            && indicator.candidates.is_empty()
+            && names.iter().all(|name| background.contains(name))
+        {
+            let first = names.iter().next().map_or("", String::as_str);
+            indicator.noise = Some(format!(
+                "{ip} is the address the base image's lookup of {first} got"
+            ));
+        }
+        if let IpAddr::V4(v4) = ip
+            && v4.octets()[..2] == [198, 18]
+        {
+            let shown: Vec<&str> = names.iter().take(3).map(String::as_str).collect();
+            indicator.stand_in = Some(shown.join(", "));
+        }
     }
 }
 

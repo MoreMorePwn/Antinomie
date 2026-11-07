@@ -19,6 +19,7 @@ mod qa;
 mod scan;
 mod selection;
 
+pub(in crate::triage) use cards::yara_strength;
 use cards::{card_summary, match_cards, severity_color};
 use finding::{byte_preview, evidence_list, evidence_values, WindowKey};
 use selection::SelectionDigests;

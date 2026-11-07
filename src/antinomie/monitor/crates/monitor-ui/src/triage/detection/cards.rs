@@ -31,24 +31,70 @@ pub(super) fn match_cards(
     }
     let order = sorted(report, rows, sort);
     let rows: Vec<&Vec<Cell>> = order.into_iter().map(|index| &rows[index]).collect();
+    // YARA matches that say little sit folded under the ones that do.
+    let (strong, weak): (Vec<&Vec<Cell>>, Vec<&Vec<Cell>>) = rows.into_iter().partition(|row| {
+        finding_for(report, row).is_none_or(|finding| {
+            yara_strength(report, finding) == crate::triage::family::Strength::Strong
+        })
+    });
     let mut opened = None;
     egui::ScrollArea::vertical()
         .id_salt("detection-matches")
         .max_height(320.0)
         .auto_shrink([false, true])
         .show(ui, |ui| {
-            for (index, row) in rows.iter().enumerate() {
-                let row = row.as_slice();
-                let Some(finding) = finding_for(report, row) else {
-                    continue;
-                };
-                if let Some(next) = card(ui, report, finding, table_id, index, row) {
-                    opened = Some(next);
+            let mut draw = |ui: &mut egui::Ui, rows: &[&Vec<Cell>], from: usize| {
+                for (index, row) in rows.iter().enumerate() {
+                    let row = row.as_slice();
+                    let Some(finding) = finding_for(report, row) else {
+                        continue;
+                    };
+                    if let Some(next) = card(ui, report, finding, table_id, from + index, row) {
+                        opened = Some(next);
+                    }
+                    ui.add_space(6.0);
                 }
-                ui.add_space(6.0);
+            };
+            draw(ui, &strong, 0);
+            if !weak.is_empty() {
+                egui::CollapsingHeader::new(
+                    RichText::new(format!("Weak or generic matches ({})", weak.len()))
+                        .color(theme::muted()),
+                )
+                .id_salt(("weak-matches", table_id))
+                .default_open(strong.is_empty())
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(
+                            "Unscored community rules without a family, generic or hunting \
+                             rules, Elastic rules scored below 70, and rules for another \
+                             platform. Nothing is removed: the counts are totals.",
+                        )
+                        .small()
+                        .color(theme::muted()),
+                    );
+                    draw(ui, &weak, strong.len());
+                });
             }
         });
     opened
+}
+
+/// How much a YARA match says; every other engine's match counts as strong.
+pub(in crate::triage) fn yara_strength(
+    report: &Report,
+    finding: &Finding,
+) -> crate::triage::family::Strength {
+    use crate::triage::family::{strength, Strength};
+    if report.engine != Engine::Yara {
+        return Strength::Strong;
+    }
+    strength(
+        &finding.title,
+        &finding.severity,
+        &pack_name(report, finding),
+        &crate::triage::digest::yara_family(report.engine, &finding.rule_text),
+    )
 }
 
 /// "Sort by" and its menu, drawn inline on the row the table filter shares.
