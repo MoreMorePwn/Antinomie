@@ -4,19 +4,19 @@
 //! purpose (an Elastic `Linux_Trojan_<Family>_<hash>` rule, a `family` meta,
 //! Malpedia, the sample's MalwareBazaar record), and only then from fragments
 //! of other rule names. Several rules naming one family raise it.
-use antinomie_monitor_core::run_digest::DetectionHit;
+use crate::run_digest::DetectionHit;
 use std::collections::BTreeMap;
 
 /// A malware family a detection names, with where it said so.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Candidate {
+pub struct Candidate {
     pub name: String,
     pub source: String,
 }
 
 /// What MalwareBazaar says of the run's sample: its `signature` and `tags`.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Bazaar<'a> {
+pub struct Bazaar<'a> {
     pub signature: Option<&'a str>,
     pub tags: &'a [String],
 }
@@ -27,7 +27,7 @@ pub(crate) struct Bazaar<'a> {
 /// `test_Malaysia`), the bare category `RANSOMWARE`, and pack prefixes. A
 /// candidate is never taken from one of these, and a rule whose name carries
 /// one is a generic match.
-pub(crate) const GENERIC_FRAGMENTS: &[&str] = &[
+pub const GENERIC_FRAGMENTS: &[&str] = &[
     "masshunt",
     "unique",
     "base",
@@ -302,7 +302,7 @@ fn family_token(name: &str) -> Option<String> {
 }
 
 /// A rule's name without the `s123::` prefix the engine puts before its id.
-pub(crate) fn plain_name(rule: &str) -> &str {
+pub fn plain_name(rule: &str) -> &str {
     match rule.split_once("::") {
         Some((prefix, name))
             if prefix.starts_with('s') && prefix[1..].chars().all(|c| c.is_ascii_digit()) =>
@@ -495,7 +495,7 @@ fn score(severity: &str) -> Option<u32> {
 
 /// How much one YARA match says about the sample.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Strength {
+pub enum Strength {
     /// An Elastic rule scored 70 or more, a rule with `family` meta, or a
     /// curated pack's rule that is not generic.
     Strong,
@@ -509,7 +509,7 @@ pub(crate) enum Strength {
 
 /// Whether a rule's name is a generic or hunting rule (see
 /// `GENERIC_FRAGMENTS`).
-pub(crate) fn is_generic_rule(rule: &str) -> bool {
+pub fn is_generic_rule(rule: &str) -> bool {
     let name = plain_name(rule);
     let lower = name.to_ascii_lowercase();
     if lower.starts_with("test_") || lower == "ransomware" {
@@ -523,7 +523,7 @@ pub(crate) fn is_generic_rule(rule: &str) -> bool {
 }
 
 /// Whether a rule's name says it is for another platform than a Linux ELF.
-pub(crate) fn wrong_platform(rule: &str) -> bool {
+pub fn wrong_platform(rule: &str) -> bool {
     const OTHER: &[&str] = &[
         "windows",
         "win32",
@@ -559,7 +559,7 @@ pub(crate) fn wrong_platform(rule: &str) -> bool {
 
 /// The strength of one YARA match: its rule name, severity (an Elastic score),
 /// pack and `family` meta.
-pub(crate) fn strength(rule: &str, severity: &str, source: &str, family: &str) -> Strength {
+pub fn strength(rule: &str, severity: &str, source: &str, family: &str) -> Strength {
     if wrong_platform(rule) {
         return Strength::WrongPlatform;
     }
@@ -588,10 +588,7 @@ pub(crate) fn strength(rule: &str, severity: &str, source: &str, family: &str) -
 /// type, an architecture, a packer, a kind of malware) and not the signature
 /// again. A sample with signature `Mirai` and tags `elf`, `Mirai`, `Prometei`
 /// gives Mirai (signature) and Prometei (tag).
-pub(crate) fn bazaar_families(
-    signature: Option<&str>,
-    tags: &[String],
-) -> Vec<(String, &'static str)> {
+pub fn bazaar_families(signature: Option<&str>, tags: &[String]) -> Vec<(String, &'static str)> {
     let mut out: Vec<(String, &'static str)> = Vec::new();
     let add = |name: String, source: &'static str, out: &mut Vec<(String, &'static str)>| {
         if !out
@@ -601,10 +598,10 @@ pub(crate) fn bazaar_families(
             out.push((name, source));
         }
     };
-    if let Some(signature) = signature.map(str::trim).filter(|s| !s.is_empty()) {
-        if !not_family(&signature.to_ascii_lowercase()) {
-            add(pretty(signature), "MalwareBazaar signature", &mut out);
-        }
+    if let Some(signature) = signature.map(str::trim).filter(|s| !s.is_empty())
+        && !not_family(&signature.to_ascii_lowercase())
+    {
+        add(pretty(signature), "MalwareBazaar signature", &mut out);
     }
     for tag in tags.iter().filter(|tag| tag_is_family(tag)) {
         add(pretty(tag.trim()), "MalwareBazaar tag", &mut out);
@@ -626,7 +623,7 @@ struct Mention {
 /// by MalwareBazaar comes before the fragments of other rule names, and
 /// several rules naming one family add up. MalwareBazaar's signature and its
 /// tags may name different families; both are candidates.
-pub(crate) fn family_candidates(hits: &[DetectionHit], bazaar: Bazaar<'_>) -> Vec<Candidate> {
+pub fn family_candidates(hits: &[DetectionHit], bazaar: Bazaar<'_>) -> Vec<Candidate> {
     let mut mentions: Vec<Mention> = Vec::new();
     let yara = |hit: &&DetectionHit| hit.engine.eq_ignore_ascii_case("yara");
     for hit in hits.iter().filter(yara) {
@@ -657,16 +654,18 @@ pub(crate) fn family_candidates(hits: &[DetectionHit], bazaar: Bazaar<'_>) -> Ve
                     source: format!("YARA \u{b7} Elastic rule {name}"),
                 });
             }
-        } else if curated_pack(&hit.source) && !wrong_platform(name) && !is_generic_rule(name) {
-            if let Some(family) = family_in_rule_name(name) {
-                let malpedia = hit.source.to_ascii_lowercase().contains("malpedia");
-                mentions.push(Mention {
-                    name: family,
-                    points: if malpedia { 70 } else { 20 },
-                    strong: malpedia,
-                    source: format!("YARA \u{b7} {} rule {name}", hit.source),
-                });
-            }
+        } else if curated_pack(&hit.source)
+            && !wrong_platform(name)
+            && !is_generic_rule(name)
+            && let Some(family) = family_in_rule_name(name)
+        {
+            let malpedia = hit.source.to_ascii_lowercase().contains("malpedia");
+            mentions.push(Mention {
+                name: family,
+                points: if malpedia { 70 } else { 20 },
+                strong: malpedia,
+                source: format!("YARA \u{b7} {} rule {name}", hit.source),
+            });
         }
     }
     for hit in hits

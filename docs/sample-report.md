@@ -58,7 +58,8 @@ keeps at most 5 000 rows; both say how many were left out.
 
 Files go to the folder you give (empty: `<data folder>/sample-reports/`), are
 never overwritten, are owner-only (0600), and are named
-`antinomie-sample-report-<sha8>-<yyyymmdd-hhmmss>` plus the format's ending.
+`antinomie-sample-report-<sha8>-<yyyymmdd-hhmmss>Z` (the time is UTC) plus the format's ending.
+No format carries a path on this computer: the custody log's "added", "original deleted" and "recorded before" entries and the Origins table name the file, not its folder. A rule the static scan and a run both matched is one row ("static scan + runs 1, 4"), and a sample with no recorded family lists the families its matched rules name.
 Writing them adds an `Exported` entry to the sample's custody log (after the
 head the report shows).
 

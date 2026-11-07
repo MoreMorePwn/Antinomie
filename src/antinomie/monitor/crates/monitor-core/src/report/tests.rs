@@ -32,6 +32,7 @@ pub(super) fn fixture() -> Report {
             run_id: "run-0123456789".into(),
             started_ms: Some(1_792_000_000_000),
             finished: true,
+            ..RunInfo::default()
         },
         1_792_000_100_000,
     );
@@ -39,6 +40,7 @@ pub(super) fn fixture() -> Report {
         name: "dropper <1>.elf".into(),
         sha256: "ab".repeat(32),
         size: Some(1234),
+        role: String::new(),
     });
     report.summary = Some(Summary {
         assessment: "matched_indicators".into(),
@@ -46,6 +48,8 @@ pub(super) fn fixture() -> Report {
         highest_tier: "high".into(),
         families: vec!["Mirai".into()],
         family_sources: vec!["Mirai: dataset threatfox".into()],
+        tiers: TierCounts::default(),
+        key_findings: Vec::new(),
         key_behaviours: vec![Behaviour {
             rule: "exec-from-tmp".into(),
             tier: "high".into(),
@@ -139,6 +143,7 @@ pub(super) fn fixture() -> Report {
         license: "DRL 1.1".into(),
         source: "Example Pack".into(),
         reference: "https://example.org/r1".into(),
+        strength: String::new(),
     }]);
     report.evidence = Some(vec![EvidenceRef {
         kind: "telemetry".into(),
@@ -359,10 +364,15 @@ fn misp_event_has_attributes_to_ids_only_for_matches_and_galaxy_tags() {
         find("filename|sha256")["value"],
         format!("/tmp/payload.bin|{}", "cd".repeat(64 / 2))
     );
+    // The sample is a file object with its hash (to_ids: a dataset matched).
+    let object = &event["Object"][0];
+    assert_eq!(object["name"], "file");
     assert_eq!(
-        attrs
+        object["Attribute"]
+            .as_array()
+            .unwrap()
             .iter()
-            .filter(|a| a["type"] == "sha256" && a["category"] == "Payload delivery")
+            .filter(|a| a["type"] == "sha256" && a["to_ids"] == true)
             .count(),
         1
     );
@@ -523,7 +533,7 @@ fn the_bundle_holds_every_file_with_a_matching_hash_and_the_password_opens_the_i
         assert_eq!(sha(&bytes), hash, "{name}");
         checked += 1;
     }
-    assert_eq!(checked, 3, "capture, inner archive, custody");
+    assert_eq!(checked, 4, "capture, inner archive, custody, README");
     let mut manifest = String::new();
     outer
         .by_name("manifest.json")

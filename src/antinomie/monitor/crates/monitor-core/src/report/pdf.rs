@@ -37,7 +37,7 @@ fn literal(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-fn content(ops: &[Op], footer: &str) -> Vec<u8> {
+fn content(ops: &[Op], header: Option<&str>, footer: &str) -> Vec<u8> {
     let mut out: Vec<u8> = Vec::new();
     for op in ops {
         match op {
@@ -115,6 +115,17 @@ fn content(ops: &[Op], footer: &str) -> Vec<u8> {
             }
         }
     }
+    if let Some(header) = header {
+        out.extend(
+            format!(
+                "BT /F1 7.5 Tf 0.45 0.45 0.45 rg 36 {} Td ",
+                num(PAGE_H - 22.0)
+            )
+            .bytes(),
+        );
+        out.extend(literal(&encode(header)));
+        out.extend(b" Tj ET\n");
+    }
     let footer_width = width(Font::Regular, 7.5, footer);
     out.extend(
         format!(
@@ -153,7 +164,8 @@ pub(super) fn render(document: &Document, generated_ms: u64) -> Result<Vec<u8>, 
     let mut objects: Vec<(usize, Vec<u8>)> = Vec::new();
     objects.push((
         1,
-        b"<< /Type /Catalog /Pages 2 0 R /Outlines 8 0 R /PageMode /UseOutlines >>".to_vec(),
+        b"<< /Type /Catalog /Pages 2 0 R /Outlines 8 0 R /PageMode /UseOutlines /Lang (en) >>"
+            .to_vec(),
     ));
     let kids: String = (0..total)
         .map(|i| format!("{} 0 R", page_obj(i)))
@@ -178,7 +190,22 @@ pub(super) fn render(document: &Document, generated_ms: u64) -> Result<Vec<u8>, 
     }
     let mut info = b"<< /Title ".to_vec();
     info.extend(literal(&encode(&document.title)));
-    info.extend(b" /Producer (Antinomie) /Creator (Antinomie Triage report) /CreationDate ");
+    for (key, value) in [
+        ("Subject", document.meta.subject.as_str()),
+        ("Keywords", document.meta.keywords.as_str()),
+    ] {
+        if !value.is_empty() {
+            info.extend(format!(" /{key} ").bytes());
+            info.extend(literal(&encode(value)));
+        }
+    }
+    info.extend(b" /Producer (Antinomie) /Creator ");
+    info.extend(literal(&encode(if document.meta.creator.is_empty() {
+        "Antinomie"
+    } else {
+        &document.meta.creator
+    })));
+    info.extend(b" /CreationDate ");
     info.extend(literal(pdf_date(generated_ms).as_bytes()));
     info.extend(b" >>");
     objects.push((7, info));
@@ -227,7 +254,19 @@ pub(super) fn render(document: &Document, generated_ms: u64) -> Result<Vec<u8>, 
             )
             .into_bytes(),
         ));
-        let raw = content(&page.ops, &format!("Page {} of {total}", index + 1));
+        let raw = content(
+            &page.ops,
+            (index > 0).then_some(document.meta.header.as_str()),
+            &format!(
+                "{}Page {} of {total}",
+                if document.meta.footer.is_empty() {
+                    String::new()
+                } else {
+                    format!("{} - ", document.meta.footer)
+                },
+                index + 1
+            ),
+        );
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::new(6));
         encoder.write_all(&raw).map_err(|e| e.to_string())?;
         let packed = encoder.finish().map_err(|e| e.to_string())?;

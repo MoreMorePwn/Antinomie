@@ -204,8 +204,8 @@ impl Cursor {
     }
 
     fn heading(&mut self, title: &str, bookmark: bool) {
-        self.need(70.0);
-        self.y -= 14.0;
+        self.need(90.0);
+        self.y -= 22.0;
         if bookmark {
             let (page, y) = (self.pages.len() - 1, self.y + 16.0);
             self.bookmarks.push(Bookmark {
@@ -228,8 +228,8 @@ impl Cursor {
     }
 
     fn sub(&mut self, title: &str) {
-        self.need(50.0);
-        self.y -= 8.0;
+        self.need(70.0);
+        self.y -= 12.0;
         let size = 10.0;
         self.y -= size;
         let y = self.y;
@@ -249,6 +249,7 @@ impl Cursor {
         let leading = size * 1.3;
         let tactic_column =
             header.and_then(|header| header.iter().position(|c| c == super::TACTIC_COLUMN));
+        let tier_column = header.and_then(|header| header.iter().position(|c| c == "Tier"));
         let draw_row = |this: &mut Self, cells: &[(Vec<String>, Font)], height: f32, head: bool| {
             let top = this.y;
             let bottom = top - height;
@@ -277,7 +278,19 @@ impl Cursor {
                 }
                 for (i, line) in lines.iter().enumerate() {
                     let y = top - PAD - size - i as f32 * leading + (size * 0.15);
-                    this.text(x + PAD, y, *font, size, INK, line);
+                    // The tier words in the colours of the app's chips.
+                    let ink = match (
+                        head,
+                        Some(column) == tier_column,
+                        line.to_ascii_lowercase().as_str(),
+                    ) {
+                        (false, true, "high") => [0.70, 0.15, 0.12],
+                        (false, true, "medium") => [0.63, 0.36, 0.0],
+                        (false, true, "low") => [0.04, 0.36, 0.68],
+                        _ => INK,
+                    };
+                    let font = if ink == INK { *font } else { Font::Bold };
+                    this.text(x + PAD, y, font, size, ink, line);
                 }
                 this.page().ops.push(Op::Frame {
                     x,
@@ -303,7 +316,10 @@ impl Cursor {
                     } else {
                         Font::Regular
                     };
-                    (wrap(cell, font, size, w - 2.0 * PAD, CELL_LINES), font)
+                    (
+                        wrap(cell, font, size, w - 2.0 * PAD + 0.05, CELL_LINES),
+                        font,
+                    )
                 })
                 .collect();
             let lines = cells.iter().map(|(l, _)| l.len()).max().unwrap_or(1).max(1);
@@ -446,9 +462,29 @@ fn column_widths(table: &DocTable, size: f32) -> Vec<f32> {
     for (n, head) in natural.iter_mut().zip(&heads) {
         *n = n.max(*head);
     }
-    let head_total: f32 = heads.iter().sum();
-    if floor.iter().sum::<f32>() > avail && head_total <= avail {
-        floor.clone_from(&heads);
+    // When the longest words side by side are wider than the page, only the
+    // widest of them give way (a hash, a long path); a narrow column keeps its
+    // longest word whole instead of every column falling back to its title.
+    if floor.iter().sum::<f32>() > avail {
+        let fitted = |cap: f32| -> f32 {
+            floor
+                .iter()
+                .zip(&heads)
+                .map(|(f, head)| f.min(cap).max(*head))
+                .sum()
+        };
+        let (mut low, mut high) = (0.0f32, floor.iter().copied().fold(0.0, f32::max));
+        for _ in 0..30 {
+            let middle = (low + high) / 2.0;
+            if fitted(middle) > avail {
+                high = middle;
+            } else {
+                low = middle;
+            }
+        }
+        for (f, head) in floor.iter_mut().zip(&heads) {
+            *f = f.min(low).max(*head);
+        }
     }
     let total: f32 = natural.iter().sum();
     if total <= avail {
@@ -499,6 +535,11 @@ pub(super) fn lay_out(document: &Document) -> Laid {
                 Block::Paragraph(text) => cursor.paragraph(text, Font::Regular, 9.5, INK),
                 Block::Note(text) => cursor.paragraph(text, Font::Oblique, 8.5, NOTE),
                 Block::Sub(text) => cursor.sub(text),
+                Block::List(items) => {
+                    for item in items {
+                        cursor.paragraph(&format!("- {item}"), Font::Regular, 9.0, INK);
+                    }
+                }
                 Block::Facts(facts) => cursor.facts(facts),
                 Block::Table(table) => cursor.table(table),
             }
