@@ -808,7 +808,7 @@ fn the_zoom_controls_are_clipped_with_the_box_when_the_page_scrolls() {
         wheel(&ctx, &mut view, size, egui::pos2(300.0, 200.0), -15.0);
         out = settle(&ctx, &mut view, size, None);
     }
-    assert!(seen, "the controls were drawn at some point");
+    assert!(seen, "the controls were drawn at some point {:?}", texts(&out));
     assert!(crossed, "the page scrolled past the top of the box");
 }
 
@@ -1470,9 +1470,8 @@ fn many_long_processes_of_interest_stay_a_compact_row() {
     for width in [1920.0_f32, 1280.0, 760.0] {
         let ctx = context(16.0);
         let mut height = 0.0;
-        let mut out = None;
         for _ in 0..4 {
-            out = Some(ctx.run_ui(
+            let _ = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1490,19 +1489,160 @@ fn many_long_processes_of_interest_stay_a_compact_row() {
                             .height();
                     });
                 },
-            ));
+            );
         }
         let line = ctx.global_style().spacing.interact_size.y;
-        // Six items and the count fit in two lines on a wide row and wrap to
-        // four in a narrow one (760); an item with a line of its own would
-        // take seven or more.
-        let lines = if width > 1000.0 { 3.4 } else { 5.8 };
+        // One line (and the scroll bar when the content is wider than the
+        // box): never the gap of a wrapped row.
         assert!(
-            height <= line * lines,
-            "{height} tall at {width}: a gap under the row"
+            height <= line * 1.8,
+            "{height} tall at {width}: the row wrapped"
         );
-        for (text, rect) in texts(&out.unwrap()) {
-            assert!(rect.right() <= width, "{text:?} past the window");
+    }
+}
+
+fn row_frame(
+    ctx: &egui::Context,
+    width: f32,
+    events: Vec<egui::Event>,
+    scan: &crate::triage::ArchiveScan,
+    interest: &[relations::model::Interest],
+) -> (egui::FullOutput, egui::Rect, f32) {
+    let mut rect = egui::Rect::NOTHING;
+    let mut page = 0.0;
+    let out = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, 500.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |root| {
+            let area = egui::ScrollArea::vertical()
+                .id_salt("page")
+                .show(root, |ui| {
+                    let mut acts = Vec::new();
+                    rect = ui
+                        .scope(|ui| panels::interest_row(ui, interest, scan, &mut acts))
+                        .response
+                        .rect;
+                    ui.allocate_space(egui::vec2(10.0, 2000.0));
+                });
+            page = area.state.offset.y;
+        },
+    );
+    (out, rect, page)
+}
+
+#[test]
+fn five_long_names_stay_one_line_that_scrolls_sideways_while_the_wheel_scrolls_the_page() {
+    use crate::triage::rules::Tier;
+    let (_files, view) = fixture();
+    let scan = view.scan.as_ref().unwrap();
+    let interest: Vec<_> = (0..5u32)
+        .map(|n| relations::model::Interest {
+            key: (n, u64::from(n)),
+            label: format!("{}{n} ({})", "a".repeat(40), 1000 + n),
+            tier: Some(Tier::High),
+            findings: 2,
+            warn: false,
+        })
+        .collect();
+    let ctx = context(16.0);
+    let mut height = 0.0;
+    let mut last = None;
+    for _ in 0..4 {
+        let (out, rect, _) = row_frame(&ctx, 760.0, vec![], scan, &interest);
+        height = rect.height();
+        last = Some((out, rect));
+    }
+    let (out, rect) = last.unwrap();
+    let line = ctx.global_style().spacing.interact_size.y;
+    assert!(height <= line * 1.8, "{height} tall: the row wrapped");
+    // The names are cut at 36 characters.
+    assert!(!has(&out, &"a".repeat(40)));
+    // The wheel over the row scrolls the page, not the row.
+    let over = rect.center();
+    let wheel = |dx: f32, dy: f32, shift: bool| {
+        vec![
+            egui::Event::PointerMoved(over),
+            egui::Event::MouseWheel {
+                phase: egui::TouchPhase::Move,
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(dx, dy),
+                modifiers: if shift {
+                    egui::Modifiers::SHIFT
+                } else {
+                    egui::Modifiers::NONE
+                },
+            },
+        ]
+    };
+    row_frame(&ctx, 760.0, wheel(0.0, -120.0, false), scan, &interest);
+    let page = row_frame(&ctx, 760.0, vec![], scan, &interest).2;
+    assert!(page > 20.0, "the page did not scroll: {page}");
+    // Shift and the wheel scroll the row sideways, to reach its end.
+    let title = |out: &egui::FullOutput| {
+        texts(out)
+            .into_iter()
+            .find(|(text, _)| text == "Processes of interest")
+            .map(|(_, r)| r.left())
+    };
+    let first = title(&out).expect("the title shows first");
+    let mut out = out;
+    for _ in 0..6 {
+        row_frame(&ctx, 760.0, wheel(0.0, -200.0, true), scan, &interest);
+        out = row_frame(&ctx, 760.0, vec![], scan, &interest).0;
+    }
+    assert!(
+        title(&out).is_none_or(|left| left < first - 50.0),
+        "the row did not scroll sideways"
+    );
+}
+
+#[test]
+fn the_engine_cards_have_one_height_and_their_buttons_sit_on_one_line() {
+    let (_files, mut view) = merlin_view();
+    for size in [WIDE, egui::vec2(1920.0, 2600.0)] {
+        let ctx = context(16.0);
+        let out = settle(&ctx, &mut view, size, None);
+        fn walk(shape: &egui::Shape, out: &mut Vec<(egui::Color32, egui::Rect)>) {
+            match shape {
+                egui::Shape::Rect(rect) => out.push((rect.fill, rect.rect)),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut rects = Vec::new();
+        for clipped in &out.shapes {
+            walk(&clipped.shape, &mut rects);
+        }
+        let buttons: Vec<egui::Rect> = texts(&out)
+            .into_iter()
+            .filter(|(text, _)| text == "Open results")
+            .map(|(_, rect)| rect)
+            .collect();
+        assert_eq!(buttons.len(), 3);
+        let cards: Vec<egui::Rect> = buttons
+            .iter()
+            .map(|button| {
+                rects
+                    .iter()
+                    .filter(|(fill, rect)| *fill == theme::panel() && rect.contains_rect(*button))
+                    .map(|(_, rect)| *rect)
+                    .reduce(|a, b| if b.height() < a.height() { b } else { a })
+                    .expect("the card")
+            })
+            .collect();
+        for at in 1..3 {
+            assert!(
+                (buttons[at].min.y - buttons[0].min.y).abs() < 0.5,
+                "{buttons:?}"
+            );
+            assert!((cards[at].max.y - cards[0].max.y).abs() < 0.5, "{cards:?}");
+            assert!((cards[at].min.y - cards[0].min.y).abs() < 0.5, "{cards:?}");
         }
     }
 }
