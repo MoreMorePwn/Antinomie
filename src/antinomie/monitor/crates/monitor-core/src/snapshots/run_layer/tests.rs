@@ -55,7 +55,7 @@ fn a_boots_writes_go_to_the_automatic_layer_and_merge_back_down() {
     );
     // A running boot is not finished.
     assert!(finalize(&fixture.options, &fixture.vm.id).is_err());
-    ended(&fixture.vm.id);
+    ended(&fixture.options, &fixture.vm.id);
     assert_eq!(
         finalize(&fixture.options, &fixture.vm.id).unwrap(),
         Some(Outcome::Merged)
@@ -112,7 +112,7 @@ fn a_crash_leaves_a_bootable_disk_and_the_next_start_finishes_it() {
     let index = crate::file_before_store::Index::load(&first.boot_dir).unwrap();
     assert!(!index.complete);
     assert!(index.note.unwrap().contains("not (fully) copied"));
-    ended(&fixture.vm.id);
+    ended(&fixture.options, &fixture.vm.id);
     finalize(&fixture.options, &fixture.vm.id).unwrap();
     assert_eq!(active(&fixture), disk);
 }
@@ -136,7 +136,7 @@ fn a_commit_cut_short_is_repeated_safely() {
     let top = active(&fixture);
     // Dies after the data reached the sealed layer, before the switch back.
     commit(&fixture.options, &top).unwrap();
-    ended(&fixture.vm.id);
+    ended(&fixture.options, &fixture.vm.id);
     assert_eq!(
         finalize(&fixture.options, &fixture.vm.id).unwrap(),
         Some(Outcome::Merged)
@@ -155,7 +155,7 @@ fn a_commit_cut_short_is_repeated_safely() {
     let mut manifest = load(&fixture.directory, &fixture.vm).unwrap();
     manifest.active_disk = record.sealed.clone();
     save(&fixture.directory, &manifest).unwrap();
-    ended(&fixture.vm.id);
+    ended(&fixture.options, &fixture.vm.id);
     assert_eq!(
         finalize(&fixture.options, &fixture.vm.id).unwrap(),
         Some(Outcome::Cleaned)
@@ -186,7 +186,7 @@ fn a_user_snapshot_taken_during_the_boot_is_never_merged() {
     let after = active(&fixture);
     assert_ne!(after, top);
     fixture.write(4);
-    ended(&fixture.vm.id);
+    ended(&fixture.options, &fixture.vm.id);
     assert_eq!(
         finalize(&fixture.options, &fixture.vm.id).unwrap(),
         Some(Outcome::KeptInChain)
@@ -222,7 +222,7 @@ fn a_user_snapshot_that_exists_before_the_boot_stays_as_it_is() {
     )
     .unwrap();
     fixture.write(6);
-    ended(&fixture.vm.id);
+    ended(&fixture.options, &fixture.vm.id);
     assert_eq!(
         finalize(&fixture.options, &fixture.vm.id).unwrap(),
         Some(Outcome::Merged)
@@ -255,7 +255,7 @@ fn resize_and_delete_wait_for_a_pending_layer() {
     )
     .unwrap();
     assert!(ensure_idle(&fixture.options, &fixture.vm.id).is_err());
-    ended(&fixture.vm.id);
+    ended(&fixture.options, &fixture.vm.id);
     finalize(&fixture.options, &fixture.vm.id).unwrap();
     ensure_idle(&fixture.options, &fixture.vm.id).unwrap();
 }
@@ -281,7 +281,7 @@ fn a_snapshot_after_the_boot_settles_the_pending_layer_first() {
     // The boot is over but its layer is still pending (the background
     // finalize has not run): the snapshot of the stopped VM finishes it first,
     // so it freezes the merged disk and not a layer that is deleted a moment later.
-    ended(&fixture.vm.id);
+    ended(&fixture.options, &fixture.vm.id);
     let checkpoint = fixture.take("After the boot");
     assert!(pending_record(&fixture.options, &fixture.vm.id).is_none());
     assert!(!top.exists(), "the automatic layer is merged and removed");
@@ -307,7 +307,7 @@ fn a_snapshot_waits_for_a_finalize_at_work() {
     )
     .unwrap();
     fixture.write(5);
-    ended(&fixture.vm.id);
+    ended(&fixture.options, &fixture.vm.id);
     // Another finalize holds the folder's lock: the snapshot must neither load
     // the manifest under it nor fail; it takes the layer over once it is free.
     let held = lock(&fixture.directory).unwrap();
@@ -325,4 +325,131 @@ fn a_snapshot_waits_for_a_finalize_at_work() {
         list(&fixture.options, &fixture.vm).unwrap().nodes[0].id,
         checkpoint.id
     );
+}
+
+fn write_record(fixture: &Fixture, boot: &str, marker: Marker) {
+    Record {
+        format: 1,
+        vm_id: fixture.vm.id.clone(),
+        boot_id: boot.into(),
+        boot_dir: fixture.root.join("rec/boots").join(boot),
+        sealed: "disk.qcow2".into(),
+        top: "snapshots/top.qcow2".into(),
+        manifest_absent: true,
+        marker,
+    }
+    .store(&fixture.directory)
+    .unwrap();
+}
+
+#[test]
+fn the_marker_follows_a_boot_from_live_to_saving_to_finalizing() {
+    let _serial = serial();
+    if !have_qemu() {
+        eprintln!("skipped: qemu-img and qemu-io are needed");
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.write(1);
+    let before = now_ms();
+    begin(
+        &fixture.options,
+        &fixture.vm,
+        &boot_dir(&fixture, "b1"),
+        "b1",
+    )
+    .unwrap();
+    let vms = [fixture.vm.id.clone()];
+    let record = pending_record(&fixture.options, &fixture.vm.id).unwrap();
+    assert_eq!(record.marker.phase, Some(LayerPhase::Live));
+    assert_eq!(record.marker.owner, Owner::current());
+    assert!(record.marker.started_ms.unwrap() >= before);
+    let layers = disk_layers(&fixture.options, &vms);
+    assert_eq!(layers.len(), 1);
+    assert_eq!(
+        (layers[0].boot_id.as_str(), layers[0].phase),
+        ("b1", LayerPhase::Live)
+    );
+    assert_eq!(layers[0].started_ms, record.marker.started_ms.unwrap());
+
+    // QEMU stopped: the recording is being saved, the layer is still pending.
+    ended(&fixture.options, &fixture.vm.id);
+    let layers = disk_layers(&fixture.options, &vms);
+    assert_eq!(layers[0].phase, LayerPhase::Saving);
+    assert!(layers[0].phase_ms >= layers[0].started_ms);
+    // The file is whole and a 0.8.x reader still accepts it.
+    let text = fs::read_to_string(fixture.directory.join(RECORD)).unwrap();
+    let value: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["format"], 1);
+    assert_eq!(value["phase"], "saving");
+
+    // Finishing removes the file: no entry means done.
+    finalize(&fixture.options, &fixture.vm.id).unwrap();
+    assert!(disk_layers(&fixture.options, &vms).is_empty());
+}
+
+#[test]
+fn settle_marks_finalizing_before_it_copies_and_a_failed_one_leaves_it() {
+    let _serial = serial();
+    let fixture = Fixture::new();
+    // A record whose layer path is not ours to touch: settle fails after the
+    // marker was written, so the marker is what is left.
+    write_record(
+        &fixture,
+        "b1",
+        Marker {
+            phase: Some(LayerPhase::Saving),
+            phase_ms: Some(1),
+            started_ms: Some(1),
+            owner: Owner::current(),
+        },
+    );
+    let mut record = pending_record(&fixture.options, &fixture.vm.id).unwrap();
+    record.sealed = "../escape".into();
+    record.store(&fixture.directory).unwrap();
+    assert!(finalize(&fixture.options, &fixture.vm.id).is_err());
+    let after = pending_record(&fixture.options, &fixture.vm.id).unwrap();
+    assert_eq!(after.marker.phase, Some(LayerPhase::Finalizing));
+    assert!(after.marker.phase_ms.unwrap() > 1);
+}
+
+#[test]
+fn a_record_another_process_left_is_adopted_as_finalizing() {
+    let fixture = Fixture::new();
+    let vms = [fixture.vm.id.clone()];
+    // Written by 0.8.x: no marker at all.
+    write_record(&fixture, "old", Marker::default());
+    let layers = disk_layers(&fixture.options, &vms);
+    assert_eq!(layers.len(), 1);
+    assert_eq!(layers[0].phase, LayerPhase::Finalizing);
+    assert_eq!(layers[0].started_ms, 0);
+    // Written by a 0.9 process that is gone (not this one).
+    let mut other = Owner::current();
+    other.pid = Some(std::process::id().wrapping_add(1));
+    write_record(
+        &fixture,
+        "old",
+        Marker {
+            phase: Some(LayerPhase::Live),
+            phase_ms: Some(7),
+            started_ms: Some(3),
+            owner: other,
+        },
+    );
+    let layers = disk_layers(&fixture.options, &vms);
+    assert_eq!(layers[0].phase, LayerPhase::Finalizing);
+    assert_eq!((layers[0].started_ms, layers[0].phase_ms), (3, 7));
+    // No record, no entry.
+    fs::remove_file(fixture.directory.join(RECORD)).unwrap();
+    assert!(disk_layers(&fixture.options, &vms).is_empty());
+}
+
+#[test]
+fn the_lock_probe_sees_a_held_finalizer_lock_and_touches_nothing_else() {
+    let fixture = Fixture::new();
+    assert_eq!(lock_free(&fixture.directory), None);
+    let held = lock(&fixture.directory).unwrap();
+    assert_eq!(lock_free(&fixture.directory), Some(false));
+    drop(held);
+    assert_eq!(lock_free(&fixture.directory), Some(true));
 }

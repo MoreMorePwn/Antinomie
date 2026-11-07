@@ -29,6 +29,7 @@ pub mod date;
 pub mod debug;
 pub mod dependencies;
 pub mod direct;
+pub mod disk_layers;
 pub mod disk_start;
 pub mod disks;
 mod display;

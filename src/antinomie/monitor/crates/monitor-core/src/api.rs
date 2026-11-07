@@ -2187,6 +2187,10 @@ pub enum Command {
         run_id: String,
         data: Vec<u8>,
     },
+    /// Poll a run's terminal. The answer is a `Terminal` notification, if
+    /// there is output, and **no `CommandResult` when the read succeeds** (a
+    /// failed read does answer): the window polls often and a result for each
+    /// would flood it. A caller that needs a per-read acknowledgement has none.
     TerminalRead {
         run_id: String,
     },
@@ -2653,6 +2657,12 @@ pub struct Snapshot {
     /// What the guest accepts for process cores; None until it has answered.
     pub guest_core_limits: Option<crate::core_limits::CoreLimits>,
     /// The optional hashing the guest tracer offers; None until it has
+    /// The VMs whose automatic disk layer is pending, with the stage of each
+    /// (`live`, `saving`, `finalizing`); a VM with no entry has none. After
+    /// `Stop` the entry is `saving` until the recording is saved, then
+    /// `finalizing` until the earlier bytes are copied and the layer merged:
+    /// the recording is final only when the entry is gone.
+    pub disk_layers: Vec<crate::disk_layers::DiskLayer>,
     /// answered, all zero for a guest without TRACER_CAPS.
     pub guest_tracer: Option<GuestTracerCaps>,
     pub last_error: Option<String>,

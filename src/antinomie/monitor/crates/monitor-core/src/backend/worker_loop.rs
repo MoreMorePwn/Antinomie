@@ -87,6 +87,29 @@ impl Worker {
             wake();
         }
     }
+    /// Read the pending automatic layers into the snapshot (what a reader
+    /// waits on before it calls a recording final). True when the list changed.
+    pub(super) fn refresh_disk_layers(&mut self) -> bool {
+        let vms: Vec<String> = self.snapshot.vms.iter().map(|vm| vm.id.clone()).collect();
+        let layers = crate::snapshots::run_layer::disk_layers(&self.options, &vms);
+        if layers == self.snapshot.disk_layers {
+            return false;
+        }
+        self.snapshot.disk_layers = layers;
+        true
+    }
+    /// The background layer finalizer runs on a thread of its own, so the
+    /// worker looks for its progress while one is pending or listed.
+    fn poll_disk_layers(&mut self) {
+        let pending =
+            !self.snapshot.disk_layers.is_empty() || crate::snapshots::run_layer::working();
+        if pending && self.layer_scan.elapsed() >= Duration::from_millis(200) {
+            self.layer_scan = Instant::now();
+            if self.refresh_disk_layers() {
+                self.publish();
+            }
+        }
+    }
     /// Show the progress of the background flush of stopped boots, and report
     /// what failed when a job ends.
     pub(super) fn poll_flush(&mut self) {
@@ -131,6 +154,7 @@ impl Worker {
             self.snapshot.recording_flush = status;
             self.publish();
         }
+        self.poll_disk_layers();
     }
     /// Closing: wait for the background flush, showing its progress.
     fn finish_flush(&mut self) {
@@ -706,9 +730,10 @@ impl Worker {
             let steps = session.seal("unexpected-exit", &mut self.snapshot);
             self.carry_analyses(&mut session);
             self.submit_sealed_flush(session.boot_id.clone(), steps);
-            crate::snapshots::run_layer::ended(&session.vm.id);
+            crate::snapshots::run_layer::ended(&self.options, &session.vm.id);
             crate::snapshots::run_layer::mark_due(&session.vm.id);
         }
+        self.refresh_disk_layers();
         if let Err(e) = end_network_capture(&mut self.snapshot) {
             self.snapshot.last_error = Some(e);
         }

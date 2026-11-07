@@ -32,6 +32,7 @@
 //! * A VM that had no `snapshots.json` gets it deleted again after the merge,
 //!   so it is not "managed" afterwards (reset and delete work as before).
 use super::*;
+use crate::disk_layers::{DiskLayer, LayerPhase, Marker, Owner};
 use std::{os::unix::fs::OpenOptionsExt, sync::Mutex};
 
 const RECORD: &str = "run-layer.json";
@@ -54,6 +55,9 @@ pub struct Record {
     pub top: PathBuf,
     /// The VM had no snapshot manifest before this boot.
     pub manifest_absent: bool,
+    /// The writer's stage and identity (design 5.12.2); a 0.8.x file has none.
+    #[serde(flatten)]
+    pub marker: Marker,
 }
 
 /// What became of a pending layer.
@@ -73,12 +77,29 @@ impl Record {
     fn path(directory: &Path) -> PathBuf {
         directory.join(RECORD)
     }
+    /// Replace the record on disk with this one: one whole file for a reader.
+    fn store(&self, directory: &Path) -> Result<(), String> {
+        atomic_json(&Self::path(directory), self)
+    }
+    /// Enter `phase`: stamp the time and the writer, then replace the file.
+    fn enter(&mut self, directory: &Path, phase: LayerPhase) -> Result<(), String> {
+        self.marker.phase = Some(phase);
+        self.marker.phase_ms = Some(now_ms());
+        self.marker.owner = Owner::current();
+        self.store(directory)
+    }
     pub fn load(directory: &Path) -> Option<Self> {
         let file = File::open(Self::path(directory)).ok()?;
         serde_json::from_reader(std::io::Read::take(file, 1 << 20))
             .ok()
             .filter(|record: &Self| record.format == 1)
     }
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 /// The pending record of `vm_id`, if there is one.
@@ -140,18 +161,23 @@ pub(crate) fn begin(
         .map_err(|e| e.to_string())?;
     let sealed = manifest.active_disk.clone();
     let top = make_child(options, &directory, &owned(&directory, &sealed)?)?;
-    atomic_json(
-        &Record::path(&directory),
-        &Record {
-            format: 1,
-            vm_id: vm.id.clone(),
-            boot_id: boot_id.to_owned(),
-            boot_dir: boot_dir.to_path_buf(),
-            sealed,
-            top: top.clone(),
-            manifest_absent,
+    let now = now_ms();
+    Record {
+        format: 1,
+        vm_id: vm.id.clone(),
+        boot_id: boot_id.to_owned(),
+        boot_dir: boot_dir.to_path_buf(),
+        sealed,
+        top: top.clone(),
+        manifest_absent,
+        marker: Marker {
+            phase: Some(LayerPhase::Live),
+            phase_ms: Some(now),
+            started_ms: Some(now),
+            owner: Owner::current(),
         },
-    )?;
+    }
+    .store(&directory)?;
     manifest.active_disk = top;
     save(&directory, &manifest)?;
     if let Ok(mut live) = LIVE.lock() {
@@ -160,10 +186,58 @@ pub(crate) fn begin(
     Ok(())
 }
 
-/// The boot of `vm_id` is over in this process (QEMU stopped).
-pub(crate) fn ended(vm_id: &str) {
+/// The boot of `vm_id` is over in this process (QEMU stopped): the recording
+/// is being saved, which the marker says (`saving`).
+pub(crate) fn ended(options: &BackendOptions, vm_id: &str) {
     if let Ok(mut live) = LIVE.lock() {
         live.remove(vm_id);
+    }
+    // A failure to rewrite leaves the `live` marker: the owner test still
+    // tells a reader the truth once this process is gone, and the layer is
+    // finished all the same.
+    if let Ok(directory) = vm_dir(options, vm_id)
+        && let Some(mut record) = Record::load(&directory)
+        && record.marker.phase != Some(LayerPhase::Finalizing)
+    {
+        let _ = record.enter(&directory, LayerPhase::Saving);
+    }
+}
+
+/// `Snapshot.disk_layers` for `vm_ids`: every VM whose record exists. The
+/// engine publishing this is the owner, so a record another process left
+/// (a crash or kill) is adopted at start and reads as `finalizing`.
+pub(crate) fn disk_layers(options: &BackendOptions, vm_ids: &[String]) -> Vec<DiskLayer> {
+    let me = std::process::id();
+    vm_ids
+        .iter()
+        .filter_map(|vm_id| {
+            let record = pending_record(options, vm_id)?;
+            let mine = record.marker.owner.pid == Some(me);
+            let phase = match record.marker.phase {
+                Some(phase) if mine => phase,
+                _ => LayerPhase::Finalizing,
+            };
+            Some(DiskLayer {
+                vm_id: record.vm_id,
+                boot_id: record.boot_id,
+                phase,
+                started_ms: record.marker.started_ms.unwrap_or(0),
+                phase_ms: record.marker.phase_ms.unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+/// Whether nothing holds `run-layer.lock` of the VM folder `directory`: a
+/// non-blocking shared `flock`, released at once. This is the only lock a
+/// reader touches; `None` when the file cannot be opened (no finalizer ever
+/// ran there, or no access).
+pub fn lock_free(directory: &Path) -> Option<bool> {
+    let file = fs::File::open(directory.join(LOCK)).ok()?;
+    match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockShared) {
+        Ok(()) => Some(true),
+        Err(rustix::io::Errno::WOULDBLOCK) => Some(false),
+        Err(_) => None,
     }
 }
 
@@ -280,6 +354,10 @@ pub(crate) fn finalize(options: &BackendOptions, vm_id: &str) -> Result<Option<O
 }
 
 fn settle(options: &BackendOptions, directory: &Path, record: &Record) -> Result<Outcome, String> {
+    // Before the copier starts: a reader sees that only the earlier bytes wait.
+    let mut entering = record.clone();
+    // The marker is advice for readers; the work goes on without it.
+    let _ = entering.enter(directory, LayerPhase::Finalizing);
     // The earlier bytes first: they are read from `A`, which the merge changes.
     if let Err(why) = crate::file_before_store::copy_for(record) {
         crate::file_before_store::note_not_copied(&record.boot_dir, &record.boot_id, &why);
