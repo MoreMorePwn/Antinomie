@@ -19,6 +19,7 @@ mod disk_view;
 mod evidence;
 mod evidence_delete;
 mod evidence_jobs;
+mod export_dirs;
 mod folders;
 mod getting_started;
 mod hex_view;

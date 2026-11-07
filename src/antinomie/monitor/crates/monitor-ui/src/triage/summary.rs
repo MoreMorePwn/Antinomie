@@ -166,13 +166,13 @@ impl TriageView {
             }
             Act::File => *destination = Some(Destination::Changed),
             Act::Endpoint => *destination = Some(Destination::Ips),
-            Act::ExportIndicators => self.export_indicators(),
+            Act::ExportIndicators => self.export_indicators(ctx),
             Act::Screenshot(path) => self.summary_state.open_screenshot = Some(path),
         }
     }
 
     /// Write the Summary's indicators as JSON beside the run's files.
-    fn export_indicators(&mut self) {
+    fn export_indicators(&mut self, ctx: &egui::Context) {
         let (Some(dir), Some(built)) = (
             self.details_directory.clone(),
             self.summary_state.built.as_ref(),
@@ -180,19 +180,21 @@ impl TriageView {
             self.summary_state.status = Some("This run has no folder to write to.".into());
             return;
         };
-        let name = format!(
-            "summary-indicators-{}.json",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |elapsed| elapsed.as_secs())
-        );
+        let run = dir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let name = crate::export_dirs::stamped("indicators", &run, "json");
         self.summary_state.status = Some(
             match write_new(&dir.join("ioc"), &name, built.indicators.json().as_bytes()) {
-                Ok(path) => format!(
-                    "Exported {} indicators to {}",
-                    built.indicators.total(),
-                    path.display()
-                ),
+                Ok(path) => {
+                    crate::export_dirs::reported(ctx, "Indicators", &path);
+                    format!(
+                        "Exported {} indicators to {}",
+                        built.indicators.total(),
+                        path.display()
+                    )
+                }
                 Err(error) => error,
             },
         );

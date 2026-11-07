@@ -477,6 +477,8 @@ pub(super) fn bpf_detail(
         if ui.button("Export binary and JSON").clicked() {
             *status = match bpf::write_export(&directory.join("bpf"), bytes, &note.identity) {
                 Ok((binary, metadata)) => {
+                    // Said where the person is looking, not only in a line above.
+                    crate::export_dirs::reported(ui.ctx(), "eBPF program and JSON", &binary);
                     format!("Wrote {} and {}", binary.display(), metadata.display())
                 }
                 Err(error) => error,

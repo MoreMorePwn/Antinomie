@@ -28,6 +28,8 @@ pub(in crate::app) struct ExportDialog {
     sign: Sign,
     key: String,
     destination: String,
+    /// The folder the default destination is in.
+    folder: PathBuf,
     /// The analyst typed the destination: the extension no longer follows
     /// the format.
     destination_edited: bool,
@@ -53,7 +55,8 @@ fn default_key(sign: Sign) -> String {
 }
 
 impl ExportDialog {
-    pub(super) fn new(record: &SampleRecord, check: ChainCheck) -> Self {
+    /// `folder` is where the file goes unless the analyst types another.
+    pub(super) fn new(record: &SampleRecord, check: ChainCheck, folder: PathBuf) -> Self {
         let mut dialog = Self {
             sha256: record.sha256.clone(),
             name: record.name.clone(),
@@ -62,6 +65,7 @@ impl ExportDialog {
             sign: Sign::None,
             key: String::new(),
             destination: String::new(),
+            folder,
             destination_edited: false,
             working: None,
             result: None,
@@ -74,23 +78,12 @@ impl ExportDialog {
 
     fn follow_format(&mut self) {
         if !self.destination_edited {
-            let file: String = self
-                .name
-                .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() || ".-_".contains(c) {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
-                .take(40)
-                .collect();
-            self.destination = home()
-                .join(format!(
-                    "custody-{file}-{}.{}",
-                    &self.sha256[..8],
-                    self.format.extension()
+            self.destination = self
+                .folder
+                .join(crate::export_dirs::stamped(
+                    "custody",
+                    &self.sha256,
+                    self.format.extension(),
                 ))
                 .display()
                 .to_string();
@@ -132,12 +125,16 @@ impl ExportDialog {
             if let Ok(result) = receiver.try_recv() {
                 self.working = None;
                 self.wrote |= result.is_ok();
+                if let Ok(done) = &result {
+                    crate::export_dirs::wrote(ctx, "Custody record", &done.path);
+                }
                 self.result = Some(result);
             }
         }
         let mut open = true;
         let mut start = false;
         let mut close = false;
+        let window_id = egui::Id::new("samples_export_custody");
         widgets::window(format!("Export custody record: {}", crate::widgets::short_name(&self.name)))
             .id(egui::Id::new("samples_export_custody"))
             .open(&mut open)
@@ -267,7 +264,7 @@ impl ExportDialog {
         if start {
             self.start(ctx, data_dir);
         }
-        if close || !open {
+        if close || !open || widgets::escape_closes(ctx, window_id) {
             self.open = false;
         }
     }
