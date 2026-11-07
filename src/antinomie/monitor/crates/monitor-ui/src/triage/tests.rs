@@ -160,7 +160,7 @@ fn native_triage_fixture() {
                 (42, rules::Tier::Info),
             ] {
                 let mut finding = template.clone();
-                finding.cells[1] = cell(tier.tag(), tier.color(), false);
+                finding.cells[1] = cell(tier.tag(), tier.tone(), false);
                 for (key, value) in &mut finding.values {
                     match *key {
                         "process.pid" | "process.cookie" => *value = RowValue::Number(pid),
@@ -332,7 +332,7 @@ fn native_triage_fixture() {
                     )
                 }),
                 "tree" => {
-                    let mut row = vec![cell("PID 42 · TID 42 (main)", theme::text(), true)];
+                    let mut row = vec![cell("PID 42 · TID 42 (main)", tone::text(), true)];
                     row[0].values = vec![
                         ("process.pid", RowValue::Number(42)),
                         ("process.cookie", RowValue::Number(42)),
@@ -412,7 +412,7 @@ fn double_click_table_text_requests_its_exact_evidence() {
     for packet in [false, true] {
         let ctx = egui::Context::default();
         theme::install(&ctx);
-        let mut c = cell("click this evidence", theme::text(), false);
+        let mut c = cell("click this evidence", tone::text(), false);
         c.values = if packet {
             vec![("frame.number", RowValue::Number(520))]
         } else {
@@ -2011,9 +2011,9 @@ fn a_long_content_cell_shows_a_bounded_hover_and_keeps_the_full_value() {
     crate::theme::text_size(&ctx, 22.0);
     let long = format!("4096 B: {}", "ELF\\x02\\x01".repeat(200));
     let rows = vec![vec![
-        cell("12:00:00", theme::text(), true),
-        cell("/tmp/sample", theme::text(), true),
-        cell(long.clone(), theme::text(), true),
+        cell("12:00:00", tone::text(), true),
+        cell("/tmp/sample", tone::text(), true),
+        cell(long.clone(), tone::text(), true),
     ]];
     let headers = ["Time", "Path", "Transferred / content"];
     let draw = |events, time| {

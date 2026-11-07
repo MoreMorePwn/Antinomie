@@ -672,9 +672,9 @@ pub(super) fn location_text(found: &[Location]) -> String {
 /// at first (hidden, persistence, credentials).
 pub(super) fn location_cell(found: &[Location]) -> Cell {
     let color = if found.iter().any(|location| location.flagged()) {
-        theme::warn()
+        tone::warn()
     } else {
-        theme::text()
+        tone::text()
     };
     cell(location_text(found), color, false)
 }
@@ -770,36 +770,32 @@ pub(super) fn category_row(
     ));
     let notable = mode.is_some_and(|mode| mode & 0o7111 != 0);
     let mut row = vec![
-        cell(event.timestamp_ns.to_string(), theme::text(), true),
-        cell(hit.label(), theme::text(), false),
+        cell(event.timestamp_ns.to_string(), tone::text(), true),
+        cell(hit.label(), tone::text(), false),
         cell(
             file_events::operation_label(call, event),
-            theme::value(theme::ValueKind::Name),
+            tone::value(ValueKind::Name),
             false,
         ),
-        cell(base[0].text.clone(), theme::text(), true),
+        cell(base[0].text.clone(), tone::text(), true),
         cell(
             text,
-            if notable {
-                theme::warn()
-            } else {
-                theme::text()
-            },
+            if notable { tone::warn() } else { tone::text() },
             false,
         ),
-        cell(base[1].text.clone(), theme::text(), true),
+        cell(base[1].text.clone(), tone::text(), true),
         cell(
             result.label(),
             if result.failed() {
-                theme::warn()
+                tone::warn()
             } else {
-                theme::text()
+                tone::text()
             },
             false,
         ),
         location_cell(&found),
-        cell(access.label(), theme::text(), false),
-        cell(format!("call {}", call.call_id), theme::text(), true),
+        cell(access.label(), tone::text(), false),
+        cell(format!("call {}", call.call_id), tone::text(), true),
     ];
     row[0].values = values;
     row

@@ -6,6 +6,7 @@ use super::graph::{self, Layout};
 use super::reconstruct;
 use super::{Activity, ByteRun, Event, FileActivity};
 use crate::theme;
+use crate::triage::tone;
 use crate::triage::{details, Cell, RowValue};
 use crate::widgets::{self, Tone};
 use antinomie_monitor_core::file_writes::{Piece, Tally};
@@ -750,7 +751,7 @@ pub(super) fn call_cells(
     let (stream, task, call) = event.key;
     let mut time = cell(
         crate::time_format::guest_ns(clock, Some(event.time)),
-        theme::text(),
+        tone::text(),
         true,
     );
     time.values = vec![
@@ -760,16 +761,16 @@ pub(super) fn call_cells(
     ];
     vec![
         time,
-        cell(activity.process_label(event.process), theme::text(), false),
-        cell(&event.operation, graph::tint(event.kind), false),
-        cell(result, theme::text(), false),
-        cell(offset, theme::text(), true),
+        cell(activity.process_label(event.process), tone::text(), false),
+        cell(&event.operation, graph::tone_of(event.kind), false),
+        cell(result, tone::text(), false),
+        cell(offset, tone::text(), true),
         cell(
             event.len.map(|len| len.to_string()).unwrap_or_default(),
-            theme::text(),
+            tone::text(),
             true,
         ),
-        cell(content_text(event), theme::text(), true),
+        cell(content_text(event), tone::text(), true),
     ]
 }
 
@@ -795,24 +796,24 @@ pub(in crate::triage) fn file_cells(
     let calls = file.events.len() as u64 + file.omitted;
     let hash = file.sha256().unwrap_or_default();
     vec![
-        cell(&file.path, theme::text(), true),
-        cell(file.names.join(", "), theme::text(), true),
+        cell(&file.path, tone::text(), true),
+        cell(file.names.join(", "), tone::text(), true),
         cell(
             crate::time_format::guest_ns(clock, Some(file.first_ns)),
-            theme::text(),
+            tone::text(),
             true,
         ),
         cell(
             crate::time_format::guest_ns(clock, Some(file.last_ns)),
-            theme::text(),
+            tone::text(),
             true,
         ),
-        cell(calls.to_string(), theme::text(), true),
-        cell(file.summary(), theme::text(), false),
-        cell(state.join(", "), theme::text(), false),
-        cell(super::overview::size_change(file), theme::text(), true),
-        cell(super::overview::type_of(file), theme::text(), false),
-        cell(hash, theme::text(), true),
+        cell(calls.to_string(), tone::text(), true),
+        cell(file.summary(), tone::text(), false),
+        cell(state.join(", "), tone::text(), false),
+        cell(super::overview::size_change(file), tone::text(), true),
+        cell(super::overview::type_of(file), tone::text(), false),
+        cell(hash, tone::text(), true),
     ]
 }
 

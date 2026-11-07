@@ -47,38 +47,34 @@ impl Change {
         let mut row = vec![
             cell(
                 crate::time_format::guest_ns(clock, Some(self.first_ns)),
-                theme::text(),
+                tone::text(),
                 true,
             ),
-            cell(&self.path, theme::text(), true),
+            cell(&self.path, tone::text(), true),
             cell(
                 process_cells::task_label(self.pid, self.tid, self.process_image.as_deref()),
-                theme::text(),
+                tone::text(),
                 true,
             ),
-            cell(self.lifecycle_text(), theme::text(), false),
+            cell(self.lifecycle_text(), tone::text(), false),
             cell(
                 self.count_label(),
                 if !self.has_gaps() {
-                    theme::text()
+                    tone::text()
                 } else {
-                    theme::warn()
+                    tone::warn()
                 },
                 false,
             ),
             file_category::location_cell(&self.locations),
-            cell(format!("call {}", self.call), theme::text(), true),
-            cell(
-                file_type::of(&self.head(), &self.path),
-                theme::text(),
-                false,
-            ),
+            cell(format!("call {}", self.call), tone::text(), true),
+            cell(file_type::of(&self.head(), &self.path), tone::text(), false),
             cell(
                 self.hash
                     .as_ref()
                     .and_then(FileHash::sha256_hex)
                     .unwrap_or_default(),
-                theme::text(),
+                tone::text(),
                 true,
             ),
         ];
@@ -236,15 +232,15 @@ impl Change {
                 // A reconnect marker has no call of its own.
                 let marker = op.call == 0;
                 let mut row = vec![
-                    cell(if marker { "—".to_owned() } else { crate::time_format::guest_ns(clock, Some(op.time)) }, theme::text(), true),
+                    cell(if marker { "—".to_owned() } else { crate::time_format::guest_ns(clock, Some(op.time)) }, tone::text(), true),
                     cell(
                         &op.name,
-                        if marker { theme::neutral_accent() } else { theme::text() },
+                        if marker { Tone::Accent } else { tone::text() },
                         false,
                     ),
-                    cell(&op.process, theme::text(), true),
-                    cell(&op.result, theme::text(), false),
-                    cell(if marker { "—".to_owned() } else { format!("call {}", op.call) }, theme::text(), true),
+                    cell(&op.process, tone::text(), true),
+                    cell(&op.result, tone::text(), false),
+                    cell(if marker { "—".to_owned() } else { format!("call {}", op.call) }, tone::text(), true),
                 ];
                 row[0].values = vec![("event.id", RowValue::Number(i128::from(op.call))), ("stream.id", RowValue::Number(i128::from(op.key.0))), ("process.cookie", RowValue::Number(i128::from(op.key.1)))]; row
             }).collect();

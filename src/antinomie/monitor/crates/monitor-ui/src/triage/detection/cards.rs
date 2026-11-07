@@ -3,6 +3,7 @@
 //! short summary, a facts row and a Details button.
 use super::finding::{pack_name, parse_details};
 use super::*;
+use crate::triage::Tone;
 use antinomie_monitor_core::analysis::detection::MatchSort;
 
 /// Widest MITRE chip list on a card; the rest is counted.
@@ -403,11 +404,16 @@ fn row_text<'a>(row: &'a [Cell], key: &str) -> Option<&'a str> {
 }
 
 pub(super) fn severity_color(severity: &str) -> egui::Color32 {
+    theme::tone(severity_tone(severity))
+}
+
+/// The colour role of a detection's severity.
+pub(super) fn severity_tone(severity: &str) -> Tone {
     match severity.trim().to_ascii_lowercase().as_str() {
-        "1" | "critical" | "high" => theme::error(),
-        "2" | "medium" | "indicator" => theme::warn(),
-        "3" | "4" | "low" | "informational" | "info" => theme::blue(),
-        _ => theme::muted(),
+        "1" | "critical" | "high" => Tone::Bad,
+        "2" | "medium" | "indicator" => Tone::Warn,
+        "3" | "4" | "low" | "informational" | "info" => Tone::Info,
+        _ => Tone::Muted,
     }
 }
 

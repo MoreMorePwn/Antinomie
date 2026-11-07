@@ -463,11 +463,11 @@ pub(super) fn read_cells(
         Access::Inherited
     };
     let mut row = vec![
-        cell(event.timestamp_ns.to_string(), theme::text(), true),
-        cell(path, theme::text(), true),
+        cell(event.timestamp_ns.to_string(), tone::text(), true),
+        cell(path, tone::text(), true),
         cell(
             process_cells::task_label(event.pid, event.tid, process_image(files, event)),
-            theme::text(),
+            tone::text(),
             true,
         ),
         cell(
@@ -484,20 +484,20 @@ pub(super) fn read_cells(
                 (true, None) => format!("{size} B: kernel transfer; bytes not captured"),
                 (false, _) => "Unavailable".into(),
             },
-            theme::text(),
+            tone::text(),
             true,
         ),
-        cell(result_label(ret), theme::text(), false),
+        cell(result_label(ret), tone::text(), false),
         file_category::location_cell(&read_locations),
         cell(
             match async_files::via(call) {
                 Some(system) => format!("{} ({system})", read_access.label()),
                 None => read_access.label().to_owned(),
             },
-            theme::text(),
+            tone::text(),
             false,
         ),
-        cell(format!("call {}", call.call_id), theme::text(), true),
+        cell(format!("call {}", call.call_id), tone::text(), true),
     ];
     row[0].values = vec![
         (

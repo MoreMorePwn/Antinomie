@@ -88,12 +88,12 @@ pub(super) fn event_row(
             } else {
                 path
             },
-            theme::text(),
+            tone::text(),
             true,
         ),
         cell(
             process_cells::task_label(event.pid, event.tid, process_image(files, event)),
-            theme::text(),
+            tone::text(),
             true,
         ),
         cell(
@@ -104,16 +104,16 @@ pub(super) fn event_row(
                     .and_then(crate::values::standard_fd_name)
                     .map_or_else(|| fd.clone(), |name| format!("{fd} ({name})"))
             },
-            theme::value(theme::ValueKind::Number),
+            tone::value(ValueKind::Number),
             true,
         ),
         cell(
             operation_label(invocation, event),
-            theme::value(theme::ValueKind::Name),
+            tone::value(ValueKind::Name),
             false,
         ),
-        cell(result, theme::text(), true),
-        cell(file_outcome(invocation), theme::text(), false),
+        cell(result, tone::text(), true),
+        cell(file_outcome(invocation), tone::text(), false),
     ];
     let paths = path_list(invocation);
     let ret = invocation.exit.as_ref().and_then(|exit| exit.result);
@@ -245,22 +245,22 @@ pub(super) fn event_row(
         ),
     ];
     row.extend([
-        cell(access, theme::text(), false),
-        cell(event.timestamp_ns.to_string(), theme::text(), true),
+        cell(access, tone::text(), false),
+        cell(event.timestamp_ns.to_string(), tone::text(), true),
         cell(
             written.map_or("—".into(), |size| size.to_string()),
-            theme::text(),
+            tone::text(),
             true,
         ),
         cell(
             requested.map_or("—".into(), |size| size.to_string()),
-            theme::text(),
+            tone::text(),
             true,
         ),
-        cell(paths.join(" → "), theme::text(), true),
-        cell(format!("call {}", invocation.call_id), theme::text(), true),
-        cell(event.timestamp_ns.to_string(), theme::text(), true),
-        cell("1", theme::text(), true),
+        cell(paths.join(" → "), tone::text(), true),
+        cell(format!("call {}", invocation.call_id), tone::text(), true),
+        cell(event.timestamp_ns.to_string(), tone::text(), true),
+        cell("1", tone::text(), true),
     ]);
     row
 }

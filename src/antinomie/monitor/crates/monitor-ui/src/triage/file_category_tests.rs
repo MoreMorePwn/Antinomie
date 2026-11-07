@@ -683,7 +683,7 @@ fn a_failed_read_is_listed_with_its_result_while_the_toggle_is_off() {
         show_failed: false,
         ..file_visibility::FileVisibility::default()
     };
-    let mut row = vec![cell("t", theme::text(), true)];
+    let mut row = vec![cell("t", tone::text(), true)];
     row[0].values = vec![("file.result", RowValue::Text("failed".into()))];
     assert!(!visibility.keeps(&row));
     assert!(visibility.keeps_with(&row, true));

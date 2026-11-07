@@ -668,11 +668,11 @@ fn verdict_cell(verdict: &Verdict) -> Cell {
             } else {
                 "Matched"
             },
-            theme::error(),
+            tone::error(),
         ),
-        Outcome::KnownFp => ("Known FP", theme::blue()),
-        Outcome::NoMatch => ("No match", theme::text()),
-        Outcome::NotChecked => ("Not checked", theme::muted()),
+        Outcome::KnownFp => ("Known FP", tone::blue()),
+        Outcome::NoMatch => ("No match", tone::text()),
+        Outcome::NotChecked => ("Not checked", tone::muted()),
     };
     table::cell(text, color, false)
 }
@@ -713,7 +713,7 @@ pub(super) fn annotate(
     // scrolling; the HTTP rows keep their 0.7.0 columns and end with it.
     let mark = |row: &mut Vec<Cell>, found: Option<usize>, column: usize| {
         let cell = found.map_or_else(
-            || table::cell("—", theme::muted(), false),
+            || table::cell("—", tone::muted(), false),
             |at| verdict_cell(&verdicts[at]),
         );
         row.insert(column.min(row.len()), cell);
@@ -791,7 +791,7 @@ pub(super) fn annotate(
             let mut row: Vec<Cell> = source.iter().take(7).cloned().collect();
             row.insert(
                 6,
-                table::cell(text_of(&values, "http.version"), theme::text(), false),
+                table::cell(text_of(&values, "http.version"), tone::text(), false),
             );
             mark(&mut row, found, 3);
             row

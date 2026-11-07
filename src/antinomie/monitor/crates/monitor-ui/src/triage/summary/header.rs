@@ -126,7 +126,7 @@ pub(super) fn show(
                 } else {
                     tier.tag().to_uppercase()
                 };
-                let color = tier.color();
+                let color = theme::tone(tier.tone());
                 let button = egui::Button::new(
                     RichText::new(format!("{count} {label}"))
                         .strong()

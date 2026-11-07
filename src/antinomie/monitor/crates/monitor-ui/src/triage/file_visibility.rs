@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn filters_preserve_unknown_paths_and_similar_names_and_can_be_disabled() {
-        let mut row = vec![cell("path", theme::text(), true)];
+        let mut row = vec![cell("path", tone::text(), true)];
         let visibility = FileVisibility::default();
         for path in [
             "/usr/lib/a.so",
@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn failed_attempts_are_listed_by_default_and_hidden_when_the_chip_is_off() {
-        let mut row = vec![cell("path", theme::text(), true)];
+        let mut row = vec![cell("path", tone::text(), true)];
         row[0].values = vec![
             ("file.path", RowValue::Text("/tmp/a".into())),
             ("file.result", RowValue::Text("failed".into())),

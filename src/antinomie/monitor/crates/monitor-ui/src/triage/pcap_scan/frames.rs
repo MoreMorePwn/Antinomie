@@ -147,27 +147,27 @@ pub(super) fn dns_queries(
             let protocol = if field(6).is_empty() { "UDP" } else { "TCP" };
             let retry = tshark_boolean(field(30));
             let mut row = vec![
-                cell(format!("#{frame}"), theme::text(), true),
-                cell(endpoints, theme::text(), true),
-                cell(field(18), theme::text(), true),
-                cell(name, theme::text(), false),
-                cell(network::qtype(item(20)), theme::text(), false),
-                cell(item(21), theme::text(), false),
-                cell(protocol, theme::text(), false),
+                cell(format!("#{frame}"), tone::text(), true),
+                cell(endpoints, tone::text(), true),
+                cell(field(18), tone::text(), true),
+                cell(name, tone::text(), false),
+                cell(network::qtype(item(20)), tone::text(), false),
+                cell(item(21), tone::text(), false),
+                cell(protocol, tone::text(), false),
                 cell(
                     rcode.map_or("—".into(), |code| code.to_string()),
-                    theme::text(),
+                    tone::text(),
                     true,
                 ),
-                cell(answers.join(", "), theme::text(), false),
-                cell(field(28), theme::text(), true),
+                cell(answers.join(", "), tone::text(), false),
+                cell(field(28), tone::text(), true),
                 cell(
                     match retry {
                         Some(true) => "retry",
                         Some(false) => "query",
                         None => "—",
                     },
-                    theme::text(),
+                    tone::text(),
                     false,
                 ),
             ];

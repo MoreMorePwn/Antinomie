@@ -6,7 +6,6 @@
 //! column after the Path, and no Evidence column (Details opens the original syscall).
 use super::file_location::Location;
 use super::*;
-use crate::widgets::Tone;
 
 /// What a table needs besides its rows.
 pub(super) struct Notes<'a> {
@@ -110,7 +109,7 @@ pub(super) fn path_tags(
             tone: if matches!(tag.as_str(), "hidden" | "persistence" | "credentials") {
                 Tone::Warn
             } else {
-                Tone::Neutral
+                Tone::Muted
             },
             hover: format!("Location: {tag}"),
         })
@@ -130,7 +129,7 @@ pub(super) fn path_tags(
 
 /// The Tags cell: the tags of a path as pills, and no text of its own.
 pub(super) fn tags_cell(badges: Vec<Badge>) -> Cell {
-    let mut cell = table::cell("", theme::text(), false);
+    let mut cell = table::cell("", tone::text(), false);
     cell.badges = badges;
     cell
 }

@@ -156,9 +156,9 @@ const DETAILS_HEADERS: &[&str] = &["Indicator", "Kind", "Id"];
 /// indicator's id, which finds it again in the scan.
 fn details_cells(indicator: &Indicator) -> Vec<Cell> {
     vec![
-        cell(&indicator.value, theme::text(), true),
-        cell(super::detail::kind_name(indicator.ty), theme::text(), false),
-        cell(indicator.id(), theme::text(), true),
+        cell(&indicator.value, tone::text(), true),
+        cell(super::detail::kind_name(indicator.ty), tone::text(), false),
+        cell(indicator.id(), tone::text(), true),
     ]
 }
 

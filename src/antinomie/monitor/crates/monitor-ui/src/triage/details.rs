@@ -415,7 +415,7 @@ mod tests {
         for table_id in TABLES.iter().filter(|id| **id != "file-operation-timeline") {
             let ctx = egui::Context::default();
             theme::install(&ctx);
-            let mut row = vec![cell("select this observation", theme::text(), false)];
+            let mut row = vec![cell("select this observation", tone::text(), false)];
             row[0].values = vec![("frame.number", RowValue::Number(520))];
             let rows = vec![row];
             let mut view = TriageView::default();
@@ -579,7 +579,7 @@ mod tests {
     #[test]
     fn changing_run_clears_shared_information_and_old_row_highlights() {
         let ctx = egui::Context::default();
-        let mut row = vec![cell("old run evidence", theme::text(), false)];
+        let mut row = vec![cell("old run evidence", tone::text(), false)];
         row[0].values = vec![("event.id", RowValue::Number(1))];
         select(&ctx, "triage-read", &["Path"], &row);
         ctx.data_mut(|data| {
@@ -611,7 +611,7 @@ mod tests {
     #[test]
     fn findings_on_the_same_call_keep_distinct_selected_information() {
         let ctx = egui::Context::default();
-        let mut row = vec![cell("first rule", theme::text(), false)];
+        let mut row = vec![cell("first rule", tone::text(), false)];
         row[0].values = vec![
             ("stream.id", RowValue::Number(1)),
             ("process.cookie", RowValue::Number(2)),
@@ -687,8 +687,8 @@ mod disk_link_tests {
             key: "key".into(),
             headers: vec!["Time".into(), "Path".into()],
             cells: vec![
-                cell("12:00:00", theme::text(), true),
-                cell(path, theme::text(), true),
+                cell("12:00:00", tone::text(), true),
+                cell(path, tone::text(), true),
             ],
         }
     }

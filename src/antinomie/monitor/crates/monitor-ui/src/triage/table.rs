@@ -13,15 +13,14 @@ fn hover_errno(response: egui::Response, text: &str) {
 /// The pills of a cell, before its text.
 fn cell_badges(ui: &mut egui::Ui, cell: &Cell) {
     for badge in &cell.badges {
-        crate::widgets::chip(ui, badge.text.clone(), badge.tone).on_hover_text(&badge.hover);
+        crate::widgets::chip(ui, badge.text.clone(), badge.tone.into()).on_hover_text(&badge.hover);
     }
 }
 
-pub(super) fn cell(text: impl Into<String>, color: egui::Color32, mono: bool) -> Cell {
+pub(super) fn cell(text: impl Into<String>, tone: Tone, mono: bool) -> Cell {
     Cell {
         text: text.into(),
-        color,
-        theme: theme::theme(),
+        tone,
         mono,
         values: Vec::new(),
         badges: Vec::new(),
@@ -425,7 +424,9 @@ fn table_rows_with(
                                         }
                                         _ => None,
                                     })
-                                    .map_or(crate::widgets::Tone::Neutral, rules::Tier::tone);
+                                    .map_or(crate::widgets::Tone::Neutral, |tier| {
+                                        tier.tone().into()
+                                    });
                                 let chip = crate::widgets::chip(ui, count.to_string(), tone);
                                 let chip = ui.interact(
                                     chip.rect,

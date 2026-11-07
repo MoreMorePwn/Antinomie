@@ -85,13 +85,12 @@ impl Tier {
     }
 
     /// The chip tone of the tier, matching the tier colours of the table.
-    pub(super) fn tone(self) -> crate::widgets::Tone {
-        use crate::widgets::Tone;
+    pub(super) fn tone(self) -> Tone {
         match self {
-            Self::High => Tone::Error,
+            Self::High => Tone::Bad,
             Self::Medium => Tone::Warn,
             Self::Low => Tone::Info,
-            Self::Info => Tone::Neutral,
+            Self::Info => Tone::Muted,
         }
     }
 
@@ -140,15 +139,6 @@ impl Tier {
             Self::Medium => 1,
             Self::Low => 2,
             Self::Info => 3,
-        }
-    }
-
-    pub(super) fn color(self) -> egui::Color32 {
-        match self {
-            Self::High => theme::error(),
-            Self::Medium => theme::warn(),
-            Self::Low => theme::blue(),
-            Self::Info => theme::muted(),
         }
     }
 }

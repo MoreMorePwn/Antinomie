@@ -55,7 +55,7 @@ fn plain(ui: &mut egui::Ui, cell: &Cell) {
 
 fn tier(ui: &mut egui::Ui, cell: &Cell) {
     let tier = Tier::from_tag(&cell.text).unwrap_or(Tier::Info);
-    let chip = chip(ui, tier.letter(), tier.tone());
+    let chip = chip(ui, tier.letter(), tier.tone().into());
     if let Some(tip) = tip(cell) {
         chip.on_hover_text(tip);
     }

@@ -354,7 +354,7 @@ fn accepted_connections_and_udp_peers_are_network_connections() {
 fn a_destination_takes_its_name_from_the_dns_answer_and_says_so() {
     let mut files = FdState::default();
     let answer = |name: &str, address: &str, time: i128| {
-        let mut row = cell("", theme::text(), true);
+        let mut row = cell("", tone::text(), true);
         row.values = vec![
             ("dns.name", RowValue::Text(name.into())),
             (

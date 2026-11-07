@@ -249,10 +249,7 @@ impl Row for Finding {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct StoredCell {
     text: String,
-    color: [u8; 4],
-    /// The theme `color` was taken from.
-    #[serde(default)]
-    theme: crate::theme::Theme,
+    tone: Tone,
     mono: bool,
     values: Vec<(usize, RowValue)>,
 }
@@ -299,8 +296,7 @@ impl Spool {
                     .collect();
                 StoredCell {
                     text: cell.text,
-                    color: cell.color.to_array(),
-                    theme: cell.theme,
+                    tone: cell.tone,
                     mono: cell.mono,
                     values,
                 }
@@ -370,13 +366,7 @@ impl Spool {
                         .collect::<Result<_, _>>()?;
                     Ok(Cell {
                         text: cell.text,
-                        color: egui::Color32::from_rgba_premultiplied(
-                            cell.color[0],
-                            cell.color[1],
-                            cell.color[2],
-                            cell.color[3],
-                        ),
-                        theme: cell.theme,
+                        tone: cell.tone,
                         mono: cell.mono,
                         values,
                         badges: Vec::new(),
@@ -487,11 +477,11 @@ mod tests {
         });
         let mut page = Page::<Vec<Cell>>::new(&request, 6, &Arc::new(AtomicBool::new(false)));
         for number in 0..2051 {
-            let mut row = vec![cell(number.to_string(), theme::text(), true)];
+            let mut row = vec![cell(number.to_string(), tone::text(), true)];
             row[0].values = vec![("frame.number", RowValue::Number(number))];
             page.push(row).unwrap();
         }
-        page.push(vec![cell("Unavailable", theme::text(), false)])
+        page.push(vec![cell("Unavailable", tone::text(), false)])
             .unwrap();
         let (rows, omitted, total) = page.finish().unwrap();
         assert_eq!((rows.len(), omitted, total), (STORED_ROWS, 52, 2052));
@@ -508,10 +498,10 @@ mod tests {
         request.offsets[6] = STORED_ROWS;
         let mut next = Page::<Vec<Cell>>::new(&request, 6, &Arc::new(AtomicBool::new(false)));
         for number in 0..2051 {
-            next.push(vec![cell(number.to_string(), theme::text(), true)])
+            next.push(vec![cell(number.to_string(), tone::text(), true)])
                 .unwrap();
         }
-        next.push(vec![cell("Unavailable", theme::text(), false)])
+        next.push(vec![cell("Unavailable", tone::text(), false)])
             .unwrap();
         let (rows, omitted, total) = next.finish().unwrap();
         assert_eq!((rows.len(), omitted, total), (52, 2000, 2052));
@@ -540,7 +530,7 @@ mod tests {
         assert_eq!(rows[0].call_id, u64::MAX);
         let mut cancelled = Page::<Vec<Cell>>::new(&request, 0, &cancel);
         cancelled
-            .push(vec![cell("row", theme::text(), false)])
+            .push(vec![cell("row", tone::text(), false)])
             .unwrap();
         cancel.store(true, Ordering::Relaxed);
         assert!(matches!(cancelled.finish(), Err(error) if error.contains("cancelled")));

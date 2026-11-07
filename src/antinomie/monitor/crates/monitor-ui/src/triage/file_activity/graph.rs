@@ -5,6 +5,7 @@
 //! right; a change of lane is a different process taking over.
 use super::{Activity, FileActivity, Kind};
 use crate::theme;
+use crate::triage::Tone;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
 use std::ops::Range;
 
@@ -79,15 +80,20 @@ pub(super) fn layout(file: &FileActivity) -> Layout {
 
 /// The color of an operation's node.
 pub(super) fn tint(kind: Kind) -> Color32 {
+    theme::tone(tone_of(kind))
+}
+
+/// The colour role of an operation.
+pub(super) fn tone_of(kind: Kind) -> Tone {
     match kind {
-        Kind::Open => theme::info(),
-        Kind::Create => theme::good(),
-        Kind::Read => theme::bright_blue(),
-        Kind::Write | Kind::Resize => theme::neutral_accent(),
-        Kind::Rename | Kind::Link => theme::primary(),
-        Kind::Delete => theme::error(),
-        Kind::Exec => theme::error(),
-        Kind::Attributes | Kind::Map | Kind::Probe | Kind::Other => theme::muted(),
+        Kind::Open => Tone::Notice,
+        Kind::Create => Tone::Good,
+        Kind::Read => Tone::BrightBlue,
+        Kind::Write | Kind::Resize => Tone::Accent,
+        Kind::Rename | Kind::Link => Tone::Primary,
+        Kind::Delete => Tone::Bad,
+        Kind::Exec => Tone::Bad,
+        Kind::Attributes | Kind::Map | Kind::Probe | Kind::Other => Tone::Muted,
     }
 }
 

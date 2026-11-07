@@ -117,6 +117,8 @@ mod sorting;
 pub(crate) use sorting::{current as sort_current, header as sort_header, Spec as SortSpec};
 mod summary;
 mod table;
+pub(crate) mod tone;
+pub(crate) use tone::{Tone, ValueKind};
 #[cfg(test)]
 mod tracer_qa;
 #[cfg(test)]
@@ -1056,9 +1058,8 @@ impl Drop for TriageView {
 #[derive(Clone)]
 struct Cell {
     text: String,
-    /// Taken from the palette of `theme`; read it through [`Cell::color`].
-    color: egui::Color32,
-    theme: theme::Theme,
+    /// The colour role of the text; read the colour through [`Cell::color`].
+    tone: Tone,
     mono: bool,
     values: Vec<(&'static str, RowValue)>,
     /// Small pills drawn before the text (a path's location, how many other
@@ -1073,7 +1074,7 @@ struct Cell {
 #[derive(Clone, Debug, PartialEq)]
 struct Badge {
     text: String,
-    tone: crate::widgets::Tone,
+    tone: Tone,
     hover: String,
 }
 
@@ -1081,7 +1082,7 @@ impl Cell {
     /// The text color in the theme that is active now, whichever one the row
     /// was indexed in.
     fn color(&self) -> egui::Color32 {
-        theme::translate(self.color, self.theme, theme::theme())
+        theme::tone(self.tone)
     }
 }
 

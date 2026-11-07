@@ -149,7 +149,7 @@ fn outcome(agg: &Agg) -> String {
 
 pub(super) fn finding(agg: &Agg) -> Finding {
     let spec = agg.spec();
-    let color = agg.tier.color();
+    let color = agg.tier.tone();
     let mut summary = agg.summary.clone();
     if agg.count > 1 {
         if let Some(period) = agg.period() {
@@ -278,14 +278,14 @@ pub(super) fn finding(agg: &Agg) -> Finding {
     if let Some(reason) = limited {
         tier.values.push((LIMITED, RowValue::Text(reason.into())));
     }
-    let mut behaviour = cell(title, theme::text(), false);
+    let mut behaviour = cell(title, tone::text(), false);
     behaviour.values.push((
         TIP,
         RowValue::Text(format!("{} \u{b7} version {}", agg.rule, spec.version)),
     ));
     let mut count = cell(
         present::count_text(agg.count, agg.period()),
-        theme::text(),
+        tone::text(),
         true,
     );
     if agg.siblings > 1 {
@@ -294,14 +294,14 @@ pub(super) fn finding(agg: &Agg) -> Finding {
             RowValue::Text(format!("The same in {} processes: one row.", agg.siblings)),
         ));
     }
-    let mut attack_cell = cell(technique, theme::text(), false);
+    let mut attack_cell = cell(technique, tone::text(), false);
     attack_cell
         .values
         .push((TIP, RowValue::Text(technique_hover)));
     let result_color = if result == "all failed" {
-        theme::muted()
+        tone::muted()
     } else {
-        theme::text()
+        tone::text()
     };
     let identity = present::process_text(agg);
     Finding {
@@ -311,31 +311,31 @@ pub(super) fn finding(agg: &Agg) -> Finding {
         cells: vec![
             cell(agg.rule, color, false),
             tier,
-            cell(spec.category.label(), theme::text(), false),
-            cell(identity, theme::text(), true),
-            cell(summary, theme::text(), false),
+            cell(spec.category.label(), tone::text(), false),
+            cell(identity, tone::text(), true),
+            cell(summary, tone::text(), false),
             count,
-            cell(source, theme::muted(), false),
-            cell(time, theme::text(), true),
+            cell(source, tone::muted(), false),
+            cell(time, tone::text(), true),
             cell(
                 if agg.high_confidence {
                     "high"
                 } else {
                     "limited"
                 },
-                theme::text(),
+                tone::text(),
                 false,
             ),
-            cell(agg.evidence.clone(), theme::text(), true),
-            cell(spec.version.to_string(), theme::text(), true),
-            cell(outcome(agg), theme::text(), false),
+            cell(agg.evidence.clone(), tone::text(), true),
+            cell(spec.version.to_string(), tone::text(), true),
+            cell(outcome(agg), tone::text(), false),
             behaviour,
-            cell(agg.object.clone(), theme::text(), true),
+            cell(agg.object.clone(), tone::text(), true),
             attack_cell,
             cell(result, result_color, false),
             cell(
                 present::when_text(agg.first_ns, agg.last_ns, Some(0)),
-                theme::text(),
+                tone::text(),
                 true,
             ),
         ],

@@ -37,7 +37,7 @@ pub(super) fn process_rows(
         .iter()
         .map(|node| {
             let ended = node.state.starts_with("task exit");
-            let mut command = cell(process_cells::argv_line(&node.argv), theme::text(), false);
+            let mut command = cell(process_cells::argv_line(&node.argv), tone::text(), false);
             if let Some(hover) = process_cells::argv_hover(&node.argv) {
                 tip(&mut command, hover);
             }
@@ -45,7 +45,7 @@ pub(super) fn process_rows(
                 suspicious
                     .get(&(node.cookie, node.pid))
                     .map_or_else(String::new, |(count, _)| count.to_string()),
-                theme::text(),
+                tone::text(),
                 true,
             );
             tip(
@@ -54,7 +54,7 @@ pub(super) fn process_rows(
             );
             let mut started = cell(
                 process_cells::relative(node.first_ns, start),
-                theme::text(),
+                tone::text(),
                 true,
             );
             tip(
@@ -63,7 +63,7 @@ pub(super) fn process_rows(
             );
             let mut user = cell(
                 process_cells::user(node.record.creds.last()),
-                theme::text(),
+                tone::text(),
                 true,
             );
             if let Some(step) = node.record.creds.last() {
@@ -73,9 +73,9 @@ pub(super) fn process_rows(
                 cell(
                     process_label(node),
                     if node.forked {
-                        theme::muted()
+                        tone::muted()
                     } else {
-                        theme::value(theme::ValueKind::Pointer)
+                        tone::value(ValueKind::Pointer)
                     },
                     true,
                 ),
@@ -85,7 +85,7 @@ pub(super) fn process_rows(
                 started,
                 cell(
                     process_cells::lifetime(node.first_ns, node.last_ns, ended),
-                    theme::text(),
+                    tone::text(),
                     true,
                 ),
                 cell(
@@ -94,11 +94,11 @@ pub(super) fn process_rows(
                         node.in_call.as_ref().map(|call| call.0.as_str()),
                         node.record.killed_by,
                     ),
-                    theme::text(),
+                    tone::text(),
                     false,
                 ),
-                cell(node.record.calls.to_string(), theme::text(), true),
-                cell(history_text(node), theme::text(), false),
+                cell(node.record.calls.to_string(), tone::text(), true),
+                cell(history_text(node), tone::text(), false),
             ];
             row[0].values = vec![
                 (

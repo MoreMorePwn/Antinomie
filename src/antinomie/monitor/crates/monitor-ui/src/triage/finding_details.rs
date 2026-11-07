@@ -139,7 +139,7 @@ impl TriageView {
 
         // The header.
         ui.horizontal_wrapped(|ui| {
-            chip(ui, tier.label(), tier.tone()).on_hover_text(tier.meaning());
+            chip(ui, tier.label(), tier.tone().into()).on_hover_text(tier.meaning());
             let size = egui::TextStyle::Heading.resolve(ui.style()).size;
             ui.label(theme::bold(ui, title).size(size).color(theme::heading()));
         });

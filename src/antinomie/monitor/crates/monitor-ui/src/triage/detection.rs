@@ -20,7 +20,7 @@ mod scan;
 mod selection;
 
 pub(in crate::triage) use cards::yara_strength;
-use cards::{card_summary, match_cards, severity_color};
+use cards::{card_summary, match_cards, severity_color, severity_tone};
 use finding::{byte_preview, evidence_list, evidence_values, WindowKey};
 use selection::SelectionDigests;
 
@@ -461,14 +461,14 @@ impl View {
                     .iter()
                     .map(|finding| {
                         let mut row = vec![
-                            cell(&finding.rule_id, theme::text(), true),
-                            cell(&finding.title, theme::text(), false),
-                            cell(&finding.severity, severity_color(&finding.severity), false),
-                            cell(finding.count.to_string(), theme::text(), true),
-                            cell(finding.mitre.join(", "), theme::text(), true),
-                            cell(&finding.source, theme::text(), false),
-                            cell(&finding.license, theme::muted(), false),
-                            cell(attribution(&finding.author), theme::text(), false),
+                            cell(&finding.rule_id, tone::text(), true),
+                            cell(&finding.title, tone::text(), false),
+                            cell(&finding.severity, severity_tone(&finding.severity), false),
+                            cell(finding.count.to_string(), tone::text(), true),
+                            cell(finding.mitre.join(", "), tone::text(), true),
+                            cell(&finding.source, tone::text(), false),
+                            cell(&finding.license, tone::muted(), false),
+                            cell(attribution(&finding.author), tone::text(), false),
                         ];
                         row[0].values = vec![
                             ("finding.rule", RowValue::Text(finding.rule_id.clone())),

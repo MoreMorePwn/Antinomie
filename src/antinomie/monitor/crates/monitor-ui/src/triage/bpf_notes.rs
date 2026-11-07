@@ -396,16 +396,16 @@ pub(super) fn bpf_row(
     let mut row = vec![
         cell(
             crate::time_format::guest_ns(clock, note.identity.timestamp_ns),
-            theme::text(),
+            tone::text(),
             true,
         ),
-        cell(&note.summary, theme::text(), false),
-        cell(&note.outcome, theme::text(), false),
+        cell(&note.summary, tone::text(), false),
+        cell(&note.outcome, tone::text(), false),
         cell(
             note.identity
                 .event_id
                 .map_or("Unavailable".into(), |id| format!("call {id}")),
-            theme::text(),
+            tone::text(),
             true,
         ),
     ];

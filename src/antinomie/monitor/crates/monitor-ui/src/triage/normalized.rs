@@ -808,7 +808,7 @@ mod tests {
             root_cookie: 1,
         };
         let mut journal = EventJournal::new(&temp.directory, &identity).unwrap();
-        let mut row = cell("", theme::text(), true);
+        let mut row = cell("", tone::text(), true);
         row.values = vec![
             ("frame.number", RowValue::Number(5)),
             ("frame.time_us", RowValue::Number(1_700_000_000_000_000)),

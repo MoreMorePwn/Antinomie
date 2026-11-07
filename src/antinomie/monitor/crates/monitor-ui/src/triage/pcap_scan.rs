@@ -672,24 +672,24 @@ pub(super) struct HttpRequest<'a> {
 fn http_row(path: &Path, request: &HttpRequest<'_>) -> Vec<Cell> {
     let time = request.time;
     let mut row = vec![
-        cell(format!("#{}", request.frame), theme::text(), true),
+        cell(format!("#{}", request.frame), tone::text(), true),
         cell(
             time.map_or("Unavailable".into(), crate::time_format::short_time_us),
-            theme::text(),
+            tone::text(),
             true,
         ),
-        cell(request.endpoints, theme::text(), true),
-        cell(request.method, theme::text(), false),
-        cell(request.host, theme::text(), false),
-        cell(request.uri, theme::text(), false),
+        cell(request.endpoints, tone::text(), true),
+        cell(request.method, tone::text(), false),
+        cell(request.host, tone::text(), false),
+        cell(request.uri, tone::text(), false),
         cell(
             request
                 .status
                 .map_or("—".into(), |status| status.to_string()),
-            theme::text(),
+            tone::text(),
             true,
         ),
-        cell(request.response_frames, theme::text(), true),
+        cell(request.response_frames, tone::text(), true),
     ];
     row[0].values = vec![
         ("capture.path", RowValue::Text(path.display().to_string())),
@@ -776,18 +776,18 @@ fn session_rows(
                 .join(" ");
             let shown_protocol = format!("{protocol} {kind}");
             let mut row = vec![
-                cell(format!("#{frame}"), theme::text(), true),
+                cell(format!("#{frame}"), tone::text(), true),
                 cell(
                     time.map_or("Unavailable".into(), crate::time_format::short_time_us),
-                    theme::text(),
+                    tone::text(),
                     true,
                 ),
-                cell(endpoints, theme::text(), true),
-                cell(&shown_protocol, theme::text(), false),
-                cell(&server_name, theme::text(), false),
-                cell(&alpn, theme::text(), false),
-                cell(&details, theme::text(), false),
-                cell(&fingerprint, theme::text(), true),
+                cell(endpoints, tone::text(), true),
+                cell(&shown_protocol, tone::text(), false),
+                cell(&server_name, tone::text(), false),
+                cell(&alpn, tone::text(), false),
+                cell(&details, tone::text(), false),
+                cell(&fingerprint, tone::text(), true),
             ];
             row[0].values = vec![
                 ("capture.path", RowValue::Text(path.display().to_string())),

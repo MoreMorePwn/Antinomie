@@ -101,7 +101,7 @@ fn a_task_is_its_name_and_two_bare_numbers() {
 fn stored_row(path: &str, time_ns: u64) -> Vec<Cell> {
     let mut row: Vec<Cell> = file_category::EVENT_HEADERS
         .iter()
-        .map(|header| cell(*header, theme::text(), false))
+        .map(|header| cell(*header, tone::text(), false))
         .collect();
     row[0].text = "~12:00:01.000".into();
     row[3].text = path.into();
@@ -185,7 +185,7 @@ fn a_path_is_only_the_path_and_its_tags_are_in_the_next_column() {
     assert_eq!(shown[0][0].text, "~12:00:01.000");
     // No table draws a warning sign.
     for slot in [1, 2, 5, 8] {
-        let stored: Vec<Cell> = (0..10).map(|_| cell("x", theme::text(), false)).collect();
+        let stored: Vec<Cell> = (0..10).map(|_| cell("x", tone::text(), false)).collect();
         let drawn = file_shown::shown(slot, &[stored], &notes);
         assert!(drawn[0].iter().all(|cell| !cell.text.contains('\u{26a0}')
             && cell

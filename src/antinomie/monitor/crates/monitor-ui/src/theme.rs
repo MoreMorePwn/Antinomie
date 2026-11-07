@@ -223,17 +223,23 @@ pub fn category(index: usize) -> Color32 {
     [palette.string, palette.pointer, palette.name, palette.good][index % 4]
 }
 
-/// What a value is, for its syntax color.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ValueKind {
-    Number,
-    Text,
-    Pointer,
-    Flags,
-    /// Syscall and symbol names.
-    Name,
-    Error,
-    Plain,
+pub use crate::triage::tone::{Tone, ValueKind};
+
+/// The colour of a row's text role in the active theme.
+pub fn tone(tone: Tone) -> Color32 {
+    match tone {
+        Tone::Text => text(),
+        Tone::Muted => muted(),
+        Tone::Good => good(),
+        Tone::Warn => warn(),
+        Tone::Bad => error(),
+        Tone::Info => blue(),
+        Tone::Value(kind) => value(kind),
+        Tone::Accent => neutral_accent(),
+        Tone::Primary => primary(),
+        Tone::BrightBlue => bright_blue(),
+        Tone::Notice => info(),
+    }
 }
 pub fn value(kind: ValueKind) -> Color32 {
     let palette = palette();

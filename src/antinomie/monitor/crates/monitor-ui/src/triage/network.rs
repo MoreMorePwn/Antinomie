@@ -532,28 +532,24 @@ impl Inventory {
                 });
             let shown = antinomie_monitor_core::ioc::kind::ip_port(*ip, *port);
             let mut row = vec![
-                cell(&shown, theme::text(), true),
-                cell(*protocol, theme::text(), false),
-                cell(endpoint.frames.to_string(), theme::text(), true),
-                cell(
-                    crate::values::file_size(endpoint.bytes),
-                    theme::text(),
-                    true,
-                ),
-                cell(available(country), theme::text(), false),
-                cell(available(organization), theme::text(), false),
+                cell(&shown, tone::text(), true),
+                cell(*protocol, tone::text(), false),
+                cell(endpoint.frames.to_string(), tone::text(), true),
+                cell(crate::values::file_size(endpoint.bytes), tone::text(), true),
+                cell(available(country), tone::text(), false),
+                cell(available(organization), tone::text(), false),
                 cell(
                     endpoint
                         .first
                         .map_or("Unavailable".into(), crate::time_format::short_time_us),
-                    theme::text(),
+                    tone::text(),
                     true,
                 ),
                 cell(
                     endpoint
                         .last
                         .map_or("Unavailable".into(), crate::time_format::short_time_us),
-                    theme::text(),
+                    tone::text(),
                     true,
                 ),
             ];
@@ -592,10 +588,10 @@ impl Inventory {
         for (name, host) in &self.hosts {
             let rcodes: Vec<String> = host.rcodes.iter().cloned().collect();
             let mut row = vec![
-                cell(name, theme::text(), false),
+                cell(name, tone::text(), false),
                 cell(
                     host.sources.iter().cloned().collect::<Vec<_>>().join(", "),
-                    theme::text(),
+                    tone::text(),
                     false,
                 ),
                 cell(
@@ -604,20 +600,20 @@ impl Inventory {
                         .cloned()
                         .collect::<Vec<_>>()
                         .join(", "),
-                    theme::text(),
+                    tone::text(),
                     true,
                 ),
-                cell(host.count.to_string(), theme::text(), true),
+                cell(host.count.to_string(), tone::text(), true),
                 cell(
                     host.first
                         .map_or("Unavailable".into(), crate::time_format::short_time_us),
-                    theme::text(),
+                    tone::text(),
                     true,
                 ),
                 cell(
                     host.last
                         .map_or("Unavailable".into(), crate::time_format::short_time_us),
-                    theme::text(),
+                    tone::text(),
                     true,
                 ),
                 cell(
@@ -626,7 +622,7 @@ impl Inventory {
                     } else {
                         rcodes.join(", ")
                     },
-                    theme::text(),
+                    tone::text(),
                     false,
                 ),
             ];
@@ -707,24 +703,24 @@ impl Inventory {
                 );
             }
             let mut row = vec![
-                cell(format!("#{}", session.frame), theme::text(), true),
+                cell(format!("#{}", session.frame), tone::text(), true),
                 cell(
                     if sni.is_empty() {
                         "(none)"
                     } else {
                         sni.as_str()
                     },
-                    theme::text(),
+                    tone::text(),
                     false,
                 ),
-                cell(endpoint, theme::text(), true),
-                cell(&session.version, theme::text(), false),
-                cell(&session.alpn, theme::text(), false),
-                cell(&session.ja3, theme::text(), true),
-                cell(&session.ja4, theme::text(), true),
-                cell(&session.ja3s, theme::text(), true),
-                cell(&session.cert_sha1, theme::text(), true),
-                cell(count.to_string(), theme::text(), true),
+                cell(endpoint, tone::text(), true),
+                cell(&session.version, tone::text(), false),
+                cell(&session.alpn, tone::text(), false),
+                cell(&session.ja3, tone::text(), true),
+                cell(&session.ja4, tone::text(), true),
+                cell(&session.ja3s, tone::text(), true),
+                cell(&session.cert_sha1, tone::text(), true),
+                cell(count.to_string(), tone::text(), true),
             ];
             row[0].values = vec![
                 ("capture.path", text_value(&session.capture)),
@@ -791,9 +787,9 @@ impl Inventory {
             .iter()
             .map(|(ip, (frame, country, organization, capture))| {
                 let mut row = vec![
-                    cell(ip, theme::text(), true),
-                    cell(available(country), theme::text(), false),
-                    cell(available(organization), theme::text(), false),
+                    cell(ip, tone::text(), true),
+                    cell(available(country), tone::text(), false),
+                    cell(available(organization), tone::text(), false),
                 ];
                 row[0].values = vec![
                     ("capture.path", text_value(capture)),
@@ -810,32 +806,32 @@ impl Inventory {
             .iter()
             .map(|(name, host)| {
                 let mut row = vec![
-                    cell(name, theme::text(), false),
+                    cell(name, tone::text(), false),
                     cell(
                         host.addresses
                             .iter()
                             .cloned()
                             .collect::<Vec<_>>()
                             .join(", "),
-                        theme::text(),
+                        tone::text(),
                         true,
                     ),
                     cell(
                         host.first
                             .map_or("Unavailable".into(), crate::time_format::short_time_us),
-                        theme::text(),
+                        tone::text(),
                         true,
                     ),
                     cell(
                         host.last
                             .map_or("Unavailable".into(), crate::time_format::short_time_us),
-                        theme::text(),
+                        tone::text(),
                         true,
                     ),
-                    cell(host.count.to_string(), theme::text(), true),
+                    cell(host.count.to_string(), tone::text(), true),
                     cell(
                         host.sources.iter().cloned().collect::<Vec<_>>().join(", "),
-                        theme::text(),
+                        tone::text(),
                         false,
                     ),
                 ];
