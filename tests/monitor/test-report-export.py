@@ -84,8 +84,8 @@ def check_json(folder):
     doc = json.loads(path.read_text())
     if have_schema:
         errors = list(jsonschema.Draft202012Validator(schema).iter_errors(doc))
-        check(not errors, f"JSON matches schema version 1 ({path.name}) {errors[:1]}")
-    check(doc["schema_version"] == 1 and doc["schema"] == "antinomie-triage-report", "JSON names its schema and version")
+        check(not errors, f"JSON matches schema version 2 ({path.name}) {errors[:1]}")
+    check(doc["schema_version"] == 2 and doc["schema"] == "antinomie-triage-report", "JSON names its schema and version")
     for part in ("summary", "indicators", "attack", "processes", "findings", "files", "file_activity", "network", "detections", "evidence", "custody"):
         check(part in doc, f"JSON has the {part} key (null when not chosen)")
     if have_schema:
@@ -95,10 +95,48 @@ def check_json(folder):
         bad = json.loads(path.read_text())
         bad["summary"]["assessment"] = "malicious"
         check(bool(list(jsonschema.Draft202012Validator(schema).iter_errors(bad))), "an unknown assessment is rejected")
+    check_json_links(doc, path.name)
     for hit in doc.get("detections") or []:
         check(all(key in hit for key in ("author", "license", "source", "reference")),
               f"detection {hit['rule_id']} carries its author, licence, source and reference")
     return doc
+
+
+def check_json_links(doc, name):
+    """Schema 2: key findings are objects (the sentences moved to
+    key_findings_text), every entry has an id, and every *_ref / *_refs names
+    an id of the same file."""
+    ids, refs = set(), []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "id" and isinstance(value, str):
+                    ids.add(value)
+                elif key == "anchors" and isinstance(value, list):
+                    ids.update(v for v in value if isinstance(v, str))
+                elif key.endswith("_ref") and isinstance(value, str) and value:
+                    refs.append(value)
+                elif key.endswith("_refs") and isinstance(value, list):
+                    refs.extend(v for v in value if isinstance(v, str))
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(doc)
+    # A technique's id is its bare Txxxx; its anchor adds the prefix.
+    ids.update(f"attack-{t['id']}" for t in doc.get("attack") or [])
+    summary = doc.get("summary")
+    if summary is not None:
+        key = summary["key_findings"]
+        check(all(isinstance(k, dict) and {"tier", "rule", "title"} <= set(k) for k in key),
+              f"{name}: key findings are objects")
+        text = summary["key_findings_text"]
+        check(all(isinstance(t, str) for t in text) and len(text) == len(key),
+              f"{name}: key_findings_text keeps one sentence per key finding")
+    dangling = sorted(set(r for r in refs if r not in ids))
+    check(bool(ids) and not dangling, f"{name}: every link names an id of the same file ({len(refs)} links, {len(ids)} ids) {dangling[:3]}")
 
 
 def check_misp(folder):
@@ -176,15 +214,19 @@ def check_pdf(folder, doc):
     info = run("pdfinfo", str(path)).stdout
     check("Pages:" in info and "Antinomie Triage report" in info, "pdfinfo reads the pages and the title")
     text = run("pdftotext", "-layout", str(path), "-").stdout
-    titles = {"summary": "Summary", "indicators": "Indicators of compromise", "attack": "ATT&CK techniques",
+    titles = {"summary": "At a glance", "indicators": "Indicators of compromise", "attack": "ATT&CK techniques",
               "processes": "Processes", "findings": "Suspicious activity", "files": "Files",
               "file_activity": "File activity and reconstruction", "network": "Network",
               "detections": "Detection engines", "evidence": "Evidence references", "custody": "Custody log"}
     for key, title in titles.items():
-        present = doc.get(key) is not None
+        present = bool(doc.get(key))
         check((title in text) == present or key == "custody", f"PDF {'has' if present else 'omits'} the {title} section")
+    if doc.get("summary") is not None:
+        contents = text.split("At a glance", 2)
+        check(len(contents) == 3 and "Contents" in contents[0] and "page" not in contents[1] and contents[1].lstrip().startswith("1"),
+              "PDF starts with a Contents block that lists At a glance with a bare page number 1")
     outline = run("mutool", "show", str(path), "outline").stdout
-    check("Summary" in outline or run("qpdf", "--show-npages", str(path)).returncode == 0, "PDF has bookmarks or opens")
+    check("At a glance" in outline or run("qpdf", "--show-npages", str(path)).returncode == 0, "PDF has bookmarks or opens")
     return text
 
 
@@ -195,11 +237,23 @@ def check_html(folder, doc, subdir=None):
     text = path.read_text()
     for bad in ("<script", "<link", "src=", "@import", "url(", "href=\"http", "http://", "https://"):
         check(bad not in text, f"HTML is self-contained: no {bad}")
-    check("<h2>Run overview</h2>" in text, "HTML has the overview")
+    if doc is None or doc.get("summary") is not None:
+        check("<h2>At a glance</h2>" in text, "HTML starts with At a glance")
+    ids = set(re.findall(r'\bid="([^"]+)"', text))
+    dangling = sorted(set(re.findall(r'href="#([^"]*)"', text)) - ids)
+    check(not dangling, f"HTML links all name an anchor of the page {dangling[:3]}")
     for hit in doc.get("detections") or [] if doc else []:
         check(all(value in text for value in (hit["author"], hit["license"])),
               f"HTML names the author and licence of {hit['rule_id']}")
     return text
+
+
+def check_markdown(folder):
+    text = next(folder.glob("antinomie-report-*.md")).read_text()
+    check(text.count("## At a glance") == 1, "Markdown has the At a glance section")
+    ids = set(re.findall(r'<a id="([^"]+)"></a>', text))
+    dangling = sorted(set(re.findall(r"\]\(#([^)]*)\)", text)) - ids)
+    check(bool(ids) and not dangling, f"Markdown links all name an <a id> anchor {dangling[:3]}")
 
 
 def check_bundle(folder):
@@ -257,6 +311,7 @@ def main():
     check_stix(folder)
     check_pdf(folder, doc)
     html = check_html(folder, doc)
+    check_markdown(folder)
     check("example.com" in html, "the default export is not defanged")
     check_bundle(folder)
     limited = folder / "limited-defanged"

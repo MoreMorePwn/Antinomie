@@ -342,6 +342,198 @@ fn pdf_has_valid_offsets_pages_bookmarks_and_the_sections() {
     assert!(content.contains("203.0.113.5:443"));
 }
 
+/// One item of a PDF outline, read back from the written objects.
+#[derive(Debug)]
+pub(super) struct OutlineItem {
+    pub obj: usize,
+    pub title: String,
+    pub parent: usize,
+    pub prev: Option<usize>,
+    pub next: Option<usize>,
+    pub first: Option<usize>,
+    pub last: Option<usize>,
+    pub count: Option<i64>,
+}
+
+/// The outline items in object order, and the root's `(first, last, count)`;
+/// the structure is checked on the way: every link between items is mutual.
+pub(super) fn outline(bytes: &[u8]) -> (Vec<OutlineItem>, (usize, usize, i64)) {
+    let raw: String = bytes.iter().map(|&b| b as char).collect();
+    let number = |line: &str, key: &str| -> Option<usize> {
+        let rest = &line[line.find(key)? + key.len()..];
+        rest.split(' ').next()?.parse().ok()
+    };
+    let mut items = Vec::new();
+    let mut root = None;
+    let mut lines = raw.lines();
+    while let Some(line) = lines.next() {
+        let Some(obj) = line.strip_suffix(" 0 obj").and_then(|n| n.parse().ok()) else {
+            continue;
+        };
+        let Some(body) = lines.next() else { break };
+        if body.starts_with("<< /Type /Outlines") {
+            root = Some((
+                number(body, "/First ").unwrap_or(0),
+                number(body, "/Last ").unwrap_or(0),
+                body.split("/Count ")
+                    .nth(1)
+                    .and_then(|c| c.split(' ').next())
+                    .and_then(|c| c.parse().ok())
+                    .unwrap_or(0),
+            ));
+        } else if let Some(rest) = body.strip_prefix("<< /Title (") {
+            // The document info also starts with a title, but has no parent.
+            let Some(end) = rest.find(") /Parent ") else {
+                continue;
+            };
+            items.push(OutlineItem {
+                obj,
+                title: rest[..end].to_owned(),
+                parent: number(body, "/Parent ").unwrap(),
+                prev: number(body, "/Prev "),
+                next: number(body, "/Next "),
+                first: number(body, "/First "),
+                last: number(body, "/Last "),
+                count: body
+                    .split("/Count ")
+                    .nth(1)
+                    .and_then(|c| c.split(' ').next())
+                    .and_then(|c| c.parse().ok()),
+            });
+        }
+    }
+    let root = root.expect("an outline root");
+    let by = |obj: usize| items.iter().find(|i| i.obj == obj).expect("item exists");
+    for item in &items {
+        if let Some(next) = item.next {
+            assert_eq!(by(next).prev, Some(item.obj), "{} -> next", item.title);
+            assert_eq!(by(next).parent, item.parent, "siblings share a parent");
+        }
+        if let Some(prev) = item.prev {
+            assert_eq!(by(prev).next, Some(item.obj), "{} <- prev", item.title);
+        }
+        let kids: Vec<&OutlineItem> = items.iter().filter(|i| i.parent == item.obj).collect();
+        assert_eq!(
+            item.first,
+            kids.first().map(|k| k.obj),
+            "{} first",
+            item.title
+        );
+        assert_eq!(item.last, kids.last().map(|k| k.obj), "{} last", item.title);
+        assert_eq!(
+            item.count,
+            (!kids.is_empty()).then_some(kids.len() as i64),
+            "{} count",
+            item.title
+        );
+    }
+    let tops: Vec<&OutlineItem> = items.iter().filter(|i| i.parent == 8).collect();
+    assert_eq!(Some(root.0), tops.first().map(|t| t.obj));
+    assert_eq!(Some(root.1), tops.last().map(|t| t.obj));
+    assert_eq!(root.2, items.len() as i64, "root counts every open item");
+    (items, root)
+}
+
+/// The titles of the children of the section with this title.
+pub(super) fn children_of(items: &[OutlineItem], section: &str) -> Vec<String> {
+    let parent = items
+        .iter()
+        .find(|i| i.parent == 8 && i.title == section)
+        .unwrap_or_else(|| panic!("section {section}"))
+        .obj;
+    items
+        .iter()
+        .filter(|i| i.parent == parent)
+        .map(|i| i.title.clone())
+        .collect()
+}
+
+#[test]
+fn the_pdf_outline_is_a_tree_with_the_files_subsections_as_children() {
+    let mut report = fixture();
+    report.network = Some(vec![
+        NamedTable {
+            name: "Endpoints".into(),
+            table: table(2),
+        },
+        NamedTable {
+            name: "Domains".into(),
+            table: table(2),
+        },
+    ]);
+    let bytes = export::render(&report, Format::Pdf, false).unwrap();
+    let (items, _) = outline(&bytes);
+    let files = children_of(&items, "Files");
+    assert!(
+        files.iter().any(|t| t.starts_with("Written or changed")),
+        "{files:?}"
+    );
+    assert!(
+        files.iter().any(|t| t.starts_with("Opened files")),
+        "{files:?}"
+    );
+    let network = children_of(&items, "Network");
+    assert!(
+        network.iter().any(|t| t.starts_with("Endpoints")),
+        "{network:?}"
+    );
+    assert!(
+        network.iter().any(|t| t.starts_with("Domains")),
+        "{network:?}"
+    );
+    let files_item = items.iter().find(|i| i.title == "Files").unwrap();
+    assert_eq!(
+        files_item.count,
+        Some(files.len() as i64),
+        "open, one per child"
+    );
+    // A section without sub-headings is a leaf with no /Count.
+    let glance = items.iter().find(|i| i.title == "Custody log").unwrap();
+    assert!(glance.first.is_none() && glance.count.is_none());
+}
+
+#[test]
+fn the_contents_lines_hold_bare_page_numbers_and_no_tactic_colours() {
+    let report = fixture();
+    let bytes = export::render(&report, Format::Pdf, false).unwrap();
+    let (content, _) = pdf_text(&bytes);
+    assert!(!content.contains("(page "), "no 'page n' in the contents");
+    assert!(content.contains("(1) Tj"), "a bare page number");
+    // The fixture's ATT&CK rows draw no coloured bar: no tactic colour is set.
+    for tactic in crate::mitre::Tactic::ALL {
+        let [r, g, b] = tactic.rgb(true).map(|c| f32::from(c) / 255.0);
+        let fill = format!(
+            "{} {} {} rg",
+            super::pdf::num(r),
+            super::pdf::num(g),
+            super::pdf::num(b)
+        );
+        assert!(
+            !content.contains(&fill),
+            "{} colour in the PDF",
+            tactic.name()
+        );
+    }
+    let html = String::from_utf8(export::render(&report, Format::Html, false).unwrap()).unwrap();
+    assert!(html.contains("class=\"tac\""), "the tactic stays as a chip");
+    assert!(
+        !html.contains("--c:") && !html.contains(".t0{"),
+        "no tactic classes"
+    );
+    for tactic in crate::mitre::Tactic::ALL {
+        for light in [true, false] {
+            let [r, g, b] = tactic.rgb(light);
+            assert!(
+                !html.contains(&format!("#{r:02x}{g:02x}{b:02x}")),
+                "{} colour in the HTML",
+                tactic.name()
+            );
+        }
+    }
+    let md = String::from_utf8(export::render(&report, Format::Markdown, false).unwrap()).unwrap();
+    assert!(!md.contains("page "), "no page numbers in the Markdown");
+}
+
 #[test]
 fn pdf_defangs_and_shows_non_latin_text_as_question_marks() {
     let mut report = fixture();

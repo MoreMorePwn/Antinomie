@@ -208,11 +208,11 @@ pub(super) fn show(
         kind,
         AnalysisKind::Disassembly | AnalysisKind::Decompilation
     );
-    // Header and table rows have room around their text; code lines sit one
-    // font row apart, as in a text editor, with no item spacing between them.
+    // Header and table rows have room around their text; code lines are a
+    // font row plus a little air, so the lines do not touch.
     let head_height = mono.size + 10.0;
     let row_height = if split {
-        ui.fonts_mut(|fonts| fonts.row_height(&mono))
+        ui.fonts_mut(|fonts| fonts.row_height(&mono)) + 6.0
     } else {
         head_height
     };

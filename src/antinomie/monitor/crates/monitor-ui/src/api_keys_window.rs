@@ -355,6 +355,7 @@ mod tests {
 
     #[test]
     fn a_saved_key_is_shown_by_its_last_four_characters_only() {
+        let _keys = crate::api_key_lock();
         let dir = temp("show");
         let ctx = egui::Context::default();
         theme::install(&ctx);
@@ -391,6 +392,7 @@ mod tests {
 
     #[test]
     fn a_bad_key_is_refused_with_a_reason_and_nothing_is_saved() {
+        let _keys = crate::api_key_lock();
         let dir = temp("bad");
         let mut window = ApiKeysWindow::default();
         window.drafts.insert(ApiKey::MalShare, "not valid!".into());

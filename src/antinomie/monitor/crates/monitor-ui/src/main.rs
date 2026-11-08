@@ -26,6 +26,14 @@ mod hex_view;
 mod jobs;
 #[cfg(test)]
 mod memory_probe;
+/// Key changes are counted for the whole process (`api_keys::generation`), so
+/// a test that saves or removes a key, or that watches for one, holds this
+/// while another such test would otherwise move the count under it.
+#[cfg(test)]
+pub(crate) fn api_key_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 mod memory_view;
 mod mermaid;
 mod network_view;
