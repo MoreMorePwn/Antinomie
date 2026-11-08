@@ -847,6 +847,7 @@ mod key_tests {
     /// two seconds the key used to be cached for.
     #[test]
     fn the_key_state_follows_a_save_and_a_removal_at_once() {
+        let _keys = crate::api_key_lock();
         let dir = std::env::temp_dir().join(format!("ant-ioc-key-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut view = View::default();
