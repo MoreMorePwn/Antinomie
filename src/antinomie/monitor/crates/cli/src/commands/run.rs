@@ -180,9 +180,7 @@ pub fn request_for(arguments: &Exec) -> Result<ExecRequest, CliError> {
         route: arguments.route.as_deref().map(parse_route).transpose()?,
         ..ExecRequest::default()
     };
-    request
-        .validate()
-        .map_err(|message| CliError::invalid(message))?;
+    request.validate().map_err(CliError::invalid)?;
     Ok(request)
 }
 

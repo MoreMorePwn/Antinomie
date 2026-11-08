@@ -169,3 +169,35 @@ fn a_daemon_flag_is_refused_until_a_daemon_exists() {
     assert_eq!(code, 1, "{reply}");
     assert_eq!(error_code(&reply), "unsupported");
 }
+
+#[test]
+fn run_exec_refuses_what_it_can_before_the_engine_starts() {
+    let data = with_vm("exec");
+    for (args, code) in [
+        (&["run", "exec", &"ab".repeat(32)][..], 3),
+        (&["run", "exec", "/no/such/file"][..], 3),
+        (&["run", "exec", &"ab".repeat(32), "--as", "admin"][..], 4),
+        (
+            &["run", "exec", &"ab".repeat(32), "--env", "NOEQUALS"][..],
+            4,
+        ),
+        (&["run", "exec", &"ab".repeat(32), "--route", "wifi"][..], 4),
+    ] {
+        let (exit, reply) = cli(&data, args);
+        assert_eq!(exit, code, "{args:?}: {reply}");
+    }
+}
+
+#[test]
+fn run_exec_with_events_speaks_ndjson_even_when_json_was_asked() {
+    let data = with_vm("events");
+    let output = Command::new(env!("CARGO_BIN_EXE_antinomie-cli"))
+        .args(["-o", "json", "--data-dir", data.to_str().unwrap()])
+        .args(["run", "exec", "/no/such/file", "--events"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(output.stdout).unwrap();
+    let line: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+    assert!(line.get("error").is_some(), "{text}");
+    assert!(line.get("api_version").is_none(), "{text}");
+}
