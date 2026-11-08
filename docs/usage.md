@@ -1721,6 +1721,38 @@ the web layer are not shipped yet; this list is what `antinomie-cli --help` show
   happens, one event of the job API per line (`job.stage`, `job.progress`, `job.run`,
   `job.warning`, `job.finished`; `job_id` is null, `seq` counts from 1), then the result;
   it implies `-o ndjson`. `--timeout SECONDS` limits the whole command (exit 14).
+- **Triage, detection and reports of a saved run.** `triage RUN [--parts LIST]`,
+  `detect RUN [--engine yara,sigma,ids] [--out DIR] [--save]` and `report RUN
+  [--formats html,pdf,json,misp,stix,md] [--parts LIST] [--evidence-bundle] [--defang |
+  --no-defang] [--include-content] [--out DIR]` read a saved run with no window.
+  `RUN` is the run's id or its first characters (4 or more), `vm:boot:run`, a run
+  key, or the run's folder; every VM of the data directory is searched. Each command
+  indexes the whole run the way Triage does when the run is selected, with the
+  data directory's `settings.json` (the window's defaults when there is none) and
+  with `dig` and `whois` lookups off (TShark's installed GeoIP fields stay); the
+  progress goes to standard error and Ctrl-C stops it (exit 130).
+  `triage` prints Triage's Summary: the assessment and its basis, the tier counts,
+  the counts, the families, the key behaviours, the key findings and the notes;
+  `--parts` adds report parts to the result (`summary`, `indicators`, `attack`,
+  `processes`, `findings`, `files`, `file_activity`, `network`, `detections`,
+  `evidence`, `custody`, or `all`). `report` writes the files the window's
+  **Export report** writes for the same run and choices (see
+  [Triage report export](triage-report.md)); formats and parts default to the
+  export choices in `settings.json` (HTML and PDF, every part, defanged), and the
+  files go to `--out` (default `report-<first 8 characters of the run id>` in the
+  current folder), never into the recording. `detect` runs the engines over the
+  run's evidence as the Detection tab does: the same evidence check, the same frozen
+  rule selection and the same sandbox. YARA needs the static analysis of the run's
+  sample (`run exec --static`), IDS a capture (`run exec --net-capture`), Sigma the
+  event journal the index writes; an engine without its evidence is listed as not
+  scanned, with the reason. Without `--save` nothing is written into the recording:
+  the matches are printed and `--out DIR` writes each engine's full result as
+  `detection-<engine>.json`. `--save` keeps the results where the Detection tab keeps
+  them and adds them to the run's digest, so a later `report` lists them; it takes
+  the engine lock (exit 21 while the window owns the data directory). `detect` exits
+  1 when an engine failed. Apart from `detect --save`, these commands take no lock
+  and write nothing into the recording but the index Triage keeps there (its event
+  and finding journals), as the window does when it shows the run.
 - **A VM lives as long as the command.** In direct mode the engine runs inside the
   command and stops the VM when the command ends, so `vm start` boots the guest, waits
   until it answers, reports how long that took and stops it again; `--hold` keeps it
@@ -1770,7 +1802,8 @@ the web layer are not shipped yet; this list is what `antinomie-cli --help` show
   without starting anything (see [service configuration](service-config.md)); it
   prints each problem as `file:line:column` and exits 4 when there is an error.
 - Not shipped yet: submitting and waiting for jobs, the daemon and its socket, watch
-  folders, and reading recordings from the command line. The job contract they will
+  folders, and listing or exporting recordings from the command line (`run list`,
+  `run show`, `run export`). The job contract they will
   use is written down in [Job API, version 1](job-api-1.md).
 
 ## Troubleshooting

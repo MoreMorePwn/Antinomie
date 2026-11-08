@@ -13,7 +13,7 @@ use std::path::PathBuf;
 #[command(
     name = "antinomie-cli",
     version = antinomie_monitor_core::api::APP_BUILD,
-    about = "Antinomie command line: the sample library and static analysis without a window",
+    about = "Antinomie command line: bases, VMs, runs, Triage and reports without a window",
     propagate_version = true
 )]
 pub struct Cli {

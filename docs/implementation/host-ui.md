@@ -331,6 +331,12 @@ behind it.
   identity are `antinomie_triage::detection`; the dialog and the tab keep only
   their state and drawing. `analysis::detection::run_unsaved` runs an engine
   without writing its result, manifest or log into the run's folder.
+  `antinomie-cli triage`, `detect` and `report` (`crates/cli/src/commands/`)
+  find the run read-only (`recording::list_runs_read_only`, `find_run_read_only`),
+  index it through `SavedRun`, and run `report_export::Job::for_saved` /
+  `build_report` / `write_built` and `detection::scan`; `detect --save` takes the
+  data-folder lock and writes the digest with `digest::Update`, as the window's
+  digest tick does.
   The CLI is not a second implementation: every engine step it takes
   (`Command::AnalyzeSample`, the rule registry, the sample library, custody) is a
   core function the window calls too.

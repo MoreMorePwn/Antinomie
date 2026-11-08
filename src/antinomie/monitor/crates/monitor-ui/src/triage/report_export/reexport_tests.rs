@@ -333,3 +333,90 @@ fn rerender_exported_reports() {
     }
     let _ = std::fs::remove_dir_all(&scratch);
 }
+
+/// What the Export report dialog writes for one saved run, through the
+/// dialog's own steps: the run as Run History lists it, the Triage input the
+/// app makes for the selected run of a stopped VM, the app's default Triage
+/// settings, then `open_report` and `start_report` with every format, and the
+/// window until its worker is done. For comparing with `antinomie-cli report`
+/// (card P2-4). `ANTINOMIE_DIALOG_DATA` is the data directory,
+/// `ANTINOMIE_DIALOG_RUN` the run id and `ANTINOMIE_DIALOG_OUT` the folder.
+#[test]
+#[ignore = "exports a saved run; set ANTINOMIE_DIALOG_DATA, ANTINOMIE_DIALOG_RUN and ANTINOMIE_DIALOG_OUT"]
+fn export_a_saved_run_as_the_dialog_does() {
+    let var = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("set {name}"));
+    let data = PathBuf::from(var("ANTINOMIE_DIALOG_DATA"));
+    let run_id = var("ANTINOMIE_DIALOG_RUN");
+    let out = var("ANTINOMIE_DIALOG_OUT");
+    let options = antinomie_monitor_core::BackendOptions {
+        data_dir: data.clone(),
+        ..Default::default()
+    };
+    let run = antinomie_monitor_core::recording::read_only_locations(&options)
+        .unwrap()
+        .into_iter()
+        .flat_map(|location| {
+            antinomie_monitor_core::recording::list_vm_runs(&options, &location.vm_id)
+                .unwrap_or_default()
+        })
+        .find(|run| run.id == run_id)
+        .expect("the run is in the history");
+    let pcap = match antinomie_triage::SavedCapture::of(&run) {
+        antinomie_triage::SavedCapture::Found { file, .. } => Some(file),
+        _ => None,
+    };
+    let input = TriageInput {
+        pcap_open: false,
+        run_finished: true,
+        current_boot: false,
+        ..TriageInput::for_run(&run, pcap.as_deref())
+    };
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut view = TriageView::default();
+    view.refresh_seconds = 3600;
+    view.set_address_lookup(AddressLookup::default());
+    view.set_data_dir(&data);
+    view.set_write_limits(
+        antinomie_monitor_core::settings::EngineSettings::default().write_limits(),
+    );
+    view.set_page_rows(STORED_ROWS as u32);
+    view.set_rebuild_limits(DEFAULT_REBUILD_FILE_MIB, DEFAULT_REBUILD_RUN_MIB);
+    view.set_launch(Some(&run));
+    view.set_kernel_revision(ScanRequest::kernel_revision_of(&run));
+    let frame = |view: &mut TriageView, input: TriageInput<'_>| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            view.tick(root.ctx(), input);
+            view.show_report_dialog(root.ctx());
+        });
+    };
+    let deadline = Instant::now() + Duration::from_secs(600);
+    while view.scan.is_none() || view.scan_rx.is_some() {
+        frame(&mut view, input);
+        assert!(Instant::now() < deadline, "the index never arrived");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    view.set_report_choices(Choices {
+        formats: Format::ALL.to_vec(),
+        folder: out,
+        ..Choices::default()
+    });
+    view.open_report(&input);
+    let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+        view.start_report(root.ctx());
+    });
+    while matches!(view.report.state, State::Running { .. }) {
+        frame(&mut view, input);
+        assert!(Instant::now() < deadline, "the export never ended");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    match &view.report.state {
+        State::Done(written) => {
+            for (label, path) in &written.files {
+                eprintln!("{label}: {}", path.display());
+            }
+        }
+        State::Failed(error) => panic!("the export failed: {error}"),
+        _ => panic!("the export did not run"),
+    }
+}

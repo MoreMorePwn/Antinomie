@@ -377,7 +377,7 @@ worker. Terminal output sequence gaps trigger a core-owned screen snapshot.
 | `crates/monitor-ui/src/` | Native VM list, settings, event table and VT terminal |
 | `crates/triage/src/` | `antinomie-triage` (0.9.0): the Triage model: the recording scan, activity rules, process tree, file and network indexes, the run digest, the exported report's builder (`report_export/`), the Detection tab's request builder (`detection.rs`), a saved run's input (`saved_run.rs`), the filter language (`query/`), the eBPF decoder and the earlier-bytes copier; colour roles (`Tone`) instead of colours; no GUI dependency |
 | `crates/service/src/` | `antinomie-service` (0.9.0): job and query API types, `service.toml` and policies, the job store, sample intake and read-only recording queries; no GUI dependency |
-| `crates/cli/src/` | `antinomie-cli` (0.9.0): the headless command line over core and the service (`doctor`, `capabilities`, `config`, `sample`, `custody`, `analyze`, `rules`); no GUI dependency |
+| `crates/cli/src/` | `antinomie-cli` (0.9.0): the headless command line over core and the service (`doctor`, `capabilities`, `config`, `sample`, `custody`, `analyze`, `rules`, `base`, `vm`, `snapshot`, `run exec`, `triage`, `detect`, `report`); no GUI dependency |
 | `protocol/guest-profile.json` | Exact syscall set, UAPI layouts, capture rules and known gaps |
 | `protocol/control.h` | Kernel/host application-control wire contract |
 | `../transport/` | Unchanged V7 transport API and layout |
