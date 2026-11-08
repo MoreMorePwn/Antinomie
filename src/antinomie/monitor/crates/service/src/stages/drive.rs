@@ -133,7 +133,16 @@ impl<E: Engine> LaneStages<'_, E> {
         let now = self.waiter.now_ms();
         self.update_lane(|file| file.checkpoint(Stage::Collect, Checkpoint::Started, now))?;
         let end = match self.collect(job, launched) {
-            Ok(end) => end,
+            Ok(mut end) => {
+                // A run stopped for the disk floor is a partial result.
+                if store
+                    .get(&job.id)
+                    .is_ok_and(|stored| stored.warnings.iter().any(|w| w.code == "low_disk"))
+                {
+                    end.outcome = Outcome::Partial;
+                }
+                end
+            }
             Err(stop) => {
                 if matches!(stop, StageStop::Failed(_)) {
                     let _ = store.end_stage(&job.id, StageStatus::Failed);

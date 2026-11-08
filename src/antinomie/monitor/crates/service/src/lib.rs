@@ -32,6 +32,8 @@ pub mod intake;
 pub mod lane;
 /// `QueryApi`, the read-only recording queries (cards Q-1 and later).
 pub mod query;
+/// Resource floors and the queue pause (card P3-5c).
+pub mod resources;
 /// The JSON Schema generated from the types above.
 pub mod schema;
 /// The lane stages `prechecks` to `collect`, retries and the watchdog (cards P3-4b, P3-4c).

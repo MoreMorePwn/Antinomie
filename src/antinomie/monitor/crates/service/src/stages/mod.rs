@@ -38,6 +38,8 @@ pub mod plan;
 mod prechecks;
 mod provision;
 mod report;
+#[cfg(test)]
+mod resources_tests;
 pub mod retry;
 mod run;
 #[cfg(test)]
@@ -125,6 +127,17 @@ pub enum HostProblem {
 /// real checks with injected probes are card P3-5c; these are the seam.
 pub trait HostChecks {
     fn check(&self, job: &Job, policy: &crate::config::Policy) -> Result<(), HostProblem>;
+
+    /// The disk floor itself, asked every minute while a program runs. The
+    /// words say what is short; `None` means room.
+    fn low_disk(&self) -> Option<String> {
+        None
+    }
+
+    /// Whether the host can take any job now, asked before a job is claimed.
+    fn admission(&self) -> Option<(WaitingFor, String)> {
+        None
+    }
 }
 
 /// Every check passes.
@@ -256,6 +269,9 @@ impl<E: Engine> LaneStages<'_, E> {
     pub fn eligibility(&mut self) -> Eligibility {
         if self.waiter.drain().is_err() {
             return Eligibility::Wait(WaitingFor::Lane);
+        }
+        if let Some((waiting_for, _)) = self.env.host.admission() {
+            return Eligibility::Wait(waiting_for);
         }
         match self.env.lanes.load(&self.lane) {
             Ok(Some(file)) => prechecks::lane_eligibility(&file, self.waiter.snapshot()),
