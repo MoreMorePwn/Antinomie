@@ -934,7 +934,7 @@ mod tests {
     }
 
     #[test]
-    fn history_lists_the_good_runs_beside_a_damaged_one() {
+    fn history_lists_the_good_runs_and_a_damaged_one_with_its_reason() {
         let fixture = Fixture::new();
         let (vm, location) = fixture.create(VmConfig {
             id: "history-damaged".into(),
@@ -947,7 +947,22 @@ mod tests {
         fs::create_dir_all(&bad).unwrap();
         fs::write(bad.join("run.json"), b"{\"id\":\"bad\",").unwrap();
         let history = crate::recording::list_vm_runs(&fixture.options, &vm.id).unwrap();
-        assert_eq!(history.len(), 2, "{history:?}");
+        assert_eq!(history.len(), 3, "{history:?}");
+        let damaged = history.iter().find(|run| run.id == "bad").unwrap();
+        assert!(
+            damaged
+                .recording_error
+                .as_deref()
+                .unwrap()
+                .starts_with("run record unreadable:")
+        );
+        assert!(
+            history
+                .iter()
+                .filter(|run| run.recording_error.is_none())
+                .count()
+                == 2
+        );
     }
 
     #[test]
