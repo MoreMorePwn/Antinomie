@@ -4,6 +4,8 @@
 //! Where the nodes sit is `layout`'s. It draws the graph and says what was
 //! clicked; it keeps no data of its own.
 use super::fold::Fold;
+#[cfg(test)]
+use super::fold::FoldGraph;
 use super::layout::Layout;
 use super::model::{EdgeKind, Graph, GroupInfo, NodeKind};
 use crate::theme;

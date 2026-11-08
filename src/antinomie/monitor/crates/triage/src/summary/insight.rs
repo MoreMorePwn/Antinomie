@@ -17,7 +17,7 @@ const MINER_WORDS: &[&str] = &["miner", "xmrig", "coinminer", "cryptominer", "ki
 
 /// What the tags are made from.
 #[derive(Default)]
-pub(super) struct TagInput<'a> {
+pub struct TagInput<'a> {
     /// `finding.category` and `finding.rule` of each finding of LOW and above.
     pub findings: Vec<(&'a str, &'a str)>,
     /// Titles and families of the detection matches.
@@ -60,7 +60,7 @@ const TAG_ORDER: &[&str] = &[
 
 /// The behaviour tags the rule categories and tactics that fired, and the
 /// names of the detections, give.
-pub(super) fn behaviour_tags(input: &TagInput<'_>) -> Vec<&'static str> {
+pub fn behaviour_tags(input: &TagInput<'_>) -> Vec<&'static str> {
     let mut on: BTreeSet<&'static str> = BTreeSet::new();
     for (category, rule) in &input.findings {
         match *category {
@@ -129,7 +129,7 @@ fn number(values: &[(&'static str, RowValue)], key: &str) -> u64 {
 }
 
 /// A finding's tier, when it names one.
-pub(super) fn tier_of(finding: &Finding) -> Option<rules::Tier> {
+pub fn tier_of(finding: &Finding) -> Option<rules::Tier> {
     rules::Tier::from_tag(text(&finding.values, "finding.tier"))
 }
 
@@ -141,7 +141,7 @@ fn hidden(finding: &Finding) -> bool {
 }
 
 /// What the tags are made from, for the findings of LOW and above.
-pub(super) fn tag_findings(findings: &[Finding]) -> Vec<(&str, &str)> {
+pub fn tag_findings(findings: &[Finding]) -> Vec<(&str, &str)> {
     findings
         .iter()
         .filter(|finding| {
@@ -158,7 +158,7 @@ pub(super) fn tag_findings(findings: &[Finding]) -> Vec<(&str, &str)> {
 
 /// One row of Key findings.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Key {
+pub struct Key {
     /// Place in the scan's findings.
     pub index: usize,
     pub tier: rules::Tier,
@@ -177,7 +177,7 @@ pub(super) struct Key {
 }
 
 /// How many findings the Summary lists.
-pub(super) const KEY_ROWS: usize = 6;
+pub const KEY_ROWS: usize = 6;
 
 /// The first words of `text`, cut at a sentence end or `max` characters.
 fn short(text: &str, max: usize) -> String {
@@ -195,7 +195,7 @@ fn short(text: &str, max: usize) -> String {
 
 /// The findings of LOW and above that are not hidden, by tier and then by
 /// first time: how many there are, and the top `limit`.
-pub(super) fn key_findings(findings: &[Finding], limit: usize) -> (usize, Vec<Key>) {
+pub fn key_findings(findings: &[Finding], limit: usize) -> (usize, Vec<Key>) {
     let mut keys: Vec<Key> = findings
         .iter()
         .enumerate()

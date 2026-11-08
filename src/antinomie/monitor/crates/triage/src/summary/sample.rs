@@ -5,7 +5,7 @@
 use antinomie_monitor_core::{AnalysisKind, AnalysisReport};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct SampleInfo {
+pub struct SampleInfo {
     pub name: String,
     /// "ELF 64-bit x86-64"; empty when the analysis did not say.
     pub kind: String,
@@ -18,7 +18,7 @@ pub(super) struct SampleInfo {
 }
 
 /// "ELF 64-bit x86-64" and the linking from `file`'s magic text.
-pub(super) fn describe_magic(magic: &str) -> (String, Option<&'static str>) {
+pub fn describe_magic(magic: &str) -> (String, Option<&'static str>) {
     let linking = if magic.contains("statically linked") || magic.contains("static-pie") {
         Some("static")
     } else if magic.contains("dynamically linked") {
@@ -47,7 +47,7 @@ pub(super) fn describe_magic(magic: &str) -> (String, Option<&'static str>) {
 }
 
 impl SampleInfo {
-    pub(super) fn of(report: &AnalysisReport) -> Self {
+    pub fn of(report: &AnalysisReport) -> Self {
         let entry = |kind: AnalysisKind, label: &str| {
             report
                 .sections
@@ -78,7 +78,7 @@ impl SampleInfo {
             }
         });
         Self {
-            name: crate::triage::process_cells::file_name(&report.source_path).to_owned(),
+            name: crate::process_cells::file_name(&report.source_path).to_owned(),
             kind,
             linking,
             packer,
@@ -89,7 +89,7 @@ impl SampleInfo {
 }
 
 /// "812 KiB" for a size in bytes.
-pub(super) fn size_text(bytes: u64) -> String {
+pub fn size_text(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
     let mut value = bytes as f64;
     let mut unit = 0;
@@ -105,7 +105,7 @@ pub(super) fn size_text(bytes: u64) -> String {
 }
 
 /// The first and last characters of a hash: "3f9a…c21e".
-pub(super) fn short_hash(hash: &str) -> String {
+pub fn short_hash(hash: &str) -> String {
     if hash.len() <= 12 {
         hash.to_owned()
     } else {

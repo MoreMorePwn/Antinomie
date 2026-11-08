@@ -5,6 +5,8 @@
 //! it wrote or ran and the endpoints it contacted beside it, to its right;
 //! the root is at the top left. All the children of a node are stacked in the
 //! next column to its right, however many there are.
+#[cfg(test)]
+use super::fold::FoldGraph;
 use super::model::{EdgeKind, Graph, NodeKind};
 use eframe::egui::{self, Pos2, Rect, Vec2};
 

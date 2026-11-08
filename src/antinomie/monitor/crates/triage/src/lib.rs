@@ -69,6 +69,7 @@ pub mod sigma_events;
 #[cfg(test)]
 pub mod sigma_events_tests;
 pub mod sorting;
+pub mod summary;
 pub mod table;
 #[cfg(any(test, feature = "test-support"))]
 pub mod tests;

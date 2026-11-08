@@ -7,11 +7,11 @@ use super::super::super::rules::Tier;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// A task's identity: its pid and the recording's stable cookie.
-pub(in crate::triage) type Key = (u32, u64);
+pub type Key = (u32, u64);
 
 /// A process of the run.
 #[derive(Clone, Debug, Default)]
-pub(in crate::triage) struct Proc {
+pub struct Proc {
     pub pid: u32,
     pub cookie: u64,
     pub parent: Option<Key>,
@@ -28,7 +28,7 @@ pub(in crate::triage) struct Proc {
 
 /// A finding, with what the graph needs of it.
 #[derive(Clone, Debug)]
-pub(in crate::triage) struct Fact {
+pub struct Fact {
     pub tier: Tier,
     pub rule: String,
     pub object: String,
@@ -38,7 +38,7 @@ pub(in crate::triage) struct Fact {
 
 /// A file a process wrote or ran.
 #[derive(Clone, Debug)]
-pub(in crate::triage) struct FileFact {
+pub struct FileFact {
     pub path: String,
     pub roles: Vec<String>,
     pub process: Option<Key>,
@@ -46,13 +46,13 @@ pub(in crate::triage) struct FileFact {
 
 /// An endpoint a process contacted.
 #[derive(Clone, Debug)]
-pub(in crate::triage) struct EndpointFact {
+pub struct EndpointFact {
     pub endpoint: String,
     pub process: Option<Key>,
 }
 
 #[derive(Clone, Debug, Default)]
-pub(in crate::triage) struct Facts {
+pub struct Facts {
     pub procs: Vec<Proc>,
     pub findings: Vec<Fact>,
     pub files: Vec<FileFact>,
@@ -60,7 +60,7 @@ pub(in crate::triage) struct Facts {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::triage) enum NodeKind {
+pub enum NodeKind {
     Process(Key),
     File(String),
     Endpoint(String),
@@ -72,7 +72,7 @@ pub(in crate::triage) enum NodeKind {
 
 /// What a group node stands for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::triage) enum GroupWhat {
+pub enum GroupWhat {
     /// Children of one parent that ran the same image.
     Processes,
     /// Files one process wrote into one folder.
@@ -80,7 +80,7 @@ pub(in crate::triage) enum GroupWhat {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::triage) struct GroupInfo {
+pub struct GroupInfo {
     /// Stable: made from the parent's identity and the image or folder.
     pub id: String,
     pub what: GroupWhat,
@@ -93,7 +93,7 @@ pub(in crate::triage) struct GroupInfo {
 
 /// What a node is, for the Compact view's "best of each kind".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::triage) enum Family {
+pub enum Family {
     Process,
     Victim,
     File,
@@ -102,7 +102,7 @@ pub(in crate::triage) enum Family {
 
 impl NodeKind {
     /// Stable between builds: the same run gives the same text.
-    pub(in crate::triage) fn id(&self) -> String {
+    pub fn id(&self) -> String {
         match self {
             Self::Process((pid, cookie)) => format!("p:{pid}:{cookie}"),
             Self::File(path) => format!("f:{path}"),
@@ -112,7 +112,7 @@ impl NodeKind {
         }
     }
 
-    pub(in crate::triage) fn family(&self) -> Family {
+    pub fn family(&self) -> Family {
         match self {
             Self::Process(_)
             | Self::Group(GroupInfo {
@@ -131,7 +131,7 @@ impl NodeKind {
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::triage) struct Node {
+pub struct Node {
     pub kind: NodeKind,
     pub label: String,
     /// The highest tier of a finding that involves it.
@@ -145,7 +145,7 @@ pub(in crate::triage) struct Node {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(in crate::triage) enum EdgeKind {
+pub enum EdgeKind {
     Forked,
     Execed,
     Wrote,
@@ -158,7 +158,7 @@ pub(in crate::triage) enum EdgeKind {
 }
 
 impl EdgeKind {
-    pub(in crate::triage) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Forked => "fork",
             Self::Execed => "exec",
@@ -173,7 +173,7 @@ impl EdgeKind {
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::triage) struct Edge {
+pub struct Edge {
     pub from: usize,
     pub to: usize,
     pub kind: EdgeKind,
@@ -181,7 +181,7 @@ pub(in crate::triage) struct Edge {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(in crate::triage) struct Graph {
+pub struct Graph {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
     /// Per node, the indices of the edges that leave and enter it.
@@ -204,7 +204,7 @@ const FILE_ROLES: &[&str] = &["created", "written at close", "executed"];
 
 /// The pid an injection finding's object names: `pid 418 poke`, `pid 7` or
 /// `/proc/418/mem`.
-pub(in crate::triage) fn target_pid(object: &str) -> Option<u32> {
+pub fn target_pid(object: &str) -> Option<u32> {
     let digits = |text: &str| -> Option<u32> {
         let run: String = text.chars().take_while(char::is_ascii_digit).collect();
         run.parse().ok()
@@ -240,7 +240,7 @@ fn image_of(proc: &Proc) -> String {
 
 impl Graph {
     /// Fill `out` and `inc` from `edges`.
-    pub(in crate::triage) fn index(&mut self) {
+    pub fn index(&mut self) {
         self.out = vec![Vec::new(); self.nodes.len()];
         self.inc = vec![Vec::new(); self.nodes.len()];
         for (at, edge) in self.edges.iter().enumerate() {
@@ -250,16 +250,16 @@ impl Graph {
     }
 
     /// The edges that enter `node`.
-    pub(in crate::triage) fn edges_in(&self, node: usize) -> impl Iterator<Item = &Edge> {
+    pub fn edges_in(&self, node: usize) -> impl Iterator<Item = &Edge> {
         self.inc[node].iter().map(|&at| &self.edges[at as usize])
     }
 
     /// The edges that leave `node`.
-    pub(in crate::triage) fn edges_out(&self, node: usize) -> impl Iterator<Item = &Edge> {
+    pub fn edges_out(&self, node: usize) -> impl Iterator<Item = &Edge> {
         self.out[node].iter().map(|&at| &self.edges[at as usize])
     }
 
-    pub(in crate::triage) fn build(facts: &Facts) -> Self {
+    pub fn build(facts: &Facts) -> Self {
         let mut graph = Graph::default();
         let mut index: BTreeMap<String, usize> = BTreeMap::new();
         let mut by_key: BTreeMap<Key, usize> = BTreeMap::new();
@@ -353,7 +353,7 @@ impl Graph {
             let at = node_of(
                 &mut graph,
                 NodeKind::File(file.path.clone()),
-                crate::triage::process_cells::file_name(&file.path).to_owned(),
+                crate::process_cells::file_name(&file.path).to_owned(),
             );
             let wrote = file
                 .roles
@@ -497,7 +497,7 @@ impl Graph {
 
     /// The node that connects `node` to the rest: the process that started,
     /// wrote, contacted or acted on it. A parent comes before an injector.
-    pub(in crate::triage) fn anchor(&self, node: usize) -> Option<usize> {
+    pub fn anchor(&self, node: usize) -> Option<usize> {
         self.edges_in(node)
             .min_by_key(|edge| {
                 (
@@ -510,7 +510,7 @@ impl Graph {
 
     /// The first process nothing started: the run's root. (A process another
     /// injected into has an anchor, but it was not started by it.)
-    pub(in crate::triage) fn root(&self) -> usize {
+    pub fn root(&self) -> usize {
         (0..self.nodes.len())
             .find(|&at| {
                 matches!(self.nodes[at].kind, NodeKind::Process(_))
@@ -544,7 +544,7 @@ impl Graph {
     }
 
     /// `node` and the chain of anchors that joins it to the root.
-    pub(in crate::triage) fn add_chain(&self, node: usize, chosen: &mut BTreeSet<usize>) {
+    pub fn add_chain(&self, node: usize, chosen: &mut BTreeSet<usize>) {
         let mut next = Some(node);
         let mut guard = 0;
         while let Some(at) = next {
@@ -561,7 +561,7 @@ impl Graph {
     /// node), and the processes the run injected into or signalled, each with
     /// the chain that joins it to the root. Processes the chains pull in come
     /// on top of the `per_kind`. What an open group holds is shown with it.
-    pub(in crate::triage) fn compact(&self, per_kind: usize) -> Vec<usize> {
+    pub fn compact(&self, per_kind: usize) -> Vec<usize> {
         if self.nodes.is_empty() {
             return Vec::new();
         }
@@ -608,7 +608,7 @@ impl Graph {
 
 /// A process the Summary names for its findings or its argv.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::triage) struct Interest {
+pub struct Interest {
     pub key: Key,
     pub label: String,
     pub tier: Option<Tier>,
@@ -618,7 +618,7 @@ pub(in crate::triage) struct Interest {
 
 /// The processes with the most findings (by tier, then count), and those whose
 /// argv does not match the image, at most `limit`.
-pub(in crate::triage) fn interest(facts: &Facts, limit: usize) -> Vec<Interest> {
+pub fn interest(facts: &Facts, limit: usize) -> Vec<Interest> {
     let mut tiers: HashMap<Key, Vec<Tier>> = HashMap::new();
     for finding in facts.findings.iter().filter(|f| f.tier != Tier::Info) {
         tiers
@@ -654,8 +654,8 @@ pub(in crate::triage) fn interest(facts: &Facts, limit: usize) -> Vec<Interest> 
     out
 }
 
-#[cfg(test)]
-pub(super) mod tests {
+#[cfg(any(test, feature = "test-support"))]
+pub mod tests {
     use super::*;
 
     fn proc(pid: u32, cookie: u64, parent: Option<Key>, name: &str) -> Proc {
@@ -668,7 +668,7 @@ pub(super) mod tests {
         }
     }
 
-    pub(in crate::triage) fn fixture() -> Facts {
+    pub fn fixture() -> Facts {
         let mut sh = proc(420, 4, Some((401, 1)), "sh");
         sh.forked = true;
         sh.sent = vec![(555, 9)];
@@ -723,7 +723,7 @@ pub(super) mod tests {
     /// A big run: one root, `processes` below it in a tree whose images
     /// repeat, and `files` written into forty folders; every 97th process has
     /// a finding.
-    pub(in crate::triage) fn synthetic(processes: usize, files: usize) -> Facts {
+    pub fn synthetic(processes: usize, files: usize) -> Facts {
         let mut facts = Facts::default();
         facts.procs.push(proc(1, 1, None, "demo-all"));
         for i in 0..processes {
@@ -759,6 +759,7 @@ pub(super) mod tests {
         facts
     }
 
+    #[cfg(test)]
     fn at(graph: &Graph, kind: NodeKind) -> usize {
         graph
             .nodes
@@ -767,6 +768,7 @@ pub(super) mod tests {
             .unwrap()
     }
 
+    #[cfg(test)]
     fn has(graph: &Graph, from: &NodeKind, to: &NodeKind, kind: EdgeKind) -> bool {
         let (from, to) = (at(graph, from.clone()), at(graph, to.clone()));
         graph

@@ -5,7 +5,7 @@
 //! one folder become one node ("/tmp/x/ · 1,240 files written"). A node with
 //! a finding is never grouped. A group is open or shut; an open group stays
 //! as a node with its members beside it, so a click can shut it again.
-use super::fold::{Fold, Folded};
+use super::fold::{Fold, FoldGraph, Folded};
 use super::layout::Layout;
 use super::model::{Edge, EdgeKind, Graph, GroupInfo, GroupWhat, Node, NodeKind};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -373,16 +373,28 @@ impl Builder<'_> {
     }
 }
 
-impl Graph {
+/// Grouping a graph into the view that is drawn (a method set of the triage
+/// crate's `Graph`).
+pub(in crate::triage) trait GroupGraph {
+    fn view(&self, toggled: &BTreeSet<String>, policy: Policy) -> Graph;
+    fn view_with(
+        &self,
+        toggled: &BTreeSet<String>,
+        policy: Policy,
+        keep: Option<Vec<bool>>,
+    ) -> Graph;
+}
+
+impl GroupGraph for Graph {
     /// The graph as drawn: repeats grouped, shut unless `toggled` or `policy`
     /// opens them. The nodes come in breadth-first order from the roots, so
     /// the first `n` of them are joined to each other. `self` is a raw graph.
-    pub(in crate::triage) fn view(&self, toggled: &BTreeSet<String>, policy: Policy) -> Graph {
+    fn view(&self, toggled: &BTreeSet<String>, policy: Policy) -> Graph {
         self.view_with(toggled, policy, None)
     }
 
     /// `view`, or with `keep` the Full view's: `toggled` the open groups.
-    pub(super) fn view_with(
+    fn view_with(
         &self,
         toggled: &BTreeSet<String>,
         policy: Policy,
