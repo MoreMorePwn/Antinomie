@@ -1775,3 +1775,46 @@ fn native_interest_row_fixture() {
     )
     .unwrap();
 }
+
+/// Go's runtime preempts its own threads with tgkill(pid, tid, SIGURG): the
+/// graph must not draw those threads as "pid N" boxes (run 5d01734c, Merlin),
+/// while a signal to another process's thread still points at that process.
+#[test]
+fn signals_to_threads_are_drawn_on_their_process_and_never_as_pid_boxes() {
+    let (_files, mut view) = fixture();
+    let scan = view.scan.as_mut().unwrap();
+    let mut thread = node(401, 9, Some((401, 1)), "demo-all", &["demo-all"], 1_500_000);
+    thread.tid = 1360;
+    thread.thread = true;
+    let mut other = node(421, 10, Some((421, 5)), "curl", &["curl"], 3_500_000);
+    other.tid = 1500;
+    other.thread = true;
+    scan.process.push(thread);
+    scan.process.push(other);
+    let root = scan
+        .process
+        .iter_mut()
+        .find(|n| n.pid == 401 && !n.thread)
+        .unwrap();
+    // Own thread (SIGURG, many times) and curl's thread (SIGTERM).
+    root.record.sent = vec![(1360, 23), (1360, 23), (1500, 15)];
+    let facts = relations::facts::facts_of(scan);
+    let graph = relations::model::Graph::build(&facts);
+    let labels: Vec<&str> = graph.nodes.iter().map(|n| n.label.as_str()).collect();
+    assert!(
+        !labels.contains(&"pid 1360") && !labels.contains(&"pid 1500"),
+        "{labels:?}"
+    );
+    let curl = graph
+        .nodes
+        .iter()
+        .position(|n| n.label.starts_with("curl"))
+        .unwrap();
+    assert!(
+        graph
+            .edges
+            .iter()
+            .any(|e| e.to == curl && matches!(e.kind, relations::model::EdgeKind::Signalled)),
+        "a signal to curl's thread is drawn on curl"
+    );
+}

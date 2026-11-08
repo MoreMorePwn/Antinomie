@@ -49,6 +49,20 @@ fn recorded_name(node: &crate::triage::ProcessNode) -> String {
 
 pub(in crate::triage) fn facts_of(scan: &ArchiveScan) -> Facts {
     let mut facts = Facts::default();
+    // A signal names a thread id when it was sent with tkill or tgkill: Go's
+    // runtime, for one, preempts its own threads with tgkill(pid, tid, SIGURG).
+    // The graph draws processes, so each thread id stands for the process
+    // whose thread it is; a signal to one of the sender's own threads then
+    // draws nothing instead of a "pid N" box.
+    let mut owner = std::collections::HashMap::new();
+    for node in scan
+        .process
+        .iter()
+        .filter(|node| node.thread && node.tid != 0)
+    {
+        // A thread node's pid is its process's; its tid is the thread's own id.
+        owner.insert(i64::from(node.tid), i64::from(node.pid));
+    }
     for node in scan.process.iter().filter(|node| !node.thread) {
         facts.procs.push(Proc {
             pid: node.pid,
@@ -58,7 +72,12 @@ pub(in crate::triage) fn facts_of(scan: &ArchiveScan) -> Facts {
             mismatch: !node.forked
                 && process_cells::argv0_mismatch(&node.comm, &node.argv).is_some(),
             execs: node.record.execs.clone(),
-            sent: node.record.sent.clone(),
+            sent: node
+                .record
+                .sent
+                .iter()
+                .map(|&(target, signal)| (owner.get(&target).copied().unwrap_or(target), signal))
+                .collect(),
             forked: node.forked,
         });
     }
