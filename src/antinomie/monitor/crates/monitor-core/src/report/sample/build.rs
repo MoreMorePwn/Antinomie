@@ -343,6 +343,7 @@ pub fn merge_attack(digests: &[(usize, &RunDigest)]) -> Vec<Technique> {
             id,
             rules: rules.into_iter().collect(),
             count,
+            rule_refs: Vec::new(),
         })
         .collect()
 }
@@ -360,9 +361,10 @@ pub fn in_data_dir(data_dir: &std::path::Path, path: &std::path::Path) -> String
 }
 
 /// The fullest report file a run's Triage export wrote: of
-/// `report/antinomie-report-*.html` in the run's folder, the largest (an
-/// export with its sections turned off is a few KB beside the full one), the
-/// newest of equals. Empty when the run has none.
+/// `report/antinomie-report-*.html` in the run's folder, the one with the most
+/// sections (an export with sections turned off has fewer), the newest of
+/// those. Not the largest: a report of an older version can be larger because
+/// it copied what the sample read. Empty when the run has none.
 pub fn latest_run_report(data_dir: &std::path::Path, run_directory: &std::path::Path) -> String {
     let Ok(listing) = std::fs::read_dir(run_directory.join("report")) else {
         return String::new();
@@ -371,11 +373,21 @@ pub fn latest_run_report(data_dir: &std::path::Path, run_directory: &std::path::
         .flatten()
         .filter_map(|item| {
             let name = item.file_name().to_string_lossy().into_owned();
-            (name.starts_with("antinomie-report-") && name.ends_with(".html"))
-                .then(|| (item.metadata().map_or(0, |meta| meta.len()), name))
+            if !(name.starts_with("antinomie-report-") && name.ends_with(".html")) {
+                return None;
+            }
+            let sections = std::fs::read_to_string(item.path())
+                .map_or(0, |html| html.matches("<section id=\"").count());
+            let modified = item
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |since| since.as_millis());
+            Some((sections, modified, name))
         })
         .max()
-        .map(|(_, name)| in_data_dir(data_dir, &run_directory.join("report").join(name)))
+        .map(|(_, _, name)| in_data_dir(data_dir, &run_directory.join("report").join(name)))
         .unwrap_or_default()
 }
 

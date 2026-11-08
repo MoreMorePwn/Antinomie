@@ -35,6 +35,9 @@ pub(in crate::app) struct ExportDialog {
     destination_edited: bool,
     working: Option<Receiver<Result<Exported, String>>>,
     result: Option<Result<Exported, String>>,
+    /// Keep paths on this computer in the entries that name one (off: the
+    /// export names the file only and marks the entry withheld).
+    keep_host_paths: bool,
     /// The log changed (the export noted itself): the page reads it again.
     pub(super) wrote: bool,
     pub(super) open: bool,
@@ -69,6 +72,7 @@ impl ExportDialog {
             destination_edited: false,
             working: None,
             result: None,
+            keep_host_paths: false,
             wrote: false,
             open: true,
         };
@@ -104,13 +108,23 @@ impl ExportDialog {
         };
         let (sender, receiver) = mpsc::channel();
         let (data_dir, sha256, format) = (data_dir.to_path_buf(), self.sha256.clone(), self.format);
+        let keep = self.keep_host_paths;
         let destination = PathBuf::from(self.destination.trim());
         let wake = ctx.clone();
         match std::thread::Builder::new()
             .name("custody-export".into())
             .spawn(move || {
-                let result = Library::open(&data_dir).and_then(|mut library| {
-                    library.export_custody(&sha256, format, &destination, signer.as_ref())
+                // The default folder (`<data>/exports/custody`) is made on first use.
+                let result = crate::export_dirs::ensure_parent(&destination).and_then(|()| {
+                    Library::open(&data_dir).and_then(|mut library| {
+                        library.export_custody_with(
+                            &sha256,
+                            format,
+                            &destination,
+                            signer.as_ref(),
+                            keep,
+                        )
+                    })
                 });
                 let _ = sender.send(result);
                 wake.request_repaint();
@@ -126,7 +140,7 @@ impl ExportDialog {
                 self.working = None;
                 self.wrote |= result.is_ok();
                 if let Ok(done) = &result {
-                    crate::export_dirs::wrote(ctx, "Custody record", &done.path);
+                    crate::export_dirs::wrote(ctx, "custody", "Custody record", &done.path);
                 }
                 self.result = Some(result);
             }
@@ -205,6 +219,14 @@ impl ExportDialog {
                             .small(),
                         );
                     }
+                    ui.add_space(4.0);
+                    ui.checkbox(&mut self.keep_host_paths, "Keep paths on this computer")
+                        .on_hover_text(
+                            "Off: an entry that names a file on this computer (an import, a deleted \
+                             original) gives only its name and is marked withheld; the verifier \
+                             still checks every link. On: the paths stay and every entry can be \
+                             checked on its own. For internal use.",
+                        );
                     ui.add_space(4.0);
                     ui.label(RichText::new("Save as").color(theme::muted()));
                     if ui

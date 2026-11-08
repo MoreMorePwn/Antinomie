@@ -212,6 +212,7 @@ pub(super) fn techniques(behaviour: &Behaviour, detections: &[DetectionHit]) -> 
             id,
             rules: rules.into_iter().collect(),
             count,
+            rule_refs: Vec::new(),
         })
         .collect()
 }

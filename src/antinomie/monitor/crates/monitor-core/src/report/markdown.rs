@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
-//! The Markdown form of the sample report: the same document as the HTML,
-//! as GitHub-flavoured Markdown (pipe tables). Text is escaped so a sample
-//! name or a note cannot become markup; hashes and paths sit in code spans.
-use super::super::layout::{Block, Document};
+//! The Markdown form of a run or sample report: the same document as the
+//! HTML, as GitHub-flavoured Markdown (pipe tables). Every section, sub-heading
+//! and entry row is an anchor (`<a id="…"></a>`) and every mention of an entry
+//! a link (`[text](#id)`). Text is escaped so a sample name or a note cannot
+//! become markup; hashes and paths sit in code spans.
+use super::page::{Block, Cell, Document};
 
 /// A hash, a path or an address reads better as code.
 fn mono(text: &str) -> bool {
@@ -96,18 +98,65 @@ fn paragraph(text: &str) -> String {
         .join("  \n")
 }
 
-fn row(cells: &[String]) -> String {
+/// An anchor a link can jump to. GitHub keeps `<a id>` (it prefixes the id
+/// and still follows `#id`).
+fn anchor_tag(id: &str) -> String {
+    let safe: String = id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .collect();
+    format!("<a id=\"{safe}\"></a>")
+}
+
+/// A link target as Markdown writes it: no space, parenthesis or `|`.
+fn href(target: &str) -> String {
+    target
+        .chars()
+        .map(|c| match c {
+            ' ' => "%20".to_owned(),
+            '(' => "%28".to_owned(),
+            ')' => "%29".to_owned(),
+            '|' => "%7C".to_owned(),
+            c => c.to_string(),
+        })
+        .collect()
+}
+
+/// A cell or a fact's value: its anchors, then its spans, links as
+/// `[text](#id)`.
+fn cell(cell: &Cell) -> String {
+    let mut out: String = cell.ids().map(|id| anchor_tag(id)).collect();
+    for span in &cell.spans {
+        let text = inline(&span.text);
+        match &span.href {
+            Some(target) if !text.is_empty() => {
+                out.push_str(&format!("[{text}]({})", href(target)));
+            }
+            _ => out.push_str(&text),
+        }
+    }
+    out
+}
+
+fn row(cells: &[Cell]) -> String {
     format!(
         "| {} |",
         cells
             .iter()
-            .map(|cell| {
-                let text = inline(cell);
+            .map(|c| {
+                let text = cell(c);
                 if text.is_empty() { " ".into() } else { text }
             })
             .collect::<Vec<_>>()
             .join(" | ")
     )
+}
+
+fn header(columns: &[String]) -> String {
+    row(&columns
+        .iter()
+        .map(|c| Cell::plain(c.clone()))
+        .collect::<Vec<_>>())
 }
 
 /// The report as Markdown.
@@ -122,36 +171,39 @@ pub fn render(document: &Document) -> String {
         &document
             .sections
             .iter()
-            .map(|s| format!("[{}](#{})", inline(&s.title), anchor(&s.title)))
+            .map(|s| format!("[{}](#{})", inline(&s.title), href(&s.id)))
             .collect::<Vec<_>>()
             .join(" - "),
     );
     out.push_str("\n\n");
     for section in &document.sections {
-        out.push_str(&format!("## {}\n\n", inline(&section.title)));
+        out.push_str(&format!(
+            "{}\n\n## {}\n\n",
+            anchor_tag(&section.id),
+            inline(&section.title)
+        ));
         for block in &section.blocks {
             match block {
                 Block::Paragraph(text) => out.push_str(&format!("{}\n\n", paragraph(text))),
                 Block::Note(text) => {
                     out.push_str(&format!("*{}*\n\n", paragraph(text).replace('\n', " ")))
                 }
-                Block::Sub(text) => out.push_str(&format!("### {}\n\n", inline(text))),
-                Block::List(items) => {
-                    for item in items {
-                        out.push_str(&format!("- {}\n", inline(item)));
+                Block::Sub { title, id } => {
+                    if !id.is_empty() {
+                        out.push_str(&format!("{}\n\n", anchor_tag(id)));
                     }
-                    out.push('\n');
+                    out.push_str(&format!("### {}\n\n", inline(title)));
                 }
                 Block::Facts(facts) => {
                     out.push_str("| Field | Value |\n| --- | --- |\n");
                     for (name, value) in facts {
-                        out.push_str(&row(&[name.clone(), value.clone()]));
+                        out.push_str(&row(&[Cell::plain(name.clone()), value.clone()]));
                         out.push('\n');
                     }
                     out.push('\n');
                 }
                 Block::Table(table) => {
-                    out.push_str(&row(&table.columns));
+                    out.push_str(&header(&table.columns));
                     out.push('\n');
                     out.push_str(&format!("|{}\n", " --- |".repeat(table.columns.len())));
                     for cells in &table.rows {
@@ -166,15 +218,24 @@ pub fn render(document: &Document) -> String {
     out
 }
 
-/// GitHub's heading anchor.
-fn anchor(title: &str) -> String {
-    title
-        .to_lowercase()
-        .chars()
-        .filter_map(|c| match c {
-            c if c.is_alphanumeric() || c == '-' => Some(c),
-            ' ' => Some('-'),
-            _ => None,
-        })
-        .collect()
+/// The anchors a Markdown export holds (`<a id>`) and the internal links it
+/// makes (`](#…)`): for checking that every link resolves.
+pub fn anchors_and_links(markdown: &str) -> (Vec<String>, Vec<String>) {
+    let mut ids = Vec::new();
+    let mut rest = markdown;
+    while let Some(at) = rest.find("<a id=\"") {
+        rest = &rest[at + 7..];
+        if let Some(end) = rest.find('"') {
+            ids.push(rest[..end].to_owned());
+        }
+    }
+    let mut links = Vec::new();
+    let mut rest = markdown;
+    while let Some(at) = rest.find("](#") {
+        rest = &rest[at + 3..];
+        if let Some(end) = rest.find(')') {
+            links.push(rest[..end].to_owned());
+        }
+    }
+    (ids, links)
 }

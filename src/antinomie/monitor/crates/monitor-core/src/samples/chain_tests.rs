@@ -423,6 +423,47 @@ fn a_json_export_verifies_in_rust_and_in_the_bundled_verifier() {
     assert!(library.custody_check(&sha).unwrap().ok());
 }
 
+#[test]
+fn an_export_withholds_host_paths_and_both_checkers_still_verify_it() {
+    let (root, mut library, sha) = library_with_log("hostpath");
+    library
+        .record_event(
+            &sha,
+            "analyst",
+            CustodyEvent::OriginalDeleted {
+                path: "/home/analyst/work/ext/9701ae72.bin".into(),
+            },
+        )
+        .unwrap();
+    let dest = root.join("out").join("record.json");
+    let exported = library
+        .export_custody(&sha, ExportFormat::Json, &dest, None)
+        .unwrap();
+    let text = fs::read_to_string(&dest).unwrap();
+    assert!(!text.contains("/home/analyst"), "{text}");
+    assert!(text.contains("9701ae72.bin") && text.contains("\"detail_redacted\": true"));
+    let checked = verify_record(&text).unwrap();
+    assert!(checked.check.ok(), "{checked:?}");
+    assert_eq!(checked.check.head, exported.head);
+    if let Some((code, out)) = run_verifier(&dest) {
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("withheld in this file"), "{out}");
+    }
+    // The HTML's embedded record has no host path either.
+    let html = root.join("out").join("record.html");
+    library
+        .export_custody(&sha, ExportFormat::Html, &html, None)
+        .unwrap();
+    assert!(!fs::read_to_string(&html).unwrap().contains("/home/analyst"));
+    // Asked for, the paths stay, and every entry is checked.
+    let full = root.join("out").join("full.json");
+    library
+        .export_custody_with(&sha, ExportFormat::Json, &full, None, true)
+        .unwrap();
+    assert!(fs::read_to_string(&full).unwrap().contains("/home/analyst"));
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Edit the exported record the way a person would, and see both checkers
 /// name the same entry.
 fn tampered(text: &str, change: impl Fn(&mut serde_json::Value)) -> String {

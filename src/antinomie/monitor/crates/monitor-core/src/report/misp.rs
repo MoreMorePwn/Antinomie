@@ -137,8 +137,18 @@ pub(in crate::report) fn attributes(indicator: &Indicator, seed: &str, at: u64) 
             } else {
                 indicator.sha256.as_str()
             };
+            // A folder (`/tmp`, a file that had no name of its own) is no file
+            // name: the hash alone, with where it was seen in the comment.
+            let named = indicator.path.len() > 1
+                && !indicator.path.ends_with('/')
+                && indicator.path.trim_start_matches('/').contains('/');
             if hash.len() == 64 {
-                if indicator.path.is_empty() {
+                if !named {
+                    let note = if indicator.path.is_empty() {
+                        note.clone()
+                    } else {
+                        format!("{note}; written through {}", indicator.path)
+                    };
                     out.push(attribute(
                         "sha256",
                         "Artifacts dropped",
@@ -205,8 +215,10 @@ pub fn render(report: &Report) -> Result<String, String> {
         .unwrap_or_default();
     // An observed-only run is not evidence against its sample: the sample's
     // hash is for blocking only when a dataset matched or a rule named a family.
-    let strong =
-        matches!(assessment, "matched_indicators" | "suspicious_behaviour") || !families.is_empty();
+    let not_started = report.not_started();
+    let strong = !not_started
+        && (matches!(assessment, "matched_indicators" | "suspicious_behaviour")
+            || !families.is_empty());
     let mut attrs = Vec::new();
     let mut objects = Vec::new();
     if let Some(sample) = &report.sample
@@ -241,7 +253,9 @@ pub fn render(report: &Report) -> Result<String, String> {
             "uuid": uuid5(&format!("misp-object:{seed}:file")),
             "name": "file",
             "meta-category": "file",
-            "description": if sample.role.is_empty() {
+            "description": if not_started {
+                "the sample the run was to execute; it did not start".to_owned()
+            } else if sample.role.is_empty() {
                 "the sample the run executed".to_owned()
             } else {
                 format!("the {} of the run", sample.role)
@@ -269,8 +283,8 @@ pub fn render(report: &Report) -> Result<String, String> {
             &format!(
                 "{} rule {} ({}) matched {} time(s). Author: {}. License: {}. Source: {}{}",
                 hit.engine,
-                hit.rule_id,
-                hit.title,
+                super::layout::plain_rule(&hit.rule_id),
+                super::layout::plain_rule(&hit.title),
                 hit.count,
                 if hit.author.is_empty() {
                     "unknown"
@@ -299,6 +313,20 @@ pub fn render(report: &Report) -> Result<String, String> {
             at,
         ));
     }
+    if not_started {
+        attrs.push(attribute(
+            "comment",
+            "Other",
+            &format!(
+                "Run {} did not start: {}",
+                report.run.run_id, report.run.state
+            ),
+            false,
+            "nothing ran, so nothing was observed",
+            &seed,
+            at,
+        ));
+    }
     attrs.push(attribute(
         "comment",
         "Other",
@@ -313,6 +341,11 @@ pub fn render(report: &Report) -> Result<String, String> {
         at,
     ));
     let mut tags = vec![json!({"name": "antinomie:triage-report", "colour": "#0b5cad"})];
+    let assessment = if not_started {
+        "not_started"
+    } else {
+        assessment
+    };
     if !assessment.is_empty() {
         tags.push(
             json!({"name": format!("antinomie:assessment=\"{assessment}\""), "colour": "#6b4e00"}),
@@ -349,7 +382,13 @@ pub fn render(report: &Report) -> Result<String, String> {
         },
         // 1 is ongoing: a run the person ended with Stop run is not a finished
         // analysis of the sample.
-        "analysis": if report.run.stopped_by_user { "1" } else { "2" },
+        "analysis": if not_started {
+            "0"
+        } else if report.run.stopped_by_user {
+            "1"
+        } else {
+            "2"
+        },
         "distribution": "0",
         "published": false,
         "Orgc": {"uuid": uuid5("misp-org:antinomie"), "name": "Antinomie"},

@@ -9,11 +9,13 @@ use antinomie_monitor_core::report::{self, export::Written, Choices, Format, Par
 use std::path::PathBuf;
 
 mod build;
+mod build_sources;
 #[cfg(test)]
 mod dialog_tests;
 mod not_started;
 #[cfg(test)]
 mod reexport_tests;
+mod rows;
 mod run_facts;
 #[cfg(test)]
 mod tests;
@@ -626,7 +628,27 @@ impl TriageView {
                                 }
                             });
                             ui.add_space(6.0);
-                            ui.label(theme::section_title(ui, "Options"));
+                            ui.horizontal(|ui| {
+                                ui.label(theme::section_title(ui, "Options"));
+                                // The choices are remembered: say how to get the
+                                // defaults back (Defang on, HTML and PDF).
+                                let defaults = Choices {
+                                    folder: choices.folder.clone(),
+                                    ..Choices::default()
+                                };
+                                if *choices != defaults
+                                    && ui
+                                        .small_button("Reset to defaults")
+                                        .on_hover_text(
+                                            "Every section, HTML and PDF, Defang on, no bundle. \
+                                             The folder stays.",
+                                        )
+                                        .clicked()
+                                {
+                                    *choices = defaults;
+                                    edited = true;
+                                }
+                            });
                             if !simple {
                                 edited |= ui
                                     .checkbox(
@@ -641,9 +663,13 @@ impl TriageView {
                                     .changed();
                             }
                             edited |= ui
-                                .checkbox(&mut choices.defang, "Defang indicators in HTML and PDF")
+                                .checkbox(
+                                    &mut choices.defang,
+                                    "Defang indicators in HTML, PDF and Markdown",
+                                )
                                 .on_hover_text(
-                                    "hxxp://example[.]com. JSON, MISP and STIX keep the raw values.",
+                                    "On by default: hxxp://example[.]com. JSON, MISP and STIX \
+                                     keep the raw values.",
                                 )
                                 .changed();
                             ui.add_space(6.0);

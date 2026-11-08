@@ -23,7 +23,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-SCHEMA = ROOT / "docs/triage-report-schema-1.json"
+SCHEMA = ROOT / "docs/triage-report-schema-2.json"
 failures = []
 
 

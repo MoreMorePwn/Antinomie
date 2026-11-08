@@ -134,7 +134,52 @@ fn a_whole_run_exports_every_format_whatever_the_screen_filters_say() {
         json["detections"][0]["reference"],
         "https://example.org/rule"
     );
+    // The recorded run's report links its entries, and every link resolves.
+    let parsed: report::Report = serde_json::from_value(json.clone()).unwrap();
+    assert_eq!(report::refs::problems(&parsed), Vec::<String>::new());
+    assert_eq!(json["schema_version"], 2);
+    let process_ids: Vec<&str> = json["processes"]["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|d| d["id"].as_str())
+        .collect();
+    assert!(
+        process_ids.iter().all(|id| id.starts_with("proc-")) && !process_ids.is_empty(),
+        "{process_ids:?}"
+    );
+    assert!(json["findings"]["data"][0]["process_ref"]
+        .as_str()
+        .is_some_and(|id| id.starts_with("proc-")));
+    let key = &json["summary"]["key_findings"];
+    assert!(key.as_array().is_some_and(|k| !k.is_empty()), "{key}");
+    assert!(key[0]["finding_ref"]
+        .as_str()
+        .is_some_and(|id| id.starts_with("finding-")));
     let html = read(&path("HTML"));
+    let anchors: Vec<&str> = html
+        .split(" id=\"")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+        .collect();
+    let mut seen = std::collections::BTreeSet::new();
+    assert!(
+        anchors.iter().all(|id| seen.insert(*id)),
+        "anchors are unique"
+    );
+    for link in html
+        .split("href=\"#")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+    {
+        assert!(anchors.contains(&link), "#{link} resolves");
+    }
+    assert!(html.contains("<caption>Key findings</caption>"));
+    let markdown = read(&path("Markdown"));
+    let (ids, links) = report::markdown::anchors_and_links(&markdown);
+    for link in links {
+        assert!(ids.contains(&link), "#{link} resolves in the Markdown");
+    }
     assert!(html.contains("Jane Rule") && html.contains("DRL 1.1"));
     assert!(html.contains("<h2>Processes</h2>") && html.contains("example[.]com"));
     let pdf = std::fs::read(path("PDF")).unwrap();
@@ -450,7 +495,7 @@ fn the_dialog_lists_every_section_and_format_remembers_changes_and_exports() {
         position(&out, format.label());
     }
     position(&out, "Evidence bundle (.zip next to the report)");
-    position(&out, "Defang indicators in HTML and PDF");
+    position(&out, "Defang indicators in HTML, PDF and Markdown");
 
     // Unchecking a section and choosing the JSON format is remembered.
     click(
@@ -590,11 +635,15 @@ fn the_summary_and_the_export_agree_on_the_attack_techniques() {
         digest.detections = stored;
     })
     .unwrap();
-    let exported = build::build(&scan, &scan_job)
+    let mut exported = build::build(&scan, &scan_job)
         .unwrap()
         .report
         .attack
         .unwrap();
+    // The export adds its links; the techniques themselves are the same.
+    for technique in &mut exported {
+        technique.rule_refs.clear();
+    }
     view.scan = Some(scan);
     let shown = view.attack_list().0.to_vec();
     assert_eq!(shown, exported);

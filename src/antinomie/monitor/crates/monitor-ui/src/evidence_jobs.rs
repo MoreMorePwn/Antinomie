@@ -179,17 +179,20 @@ impl EvidenceJobs {
                         export.destination.trim()
                     );
                     self.start(move || {
+                        let destination = crate::folders::user_path(export.destination.trim());
+                        // The default folder (`<data>/exports/static`) is made on first use.
+                        crate::export_dirs::ensure_parent(&destination)?;
                         let path = antinomie_monitor_core::export_analysis(
                             &export.directory,
                             &export.report_id,
                             export.kind,
                             export.format,
-                            &crate::folders::user_path(export.destination.trim()),
+                            &destination,
                         )?;
                         if let Some(tools) = export.open_tools {
                             Self::launch_project(path.join("antinomie.gpr"), tools)
                         } else {
-                            crate::export_dirs::remember(&path);
+                            crate::export_dirs::remember("static", &path);
                             Ok(crate::export_dirs::wrote_text("Analysis result", &path))
                         }
                     });
@@ -212,6 +215,8 @@ impl EvidenceJobs {
                                 ui.label(text);
                             }
                             Err(error) => {
+                                // Said in the window too, not only in a toast.
+                                ui.colored_label(crate::theme::error(), error);
                                 crate::activity::error_toast(ui, error);
                             }
                         }

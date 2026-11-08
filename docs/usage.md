@@ -473,18 +473,28 @@ The network capture is the guest's own view on every route.
   In a process's Details, **Show its calls** opens **Syscall Trace**
   filtered to that process (clear the filter to see all).
 - **Export report…** (right of the Triage tabs): writes the whole Triage as
-  HTML, PDF, JSON, MISP or STIX 2.1, with a checkbox per section, optional IoC
-  defanging and an optional evidence bundle. See
+  HTML, PDF, Markdown, JSON, MISP or STIX 2.1, with a checkbox per section,
+  optional IoC defanging and an optional evidence bundle. The key findings are
+  a table, and every process, file, endpoint, domain, rule, finding, detection
+  and technique a report mentions is a link to its entry (the PDF has a
+  contents block and internal links). See
   [the report guide](triage-report.md).
 - **Other exports** (Summary > Indicators **Export**, the IOC tab's CSV and JSON,
   eBPF **Export binary and JSON**, Static analysis **Export**, **Export custody
   record…**) name what they write `antinomie-<kind>-<run or sample, 8
-  characters>-<yyyymmdd-hhmmss in UTC>.<ext>` (the Static analysis export keeps
+  characters>-<yyyymmdd-hhmmss in UTC>Z.<ext>` (the Static analysis export keeps
   its analysis id and the eBPF export its program hash), tell you in a toast and
   an Activity row (file, size and folder), and open in a folder that is not your
   home folder: the run's `ioc` or `bpf` folder, or `exports/static` and
-  `exports/custody` in the data folder, or the folder the last export of that
-  kind went to. A run's Data window **Copy** copies the format shown, and Hex
+  `exports/custody` in the data folder (made on the first export), or the folder
+  the last export of that kind went to (a custody export never opens where a
+  static-analysis export went). The eBPF export names its files after the
+  capture, so a second press says "Already exported: <name> in <folder>" beside
+  the button instead of failing. **Export custody record…** gives a path on
+  this computer (an import, a deleted original) as its file name only and marks
+  the entry withheld; `verify-custody.py` still checks every link and says which
+  entries it took as recorded. **Keep paths on this computer** keeps them.
+  A run's Data window **Copy** copies the format shown, and Hex
   for bytes the text views would change (UTF-8 for bytes that are not valid
   UTF-8, ASCII for control bytes); **Copy as** switches those two off for such
   bytes.

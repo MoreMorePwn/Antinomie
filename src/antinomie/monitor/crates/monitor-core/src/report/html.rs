@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! The self-contained HTML report: one file, inline CSS, no script and no
-//! reference to another file or address. The markup is also well-formed XML
-//! (void elements self-close, five entities), so any XML parser can read it.
-use super::layout::{Block, DocTable, Document};
+//! reference to an address. Every entry row is an anchor (`<td id>`) and
+//! every mention of it a link (`<a href="#…">`) inside the same file; the
+//! sample report's links to run reports are relative paths. The markup is
+//! also well-formed XML (void elements self-close, five entities), so any XML
+//! parser can read it.
+use super::page::{Block, Cell, DocTable, Document};
 
 /// Text safe inside an element or an attribute. Characters XML cannot hold
 /// become U+FFFD.
@@ -28,8 +31,8 @@ pub(super) fn escape(text: &str) -> String {
 }
 
 const STYLE: &str = "\
-:root{color-scheme:light dark;--bg:#fff;--fg:#1b1f24;--muted:#5c6670;--line:#d3d8de;--head:#eef1f4;--accent:#0b5cad;--note:#6b4e00}\
-@media (prefers-color-scheme:dark){:root{--bg:#14181d;--fg:#e4e8ec;--muted:#98a2ad;--line:#333b44;--head:#1f262d;--accent:#6cb2ff;--note:#e0b95a}}\
+:root{color-scheme:light dark;--bg:#fff;--fg:#1b1f24;--muted:#5c6670;--line:#d3d8de;--head:#eef1f4;--accent:#0b5cad;--note:#6b4e00;--hit:#fff4c2}\
+@media (prefers-color-scheme:dark){:root{--bg:#14181d;--fg:#e4e8ec;--muted:#98a2ad;--line:#333b44;--head:#1f262d;--accent:#6cb2ff;--note:#e0b95a;--hit:#3d3415}}\
 *{box-sizing:border-box}\
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}\
 main{max-width:1200px;margin:0 auto;padding:24px 20px 60px}\
@@ -47,6 +50,8 @@ table.t12{font-size:12px}table.t11{font-size:11px}table.t10{font-size:10px}table
 .mono,code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}\
 .note{color:var(--note);font-size:13px;margin:4px 0 10px}\
 .wide{overflow-x:auto}.wide:focus{outline:2px solid var(--accent)}\
+td a,.facts a{color:var(--accent);text-decoration:none}td a:hover,.facts a:hover{text-decoration:underline}\
+:target{scroll-margin-top:48px}td:target,tr:has(>td:target)>td{background:var(--hit)}\
 .tier{font-weight:600;white-space:nowrap}.tier.high{color:#b3261e}.tier.medium{color:#a15c00}.tier.low{color:#0b5cad}.tier.info{color:var(--muted)}\
 @media (prefers-color-scheme:dark){.tier.high{color:#ff8a80}.tier.medium{color:#ffb74d}.tier.low{color:#6cb2ff}}\
 caption{caption-side:top;text-align:left;color:var(--muted);font-size:12px;padding:2px 0}\
@@ -152,13 +157,32 @@ fn groups(columns: &[String]) -> Vec<Vec<usize>> {
     out
 }
 
-fn one_table(
-    out: &mut String,
-    columns: &[&String],
-    rows: &[Vec<&String>],
-    size: u32,
-    caption: &str,
-) {
+/// A cell's spans as markup: text, and `<a>` for each link.
+fn spans(cell: &Cell) -> String {
+    cell.spans
+        .iter()
+        .map(|span| match &span.href {
+            Some(href) => format!("<a href=\"{}\">{}</a>", escape(href), escape(&span.text)),
+            None => escape(&span.text),
+        })
+        .collect()
+}
+
+/// ` id="…"` of a cell's first anchor, and an empty `<a id>` for each more.
+fn anchors(cell: &Cell) -> (String, String) {
+    let first = cell
+        .id
+        .as_ref()
+        .map_or(String::new(), |id| format!(" id=\"{}\"", escape(id)));
+    let more = cell
+        .more_ids
+        .iter()
+        .map(|id| format!("<a id=\"{}\"></a>", escape(id)))
+        .collect();
+    (first, more)
+}
+
+fn one_table(out: &mut String, columns: &[&String], rows: &[Vec<&Cell>], size: u32, caption: &str) {
     let class = if size >= SIZES[0] {
         String::new()
     } else {
@@ -180,27 +204,32 @@ fn one_table(
     for row in rows {
         out.push_str("<tr>");
         for (column, cell) in row.iter().enumerate() {
+            let text = cell.text();
+            let (id, more) = anchors(cell);
             let tier = Some(column) == tiers
                 && matches!(
-                    cell.to_ascii_lowercase().as_str(),
+                    text.to_ascii_lowercase().as_str(),
                     "high" | "medium" | "low" | "info"
                 );
-            if Some(column) == tactics {
-                out.push_str(&format!("<td>{}</td>", tactic_cell(cell)));
-            } else if tier {
-                out.push_str(&format!(
-                    "<td><span class=\"tier {}\">{}</span></td>",
-                    cell.to_ascii_lowercase(),
-                    escape(cell)
-                ));
-            } else if mono(cell) {
-                out.push_str(&format!("<td class=\"mono\">{}</td>", escape(cell)));
-            } else if cell.chars().count() > 40 {
-                out.push_str(&format!("<td class=\"long\">{}</td>", escape(cell)));
-            } else if no_wrap(cell) {
-                out.push_str(&format!("<td class=\"nw\">{}</td>", escape(cell)));
+            let class = if mono(&text) {
+                " class=\"mono\""
+            } else if text.chars().count() > 40 {
+                " class=\"long\""
+            } else if no_wrap(&text) {
+                " class=\"nw\""
             } else {
-                out.push_str(&format!("<td>{}</td>", escape(cell)));
+                ""
+            };
+            if Some(column) == tactics && !cell.has_links() {
+                out.push_str(&format!("<td{id}>{more}{}</td>", tactic_cell(&text)));
+            } else if tier && !cell.has_links() {
+                out.push_str(&format!(
+                    "<td{id}>{more}<span class=\"tier {}\">{}</span></td>",
+                    text.to_ascii_lowercase(),
+                    escape(&text)
+                ));
+            } else {
+                out.push_str(&format!("<td{id}{class}>{more}{}</td>", spans(cell)));
             }
         }
         out.push_str("</tr>\n");
@@ -218,7 +247,7 @@ fn table(out: &mut String, table: &DocTable, caption: &str) {
         .into_iter()
         .find(|&size| header_width(&all, size) <= TABLE_WIDTH)
     {
-        let rows: Vec<Vec<&String>> = table.rows.iter().map(|row| row.iter().collect()).collect();
+        let rows: Vec<Vec<&Cell>> = table.rows.iter().map(|row| row.iter().collect()).collect();
         one_table(out, &all, &rows, size, caption);
         return;
     }
@@ -230,7 +259,7 @@ fn table(out: &mut String, table: &DocTable, caption: &str) {
             parts.len()
         ));
         let columns: Vec<&String> = part.iter().map(|&i| &table.columns[i]).collect();
-        let rows: Vec<Vec<&String>> = table
+        let rows: Vec<Vec<&Cell>> = table
             .rows
             .iter()
             .map(|row| part.iter().filter_map(|&i| row.get(i)).collect())
@@ -277,25 +306,28 @@ pub(super) fn render(document: &Document) -> String {
                 Block::Note(text) => {
                     out.push_str(&format!("<p class=\"note\">{}</p>\n", escape(text)))
                 }
-                Block::Sub(text) => {
-                    caption.clone_from(text);
-                    out.push_str(&format!("<h3>{}</h3>\n", escape(text)));
-                }
-                Block::List(items) => {
-                    out.push_str("<ul>\n");
-                    for item in items {
-                        out.push_str(&format!("<li>{}</li>\n", escape(item)));
-                    }
-                    out.push_str("</ul>\n");
+                Block::Sub { title, id } => {
+                    caption.clone_from(title);
+                    let id = if id.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" id=\"{}\"", escape(id))
+                    };
+                    out.push_str(&format!("<h3{id}>{}</h3>\n", escape(title)));
                 }
                 Block::Facts(facts) => {
                     out.push_str("<table class=\"facts\"><tbody>\n");
                     for (name, value) in facts {
-                        let class = if mono(value) { " class=\"mono\"" } else { "" };
+                        let class = if mono(&value.text()) {
+                            " class=\"mono\""
+                        } else {
+                            ""
+                        };
+                        let (id, more) = anchors(value);
                         out.push_str(&format!(
-                            "<tr><th scope=\"row\">{}</th><td{class}>{}</td></tr>\n",
+                            "<tr><th scope=\"row\">{}</th><td{id}{class}>{more}{}</td></tr>\n",
                             escape(name),
-                            escape(value)
+                            spans(value)
                         ));
                     }
                     out.push_str("</tbody></table>\n");

@@ -12,7 +12,7 @@
 //! passphrase (a key that needs one must be loaded in an agent).
 use super::{
     chain::row_of,
-    chain_check::{ChainCheck, Entry, IndexRecord, check_record, short},
+    chain_check::{ChainCheck, Entry, IndexRecord, check_record_withheld, short},
     custody::CustodyEvent,
     library::Library,
 };
@@ -156,10 +156,7 @@ impl Library {
         Ok((value, check))
     }
 
-    /// Write the custody record of `sha256` to `dest` (a file path) in
-    /// `format`, with the verifier beside a JSON export and a signature made
-    /// with the analyst's own key when asked. The export is itself noted in
-    /// the log, after the head it contains.
+    /// [`Self::export_custody_with`] with host paths withheld.
     pub fn export_custody(
         &mut self,
         sha256: &str,
@@ -167,7 +164,28 @@ impl Library {
         dest: &Path,
         sign: Option<&SignWith>,
     ) -> Result<Exported, String> {
-        let (value, check) = self.custody_record(sha256)?;
+        self.export_custody_with(sha256, format, dest, sign, false)
+    }
+
+    /// Write the custody record of `sha256` to `dest` (a file path) in
+    /// `format`, with the verifier beside a JSON export and a signature made
+    /// with the analyst's own key when asked. The export is itself noted in
+    /// the log, after the head it contains. Unless `keep_host_paths`, an
+    /// entry that names a path on this computer (an import from before
+    /// entries stored only file names) carries it as its file name, with
+    /// `detail_redacted` and the SHA-256 of the withheld text.
+    pub fn export_custody_with(
+        &mut self,
+        sha256: &str,
+        format: Format,
+        dest: &Path,
+        sign: Option<&SignWith>,
+        keep_host_paths: bool,
+    ) -> Result<Exported, String> {
+        let (mut value, check) = self.custody_record(sha256)?;
+        if !keep_host_paths {
+            withhold_host_paths(&mut value);
+        }
         let text = match format {
             Format::Json => serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?,
             Format::Html => render_html(&value, &check)?,
@@ -220,6 +238,67 @@ impl Library {
             entries: check.entries,
             verified: check.ok(),
         })
+    }
+}
+
+/// Whether `text` is a path on this computer: under a home or a mounted
+/// volume, or a Windows path. A guest path a sample was sent to is not.
+fn host_path(text: &str) -> bool {
+    ["/home/", "/Users/", "/mnt/", "/media/", "/run/user/"]
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
+        || text.get(1..3) == Some(":\\")
+        || text.starts_with("\\\\")
+}
+
+/// `value` with every string that is a host path (or that ends in one, as
+/// `file: <home folder>/...`) cut to its file name.
+fn cut_host_paths(value: &mut Value) -> bool {
+    match value {
+        Value::String(text) => {
+            let (lead, path) = match text.split_once(": ") {
+                Some((lead, path)) if host_path(path) => (format!("{lead}: "), path.to_owned()),
+                _ if host_path(text) => (String::new(), text.clone()),
+                _ => return false,
+            };
+            *text = format!("{lead}{}", super::custody::host_file(&path));
+            true
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .fold(false, |any, item| cut_host_paths(item) | any),
+        Value::Object(map) => map
+            .values_mut()
+            .fold(false, |any, item| cut_host_paths(item) | any),
+        _ => false,
+    }
+}
+
+/// Replace the detail of every entry that names a host path with the same
+/// event naming only the file, marked `detail_redacted`, with the SHA-256 of
+/// the stored text so the withheld text can still be matched.
+pub(crate) fn withhold_host_paths(record: &mut Value) {
+    let Some(entries) = record["entries"].as_array_mut() else {
+        return;
+    };
+    for entry in entries {
+        let Some(detail) = entry["detail"].as_str().map(str::to_owned) else {
+            continue;
+        };
+        let mut event: Value = match serde_json::from_str(&detail) {
+            Ok(event) => event,
+            Err(_) => Value::String(detail.clone()),
+        };
+        if !cut_host_paths(&mut event) {
+            continue;
+        }
+        let text = match &event {
+            Value::String(text) => text.clone(),
+            other => other.to_string(),
+        };
+        entry["detail_sha256"] = json!(crate::storage::sha256_hex(detail.as_bytes()));
+        entry["detail"] = json!(text);
+        entry["detail_redacted"] = json!(true);
     }
 }
 
@@ -346,8 +425,16 @@ pub fn verify_record(text: &str) -> Result<RecordCheck, String> {
         serde_json::from_value(value["entries"].clone()).map_err(|e| format!("entries: {e}"))?;
     let index: Vec<IndexRecord> =
         serde_json::from_value(value["index"].clone()).map_err(|e| format!("index: {e}"))?;
+    // Entries whose host path the export left out: their links still count.
+    let withheld = value["entries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry["detail_redacted"] == true)
+        .filter_map(|entry| entry["seq"].as_u64())
+        .collect();
     Ok(RecordCheck {
-        check: check_record(&sha256, &entries, &index),
+        check: check_record_withheld(&sha256, &entries, &index, &withheld),
         sha256,
     })
 }

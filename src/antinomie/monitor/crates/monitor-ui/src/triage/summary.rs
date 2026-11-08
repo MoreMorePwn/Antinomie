@@ -45,6 +45,48 @@ pub(super) fn key_finding_lines(findings: &[Finding], limit: usize) -> Vec<Strin
         .collect()
 }
 
+/// The Summary's Key findings for the exported report: (place in `findings`,
+/// tier tag, rule, title, object, pid, cookie, executable, count, first ns,
+/// why), worst first, at most `limit`, and how many there are in all.
+pub(super) fn key_findings_for_report(
+    findings: &[Finding],
+    limit: usize,
+) -> (usize, Vec<KeyFindingRow>) {
+    let (total, keys) = insight::key_findings(findings, limit);
+    let rows = keys
+        .into_iter()
+        .map(|key| KeyFindingRow {
+            index: key.index,
+            tier: key.tier.tag().to_owned(),
+            rule: key.rule,
+            title: key.title,
+            target: key.target,
+            pid: key.pid,
+            cookie: key.cookie,
+            exe: key.exe,
+            count: key.count,
+            first_ns: key.first_ns,
+            why: key.why,
+        })
+        .collect();
+    (total, rows)
+}
+
+/// One of [`key_findings_for_report`].
+pub(super) struct KeyFindingRow {
+    pub index: usize,
+    pub tier: String,
+    pub rule: String,
+    pub title: String,
+    pub target: String,
+    pub pid: u32,
+    pub cookie: u64,
+    pub exe: String,
+    pub count: u64,
+    pub first_ns: u64,
+    pub why: String,
+}
+
 /// How many findings each tier has (high, medium, low, info), hidden ones left
 /// out, as the Summary's tier chips count them.
 pub(super) fn tier_counts(findings: &[Finding]) -> [u64; 4] {

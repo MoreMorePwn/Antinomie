@@ -12,6 +12,34 @@ use std::collections::BTreeMap;
 pub struct Candidate {
     pub name: String,
     pub source: String,
+    /// How much the rules and records that name it add up to: an Elastic
+    /// rule its score, a `family` meta 90, MalwareBazaar's signature 85.
+    pub points: u32,
+    /// A rule or record that names a family on purpose named it.
+    pub strong: bool,
+}
+
+/// The candidates a report names as the family: the first, and any other
+/// with at least half its points (MalwareBazaar's signature and tags may name
+/// two). The rest are "also named". Both lists keep the candidates' order.
+pub fn primary_families(candidates: &[Candidate]) -> (Vec<&Candidate>, Vec<&Candidate>) {
+    let top = candidates.first().map_or(0, |c| c.points);
+    let mut primary = Vec::new();
+    let mut other = Vec::new();
+    for (at, candidate) in candidates.iter().enumerate() {
+        if at == 0 || candidate.points * 2 >= top {
+            primary.push(candidate);
+        } else {
+            other.push(candidate);
+        }
+    }
+    (primary, other)
+}
+
+/// The family one YARA or IDS match names, when it names one on purpose or
+/// in its name: what [`family_candidates`] counts for this match.
+pub fn rule_family(hit: &DetectionHit) -> Option<String> {
+    mention(hit).map(|m| m.name)
 }
 
 /// What MalwareBazaar says of the run's sample: its `signature` and `tags`.
@@ -626,62 +654,13 @@ struct Mention {
 pub fn family_candidates(hits: &[DetectionHit], bazaar: Bazaar<'_>) -> Vec<Candidate> {
     let mut mentions: Vec<Mention> = Vec::new();
     let yara = |hit: &&DetectionHit| hit.engine.eq_ignore_ascii_case("yara");
-    for hit in hits.iter().filter(yara) {
-        let name = plain_name(&hit.rule_id);
-        let name = if name.is_empty() {
-            plain_name(&hit.title)
-        } else {
-            name
-        };
-        if !hit.family.is_empty() {
-            let family = meta_family(&hit.family);
-            if !not_family(&family.to_ascii_lowercase()) {
-                mentions.push(Mention {
-                    name: family,
-                    points: 90,
-                    strong: true,
-                    source: format!("YARA \u{b7} {} meta {}", hit.source, hit.family),
-                });
-                continue;
-            }
-        }
-        if is_elastic(&hit.source) {
-            if let Some(family) = elastic_family(name) {
-                mentions.push(Mention {
-                    name: family,
-                    points: score(&hit.severity).unwrap_or(60).min(100),
-                    strong: true,
-                    source: format!("YARA \u{b7} Elastic rule {name}"),
-                });
-            }
-        } else if curated_pack(&hit.source)
-            && !wrong_platform(name)
-            && !is_generic_rule(name)
-            && let Some(family) = family_in_rule_name(name)
-        {
-            let malpedia = hit.source.to_ascii_lowercase().contains("malpedia");
-            mentions.push(Mention {
-                name: family,
-                points: if malpedia { 70 } else { 20 },
-                strong: malpedia,
-                source: format!("YARA \u{b7} {} rule {name}", hit.source),
-            });
-        }
-    }
-    for hit in hits
-        .iter()
-        .filter(|hit| hit.engine.eq_ignore_ascii_case("ids"))
-    {
-        let title = hit.title.to_ascii_lowercase();
-        if let Some(word) = IDS_FAMILIES.iter().find(|family| title.contains(**family)) {
-            mentions.push(Mention {
-                name: pretty(word),
-                points: 30,
-                strong: false,
-                source: format!("IDS \u{b7} {}", hit.title),
-            });
-        }
-    }
+    // YARA first, then IDS: on a tie the earlier mention leads.
+    mentions.extend(hits.iter().filter(yara).filter_map(mention));
+    mentions.extend(
+        hits.iter()
+            .filter(|hit| hit.engine.eq_ignore_ascii_case("ids"))
+            .filter_map(mention),
+    );
     for (name, source) in bazaar_families(bazaar.signature, bazaar.tags) {
         mentions.push(Mention {
             name,
@@ -695,6 +674,62 @@ pub fn family_candidates(hits: &[DetectionHit], bazaar: Bazaar<'_>) -> Vec<Candi
         });
     }
     merge(mentions)
+}
+
+/// What one YARA or IDS match says of the family.
+fn mention(hit: &DetectionHit) -> Option<Mention> {
+    if hit.engine.eq_ignore_ascii_case("ids") {
+        let title = hit.title.to_ascii_lowercase();
+        let word = IDS_FAMILIES
+            .iter()
+            .find(|family| title.contains(**family))?;
+        return Some(Mention {
+            name: pretty(word),
+            points: 30,
+            strong: false,
+            source: format!("IDS \u{b7} {}", hit.title),
+        });
+    }
+    if !hit.engine.eq_ignore_ascii_case("yara") {
+        return None;
+    }
+    let name = plain_name(&hit.rule_id);
+    let name = if name.is_empty() {
+        plain_name(&hit.title)
+    } else {
+        name
+    };
+    if !hit.family.is_empty() {
+        let family = meta_family(&hit.family);
+        if !not_family(&family.to_ascii_lowercase()) {
+            return Some(Mention {
+                name: family,
+                points: 90,
+                strong: true,
+                source: format!("YARA \u{b7} {} meta {}", hit.source, hit.family),
+            });
+        }
+    }
+    if is_elastic(&hit.source) {
+        let family = elastic_family(name)?;
+        return Some(Mention {
+            name: family,
+            points: score(&hit.severity).unwrap_or(60).min(100),
+            strong: true,
+            source: format!("YARA \u{b7} Elastic rule {name}"),
+        });
+    }
+    if curated_pack(&hit.source) && !wrong_platform(name) && !is_generic_rule(name) {
+        let family = family_in_rule_name(name)?;
+        let malpedia = hit.source.to_ascii_lowercase().contains("malpedia");
+        return Some(Mention {
+            name: family,
+            points: if malpedia { 70 } else { 20 },
+            strong: malpedia,
+            source: format!("YARA \u{b7} {} rule {name}", hit.source),
+        });
+    }
+    None
 }
 
 /// One candidate per family: the points add up, the strongest mention gives the
@@ -772,6 +807,8 @@ fn merge(mentions: Vec<Mention>) -> Vec<Candidate> {
             Candidate {
                 name: total.best.1,
                 source,
+                points: total.points,
+                strong: total.strong,
             }
         })
         .collect()

@@ -14,8 +14,12 @@ use antinomie_monitor_core::RunSummary;
 pub(crate) struct NotStartedRun {
     pub run: report::RunInfo,
     pub sample: Option<report::SampleInfo>,
-    /// Why it did not start, without host paths.
+    /// Why it did not start, without host paths: the first part of the
+    /// failure, in one sentence or two.
     pub reason: String,
+    /// The rest of the failure text (the route's log and its last lines),
+    /// without host paths; empty when there is none.
+    pub detail: String,
     /// The program, its arguments and where it was to run.
     pub request: String,
     /// The network route, when the run named one.
@@ -28,14 +32,34 @@ pub(crate) struct NotStartedRun {
     pub directory: PathBuf,
 }
 
+/// Where a host path starts: the analyst's home and the usual places of
+/// user data. A guest path (`/proc/net/tcp`, `/etc/shadow`, `/tmp/x`) is none.
+fn host_prefixes() -> Vec<String> {
+    let mut prefixes: Vec<String> = ["/home/", "/mnt/", "/media/", "/Users/", "/run/user/"]
+        .map(String::from)
+        .to_vec();
+    if let Ok(home) = std::env::var("HOME") {
+        let home = home.trim_end_matches('/');
+        if home.len() > 1 && home != "/root" {
+            prefixes.push(format!("{home}/"));
+        }
+    }
+    prefixes
+}
+
 /// `text` with every absolute host path cut to its last component: a report
-/// is shared, and the analyst's folders are not for others.
+/// is shared, and the analyst's folders are not for others. Guest paths, the
+/// ones the request names, stay whole.
 pub(crate) fn without_host_paths(text: &str) -> String {
+    let prefixes = host_prefixes();
     text.split(' ')
         .map(|word| {
-            let bare = word.trim_start_matches(['(', '"', '\'']);
+            let bare = word.trim_start_matches(['(', '"', '\'', '=']);
             let lead = &word[..word.len() - bare.len()];
-            if bare.starts_with('/') && bare.matches('/').count() >= 2 {
+            if prefixes
+                .iter()
+                .any(|prefix| bare.starts_with(prefix.as_str()))
+            {
                 let last = bare.rsplit('/').next().unwrap_or(bare);
                 format!("{lead}{last}")
             } else {
@@ -44,6 +68,24 @@ pub(crate) fn without_host_paths(text: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// A failure text as (reason, detail): without a leading "Not started: "
+/// (the report adds its own), the reason up to the route's log, the log
+/// name and its last lines as the detail.
+pub(crate) fn split_failure(text: &str) -> (String, String) {
+    let mut text = text.trim();
+    while let Some(rest) = text.strip_prefix("Not started:") {
+        text = rest.trim_start();
+    }
+    let cut = [" Log: ", " Last log lines", "\nLog: ", "\nLast log lines"]
+        .iter()
+        .filter_map(|marker| text.find(marker))
+        .min();
+    match cut {
+        Some(at) => (text[..at].trim().to_owned(), text[at..].trim().to_owned()),
+        None => (text.to_owned(), String::new()),
+    }
 }
 
 impl NotStartedRun {
@@ -70,14 +112,20 @@ impl NotStartedRun {
                     ..report::SampleInfo::default()
                 })
             });
-        let mut reason = without_host_paths(
+        let (reason, detail) = split_failure(
             run.recording_error
                 .as_deref()
                 .unwrap_or("the run did not start, and no reason was recorded"),
         );
-        if reason.chars().count() > 1200 {
-            reason = reason.chars().take(1199).collect::<String>() + "…";
-        }
+        let clip = |text: String| {
+            if text.chars().count() > 1200 {
+                text.chars().take(1199).collect::<String>() + "…"
+            } else {
+                text
+            }
+        };
+        let reason = clip(without_host_paths(&reason));
+        let detail = clip(without_host_paths(&detail));
         let request = {
             let mut text = run.request.path.clone();
             for arg in &run.request.args {
@@ -135,12 +183,13 @@ impl NotStartedRun {
                 info.boot_id = base.boot_id;
                 info.run_id = base.run_id;
                 info.finished = true;
-                // The failure text can name host files (the Tor log).
-                info.state = without_host_paths(&info.state);
+                // The state is the reason alone; the log is a note of its own.
+                info.state = format!("Not started: {reason}");
                 info
             },
             sample,
-            reason,
+            reason: reason.clone(),
+            detail,
             request,
             route,
             environment,
@@ -154,11 +203,18 @@ impl NotStartedRun {
 /// route, the environment and the static analysis, each as an overview note.
 pub(crate) fn build(run: &NotStartedRun, now_ms: u64) -> report::Report {
     let mut report = report::Report::new(run.run.clone(), now_ms);
+    // Every format reads the state to know the run did not start.
+    if !report.not_started() {
+        report.run.state = format!("Not started: {}", run.reason);
+    }
     report.sample = run.sample.clone();
     report.notes.push(format!(
-        "This run did not start, so there is no recording and no Triage. Not started: {}",
+        "This run did not start, so there is no recording and no Triage: {}",
         run.reason
     ));
+    if !run.detail.is_empty() {
+        report.notes.push(format!("Failure detail: {}", run.detail));
+    }
     if !run.request.is_empty() {
         report.notes.push(format!("Request: {}", run.request));
     }
@@ -189,15 +245,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn host_paths_are_cut_to_their_last_component() {
+    fn host_paths_are_cut_to_their_last_component_and_guest_paths_stay() {
         assert_eq!(
             without_host_paths(
                 "tor stuck at 55%. Log: /home/user/data/network/tor/ant-1/tor.log. Last log lines"
             ),
             "tor stuck at 55%. Log: tor.log. Last log lines"
         );
-        assert_eq!(without_host_paths("ran (/bin/sh) /tmp"), "ran (sh) /tmp");
+        assert_eq!(
+            without_host_paths("ran (/bin/sh) /tmp"),
+            "ran (/bin/sh) /tmp"
+        );
+        // The Symbiote request: guest paths are what the run was asked to do.
+        let request = "sh -c L=$(ls /tmp/f55af21f-* | head -n 1); cat /proc/net/tcp; cat /etc/passwd /etc/shadow";
+        assert_eq!(without_host_paths(request), request);
         assert_eq!(without_host_paths("no paths here"), "no paths here");
+    }
+
+    #[test]
+    fn a_failure_is_said_once_and_its_log_is_a_detail() {
+        let (reason, detail) = split_failure(
+            "Not started: Not started: the Tor route did not become ready in 120 s (bootstrap 55%). Log: /home/user/d/tor.log. Last log lines: [notice] Bootstrapped 55%",
+        );
+        assert_eq!(
+            reason,
+            "the Tor route did not become ready in 120 s (bootstrap 55%)."
+        );
+        assert!(
+            detail.starts_with("Log: /home/user/d/tor.log. Last log lines"),
+            "{detail}"
+        );
+        assert_eq!(
+            split_failure("launch rejected by the guest: Bad address"),
+            (
+                "launch rejected by the guest: Bad address".into(),
+                String::new()
+            )
+        );
     }
 
     #[test]
@@ -215,6 +299,7 @@ mod tests {
                 ..Default::default()
             }),
             reason: "launch rejected by the guest, nothing was started".into(),
+            detail: "Log: tor.log. Last log lines: x".into(),
             request: "/tmp/x -a".into(),
             route: "Tor via 127.0.0.1:9050".into(),
             environment: "Debian 13 (Minimal), kernel 6.12.94".into(),
@@ -223,7 +308,12 @@ mod tests {
         };
         let report = build(&run, 1_794_000_000_000);
         assert_eq!(report.sample.as_ref().unwrap().name, "elf-6168f5d053f4");
-        assert!(report.notes[0].contains("Not started: launch rejected"));
+        assert!(report.notes[0].contains("no Triage: launch rejected"));
+        assert!(!report.notes[0].contains("Not started: Not started"));
+        assert_eq!(
+            report.notes[1],
+            "Failure detail: Log: tor.log. Last log lines: x"
+        );
         assert!(report.notes.iter().any(|n| n == "Request: /tmp/x -a"));
         assert!(report
             .notes
@@ -231,10 +321,34 @@ mod tests {
             .any(|n| n == "Static analysis, Identification: ELF x86-64"));
         let json = report.to_json().unwrap();
         assert!(json.contains("launch rejected"));
-        // Every format writes it.
+        // Every format writes it; MISP and STIX hold no malware for it.
         for format in report::Format::ALL {
             let bytes = report::export::render(&report, format, true).unwrap();
             assert!(!bytes.is_empty(), "{format:?}");
+            if let Ok(out) = std::env::var("ANTINOMIE_REPORT_OUT") {
+                let folder = Path::new(&out).join("not-started");
+                std::fs::create_dir_all(&folder).unwrap();
+                std::fs::write(
+                    folder.join(format!("not-started{}", format.suffix())),
+                    &bytes,
+                )
+                .unwrap();
+            }
         }
+        let stix = String::from_utf8(
+            report::export::render(&report, report::Format::Stix, false).unwrap(),
+        )
+        .unwrap();
+        assert!(!stix.contains("\"malware\"") && !stix.contains("malware-analysis"));
+        assert!(stix.contains("did not start"));
+        let misp = String::from_utf8(
+            report::export::render(&report, report::Format::Misp, false).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            misp.contains("antinomie:assessment=\\\"not_started\\\""),
+            "{misp}"
+        );
+        assert!(!misp.contains("\"to_ids\": true"));
     }
 }

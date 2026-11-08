@@ -17,6 +17,13 @@ pub(crate) fn not_started_panel(ui: &mut egui::Ui, run: &NotStartedRun) -> bool 
                     .wrap()
                     .selectable(true),
             );
+            if !run.detail.is_empty() {
+                ui.add(
+                    egui::Label::new(RichText::new(&run.detail).small().color(theme::muted()))
+                        .wrap()
+                        .selectable(true),
+                );
+            }
             ui.add_space(8.0);
             ui.add(
                 egui::Label::new(

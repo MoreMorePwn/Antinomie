@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Where an export goes when the person has not said, and the word it gives
-//! back. An export defaults to the folder the last one went to, else a folder
-//! of its own kind under the data directory: never the home directory, where a
-//! custody record or an analysis dump would land among personal files.
+//! back. An export defaults to the folder the last export of the same kind
+//! went to, else a folder of its own kind under the data directory: never the
+//! home directory, where a custody record or an analysis dump would land among
+//! personal files. The folder is made when the export is written.
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-static LAST: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// The last folder of each kind of export this session.
+static LAST: Mutex<BTreeMap<String, PathBuf>> = Mutex::new(BTreeMap::new());
 
 /// The folder an export of `kind` ("custody", "static") opens with: `last`
 /// when it is a folder that still exists, else `<data>/exports/<kind>`.
@@ -17,24 +20,40 @@ pub(crate) fn choose(data_dir: &Path, kind: &str, last: Option<&Path>) -> PathBu
     }
 }
 
-/// [`choose`] with the folder of the last export this session.
+/// [`choose`] with the folder of the last export of `kind` this session: a
+/// custody export does not open where a static-analysis export went.
 pub(crate) fn default_folder(data_dir: &Path, kind: &str) -> PathBuf {
-    let last = LAST.lock().ok().and_then(|last| last.clone());
+    let last = LAST.lock().ok().and_then(|last| last.get(kind).cloned());
     choose(data_dir, kind, last.as_deref())
 }
 
-/// An export wrote `file`: the next one opens in its folder.
-pub(crate) fn remember(file: &Path) {
+/// An export of `kind` wrote `file`: the next one of that kind opens in its folder.
+pub(crate) fn remember(kind: &str, file: &Path) {
     if let Some(folder) = file.parent().filter(|f| !f.as_os_str().is_empty()) {
         if let Ok(mut last) = LAST.lock() {
-            *last = Some(folder.to_path_buf());
+            last.insert(kind.to_owned(), folder.to_path_buf());
         }
     }
 }
 
-/// The one naming scheme of every export: `antinomie-<kind>-<subject>-<time>.<ext>`,
+/// Make the folder `path` goes in (owner-only) when it does not exist yet: the
+/// default `<data>/exports/<kind>` is not made until an export needs it.
+pub(crate) fn ensure_parent(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::DirBuilderExt;
+    match path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        Some(folder) if !folder.is_dir() => std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(folder)
+            .map_err(|error| format!("{}: {error}", folder.display())),
+        _ => Ok(()),
+    }
+}
+
+/// The one naming scheme of every export: `antinomie-<kind>-<subject>-<time>Z.<ext>`,
 /// the subject cut to 8 letters or digits (a run or sample id), the time
-/// `yyyymmdd-hhmmss` in UTC. `ms` is the Unix time in milliseconds.
+/// `yyyymmdd-hhmmss` in UTC with a `Z`, as the reports' names have it. `ms` is
+/// the Unix time in milliseconds.
 pub(crate) fn stamped_at(kind: &str, subject: &str, ext: &str, ms: u64) -> String {
     let subject: String = subject
         .chars()
@@ -45,9 +64,9 @@ pub(crate) fn stamped_at(kind: &str, subject: &str, ext: &str, ms: u64) -> Strin
         .replace(['-', ':'], "")
         .replace(' ', "-");
     if subject.is_empty() {
-        format!("antinomie-{kind}-{time}.{ext}")
+        format!("antinomie-{kind}-{time}Z.{ext}")
     } else {
-        format!("antinomie-{kind}-{subject}-{time}.{ext}")
+        format!("antinomie-{kind}-{subject}-{time}Z.{ext}")
     }
 }
 
@@ -91,9 +110,9 @@ fn folder_text(path: &Path) -> String {
 }
 
 /// Tell the person: an Activity row and a toast naming the file, its size and
-/// its folder. Also remembers the folder for the next export.
-pub(crate) fn wrote(ctx: &eframe::egui::Context, what: &str, path: &Path) {
-    remember(path);
+/// its folder. Also remembers the folder for the next export of `kind`.
+pub(crate) fn wrote(ctx: &eframe::egui::Context, kind: &str, what: &str, path: &Path) {
+    remember(kind, path);
     reported(ctx, what, path);
 }
 
@@ -128,12 +147,37 @@ mod tests {
         let ms = 1_794_098_994_000;
         assert_eq!(
             stamped_at("indicators", "f9c3d854-aaaa", "json", ms),
-            "antinomie-indicators-f9c3d854-20261108-004954.json"
+            "antinomie-indicators-f9c3d854-20261108-004954Z.json"
         );
         assert_eq!(
             stamped_at("custody", "", "json", ms),
-            "antinomie-custody-20261108-004954.json"
+            "antinomie-custody-20261108-004954Z.json"
         );
+    }
+
+    #[test]
+    fn each_kind_remembers_its_own_folder_and_a_missing_one_is_made() {
+        let root = std::env::temp_dir().join(format!("ant-export-kinds-{}", std::process::id()));
+        let data = root.join("data");
+        let typed = root.join("typed");
+        std::fs::create_dir_all(&typed).unwrap();
+        remember("static-test", &typed.join("a.txt"));
+        assert_eq!(default_folder(&data, "static-test"), typed);
+        assert_eq!(
+            default_folder(&data, "custody-test"),
+            data.join("exports/custody-test"),
+            "another kind keeps its own default"
+        );
+        let file = default_folder(&data, "custody-test").join("x.json");
+        ensure_parent(&file).unwrap();
+        assert!(file.parent().unwrap().is_dir());
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(file.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

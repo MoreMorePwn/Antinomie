@@ -1034,7 +1034,10 @@ fn a_rule_the_static_scan_and_a_run_both_matched_is_one_row_and_names_its_family
     assert_eq!(hit.rule_id, "s1919::Linux_Trojan_Tsunami_30c039e2");
     assert_eq!(report.sample.family_candidates[0].name, "Tsunami");
     let md = String::from_utf8(export::render(&report, Format::Markdown, false).unwrap()).unwrap();
-    assert!(md.contains("Tsunami") && md.contains("static scan + runs 1, 4"));
+    assert!(
+        md.contains("Tsunami") && md.contains("static scan + runs [1](#run-1), 4"),
+        "{md}"
+    );
     assert!(
         !md.contains("s1919::"),
         "the pack's number stays in the JSON"
@@ -1060,6 +1063,7 @@ fn markdown_escapes_only_what_would_become_markup() {
             ],
         }],
         meta: Default::default(),
+        aliases: Default::default(),
     };
     let md = markdown::render(&document);
     assert!(md.contains("\n5 run(s). The strongest"), "{md}");
@@ -1071,21 +1075,64 @@ fn markdown_escapes_only_what_would_become_markup() {
 }
 
 #[test]
-fn the_fullest_run_report_is_the_one_listed_not_the_newest() {
+fn the_fullest_run_report_is_the_one_listed_and_the_newest_of_those() {
     let dir = std::env::temp_dir().join(format!("ant-latest-{}", std::process::id()));
     let report = dir.join("run1").join("report");
     std::fs::create_dir_all(&report).unwrap();
+    let sections = |n: usize, pad: usize| {
+        format!(
+            "{}{}",
+            "<section id=\"s\"></section>".repeat(n),
+            "x".repeat(pad)
+        )
+    };
+    // An old full export, large because it copied what the sample read.
     std::fs::write(
-        report.join("antinomie-report-aaaa-20261107-175434Z.html"),
-        "x".repeat(5000),
+        report.join("antinomie-report-aaaa-20261107-175528.html"),
+        sections(11, 90_000),
     )
     .unwrap();
+    // A near-empty export written after it.
     std::fs::write(
-        report.join("antinomie-report-aaaa-20261107-175727Z.html"),
-        "x".repeat(40),
+        report.join("antinomie-report-aaaa-20261107-175727.html"),
+        sections(1, 0),
+    )
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    // The newest full export, smaller than the old one.
+    std::fs::write(
+        report.join("antinomie-report-aaaa-20261108-011903Z.html"),
+        sections(11, 10),
     )
     .unwrap();
     let named = build::latest_run_report(&dir, &dir.join("run1"));
-    assert!(named.ends_with("175434Z.html"), "{named}");
+    assert!(named.ends_with("011903Z.html"), "{named}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn sample_report_anchors_are_unique_and_every_link_resolves() {
+    let report = fixture();
+    let document = layout::document(&report, true);
+    let ids = crate::report::page::ids(&document);
+    let unique: std::collections::BTreeSet<&String> = ids.iter().collect();
+    assert_eq!(unique.len(), ids.len(), "{ids:?}");
+    for target in crate::report::page::links(&document) {
+        assert!(ids.contains(&target), "#{target} resolves");
+    }
+    let md = text(&report, Format::Markdown, true);
+    let (anchors, links) = crate::report::markdown::anchors_and_links(&md);
+    assert!(anchors.contains(&"run-1".to_owned()));
+    for link in links {
+        assert!(anchors.contains(&link), "#{link} resolves in the Markdown");
+    }
+    // With `ANTINOMIE_REPORT_OUT` set, every format is written there.
+    if let Ok(out) = std::env::var("ANTINOMIE_REPORT_OUT") {
+        let folder = std::path::Path::new(&out).join("core-fixture-sample");
+        std::fs::create_dir_all(&folder).unwrap();
+        for format in Format::ALL {
+            let bytes = export::render(&report, format, true).unwrap();
+            std::fs::write(folder.join(format!("sample{}", format.suffix())), bytes).unwrap();
+        }
+    }
 }

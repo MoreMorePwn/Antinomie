@@ -2,9 +2,7 @@
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! The report from a whole-run index: each part reads the same rows Triage's
 //! tables hold, so the report says what the tabs say.
-use super::super::{
-    digest, file_activity::start_of, file_tabs, ioc_scan, net_tabs, pcap_scan, rules, FileTab,
-};
+use super::super::{digest, file_activity::start_of, file_tabs, ioc_scan, rules, FileTab};
 use super::*;
 use antinomie_monitor_core::{
     file_reconstruct::Reconstruction,
@@ -14,8 +12,8 @@ use antinomie_monitor_core::{
     },
     report::{
         bundle::{self, BundleInput, DroppedFile},
-        Counts, Custody, Detection, EvidenceRef, FileRecord, FilesSection, IndicatorColumn,
-        IndicatorKind, NamedTable, Part, Report, Summary, Table,
+        Counts, FileRecord, FilesSection, IndicatorColumn, IndicatorKind, NamedTable, Part, Report,
+        Summary, Table,
     },
     run_digest::RunDigest,
 };
@@ -29,7 +27,7 @@ pub(super) struct Built {
 }
 
 /// Rows of `rows` at `keep`, as a table with `columns` named.
-fn table(
+pub(super) fn table(
     headers: &[&str],
     keep: &[usize],
     rows: &[Vec<Cell>],
@@ -55,10 +53,16 @@ fn table(
                     .map(|column| IndicatorColumn { column, kind })
             })
             .collect(),
+        data: Vec::new(),
     }
 }
 
-fn all(n: usize) -> Vec<usize> {
+/// The first moment of the run: when its first task was first seen.
+fn run_start(scan: &ArchiveScan) -> Option<u64> {
+    scan.process.iter().filter_map(|node| node.first_ns).min()
+}
+
+pub(super) fn all(n: usize) -> Vec<usize> {
     (0..n).collect()
 }
 
@@ -115,7 +119,16 @@ fn indicators(job: &Job, scan: &ArchiveScan) -> Vec<(report::Indicator, bool)> {
                 &indicator.roles,
                 indicator.not_checked.as_deref().unwrap_or_default(),
             );
+            let mut pids: Vec<u32> = indicator
+                .process
+                .iter()
+                .chain(&indicator.candidates)
+                .map(|p| p.pid)
+                .filter(|pid| *pid != 0)
+                .collect();
+            pids.dedup();
             let item = report::Indicator {
+                pids,
                 kind: indicator.ty.id().to_owned(),
                 value: indicator.value.clone(),
                 path: if indicator.ty == antinomie_monitor_core::ioc::indicator::Type::Url {
@@ -153,6 +166,7 @@ fn indicators(job: &Job, scan: &ArchiveScan) -> Vec<(report::Indicator, bool)> {
                 base_noise: noise,
                 stand_in,
                 not_shared,
+                ..report::Indicator::default()
             };
             (item, matched)
         })
@@ -165,8 +179,11 @@ fn summary(
     indicators: &[(report::Indicator, bool)],
     candidates: &[super::super::family::Candidate],
     techniques: usize,
+    clock: Option<antinomie_monitor_core::HostClockAnchor>,
 ) -> Summary {
     let matched = indicators.iter().filter(|(_, m)| *m).count();
+    let (key_total, key_rows) =
+        super::rows::key_findings(&scan.findings, clock, run_start(scan), KEY_FINDINGS);
     // Families come from matched indicators (stored datasets) and from the
     // same candidates the app's Summary shows: Elastic and curated YARA rule
     // names, `family` metadata, IDS messages and the sample's MalwareBazaar
@@ -190,9 +207,17 @@ fn summary(
             add(&indicator.family, format!("dataset {}", indicator.dataset));
         }
     }
-    for candidate in candidates {
-        add(&candidate.name, candidate.source.clone());
+    // The strongest candidates are the family; one Mirai rule beside twenty
+    // Gafgyt ones is "also named".
+    let (primary, others) = super::super::family::primary_families(candidates);
+    for candidate in &primary {
+        add(&candidate.name, pack_names(&candidate.source));
     }
+    let other_families: Vec<String> = others
+        .iter()
+        .filter(|c| !named.iter().any(|(n, _)| n.eq_ignore_ascii_case(&c.name)))
+        .map(|c| format!("{} ({})", c.name, pack_names(&c.source)))
+        .collect();
     let family_sources: Vec<String> = named
         .iter()
         .map(|(family, sources)| format!("{family}: {sources}"))
@@ -259,8 +284,9 @@ fn summary(
             String::new()
         } else {
             format!(
-                " Family named by {}. A family is the name a rule or dataset gave, not a verdict.",
-                family_sources.join("; ")
+                " Family: {} ({}). A family is the name a rule or dataset gave, not a verdict.",
+                families.join(", "),
+                family_basis(&named)
             )
         }
     );
@@ -280,16 +306,24 @@ fn summary(
         },
         families,
         family_sources,
+        other_families,
         tiers: {
-            let counts = super::super::summary::tier_counts(&scan.findings);
+            // The app's tier chips count every finding, INFO included; the
+            // index lists INFO rows only when asked for them.
+            let listed = super::super::summary::tier_counts(&scan.findings);
+            let all = scan.counts.finding_tiers;
+            let counts: [u64; 4] = std::array::from_fn(|at| all[at].max(listed[at]));
             report::TierCounts {
                 high: counts[0],
                 medium: counts[1],
                 low: counts[2],
                 info: counts[3],
+                info_not_listed: counts[3].saturating_sub(listed[3]),
             }
         },
-        key_findings: super::super::summary::key_finding_lines(&scan.findings, 8),
+        key_findings: key_rows,
+        key_findings_text: super::super::summary::key_finding_lines(&scan.findings, KEY_FINDINGS),
+        key_findings_total: key_total,
         key_behaviours: key,
         counts: Counts {
             processes: scan.process.len() as u64,
@@ -306,6 +340,70 @@ fn summary(
 }
 
 use antinomie_monitor_core::run_digest as digest_types;
+
+/// Rows of the report's Key findings table.
+const KEY_FINDINGS: usize = 10;
+
+/// A family source with pack paths named as packs:
+/// `YARA · selection/pack/yara-forge-core/sekoia.yar rule X` reads
+/// `YARA · YARA-Forge Core rule X`.
+fn pack_names(source: &str) -> String {
+    source
+        .split(' ')
+        .map(|word| {
+            if word.contains("pack/") {
+                antinomie_monitor_core::report::layout::pack_label(word)
+            } else {
+                word.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// "named by 4 rules (strongest: YARA · Elastic rule Linux_Trojan_BPFDoor_f690fe3b)".
+fn family_basis(named: &[(String, String)]) -> String {
+    let Some((_, sources)) = named.first() else {
+        return String::new();
+    };
+    let strongest = sources.split("; ").next().unwrap_or(sources);
+    let extra: usize = sources
+        .split("(+")
+        .skip(1)
+        .filter_map(|rest| rest.split(' ').next()?.parse::<usize>().ok())
+        .sum();
+    let rules = sources.split("; ").count() + extra;
+    let strongest = strongest.split(" (+").next().unwrap_or(strongest);
+    if rules > 1 {
+        format!("named by {rules} rules or records; strongest: {strongest}")
+    } else {
+        format!("named by {strongest}")
+    }
+}
+
+/// A domain that is another domain with its own last label added again
+/// (`mircd.xiao.my.id.id`): a resolver's search suffix, not a second name.
+fn suffix_variant_note(indicators: &[(report::Indicator, bool)]) -> Option<String> {
+    let names: BTreeSet<&str> = indicators
+        .iter()
+        .filter(|(i, _)| i.kind == "domain")
+        .map(|(i, _)| i.value.as_str())
+        .collect();
+    let pairs: Vec<String> = names
+        .iter()
+        .filter_map(|name| {
+            let (base, last) = name.rsplit_once('.')?;
+            (base.ends_with(&format!(".{last}")) && names.contains(base))
+                .then(|| format!("{name} looks like a search-suffix variant of {base}"))
+        })
+        .collect();
+    (!pairs.is_empty()).then(|| {
+        format!(
+            "{}: the guest's resolver tried the name with its search suffix added; both are listed as the run asked for them.",
+            pairs.join("; ")
+        )
+    })
+}
 
 /// Which calls the guest recorded without decoding an argument ("schema
 /// gaps" in the recorder line): the call and its result are in the report, only
@@ -338,6 +436,7 @@ fn processes(scan: &ArchiveScan, clock: Option<antinomie_monitor_core::HostClock
     let rows = super::super::process_tree::process_rows(&scan.process, clock, &scan.suspicious);
     let headers = super::super::process_tree::PROCESS_HEADERS;
     let mut out = table(&headers, &[0, 1, 2, 3, 4, 5, 6, 7, 8], &rows, 0, &[]);
+    out.data = super::rows::processes(&rows, clock, run_start(scan));
     for (row, source) in out.rows.iter_mut().zip(&rows) {
         let depth = files::number(&source[0].values, "process.depth").unwrap_or(0) as usize;
         row[0] = format!(
@@ -351,7 +450,7 @@ fn processes(scan: &ArchiveScan, clock: Option<antinomie_monitor_core::HostClock
 }
 
 fn findings(scan: &ArchiveScan, clock: Option<antinomie_monitor_core::HostClockAnchor>) -> Table {
-    let start = scan.process.iter().filter_map(|node| node.first_ns).min();
+    let start = run_start(scan);
     let rows: Vec<Vec<Cell>> = scan
         .findings
         .iter()
@@ -361,7 +460,7 @@ fn findings(scan: &ArchiveScan, clock: Option<antinomie_monitor_core::HostClockA
             finding.cells
         })
         .collect();
-    table(
+    let mut out = table(
         rules::HEADERS,
         &[
             rules::COL_TIME,
@@ -378,7 +477,9 @@ fn findings(scan: &ArchiveScan, clock: Option<antinomie_monitor_core::HostClockA
         &rows,
         scan.findings_omitted,
         &[],
-    )
+    );
+    out.data = super::rows::findings(&scan.findings, clock, start);
+    out
 }
 
 /// The paths the run created or changed.
@@ -451,243 +552,77 @@ fn file_tabs_section(
     include_content: bool,
 ) -> FilesSection {
     let mut tabs = Vec::new();
+    let start = run_start(scan);
+    let path_of = |headers: &[&str]| headers.iter().position(|h| *h == "Path").unwrap_or(1);
     for tab in FileTab::ALL {
         let (_, omitted) = scan.file_rows(tab);
-        let named = match tab {
-            FileTab::Changed => table(
-                file_tabs::CHANGED_HEADERS,
-                &all(file_tabs::CHANGED_HEADERS.len()),
-                &scan.changed,
-                omitted,
-                &[],
-            ),
+        let mut named = match tab {
+            FileTab::Changed => {
+                let mut changed = table(
+                    file_tabs::CHANGED_HEADERS,
+                    &all(file_tabs::CHANGED_HEADERS.len()),
+                    &scan.changed,
+                    omitted,
+                    &[],
+                );
+                changed.data = super::rows::files(
+                    &scan.changed,
+                    path_of(file_tabs::CHANGED_HEADERS),
+                    clock,
+                    start,
+                );
+                changed
+            }
             FileTab::Read => {
+                let rows = file_category::with_time(&scan.read, clock);
                 let mut read = table(
                     file_tabs::READ_HEADERS,
                     file_tabs::READ_COLUMNS,
-                    &file_category::with_time(&scan.read, clock),
+                    &rows,
                     omitted,
                     &[],
                 );
                 transferred(&mut read, include_content, &written_paths(scan));
+                read.data =
+                    super::rows::files(&rows, path_of(file_tabs::READ_HEADERS), clock, start);
                 read
             }
-            FileTab::Opened => table(
-                file_category::EVENT_HEADERS,
-                file_tabs::OPENED_COLUMNS,
-                &file_category::with_time(&scan.opened, clock),
-                omitted,
-                &[],
-            ),
-            other => table(
-                file_category::EVENT_HEADERS,
-                &[0, 2, 3, 4, 5, 6],
-                &file_category::with_time(&scan.file_tabs[other.slot() - 8].rows, clock),
-                omitted,
-                &[],
-            ),
+            FileTab::Opened => {
+                let rows = file_category::with_time(&scan.opened, clock);
+                let mut opened = table(
+                    file_category::EVENT_HEADERS,
+                    file_tabs::OPENED_COLUMNS,
+                    &rows,
+                    omitted,
+                    &[],
+                );
+                opened.data =
+                    super::rows::files(&rows, path_of(file_category::EVENT_HEADERS), clock, start);
+                opened
+            }
+            other => {
+                let rows = file_category::with_time(&scan.file_tabs[other.slot() - 8].rows, clock);
+                let mut events = table(
+                    file_category::EVENT_HEADERS,
+                    &[0, 2, 3, 4, 5, 6],
+                    &rows,
+                    omitted,
+                    &[],
+                );
+                events.data =
+                    super::rows::files(&rows, path_of(file_category::EVENT_HEADERS), clock, start);
+                events
+            }
         };
+        if named.data.len() != named.rows.len() {
+            named.data.clear();
+        }
         tabs.push(NamedTable {
             name: tab.title().to_owned(),
             table: named,
         });
     }
     FilesSection { tabs }
-}
-
-fn network(scan: &ArchiveScan) -> Vec<NamedTable> {
-    use IndicatorKind::*;
-    let tabs = &scan.new_tabs;
-    let _ = pcap_scan::SESSION_HEADERS;
-    vec![
-        NamedTable {
-            name: "Endpoints".into(),
-            table: table(
-                net_tabs::ENDPOINT_HEADERS,
-                &all(net_tabs::ENDPOINT_HEADERS.len()),
-                &tabs.endpoints,
-                tabs.endpoints_omitted,
-                &[(0, Endpoint)],
-            ),
-        },
-        NamedTable {
-            name: "Domains".into(),
-            table: table(
-                net_tabs::DOMAIN_HEADERS,
-                &all(net_tabs::DOMAIN_HEADERS.len()),
-                &tabs.domains,
-                tabs.domains_omitted,
-                &[(0, Domain)],
-            ),
-        },
-        NamedTable {
-            name: "URLs".into(),
-            table: table(
-                net_tabs::URL_HEADERS,
-                &all(net_tabs::URL_HEADERS.len()),
-                &tabs.urls,
-                scan.http_omitted,
-                &[(2, Endpoint), (5, Domain)],
-            ),
-        },
-        NamedTable {
-            name: "TLS".into(),
-            table: table(
-                net_tabs::TLS_HEADERS,
-                &all(net_tabs::TLS_HEADERS.len()),
-                &tabs.tls,
-                tabs.tls_omitted,
-                &[(1, Tls), (3, Endpoint)],
-            ),
-        },
-    ]
-}
-
-fn detections(run_dir: &Path) -> Vec<Detection> {
-    RunDigest::read(run_dir)
-        .and_then(|digest| digest.detections)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|hit| Detection {
-            strength: if hit.engine.eq_ignore_ascii_case("yara") {
-                match super::super::family::strength(
-                    &hit.rule_id,
-                    &hit.severity,
-                    &hit.source,
-                    &hit.family,
-                ) {
-                    super::super::family::Strength::Strong => "strong",
-                    super::super::family::Strength::Weak => "weak",
-                    super::super::family::Strength::WrongPlatform => "wrong platform",
-                }
-                .to_owned()
-            } else {
-                String::new()
-            },
-            engine: hit.engine,
-            rule_id: hit.rule_id,
-            title: hit.title,
-            severity: hit.severity,
-            mitre: hit.mitre,
-            count: hit.count,
-            author: hit.author,
-            license: hit.license,
-            source: hit.source,
-            reference: hit.reference,
-        })
-        .collect()
-}
-
-/// Files up to this size are hashed for the evidence list.
-const HASH_LIMIT: u64 = 64 * 1024 * 1024;
-
-fn tree_size(path: &Path, depth: usize, budget: &mut usize) -> u64 {
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return 0;
-    };
-    let mut total = 0;
-    for entry in entries.flatten() {
-        if *budget == 0 {
-            break;
-        }
-        *budget -= 1;
-        let Ok(meta) = entry.metadata() else { continue };
-        if meta.is_file() {
-            total += meta.len();
-        } else if meta.is_dir() && depth < 6 {
-            total += tree_size(&entry.path(), depth + 1, budget);
-        }
-    }
-    total
-}
-
-fn evidence(run_dir: &Path) -> Vec<EvidenceRef> {
-    let Ok(entries) = std::fs::read_dir(run_dir) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        // The report's own folder and temporary files are not evidence.
-        if name == "report" || name.starts_with('.') || name.ends_with(".tmp") {
-            continue;
-        }
-        let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
-            continue;
-        };
-        let lower = name.to_ascii_lowercase();
-        let kind = if name == "telemetry.raw" || lower.contains("telemetry") {
-            "telemetry"
-        } else if lower.contains("pcap") {
-            "network capture"
-        } else if lower.contains("memory") {
-            "memory dump"
-        } else if lower.contains("core") {
-            "core dump"
-        } else if lower.contains("disk") || lower.ends_with(".qcow2") {
-            "disk"
-        } else if name == "objects" || lower.contains("object") {
-            "object store"
-        } else if name == "reconstructed" {
-            "reconstructed"
-        } else {
-            "other"
-        };
-        if meta.is_file() {
-            let sha256 = if meta.len() <= HASH_LIMIT {
-                antinomie_monitor_core::storage::sha256_file_hex(&entry.path()).unwrap_or_default()
-            } else {
-                String::new()
-            };
-            out.push(EvidenceRef {
-                kind: kind.into(),
-                path: name,
-                size: meta.len(),
-                sha256,
-            });
-        } else if meta.is_dir() {
-            let mut budget = 200_000;
-            out.push(EvidenceRef {
-                kind: kind.into(),
-                path: format!("{name}/"),
-                size: tree_size(&entry.path(), 0, &mut budget),
-                sha256: String::new(),
-            });
-        }
-    }
-    out.sort_by(|a, b| a.path.cmp(&b.path));
-    out
-}
-
-fn custody(job: &Job) -> Result<Custody, String> {
-    let (sample, data_dir) = job
-        .sample
-        .as_ref()
-        .zip(job.data_dir.as_ref())
-        .ok_or("the run has no sample record to read a custody log for")?;
-    let library = antinomie_monitor_core::samples::Library::open(data_dir)?;
-    // A file that is not a library sample has no custody log to report.
-    if library.get(&sample.sha256)?.is_none() {
-        return Err("the file is not a library sample, so there is no custody log".into());
-    }
-    let (value, _) = library.custody_record(&sample.sha256)?;
-    Ok(Custody {
-        sample_sha256: sample.sha256.clone(),
-        entries: value["status"]["entries"].as_u64().unwrap_or(0),
-        head: value["status"]["head"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned(),
-        verified: value["status"]["verified"].as_bool().unwrap_or(false),
-        library_head: value["library_index"]["head"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned(),
-        problem: value["status"]["problem"]["text"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned(),
-    })
 }
 
 /// Files the run created or changed, with what the reconstruction knows; when
@@ -728,7 +663,7 @@ fn file_activity(
             bytes_written: counts.written,
             bytes_not_captured: counts.not_captured,
             bytes_unknown: counts.unknown + counts.mapping,
-            bundle_entry: String::new(),
+            ..FileRecord::default()
         };
         if bundle {
             let size = map.size();
@@ -810,9 +745,13 @@ pub(super) fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
             &indicator_rows,
             &candidates,
             techniques.len(),
+            clock,
         ));
     }
     if let Some(note) = schema_gap_note(scan) {
+        report.notes.push(note);
+    }
+    if let Some(note) = suffix_variant_note(&indicator_rows) {
         report.notes.push(note);
     }
     // Said once, in the overview's notes; the Summary's statement keeps to the
@@ -865,16 +804,16 @@ pub(super) fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
         }
     }
     if choices.has(Part::Network) {
-        report.network = Some(network(scan));
+        report.network = Some(super::build_sources::network(scan));
     }
     if choices.has(Part::Detections) {
-        report.detections = Some(detections(&job.archive));
+        report.detections = Some(super::build_sources::detections(&job.archive));
     }
     if choices.has(Part::Evidence) {
-        report.evidence = Some(evidence(&job.archive));
+        report.evidence = Some(super::build_sources::evidence(&job.archive));
     }
     if choices.has(Part::Custody) {
-        match custody(job) {
+        match super::build_sources::custody(job) {
             Ok(custody) => report.custody = Some(custody),
             Err(error) => report
                 .notes
@@ -906,6 +845,8 @@ pub(super) fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
             antinomie_monitor_core::geoip::ATTRIBUTION_NOTE
         ));
     }
+    // Every entry its anchor, every mention its link (`*_ref`).
+    report::refs::link(&mut report);
     let bundle = choices.bundle.then(|| {
         let captures = antinomie_monitor_core::RunArtifacts::load(&job.archive)
             .ok()
