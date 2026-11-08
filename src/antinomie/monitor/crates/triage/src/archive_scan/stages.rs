@@ -582,10 +582,10 @@ impl Scan {
             .unwrap_or(false);
         network_request.started_ms = started_ms;
         // What made each flow: the network calls the rules pass has seen.
-        network_request.attribution = Some(Arc::new(net_attr::NetAttribution::from_log(
-            engine.net_calls(),
-            clock_anchor,
-        )));
+        network_request.attribution = Some(Arc::new(
+            net_attr::NetAttribution::from_log(engine.net_calls(), clock_anchor)
+                .within(started_ms, facts.as_ref().and_then(|facts| facts.ended_ms)),
+        ));
         network_request.segments = segments
             .iter()
             .take(segments.len().saturating_sub(1))

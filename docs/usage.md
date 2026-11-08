@@ -1070,7 +1070,7 @@ The network capture is the guest's own view on every route.
   read from TShark, each with an IOC column. The capture is VM-wide and the guest
   tags no packet, so **Endpoints** has a **Source** column made on the host from
   the run's recorded network calls (`connect`, `sendto`, `sendmsg`, `accept`,
-  `recvfrom`, `bind`), matched by address, protocol and time: a process as
+  `recvfrom`, `bind`), matched by address and protocol, with time telling processes apart when several made calls to one address (the host's estimate of the guest's clock can be seconds off, so a single caller is believed whatever the clocks say): a process as
   `name (pid · tid)` (a click opens it in Details; several processes show the
   first and `+N`), **Base image background: NTP** (or DHCP, apt: the traffic the
   Summary's Indicators set apart, and a base program's own flows), or

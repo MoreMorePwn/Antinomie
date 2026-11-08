@@ -5,7 +5,7 @@
 //! does, follows the sockets the calls open, and keeps only the network calls
 //! [`rules::ioc::observe_net`] names; no finding, journal or file table is made.
 use super::*;
-use crate::segments::{run_segments, walk_segments};
+use crate::segments::{run_segments, segment_facts, walk_segments};
 
 /// The run's network calls with host times, from the saved calls of `directory`
 /// (every reconnect segment, oldest first). Writes nothing.
@@ -69,7 +69,11 @@ pub fn read_calls(
         }
         Ok(())
     })?;
-    Ok(net_attr::NetAttribution::from_log(&log.net, clock))
+    let ended_ms = segment_facts(&segments, request)
+        .ok()
+        .flatten()
+        .and_then(|facts| facts.ended_ms);
+    Ok(net_attr::NetAttribution::from_log(&log.net, clock).within(started_ms, ended_ms))
 }
 
 #[cfg(test)]
@@ -78,7 +82,8 @@ mod tests {
 
     #[test]
     fn a_directory_with_no_recording_is_an_error_and_nothing_is_created() {
-        let dir = std::env::temp_dir().join(format!("antinomie-netattr-read-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("antinomie-netattr-read-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let cancel = Arc::new(AtomicBool::new(false));

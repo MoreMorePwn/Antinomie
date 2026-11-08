@@ -13,10 +13,13 @@
 use antinomie_monitor_core::ioc::baseline;
 use std::{collections::BTreeMap, net::IpAddr};
 
-/// How far the host's estimate of a guest time may be off, in microseconds.
-pub const SLACK_US: u64 = 3_000_000;
+/// How far the host's estimate of a guest time may be off, in microseconds
+/// (a run on the PC showed 5 s between the guest's clock and the capture's).
+pub const SLACK_US: u64 = 15_000_000;
 /// How long a datagram call still stands for the replies that follow it.
 pub const UDP_REPLY_US: u64 = 5_000_000;
+/// How far outside the run's span a packet may be and still be the run's.
+pub const WINDOW_SLACK_US: u64 = 30_000_000;
 /// Two calls of one process to one peer closer than this are one burst.
 pub const BURST_NS: u64 = 2_000_000_000;
 /// Callers named in one cell before "+N".
@@ -174,6 +177,9 @@ pub struct NetAttribution {
     calls: Vec<FlowCall>,
     /// Where the calls that name a port are in `calls`.
     by_port: std::collections::HashMap<u16, Vec<usize>>,
+    /// When the run was live, host microseconds: packets far outside it are
+    /// not named by its calls.
+    window: Option<(u64, u64)>,
     /// Addresses the run's own DNS answers gave to a name, by address.
     names_at: BTreeMap<IpAddr, Vec<String>>,
 }
@@ -192,6 +198,7 @@ impl NetAttribution {
         Self {
             calls,
             by_port,
+            window: None,
             names_at: BTreeMap::new(),
         }
     }
@@ -233,6 +240,16 @@ impl NetAttribution {
         )
     }
 
+    /// Say when the run was live (host Unix milliseconds): a packet more than
+    /// [`WINDOW_SLACK_US`] outside is not named by this run's calls.
+    #[must_use]
+    pub fn within(mut self, started_ms: Option<u64>, ended_ms: Option<u64>) -> Self {
+        self.window = started_ms
+            .zip(ended_ms.or(started_ms))
+            .map(|(from, to)| (from.saturating_mul(1000), to.max(from).saturating_mul(1000)));
+        self
+    }
+
     pub fn calls(&self) -> &[FlowCall] {
         &self.calls
     }
@@ -265,25 +282,28 @@ impl NetAttribution {
         }
     }
 
-    /// The calls that name a flow: its address (or a bind of its port), its
-    /// protocol, and a time that overlaps the flow. A bind only counts when
-    /// no call names the address itself.
+    /// Whether a call's time fits a span, within the clock slack. A bind holds
+    /// its port from then on.
+    fn fits_time(call: &FlowCall, first: Option<u64>, last: Option<u64>) -> bool {
+        match (call.first_us, call.last_us, first, last) {
+            (Some(from), _, _, Some(last)) if call.role == Role::Bound => {
+                from <= last.saturating_add(SLACK_US)
+            }
+            (Some(from), Some(to), Some(first), Some(last)) => {
+                to.saturating_add(SLACK_US) >= first && from <= last.saturating_add(SLACK_US)
+            }
+            _ => true,
+        }
+    }
+
+    /// The calls that name a flow: its address (or a bind of its port) and
+    /// its protocol. The host's estimate of the guest clock can be seconds
+    /// off, so time only tells processes apart: when one process made every
+    /// matching call it is the flow's, whatever the clocks say; when several
+    /// did, those whose calls overlap the flow (within [`SLACK_US`]) are, and
+    /// all of them when none does. A bind only counts when no call names the
+    /// address itself.
     fn flow_calls(&self, key: &FlowKey<'_>) -> Vec<&FlowCall> {
-        let fits = |call: &&FlowCall| {
-            Self::names_endpoint(call, key)
-                && key.udp.is_none_or(|udp| udp == call.udp)
-                && match (call.first_us, call.last_us, key.first_us, key.last_us) {
-                    // A bind holds the port from then on.
-                    (Some(from), _, _, Some(last)) if call.role == Role::Bound => {
-                        from <= last.saturating_add(SLACK_US)
-                    }
-                    (Some(from), Some(to), Some(first), Some(last)) => {
-                        to.saturating_add(SLACK_US) >= first
-                            && from <= last.saturating_add(SLACK_US)
-                    }
-                    _ => true,
-                }
-        };
         let mut at: Vec<usize> = std::iter::once(key.endpoint.1)
             .chain(key.others.iter().map(|other| other.1))
             .flat_map(|port| self.by_port.get(&port).into_iter().flatten().copied())
@@ -293,17 +313,33 @@ impl NetAttribution {
         let found: Vec<&FlowCall> = at
             .into_iter()
             .map(|at| &self.calls[at])
-            .filter(fits)
+            .filter(|call| Self::names_endpoint(call, key))
+            .filter(|call| key.udp.is_none_or(|udp| udp == call.udp))
             .collect();
         let named: Vec<&FlowCall> = found
             .iter()
             .copied()
             .filter(|call| call.role != Role::Bound)
             .collect();
-        if named.is_empty() {
-            found
+        let found = if named.is_empty() { found } else { named };
+        Self::by_time(found, |call| {
+            Self::fits_time(call, key.first_us, key.last_us)
+        })
+    }
+
+    /// `calls`, narrowed by `fits` when more than one process made them and
+    /// some of them fit.
+    fn by_time(calls: Vec<&FlowCall>, fits: impl Fn(&FlowCall) -> bool) -> Vec<&FlowCall> {
+        let distinct: std::collections::BTreeSet<u64> =
+            calls.iter().map(|call| call.caller.cookie).collect();
+        if distinct.len() < 2 {
+            return calls;
+        }
+        let fitting: Vec<&FlowCall> = calls.iter().copied().filter(|call| fits(call)).collect();
+        if fitting.is_empty() {
+            calls
         } else {
-            named
+            fitting
         }
     }
 
@@ -375,34 +411,49 @@ impl NetAttribution {
     /// whose latest call to either end came before it, a datagram call only
     /// standing for the replies that follow it.
     pub fn source_of_packet(&self, udp: bool, ends: [(IpAddr, u16); 2], time_us: u64) -> Source {
-        let mut latest: BTreeMap<u64, &FlowCall> = BTreeMap::new();
+        // A packet outside the run's own span (a capture shared with another
+        // run) is not named by this run's calls.
+        let outside = self.window.is_some_and(|(from, to)| {
+            time_us.saturating_add(WINDOW_SLACK_US) < from
+                || time_us > to.saturating_add(WINDOW_SLACK_US)
+        });
         let mut at: Vec<usize> = ends
             .iter()
             .flat_map(|end| self.by_port.get(&end.1).into_iter().flatten().copied())
             .collect();
         at.sort_unstable();
         at.dedup();
-        for call in at.into_iter().map(|at| &self.calls[at]) {
-            if call.udp != udp
-                || !ends
-                    .iter()
-                    .any(|(ip, port)| Self::matches_address(call, *ip, *port))
-            {
-                continue;
-            }
-            if let Some(from) = call.first_us
-                && from > time_us.saturating_add(SLACK_US)
-            {
-                continue;
-            }
-            if udp
-                && call.role != Role::Bound
-                && call
-                    .last_us
-                    .is_some_and(|to| time_us > to.saturating_add(UDP_REPLY_US))
-            {
-                continue;
-            }
+        let found: Vec<&FlowCall> = at
+            .into_iter()
+            .map(|at| &self.calls[at])
+            .filter(|call| {
+                !outside
+                    && call.udp == udp
+                    && ends
+                        .iter()
+                        .any(|(ip, port)| Self::matches_address(call, *ip, *port))
+            })
+            .collect();
+        // A bind names a port, not a peer: it counts when nothing else does.
+        let named: Vec<&FlowCall> = found
+            .iter()
+            .copied()
+            .filter(|call| call.role != Role::Bound)
+            .collect();
+        let found = if named.is_empty() { found } else { named };
+        // One call per process; time only tells processes apart (see `flow_calls`).
+        let mut latest: BTreeMap<u64, &FlowCall> = BTreeMap::new();
+        for call in Self::by_time(found, |call| {
+            let began = call
+                .first_us
+                .is_none_or(|from| from <= time_us.saturating_add(SLACK_US));
+            let live = call.role == Role::Bound
+                || !udp
+                || call.last_us.is_none_or(|to| {
+                    time_us <= to.saturating_add(UDP_REPLY_US).saturating_add(SLACK_US)
+                });
+            began && live
+        }) {
             latest
                 .entry(call.caller.cookie)
                 .and_modify(|held| {
@@ -414,10 +465,6 @@ impl NetAttribution {
         }
         let mut named: Vec<&FlowCall> = latest.values().copied().collect();
         named.sort_by_key(|call| (call.first_us, call.call_id));
-        // A bind names a port, not a peer: it counts when nothing else does.
-        if named.iter().any(|call| call.role != Role::Bound) {
-            named.retain(|call| call.role != Role::Bound);
-        }
         let callers = Self::callers(&named);
         let own: Vec<Caller> = callers.iter().filter(|c| !c.base()).cloned().collect();
         if !own.is_empty() {
@@ -521,30 +568,91 @@ mod tests {
 
     #[test]
     fn a_udp_dns_lookup_through_sendto_names_the_resolver_caller() {
+        let attribution = NetAttribution::new(vec![
+            call(
+                caller(52, "nslookup"),
+                "sendto",
+                Role::Remote,
+                ("10.0.2.3", 53),
+                true,
+                50 * SEC,
+            ),
+            call(
+                caller(60, "dig"),
+                "sendto",
+                Role::Remote,
+                ("10.0.2.3", 53),
+                true,
+                400 * SEC,
+            ),
+        ]);
+        let source =
+            attribution.source_of(&key(true, ("10.0.2.3", 53), (50 * SEC, 50 * SEC + 30_000)));
+        assert_eq!(source.label(), "nslookup (52 \u{b7} 53)");
+        // The reply 4 s later is the first caller's; the second caller's own
+        // packet a few minutes on is the second's.
+        let ends = [(ip("10.0.2.3"), 53), (ip("10.0.2.15"), 40000)];
+        assert_eq!(
+            attribution.source_of_packet(true, ends, 54 * SEC).label(),
+            "nslookup (52 \u{b7} 53)"
+        );
+        assert_eq!(
+            attribution
+                .source_of_packet(true, ends, 400 * SEC + 20_000)
+                .label(),
+            "dig (60 \u{b7} 61)"
+        );
+    }
+
+    #[test]
+    fn a_clock_that_is_seconds_off_still_names_the_only_process_that_called() {
+        // The PC run: the guest's clock put the lookup 5 s before the capture's.
+        let attribution = NetAttribution::new(vec![call(
+            caller(165, "exe"),
+            "connect",
+            Role::Remote,
+            ("10.0.2.3", 53),
+            true,
+            100 * SEC,
+        )]);
+        let late = key(true, ("10.0.2.3", 53), (105 * SEC + 90_000, 110 * SEC));
+        assert_eq!(attribution.source_of(&late).label(), "exe (165 \u{b7} 166)");
+        let ends = [(ip("10.0.2.3"), 53), (ip("10.0.2.15"), 40000)];
+        assert_eq!(
+            attribution
+                .source_of_packet(true, ends, 105 * SEC + 90_000)
+                .kind(),
+            "process"
+        );
+    }
+
+    #[test]
+    fn packets_far_outside_the_runs_span_are_not_named_by_its_calls() {
+        // A capture shared with another run: this run was live 100..200 s.
         let attribution = NetAttribution::new(vec![call(
             caller(52, "nslookup"),
             "sendto",
             Role::Remote,
             ("10.0.2.3", 53),
             true,
-            50 * SEC,
-        )]);
-        let source =
-            attribution.source_of(&key(true, ("10.0.2.3", 53), (50 * SEC, 50 * SEC + 30_000)));
-        assert_eq!(source.label(), "nslookup (52 \u{b7} 53)");
-        // The reply 4 s later is still this call's; one a minute later is not.
-        let reply = attribution.source_of_packet(
-            true,
-            [(ip("10.0.2.3"), 53), (ip("10.0.2.15"), 40000)],
-            54 * SEC,
+            150 * SEC,
+        )])
+        .within(Some(100 * 1000), Some(200 * 1000));
+        let ends = [(ip("10.0.2.3"), 53), (ip("10.0.2.15"), 40000)];
+        assert_eq!(
+            attribution.source_of_packet(true, ends, 151 * SEC).kind(),
+            "process"
         );
-        assert_eq!(reply.kind(), "process");
-        let stale = attribution.source_of_packet(
-            true,
-            [(ip("10.0.2.3"), 53), (ip("10.0.2.15"), 40000)],
-            120 * SEC,
+        assert_eq!(
+            attribution.source_of_packet(true, ends, 500 * SEC),
+            Source::Unattributed
         );
-        assert_eq!(stale, Source::Unattributed);
+        // The base image's NTP is still the base image's.
+        let ntp = [(ip("203.0.113.5"), 123), (ip("10.0.2.15"), 123)];
+        assert_eq!(
+            attribution.source_of_packet(true, ntp, 500 * SEC).kind(),
+            "background"
+        );
     }
 
     #[test]
