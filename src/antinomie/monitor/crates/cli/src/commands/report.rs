@@ -165,8 +165,14 @@ fn short(id: &str) -> String {
 pub fn run(arguments: &Report, context: &Context) -> Result<Reply, CliError> {
     let saved = open_saved(context, &arguments.run)?;
     let choices = choices(arguments, context, &saved.run.id)?;
-    let scan = index(context, &saved)?;
     let job = report_export::Job::for_saved(&saved, choices, time_format::now_ms());
+    // A large recording is read whole unless an index of it is at hand: say
+    // so before the wait (the progress lines follow; Ctrl-C stops it).
+    let large = report_export::large_run(&job);
+    if let Some(large) = &large {
+        context.logger.warn(&large.warning());
+    }
+    let scan = index(context, &saved)?;
     std::fs::create_dir_all(&job.folder).map_err(|error| CliError::io(&job.folder, &error))?;
     context.logger.info("building the report");
     let (job, built) = report_export::build_report(&job, &scan).map_err(|error| {
@@ -202,7 +208,7 @@ pub fn run(arguments: &Report, context: &Context) -> Result<Reply, CliError> {
                 .collect()
         })
         .unwrap_or_default();
-    let value = json!({
+    let mut value = json!({
         "run": run_value(&saved),
         "folder": job.folder,
         "formats": job.choices.formats.iter().map(|format| format.label()).collect::<Vec<_>>(),
@@ -212,6 +218,12 @@ pub fn run(arguments: &Report, context: &Context) -> Result<Reply, CliError> {
         "files": files,
         "not_in_bundle": skipped,
     });
+    if let Some(large) = &large {
+        value["large_recording"] = json!({
+            "bytes": large.bytes,
+            "estimated_seconds": large.seconds,
+        });
+    }
     let mut human = block(&[
         ("run", saved.run.id.clone()),
         ("folder", job.folder.display().to_string()),

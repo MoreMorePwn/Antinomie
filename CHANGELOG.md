@@ -89,6 +89,17 @@ x86 programs by their own table.
   same for the same run and choices; the window's dialog and Detection tab work
   as before. See "Command line" in docs/usage.md.
 
+- **Exporting a large run no longer reads its recording a second time
+  (ANT-T0412).** The index Triage makes of a run when it opens it is kept for
+  the report: an export, or `antinomie-cli report`, of a recording that has not
+  changed (same files, sizes and modification times) builds the report from that
+  index and reads nothing again, even after you filtered or paged the tables on
+  screen. A 3.5 GB recording took 71 minutes to export. When a recording over
+  1 GB has to be read, the dialog says so before it starts, with an estimate
+  (Export becomes **Export anyway**) and `report` prints the same warning on
+  standard error and in its JSON result (`large_recording`); the progress line
+  and Cancel are unchanged.
+
 - **Clock model for the boot age.** A new Clock model setting in a VM's Device
   profile (Auto, Always running, Suspend) chooses whether the boot age steps
   both guest clocks or only CLOCK_BOOTTIME. Auto picks Suspend on Debian bases,
