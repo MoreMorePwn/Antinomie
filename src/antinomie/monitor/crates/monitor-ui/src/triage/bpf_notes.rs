@@ -437,9 +437,6 @@ pub(super) fn bpf_detail(
     status: &mut String,
     cx: &bpf_fields::Context,
 ) {
-    if !status.is_empty() {
-        ui.label(status.as_str());
-    }
     ui.label(theme::bold(ui, &note.heading));
     if let Some(line) = &note.lifecycle {
         ui.label(line);
@@ -475,14 +472,42 @@ pub(super) fn bpf_detail(
     }
     if let (Some(bytes), Some(directory)) = (&note.bytes, directory) {
         if ui.button("Export binary and JSON").clicked() {
-            *status = match bpf::write_export(&directory.join("bpf"), bytes, &note.identity) {
-                Ok((binary, metadata)) => {
-                    // Said where the person is looking, not only in a line above.
-                    crate::export_dirs::reported(ui.ctx(), "eBPF program and JSON", &binary);
-                    format!("Wrote {} and {}", binary.display(), metadata.display())
-                }
-                Err(error) => error,
+            let name = |path: &Path| {
+                path.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
             };
+            *status = match bpf::export_once(&directory.join("bpf"), bytes, &note.identity) {
+                Ok(bpf::Exported::Wrote(binary, metadata)) => {
+                    crate::export_dirs::reported(ui.ctx(), "eBPF program and JSON", &binary);
+                    format!("Wrote {} and {}", name(&binary), name(&metadata))
+                }
+                Ok(bpf::Exported::Already(binary, _)) => {
+                    // The name is the capture's: the same capture is one export.
+                    let text = format!(
+                        "Already exported: {} in {}",
+                        name(&binary),
+                        binary
+                            .parent()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default()
+                    );
+                    crate::activity::report(ui.ctx(), crate::activity::Level::Info, &text);
+                    text
+                }
+                Err(error) => {
+                    crate::activity::report(
+                        ui.ctx(),
+                        crate::activity::Level::Error,
+                        format!("eBPF export failed: {error}"),
+                    );
+                    error
+                }
+            };
+        }
+        // Beside the button, where the person is looking.
+        if !status.is_empty() {
+            ui.add(egui::Label::new(status.as_str()).wrap());
         }
     }
 }

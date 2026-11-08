@@ -217,6 +217,18 @@ fn note_diff(
 /// Check one sample's chain. `entries` are in storage order; `heads` are the
 /// library index's `head` records for this sample since its last purge.
 pub fn check_chain(sha256: &str, entries: &[Entry], heads: &[&IndexRecord]) -> ChainCheck {
+    check_chain_withheld(sha256, entries, heads, &std::collections::BTreeSet::new())
+}
+
+/// [`check_chain`] for an export that withheld the detail of the entries in
+/// `withheld` (a path on the exporting computer): their own hashes are taken
+/// as recorded, every link is still checked.
+fn check_chain_withheld(
+    sha256: &str,
+    entries: &[Entry],
+    heads: &[&IndexRecord],
+    withheld: &std::collections::BTreeSet<u64>,
+) -> ChainCheck {
     let mut sorted: Vec<&Entry> = entries.iter().collect();
     sorted.sort_by_key(|entry| entry.seq);
     let mut problem = None;
@@ -231,7 +243,7 @@ pub fn check_chain(sha256: &str, entries: &[Entry], heads: &[&IndexRecord]) -> C
             break;
         }
         let recomputed = entry_hash(sha256, entry);
-        if recomputed != entry.hash {
+        if recomputed != entry.hash && !withheld.contains(&entry.seq) {
             note_diff(
                 &mut problem,
                 entry.seq,
@@ -380,10 +392,17 @@ pub fn heads_of<'a>(sha256: &str, index: &'a [IndexRecord]) -> Vec<&'a IndexReco
         .collect()
 }
 
-/// Check an exported record: the chain as [`check_chain`] does, and every
-/// index record's own hash. `index` is what the record carries.
-pub fn check_record(sha256: &str, entries: &[Entry], index: &[IndexRecord]) -> ChainCheck {
-    let mut check = check_chain(sha256, entries, &heads_of(sha256, index));
+/// Check an exported record: the chain as [`check_chain`] does (taking the
+/// hashes of the entries in `withheld`, whose host path the export left out,
+/// as recorded), and every index record's own hash. `index` is what the
+/// record carries.
+pub fn check_record_withheld(
+    sha256: &str,
+    entries: &[Entry],
+    index: &[IndexRecord],
+    withheld: &std::collections::BTreeSet<u64>,
+) -> ChainCheck {
+    let mut check = check_chain_withheld(sha256, entries, &heads_of(sha256, index), withheld);
     for record in index {
         if index_hash(record) != record.hash {
             note(

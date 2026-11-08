@@ -192,7 +192,7 @@ fn write(
     let time = antinomie_monitor_core::report::utc(now)
         .replace(['-', ':'], "")
         .replace(' ', "-");
-    let base = format!("antinomie-sample-iocs-{short}-{time}");
+    let base = format!("antinomie-sample-iocs-{short}-{time}Z");
     let mut path = folder.join(format!("{base}{suffix}"));
     let mut n = 1;
     while path.exists() {

@@ -123,6 +123,44 @@ pub(crate) fn export_capture(bytes: &[u8], identity: &BpfIdentity) -> String {
     format!("{meta}\n{}", dump(bytes))
 }
 
+/// Where [`write_export`] puts a capture: `<sha256>-<provenance>.bin` and
+/// `.json`. The name is the content's, so one capture has one export.
+pub(crate) fn export_paths(
+    directory: &Path,
+    bytes: &[u8],
+    identity: &BpfIdentity,
+) -> (PathBuf, PathBuf) {
+    let hash = antinomie_monitor_core::storage::sha256_hex(bytes);
+    let provenance =
+        antinomie_monitor_core::storage::sha256_hex(export_capture(bytes, identity).as_bytes());
+    let stem = format!("{hash}-{}", &provenance[..16]);
+    (
+        directory.join(format!("{stem}.bin")),
+        directory.join(format!("{stem}.json")),
+    )
+}
+
+/// What an export button did: wrote the files, or found them written already.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Exported {
+    Wrote(PathBuf, PathBuf),
+    Already(PathBuf, PathBuf),
+}
+
+/// [`write_export`], or the files of an earlier export of the same capture
+/// when they are both there (the export never overwrites).
+pub(crate) fn export_once(
+    directory: &Path,
+    bytes: &[u8],
+    identity: &BpfIdentity,
+) -> Result<Exported, String> {
+    let (binary, metadata) = export_paths(directory, bytes, identity);
+    if binary.is_file() && metadata.is_file() {
+        return Ok(Exported::Already(binary, metadata));
+    }
+    write_export(directory, bytes, identity).map(|(b, m)| Exported::Wrote(b, m))
+}
+
 /// Write the captured bytes and a JSON sidecar. The binary is the recorded
 /// octets only; a short tail is not padded.
 pub(crate) fn write_export(
@@ -132,12 +170,11 @@ pub(crate) fn write_export(
 ) -> Result<(PathBuf, PathBuf), String> {
     std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
     let hash = antinomie_monitor_core::storage::sha256_hex(bytes);
-    let provenance =
-        antinomie_monitor_core::storage::sha256_hex(export_capture(bytes, identity).as_bytes());
-    let stem = format!("{hash}-{}", &provenance[..16]);
-    let binary_name = format!("{stem}.bin");
-    let binary = directory.join(&binary_name);
-    let metadata = directory.join(format!("{stem}.json"));
+    let (binary, metadata) = export_paths(directory, bytes, identity);
+    let binary_name = binary
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let meta = serde_json::json!({
         "sha256": hash,
         "binary": binary_name,
@@ -783,10 +820,16 @@ mod tests {
         assert_eq!(std::fs::read(&metadata).unwrap(), saved_metadata);
         let other = BpfIdentity {
             event_id: Some(3),
-            ..identity
+            ..identity.clone()
         };
         let (other_binary, _) = write_export(&root, &bytes, &other).unwrap();
         assert_ne!(binary, other_binary);
+        // A second press finds the files and says so; nothing is rewritten.
+        assert_eq!(
+            export_once(&root, &bytes, &identity).unwrap(),
+            Exported::Already(binary.clone(), metadata.clone())
+        );
+        assert_eq!(std::fs::read(&metadata).unwrap(), saved_metadata);
         std::fs::remove_dir_all(root).unwrap();
     }
 
