@@ -21,8 +21,15 @@ use std::{
     time::Duration,
 };
 
+mod run;
 #[cfg(test)]
 mod tests;
+
+pub use run::{
+    BOOT_WAIT, EVIDENCE_WAIT, EndReason, Evidence, LAUNCH_WAIT, Phase, RunPlan, RunReport,
+    STOP_RUN_GRACE, Timings, UPLOAD_WAIT, Warning, incomplete_parts, load_artifacts, pending_parts,
+    phase,
+};
 
 /// A guest command (upload, launch, stop run) whose result does not arrive in
 /// this long is an `internal` failure of the engine (audit G5, E17).
@@ -60,6 +67,8 @@ pub enum WaitError {
     Silent { what: String },
     /// A signal asked the command to stop.
     Interrupted,
+    /// The deadline the caller set for the whole command passed.
+    DeadlineExceeded,
     /// The engine is gone.
     Disconnected(String),
 }
@@ -75,6 +84,7 @@ impl std::fmt::Display for WaitError {
                 LANE_SILENCE.as_secs()
             ),
             Self::Interrupted => f.write_str("interrupted"),
+            Self::DeadlineExceeded => f.write_str("the time limit of the command passed"),
         }
     }
 }
@@ -100,6 +110,7 @@ pub struct Waiter<E: Engine> {
     terminals: BTreeMap<String, TerminalTail>,
     observer: Option<Observer>,
     interrupted: Option<Box<dyn Fn() -> bool + Send>>,
+    deadline_ms: Option<u64>,
 }
 
 impl<E: Engine> Waiter<E> {
@@ -112,6 +123,7 @@ impl<E: Engine> Waiter<E> {
             terminals: BTreeMap::new(),
             observer: None,
             interrupted: None,
+            deadline_ms: None,
         }
     }
 
@@ -124,6 +136,12 @@ impl<E: Engine> Waiter<E> {
     /// [`WaitError::Interrupted`].
     pub fn interrupt_when(&mut self, interrupted: impl Fn() -> bool + Send + 'static) {
         self.interrupted = Some(Box::new(interrupted));
+    }
+
+    /// Every wait ends with [`WaitError::DeadlineExceeded`] once the clock
+    /// passes `after` from now: the limit of the whole command.
+    pub fn deadline_in(&mut self, after: Duration) {
+        self.deadline_ms = Some(self.now_ms() + millis(after));
     }
 
     pub fn snapshot(&self) -> &Snapshot {
@@ -153,7 +171,11 @@ impl<E: Engine> Waiter<E> {
 
     fn check_interrupt(&self) -> Result<(), WaitError> {
         match &self.interrupted {
-            Some(interrupted) if interrupted() => Err(WaitError::Interrupted),
+            Some(interrupted) if interrupted() => return Err(WaitError::Interrupted),
+            _ => {}
+        }
+        match self.deadline_ms {
+            Some(deadline) if self.now_ms() >= deadline => Err(WaitError::DeadlineExceeded),
             _ => Ok(()),
         }
     }

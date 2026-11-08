@@ -9,8 +9,11 @@ use std::{
     },
 };
 
+type Reactor = Box<dyn FnMut(&Command, u64, &mut VecDeque<Notification>)>;
+
 /// An engine that plays notifications back. A receive with nothing queued
-/// moves the clock by the timeout, as a real wait would.
+/// moves the clock by the timeout, as a real wait would, or to the next
+/// notification scheduled for a later time.
 pub(super) struct Fake {
     pub clock: Arc<ManualClock>,
     pub queue: VecDeque<Notification>,
@@ -18,6 +21,10 @@ pub(super) struct Fake {
     next_id: u64,
     /// Notifications released by the n-th command sent.
     pub on_send: Vec<VecDeque<Notification>>,
+    /// Called for every command sent, with its id; what it pushes is queued.
+    pub react: Option<Reactor>,
+    /// Notifications that arrive when the clock reaches the time (ms).
+    pub timed: Vec<(u64, Notification)>,
 }
 
 impl Fake {
@@ -28,6 +35,8 @@ impl Fake {
             sent: Arc::default(),
             next_id: 0,
             on_send: Vec::new(),
+            react: None,
+            timed: Vec::new(),
         }
     }
 }
@@ -40,16 +49,27 @@ impl Engine for Fake {
             let released = self.on_send.remove(0);
             self.queue.extend(released);
         }
+        if let Some(react) = self.react.as_mut() {
+            react(&command, self.next_id, &mut self.queue);
+        }
         Ok(self.next_id)
     }
     fn recv(&mut self, timeout: Duration) -> Result<Option<Notification>, String> {
-        match self.queue.pop_front() {
-            Some(notification) => Ok(Some(notification)),
-            None => {
-                self.clock.advance(timeout.as_millis() as u64);
-                Ok(None)
-            }
+        if let Some(notification) = self.queue.pop_front() {
+            return Ok(Some(notification));
         }
+        let now = self.clock.now_ms();
+        let limit = now + timeout.as_millis() as u64;
+        self.timed.sort_by_key(|(at, _)| *at);
+        if let Some((at, _)) = self.timed.first()
+            && *at <= limit
+        {
+            let (at, notification) = self.timed.remove(0);
+            self.clock.set(at.max(now));
+            return Ok(Some(notification));
+        }
+        self.clock.advance(timeout.as_millis() as u64);
+        Ok(None)
     }
 }
 
@@ -61,7 +81,7 @@ pub(super) fn result(id: u64, success: bool, message: &str) -> Notification {
     }
 }
 
-pub(super) fn waiter(fake: Fake) -> (Waiter<Fake>, Arc<ManualClock>) {
+pub(super) fn make(fake: Fake) -> (Waiter<Fake>, Arc<ManualClock>) {
     let clock = fake.clock.clone();
     (Waiter::new(fake, clock.clone()), clock)
 }
@@ -74,7 +94,7 @@ fn a_command_returns_its_own_result_and_keeps_another_for_later() {
         result(2, true, "second"),
         result(1, true, "first"),
     ])];
-    let (mut waiter, _) = waiter(fake);
+    let (mut waiter, _) = make(fake);
     assert_eq!(waiter.command(Command::Stop, None), Ok("first".to_owned()));
     assert_eq!(waiter.take_result(2), Some(Ok("second".to_owned())));
     assert_eq!(waiter.take_result(2), None);
@@ -84,7 +104,7 @@ fn a_command_returns_its_own_result_and_keeps_another_for_later() {
 fn a_refused_command_carries_the_engines_words() {
     let mut fake = Fake::new(Arc::new(ManualClock::new(0)));
     fake.on_send = vec![VecDeque::from([result(1, false, "unknown VM")])];
-    let (mut waiter, _) = waiter(fake);
+    let (mut waiter, _) = make(fake);
     assert_eq!(
         waiter.command(Command::Stop, None),
         Err(WaitError::Failed("unknown VM".into()))
@@ -93,7 +113,7 @@ fn a_refused_command_carries_the_engines_words() {
 
 #[test]
 fn the_limit_ends_a_wait_on_the_clock_without_sleeping() {
-    let (mut waiter, clock) = waiter(Fake::new(Arc::new(ManualClock::new(0))));
+    let (mut waiter, clock) = make(Fake::new(Arc::new(ManualClock::new(0))));
     let error = waiter
         .command(Command::Stop, Some(Duration::from_secs(5)))
         .unwrap_err();
@@ -108,7 +128,7 @@ fn the_limit_ends_a_wait_on_the_clock_without_sleeping() {
 
 #[test]
 fn a_guest_command_without_a_result_is_silence_after_sixty_seconds() {
-    let (mut waiter, clock) = waiter(Fake::new(Arc::new(ManualClock::new(0))));
+    let (mut waiter, clock) = make(Fake::new(Arc::new(ManualClock::new(0))));
     let error = waiter.lane_command(Command::Stop).unwrap_err();
     assert_eq!(
         error,
@@ -132,7 +152,7 @@ fn wait_until_follows_the_latest_snapshot() {
     fake.queue
         .push_back(Notification::Snapshot(Snapshot::default()));
     fake.queue.push_back(Notification::Snapshot(running));
-    let (mut waiter, _) = waiter(fake);
+    let (mut waiter, _) = make(fake);
     let seen = Arc::new(Mutex::new(0));
     let counter = seen.clone();
     waiter.observe(move |_| *counter.lock().unwrap() += 1);
@@ -157,7 +177,7 @@ fn wait_until_follows_the_latest_snapshot() {
 
 #[test]
 fn a_signal_ends_a_wait() {
-    let (mut waiter, _) = waiter(Fake::new(Arc::new(ManualClock::new(0))));
+    let (mut waiter, _) = make(Fake::new(Arc::new(ManualClock::new(0))));
     let flag = Arc::new(AtomicBool::new(false));
     let seen = flag.clone();
     waiter.interrupt_when(move || seen.load(Ordering::SeqCst));
@@ -180,7 +200,7 @@ fn terminal_output_is_kept_as_a_bounded_tail() {
     fake.queue
         .push_back(piece(vec![b'a'; TERMINAL_TAIL], false));
     fake.queue.push_back(piece(b"tail".to_vec(), true));
-    let (mut waiter, _) = waiter(fake);
+    let (mut waiter, _) = make(fake);
     waiter.drain().unwrap();
     let tail = waiter.terminal("r1").unwrap();
     assert_eq!(tail.bytes.len(), TERMINAL_TAIL);
@@ -234,7 +254,7 @@ fn a_stop_waits_for_the_flush_and_the_disk_layer() {
         result(1, true, "VM stopped"),
         Notification::Snapshot(settled),
     ])];
-    let (mut waiter, _) = waiter(fake);
+    let (mut waiter, _) = make(fake);
     assert_eq!(waiter.stop_vm("vm1", None), Ok("VM stopped".to_owned()));
     assert!(waiter.snapshot().disk_layers.is_empty());
 }
@@ -261,9 +281,20 @@ fn a_stop_whose_layer_never_settles_times_out_on_the_clock() {
         result(1, true, "VM stopped"),
         Notification::Snapshot(stuck),
     ])];
-    let (mut waiter, _) = waiter(fake);
+    let (mut waiter, _) = make(fake);
     let error = waiter
         .stop_vm("vm1", Some(Duration::from_secs(30)))
         .unwrap_err();
     assert!(matches!(error, WaitError::TimedOut { .. }));
+}
+
+#[test]
+fn the_deadline_of_the_command_ends_every_wait_the_same_way() {
+    let (mut waiter, clock) = make(Fake::new(Arc::new(ManualClock::new(0))));
+    waiter.deadline_in(Duration::from_secs(30));
+    let error = waiter.command(Command::Stop, None).unwrap_err();
+    assert_eq!(error, WaitError::DeadlineExceeded);
+    assert!((30_000..31_000).contains(&clock.now_ms()));
+    let again = waiter.wait_until("anything", None, |_| false).unwrap_err();
+    assert_eq!(again, WaitError::DeadlineExceeded);
 }
