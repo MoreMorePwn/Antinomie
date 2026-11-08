@@ -1808,6 +1808,19 @@ the web layer are not shipped yet; this list is what `antinomie-cli --help` show
 
 ## Troubleshooting
 
+- **Moving the data folder (0.9.0).** Close Antinomie, move or copy the whole data
+  folder (bases, VM folders, `vm-locations.json`), and point the app at the new place
+  (`--data-dir`, or the default location). Installed bases record their files
+  relative to their folder, and bases installed before 0.9.0 are found by file name
+  inside their own folder. At the next start the app repairs the paths a VM keeps
+  outside its base (`vm-locations.json`, the VM's `bundle.json`, the backing-file
+  names inside `disk.qcow2` and `snapshots/`), and prints what it could not repair
+  on standard error as "data folder: ...". A base that still cannot load is listed
+  in the Library with its reason and in `antinomie-cli base list`, and the menu bar
+  says "Base image not usable". Left as they were: a VM or recordings folder placed
+  outside the data folder (it stays where it was recorded), the recorded start
+  state of a boot (`disk-start.json`, only used to read a run's earlier file bytes),
+  and the user's own absolute paths in settings.
 - **A run is missing from Run History.** A run whose files cannot be read still
   shows (0.9.0), with "run record unreadable" and the reason; its folder is
   untouched. Older builds skipped a run whose analysis report had gained a check

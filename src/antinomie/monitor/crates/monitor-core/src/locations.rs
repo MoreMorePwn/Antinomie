@@ -17,7 +17,63 @@ struct Entry {
     deleted: bool,
 }
 
+/// The registry as the data folder stands now: an entry whose folder is gone
+/// because the data folder moved (restored from a backup, mounted elsewhere)
+/// points at the VM's folder in this data folder instead.
 fn registry(options: &BackendOptions) -> Result<Vec<Entry>, String> {
+    let mut entries = recorded_registry(options)?;
+    relocate_entries(options, &mut entries);
+    Ok(entries)
+}
+
+/// Re-point the entries of VMs whose recorded folder is missing but whose
+/// folder `<data>/<id>` is here. Every other path under the old data folder
+/// moves with it; paths elsewhere (a recordings folder chosen outside the
+/// data folder) stay as recorded.
+fn relocate_entries(options: &BackendOptions, entries: &mut [Entry]) {
+    for entry in entries {
+        let here = options.data_dir.join(&entry.id);
+        let old = entry.disk_directory.clone();
+        if old.exists() || old == here || !here.join("config.json").is_file() {
+            continue;
+        }
+        let old_data = old.parent().map(std::path::Path::to_path_buf);
+        let moved = |path: &PathBuf| -> PathBuf {
+            if *path == old {
+                return here.clone();
+            }
+            match old_data
+                .as_ref()
+                .and_then(|data| path.strip_prefix(data).ok())
+            {
+                Some(rest) => options.data_dir.join(rest),
+                None => path.clone(),
+            }
+        };
+        entry.disk_directory = here.clone();
+        entry.recording_directory = moved(&entry.recording_directory);
+        entry.recording_directories = entry.recording_directories.iter().map(moved).collect();
+    }
+}
+
+/// Write the registry again when [`registry`] had to move entries, so the
+/// file names this data folder.
+pub(crate) fn heal_registry(options: &BackendOptions) -> Result<bool, String> {
+    let recorded = recorded_registry(options)?;
+    let mut healed = recorded.clone();
+    relocate_entries(options, &mut healed);
+    let changed = recorded.iter().zip(&healed).any(|(a, b)| {
+        a.disk_directory != b.disk_directory
+            || a.recording_directory != b.recording_directory
+            || a.recording_directories != b.recording_directories
+    });
+    if changed {
+        store(options, &healed).map_err(|e| e.to_string())?;
+    }
+    Ok(changed)
+}
+
+fn recorded_registry(options: &BackendOptions) -> Result<Vec<Entry>, String> {
     let path = options.data_dir.join("vm-locations.json");
     if !path.exists() {
         return Ok(Vec::new());
@@ -292,11 +348,20 @@ pub(crate) fn mark_deleted(options: &BackendOptions, id: &str) -> Result<(), Pub
 }
 
 pub(crate) fn installed_bases(options: &BackendOptions) -> Result<Vec<BaseSummary>, String> {
+    installed_bases_checked(options).map(|(bases, _)| bases)
+}
+
+/// The installed bases that load, and the base folders that do not with the
+/// reason each failed: one damaged or unmoved base must not hide the others.
+pub(crate) fn installed_bases_checked(
+    options: &BackendOptions,
+) -> Result<(Vec<BaseSummary>, Vec<BaseProblem>), String> {
     let root = options.data_dir.join("bases");
     if !root.exists() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let mut bases = Vec::new();
+    let mut problems = Vec::new();
     for entry in fs::read_dir(root).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         if !entry.file_type().map_err(|e| e.to_string())?.is_dir()
@@ -304,43 +369,56 @@ pub(crate) fn installed_bases(options: &BackendOptions) -> Result<Vec<BaseSummar
         {
             continue;
         }
-        let bundle = Bundle::load(&entry.path())?;
-        bundle.verify_installed()?;
-        if !bundle.kernel_version.starts_with("6.12.94") {
-            continue;
-        }
-        let id = bundle
-            .base_identity
-            .ok_or("installed bundle missing identity")?;
-        if entry.file_name() != std::ffi::OsStr::new(&id) {
-            return Err("installed base directory identity mismatch".into());
-        }
-        bases.push(BaseSummary {
-            id,
-            label: bundle.name.clone().unwrap_or_else(|| {
-                bundle
-                    .guest
-                    .as_ref()
-                    .map_or_else(|| "BusyBox".into(), |guest| guest.label.clone())
+        match installed_base(&entry.path()) {
+            Ok(Some(base)) => bases.push(base),
+            Ok(None) => {}
+            Err(reason) => problems.push(BaseProblem {
+                directory: entry.path(),
+                reason,
             }),
-            directory: entry.path(),
-            min_ram_mib: bundle.guest.as_ref().map_or(256, |guest| guest.min_ram_mib),
-            min_disk_gib: bundle.guest.as_ref().map_or(1, |guest| guest.min_disk_gib),
-            guest: bundle.guest,
-            fixed_display: bundle.fixed_display,
-            arch: bundle.arch,
-            size_bytes: fs::metadata(&bundle.base_disk).map_or(0, |meta| meta.len()),
-            revision: bundle.antinomie_revision,
-            min_app_version: bundle.min_app_version.clone(),
-            built_with: bundle.built_with.clone(),
-            stealth_support: bundle.stealth_support.clone(),
-        });
+        }
         if bases.len() > 128 {
             return Err("installed base catalog exceeds limit".into());
         }
     }
     bases.sort_by(|a, b| a.id.cmp(&b.id));
-    Ok(bases)
+    problems.sort_by(|a, b| a.directory.cmp(&b.directory));
+    Ok((bases, problems))
+}
+
+/// One installed base folder; `None` for a base of another kernel line.
+fn installed_base(directory: &std::path::Path) -> Result<Option<BaseSummary>, String> {
+    let bundle = Bundle::load(directory)?;
+    bundle.verify_installed()?;
+    if !bundle.kernel_version.starts_with("6.12.94") {
+        return Ok(None);
+    }
+    let id = bundle
+        .base_identity
+        .ok_or("installed bundle missing identity")?;
+    if directory.file_name() != Some(std::ffi::OsStr::new(&id)) {
+        return Err("installed base directory identity mismatch".into());
+    }
+    Ok(Some(BaseSummary {
+        id,
+        label: bundle.name.clone().unwrap_or_else(|| {
+            bundle
+                .guest
+                .as_ref()
+                .map_or_else(|| "BusyBox".into(), |guest| guest.label.clone())
+        }),
+        directory: directory.to_path_buf(),
+        min_ram_mib: bundle.guest.as_ref().map_or(256, |guest| guest.min_ram_mib),
+        min_disk_gib: bundle.guest.as_ref().map_or(1, |guest| guest.min_disk_gib),
+        guest: bundle.guest,
+        fixed_display: bundle.fixed_display,
+        arch: bundle.arch,
+        size_bytes: fs::metadata(&bundle.base_disk).map_or(0, |meta| meta.len()),
+        revision: bundle.antinomie_revision,
+        min_app_version: bundle.min_app_version.clone(),
+        built_with: bundle.built_with.clone(),
+        stealth_support: bundle.stealth_support.clone(),
+    }))
 }
 
 pub(crate) fn boot_bundle(

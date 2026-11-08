@@ -109,7 +109,10 @@ fn a_run_record_that_cannot_be_read_is_listed_with_the_reason() {
                 .unwrap()
                 .starts_with("run record unreadable:")
         );
-        assert_eq!(run.directory, root.canonicalize().unwrap().join("runs").join(name));
+        assert_eq!(
+            run.directory,
+            root.canonicalize().unwrap().join("runs").join(name)
+        );
         assert!(!run.state.ended_normally());
     }
     // Listing wrote nothing into the damaged folders.

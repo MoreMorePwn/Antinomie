@@ -23,6 +23,17 @@ x86 programs by their own table.
   instead of being left out, and an analysis report that cannot be used no
   longer hides its run: the run shows with a note.
 
+- **A moved data folder keeps its bases and VMs (ANT-T0416).** A base installed
+  from 0.9.0 on records its files relative to its own folder, and the app
+  reads the older absolute records from the folder they are in, so a data
+  folder moved, restored from a backup or mounted at another path no longer
+  shows "No base image" (the check that a recorded file stays inside the base
+  folder is kept). At start the app also repairs what a VM keeps outside its
+  base: `vm-locations.json`, the VM's own `bundle.json` and the backing-file
+  names inside its disk and snapshot layers, when the folder they name is gone.
+  A base that cannot load is listed with the reason (Library page, `base
+  list`) and no longer hides the others.
+
 - **The data folder says who owns it.** The process that takes the data folder
   writes `run/owner.json` (its pid, whether it is the window, a daemon or a
   command, when it started) and removes it on a clean exit. A second Antinomie

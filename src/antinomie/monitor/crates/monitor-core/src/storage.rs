@@ -429,6 +429,61 @@ pub struct Bundle {
 fn is_false(value: &bool) -> bool {
     !value
 }
+/// The file a bundle record names, inside the bundle folder `root` (already
+/// canonical). A relative path is taken from `root`. An absolute path is how
+/// bundles were recorded before 0.9.0: it is used when it lies inside `root`;
+/// when the data folder has moved (the path is missing, or still names the old
+/// copy) the same path is looked up from `root` by its trailing components.
+/// A result that does not canonicalize inside `root` is refused.
+pub(crate) fn resolve_in_bundle(root: &Path, recorded: &Path) -> Result<PathBuf, String> {
+    use std::path::Component;
+    let inside = |candidate: &Path| -> Result<Option<PathBuf>, String> {
+        match fs::canonicalize(candidate) {
+            Ok(path) if path.starts_with(root) => Ok(Some(path)),
+            Ok(_) => Err("bundle artifact escapes bundle directory".into()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("artifact {}: {e}", recorded.display())),
+        }
+    };
+    if recorded
+        .components()
+        .any(|c| matches!(c, Component::ParentDir))
+    {
+        return Err("bundle artifact escapes bundle directory".into());
+    }
+    if recorded.is_relative() {
+        return inside(&root.join(recorded))?
+            .ok_or_else(|| format!("artifact {}: not found in the bundle", recorded.display()));
+    }
+    if let Ok(path) = fs::canonicalize(recorded)
+        && path.starts_with(root)
+    {
+        return Ok(path);
+    }
+    // Moved data folder: the longest tail of the old path that exists here.
+    let names: Vec<&std::ffi::OsStr> = recorded
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(name) => Some(name),
+            _ => None,
+        })
+        .collect();
+    for start in 0..names.len() {
+        let tail: PathBuf = names[start..].iter().collect();
+        if let Some(path) = inside(&root.join(tail))? {
+            return Ok(path);
+        }
+    }
+    if fs::canonicalize(recorded).is_ok() {
+        return Err("bundle artifact escapes bundle directory".into());
+    }
+    Err(format!(
+        "artifact {}: not found in the bundle folder {}",
+        recorded.display(),
+        root.display()
+    ))
+}
+
 impl Bundle {
     /// The base runs Debian's own signed modules: a Debian image (the only
     /// bases with a guest profile), whose builder accepts only the stock
@@ -436,6 +491,21 @@ impl Bundle {
     /// (NVMe, DRM, USB, libata) are Debian's builds, without Antinomie's hooks.
     pub fn runs_debian_modules(&self) -> bool {
         self.guest.is_some()
+    }
+
+    /// This bundle with every file path recorded relative to `dir` (those
+    /// that lie inside it; others are left as they are).
+    pub(crate) fn relative_to(&self, dir: &Path) -> Self {
+        let relative = |path: &PathBuf| path.strip_prefix(dir).unwrap_or(path).to_path_buf();
+        let mut copy = self.clone();
+        copy.kernel = relative(&copy.kernel);
+        copy.base_disk = relative(&copy.base_disk);
+        copy.initrd = copy.initrd.as_ref().map(relative);
+        copy.symbols = copy.symbols.as_ref().map(relative);
+        copy.uefi.uefi_root = copy.uefi.uefi_root.as_ref().map(relative);
+        copy.uefi.uefi_layout = copy.uefi.uefi_layout.as_ref().map(relative);
+        copy.uefi.uefi_disk = copy.uefi.uefi_disk.as_ref().map(relative);
+        copy
     }
 
     pub fn load(dir: &Path) -> Result<Self, String> {
@@ -452,14 +522,7 @@ impl Bundle {
         {
             return Err("bundle has an invalid stealth_support list".into());
         }
-        let resolve = |p: &Path| -> Result<PathBuf, String> {
-            let path = fs::canonicalize(root.join(p))
-                .map_err(|e| format!("artifact {}: {e}", p.display()))?;
-            if !path.starts_with(&root) {
-                return Err("bundle artifact escapes bundle directory".into());
-            }
-            Ok(path)
-        };
+        let resolve = |p: &Path| resolve_in_bundle(&root, p);
         b.kernel = resolve(&b.kernel)?;
         b.base_disk = resolve(&b.base_disk)?;
         b.initrd = b.initrd.as_ref().map(|p| resolve(p)).transpose()?;
@@ -713,7 +776,8 @@ impl Bundle {
             },
         };
         installed.verify_installed()?;
-        atomic_json(&target.join("bundle.json"), &installed)?;
+        // Recorded relative to the folder, so the data folder can move.
+        atomic_json(&target.join("bundle.json"), &installed.relative_to(&target))?;
         Ok(installed)
     }
     /// Check an installed base against its identity. The file checksums of
@@ -927,6 +991,9 @@ mod vm_ops;
 pub(crate) use vm_ops::{
     create_overlay, delete_vm, duplicate_vm, reset_vm_disk, save_vm_config, validate_disk_chain,
 };
+
+#[cfg(test)]
+mod bundle_paths_tests;
 
 #[cfg(test)]
 mod tests {

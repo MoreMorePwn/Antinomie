@@ -4,7 +4,8 @@ use super::*;
 
 impl Worker {
     pub(super) fn refresh_locations(&mut self) -> Result<(), String> {
-        self.snapshot.bases = crate::locations::installed_bases(&self.options)?;
+        (self.snapshot.bases, self.snapshot.base_problems) =
+            crate::locations::installed_bases_checked(&self.options)?;
         self.snapshot.vm_locations = self
             .snapshot
             .vms
@@ -379,16 +380,22 @@ impl Worker {
     /// when there are none. A base is fully checked the first time only,
     /// which can take seconds, so this runs here and not before the UI.
     fn load_bases(&mut self) {
-        let result = (|| -> Result<Vec<BaseSummary>, String> {
-            let mut bases = crate::locations::installed_bases(&self.options)?;
-            if bases.is_empty() && self.options.bundle_dir.join("bundle.json").is_file() {
+        let result = (|| -> Result<_, String> {
+            let mut listed = crate::locations::installed_bases_checked(&self.options)?;
+            if listed.0.is_empty()
+                && listed.1.is_empty()
+                && self.options.bundle_dir.join("bundle.json").is_file()
+            {
                 crate::locations::boot_bundle(&self.options, None)?;
-                bases = crate::locations::installed_bases(&self.options)?;
+                listed = crate::locations::installed_bases_checked(&self.options)?;
             }
-            Ok(bases)
+            Ok(listed)
         })();
         match result {
-            Ok(bases) => self.snapshot.bases = bases,
+            Ok((bases, problems)) => {
+                self.snapshot.bases = bases;
+                self.snapshot.base_problems = problems;
+            }
             Err(error) => self.snapshot.last_error = Some(format!("base images: {error}")),
         }
         self.snapshot.bases_checking = false;

@@ -1393,6 +1393,15 @@ pub struct BaseSummary {
     pub stealth_support: Vec<String>,
 }
 
+/// An installed base folder that could not be loaded, and why. The base list
+/// shows it so a base never just vanishes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BaseProblem {
+    /// The folder under `bases/`.
+    pub directory: PathBuf,
+    pub reason: String,
+}
+
 impl BaseSummary {
     /// The guest architecture the base is for, from its `bundle.json`
     /// (x86-64 when that has none).
@@ -2799,6 +2808,8 @@ pub struct Snapshot {
         std::collections::BTreeMap<String, Vec<crate::capture_processes::CaptureProcess>>,
     pub vms: Vec<VmConfig>,
     pub bases: Vec<BaseSummary>,
+    /// Base folders that did not load, each with the reason.
+    pub base_problems: Vec<BaseProblem>,
     /// The installed bases are still being listed (and, the first time,
     /// checked); `bases` is empty until then.
     pub bases_checking: bool,
