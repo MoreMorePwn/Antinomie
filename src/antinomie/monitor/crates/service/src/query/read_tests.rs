@@ -420,16 +420,48 @@ fn the_trace_filters_by_process_and_hidden_groups() {
     let names: Vec<_> = hidden.items.iter().map(|row| row.name.as_str()).collect();
     assert_eq!(names, ["execve"], "openat, read and write are file calls");
     assert_eq!(hidden.total, Some(1));
-    // The q language needs the service to use the Triage filter (card Q-4).
+    // `q` is the Triage crate's syscall filter language (card Q-4).
+    let named = reply!(
+        call(
+            &service,
+            "recording.trace.page",
+            json!({"run_key": key, "q": "syscall.name == \"openat\""}),
+            &ctx()
+        ),
+        Trace
+    );
+    let names: Vec<_> = named.items.iter().map(|row| row.name.as_str()).collect();
+    assert!(!names.is_empty() && names.iter().all(|name| *name == "openat"));
+    assert_eq!(named.total, Some(names.len() as u64));
+    assert!(names.len() < 5, "the other calls are filtered out");
     let error = call(
         &service,
         "recording.trace.page",
-        json!({"run_key": key, "q": "name = openat"}),
+        json!({"run_key": key, "q": "syscall.nope == 1"}),
         &ctx(),
     )
     .unwrap_err();
-    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert_eq!(error.code, ErrorCode::InvalidArgument);
     assert_eq!(error.field.as_deref(), Some("q"));
+    // The same walk with another filter is another walk.
+    let first = reply!(
+        call(
+            &service,
+            "recording.trace.page",
+            json!({"run_key": key, "q": "pid >= 0", "limit": 1}),
+            &ctx()
+        ),
+        Trace
+    );
+    let cursor = first.next_cursor.expect("more rows");
+    let error = call(
+        &service,
+        "recording.trace.page",
+        json!({"run_key": key, "q": "pid >= 1", "limit": 1, "cursor": cursor}),
+        &ctx(),
+    )
+    .unwrap_err();
+    assert_eq!(error.reason(), Some(ErrorReason::CursorStale));
     let error = call(
         &service,
         "recording.trace.page",
@@ -1533,21 +1565,6 @@ fn a_finalizing_recording_answers_with_its_phase_and_stays_readable() {
         Run
     );
     assert_eq!(json_of(&detail.value.unwrap())["layer"], "pending");
-}
-
-#[test]
-fn the_triage_reads_wait_for_their_card() {
-    let data = Data::new("triage");
-    let run = standard(&data);
-    let service = data.service();
-    let error = call(
-        &service,
-        "recording.summary",
-        json!({"run_key": run.key()}),
-        &ctx(),
-    )
-    .unwrap_err();
-    assert_eq!(error.code, ErrorCode::Unsupported);
 }
 
 #[test]
