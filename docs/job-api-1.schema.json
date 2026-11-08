@@ -3797,7 +3797,32 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "description": "One tag as `KIND=VALUE` (a bare value is a custom tag)."
+        },
+        "tags": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "More tags a sample must also have (additive to the 5.3 table)."
+        },
+        "all": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Include samples whose archive was removed (additive)."
+        },
+        "custody": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Fill `custody_ok` by checking every chain (additive)."
         },
         "limit": {
           "type": [
@@ -3846,6 +3871,60 @@
       "required": [
         "sha256"
       ]
+    },
+    "SampleGetParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "$ref": "#/$defs/Sha256Hex"
+        },
+        "origins": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "events": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "runs": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "sha256"
+      ],
+      "description": "`sample.get`: the sample, and on request the routes that brought it in, its\ncustody events and its runs (additive members of the 5.3 table)."
+    },
+    "SampleDownloadParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "$ref": "#/$defs/Sha256Hex"
+        },
+        "range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ByteRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "sha256"
+      ],
+      "description": "`sample.download`: a range of the library archive (an AES zip), at most\n1 MiB per call, as Base64."
     },
     "SampleAddParams": {
       "type": "object",

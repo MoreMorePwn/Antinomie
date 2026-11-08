@@ -701,6 +701,12 @@ impl Library {
     /// Replace a sample's tags. Every tag must be valid and a custom tag
     /// without a colour takes the first of the palette.
     pub fn set_tags(&mut self, sha256: &str, tags: &[Tag]) -> Result<(), String> {
+        self.set_tags_as(sha256, tags, "analyst")
+    }
+
+    /// [`Self::set_tags`] with the custody entry written under `by` (a
+    /// service names the caller instead of the analyst).
+    pub fn set_tags_as(&mut self, sha256: &str, tags: &[Tag], by: &str) -> Result<(), String> {
         let sha256 = sha256.to_ascii_lowercase();
         for tag in tags {
             tag.validate()?;
@@ -731,7 +737,7 @@ impl Library {
         transaction.commit().map_err(|e| e.to_string())?;
         self.note(
             &sha256,
-            "analyst",
+            by,
             CustodyEvent::Edited {
                 what: "tags".into(),
             },

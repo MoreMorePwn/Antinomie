@@ -386,8 +386,18 @@ pub struct ReportGetParams {
 pub struct SampleListParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub q: Option<String>,
+    /// One tag as `KIND=VALUE` (a bare value is a custom tag).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
+    /// More tags a sample must also have (additive to the 5.3 table).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+    /// Include samples whose archive was removed (additive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub all: Option<bool>,
+    /// Fill `custody_ok` by checking every chain (additive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custody: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -404,6 +414,30 @@ pub struct SampleList {
 #[serde(deny_unknown_fields)]
 pub struct Sha256Params {
     pub sha256: Sha256Hex,
+}
+
+/// `sample.get`: the sample, and on request the routes that brought it in, its
+/// custody events and its runs (additive members of the 5.3 table).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SampleGetParams {
+    pub sha256: Sha256Hex,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origins: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runs: Option<bool>,
+}
+
+/// `sample.download`: a range of the library archive (an AES zip), at most
+/// 1 MiB per call, as Base64.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SampleDownloadParams {
+    pub sha256: Sha256Hex,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<ByteRange>,
 }
 
 /// `sample.add`: `sample.upload_id`, or `sample.path` (local-only).
