@@ -702,10 +702,12 @@ mod tests {
         ctx: egui::Context,
         model: Model,
         outbound: bool,
+        _keys: std::sync::MutexGuard<'static, ()>,
     }
 
     impl Fixture {
         fn new(name: &str) -> Self {
+            let keys = crate::api_key_lock();
             let dir =
                 std::env::temp_dir().join(format!("ant-rules-ioc-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
@@ -723,6 +725,7 @@ mod tests {
                 ctx,
                 model,
                 outbound: false,
+                _keys: keys,
             }
         }
 
