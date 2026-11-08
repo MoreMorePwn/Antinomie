@@ -89,20 +89,15 @@ impl MonitorApp {
             })
             .collect();
         let input = crate::triage::TriageInput {
-            analysis: run.analysis.as_ref(),
             invocations: &invocations,
-            vm_id: Some(&run.vm_id),
-            boot_id: Some(&run.boot_id),
-            run_id: Some(&run.id),
-            archive: Some(&run.directory),
-            pcap: owned_pcap.as_ref().map(|owned| owned.0.as_path()),
             pcap_open: owned_pcap.as_ref().is_some_and(|owned| owned.1),
-            clock_anchor: run.clock_anchor,
-            started_ms: run.started_ms,
-            root_cookie: run.root_task_cookie,
             run_finished: !self.live_history_run(&run),
             current_boot: self.snapshot.active_vm.as_deref() == Some(run.vm_id.as_str())
                 && self.snapshot.boot_id.as_deref() == Some(run.boot_id.as_str()),
+            ..crate::triage::TriageInput::for_run(
+                &run,
+                owned_pcap.as_ref().map(|owned| owned.0.as_path()),
+            )
         };
         self.triage.set_address_lookup(self.settings.address_lookup);
         self.configure_detection();

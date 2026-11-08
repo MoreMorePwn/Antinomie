@@ -26,8 +26,8 @@ pub(crate) use antinomie_triage::run_end;
 use antinomie_triage::*;
 use antinomie_triage::{
     archive_scan, file_category, file_location, file_type, file_visibility, files, findings,
-    ioc_scan, lineage_index, live_judge, pcap_scan, process_cells, process_env, process_record,
-    rules, scan_progress,
+    ioc_scan, live_judge, pcap_scan, process_cells, process_env, process_record, rules,
+    scan_progress,
 };
 #[cfg(test)]
 use antinomie_triage::{async_files, descriptors, file_content, kernel_records};
@@ -82,6 +82,8 @@ mod refresh;
 #[cfg(test)]
 mod refresh_tests;
 mod report_export;
+#[cfg(test)]
+mod saved_run_tests;
 
 /// Where the app leaves the selected run's dump-trigger log for Triage, and
 /// where Triage leaves a request to open the Memory or Core dumps tab.
@@ -497,17 +499,7 @@ impl TriageView {
         self.detection
             .set_index(self.index_state(input.archive.is_some()));
         self.detection.tick(ctx, &input);
-        self.scan_request.clock_anchor = input.clock_anchor;
-        self.scan_request.started_ms = input.started_ms;
-        self.scan_request.root_cookie = input.root_cookie;
-        self.scan_request.packed = input.analysis.and_then(rules::PackedImage::of);
-        self.scan_request.run_finished = input.run_finished;
-        self.scan_request.recording_open = input.current_boot;
-        self.scan_request.identity = input
-            .vm_id
-            .zip(input.boot_id)
-            .zip(input.run_id)
-            .map(|((vm, boot), run)| (vm.into(), boot.into(), run.into()));
+        self.scan_request.apply_input(&input);
         self.follow_report(&input);
         if input.archive.is_some() {
             self.schedule_refresh(ctx, input.run_finished);

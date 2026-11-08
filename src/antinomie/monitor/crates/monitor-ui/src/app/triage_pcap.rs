@@ -12,19 +12,8 @@ use std::time::Duration;
 /// How long what the disk said is trusted for the same selection.
 const KEEP: Duration = Duration::from_secs(5);
 
-#[derive(Clone)]
-enum Artifacts {
-    /// No artifact list was written (yet).
-    Absent,
-    /// The list belongs to another run, boot or VM.
-    Mismatch,
-    /// The list names no readable capture.
-    NoCapture,
-    Found {
-        file: PathBuf,
-        complete: bool,
-    },
-}
+// What the run's artifact list says of its capture: `antinomie_triage`'s.
+use antinomie_triage::saved_run::{pcap_open, SavedCapture as Artifacts};
 
 #[derive(Clone)]
 enum Disk {
@@ -81,28 +70,7 @@ impl MonitorApp {
             artifacts,
             live_file,
         } = self.pcap_on_disk(key, || Disk::Run {
-            artifacts: match antinomie_monitor_core::RunArtifacts::load(&run.directory)
-                .ok()
-                .flatten()
-            {
-                None => Artifacts::Absent,
-                Some(artifacts)
-                    if artifacts.run_id != run.id
-                        || artifacts.vm_id != run.vm_id
-                        || artifacts.boot_id != run.boot_id =>
-                {
-                    Artifacts::Mismatch
-                }
-                Some(artifacts) => artifacts
-                    .network_captures
-                    .iter()
-                    .find(|file| file.is_file() && pcap_magic(file))
-                    .map_or(Artifacts::NoCapture, |file| Artifacts::Found {
-                        file: file.clone(),
-                        complete: artifacts.network_state
-                            == antinomie_monitor_core::RunArtifactState::Complete,
-                    }),
-            },
+            artifacts: Artifacts::of(run),
             live_file: live
                 .filter(|capture| capture.boot_id == run.boot_id)
                 .is_some_and(|capture| capture.file.is_file() && pcap_magic(&capture.file)),
@@ -130,13 +98,6 @@ impl MonitorApp {
         live.filter(|capture| capture.boot_id == run.boot_id && live_file)
             .map(|capture| (capture.file.clone(), capture.stopped_ms.is_none()))
     }
-}
-
-/// Whether a run's pcap can still grow. A capture its writer left unclosed
-/// (the VM stopped under it) is final: nothing will add to it, so a scan takes
-/// what it holds and says so, not waiting for a segment that never closes.
-fn pcap_open(run_live: bool, complete: bool, writing: bool) -> bool {
-    run_live || (!complete && writing)
 }
 
 #[cfg(test)]

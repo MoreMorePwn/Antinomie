@@ -773,20 +773,14 @@ impl eframe::App for MonitorApp {
         }
         let input = triage_run
             .map(|run| crate::triage::TriageInput {
-                analysis: run.analysis.as_ref(),
-                invocations: &[],
-                vm_id: Some(&run.vm_id),
-                boot_id: Some(&run.boot_id),
-                run_id: Some(&run.id),
-                archive: Some(&run.directory),
-                pcap: triage_pcap.as_ref().map(|owned| owned.0.as_path()),
                 pcap_open: triage_pcap.as_ref().is_some_and(|owned| owned.1),
-                clock_anchor: run.clock_anchor,
-                started_ms: run.started_ms,
-                root_cookie: run.root_task_cookie,
                 run_finished,
                 current_boot: self.snapshot.active_vm.as_deref() == Some(run.vm_id.as_str())
                     && self.snapshot.boot_id.as_deref() == Some(run.boot_id.as_str()),
+                ..crate::triage::TriageInput::for_run(
+                    run,
+                    triage_pcap.as_ref().map(|owned| owned.0.as_path()),
+                )
             })
             .unwrap_or_else(crate::triage::TriageInput::empty);
         self.triage.set_data_dir(&self.options.data_dir);

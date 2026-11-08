@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 mod cards;
 mod coverage;
 mod finding;
-pub(super) use finding::pack_name;
 mod header;
 pub(in crate::triage) use header::ScanActivity;
 mod inputs;
@@ -60,13 +59,7 @@ const HEADERS: &[&str] = &[
 ];
 const ENGINES: [Engine; 3] = [Engine::Yara, Engine::Ids, Engine::Sigma];
 const TABLES: [&str; 3] = ["triage-yara", "triage-ids", "triage-sigma"];
-pub(super) fn name(engine: Engine) -> &'static str {
-    match engine {
-        Engine::Yara => "YARA",
-        Engine::Ids => "IDS",
-        Engine::Sigma => "Sigma",
-    }
-}
+pub(super) use antinomie_triage::detection::name;
 /// What an empty result of a complete scan says when some inputs were not
 /// scanned: how many, and the reasons the scan recorded for them. `None`
 /// when every input was scanned.
@@ -162,13 +155,7 @@ struct FileDigest {
     digest: String,
 }
 
-fn engine_key(engine: Engine) -> &'static str {
-    match engine {
-        Engine::Yara => "yara",
-        Engine::Ids => "ids",
-        Engine::Sigma => "sigma",
-    }
-}
+use antinomie_triage::detection::engine_key;
 type Loaded = [Option<Report>; 3];
 type BytePreview = Result<(Evidence, Vec<u8>), String>;
 pub(super) struct Counts {

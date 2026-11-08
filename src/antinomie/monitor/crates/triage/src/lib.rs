@@ -26,6 +26,8 @@ pub mod auditd_events;
 pub mod bpf_attach;
 pub mod bpf_notes;
 pub mod descriptors;
+pub mod detection;
+pub mod digest;
 pub mod family;
 pub mod file_activity;
 pub mod file_category;
@@ -63,6 +65,7 @@ pub mod process_tree_tests;
 pub mod refresh;
 pub mod rules;
 pub mod run_end;
+pub mod saved_run;
 pub mod scan_progress;
 pub mod segments;
 pub mod sigma_events;
@@ -85,6 +88,7 @@ use self::{
     findings::*, pcap_scan::*, process_tree::*, refresh::*, table::*,
 };
 pub use network::AddressLookup;
+pub use saved_run::{SavedCapture, SavedRun, TriageSettings};
 pub use tone::{Tone, ValueKind};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
