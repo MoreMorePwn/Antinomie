@@ -10,6 +10,7 @@ use super::{
     analyze::parse_checks,
     library::{library_error, open_existing, open_for_write, parse_sha256},
     machine::{find_vm, vm_value},
+    run_read,
 };
 use crate::{
     context::Context,
@@ -43,6 +44,14 @@ use std::{
 pub enum Run {
     /// Upload a library sample into a VM, run it and wait for a settled recording.
     Exec(Exec),
+    /// List the recorded runs of the data directory; no engine lock needed.
+    List(run_read::List),
+    /// Show one run: its state, phase and artifacts; `--summary` adds the
+    /// Triage summary. No engine lock needed.
+    Show(run_read::Show),
+    /// Write a run's recording as NDJSON and evidence files into --out. No
+    /// engine lock needed.
+    Export(run_read::Export),
 }
 
 #[derive(Args, Debug)]
@@ -102,6 +111,7 @@ impl Run {
     pub fn streams_events(&self) -> bool {
         match self {
             Run::Exec(exec) => exec.events,
+            Run::List(_) | Run::Show(_) | Run::Export(_) => false,
         }
     }
 }
@@ -109,6 +119,9 @@ impl Run {
 pub fn run(command: &Run, context: &Context) -> Result<Reply, CliError> {
     match command {
         Run::Exec(arguments) => exec(arguments, context),
+        Run::List(arguments) => run_read::list(arguments, context),
+        Run::Show(arguments) => run_read::show(arguments, context),
+        Run::Export(arguments) => run_read::export(arguments, context),
     }
 }
 
@@ -535,7 +548,9 @@ mod tests {
         let sha = "ab".repeat(32);
         let mut all = vec!["x", "exec", sha.as_str()];
         all.extend_from_slice(extra);
-        let Run::Exec(exec) = Wrapper::parse_from(all).run;
+        let Run::Exec(exec) = Wrapper::parse_from(all).run else {
+            panic!("not an exec")
+        };
         exec
     }
 

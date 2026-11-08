@@ -385,8 +385,16 @@ behind it.
   and writes one `automation` entry per job with the policy digest, the route
   and the submitter (the kind and its verifier support are in core). `query/` is the read-only recording API (run lists, calls, process and
   file reads, safe artifact reads, packet reads through the no-cache packet
-  worker, cursors with generations and row and byte limits). None of it is
-  reachable from a command yet except through the tests in `crates/service/tests/`.
+  worker, cursors with generations and row and byte limits). The Triage reads
+  (`query/{scan,tables,triage,files,network,timeline}.rs`) run the same
+  `SavedRun` scan the window makes, with `ScanRequest::read_only` set so it writes
+  no journal, on a thread of its own: the first read answers `building` with the
+  scan's progress, two scans stay in memory, and filter, sort and paging run over
+  the whole row set with the Triage crate's `FieldSpec` lists (the catalogue's
+  tables are those lists). The summary and indicators come from
+  `report_export::build_report`, so counts equal the export's. `antinomie-cli`
+  reaches the query API in `commands/query.rs` (`run list`, `run show`, `run
+  export` in `run_read.rs`, and `triage`).
 * **Tests.** `cargo test --release -p antinomie-cli -p antinomie-service`.
 
 ### Historical initial requirements

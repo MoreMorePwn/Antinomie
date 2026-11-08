@@ -1752,9 +1752,10 @@ the web layer are not shipped yet; this list is what `antinomie-cli --help` show
   data directory's `settings.json` (the window's defaults when there is none) and
   with `dig` and `whois` lookups off (TShark's installed GeoIP fields stay); the
   progress goes to standard error and Ctrl-C stops it (exit 130).
-  `triage` prints Triage's Summary: the assessment and its basis, the tier counts,
-  the counts, the families, the key behaviours, the key findings and the notes;
-  `--parts` adds report parts to the result (`summary`, `indicators`, `attack`,
+  `triage` prints Triage's Summary as the query API serves it
+  (`recording.summary`): the assessment and its basis, the counts, the
+  families, the techniques, the key behaviours and the detections, and it writes
+  nothing into the recording; `--parts` adds report parts to the result (`summary`, `indicators`, `attack`,
   `processes`, `findings`, `files`, `file_activity`, `network`, `detections`,
   `evidence`, `custody`, or `all`). `report` writes the files the window's
   **Export report** writes for the same run and choices (see
@@ -1771,9 +1772,30 @@ the web layer are not shipped yet; this list is what `antinomie-cli --help` show
   `detection-<engine>.json`. `--save` keeps the results where the Detection tab keeps
   them and adds them to the run's digest, so a later `report` lists them; it takes
   the engine lock (exit 21 while the window owns the data directory). `detect` exits
-  1 when an engine failed. Apart from `detect --save`, these commands take no lock
-  and write nothing into the recording but the index Triage keeps there (its event
-  and finding journals), as the window does when it shows the run.
+  1 when an engine failed. Apart from `detect --save`, these commands take no lock.
+  `report`, `detect` and `triage --parts` write nothing into the recording but the
+  index Triage keeps there (its event and finding journals), as the window does
+  when it shows the run; `triage` without `--parts` writes nothing.
+- **Look at recorded runs.** `run list [--vm ID] [--sample SHA256] [--job ID] [--state
+  STATE] [--since SPAN] [--limit N] [--cursor C]` lists the recorded runs of the data
+  directory, newest first (`--since` takes a span such as `90m`, `24h` or `7d`, or a
+  Unix time in milliseconds). `run show RUN [--summary]` shows one run: its state,
+  whether its recording is `live`, `finalizing`, `complete` or `interrupted`, its
+  evidence and `generation`; `--summary` adds the Triage summary. `run export RUN --out
+  DIR [--part LIST] [--sensitive]` writes the parts `trace`, `processes`,
+  `findings`, `indicators`, `files`, `network`, `timeline`, `analysis`, `custody`
+  and `artifacts` (default: all) as `*.ndjson` files, one row per line, and the
+  retained evidence files of `artifacts` into `DIR` and nowhere else; the bytes the
+  sample produced (captured packets, memory and core dumps, file copies, the contents
+  of changed files) are written only with `--sensitive`. `RUN` is as for `triage`.
+  These commands are the read-only query API of the job API (`docs/job-api-1.md`,
+  "Recording queries"): they take no engine lock and write nothing into a recording,
+  so they work while the window is open. A recording that is still being written
+  (`live`) can be listed, shown and exported in its core parts, but its Triage parts
+  (summary, findings, indicators, files, network, timeline) are refused with exit 4
+  until it is saved. The first Triage part of a run indexes it, with progress lines
+  on standard error; Ctrl-C stops (exit 130) and `--timeout SECONDS` limits the wait
+  (exit 14).
 - **A VM lives as long as the command.** In direct mode the engine runs inside the
   command and stops the VM when the command ends, so `vm start` boots the guest, waits
   until it answers, reports how long that took and stops it again; `--hold` keeps it

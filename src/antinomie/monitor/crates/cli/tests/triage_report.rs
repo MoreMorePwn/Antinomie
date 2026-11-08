@@ -324,3 +324,235 @@ fn report_writes_what_the_report_checks_read() {
     assert!(doc["network"].is_null() && doc["files"].is_null());
     assert_eq!(doc["detections"][0]["rule_id"], "fixture_rule");
 }
+
+/// Every file under `root` with its size: a read must leave this unchanged.
+fn listing(root: &Path) -> Vec<(PathBuf, u64)> {
+    fn walk(dir: &Path, out: &mut Vec<(PathBuf, u64)>) {
+        let mut entries: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().collect();
+        entries.sort_by_key(|entry| entry.path());
+        for entry in entries {
+            let meta = std::fs::symlink_metadata(entry.path()).unwrap();
+            out.push((entry.path(), meta.len()));
+            if meta.is_dir() {
+                walk(&entry.path(), out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, &mut out);
+    out
+}
+
+/// The summary counts of the report builder over the saved run: the path the
+/// window's export dialog and `report` take (`SavedRun`, the scan, the shared
+/// job), which the GUI test `a_saved_run_indexes_as_the_gui_indexes_the_selected_run`
+/// holds equal to the window's own index.
+fn builder_counts(fixture: &Data) -> Value {
+    let run: RunSummary =
+        serde_json::from_slice(&std::fs::read(fixture.run_dir().join("run.json")).unwrap())
+            .unwrap();
+    let options = antinomie_monitor_core::BackendOptions {
+        data_dir: fixture.data(),
+        ..Default::default()
+    };
+    let saved = SavedRun::open(run, &options).unwrap();
+    let scan = saved.scan(&Arc::new(AtomicBool::new(false))).unwrap();
+    let choices = Choices {
+        parts: vec![antinomie_monitor_core::report::Part::Summary],
+        ..Choices::default()
+    };
+    let job = report_export::Job::for_saved(&saved, choices, 1);
+    let (_, built) = report_export::build_report(&job, &scan).unwrap();
+    let counts = built.report.summary.unwrap().counts;
+    serde_json::json!({
+        "processes": counts.processes, "findings": counts.findings,
+        "indicators": counts.indicators, "indicators_matched": counts.indicators_matched,
+        "techniques": counts.techniques, "files_changed": counts.files_changed,
+        "files_opened": counts.files_opened, "endpoints": counts.endpoints,
+        "domains": counts.domains,
+    })
+}
+
+/// The same run read through the query API (`triage`, `run show --summary`)
+/// and through the report builder gives the same counts; neither writes into
+/// the recording.
+#[test]
+fn the_query_api_and_the_report_builder_count_the_same_run_the_same() {
+    let fixture = Data::with_capture("parity");
+    let data = fixture.data();
+    let data = data.to_str().unwrap();
+    let before = listing(&fixture.root);
+    let (code, triage) = cli(&fixture.args(data, &["triage", "5f3c9a10"]));
+    assert_eq!(code, 0, "{triage}");
+    let (code, shown) = cli(&fixture.args(data, &["run", "show", "5f3c9a10", "--summary"]));
+    assert_eq!(code, 0, "{shown}");
+    assert_eq!(
+        triage["result"]["summary"]["counts"],
+        shown["result"]["summary"]["counts"]
+    );
+    assert_eq!(shown["result"]["run_id"], RUN);
+    assert_eq!(shown["result"]["phase"], "complete");
+    assert_eq!(
+        before,
+        listing(&fixture.root),
+        "triage and run show write nothing into the data directory"
+    );
+    // The builder's own scan (it writes its index journals, so it runs after the check).
+    assert_eq!(
+        triage["result"]["summary"]["counts"],
+        builder_counts(&fixture)
+    );
+    assert!(
+        triage["result"]["summary"]["counts"]["findings"]
+            .as_u64()
+            .unwrap()
+            >= 1
+    );
+}
+
+#[test]
+fn run_list_filters_and_pages_the_recorded_runs() {
+    let fixture = Data::new("runlist");
+    let data = fixture.data();
+    let data = data.to_str().unwrap();
+    let (code, value) = cli(&fixture.args(data, &["run", "list"]));
+    assert_eq!(code, 0, "{value}");
+    let items = value["result"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["run_id"], RUN);
+    assert_eq!(items[0]["vm_id"], "vm-1");
+    assert_eq!(items[0]["state"], "finished");
+    assert!(items[0]["run_key"].is_string());
+    for (args, count) in [
+        (vec!["--vm", "vm-1"], 1),
+        (vec!["--vm", "other"], 0),
+        (vec!["--state", "finished"], 1),
+        (vec!["--state", "interrupted"], 0),
+        (vec!["--since", "1h"], 0),
+        (vec!["--since", "1700000000000"], 1),
+    ] {
+        let mut all = vec!["run", "list"];
+        all.extend(args.clone());
+        let (code, value) = cli(&fixture.args(data, &all));
+        assert_eq!(code, 0, "{args:?}: {value}");
+        assert_eq!(
+            value["result"]["items"].as_array().unwrap().len(),
+            count,
+            "{args:?}"
+        );
+    }
+    let (code, _) = cli(&fixture.args(data, &["run", "list", "--since", "soon"]));
+    assert_eq!(code, 4);
+    let (code, _) = cli(&fixture.args(data, &["run", "list", "--limit", "0"]));
+    assert_eq!(code, 4);
+    let (code, _) = cli(&fixture.args(data, &["run", "list", "--state", "bogus"]));
+    assert_eq!(code, 4);
+    let (code, value) = cli(&fixture.args(data, &["run", "show", "ffffffff"]));
+    assert_eq!(code, 3, "{value}");
+}
+
+#[test]
+fn run_export_writes_only_into_out_and_sensitive_bytes_need_the_flag() {
+    let fixture = Data::with_capture("export");
+    let data = fixture.data();
+    let data = data.to_str().unwrap();
+    let out = fixture.root.join("export");
+    let before = listing(&fixture.data());
+    let (code, value) = cli(&fixture.args(
+        data,
+        &[
+            "run",
+            "export",
+            RUN,
+            "--part",
+            "findings,processes,timeline,artifacts",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    ));
+    assert_eq!(code, 0, "{value}");
+    for name in [
+        "findings.ndjson",
+        "processes.ndjson",
+        "timeline.ndjson",
+        "artifacts.ndjson",
+    ] {
+        assert!(out.join(name).is_file(), "{name}: {value}");
+    }
+    let lines = |name: &str| -> Vec<Value> {
+        std::fs::read_to_string(out.join(name))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    };
+    assert!(!lines("findings.ndjson").is_empty());
+    assert!(lines("findings.ndjson")[0]["rule"].is_string());
+    assert!(!lines("processes.ndjson").is_empty());
+    // The capture is listed as sensitive; its bytes are not written without the flag.
+    let listed = lines("artifacts.ndjson");
+    let capture = listed
+        .iter()
+        .find(|a| a["kind"] == "network_capture")
+        .unwrap();
+    assert_eq!(capture["sensitive"], true);
+    assert!(
+        !out.join("artifacts").exists()
+            || std::fs::read_dir(out.join("artifacts")).unwrap().all(|e| !e
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with("network.pcap"))
+    );
+    assert_eq!(
+        before,
+        listing(&fixture.data()),
+        "the export reads, it does not write the recording"
+    );
+    // With the flag the bytes arrive, still only under --out.
+    let (code, value) = cli(&fixture.args(
+        data,
+        &[
+            "run",
+            "export",
+            RUN,
+            "--part",
+            "artifacts",
+            "--sensitive",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    ));
+    assert_eq!(code, 0, "{value}");
+    let copied: Vec<_> = std::fs::read_dir(out.join("artifacts"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        copied.iter().any(|name| name.ends_with("network.pcap")),
+        "{copied:?}"
+    );
+    assert_eq!(before, listing(&fixture.data()));
+    // A bad part and an out that is a file are refused.
+    let (code, _) = cli(&fixture.args(
+        data,
+        &[
+            "run",
+            "export",
+            RUN,
+            "--part",
+            "bogus",
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    ));
+    assert_eq!(code, 4);
+    let file = fixture.root.join("a-file");
+    std::fs::write(&file, b"x").unwrap();
+    let (code, _) = cli(&fixture.args(
+        data,
+        &["run", "export", RUN, "--out", file.to_str().unwrap()],
+    ));
+    assert_eq!(code, 4);
+}
