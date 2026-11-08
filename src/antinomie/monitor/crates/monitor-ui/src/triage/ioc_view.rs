@@ -18,9 +18,9 @@ use antinomie_monitor_core::{
 };
 use std::collections::BTreeMap;
 
-/// The one full statement that no match proves nothing; the IOC headline
-/// carries it as a tooltip.
-pub(super) const NO_MATCH_NOTE: &str = "No match is not a clean result: a dataset only lists what abuse.ch has seen, and Antinomie checks only the datasets loaded on this machine.";
+// The row model (filter fields and values, the Details selection, the verdict
+// line, jumps to evidence) is in `antinomie_triage::ioc_view`.
+pub(super) use antinomie_triage::ioc_view::*;
 
 mod detail;
 mod list;
@@ -35,8 +35,6 @@ pub(crate) fn source_tone_of(label: &str) -> Tone {
         _ => list::source_tone(Source::Static),
     }
 }
-
-pub(super) use list::DETAILS_TABLE;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum Tab {
@@ -475,58 +473,6 @@ fn verdict_chip(ui: &mut egui::Ui, verdict: &Verdict) {
     widgets::chip(ui, text, outcome_tone(verdict.outcome));
 }
 
-/// The line under the verdict chip.
-fn verdict_line(verdict: &Verdict) -> String {
-    match verdict.outcome {
-        Outcome::Matched => verdict.primary().map_or_else(String::new, |found| {
-            format!(
-                "{} · {} · {} · first seen {}",
-                if found.record.family.is_empty() {
-                    "no family"
-                } else {
-                    &found.record.family
-                },
-                ioc_scan::dataset_name(&found.record.feed),
-                found
-                    .record
-                    .confidence
-                    .map_or("no confidence".to_owned(), |c| format!("{c}%")),
-                found.record.first_seen,
-            )
-        }),
-        Outcome::KnownFp => verdict
-            .excused
-            .as_ref()
-            .map_or_else(String::new, |(found, entry)| {
-                format!(
-                    "{} · dataset {}",
-                    if entry.reason.is_empty() {
-                        "known false positive"
-                    } else {
-                        &entry.reason
-                    },
-                    verdict
-                        .date
-                        .clone()
-                        .unwrap_or_else(|| ioc_scan::dataset_name(&found.record.feed).to_owned())
-                )
-            }),
-        Outcome::NoMatch => format!(
-            "dataset {}{}",
-            verdict.date.clone().unwrap_or_default(),
-            if verdict.partial() {
-                format!(
-                    " · {} of {} feeds",
-                    verdict.feeds_used, verdict.feeds_needed
-                )
-            } else {
-                String::new()
-            }
-        ),
-        Outcome::NotChecked => verdict.why.clone(),
-    }
-}
-
 impl TriageView {
     /// Show one indicator of this run in the IOC section, selected, when the
     /// scan has it. `path` names a file's row.
@@ -623,9 +569,9 @@ impl TriageView {
         self.ioc.tab = tab;
     }
 
-    fn ioc_jump(&mut self, ctx: &egui::Context, jump: list::Jump) {
+    fn ioc_jump(&mut self, ctx: &egui::Context, jump: Jump) {
         match jump {
-            list::Jump::Packet { capture, frame } => {
+            Jump::Packet { capture, frame } => {
                 ctx.data_mut(|data| {
                     data.insert_temp(egui::Id::new("triage-packet-jump"), frame);
                     data.insert_temp(
@@ -634,7 +580,7 @@ impl TriageView {
                     );
                 });
             }
-            list::Jump::Call {
+            Jump::Call {
                 stream,
                 cookie,
                 call,
@@ -643,7 +589,7 @@ impl TriageView {
                     data.insert_temp(egui::Id::new("triage-call-jump"), (stream, cookie, call));
                 });
             }
-            list::Jump::Properties => self.section = Section::Properties,
+            Jump::Properties => self.section = Section::Properties,
         }
     }
 }

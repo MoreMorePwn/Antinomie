@@ -3,163 +3,12 @@
 //! the selected one.
 use super::*;
 use crate::widgets::fit_table::{Col, FitBuilder};
-use crate::{
-    query::{self, FieldSpec, RowValue},
-    widgets::fit_table,
-};
-use antinomie_monitor_core::ioc::indicator::Jump as Evidence;
-
-/// Where a jump to evidence goes.
-pub(in crate::triage) enum Jump {
-    Packet { capture: String, frame: u64 },
-    Call { stream: u64, cookie: u64, call: u64 },
-    Properties,
-}
-
-pub(in crate::triage) const FIELDS: &[FieldSpec<'static>] = &[
-    FieldSpec::text("ioc.type", "endpoint, domain, url, tls or file"),
-    FieldSpec::text("ioc.value", "The indicator as the row shows it"),
-    FieldSpec::text("ioc.match", "matched, known_fp, no_match or not_checked"),
-    FieldSpec::tags("ioc.source", "pcap, syscall, disk or static"),
-    FieldSpec::text("ioc.process", "The one process that made a matching call"),
-    FieldSpec::text("ioc.dataset", "The dataset that lists it"),
-    FieldSpec::text("ioc.family", "The family the record names"),
-    FieldSpec::number("ioc.confidence", "The record's confidence, when it has one"),
-    FieldSpec::number("ioc.first_us", "First seen in the run, Unix microseconds"),
-    FieldSpec::number("ioc.last_us", "Last seen in the run, Unix microseconds"),
-    FieldSpec::text("tls.sni", "TLS server name"),
-    FieldSpec::text("tls.ja3", "JA3 client fingerprint"),
-    FieldSpec::text("tls.ja4", "JA4 client fingerprint"),
-    FieldSpec::text("tls.ja3s", "JA3S server fingerprint"),
-    FieldSpec::text("tls.cert", "Certificate SHA-1"),
-    FieldSpec::tags(
-        "file.role",
-        "sample, created, executed, deleted, written at close, changed",
-    ),
-    FieldSpec::text("file.path", "Path in the guest"),
-    FieldSpec::text("file.sha256", "SHA-256 of the content"),
-];
-
-fn example(ty: Type) -> &'static str {
-    match ty {
-        Type::Endpoint => "ioc.match == matched",
-        Type::Domain => "ioc.value contains example",
-        Type::Url => "ioc.value contains .kd",
-        Type::Tls => "tls.ja3 == \"f6d64cbcb6dead5e8e864400f056fa32\"",
-        Type::File => "file.role contains executed",
-    }
-}
+use crate::{query, widgets::fit_table};
 
 /// The rows a filter keeps.
 pub(super) struct Listing {
     key: String,
     rows: Vec<usize>,
-}
-
-fn text(value: &str) -> RowValue {
-    if value.is_empty() {
-        RowValue::Missing
-    } else {
-        RowValue::Text(value.to_owned())
-    }
-}
-
-fn outcome_name(outcome: Outcome) -> &'static str {
-    match outcome {
-        Outcome::Matched => "matched",
-        Outcome::KnownFp => "known_fp",
-        Outcome::NoMatch => "no_match",
-        Outcome::NotChecked => "not_checked",
-    }
-}
-
-/// The values a filter can read from one row.
-pub(super) fn values(indicator: &Indicator, verdict: &Verdict) -> Vec<(&'static str, RowValue)> {
-    let tls = indicator.tls.clone().unwrap_or_default();
-    let primary = verdict
-        .primary()
-        .or_else(|| verdict.excused.as_ref().map(|(found, _)| found));
-    let hash = indicator
-        .hashes
-        .as_ref()
-        .map(|hashes| hashes.sha256.as_str())
-        .unwrap_or("");
-    vec![
-        ("ioc.type", RowValue::Text(indicator.ty.id().into())),
-        ("ioc.value", RowValue::Text(indicator.value.clone())),
-        (
-            "ioc.match",
-            RowValue::Text(outcome_name(verdict.outcome).into()),
-        ),
-        (
-            "ioc.source",
-            RowValue::List(
-                indicator
-                    .sources
-                    .iter()
-                    .map(|s| s.label().to_owned())
-                    .collect(),
-            ),
-        ),
-        (
-            "ioc.process",
-            indicator
-                .process
-                .as_ref()
-                .map_or(RowValue::Missing, |process| RowValue::Text(process.label())),
-        ),
-        (
-            "ioc.dataset",
-            primary.map_or(RowValue::Missing, |found| text(&found.record.feed)),
-        ),
-        (
-            "ioc.family",
-            primary.map_or(RowValue::Missing, |found| text(&found.record.family)),
-        ),
-        (
-            "ioc.confidence",
-            primary
-                .and_then(|found| found.record.confidence)
-                .map_or(RowValue::Missing, |c| RowValue::Number(i128::from(c))),
-        ),
-        (
-            "ioc.first_us",
-            indicator
-                .first_us
-                .map_or(RowValue::Missing, |us| RowValue::Number(i128::from(us))),
-        ),
-        (
-            "ioc.last_us",
-            indicator
-                .last_us
-                .map_or(RowValue::Missing, |us| RowValue::Number(i128::from(us))),
-        ),
-        ("tls.sni", text(&tls.sni)),
-        ("tls.ja3", text(&tls.ja3)),
-        ("tls.ja4", text(&tls.ja4)),
-        ("tls.ja3s", text(&tls.ja3s)),
-        ("tls.cert", text(&tls.cert_sha1)),
-        (
-            "file.role",
-            RowValue::List(indicator.roles.iter().map(|r| (*r).to_owned()).collect()),
-        ),
-        ("file.path", text(&indicator.path)),
-        ("file.sha256", text(hash)),
-    ]
-}
-
-/// The shared Details table this tab selects into.
-pub(in crate::triage) const DETAILS_TABLE: &str = "triage-ioc";
-const DETAILS_HEADERS: &[&str] = &["Indicator", "Kind", "Id"];
-
-/// The selection the shared Details pane keeps: the value, the kind and the
-/// indicator's id, which finds it again in the scan.
-fn details_cells(indicator: &Indicator) -> Vec<Cell> {
-    vec![
-        cell(&indicator.value, tone::text(), true),
-        cell(super::detail::kind_name(indicator.ty), tone::text(), false),
-        cell(indicator.id(), tone::text(), true),
-    ]
 }
 
 /// Put `indicator` in the shared Details pane, as a click on its row does.
@@ -171,10 +20,6 @@ pub(super) fn select_in_details(ctx: &egui::Context, indicator: &Indicator) {
         &details_cells(indicator),
     );
     details::clicked(ctx, DETAILS_TABLE);
-}
-
-fn time_text(us: Option<u64>) -> String {
-    us.map_or("—".into(), crate::time_format::short_time_us)
 }
 
 impl View {
@@ -610,24 +455,5 @@ pub(super) fn source_tone(source: Source) -> Tone {
         Source::Syscall => Tone::Accent,
         Source::Disk => Tone::Good,
         Source::Static => Tone::Neutral,
-    }
-}
-
-pub(super) fn jump_of(jump: &Evidence) -> Option<Jump> {
-    match jump {
-        Evidence::Packet { capture, frame } => Some(Jump::Packet {
-            capture: capture.clone(),
-            frame: *frame,
-        }),
-        Evidence::Call {
-            stream,
-            cookie,
-            call,
-        } => Some(Jump::Call {
-            stream: *stream,
-            cookie: *cookie,
-            call: *call,
-        }),
-        Evidence::Text => Some(Jump::Properties),
     }
 }

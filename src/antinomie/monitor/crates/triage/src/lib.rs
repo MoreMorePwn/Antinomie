@@ -45,6 +45,7 @@ pub mod findings;
 pub mod geoip_fill;
 pub mod graph;
 pub mod ioc_scan;
+pub mod ioc_view;
 pub mod kernel_records;
 pub mod lineage_index;
 pub mod live_judge;
