@@ -931,7 +931,8 @@ fn saved_run_with(
             .ok()
             .and_then(|facts| facts.started_ms);
     }
-    unreadable::note_sidecar(&mut run, reopen_analysis_sidecar(root, &mut run));
+    let opened = reopen_analysis_sidecar(root, &mut run);
+    unreadable::note_sidecar(&mut run, opened);
     settle_stale_analysis(&mut run, seal);
     settle_stale_state(&mut run);
     Ok(Some(run))
