@@ -70,7 +70,7 @@ pub fn base_program(process: &Process) -> bool {
     PROGRAMS.contains(&base_name(name)) || PROGRAM_DIRS.iter().any(|dir| name.starts_with(dir))
 }
 
-fn domain_noise(name: &str) -> bool {
+pub fn domain_noise(name: &str) -> bool {
     let name = name.trim_end_matches('.').to_ascii_lowercase();
     DOMAINS
         .iter()
@@ -100,7 +100,7 @@ fn host(indicator: &Indicator) -> Option<String> {
 }
 
 /// Why a UDP endpoint is the base's: DHCP to the QEMU server, or NTP.
-fn endpoint_noise(value: &str, udp: bool) -> Option<&'static str> {
+pub fn endpoint_noise(value: &str, udp: bool) -> Option<&'static str> {
     let (address, port) = value.rsplit_once(':')?;
     let port = port.parse::<u16>().ok()?;
     if udp && port == 123 {

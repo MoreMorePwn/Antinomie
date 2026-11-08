@@ -53,6 +53,10 @@ pub mod ioc_view;
 pub mod kernel_records;
 pub mod lineage_index;
 pub mod live_judge;
+pub mod net_attr;
+pub mod net_attr_read;
+#[cfg(test)]
+pub mod net_attr_tests;
 pub mod net_tabs;
 pub mod network;
 pub mod network_index;
@@ -330,6 +334,9 @@ pub const HTTP_FIELDS: &[FieldSpec<'static>] = &[
 pub struct ScanRequest {
     /// The chips above Suspicious activity.
     pub finding_view: rules::View,
+    /// The run's network calls, set by the scan once it has read them: what
+    /// the capture's flows are matched against (see [`net_attr`]).
+    pub attribution: Option<Arc<net_attr::NetAttribution>>,
     pub event_cache: Option<normalized::Cache>,
     pub sorts: [Option<sorting::Spec>; SLOTS],
     pub file_visibility: file_visibility::FileVisibility,
@@ -574,6 +581,9 @@ pub struct ScanData {
     pub new_tabs: NewTabs,
     /// The IOC window's list of the run and the datasets' answer.
     pub ioc: Option<Arc<ioc_scan::IocScan>>,
+    /// The run's network calls and the capture's DNS names, to say which
+    /// process made a packet (the Packets list's Source column).
+    pub attribution: Option<Arc<net_attr::NetAttribution>>,
     pub network_warning: Option<String>,
     /// The run's program died of a signal before its first recorded system
     /// call: "the sample crashed before its first system call: SIGSEGV".
@@ -612,6 +622,8 @@ pub struct PacketSpool {
 pub struct PacketIndex {
     /// The tabs and the capture's indicators.
     pub new_tabs: NewTabs,
+    /// The run's network calls with the DNS names the capture showed.
+    pub attribution: Option<Arc<net_attr::NetAttribution>>,
     pub ioc: antinomie_monitor_core::ioc::indicator::Collector,
     /// Frame, destination IP and hostname counts before UI queries.
     pub counts: Option<(u64, u64, u64)>,

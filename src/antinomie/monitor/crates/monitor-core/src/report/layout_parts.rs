@@ -509,7 +509,8 @@ impl Builder {
                 Cell::plain(stamp(d.last_relative_ms, d.last_ms))
             }
             "Tier" => Cell::plain(text.to_uppercase()),
-            "Process" if !d.process_ref.is_empty() => Cell::link(text, &d.process_ref),
+            // A network row's Source links to the process that made it.
+            "Process" | "Source" if !d.process_ref.is_empty() => Cell::link(text, &d.process_ref),
             "Path" | "Target" if d.target_ref != d.id => Cell::link(text, &d.target_ref),
             "ATT&CK" => Cell::link(text, d.attack_refs.first().map_or("", String::as_str)),
             "Endpoint" if d.id.is_empty() || !d.id.starts_with("ep-") => {

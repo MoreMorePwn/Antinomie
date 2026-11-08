@@ -191,6 +191,12 @@ pub fn network(
     rows: &[Vec<Cell>],
     run_ms: Option<u64>,
 ) -> Vec<RowData> {
+    let source = |row: &[Cell]| {
+        (
+            number(row, "network.source_pid"),
+            number(row, "network.source_cookie"),
+        )
+    };
     let col = |title: &str| headers.iter().position(|h| *h == title);
     let cell = |row: &[Cell], title: &str| -> String {
         col(title)
@@ -201,6 +207,12 @@ pub fn network(
     rows.iter()
         .map(|row| {
             let mut data = network_row(name, row, &cell);
+            if name == "Endpoints" {
+                // The process that made the flow, so the Source links to it.
+                let (pid, cookie) = source(row);
+                data.pid = pid.and_then(|pid| u32::try_from(pid).ok());
+                data.cookie = cookie;
+            }
             let first = number(row, "network.first_us").or(number(row, "frame.time_us"));
             (data.time_ms, data.relative_ms) = capture_time(first, run_ms);
             (data.last_ms, data.last_relative_ms) =

@@ -581,6 +581,11 @@ impl Scan {
             .transpose()?
             .unwrap_or(false);
         network_request.started_ms = started_ms;
+        // What made each flow: the network calls the rules pass has seen.
+        network_request.attribution = Some(Arc::new(net_attr::NetAttribution::from_log(
+            engine.net_calls(),
+            clock_anchor,
+        )));
         network_request.segments = segments
             .iter()
             .take(segments.len().saturating_sub(1))
@@ -992,6 +997,7 @@ impl Scan {
             file_tabs,
             http: network.http,
             http_omitted: network.http_omitted,
+            attribution: network.attribution.take(),
             new_tabs: network.new_tabs,
             ioc: Some(Arc::new(ioc)),
             network_warning: network.network_warning,
