@@ -90,7 +90,7 @@ pub fn run(arguments: &Analyze, context: &Context) -> Result<Reply, CliError> {
         .map_or(DEFAULT_WAIT, Duration::from_secs);
     let deadline = Instant::now() + wait;
 
-    let mut engine = DirectEngine::start(context.options.clone())?;
+    let mut engine = DirectEngine::start(context)?;
     context
         .logger
         .debug("engine started; adding the file to the library");
@@ -145,12 +145,12 @@ fn add_and_analyze(
             sha256: added.sha256,
             selection,
         },
-        deadline,
+        Some(deadline.saturating_duration_since(Instant::now())),
     )?;
     loop {
-        engine.next(Duration::from_millis(100));
+        engine.pump(Duration::from_millis(100))?;
         let main = engine
-            .snapshot
+            .snapshot()
             .analysis_reports
             .iter()
             .find(|report| report.id == id)
@@ -161,7 +161,7 @@ fn add_and_analyze(
                 .filter(|layer| layer.index > 0)
                 .count();
             let layers: Vec<AnalysisReport> = engine
-                .snapshot
+                .snapshot()
                 .analysis_reports
                 .iter()
                 .filter(|report| {

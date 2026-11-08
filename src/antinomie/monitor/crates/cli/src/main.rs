@@ -16,6 +16,7 @@ mod error;
 mod exit;
 mod logging;
 mod output;
+mod signals;
 
 /// The analysis workers re-run the running program with a flag (design 1.3), so
 /// every binary that starts them must serve the flags before anything else.

@@ -14,6 +14,7 @@ path = "src/main.rs"
 antinomie-monitor-core = { path = "../monitor-core" }
 antinomie-service = { path = "../service" }
 clap = { version = "4", features = ["derive"] }
+libc = "0.2"
 serde.workspace = true
 # Result objects print their members in the order a command built them.
 serde_json = { workspace = true, features = ["preserve_order"] }
