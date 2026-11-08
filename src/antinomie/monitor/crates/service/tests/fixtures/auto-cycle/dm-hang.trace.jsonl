@@ -1,0 +1,156 @@
+{"dir":"meta","case":"dm-hang","strategy":"snapshot_disk","workload":"hang","cycles":1,"t":0.0}
+{"dir":"note","kind":"snapshot","digest":{"state":"Stopped","active_vm":null,"boot_id":null,"guest_kernel":false,"vms":0,"bases":0,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[],"analysis_reports":0,"snapshot_nodes":{}},"t":0.5}
+{"dir":"command","id":1,"name":"ImportBase","detail":"ImportBase { directory: \"/bases/0.9.0-r21-20261105/debian-minimal\" }","t":0.5}
+{"dir":"note","kind":"snapshot","digest":{"state":"Stopped","active_vm":null,"boot_id":null,"guest_kernel":false,"vms":0,"bases":1,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[],"analysis_reports":0,"snapshot_nodes":{}},"t":13.464}
+{"dir":"note","kind":"command_result","id":1,"success":true,"message":"base imported","t":13.465}
+{"dir":"command","id":2,"name":"CreateWithCredentials","detail":"","t":13.465}
+{"dir":"note","kind":"snapshot","digest":{"state":"Stopped","active_vm":null,"boot_id":null,"guest_kernel":false,"vms":1,"bases":1,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[],"analysis_reports":0,"snapshot_nodes":{}},"t":32.431}
+{"dir":"note","kind":"command_result","id":2,"success":true,"message":"VM created","t":32.432}
+{"dir":"command","id":3,"name":"Start","detail":"Start { vm_id: \"auto_cycle_22eda8c07940dcdd288345b98be2fd99\" }","t":32.454}
+{"dir":"note","kind":"run_layer_file","present":false,"t":32.454}
+{"dir":"note","kind":"snapshot","digest":{"state":"Starting","active_vm":"auto_cycle_22eda8c07940dcdd288345b98be2fd99","boot_id":null,"guest_kernel":false,"vms":1,"bases":1,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[],"analysis_reports":0,"snapshot_nodes":{}},"t":32.485}
+{"dir":"note","kind":"run_layer_file","present":true,"t":32.515}
+{"dir":"note","kind":"snapshot","digest":{"state":"Running","active_vm":"auto_cycle_22eda8c07940dcdd288345b98be2fd99","boot_id":"ef2ba3ed827fded578b3f8f8d0f60d21","guest_kernel":false,"vms":1,"bases":1,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":0}},"t":34.53}
+{"dir":"note","kind":"command_result","id":3,"success":true,"message":"VM running; transport attached","t":34.531}
+{"dir":"note","kind":"snapshot","digest":{"state":"Running","active_vm":"auto_cycle_22eda8c07940dcdd288345b98be2fd99","boot_id":"ef2ba3ed827fded578b3f8f8d0f60d21","guest_kernel":true,"vms":1,"bases":1,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":0}},"t":34.792}
+{"dir":"command","id":4,"name":"Stop","detail":"Stop","t":34.793}
+{"dir":"note","kind":"snapshot","digest":{"state":"Stopping","active_vm":"auto_cycle_22eda8c07940dcdd288345b98be2fd99","boot_id":"ef2ba3ed827fded578b3f8f8d0f60d21","guest_kernel":true,"vms":1,"bases":1,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":0}},"t":34.793}
+{"dir":"note","kind":"snapshot","digest":{"state":"Stopped","active_vm":null,"boot_id":"ef2ba3ed827fded578b3f8f8d0f60d21","guest_kernel":true,"vms":1,"bases":1,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":0}},"t":35.178}
+{"dir":"note","kind":"command_result","id":4,"success":true,"message":"VM stopped; recordings are being saved in the background","t":35.188}
+{"dir":"command","id":5,"name":"CreateVmSnapshot","detail":"CreateVmSnapshot { vm_id: \"auto_cycle_22eda8c07940dcdd288345b98be2fd99\", request: SnapshotRequest { name: \"clean\", description: \"auto-cycle lane\", mode: Disk } }","t":35.489}
+{"dir":"note","kind":"run_layer_file","present":false,"t":35.489}
+{"dir":"note","kind":"snapshot","digest":{"state":"Stopped","active_vm":null,"boot_id":"ef2ba3ed827fded578b3f8f8d0f60d21","guest_kernel":true,"vms":1,"bases":1,"last_error":null,"snapshot_progress":"Preparing checkpoint","recording_flush":null,"runs":[],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":0}},"t":35.499}
+{"dir":"note","kind":"snapshot","digest":{"state":"Stopped","active_vm":null,"boot_id":"ef2ba3ed827fded578b3f8f8d0f60d21","guest_kernel":true,"vms":1,"bases":1,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":1}},"t":35.56}
+{"dir":"note","kind":"command_result","id":5,"success":true,"message":"Snapshot clean saved","t":35.56}
+{"dir":"meta","kind":"lane_ready","strategy":"snapshot_disk","t":35.56}
+{"dir":"meta","kind":"cycle_begin","cycle":1,"t":35.56}
+{"dir":"command","id":6,"name":"RestoreVmSnapshot","detail":"RestoreVmSnapshot { vm_id: \"auto_cycle_22eda8c07940dcdd288345b98be2fd99\", snapshot_id: \"10a5357f235b1e381ce7c7cc4c878cab\", boot_from_disk: true, save_current: None, confirmed: true, switch_profile: false }","t":35.56}
+{"dir":"note","kind":"snapshot","digest":{"state":"Stopped","active_vm":null,"boot_id":"ef2ba3ed827fded578b3f8f8d0f60d21","guest_kernel":true,"vms":1,"bases":1,"last_error":null,"snapshot_progress":"Preparing snapshot recovery","recording_flush":null,"runs":[],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":1}},"t":35.641}
+{"dir":"note","kind":"snapshot","digest":{"state":"Starting","active_vm":"auto_cycle_22eda8c07940dcdd288345b98be2fd99","boot_id":null,"guest_kernel":false,"vms":1,"bases":1,"last_error":null,"snapshot_progress":"Preparing snapshot recovery","recording_flush":null,"runs":[],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":1}},"t":35.682}
+{"dir":"note","kind":"run_layer_file","present":true,"t":35.712}
+{"dir":"note","kind":"command_result","id":6,"success":true,"message":"Snapshot disk restored; guest booted in a new timeline","t":37.756}
+{"dir":"note","kind":"snapshot","digest":{"state":"Running","active_vm":"auto_cycle_22eda8c07940dcdd288345b98be2fd99","boot_id":"5fbfdddf826ee5a955e9722308e11589","guest_kernel":false,"vms":1,"bases":1,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":1}},"t":37.757}
+{"dir":"note","kind":"snapshot","digest":{"state":"Running","active_vm":"auto_cycle_22eda8c07940dcdd288345b98be2fd99","boot_id":"5fbfdddf826ee5a955e9722308e11589","guest_kernel":true,"vms":1,"bases":1,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":1}},"t":38.018}
+{"dir":"command","id":7,"name":"UploadSample","detail":"UploadSample { sha256: \"5f458ea49ae6d05cc8f3cf7023b882c827cecc63d5687f933084f6f38a7c6351\", destination: \"/tmp/5f458ea4-hang.sh\", executable: true }","t":38.018}
+{"dir":"note","kind":"snapshot","digest":{"state":"Running","active_vm":"auto_cycle_22eda8c07940dcdd288345b98be2fd99","boot_id":"5fbfdddf826ee5a955e9722308e11589","guest_kernel":true,"vms":1,"bases":1,"last_error":"guest command 0x1001: Read-only file system (os error 30)","snapshot_progress":null,"recording_flush":null,"runs":[],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":1}},"t":38.545}
+{"dir":"note","kind":"command_result","id":7,"success":false,"message":"guest command 0x1001: Read-only file system (os error 30)","t":38.545}
+{"dir":"command","id":8,"name":"UploadSample","detail":"UploadSample { sha256: \"5f458ea49ae6d05cc8f3cf7023b882c827cecc63d5687f933084f6f38a7c6351\", destination: \"/tmp/5f458ea4-hang.sh\", executable: true }","t":39.545}
+{"dir":"note","kind":"command_result","id":8,"success":true,"message":"uploaded 70 bytes to /tmp/5f458ea4-hang.sh","t":39.606}
+{"dir":"note","kind":"snapshot","digest":{"state":"Running","active_vm":"auto_cycle_22eda8c07940dcdd288345b98be2fd99","boot_id":"5fbfdddf826ee5a955e9722308e11589","guest_kernel":true,"vms":1,"bases":1,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":1}},"t":39.606}
+{"dir":"command","id":9,"name":"Execute","detail":"Execute(ExecRequest { path: \"/tmp/5f458ea4-hang.sh\", args: [], cwd: \"/tmp\", env: [\"PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin\"], uid: 1000, gid: 1000, analysis: AnalysisSelection { enabled: false, checks: [Metadata, Structures, Strings, Regex, Entropy, Hardening, Rules, Identification, Capabi","t":39.606}
+{"dir":"note","kind":"command_result","id":9,"success":true,"message":"launched pid 971, terminal session 1","t":41.772}
+{"dir":"note","kind":"run_started","run":"0673435983633b7847a787423fe168bf","state":"Running","path":"/tmp/5f458ea4-hang.sh","t":41.772}
+{"dir":"note","kind":"snapshot","digest":{"state":"Running","active_vm":"auto_cycle_22eda8c07940dcdd288345b98be2fd99","boot_id":"5fbfdddf826ee5a955e9722308e11589","guest_kernel":true,"vms":1,"bases":1,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[{"id":"0673435983633b7847a787423fe168bf","state":"Running","live_tasks":null,"pending_async":null,"flags":null,"terminal_eof":false,"recording_error":null}],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":1}},"t":41.772}
+{"dir":"command","id":10,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":41.773}
+{"dir":"note","kind":"terminal","run":"0673435983633b7847a787423fe168bf","sequence":1,"len":27,"eof":false,"text":"CYCLE-START\r\nwork-started\r\n","t":41.813}
+{"dir":"note","kind":"snapshot","digest":{"state":"Running","active_vm":"auto_cycle_22eda8c07940dcdd288345b98be2fd99","boot_id":"5fbfdddf826ee5a955e9722308e11589","guest_kernel":true,"vms":1,"bases":1,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[{"id":"0673435983633b7847a787423fe168bf","state":"Running","live_tasks":2,"pending_async":0,"flags":8,"terminal_eof":false,"recording_error":null}],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":1}},"t":41.813}
+{"dir":"command","id":11,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":41.974}
+{"dir":"command","id":12,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":42.176}
+{"dir":"command","id":13,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":42.377}
+{"dir":"command","id":14,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":42.579}
+{"dir":"command","id":15,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":42.78}
+{"dir":"command","id":16,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":42.981}
+{"dir":"command","id":17,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":43.183}
+{"dir":"command","id":18,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":43.384}
+{"dir":"command","id":19,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":43.585}
+{"dir":"command","id":20,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":43.787}
+{"dir":"command","id":21,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":43.988}
+{"dir":"command","id":22,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":44.19}
+{"dir":"command","id":23,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":44.391}
+{"dir":"command","id":24,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":44.597}
+{"dir":"command","id":25,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":44.799}
+{"dir":"command","id":26,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":45.0}
+{"dir":"command","id":27,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":45.201}
+{"dir":"command","id":28,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":45.403}
+{"dir":"command","id":29,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":45.604}
+{"dir":"command","id":30,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":45.805}
+{"dir":"command","id":31,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":46.007}
+{"dir":"command","id":32,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":46.208}
+{"dir":"command","id":33,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":46.409}
+{"dir":"command","id":34,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":46.611}
+{"dir":"command","id":35,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":46.812}
+{"dir":"command","id":36,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":47.014}
+{"dir":"command","id":37,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":47.215}
+{"dir":"command","id":38,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":47.416}
+{"dir":"command","id":39,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":47.618}
+{"dir":"command","id":40,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":47.819}
+{"dir":"command","id":41,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":48.021}
+{"dir":"command","id":42,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":48.222}
+{"dir":"command","id":43,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":48.423}
+{"dir":"command","id":44,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":48.625}
+{"dir":"command","id":45,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":48.826}
+{"dir":"command","id":46,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":49.028}
+{"dir":"command","id":47,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":49.229}
+{"dir":"command","id":48,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":49.43}
+{"dir":"command","id":49,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":49.632}
+{"dir":"command","id":50,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":49.833}
+{"dir":"command","id":51,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":50.035}
+{"dir":"command","id":52,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":50.236}
+{"dir":"command","id":53,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":50.437}
+{"dir":"command","id":54,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":50.639}
+{"dir":"command","id":55,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":50.84}
+{"dir":"command","id":56,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":51.041}
+{"dir":"command","id":57,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":51.243}
+{"dir":"command","id":58,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":51.444}
+{"dir":"command","id":59,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":51.646}
+{"dir":"command","id":60,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":51.847}
+{"dir":"command","id":61,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":52.049}
+{"dir":"command","id":62,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":52.25}
+{"dir":"command","id":63,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":52.451}
+{"dir":"command","id":64,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":52.653}
+{"dir":"command","id":65,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":52.854}
+{"dir":"command","id":66,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":53.055}
+{"dir":"command","id":67,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":53.257}
+{"dir":"command","id":68,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":53.458}
+{"dir":"command","id":69,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":53.659}
+{"dir":"command","id":70,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":53.861}
+{"dir":"command","id":71,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":54.062}
+{"dir":"command","id":72,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":54.264}
+{"dir":"command","id":73,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":54.465}
+{"dir":"command","id":74,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":54.666}
+{"dir":"command","id":75,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":54.868}
+{"dir":"command","id":76,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":55.069}
+{"dir":"command","id":77,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":55.271}
+{"dir":"command","id":78,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":55.472}
+{"dir":"command","id":79,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":55.673}
+{"dir":"command","id":80,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":55.875}
+{"dir":"command","id":81,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":56.076}
+{"dir":"command","id":82,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":56.277}
+{"dir":"command","id":83,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":56.479}
+{"dir":"command","id":84,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":56.68}
+{"dir":"command","id":85,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":56.881}
+{"dir":"command","id":86,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":57.083}
+{"dir":"command","id":87,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":57.284}
+{"dir":"command","id":88,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":57.486}
+{"dir":"command","id":89,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":57.687}
+{"dir":"command","id":90,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":57.888}
+{"dir":"command","id":91,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":58.09}
+{"dir":"command","id":92,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":58.291}
+{"dir":"command","id":93,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":58.492}
+{"dir":"command","id":94,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":58.694}
+{"dir":"command","id":95,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":58.895}
+{"dir":"command","id":96,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":59.097}
+{"dir":"command","id":97,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":59.299}
+{"dir":"command","id":98,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":59.5}
+{"dir":"command","id":99,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":59.702}
+{"dir":"command","id":100,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":59.904}
+{"dir":"command","id":101,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":60.106}
+{"dir":"command","id":102,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":60.307}
+{"dir":"command","id":103,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":60.509}
+{"dir":"command","id":104,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":60.71}
+{"dir":"command","id":105,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":60.912}
+{"dir":"command","id":106,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":61.131}
+{"dir":"command","id":107,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":61.332}
+{"dir":"command","id":108,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":61.534}
+{"dir":"command","id":109,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":61.736}
+{"dir":"command","id":110,"name":"StopRun","detail":"StopRun { run_id: \"0673435983633b7847a787423fe168bf\" }","t":61.937}
+{"dir":"command","id":111,"name":"TerminalRead","detail":"TerminalRead { run_id: \"0673435983633b7847a787423fe168bf\" }","t":61.938}
+{"dir":"note","kind":"command_result","id":110,"success":true,"message":"SIGTERM issued to the run; the guest sends SIGKILL to anything still alive after 4.0 s, and the run status then says which signal ended it","t":61.958}
+{"dir":"note","kind":"terminal","run":"0673435983633b7847a787423fe168bf","sequence":2,"len":0,"eof":true,"text":"","t":61.978}
+{"dir":"note","kind":"snapshot","digest":{"state":"Running","active_vm":"auto_cycle_22eda8c07940dcdd288345b98be2fd99","boot_id":"5fbfdddf826ee5a955e9722308e11589","guest_kernel":true,"vms":1,"bases":1,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[{"id":"0673435983633b7847a787423fe168bf","state":"StopRequested","live_tasks":2,"pending_async":0,"flags":8,"terminal_eof":true,"recording_error":null}],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":1}},"t":61.978}
+{"dir":"note","kind":"snapshot","digest":{"state":"Running","active_vm":"auto_cycle_22eda8c07940dcdd288345b98be2fd99","boot_id":"5fbfdddf826ee5a955e9722308e11589","guest_kernel":true,"vms":1,"bases":1,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[{"id":"0673435983633b7847a787423fe168bf","state":"Stopped","live_tasks":0,"pending_async":0,"flags":15,"terminal_eof":true,"recording_error":null}],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":1}},"t":61.999}
+{"dir":"command","id":112,"name":"Stop","detail":"Stop","t":62.141}
+{"dir":"note","kind":"snapshot","digest":{"state":"Stopping","active_vm":"auto_cycle_22eda8c07940dcdd288345b98be2fd99","boot_id":"5fbfdddf826ee5a955e9722308e11589","guest_kernel":true,"vms":1,"bases":1,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[{"id":"0673435983633b7847a787423fe168bf","state":"Stopped","live_tasks":0,"pending_async":0,"flags":15,"terminal_eof":true,"recording_error":null}],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":1}},"t":62.141}
+{"dir":"note","kind":"snapshot","digest":{"state":"Stopped","active_vm":null,"boot_id":"5fbfdddf826ee5a955e9722308e11589","guest_kernel":true,"vms":1,"bases":1,"last_error":null,"snapshot_progress":null,"recording_flush":null,"runs":[{"id":"0673435983633b7847a787423fe168bf","state":"Stopped","live_tasks":0,"pending_async":0,"flags":15,"terminal_eof":true,"recording_error":null}],"analysis_reports":0,"snapshot_nodes":{"auto_cycle_22eda8c07940dcdd288345b98be2fd99":1}},"t":62.6}
+{"dir":"note","kind":"command_result","id":112,"success":true,"message":"VM stopped; recordings are being saved in the background","t":62.651}
+{"dir":"meta","kind":"cycle_end","cycle":1,"t":63.554}
