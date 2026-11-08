@@ -738,6 +738,46 @@ impl Library {
         )
     }
 
+    /// Add one tag to a sample, leaving the others as they are. Returns
+    /// whether it was added (false: the sample already had it, nothing is
+    /// written). The custody entry (`edited`, tags) is written under this
+    /// library's actor ([`Self::with_actor`]), so a service that tags a
+    /// sample on its own is not recorded as the analyst.
+    pub fn add_tag(&mut self, sha256: &str, tag: Tag) -> Result<bool, String> {
+        tag.validate()?;
+        let sha256 = sha256.to_ascii_lowercase();
+        if !self.contains(&sha256)? {
+            return Err("no such sample".into());
+        }
+        let wanted = tag.value.trim().to_owned();
+        if self
+            .tags(&sha256)?
+            .iter()
+            .any(|have| have.kind == tag.kind && have.value == wanted)
+        {
+            return Ok(false);
+        }
+        let color = if tag.kind == TagKind::Custom && tag.color.is_empty() {
+            TAG_COLORS[0]
+        } else {
+            tag.color.as_str()
+        };
+        self.connection
+            .execute(
+                "INSERT OR REPLACE INTO tag(sha256, kind, value, color) VALUES (?1, ?2, ?3, ?4)",
+                params![sha256, tag.kind.as_str(), wanted, color],
+            )
+            .map_err(|e| e.to_string())?;
+        self.note(
+            &sha256,
+            &self.actor(),
+            CustodyEvent::Edited {
+                what: "tags".into(),
+            },
+        )?;
+        Ok(true)
+    }
+
     /// Name and description, as the analyst edits them.
     pub fn set_text(&mut self, sha256: &str, name: &str, description: &str) -> Result<(), String> {
         if name.len() > 256
