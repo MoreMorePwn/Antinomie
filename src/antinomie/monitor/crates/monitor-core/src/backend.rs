@@ -139,6 +139,9 @@ impl Backend {
         for line in crate::route::reap_stale_helpers(&options.data_dir) {
             eprintln!("{line}");
         }
+        for line in crate::data_move::repair(&options) {
+            eprintln!("data folder: {line}");
+        }
         let vms = storage::load_vms(&options)?;
         let freed = crate::vm::remove_stale_guest_ram(
             &options,
@@ -182,6 +185,7 @@ impl Backend {
                     snapshot: Snapshot {
                         vms,
                         bases_checking: true,
+                        base_problems: Vec::new(),
                         vm_locations,
                         analysis_tools,
                         ..Snapshot::default()

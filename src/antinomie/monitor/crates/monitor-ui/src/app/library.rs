@@ -211,9 +211,22 @@ impl MonitorApp {
             }
         });
         ui.add_space(4.0);
+        for problem in &self.snapshot.base_problems {
+            ui.label(
+                RichText::new(format!(
+                    "{}  Base not usable: {} ({})",
+                    egui_phosphor::regular::WARNING,
+                    problem.reason,
+                    problem.directory.display()
+                ))
+                .color(theme::warn()),
+            );
+        }
         let rows = self.base_rows();
         if rows.is_empty() && !self.snapshot.bases_checking {
-            ui.label(RichText::new("No base images").color(theme::muted()));
+            if self.snapshot.base_problems.is_empty() {
+                ui.label(RichText::new("No base images").color(theme::muted()));
+            }
             return self.finish_bases_page(base_action, clicked, open_downloads);
         }
         let font = self.settings.font_size;

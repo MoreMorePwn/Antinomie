@@ -1039,7 +1039,11 @@ fn startup_base_error_is_published_after_backend_construction() {
         thread::sleep(Duration::from_millis(5));
     };
     assert!(snapshot.bases.is_empty());
-    assert!(snapshot.last_error.unwrap().starts_with("base images:"));
+    // The folder that did not load is listed with its reason, not hidden.
+    assert_eq!(snapshot.base_problems.len(), 1);
+    assert_eq!(snapshot.base_problems[0].directory, root.join("bases/bad"));
+    assert!(!snapshot.base_problems[0].reason.is_empty());
+    assert!(snapshot.last_error.is_none());
     backend.shutdown().unwrap();
     fs::remove_dir_all(root).unwrap();
 }

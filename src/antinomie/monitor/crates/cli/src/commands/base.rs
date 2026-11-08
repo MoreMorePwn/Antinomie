@@ -10,7 +10,7 @@ use crate::{
     output::{Reply, table},
 };
 use antinomie_monitor_core::{
-    Command, Snapshot,
+    BaseProblem, Command, Snapshot,
     build::{BUILD_PROFILES, BuildMode, BuildOptions, BuildRequest},
     settings,
 };
@@ -103,6 +103,15 @@ fn dispatch(base: &Base, context: &Context, engine: &mut DirectEngine) -> Result
     }
 }
 
+/// A base folder that did not load, as a list item with the reason.
+fn problem_value(problem: &BaseProblem) -> Value {
+    json!({
+        "id": problem.directory.file_name().map(|name| name.to_string_lossy()),
+        "directory": problem.directory,
+        "unavailable": problem.reason,
+    })
+}
+
 fn bases_table(snapshot: &Snapshot) -> String {
     let rows: Vec<Vec<String>> = snapshot
         .bases
@@ -117,10 +126,21 @@ fn bases_table(snapshot: &Snapshot) -> String {
             ]
         })
         .collect();
-    if rows.is_empty() {
+    let mut text = if rows.is_empty() && snapshot.base_problems.is_empty() {
         return "no bases installed\n".into();
+    } else if rows.is_empty() {
+        String::new()
+    } else {
+        table(&["ID", "LABEL", "ARCH", "SIZE", "REVISION"], &rows)
+    };
+    for problem in &snapshot.base_problems {
+        text.push_str(&format!(
+            "unusable base {}: {}\n",
+            problem.directory.display(),
+            problem.reason
+        ));
     }
-    table(&["ID", "LABEL", "ARCH", "SIZE", "REVISION"], &rows)
+    text
 }
 
 fn list(
@@ -179,8 +199,14 @@ fn list(
         };
         return Ok(Reply::list(items, None).with_human(human));
     }
-    let items = engine.snapshot().bases.iter().map(base_value).collect();
-    Ok(Reply::list(items, None).with_human(bases_table(engine.snapshot())))
+    let snapshot = engine.snapshot();
+    let items = snapshot
+        .bases
+        .iter()
+        .map(base_value)
+        .chain(snapshot.base_problems.iter().map(problem_value))
+        .collect();
+    Ok(Reply::list(items, None).with_human(bases_table(snapshot)))
 }
 
 /// The catalog is the one thing a base command fetches from the network, so

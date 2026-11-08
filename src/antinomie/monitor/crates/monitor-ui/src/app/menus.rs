@@ -195,8 +195,13 @@ impl MonitorApp {
                         if ui
                             .add(egui::Button::new(
                                 RichText::new(format!(
-                                    "{}  No base image: add one",
-                                    egui_phosphor::regular::WARNING
+                                    "{}  {}",
+                                    egui_phosphor::regular::WARNING,
+                                    if self.snapshot.base_problems.is_empty() {
+                                        "No base image: add one"
+                                    } else {
+                                        "Base image not usable: see Library"
+                                    }
                                 ))
                                 .color(theme::warn()),
                             ))

@@ -24,6 +24,7 @@ pub mod core_capture;
 pub mod core_dump;
 pub mod core_limits;
 pub mod core_strings;
+mod data_move;
 pub mod data_owner;
 pub mod date;
 pub mod debug;

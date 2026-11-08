@@ -147,6 +147,12 @@ struct Header {
     l1_offset: u64,
 }
 
+/// The backing file a qcow2 image names (relative names are taken from the
+/// image's folder), or `None` for an image without one.
+pub(crate) fn backing_file(path: &Path) -> Result<Option<PathBuf>, String> {
+    header(path).map(|head| head.backing)
+}
+
 /// The parts of a qcow2 header that name its backing file and L1 table.
 fn header(path: &Path) -> Result<Header, String> {
     let file = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
