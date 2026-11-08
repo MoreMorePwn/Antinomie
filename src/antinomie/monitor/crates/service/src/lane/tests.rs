@@ -242,7 +242,7 @@ pub(crate) fn vm_config(id: &str) -> VmConfig {
     }
 }
 
-fn checkpoint(id: &str) -> VmCheckpoint {
+pub(crate) fn checkpoint(id: &str) -> VmCheckpoint {
     VmCheckpoint {
         id: id.into(),
         parent_id: None,

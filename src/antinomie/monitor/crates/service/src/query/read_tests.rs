@@ -1588,7 +1588,10 @@ fn a_cancelled_read_answers_unavailable_and_a_past_deadline_read_timeout() {
     )
     .unwrap_err();
     assert_eq!(error.code, ErrorCode::Unavailable);
-    assert_eq!(error.reason(), None);
+    assert_eq!(
+        error.reason(),
+        Some(crate::api::error::ErrorReason::Cancelled)
+    );
     let late = Ctx::local_owner("local:1000").with_timeout(std::time::Duration::ZERO);
     let error = call(
         &service,

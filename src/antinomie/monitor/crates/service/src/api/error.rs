@@ -86,6 +86,21 @@ pub enum ErrorReason {
     ScanFailed,
     /// `internal`: the recording is corrupt or its index cannot be built.
     RecordingUnreadable,
+    /// `quota_exceeded`: the connection has 16 requests in flight (or the
+    /// socket 256) (local socket, 5.9).
+    TooManyRequests,
+    /// `quota_exceeded`: requests come faster than the socket's rate;
+    /// `details.retry_after_s`.
+    RateLimited,
+    /// `unavailable`: the socket serves 64 connections already.
+    TooManyConnections,
+    /// `quota_exceeded`: 64 subscriptions of this client or 256 in all (A18).
+    TooManySubscriptions,
+    /// `unavailable`: the daemon is stopping; queued jobs stay queued.
+    ServiceStopping,
+    /// `unavailable`: a request was cancelled by `{"op": "cancel"}` or by the
+    /// connection closing.
+    Cancelled,
 }
 
 /// The error of a failed operation.

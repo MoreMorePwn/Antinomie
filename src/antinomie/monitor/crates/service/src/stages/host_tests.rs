@@ -443,6 +443,36 @@ fn the_assessment_event_is_sent_once_and_the_label_follows_the_policy_rules() {
 }
 
 #[test]
+fn tag_library_writes_the_label_and_the_policy_onto_the_sample_and_is_off_by_default() {
+    let w = world_with("host-tags", |p| {
+        p.verdict.tag_library = true;
+        p.verdict.rule = vec![crate::config::policy::VerdictRule {
+            when: "counts.processes >= 1".into(),
+            label: Label::Suspicious,
+            score: None,
+        }];
+    });
+    let job = collected(&w, 1);
+    let mut waiter = w.engine(|_| {});
+    let done = finished(host(&w, &mut waiter, &job));
+    let sha = done.sample.as_ref().unwrap().sha256.to_string();
+    let tags = w.tags.0.lock().unwrap().clone();
+    assert_eq!(
+        tags,
+        vec![
+            (sha.clone(), "auto:policy=default".to_owned()),
+            (sha, "auto:label=suspicious".to_owned())
+        ]
+    );
+    // Off (the default): nothing is written.
+    let quiet = world("host-notags");
+    let job = collected(&quiet, 1);
+    let mut waiter = quiet.engine(|_| {});
+    finished(host(&quiet, &mut waiter, &job));
+    assert!(quiet.tags.0.lock().unwrap().is_empty());
+}
+
+#[test]
 fn a_digest_detection_with_a_high_yara_severity_makes_the_job_malicious() {
     let w = world("host-yara");
     let job = collected(&w, 1);

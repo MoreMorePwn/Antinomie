@@ -1,0 +1,704 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! The `auto` commands that look at and act on jobs (design 3.4.4; card
+//! P3-6b): `status`, `list`, `wait`, `events`, `result`, `artifacts`,
+//! `fetch`, `cancel`, `retry`, `queue`, `policy list`. Each goes to the
+//! daemon when one answers, else to the job store (see [`super::link`]).
+use super::{
+    link::{self, api},
+    render,
+};
+use crate::{
+    context::Context,
+    error::{CliError, ErrorCode},
+    exit::Exit,
+    output::{Reply, table},
+};
+use antinomie_service::{
+    api::{event::Event, ids::JobId, job::Job, ops::JobListParams, status::PauseReason},
+    server::client::{Client, Streamed},
+    store::Store,
+};
+use clap::{Args, Subcommand};
+use serde_json::{Value, json};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
+
+pub fn job_id(text: &str) -> Result<JobId, CliError> {
+    JobId::try_from(text.to_owned()).map_err(|_| {
+        CliError::invalid(format!("{text:?} is not a job id (j_...)")).with_field("job")
+    })
+}
+
+fn job_of(value: Value) -> Result<Job, CliError> {
+    serde_json::from_value(value).map_err(|e| CliError::internal(format!("job: {e}")))
+}
+
+fn value(job: &impl serde::Serialize) -> Value {
+    serde_json::to_value(job).unwrap_or(Value::Null)
+}
+
+/// `auto status [JOB]`.
+#[derive(Args, Debug)]
+pub struct Status {
+    /// A job; without one, the queue and the lanes.
+    pub job: Option<String>,
+}
+
+/// `auto list`.
+#[derive(Args, Debug)]
+pub struct List {
+    #[arg(long, value_name = "STATE")]
+    pub state: Option<String>,
+    #[arg(long, value_name = "OUTCOME")]
+    pub outcome: Option<String>,
+    #[arg(long, value_name = "HEX")]
+    pub sha256: Option<String>,
+    /// A label `KEY` or `KEY=VALUE` of the spec.
+    #[arg(long, value_name = "LABEL")]
+    pub label: Option<String>,
+    /// Only jobs newer than this: `30m`, `24h`, `7d`, or a time in Unix ms.
+    #[arg(long, value_name = "WHEN")]
+    pub since: Option<String>,
+    #[arg(long, default_value_t = 50)]
+    pub limit: u32,
+    #[arg(long)]
+    pub cursor: Option<String>,
+}
+
+/// `auto wait JOB...`.
+#[derive(Args, Debug)]
+pub struct Wait {
+    #[arg(required = true)]
+    pub jobs: Vec<String>,
+    /// Exit 30, 31 or 32 for a succeeded job labelled suspicious, malicious or
+    /// inconclusive.
+    #[arg(long)]
+    pub verdict_exit: bool,
+}
+
+/// `auto events [JOB]`.
+#[derive(Args, Debug)]
+pub struct Events {
+    /// The job; with `--all`, none.
+    pub job: Option<String>,
+    /// Every job and the engine (resume by `gseq`).
+    #[arg(long, conflicts_with = "job")]
+    pub all: bool,
+    /// Resume after this `seq` (one job) or `gseq` (`--all`).
+    #[arg(long, value_name = "SEQ")]
+    pub since: Option<u64>,
+    /// Keep printing events as they happen (one job: until it ends).
+    #[arg(long)]
+    pub follow: bool,
+    /// Only these event types, comma-separated (`job.state,job.stage`).
+    #[arg(long, value_name = "T,...", value_delimiter = ',')]
+    pub types: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct JobArg {
+    pub job: String,
+}
+
+#[derive(Args, Debug)]
+pub struct Cancel {
+    pub job: String,
+    #[arg(long)]
+    pub reason: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct Retry {
+    pub job: String,
+    /// Change one override of the original spec (`timeout_s=60`,
+    /// `route=inet_sim`); the value is JSON when it parses, else text.
+    #[arg(long = "override", value_name = "KEY=VALUE")]
+    pub overrides: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct Fetch {
+    pub job: String,
+    /// `html`, `pdf`, `json`, `misp`, `stix`, `md` (or `report.html` ...), or
+    /// another artifact kind (`report.bundle`).
+    pub kind: String,
+    /// A file or a folder to write to; `-` writes to standard output.
+    #[arg(long, value_name = "PATH")]
+    pub out: Option<PathBuf>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Queue {
+    /// The queue and the lanes.
+    Status,
+    /// Start no new job (running jobs finish).
+    Pause,
+    /// Start jobs again.
+    Resume,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Policy {
+    /// The policies this user may submit to.
+    List,
+}
+
+/// `--since` of `auto list`.
+pub fn since_ms(text: &str, now_ms: u64) -> Result<u64, CliError> {
+    let bad = || {
+        CliError::invalid(format!("{text:?}: use 30m, 24h, 7d or Unix milliseconds"))
+            .with_field("since")
+    };
+    let (digits, unit) = text.split_at(text.len().saturating_sub(1));
+    let factor = match unit {
+        "s" => 1_000,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        "d" => 86_400_000,
+        _ => return text.parse().map_err(|_| bad()),
+    };
+    let amount: u64 = digits.parse().map_err(|_| bad())?;
+    Ok(now_ms.saturating_sub(amount.saturating_mul(factor)))
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+fn job_reply(job: &Value) -> Reply {
+    Reply::value(job.clone()).with_human(render::job_text(job))
+}
+
+pub fn status(arguments: &Status, context: &Context) -> Result<Reply, CliError> {
+    match &arguments.job {
+        Some(text) => {
+            let id = job_id(text)?;
+            let job = get(context, &id)?;
+            Ok(job_reply(&value(&job)))
+        }
+        None => queue(&Queue::Status, context),
+    }
+}
+
+/// One job, from the daemon or the store.
+pub fn get(context: &Context, id: &JobId) -> Result<Job, CliError> {
+    match link::daemon(context)? {
+        Some(mut client) => job_of(link::call(&mut client, "job.get", json!({"job_id": id}))?),
+        None => link::read_store(context)?.get(id).map_err(api),
+    }
+}
+
+pub fn list(arguments: &List, context: &Context) -> Result<Reply, CliError> {
+    let mut params = json!({"limit": arguments.limit});
+    for (key, value) in [
+        ("state", &arguments.state),
+        ("outcome", &arguments.outcome),
+        ("sha256", &arguments.sha256),
+        ("label", &arguments.label),
+        ("cursor", &arguments.cursor),
+    ] {
+        if let Some(value) = value {
+            params[key] = json!(value);
+        }
+    }
+    if let Some(since) = &arguments.since {
+        params["since_ms"] = json!(since_ms(since, now_ms())?);
+    }
+    let listed = match link::daemon(context)? {
+        Some(mut client) => link::call(&mut client, "job.list", params)?,
+        None => {
+            let params: JobListParams =
+                serde_json::from_value(params).map_err(|e| CliError::invalid(e.to_string()))?;
+            value(
+                &link::read_store(context)?
+                    .list(&params, None)
+                    .map_err(api)?,
+            )
+        }
+    };
+    let jobs = listed["jobs"].as_array().cloned().unwrap_or_default();
+    let rows: Vec<Vec<String>> = jobs.iter().map(render::job_row).collect();
+    let human = if rows.is_empty() {
+        "no jobs\n".into()
+    } else {
+        table(
+            &["JOB", "STATE", "STAGE", "LABEL", "SAMPLE", "POLICY"],
+            &rows,
+        )
+    };
+    let cursor = listed["next_cursor"].as_str().map(str::to_owned);
+    Ok(Reply::list(jobs, cursor).with_human(human))
+}
+
+/// Wait until `id` is terminal: through a job stream when a client is given,
+/// else by reading the store twice a second. `None` when the limit passed.
+pub fn wait_terminal(
+    client: Option<&mut Client>,
+    store: Option<&Store>,
+    id: &JobId,
+    limit: Option<Duration>,
+    on_event: &mut dyn FnMut(&Event),
+) -> Result<Job, CliError> {
+    match (client, store) {
+        (Some(client), _) => {
+            client.deadline_in(limit);
+            let ended = client.subscribe(json!({"job_id": id}), &mut |line| {
+                if let Streamed::Event(event) = line {
+                    on_event(&event);
+                }
+                true
+            });
+            client.deadline_in(None);
+            match ended {
+                Ok(_) | Err(antinomie_service::server::client::ClientError::TimedOut) => {}
+                Err(other) => return Err(link::client(other)),
+            }
+            job_of(link::call(client, "job.get", json!({"job_id": id}))?)
+        }
+        (None, Some(store)) => {
+            let until = limit.map(|limit| Instant::now() + limit);
+            let mut after = 0;
+            loop {
+                let (events, next) = store.events_list(id, after, 500).map_err(api)?;
+                for event in &events {
+                    on_event(event);
+                }
+                after = next;
+                let job = store.get(id).map_err(api)?;
+                if job.state.is_terminal() || until.is_some_and(|u| Instant::now() >= u) {
+                    return Ok(job);
+                }
+                if crate::signals::interrupted() {
+                    return Err(CliError::internal("interrupted").with_exit(Exit::Interrupted));
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        }
+        (None, None) => Err(CliError::internal("no way to reach the job")),
+    }
+}
+
+pub fn wait(arguments: &Wait, context: &Context) -> Result<Reply, CliError> {
+    crate::signals::install();
+    let ids: Vec<JobId> = arguments
+        .jobs
+        .iter()
+        .map(|t| job_id(t))
+        .collect::<Result<_, _>>()?;
+    let mut client = link::daemon(context)?;
+    let store = match client {
+        Some(_) => None,
+        None => Some(link::read_store(context)?),
+    };
+    let began = Instant::now();
+    let mut jobs = Vec::new();
+    let mut exits = Vec::new();
+    for id in &ids {
+        let left = context.timeout().map(|t| t.saturating_sub(began.elapsed()));
+        let job = wait_terminal(client.as_mut(), store.as_ref(), id, left, &mut |_| {})?;
+        exits.push(render::job_exit(&job, arguments.verdict_exit));
+        jobs.push(value(&job));
+    }
+    let exit = render::worst(&exits);
+    if jobs.len() == 1 {
+        return Ok(job_reply(&jobs[0]).with_exit(exit));
+    }
+    let human: String = jobs
+        .iter()
+        .map(render::job_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(Reply::list(jobs, None).with_human(human).with_exit(exit))
+}
+
+/// Print one event as an NDJSON line as it happens.
+pub fn print_event(event: &Event) {
+    let mut line = serde_json::to_vec(event).unwrap_or_default();
+    line.push(b'\n');
+    let mut out = std::io::stdout().lock();
+    let _ = out.write_all(&line);
+    let _ = out.flush();
+}
+
+pub fn events(arguments: &Events, context: &Context) -> Result<Reply, CliError> {
+    crate::signals::install();
+    let job = match (&arguments.job, arguments.all) {
+        (Some(text), _) => Some(job_id(text)?),
+        (None, true) => None,
+        (None, false) => {
+            return Err(CliError::invalid("name a job, or --all for every job").with_field("job"));
+        }
+    };
+    let mut params = json!({});
+    if let Some(job) = &job {
+        params["job_id"] = json!(job);
+        if let Some(since) = arguments.since {
+            params["since_seq"] = json!(since);
+        }
+    } else if let Some(since) = arguments.since {
+        params["since_gseq"] = json!(since);
+    }
+    if !arguments.types.is_empty() {
+        params["types"] = json!(arguments.types);
+    }
+    let client = link::daemon(context)?;
+    match (client, arguments.follow, &job) {
+        (Some(mut client), true, _) => {
+            client.deadline_in(context.timeout());
+            let mut hello = None;
+            let ended = client.subscribe(params, &mut |line| {
+                match line {
+                    Streamed::Event(event) => print_event(&event),
+                    Streamed::Hello(h) => hello = Some(h),
+                    Streamed::Ping => {}
+                }
+                true
+            });
+            let result = match ended {
+                Ok(result) => result,
+                Err(antinomie_service::server::client::ClientError::TimedOut) => {
+                    json!({"timed_out": true})
+                }
+                Err(other) => return Err(link::client(other)),
+            };
+            Ok(Reply::value(json!({"end": result, "hello": hello})))
+        }
+        (Some(mut client), false, Some(job)) => {
+            let mut events = Vec::new();
+            let mut after = arguments.since.unwrap_or(0);
+            loop {
+                let page = link::call(
+                    &mut client,
+                    "events.list",
+                    json!({"job_id": job, "after_seq": after, "limit": 1000}),
+                )?;
+                let batch = page["events"].as_array().cloned().unwrap_or_default();
+                if batch.is_empty() {
+                    break;
+                }
+                after = page["next_seq"].as_u64().unwrap_or(after);
+                events.extend(batch);
+            }
+            Ok(event_list(events, &arguments.types))
+        }
+        (Some(_), false, None) => Err(CliError::invalid(
+            "--all needs --follow (the stored events of every job are a stream)",
+        )),
+        (None, follow, Some(job)) => {
+            let store = link::read_store(context)?;
+            if follow {
+                let finished =
+                    wait_terminal(None, Some(&store), job, context.timeout(), &mut |e| {
+                        if wanted(e, &arguments.types) && e.seq > arguments.since {
+                            print_event(e);
+                        }
+                    })?;
+                return Ok(Reply::value(json!({"end": {"state": finished.state}})));
+            }
+            let (events, _) = store
+                .events_list(job, arguments.since.unwrap_or(0), 1000)
+                .map_err(api)?;
+            Ok(event_list(
+                events.iter().map(value).collect(),
+                &arguments.types,
+            ))
+        }
+        (None, _, None) => Err(CliError::new(
+            ErrorCode::Unavailable,
+            "the all-jobs stream needs a running daemon",
+        )),
+    }
+}
+
+fn wanted(event: &Event, types: &[String]) -> bool {
+    types.is_empty() || {
+        let kind = value(&event.body)["type"].as_str().unwrap_or("").to_owned();
+        types.contains(&kind)
+    }
+}
+
+fn event_list(events: Vec<Value>, types: &[String]) -> Reply {
+    let events: Vec<Value> = events
+        .into_iter()
+        .filter(|e| types.is_empty() || types.iter().any(|t| e["type"] == json!(t)))
+        .collect();
+    let human: String = events
+        .iter()
+        .map(|e| {
+            format!(
+                "{:>5} {:<15} {}\n",
+                e["seq"],
+                e["type"].as_str().unwrap_or(""),
+                render::clean(&e["data"].to_string())
+            )
+        })
+        .collect();
+    Reply::list(events, None).with_human(human)
+}
+
+/// An artifact's file: the daemon's path (checked to be inside the data
+/// folder), or the store's location resolved inside the job directory.
+fn artifact_paths(
+    context: &Context,
+    client: Option<&mut Client>,
+    job: &Job,
+) -> Result<Vec<Value>, CliError> {
+    let data = context
+        .data_dir()
+        .canonicalize()
+        .map_err(|e| CliError::io(context.data_dir(), &e))?;
+    let mut out = Vec::new();
+    match client {
+        Some(client) => {
+            for artifact in &job.artifacts {
+                let got = link::call(client, "artifact.get", json!({"artifact_id": artifact.id}))?;
+                let path = PathBuf::from(got["path"].as_str().unwrap_or_default());
+                if !path.starts_with(&data) {
+                    return Err(CliError::internal(format!(
+                        "the daemon named a file outside the data folder: {}",
+                        path.display()
+                    )));
+                }
+                out.push(json!({"artifact": artifact, "path": path}));
+            }
+        }
+        None => {
+            let store = link::read_store(context)?;
+            for artifact in &job.artifacts {
+                let (_, location) = store.artifact(&artifact.id).map_err(api)?;
+                let path = antinomie_service::daemon::artifacts::resolve(
+                    &store.job_dir(&job.id),
+                    &location,
+                )
+                .map_err(api)?;
+                out.push(json!({"artifact": artifact, "path": path}));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// `auto result JOB`: the job's outcome, label and report files.
+pub fn result(arguments: &JobArg, context: &Context) -> Result<Reply, CliError> {
+    let id = job_id(&arguments.job)?;
+    let mut client = link::daemon(context)?;
+    let job = match client.as_mut() {
+        Some(client) => job_of(link::call(client, "job.get", json!({"job_id": id}))?)?,
+        None => link::read_store(context)?.get(&id).map_err(api)?,
+    };
+    let files = artifact_paths(context, client.as_mut(), &job)?;
+    let mut human = render::job_text(&value(&job));
+    if !files.is_empty() {
+        human.push_str("reports:\n");
+        for file in &files {
+            human.push_str(&format!(
+                "  {:<14} {}\n",
+                file["artifact"]["kind"].as_str().unwrap_or(""),
+                file["path"].as_str().unwrap_or("")
+            ));
+        }
+    }
+    Ok(Reply::value(json!({"job": job, "files": files})).with_human(human))
+}
+
+pub fn artifacts(arguments: &JobArg, context: &Context) -> Result<Reply, CliError> {
+    let id = job_id(&arguments.job)?;
+    let list = match link::daemon(context)? {
+        Some(mut client) => {
+            link::call(&mut client, "artifact.list", json!({"job_id": id}))?["artifacts"].clone()
+        }
+        None => value(&link::read_store(context)?.artifacts(&id).map_err(api)?),
+    };
+    let items = list.as_array().cloned().unwrap_or_default();
+    let rows: Vec<Vec<String>> = items
+        .iter()
+        .map(|a| {
+            vec![
+                a["id"].as_str().unwrap_or("").into(),
+                a["kind"].as_str().unwrap_or("").into(),
+                render::clean(a["name"].as_str().unwrap_or("")),
+                a["size"].to_string(),
+                a["sensitive"].to_string(),
+            ]
+        })
+        .collect();
+    let human = table(&["ARTIFACT", "KIND", "NAME", "SIZE", "SENSITIVE"], &rows);
+    Ok(Reply::list(items, None).with_human(human))
+}
+
+pub fn fetch(arguments: &Fetch, context: &Context) -> Result<Reply, CliError> {
+    let id = job_id(&arguments.job)?;
+    let kind = if arguments.kind.contains('.') {
+        arguments.kind.clone()
+    } else {
+        format!("report.{}", arguments.kind)
+    };
+    let mut client = link::daemon(context)?;
+    let job = match client.as_mut() {
+        Some(client) => job_of(link::call(client, "job.get", json!({"job_id": id}))?)?,
+        None => link::read_store(context)?.get(&id).map_err(api)?,
+    };
+    let files = artifact_paths(context, client.as_mut(), &job)?;
+    let file = files
+        .iter()
+        .find(|f| f["artifact"]["kind"] == json!(kind))
+        .ok_or_else(|| CliError::not_found(format!("job {id} has no {kind} artifact")))?;
+    let source = PathBuf::from(file["path"].as_str().unwrap_or_default());
+    let name = file["artifact"]["name"].as_str().unwrap_or("artifact");
+    if arguments.out.as_deref() == Some(Path::new("-")) {
+        let bytes = std::fs::read(&source).map_err(|e| CliError::io(&source, &e))?;
+        let _ = std::io::stdout().write_all(&bytes);
+        return Ok(
+            Reply::value(json!({"written": "-", "size": bytes.len()})).with_human(String::new())
+        );
+    }
+    let target = match &arguments.out {
+        Some(path) if path.is_dir() => path.join(name),
+        Some(path) => path.clone(),
+        None => PathBuf::from(name),
+    };
+    std::fs::copy(&source, &target).map_err(|e| CliError::io(&target, &e))?;
+    Ok(
+        Reply::value(
+            json!({"written": target, "kind": kind, "sha256": file["artifact"]["sha256"]}),
+        )
+        .with_human(format!("{kind} written to {}\n", target.display())),
+    )
+}
+
+pub fn cancel(arguments: &Cancel, context: &Context) -> Result<Reply, CliError> {
+    let id = job_id(&arguments.job)?;
+    let job = match link::daemon(context)? {
+        Some(mut client) => link::call(
+            &mut client,
+            "job.cancel",
+            json!({"job_id": id, "reason": arguments.reason}),
+        )?,
+        None => {
+            let (store, _guard) = link::locked_store(context)?;
+            value(
+                &store
+                    .cancel(&id, arguments.reason.as_deref(), &link::me())
+                    .map_err(api)?,
+            )
+        }
+    };
+    Ok(job_reply(&job))
+}
+
+/// `--override KEY=VALUE` as an `Overrides` object.
+pub fn overrides(pairs: &[String]) -> Result<Value, CliError> {
+    let mut out = serde_json::Map::new();
+    for pair in pairs {
+        let (key, text) = pair.split_once('=').ok_or_else(|| {
+            CliError::invalid(format!("{pair:?} is not KEY=VALUE")).with_field("override")
+        })?;
+        let value = serde_json::from_str(text).unwrap_or_else(|_| json!(text));
+        out.insert(key.to_owned(), value);
+    }
+    Ok(Value::Object(out))
+}
+
+pub fn retry(arguments: &Retry, context: &Context) -> Result<Reply, CliError> {
+    let id = job_id(&arguments.job)?;
+    let mut params = json!({"job_id": id});
+    if !arguments.overrides.is_empty() {
+        params["overrides"] = overrides(&arguments.overrides)?;
+    }
+    let Some(mut client) = link::daemon(context)? else {
+        return Err(CliError::new(
+            ErrorCode::Unavailable,
+            "`auto retry` needs a running daemon (`antinomie-cli auto daemon`)",
+        ));
+    };
+    let job = link::call(&mut client, "job.retry", params)?;
+    Ok(job_reply(&job))
+}
+
+pub fn queue(command: &Queue, context: &Context) -> Result<Reply, CliError> {
+    let status = match (link::daemon(context)?, command) {
+        (Some(mut client), Queue::Status) => link::call(&mut client, "queue.status", json!({}))?,
+        (Some(mut client), Queue::Pause) => link::call(&mut client, "queue.pause", json!({}))?,
+        (Some(mut client), Queue::Resume) => link::call(&mut client, "queue.resume", json!({}))?,
+        (None, Queue::Status) => {
+            let store = link::read_store(context)?;
+            let counts = store.counts().map_err(api)?;
+            let reason = store.pause_reason().map_err(api)?;
+            json!({
+                "paused": reason.is_some(), "pause_reason": reason,
+                "queued": counts.queued, "running": counts.running,
+                "lanes": [], "owner": "none",
+            })
+        }
+        (None, change) => {
+            let (store, _guard) = link::locked_store(context)?;
+            let reason = matches!(change, Queue::Pause).then_some(PauseReason::Operator);
+            store.set_pause(reason).map_err(api)?;
+            json!({"paused": reason.is_some(), "pause_reason": reason, "owner": "none"})
+        }
+    };
+    Ok(Reply::value(status.clone()).with_human(render::queue_text(&status)))
+}
+
+pub fn policy(command: &Policy, context: &Context) -> Result<Reply, CliError> {
+    let Policy::List = command;
+    let list = match link::daemon(context)? {
+        Some(mut client) => link::call(&mut client, "policy.list", json!({}))?["policies"].clone(),
+        None => {
+            let report = antinomie_service::config::validate::load(
+                context.data_dir(),
+                &antinomie_service::config::DiskVms::open(context.data_dir()),
+                None,
+            );
+            value(&antinomie_service::config::PolicySet::new(report.policies).list_for(&link::me()))
+        }
+    };
+    let items = list.as_array().cloned().unwrap_or_default();
+    let rows: Vec<Vec<String>> = items
+        .iter()
+        .map(|p| {
+            vec![
+                p["name"].as_str().unwrap_or("").into(),
+                render::clean(p["description"].as_str().unwrap_or("")),
+            ]
+        })
+        .collect();
+    Ok(Reply::list(items, None).with_human(table(&["POLICY", "DESCRIPTION"], &rows)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn since_takes_units_or_milliseconds() {
+        let now = 10_000_000_000;
+        assert_eq!(since_ms("30m", now).unwrap(), now - 1_800_000);
+        assert_eq!(since_ms("24h", now).unwrap(), now - 86_400_000);
+        assert_eq!(since_ms("7d", now).unwrap(), now - 604_800_000);
+        assert_eq!(since_ms("1794000000000", now).unwrap(), 1_794_000_000_000);
+        for bad in ["", "h", "5x", "-3h", "1.5d"] {
+            assert!(since_ms(bad, now).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn overrides_are_json_when_they_parse() {
+        let value = overrides(&[
+            "timeout_s=60".into(),
+            "route=inet_sim".into(),
+            "args=[\"a\"]".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            value,
+            json!({"timeout_s": 60, "route": "inet_sim", "args": ["a"]})
+        );
+        assert!(overrides(&["nokey".into()]).is_err());
+    }
+}

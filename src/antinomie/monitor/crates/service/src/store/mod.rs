@@ -20,6 +20,7 @@ mod model;
 mod patch;
 mod query;
 pub mod recover;
+mod retry;
 pub mod schema;
 mod submit;
 
@@ -49,7 +50,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, MutexGuard,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     time::Duration,
@@ -104,9 +105,42 @@ pub struct Store {
     clock: Arc<dyn Clock>,
     epoch: String,
     engine_seq: AtomicU64,
-    subscribers: Mutex<Vec<mpsc::Sender<Event>>>,
+    subscribers: Mutex<Vec<Subscriber>>,
     fault: Mutex<Option<(Fault, FaultAction)>>,
     read_only: bool,
+}
+
+/// A receiver of committed events. A bounded one that falls behind is
+/// dropped and marked: the socket server ends that subscription with
+/// `slow_consumer` (design 5.5, back-pressure); the pipeline never blocks.
+enum Subscriber {
+    Unbounded(mpsc::Sender<Event>),
+    Bounded(mpsc::SyncSender<Event>, Arc<AtomicBool>),
+}
+
+impl Subscriber {
+    /// False once the receiver is gone or (bounded) full.
+    fn send(&self, event: &Event) -> bool {
+        match self {
+            Self::Unbounded(sender) => sender.send(event.clone()).is_ok(),
+            Self::Bounded(sender, overflowed) => match sender.try_send(event.clone()) {
+                Ok(()) => true,
+                Err(mpsc::TrySendError::Full(_)) => {
+                    overflowed.store(true, Ordering::SeqCst);
+                    false
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => false,
+            },
+        }
+    }
+}
+
+/// A bounded subscription ([`Store::subscribe_bounded`]): the receiver, and
+/// the flag the store sets when it dropped the subscription because the
+/// receiver fell `capacity` events behind.
+pub struct Subscription {
+    pub events: mpsc::Receiver<Event>,
+    pub overflowed: Arc<AtomicBool>,
 }
 
 /// A write in progress: the open transaction, the time, and the events the
@@ -307,10 +341,13 @@ impl Store {
         };
         self.hit(Fault::AfterCommit)?;
         // The connection stays locked so mirror lines of one job keep their
-        // order.
+        // order, and so subscribers receive events in `gseq` order: a
+        // subscription that resumes from the table and then follows the live
+        // channel skips what it has sent by `gseq`, which is only gap-free
+        // when no later commit is published before an earlier one.
         self.mirror(&pending)?;
-        drop(guard);
         self.publish(pending);
+        drop(guard);
         Ok(out)
     }
 
@@ -318,11 +355,7 @@ impl Store {
     /// forgotten.
     fn publish(&self, events: Vec<Event>) {
         let mut subscribers = lock(&self.subscribers);
-        subscribers.retain(|sender| {
-            events
-                .iter()
-                .all(|event| sender.send(event.clone()).is_ok())
-        });
+        subscribers.retain(|subscriber| events.iter().all(|event| subscriber.send(event)));
     }
 
     /// Every event committed (and every ephemeral one published) after this
@@ -331,8 +364,24 @@ impl Store {
     /// then follows this channel and skips what it has already sent.
     pub fn subscribe(&self) -> mpsc::Receiver<Event> {
         let (sender, receiver) = mpsc::channel();
-        lock(&self.subscribers).push(sender);
+        lock(&self.subscribers).push(Subscriber::Unbounded(sender));
         receiver
+    }
+
+    /// Like [`Self::subscribe`], but the store keeps at most `capacity`
+    /// events the receiver has not taken. A receiver that falls further
+    /// behind is dropped (the channel disconnects) and `overflowed` is set:
+    /// the store never waits for a slow reader.
+    pub fn subscribe_bounded(&self, capacity: usize) -> Subscription {
+        let (sender, events) = mpsc::sync_channel(capacity.max(1));
+        let overflowed = Arc::new(AtomicBool::new(false));
+        lock(&self.subscribers).push(Subscriber::Bounded(sender, Arc::clone(&overflowed)));
+        Subscription { events, overflowed }
+    }
+
+    /// Subscribers the store holds (tests and `health`).
+    pub fn subscriber_count(&self) -> usize {
+        lock(&self.subscribers).len()
     }
 
     /// Send an ephemeral event (`job.progress`, `job.metrics`): not stored, no

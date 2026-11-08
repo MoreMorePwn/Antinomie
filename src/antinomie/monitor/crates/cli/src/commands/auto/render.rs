@@ -1,0 +1,261 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! The exit code of a waited job (design 3.3, audit G27) and the human text of
+//! jobs and the queue. Text that came from a sample or the guest (names,
+//! warnings, the basis sentence) is shown with control characters and escape
+//! sequences removed (abuse case A13); `json` and `ndjson` carry it as data.
+use crate::exit::Exit;
+use antinomie_service::api::{
+    assessment::Label,
+    job::{Job, JobState},
+};
+use serde_json::Value;
+use std::fmt::Write as _;
+
+/// The exit code of a job a command waited for. The job's state comes first:
+/// `failed` 10, `partial` 11, `cancelled` 12, `rejected` 13, still running
+/// (the wait ran out) 14. Only a `succeeded` job looks at its label, and only
+/// with `--verdict-exit`: `suspicious` 30, `malicious` 31, `inconclusive` 32,
+/// `clean_observed` or none 0.
+pub fn job_exit(job: &Job, verdict_exit: bool) -> Exit {
+    match job.state {
+        JobState::Succeeded if verdict_exit => {
+            match job.assessment.as_ref().and_then(|a| a.label) {
+                Some(Label::Suspicious) => Exit::Suspicious,
+                Some(Label::Malicious) => Exit::Malicious,
+                Some(Label::Inconclusive) => Exit::Inconclusive,
+                Some(Label::CleanObserved) | None => Exit::Ok,
+            }
+        }
+        JobState::Succeeded => Exit::Ok,
+        JobState::Partial => Exit::JobPartial,
+        JobState::Failed => Exit::JobFailed,
+        JobState::Cancelled => Exit::JobCancelled,
+        JobState::Rejected => Exit::JobRejected,
+        JobState::Queued | JobState::Running | JobState::Cancelling => Exit::WaitTimeout,
+    }
+}
+
+/// The worst of several waited jobs (`auto wait A B`): the highest code.
+pub fn worst(exits: &[Exit]) -> Exit {
+    exits
+        .iter()
+        .copied()
+        .max_by_key(|exit| exit.code())
+        .unwrap_or(Exit::Ok)
+}
+
+/// Untrusted text for a terminal: C0 and C1 controls (ESC among them) and
+/// DEL become a space, so a name cannot move the cursor or change colours.
+pub fn clean(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
+fn word(value: &Value) -> String {
+    match value {
+        Value::Null => "-".into(),
+        Value::String(text) => clean(text),
+        other => clean(&other.to_string()),
+    }
+}
+
+/// `key: value` lines of one job.
+pub fn job_text(job: &Value) -> String {
+    let mut out = String::new();
+    let line = |out: &mut String, key: &str, value: String| {
+        let _ = writeln!(out, "{key:<11} {value}");
+    };
+    line(&mut out, "job:", word(&job["id"]));
+    let mut state = word(&job["state"]);
+    if let Some(stage) = job["stage"].as_str() {
+        state.push_str(&format!(" ({stage})"));
+    }
+    if let Some(waiting) = job["waiting_for"].as_str() {
+        state.push_str(&format!(", waiting for {waiting}"));
+    }
+    line(&mut out, "state:", state);
+    if !job["sample"].is_null() {
+        line(
+            &mut out,
+            "sample:",
+            format!(
+                "{} {} ({} bytes, {})",
+                word(&job["sample"]["sha256"])
+                    .chars()
+                    .take(16)
+                    .collect::<String>(),
+                word(&job["sample"]["name"]),
+                word(&job["sample"]["size"]),
+                word(&job["sample"]["type"])
+            ),
+        );
+    }
+    line(
+        &mut out,
+        "policy:",
+        format!(
+            "{}, attempt {} of {}",
+            word(&job["policy"]["name"]),
+            word(&job["attempt"]),
+            word(&job["max_attempts"])
+        ),
+    );
+    if let Some(run) = job.get("run").filter(|r| !r.is_null()) {
+        line(
+            &mut out,
+            "run:",
+            format!(
+                "{} ended {} exit {}",
+                word(&run["run_id"]),
+                word(&run["end_reason"]),
+                word(&run["exit"])
+            ),
+        );
+    }
+    if let Some(a) = job.get("assessment").filter(|a| !a.is_null()) {
+        line(
+            &mut out,
+            "label:",
+            format!(
+                "{} (score {}, {}, highest tier {})",
+                word(&a["label"]),
+                word(&a["score"]),
+                word(&a["assessment"]),
+                word(&a["highest_tier"])
+            ),
+        );
+        line(&mut out, "basis:", word(&a["basis"]));
+    }
+    if let Some(failure) = job.get("failure").filter(|f| !f.is_null()) {
+        line(
+            &mut out,
+            "failure:",
+            format!("{}: {}", word(&failure["code"]), word(&failure["message"])),
+        );
+    }
+    for warning in job["warnings"].as_array().into_iter().flatten() {
+        line(
+            &mut out,
+            "warning:",
+            format!("{}: {}", word(&warning["code"]), word(&warning["text"])),
+        );
+    }
+    out
+}
+
+/// One table row of `auto list`.
+pub fn job_row(job: &Value) -> Vec<String> {
+    vec![
+        word(&job["id"]),
+        word(&job["state"]),
+        word(&job["stage"]),
+        word(&job["assessment"]["label"]),
+        word(&job["sample"]["name"]),
+        word(&job["policy"]["name"]),
+    ]
+}
+
+/// `auto status` without a job: the queue.
+pub fn queue_text(status: &Value) -> String {
+    let mut out = format!(
+        "queue:      {} queued, {} running{}\nowner:      {}\n",
+        word(&status["queued"]),
+        word(&status["running"]),
+        match status["pause_reason"].as_str() {
+            Some(reason) => format!(", paused ({reason})"),
+            None => String::new(),
+        },
+        word(&status["owner"])
+    );
+    for lane in status["lanes"].as_array().into_iter().flatten() {
+        let _ = writeln!(
+            out,
+            "{:<11} {} vm {} job {} disk layer {}",
+            format!("{}:", word(&lane["lane"])),
+            word(&lane["state"]),
+            word(&lane["vm_id"]),
+            word(&lane["job_id"]),
+            word(&lane["disk_layer"])
+        );
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use antinomie_service::api::assessment::Assessment;
+
+    fn job(state: JobState, label: Option<Label>) -> Job {
+        let mut value = serde_json::json!({
+            "api_version": 1, "id": "j_01ARZ3NDEKTSV4RRFFQ69G5FAV", "state": "queued",
+            "stage": null, "waiting_for": null, "outcome": null, "created_ms": 1,
+            "started_ms": null, "finished_ms": null, "queue_position": null,
+            "attempt": 1, "max_attempts": 2, "client_id": "local:1",
+            "spec": {"sample": {"sha256": "aa".repeat(32)}},
+            "sample": null, "policy": {"name": "default", "digest": "d"}, "lane": null,
+            "vm": null, "run": null, "recording": null, "assessment": null,
+            "artifacts": [], "warnings": [], "failure": null, "repeat_of": null, "labels": {}
+        });
+        value["state"] = serde_json::to_value(state).unwrap();
+        let mut job: Job = serde_json::from_value(value).unwrap();
+        job.assessment = label.map(|label| Assessment {
+            label: Some(label),
+            ..serde_json::from_value(serde_json::json!({
+                "assessment": "no_findings", "highest_tier": "none", "label": null,
+                "score": null, "families": [], "key_behaviours": [],
+                "counts": {"processes": 0, "findings": 0, "indicators": 0, "indicators_matched": 0,
+                    "techniques": 0, "files_changed": 0, "files_opened": 0, "endpoints": 0, "domains": 0},
+                "detections": [], "techniques": [], "ioc_dataset_count": 0, "basis": "b"
+            }))
+            .unwrap()
+        });
+        job
+    }
+
+    #[test]
+    fn the_job_state_comes_first_and_the_label_only_counts_on_success_with_verdict_exit() {
+        use JobState::*;
+        let cases = [
+            (Succeeded, None, false, 0),
+            (Succeeded, Some(Label::Malicious), false, 0),
+            (Succeeded, Some(Label::CleanObserved), true, 0),
+            (Succeeded, None, true, 0),
+            (Succeeded, Some(Label::Suspicious), true, 30),
+            (Succeeded, Some(Label::Malicious), true, 31),
+            (Succeeded, Some(Label::Inconclusive), true, 32),
+            // A partial or failed job is never read as a verdict.
+            (Partial, Some(Label::Malicious), true, 11),
+            (Failed, Some(Label::Malicious), true, 10),
+            (Cancelled, None, true, 12),
+            (Rejected, None, true, 13),
+            (Running, None, true, 14),
+            (Queued, None, false, 14),
+        ];
+        for (state, label, verdict, code) in cases {
+            assert_eq!(
+                job_exit(&job(state, label), verdict).code(),
+                code,
+                "{state:?} {label:?} {verdict}"
+            );
+        }
+        assert_eq!(
+            worst(&[Exit::Ok, Exit::JobPartial, Exit::Suspicious]).code(),
+            30
+        );
+        assert_eq!(worst(&[]).code(), 0);
+    }
+
+    #[test]
+    fn untrusted_text_cannot_steer_the_terminal() {
+        assert_eq!(clean("a\x1b[31mred\x07\u{9b}x\n"), "a [31mred  x ");
+        let text = job_text(&serde_json::json!({
+            "id": "j_1", "state": "succeeded", "sample": {"sha256": "ab", "name": "evil\x1b]0;pwn\x07", "size": 1, "type": "sh"},
+            "policy": {"name": "default"}, "attempt": 1, "max_attempts": 2,
+            "warnings": [{"code": "w", "text": "line1\nline2"}]
+        }));
+        assert!(!text.contains('\x1b') && !text.contains('\x07'));
+        assert!(text.contains("line1 line2"));
+    }
+}

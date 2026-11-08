@@ -3,9 +3,10 @@
 [← Back to the overview](../README.md)
 
 > **Status in 0.9.0.** The files, their keys and `antinomie-cli config validate`
-> exist and are checked. The daemon that reads them (`antinomie-cli auto ...`,
-> its socket, lanes, inbox and watch folders, reload on `SIGHUP`) is not shipped
-> yet, so settings that name those only describe what the daemon will do.
+> exist and are checked, and `antinomie-cli auto daemon` reads them: the socket,
+> the queue limits, the resource floors, the shutdown keys and the reload on
+> `SIGHUP`. Watch folders, retention, result files and notifications are parsed
+> and checked but the daemon does not act on them yet.
 
 Headless mode reads two kinds of file from the data directory. A person writes
 them; the program never rewrites them.
@@ -49,6 +50,35 @@ runs while a window or the daemon owns the data directory.
 - `service.toml`: one lane (`daemon.lanes = 1`), no `safety.unsafe_routes_ack`
   (reserved), absolute watch folder paths, watch folders that name a policy that
   exists, webhooks over HTTPS or on loopback.
+
+## The daemon's keys
+
+| Key | Default | What the daemon does with it |
+|---|---|---|
+| `[daemon] socket` | `<data>/run/antinomie.sock` | The local socket (at most 107 bytes). Its folder must be the daemon user's own with mode 0700; the socket is 0600. Not changed by a reload |
+| `[daemon] lanes` | 1 | Only 1 is valid in 0.9.0 |
+| `[daemon] shutdown` | `cancel` | On the first `SIGTERM`/`SIGINT`: `cancel` sends a job in its lane stages back to the queue (attempt not counted); `drain` lets it run on for up to `drain_timeout_s` first |
+| `[daemon] drain_timeout_s` | 600 | See `shutdown = drain` |
+| `[daemon] shutdown_host_grace_s` | 120 | A job already in its host stages (`analyse`, `report`, `cleanup`) at shutdown may finish within this many seconds; past it the job is left `running` and resumes at `analyse` on the next start (the VM does not run again) |
+| `[queue] max_queued`, `per_client_queued` | 1000, 100 | `job.submit` fails `quota_exceeded` above them (the smaller of `per_client_queued` and the policy's `max_queued_per_client` applies) |
+| `[queue] paused_on_start` | false | Start with the queue paused (`queue.resume` starts it) |
+| `[inbox] dir` | `<data>/inbox` | Where uploads are staged (`uploads/`) |
+| `[resources] min_free_disk_gib`, `min_free_ram_mib`, `require_kvm` | 20, VM RAM + 2048, true | The floors of the queue: below one, jobs wait `queued` and the queue pauses (`low_disk`, `no_kvm`); checked every 5 s, and the disk every minute of a run. A `run/PAUSE` file pauses the queue within 5 s |
+
+A second `SIGTERM`/`SIGINT` within 5 s interrupts every wait at once, stops the
+VM and exits 130; recovery at the next start finishes the rest. `SIGHUP` reads
+`policies/` and `service.toml` again (a file with an error keeps the old set);
+`SIGUSR1` writes the queue's state to the log.
+
+## Verdict keys
+
+`[verdict] mapping` is `default` (the mapping of the design: `malicious`,
+`suspicious`, `clean_observed`, `inconclusive`); `[[verdict.rule]]` entries (`when`,
+`label`, `score`) replace it with rules over a small field set. `[verdict]
+tag_library = true` (default false) tags the library sample with
+`auto:label=<label>` and `auto:policy=<name>` when a job of the policy ends, under
+the custody actor `auto:policy-<name>`; a tag that cannot be written is a job
+warning (`library_tag`), never a failure.
 
 ## Policies and running jobs
 

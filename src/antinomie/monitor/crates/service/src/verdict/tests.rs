@@ -248,6 +248,7 @@ fn rules(list: &[(&str, Label, Option<u8>)]) -> VerdictPolicy {
                 score: *score,
             })
             .collect(),
+        tag_library: false,
     }
 }
 
@@ -307,12 +308,14 @@ fn a_mapping_that_cannot_be_used_says_which_key() {
     let table = VerdictPolicy {
         mapping: VerdictMapping::Table(Default::default()),
         rule: Vec::new(),
+        tag_library: false,
     };
     let error = Mapping::compile(&table).unwrap_err();
     assert_eq!(error.key(), "verdict.mapping");
     let named = VerdictPolicy {
         mapping: VerdictMapping::Name("strict".into()),
         rule: Vec::new(),
+        tag_library: false,
     };
     assert!(
         Mapping::compile(&named)

@@ -15,6 +15,9 @@ libfuzzer-sys = "0.4"
 path = "../crates/monitor-core"
 features = ["fuzzing"]
 
+[dependencies.antinomie-service]
+path = "../crates/service"
+
 # Not a member of the monitor workspace: built with nightly by cargo-fuzz only.
 [workspace]
 
@@ -98,6 +101,13 @@ bench = false
 [[bin]]
 name = "tool_text"
 path = "fuzz_targets/tool_text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "socket_frames"
+path = "fuzz_targets/socket_frames.rs"
 test = false
 doc = false
 bench = false

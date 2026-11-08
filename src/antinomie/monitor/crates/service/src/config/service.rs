@@ -26,6 +26,10 @@ pub struct Daemon {
     pub host_workers: Option<u32>,
     pub shutdown: Shutdown,
     pub drain_timeout_s: u32,
+    /// At shutdown, how long a job already in its host stages (`analyse`,
+    /// `report`, `cleanup`) may run on before its waits are interrupted (it
+    /// then resumes at `analyse` on the next start).
+    pub shutdown_host_grace_s: u32,
 }
 
 impl Default for Daemon {
@@ -36,6 +40,7 @@ impl Default for Daemon {
             host_workers: None,
             shutdown: Shutdown::Cancel,
             drain_timeout_s: 600,
+            shutdown_host_grace_s: 120,
         }
     }
 }

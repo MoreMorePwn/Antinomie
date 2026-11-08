@@ -176,3 +176,8 @@ put("tool_text", "capa", bytes([1]) + b'{"parts":["credential-access","brute for
 put("tool_text", "threatfox", bytes([1]) + b'{"query_status":"ok","data":[{"id":"1","malware":"win.x","malware_printable":"X","ioc":"1.2.3.4:80","ioc_type":"ip:port","confidence_level":75}]}')
 put("tool_text", "release", bytes([1]) + b'{"tag_name":"v0.8.0","html_url":"https://github.com/MoreMorePwn/Antinomie/releases/tag/v0.8.0"}')
 put("tool_text", "progress", bytes([1]) + b"    (12.34/100%)")
+
+# The daemon's socket framing: request lines as a client writes them.
+put("socket_frames", "requests", b'{"frame":"engine.hello"}\n{"id":1,"op":"health"}\n{"id":2,"op":"job.get","params":{"job_id":"j_01ARZ3NDEKTSV4RRFFQ69G5FAV"}}\n{"id":2,"op":"cancel"}\n')
+put("socket_frames", "upload", b'{"id":3,"op":"upload.put","params":{"upload_id":"u_01ARZ3NDEKTSV4RRFFQ69G5FAV","offset":0,"data":"IyEvYmluL3NoCmVjaG8gaGkK"}}\n')
+put("socket_frames", "subscribe", b'{"id":4,"op":"events.subscribe","params":{"since_gseq":17,"types":["job.state"]}}\n')

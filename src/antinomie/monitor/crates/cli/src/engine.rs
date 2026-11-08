@@ -38,7 +38,7 @@ impl DirectEngine {
         if context.mode() == crate::args::Mode::Daemon {
             return Err(CliError::new(
                 ErrorCode::Unsupported,
-                "client mode needs a running daemon, which this build cannot start yet; use --direct or leave the mode out",
+                "the daemon serves the `auto` commands only; this command runs in its own process (leave out --daemon, and stop the daemon or use another --data-dir while it owns this one)",
             ));
         }
         let mut options = context.options.clone();

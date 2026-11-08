@@ -138,7 +138,39 @@ impl<E: Engine> LaneStages<'_, E> {
         store
             .begin_stage(&job.id, Stage::Cleanup)
             .map_err(|e| self.store_error(Stage::Cleanup, e))?;
+        self.tag_library(job, &frozen);
         self.end_job(job, outcome, None)
+    }
+
+    /// `[verdict] tag_library` (coordinator decision for 0.9.0, design
+    /// 4.9.3): the sample gets the library tags `auto:label=<label>` and
+    /// `auto:policy=<name>`, written under the automation actor
+    /// (`auto:policy-<name>`) in its custody chain. A tag that cannot be
+    /// written is a warning; the job does not fail for it.
+    fn tag_library(&mut self, job: &Job, frozen: &crate::config::LoadedPolicy) {
+        if !frozen.policy.verdict.tag_library {
+            return;
+        }
+        let Ok(fresh) = self.env.store.get(&job.id) else {
+            return;
+        };
+        let mut tags = vec![format!("auto:policy={}", frozen.name)];
+        if let Some(label) = fresh.assessment.as_ref().and_then(|a| a.label) {
+            let name = serde_json::to_value(label)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_default();
+            tags.push(format!("auto:label={name}"));
+        }
+        for tag in tags {
+            if let Err(error) = self.env.tags.add_tag(&fresh, &tag) {
+                self.warn(
+                    job,
+                    "library_tag",
+                    &format!("the tag {tag} was not written: {error}"),
+                );
+            }
+        }
     }
 
     /// `analyse` then `report`, each with its records; a problem in a stage

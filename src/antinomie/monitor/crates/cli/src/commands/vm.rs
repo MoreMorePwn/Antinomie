@@ -131,7 +131,7 @@ fn dispatch(
 }
 
 /// One line from standard input, without its line ending.
-fn read_password() -> Result<String, CliError> {
+pub(crate) fn read_password() -> Result<String, CliError> {
     let mut line = String::new();
     std::io::stdin()
         .lock()
@@ -207,15 +207,13 @@ pub fn config_for(arguments: &Create, base_identity: String) -> Result<VmConfig,
     })
 }
 
-fn create(
+/// The engine command of a `vm create`: the base (named, or the only one),
+/// the config, and the guest account when the base needs one.
+pub(crate) fn create_command(
     arguments: &Create,
+    snapshot: &Snapshot,
     password: Option<String>,
-    limit: Option<Duration>,
-    engine: &mut DirectEngine,
-) -> Result<Reply, CliError> {
-    // The flags are checked before anything is looked up.
-    config_for(arguments, String::new())?;
-    let snapshot = engine.snapshot();
+) -> Result<Command, CliError> {
     let base = match &arguments.base {
         Some(key) => find_base(snapshot, key)?,
         None => match snapshot.bases.as_slice() {
@@ -259,6 +257,19 @@ fn create(
         }
         (false, None) => Command::Create(vm),
     };
+    Ok(command)
+}
+
+fn create(
+    arguments: &Create,
+    password: Option<String>,
+    limit: Option<Duration>,
+    engine: &mut DirectEngine,
+) -> Result<Reply, CliError> {
+    // The flags are checked before anything is looked up.
+    config_for(arguments, String::new())?;
+    let snapshot = engine.snapshot();
+    let command = create_command(arguments, snapshot, password)?;
     let before: Vec<String> = snapshot.vms.iter().map(|vm| vm.id.clone()).collect();
     let message = engine.command(command, limit)?;
     let created = engine
