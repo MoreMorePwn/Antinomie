@@ -2,16 +2,14 @@
 //! Whole-run counts, independent of table visibility, filters and query pages.
 use super::*;
 use antinomie_monitor_core::analysis::detection::{Engine, State};
+// The model of the Summary is in `antinomie_triage::summary`.
+use antinomie_triage::summary::{indicators, insight, sample};
 mod attack_list;
 mod header;
-mod indicators;
-mod insight;
 mod panels;
 mod relations;
 mod report;
 mod rows;
-mod rule_text;
-mod sample;
 mod state;
 mod thumb;
 

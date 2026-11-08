@@ -5,6 +5,7 @@
 //! set is a set of node ids, kept for the run; it starts as the root, the
 //! path from the root to every node with a finding, and those nodes
 //! themselves (so their children show).
+use super::group::GroupGraph;
 use super::layout::tree_parent;
 use super::model::{Graph, NodeKind};
 use std::collections::BTreeSet;
@@ -32,17 +33,27 @@ pub(in crate::triage) fn groups_differ(open: &BTreeSet<String>, before: &BTreeSe
 }
 
 /// What the Full view shows of a view graph.
-pub(super) struct Folded {
+pub(in crate::triage) struct Folded {
     pub shown: Vec<usize>,
     pub folds: Vec<Fold>,
     /// More was open than the cap lets be drawn.
     pub capped: bool,
 }
 
-impl Graph {
+/// Folding a graph (a method set of the triage crate's `Graph`, kept beside
+/// the GUI's layout).
+pub(in crate::triage) trait FoldGraph {
+    fn needed(&self) -> Vec<bool>;
+    fn forest(&self) -> (Vec<u32>, Vec<Vec<u32>>);
+    fn fold(&self, open: &BTreeSet<String>, cap: usize) -> Folded;
+    fn default_open(&self) -> BTreeSet<String>;
+    fn expanded(&self, budget: usize) -> BTreeSet<String>;
+}
+
+impl FoldGraph for Graph {
     /// Of the raw graph: the nodes that must not be hidden: those with a
     /// finding and the chain of anchors that joins each to the root.
-    pub(super) fn needed(&self) -> Vec<bool> {
+    fn needed(&self) -> Vec<bool> {
         let mut chosen = BTreeSet::new();
         if !self.nodes.is_empty() {
             chosen.insert(self.root());
@@ -60,7 +71,7 @@ impl Graph {
     }
 
     /// Of the raw graph: the open set a run starts with.
-    pub(in crate::triage) fn default_open(&self) -> BTreeSet<String> {
+    fn default_open(&self) -> BTreeSet<String> {
         self.needed()
             .iter()
             .enumerate()
@@ -71,7 +82,7 @@ impl Graph {
 
     /// Of the raw graph: an open set with everything open, as far as about
     /// `budget` nodes of groups can be.
-    pub(in crate::triage) fn expanded(&self, budget: usize) -> BTreeSet<String> {
+    fn expanded(&self, budget: usize) -> BTreeSet<String> {
         let policy = super::group::Policy { all: true, budget };
         let view = self.view_with(&BTreeSet::new(), policy, Some(self.needed()));
         let (_, kids) = view.forest();
@@ -101,7 +112,7 @@ impl Graph {
 
     /// Of a view graph: what shows when the nodes in `open` are open and the
     /// rest closed, at most about `cap` of it.
-    pub(super) fn fold(&self, open: &BTreeSet<String>, cap: usize) -> Folded {
+    fn fold(&self, open: &BTreeSet<String>, cap: usize) -> Folded {
         let n = self.nodes.len();
         let (parent, kids) = self.forest();
         let is_open: Vec<bool> = self

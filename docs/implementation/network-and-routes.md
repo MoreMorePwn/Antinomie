@@ -79,8 +79,10 @@ Host only. `monitor-core/src/ruleset/abusech.rs` and `monitor-ui/src/rules_windo
 ### IOC window and the Network tabs (0.7.1)
 
 Host only. Core: `monitor-core/src/ioc/` (`indicator`, `verdict`, `online`,
-`export`, `strings`, `disk`). UI: `monitor-ui/src/triage/` (`ioc_scan.rs`,
-`ioc_view.rs` and `ioc_view/`, `net_tabs.rs`, `rules/ioc.rs`, `files/ioc.rs`).
+`export`, `strings`, `disk`). Triage model (0.9.0, `crates/triage/src/`): `ioc_scan.rs`,
+`ioc_view.rs` (row fields and values, verdict line, jumps) with its fixtures, `net_tabs.rs`
+(columns, `capture_zone_shift`), `rules/ioc.rs`, `files/ioc.rs`. UI: `monitor-ui/src/triage/`
+`ioc_view.rs` and `ioc_view/` (tabs, chips, tables), `net_tabs.rs` (the Network tabs).
 
 * **Collector.** `indicator::Collector` merges plain observations into
   `Indicator`s of five types (endpoint, domain, URL, TLS group, file), each with

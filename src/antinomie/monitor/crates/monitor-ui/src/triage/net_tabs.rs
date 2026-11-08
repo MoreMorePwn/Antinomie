@@ -30,30 +30,12 @@ impl TriageView {
         })
     }
 
-    /// Whether the earliest packet of the run is a whole zone offset (a
-    /// non-zero multiple of 15 minutes under 15 h, within two minutes) away
-    /// from the run's clock anchor: the sign of a capture QEMU stamped in the
-    /// host zone. Uses only what the Endpoints table already holds.
+    /// The run's packets look stamped in the host zone (see
+    /// [`capture_zone_shift`]).
     fn old_capture_shift(&self) -> bool {
-        let Some(scan) = &self.scan else {
-            return false;
-        };
-        let Some(clock) = scan.clock_anchor.or(self.scan_request.clock_anchor) else {
-            return false;
-        };
-        let first = scan
-            .new_tabs
-            .endpoints
-            .iter()
-            .filter_map(|row| row.first())
-            .filter_map(|cell| files::number(&cell.values, "network.first_us"))
-            .min();
-        let Some(first) = first else {
-            return false;
-        };
-        let seconds = (i128::from(first) - i128::from(clock.host_us)) / 1_000_000;
-        let offset = (seconds as f64 / 900.0).round() as i128 * 900;
-        offset != 0 && offset.abs() < 15 * 3600 && (seconds - offset).abs() <= 120
+        self.scan
+            .as_ref()
+            .is_some_and(|scan| capture_zone_shift(scan, self.scan_request.clock_anchor))
     }
 
     pub(super) fn new_network(&mut self, ui: &mut egui::Ui, input: &TriageInput<'_>) {
@@ -212,13 +194,5 @@ mod tests {
         journal.ingest(&ctx);
         assert_eq!(journal.counts(), (1, 0));
         assert_eq!(journal.messages().len(), 2);
-    }
-
-    #[test]
-    fn the_geolocation_columns_are_the_countries_and_organizations() {
-        // The Summary's indicator export reads these two (a shift by one put
-        // the byte count under "country").
-        assert_eq!(ENDPOINT_HEADERS[ENDPOINT_COUNTRY], "Country");
-        assert_eq!(ENDPOINT_HEADERS[ENDPOINT_ORGANIZATION], "Organization");
     }
 }

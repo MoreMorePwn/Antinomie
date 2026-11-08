@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The details of the selected indicator: its sources, process, the dataset
 //! record that matched, what excused it and where its evidence is.
-use super::{
-    list::{jump_of, source_tone, Jump},
-    *,
-};
+use super::{list::source_tone, *};
 use antinomie_monitor_core::ioc::online;
 
 fn row(ui: &mut egui::Ui, name: &str, value: &str, mono: bool) {
@@ -12,17 +9,6 @@ fn row(ui: &mut egui::Ui, name: &str, value: &str, mono: bool) {
     let text = RichText::new(value).color(theme::text());
     ui.add(egui::Label::new(if mono { text.monospace() } else { text }).wrap());
     ui.end_row();
-}
-
-/// What the Details heading calls an indicator of this type.
-pub(super) fn kind_name(ty: Type) -> &'static str {
-    match ty {
-        Type::Endpoint => "Endpoint",
-        Type::Domain => "Domain",
-        Type::Url => "URL",
-        Type::Tls => "TLS session",
-        Type::File => "File",
-    }
 }
 
 impl View {
@@ -108,7 +94,7 @@ impl View {
                     row(
                         ui,
                         "First / last",
-                        &format!("{} / {}", time_text_of(indicator.first_us), time_text_of(indicator.last_us)),
+                        &format!("{} / {}", time_text(indicator.first_us), time_text(indicator.last_us)),
                         true,
                     );
                 });
@@ -271,8 +257,4 @@ impl View {
         });
         jump
     }
-}
-
-fn time_text_of(us: Option<u64>) -> String {
-    us.map_or("—".into(), crate::time_format::short_time_us)
 }

@@ -45,6 +45,7 @@ pub mod findings;
 pub mod geoip_fill;
 pub mod graph;
 pub mod ioc_scan;
+pub mod ioc_view;
 pub mod kernel_records;
 pub mod lineage_index;
 pub mod live_judge;
@@ -68,6 +69,7 @@ pub mod sigma_events;
 #[cfg(test)]
 pub mod sigma_events_tests;
 pub mod sorting;
+pub mod summary;
 pub mod table;
 #[cfg(any(test, feature = "test-support"))]
 pub mod tests;

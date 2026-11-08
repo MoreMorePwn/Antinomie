@@ -4,10 +4,10 @@
 //! view, built from the scan (see `model`).
 pub(super) mod canvas;
 pub(super) mod chart;
-pub(super) mod facts;
 pub(super) mod fold;
+// The facts and the graph are in `antinomie_triage::summary::relations`.
+pub(super) use antinomie_triage::summary::relations::{facts, model};
 pub(super) mod group;
 pub(super) mod layout;
-pub(super) mod model;
 pub(super) mod ui;
 pub(super) mod window;

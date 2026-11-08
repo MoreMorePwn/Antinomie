@@ -6,10 +6,10 @@ use antinomie_monitor_core::ioc::indicator::{Indicator, Type};
 use serde_json::json;
 
 /// Rows of each kind the box lists before "Show N more".
-pub(super) const SHOWN: usize = 5;
+pub const SHOWN: usize = 5;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct EndpointRow {
+pub struct EndpointRow {
     pub endpoint: String,
     pub country: String,
     pub organization: String,
@@ -23,7 +23,7 @@ pub(super) struct EndpointRow {
 /// An endpoint, name or URL that is the base image's own traffic: kept out of
 /// the lists, counted in one muted line at the end of its group.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Background {
+pub struct Background {
     /// 0 endpoints, 1 DNS names, 2 URLs (the order of the Indicators box).
     pub group: usize,
     pub value: String,
@@ -33,7 +33,7 @@ pub(super) struct Background {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct FileRow {
+pub struct FileRow {
     pub path: String,
     pub kind: &'static str,
     pub sha256: String,
@@ -41,7 +41,7 @@ pub(super) struct FileRow {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct Indicators {
+pub struct Indicators {
     pub endpoints: Vec<EndpointRow>,
     pub domains: Vec<String>,
     pub urls: Vec<String>,
@@ -69,7 +69,7 @@ fn background_kind(value: &str, why: &str) -> &'static str {
 /// What a file is, from its name and what the run did to it. The recording
 /// keeps no content type of its own.
 fn file_kind(path: &str, roles: &[String]) -> &'static str {
-    let name = crate::triage::process_cells::file_name(path);
+    let name = crate::process_cells::file_name(path);
     if name.ends_with(".so") || name.contains(".so.") {
         "shared object"
     } else if name.ends_with(".sh") || name.ends_with(".py") || name.ends_with(".pl") {
@@ -83,7 +83,7 @@ fn file_kind(path: &str, roles: &[String]) -> &'static str {
 
 impl Indicators {
     /// `geo` gives the country and organization of an `ip:port`.
-    pub(super) fn of(indicators: &[Indicator], geo: impl Fn(&str) -> (String, String)) -> Self {
+    pub fn of(indicators: &[Indicator], geo: impl Fn(&str) -> (String, String)) -> Self {
         let mut out = Indicators::default();
         for indicator in indicators {
             if let Some(why) = &indicator.noise {
@@ -155,19 +155,19 @@ impl Indicators {
         out
     }
 
-    pub(super) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.endpoints.is_empty()
             && self.domains.is_empty()
             && self.urls.is_empty()
             && self.files.is_empty()
     }
 
-    pub(super) fn total(&self) -> usize {
+    pub fn total(&self) -> usize {
         self.endpoints.len() + self.domains.len() + self.urls.len() + self.files.len()
     }
 
     /// "NL \u{b7} AS49870 Alsycon": the geolocation words of an endpoint.
-    pub(super) fn place(row: &EndpointRow) -> String {
+    pub fn place(row: &EndpointRow) -> String {
         [row.country.as_str(), row.organization.as_str()]
             .iter()
             .filter(|part| !part.is_empty() && **part != "\u{2014}")
@@ -177,7 +177,7 @@ impl Indicators {
     }
 
     /// "Base image background: NTP, apt (4)" for a group, when it has any.
-    pub(super) fn background_label(&self, group: usize) -> Option<String> {
+    pub fn background_label(&self, group: usize) -> Option<String> {
         let mut kinds: Vec<&str> = Vec::new();
         let mut count = 0;
         for item in self.background.iter().filter(|item| item.group == group) {
@@ -193,13 +193,13 @@ impl Indicators {
 
     /// Plain text, one indicator per line, grouped.
     #[cfg(test)]
-    pub(super) fn copy_text(&self) -> String {
+    pub fn copy_text(&self) -> String {
         self.copy_text_with(&[false; 3])
     }
 
     /// [`Self::copy_text`] with the background lines of the groups the
     /// analyst has opened.
-    pub(super) fn copy_text_with(&self, shown: &[bool; 3]) -> String {
+    pub fn copy_text_with(&self, shown: &[bool; 3]) -> String {
         let mut text = String::new();
         let mut group = |title: &str, lines: Vec<String>| {
             if lines.is_empty() {
@@ -268,7 +268,7 @@ impl Indicators {
             .collect()
     }
 
-    pub(super) fn json(&self) -> String {
+    pub fn json(&self) -> String {
         let value = json!({
             "endpoints": self.endpoints.iter().map(|row| json!({
                 "endpoint": row.endpoint,
@@ -289,12 +289,12 @@ impl Indicators {
     }
 }
 
-#[cfg(test)]
-pub(in crate::triage::summary) mod tests {
+#[cfg(any(test, feature = "test-support"))]
+pub mod tests {
     use super::*;
     use antinomie_monitor_core::ioc::indicator::Hashes;
 
-    pub(in crate::triage::summary) fn indicator(ty: Type, value: &str) -> Indicator {
+    pub fn indicator(ty: Type, value: &str) -> Indicator {
         Indicator {
             ty,
             key: value.into(),
@@ -320,7 +320,7 @@ pub(in crate::triage::summary) mod tests {
         }
     }
 
-    pub(in crate::triage::summary) fn sample() -> Vec<Indicator> {
+    pub fn sample() -> Vec<Indicator> {
         let mut file = indicator(Type::File, "9b1c");
         file.path = "/tmp/.x/kdevtmpfsi".into();
         file.roles = vec!["created".into(), "executed".into()];
@@ -346,6 +346,7 @@ pub(in crate::triage::summary) mod tests {
         ]
     }
 
+    #[cfg(test)]
     fn geo(endpoint: &str) -> (String, String) {
         if endpoint.starts_with("45.9.148.9") {
             ("NL".into(), "AS49870 Alsycon".into())
@@ -402,6 +403,7 @@ pub(in crate::triage::summary) mod tests {
         assert_eq!(value["files"][0]["type"], "executable");
     }
 
+    #[cfg(test)]
     fn background() -> Vec<Indicator> {
         let mut ntp = indicator(Type::Endpoint, "198.18.0.2:123");
         ntp.noise = Some("NTP, the base image's clock sync".into());

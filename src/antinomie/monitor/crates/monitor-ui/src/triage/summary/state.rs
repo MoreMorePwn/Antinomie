@@ -5,6 +5,7 @@
 use super::super::{digest, net_tabs, rules::Tier, ArchiveScan, TriageView};
 use super::indicators::Indicators;
 use super::insight::{self, Key as KeyFinding};
+use super::relations::fold::FoldGraph;
 use super::relations::{
     canvas,
     facts::facts_of,

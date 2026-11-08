@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Reads the plain facts the Relationships graph is built from out of the scan.
 use super::model::{EndpointFact, Fact, Facts, FileFact, Proc};
-use crate::triage::{process_cells, rules, ArchiveScan, RowValue};
+use crate::{process_cells, rules, ArchiveScan, RowValue};
 use antinomie_monitor_core::ioc::indicator::Type;
 
 fn text<'a>(values: &'a [(&'static str, RowValue)], key: &str) -> &'a str {
@@ -26,7 +26,7 @@ fn number(values: &[(&'static str, RowValue)], key: &str) -> u64 {
 
 /// The process's name: the recorded one; when that is empty or "?", the file
 /// name of the last image it ran, else of its argv[0].
-fn recorded_name(node: &crate::triage::ProcessNode) -> String {
+fn recorded_name(node: &crate::ProcessNode) -> String {
     let name = process_cells::file_name(&node.comm);
     if !name.is_empty() && name != "?" {
         return name.to_owned();
@@ -47,7 +47,7 @@ fn recorded_name(node: &crate::triage::ProcessNode) -> String {
         .to_owned()
 }
 
-pub(in crate::triage) fn facts_of(scan: &ArchiveScan) -> Facts {
+pub fn facts_of(scan: &ArchiveScan) -> Facts {
     let mut facts = Facts::default();
     // A signal names a thread id when it was sent with tkill or tgkill: Go's
     // runtime, for one, preempts its own threads with tgkill(pid, tid, SIGURG).
