@@ -26,6 +26,16 @@ x86 programs by their own table.
   output formats human, json and ndjson, and fixed exit codes. It does not link
   the GUI libraries. See "Command line" in docs/usage.md.
 
+- **The Triage scan runs without the window.** The scan, the activity rules,
+  the filter language and the eBPF decoder are a library of their own
+  (`antinomie-triage`) that `antinomie-cli` links too. Any Antinomie program
+  now copies the earlier bytes of the files a run changed into the recording
+  when its boot ends (only a program named `antinomie-monitor` used to), so a
+  recording made from the command line is as complete as one made in the
+  window; `ANTINOMIE_COPIER` still names another program for it. Triage looks
+  and works as before: its rows name a colour role (good, warning, bad,
+  muted...) and the theme picks the colour.
+
 - **Samples and custody from the command line.** `antinomie-cli sample add, list,
   show, tag, verify, remove` and `custody verify` (with export and signing) work
   on the sample library without the engine lock, so they run beside the window.
