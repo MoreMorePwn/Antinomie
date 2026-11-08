@@ -86,9 +86,12 @@ pub(super) fn run_info(
             // A run that never started: the reason is the whole account.
             format!(
                 "Not started: {}",
-                run.recording_error
-                    .as_deref()
-                    .unwrap_or("no reason was recorded")
+                super::not_started::split_failure(
+                    run.recording_error
+                        .as_deref()
+                        .unwrap_or("no reason was recorded")
+                )
+                .0
             )
         } else {
             crate::run_state_line::describe(run, now_ms, ended_ms, Some(alive))
@@ -242,18 +245,9 @@ fn environment(run: &RunSummary) -> Vec<Fact> {
         ));
         out.push(Fact::new("Stealth profile", env.stealth.clone()));
         if !env.rule_packs.is_empty() {
-            // "name version": the version is often a long snapshot id.
-            let packs: Vec<String> = env
-                .rule_packs
-                .iter()
-                .map(|pack| match pack.rsplit_once(' ') {
-                    Some((name, version)) if version.chars().count() > 16 => {
-                        format!("{name} {}...", version.chars().take(13).collect::<String>())
-                    }
-                    _ => pack.clone(),
-                })
-                .collect();
-            out.push(Fact::new("Rule packs", packs.join("; ")));
+            // "name version", the version whole (a snapshot id is matched by
+            // it); the document lists the packs one per row.
+            out.push(Fact::new("Rule packs", env.rule_packs.join("; ")));
         }
         if !env.tools.is_empty() {
             out.push(Fact::new("Tools", env.tools.join("; ")));
