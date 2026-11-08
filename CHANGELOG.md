@@ -22,9 +22,30 @@ x86 programs by their own table.
   `antinomie-cli doctor` shows the owner too.
 
 - **`antinomie-cli`, a headless command line.** A new binary beside the window
-  (`antinomie-cli --help`) with `doctor`, `capabilities` and `config path`, the
-  output formats human, json and ndjson, and fixed exit codes. It does not link
-  the GUI libraries. See "Command line" in docs/usage.md.
+  (`antinomie-cli --help`) with `doctor`, `capabilities` and `config`
+  (`path`, `get`, `set`, `validate`), the output formats human, json and
+  ndjson, and fixed exit codes. It does not link the GUI libraries. See
+  "Command line" in docs/usage.md. The job daemon, the `auto` commands and
+  watch folders are not part of this build yet; `--daemon` and `--socket` are
+  reserved for them and commands run in the calling process.
+
+- **Engine settings live in the data folder.** The window now keeps its engine
+  settings (detection and report options, limits, quotas, disk view) in
+  `<data>/settings.json`, which `antinomie-cli config get` and `config set`
+  read and write, instead of only in the window's own storage. The file is
+  written by the process that owns the data folder, keeps fields a newer
+  version added, and a file that cannot be read is reported and never replaced
+  by defaults.
+
+- **Service configuration and the job API contract.** The new
+  `antinomie-service` library holds what the coming daemon, command line and
+  web layer share: the job and query API types (docs/job-api-1.md, with its
+  JSON Schema), `service.toml` and `policies/*.toml` (docs/service-config.md),
+  the job store (SQLite, the state machine, the queue and its recovery),
+  uploads and sample intake, read-only recording queries, and the `automation`
+  custody actor with its frozen-policy entry. Of these only
+  `antinomie-cli config validate` is reachable by a user in this build: it
+  checks the configuration files without starting anything.
 
 - **Samples and custody from the command line.** `antinomie-cli sample add, list,
   show, tag, verify, remove` and `custody verify` (with export and signing) work
@@ -204,6 +225,8 @@ x86 programs by their own table.
   (CLOCK_MONOTONIC equal to CLOCK_BOOTTIME). A cloud profile's lived-in
   logins, auth.log and history end before the boot. Needs a base built by
   this release (stealth support `uptime`); older bases show a fresh boot.
+
+- **The sidebar names the VM's own architecture.** A VM's row reads "base name · architecture" from the base, so an arm64 VM says arm64.
 
 - **Texts no longer call the app x86-64 only.** The Core Dump on Exit and core-trigger hints, the Core view's import texts, the Samples page's refusal, the seccomp pseudocode note and the usage guide name the guests that now work (x86-64, arm64, and 32-bit ARM programs on arm64) instead of x86-64 alone; the README roadmap drops arm64. Memory analysis, capa and FLOSS still say they are x86-64 only, because they are. The Samples page now decides by the selected VM's architecture, as Run program does: an x86-64 VM takes x86-64 and 32-bit x86 programs and shell scripts, an arm64 VM takes aarch64 and 32-bit ARM programs and shell scripts, a refused program is named with the VM ("This is an AArch64 program; the selected VM is x86-64. Choose an arm64 VM."), and with no VM selected the table says which VM kinds run the program.
 

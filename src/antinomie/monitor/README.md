@@ -375,6 +375,8 @@ worker. Terminal output sequence gaps trigger a core-owned screen snapshot.
 | `run.rs` | Per-program metadata, transcript/journal and headless terminal-screen persistence |
 | `vm.rs` | Argument-vector QEMU launch, QMP force-stop and process ownership |
 | `crates/monitor-ui/src/` | Native VM list, settings, event table and VT terminal |
+| `crates/service/src/` | `antinomie-service` (0.9.0): job and query API types, `service.toml` and policies, the job store, sample intake and read-only recording queries; no GUI dependency |
+| `crates/cli/src/` | `antinomie-cli` (0.9.0): the headless command line over core and the service (`doctor`, `capabilities`, `config`, `sample`, `custody`, `analyze`, `rules`); no GUI dependency |
 | `protocol/guest-profile.json` | Exact syscall set, UAPI layouts, capture rules and known gaps |
 | `protocol/control.h` | Kernel/host application-control wire contract |
 | `../transport/` | Unchanged V7 transport API and layout |
@@ -447,6 +449,15 @@ cargo run --manifest-path src/antinomie/monitor/Cargo.toml \
   -p antinomie-monitor-core --example headless -- \
   "$PWD/work/debian-6.12.94-1-trixie/images/monitor-base" \
   "$PWD/work/monitor-backend-test" "$PWD/work/monitor-probe"
+```
+
+The command line builds and tests on its own, without the GUI libraries:
+
+```bash
+cargo build --release --manifest-path src/antinomie/monitor/Cargo.toml -p antinomie-cli
+cargo test --release --manifest-path src/antinomie/monitor/Cargo.toml \
+  -p antinomie-cli -p antinomie-service
+target/release/antinomie-cli --help
 ```
 
 The headless example also accepts `--recording CAPTURE_DIR`. Full saved-history
