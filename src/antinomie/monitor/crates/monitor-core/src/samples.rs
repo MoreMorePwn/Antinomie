@@ -72,7 +72,7 @@ pub use kept::{
 };
 pub use library::{
     Alias, CATEGORIES, DATABASE, EventRow, Library, NewOrigin, Origin, OriginKind, RunStats,
-    SampleRecord, SeenRun, TAG_COLORS, Tag, TagKind, VERDICTS,
+    SampleRecord, SeenRun, TAG_COLORS, Tag, TagKind, VERDICTS, guest_path_of,
 };
 pub use lineage::{
     Edge as LineageEdge, EdgeKind, Graph as LineageGraph, Known, Link, Node as LineageNode,

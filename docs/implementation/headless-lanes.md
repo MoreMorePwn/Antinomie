@@ -1,6 +1,6 @@
 # Implementation record: Headless lanes
 
-The lane state file, the engine seam and the recovery of a lane after a crash. Host only; part of the headless mode in `antinomie-service` (`crates/service/src/{engine,lane}/`). The stages that use these (`prechecks` to `collect`) come in later cards. Part of the [implementation record](../implementation.md).
+The lane state file, the engine seam, the recovery of a lane after a crash, and the lane stages `prechecks` to `launch`. Host only; part of the headless mode in `antinomie-service` (`crates/service/src/{engine,lane,stages}/`). The stages `run` and `collect`, retries and the watchdog come in the next card. Part of the [implementation record](../implementation.md).
 
 ### The engine seam
 
@@ -62,3 +62,20 @@ Unknown fields are an error. A file that is empty, truncated, not an object, wit
 Recovery never starts a VM or a stage, and it is safe to run twice. Engine failure during recovery is an error; the lane file is not rewritten then, and the next start repeats the lane steps.
 
 `lane::check_lane(file, snapshot)` lists what keeps a lane from taking a job (quarantined, no VM, snapshot missing, VM not stopped, layer pending). `prechecks`, recovery and `auto lane unquarantine` use it.
+
+### The stages `prechecks` to `launch`
+
+`stages::LaneStages` holds the engine waiter, the store, the lane files, the policy lookup, a `Processes` seam and a `HostChecks` seam, and has one method per stage. A stage returns what the next one needs or a `StageStop`: `Failed(Failure)` (the code of design 4.1; the job's retry or end belongs to the next card), `Wait` (not a failure: the job is `queued` with `waiting_for`), `Cancelled`, or `Abort` (a signal or a dead engine). `run_to_launch(job)` runs the five with the store's stage records and the lane file's checkpoints (`started` before a stage's first engine command, `finished` after its exit condition).
+
+| Stage | What it does | Failure codes |
+|---|---|---|
+| `prechecks` | The frozen policy still exists and still allows the client; `HostChecks` (resources, dependencies, KVM; the real probes are a later card); the lane has a file, is not quarantined or busy, its VM is stopped; the clean snapshot id is still among the VM's snapshots. A pending disk layer does not stop it: `provision` waits | `policy_denied`, `host_resources`, `dependency_missing`, `no_vm`, `lane_changed` (quarantines the lane when the VM's snapshots are listed and the id is gone). Waits: `resources`, `dependency`, `lane`, `lane_quarantined` |
+| `provision` | Wait for the previous layer (`layer_s` 1800 s), stop a VM still running, revert, wait for the guest (`boot_s` 180 s), check the guest revision (a core dump needs 15), find the VM's QEMU and record it in the lane file | `revert_failed` (quarantine after one retry; never a `Reset` fallback on a snapshot lane), `vm_start_failed`, `guest_unreachable` (three in a row quarantine), `dependency_missing` |
+| `upload` | `UploadSample` to `<guest_dir>/<sha8>-<name>`; "read-only file system" is retried inside `upload_s` (60 s plus 1 s per 10 MiB); the byte count in the reply must equal the sample's size | `upload_failed`, `internal` (engine silent for 60 s) |
+| `launch` | `Execute` with the request of `stages::plan::effective` (audit G7), then the new run in the snapshot (`launch_s` 30 s); the job gets `run`, `recording` and the `job.run` event | `launch_failed`, `internal` |
+
+Revert by policy `vm.revert`: `snapshot_disk` is `RestoreVmSnapshot { boot_from_disk: true, confirmed: true, save_current: None, switch_profile: false }` alone, because a Disk restore starts the VM itself (a `Start` after it fails "only one VM may run at a time"; spike ANT-T0345). `snapshot_full` is the same with `boot_from_disk: false`, which resumes the running guest. `reset` is `Reset { confirmed: true }` then `Start`.
+
+**The launch request.** `path` is the guest path; `args` and `env` come from the spec (a default `PATH` is added when the spec has none, as `run exec` does); `cwd` is the policy's `run.guest_dir`; `uid`/`gid` 1000 for a user run, 0 for root, or the ids given; guest-side analysis disabled; `run_in` from the spec or the policy; `capture_network`, `memory_dump_on_exit`, `core_dump_on_exit` with `core_max_size` (policy `core_max_mib` in bytes) and `core_timeout_ms` (5000 unless the spec gives one); `debug_on_start` false; `route` set; `host_copy` none; `sample` set, so the run is linked to the library sample. `ExecRequest::validate` refuses a core dump in a desktop run: `launch_failed` before the engine is asked.
+
+**Finding the QEMU process.** The engine exposes no pid. After the guest answers, `provision` scans `/proc` for `qemu-system*` processes whose command line holds the VM's folder (from the snapshot's `vm_locations`, else the VM id). Exactly one match is recorded in the lane file (`pid`, `start_ticks`, `marker`); any other count is a `qemu_pid_unknown` job warning and the record is cleared. `lane::clear_for_reset` is the bookkeeping of `auto lane reset`: it clears `failures` and `qemu` only after the recorded QEMU is confirmed gone with the test recovery uses.

@@ -6,9 +6,10 @@
 pub mod check;
 pub mod process;
 pub mod recover;
+pub mod reset;
 pub mod state;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use check::{LaneProblem, check_lane, layer_pending};
 pub use process::{ProcFs, Processes};
@@ -16,6 +17,7 @@ pub use recover::{
     FileState, LaneRecovery, QemuOutcome, RecoverError, RecoverOptions, StartupRecovery,
     recover_startup,
 };
+pub use reset::{Cleared, ResetRefused, clear_for_reset};
 pub use state::{
     Checkpoint, Collected, LANE_FILE_VERSION, LaneDir, LaneFile, LaneStateError, LaneWork,
     QUARANTINE_AFTER, QemuRecord, Quarantine, WriteFault,

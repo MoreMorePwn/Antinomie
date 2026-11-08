@@ -30,6 +30,7 @@ pub use run::{
     STOP_RUN_GRACE, Timings, UPLOAD_WAIT, Warning, incomplete_parts, load_artifacts, pending_parts,
     phase,
 };
+pub(crate) use run::{Stop, route_of};
 
 /// A guest command (upload, launch, stop run) whose result does not arrive in
 /// this long is an `internal` failure of the engine (audit G5, E17).

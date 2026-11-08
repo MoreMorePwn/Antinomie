@@ -34,8 +34,8 @@ use std::{
     time::Duration,
 };
 
-const VM: &str = "auto-1";
-const CLEAN: &str = "snap-clean";
+pub(crate) const VM: &str = "auto-1";
+pub(crate) const CLEAN: &str = "snap-clean";
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("ant-lane-{name}-{}", std::process::id()));
@@ -44,7 +44,7 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
-fn file() -> LaneFile {
+pub(crate) fn file() -> LaneFile {
     LaneFile::new(lane(), VM, CLEAN, "busybox-r21", T0)
 }
 
@@ -235,7 +235,7 @@ fn three_failures_in_a_row_quarantine_and_a_success_resets_the_count() {
 
 // ---- the checks ---------------------------------------------------------
 
-fn vm_config(id: &str) -> VmConfig {
+pub(crate) fn vm_config(id: &str) -> VmConfig {
     VmConfig {
         id: id.into(),
         ..VmConfig::default()
@@ -263,7 +263,7 @@ fn checkpoint(id: &str) -> VmCheckpoint {
 }
 
 /// A snapshot with the lane VM and its clean snapshot, stopped and settled.
-fn healthy(snapshot: &mut Snapshot) {
+pub(crate) fn healthy(snapshot: &mut Snapshot) {
     snapshot.state = VmState::Stopped;
     snapshot.vms = vec![vm_config(VM)];
     snapshot.vm_snapshot_trees.insert(
@@ -278,7 +278,7 @@ fn healthy(snapshot: &mut Snapshot) {
     );
 }
 
-fn layer(phase: LayerPhase) -> DiskLayer {
+pub(crate) fn layer(phase: LayerPhase) -> DiskLayer {
     DiskLayer {
         vm_id: VM.into(),
         boot_id: "boot".into(),
@@ -350,21 +350,21 @@ fn a_recording_flush_counts_as_a_pending_layer() {
 // ---- recovery -----------------------------------------------------------
 
 /// A table of processes; kills are recorded.
-struct Table {
-    procs: RefCell<BTreeMap<u32, ProcessInfo>>,
-    killed: RefCell<Vec<u32>>,
-    refuse: bool,
+pub(crate) struct Table {
+    pub(crate) procs: RefCell<BTreeMap<u32, ProcessInfo>>,
+    pub(crate) killed: RefCell<Vec<u32>>,
+    pub(crate) refuse: bool,
 }
 
 impl Table {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             procs: RefCell::default(),
             killed: RefCell::default(),
             refuse: false,
         }
     }
-    fn with(self, pid: u32, argv: &[&str], ticks: u64) -> Self {
+    pub(crate) fn with(self, pid: u32, argv: &[&str], ticks: u64) -> Self {
         self.procs.borrow_mut().insert(
             pid,
             ProcessInfo {
@@ -374,7 +374,7 @@ impl Table {
         );
         self
     }
-    fn qemu(self, pid: u32) -> Self {
+    pub(crate) fn qemu(self, pid: u32) -> Self {
         self.with(
             pid,
             &[
@@ -390,6 +390,14 @@ impl Table {
 impl Processes for Table {
     fn info(&self, pid: u32) -> Option<ProcessInfo> {
         self.procs.borrow().get(&pid).cloned()
+    }
+    fn find_qemu(&self, marker: &str) -> Vec<(u32, ProcessInfo)> {
+        self.procs
+            .borrow()
+            .iter()
+            .filter(|(_, info)| super::process::is_qemu_with(info, marker))
+            .map(|(pid, info)| (*pid, info.clone()))
+            .collect()
     }
     fn kill(&self, pid: u32) -> Result<(), String> {
         if self.refuse {
@@ -1013,4 +1021,78 @@ fn recovery_sweeps_a_temporary_file_a_killed_writer_left() {
     let mut waiter = world.engine(|_| {});
     world.recover(&mut waiter, &Table::new());
     assert_eq!(tmp_count(), 0);
+}
+
+// ---- lane reset ---------------------------------------------------------
+
+fn failing_lane_with_qemu(name: &str) -> LaneDir {
+    let dir = LaneDir::new(&scratch(name));
+    let mut f = file();
+    f.failures = 2;
+    f.set_qemu(QemuRecord {
+        pid: 321,
+        start_ticks: Some(500),
+        marker: VM.into(),
+        recorded_ms: T0,
+    });
+    dir.save(&f).unwrap();
+    dir
+}
+
+#[test]
+fn a_reset_clears_the_failures_and_the_record_once_qemu_is_gone() {
+    use super::reset::{Cleared, clear_for_reset};
+    let dir = failing_lane_with_qemu("reset-gone");
+    let cleared = clear_for_reset(&dir, &lane(), &Table::new(), T0 + 5).unwrap();
+    assert_eq!(
+        cleared,
+        Cleared {
+            qemu: Some(321),
+            failures: 2
+        }
+    );
+    let f = dir.load(&lane()).unwrap().unwrap();
+    assert_eq!((f.failures, f.qemu), (0, None));
+    // Nothing recorded, nothing to confirm.
+    assert_eq!(
+        clear_for_reset(&dir, &lane(), &Table::new(), T0 + 6).unwrap(),
+        Cleared {
+            qemu: None,
+            failures: 0
+        }
+    );
+}
+
+#[test]
+fn a_reset_is_refused_while_the_recorded_qemu_still_runs() {
+    use super::reset::{ResetRefused, clear_for_reset};
+    let dir = failing_lane_with_qemu("reset-alive");
+    let before = std::fs::read_to_string(dir.path(&lane())).unwrap();
+    let alive = Table::new().qemu(321);
+    assert!(matches!(
+        clear_for_reset(&dir, &lane(), &alive, T0 + 5),
+        Err(ResetRefused::QemuAlive(321))
+    ));
+    assert_eq!(
+        std::fs::read_to_string(dir.path(&lane())).unwrap(),
+        before,
+        "nothing changed"
+    );
+    // The same pid under another start time is a different process: not ours.
+    let reused = Table::new().with(
+        321,
+        &["qemu-system-x86_64", &format!("file=/d/vms/{VM}/disk")],
+        777,
+    );
+    assert!(clear_for_reset(&dir, &lane(), &reused, T0 + 5).is_ok());
+}
+
+#[test]
+fn a_reset_of_a_lane_with_no_file_says_so() {
+    use super::reset::{ResetRefused, clear_for_reset};
+    let dir = LaneDir::new(&scratch("reset-missing"));
+    assert!(matches!(
+        clear_for_reset(&dir, &lane(), &Table::new(), 0),
+        Err(ResetRefused::State(LaneStateError::Missing(_)))
+    ));
 }

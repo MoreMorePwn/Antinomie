@@ -17,21 +17,29 @@ pub struct ProcessInfo {
 pub trait Processes {
     /// The process with this pid, or `None` when there is none.
     fn info(&self, pid: u32) -> Option<ProcessInfo>;
+    /// The processes whose program is `qemu-system*` and whose command line
+    /// holds `marker`, with their pids. A table keeps its own order.
+    fn find_qemu(&self, marker: &str) -> Vec<(u32, ProcessInfo)>;
     /// End the process and wait a short while for it to go. Err names why it
     /// stays.
     fn kill(&self, pid: u32) -> Result<(), String>;
 }
 
-/// Whether `info` is the QEMU of the recorded VM.
-pub fn is_recorded_qemu(record: &QemuRecord, info: &ProcessInfo) -> bool {
+/// Whether `info` is a `qemu-system*` process with `marker` in its command line.
+pub fn is_qemu_with(info: &ProcessInfo, marker: &str) -> bool {
     let program = info
         .argv
         .first()
         .and_then(|arg0| arg0.rsplit('/').next())
         .unwrap_or("");
     program.starts_with("qemu-system")
-        && !record.marker.is_empty()
-        && info.argv.iter().any(|arg| arg.contains(&record.marker))
+        && !marker.is_empty()
+        && info.argv.iter().any(|arg| arg.contains(marker))
+}
+
+/// Whether `info` is the QEMU of the recorded VM.
+pub fn is_recorded_qemu(record: &QemuRecord, info: &ProcessInfo) -> bool {
+    is_qemu_with(info, &record.marker)
         && match (record.start_ticks, info.start_ticks) {
             (Some(recorded), Some(now)) => recorded == now,
             // A pid recorded without ticks is checked by its command line only.
@@ -65,6 +73,29 @@ impl Processes for ProcFs {
             argv,
             start_ticks: ticks,
         })
+    }
+
+    fn find_qemu(&self, marker: &str) -> Vec<(u32, ProcessInfo)> {
+        let Ok(entries) = fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        let mut found = Vec::new();
+        for entry in entries.filter_map(Result::ok) {
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|n| n.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            if let Some(info) = self.info(pid)
+                && is_qemu_with(&info, marker)
+            {
+                found.push((pid, info));
+            }
+        }
+        found.sort_by_key(|(pid, _)| *pid);
+        found
     }
 
     fn kill(&self, pid: u32) -> Result<(), String> {
