@@ -921,12 +921,14 @@ fn saved_run_with(
         return Err(RecordingError::Limit("run metadata exceeds limit"));
     }
     let mut run: RunSummary = serde_json::from_reader(file)?;
-    if let Some(report) = &run.analysis {
-        if crate::analysis::validation::validate_report(report).is_err() {
-            run.analysis = None;
-            run.notes
-                .push("The analysis saved with this run violates the reader's bounds and is not shown.".into());
-        }
+    if let Some(report) = &run.analysis
+        && crate::analysis::validation::validate_report(report).is_err()
+    {
+        run.analysis = None;
+        run.notes.push(
+            "The analysis saved with this run violates the reader's bounds and is not shown."
+                .into(),
+        );
     }
     if run.vm_id != vm_id {
         return Ok(None);
