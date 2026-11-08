@@ -8,7 +8,11 @@ description = "Job, event and query API of Antinomie's headless mode (UI-free)"
 
 [dependencies]
 antinomie-monitor-core = { path = "../monitor-core" }
+rustix = { version = "1", features = ["fs"] }
+rusqlite = { version = "0.41.0", features = ["fallible_uint"] }
 schemars = "1"
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 thiserror.workspace = true
+toml = { version = "1", default-features = false, features = ["std", "serde", "parse"] }
