@@ -38,6 +38,7 @@ pub use facts::{RunFilterFacts, run_filter_facts};
 mod matching;
 pub use matching::{ArchiveStamp, MatchTotals, MatchingPage};
 mod read_only;
+mod unreadable;
 pub use read_only::{find_run_read_only, list_runs_read_only, open_member, read_only_locations};
 
 pub struct Recording {
@@ -850,7 +851,7 @@ fn list_location_runs(
                     return Ok(newest_runs(runs));
                 }
                 // One damaged run must not hide the others.
-                let Ok(Some(run)) = saved_run_with(&root, &entry.path(), vm_id, seal) else {
+                let Some(run) = unreadable::listed_run(&root, &entry.path(), vm_id, seal) else {
                     continue;
                 };
                 // A run that lived through a transport reconnect has a record in
@@ -921,8 +922,11 @@ fn saved_run_with(
     }
     let mut run: RunSummary = serde_json::from_reader(file)?;
     if let Some(report) = &run.analysis {
-        crate::analysis::validation::validate_report(report)
-            .map_err(|_| RecordingError::Limit("archived analysis report violates bounds"))?;
+        if crate::analysis::validation::validate_report(report).is_err() {
+            run.analysis = None;
+            run.notes
+                .push("The analysis saved with this run violates the reader's bounds and is not shown.".into());
+        }
     }
     if run.vm_id != vm_id {
         return Ok(None);
@@ -933,7 +937,11 @@ fn saved_run_with(
             .ok()
             .and_then(|facts| facts.started_ms);
     }
-    reopen_analysis_sidecar(root, &mut run)?;
+    if let Err(error) = reopen_analysis_sidecar(root, &mut run) {
+        run.notes.push(format!(
+            "The analysis report file could not be used ({error}); the copy saved with the run is shown."
+        ));
+    }
     settle_stale_analysis(&mut run, seal);
     settle_stale_state(&mut run);
     Ok(Some(run))
@@ -1095,7 +1103,9 @@ fn reopen_analysis_sidecar(root: &Path, run: &mut RunSummary) -> Result<(), Reco
         .map_err(|_| RecordingError::Limit("analysis sidecar violates bounds"))?;
     if report.id != embedded.id
         || report.source_path != embedded.source_path
-        || report.sections.len() != embedded.sections.len()
+        // Checks added later (Analyse more) live only in the sidecar, after
+        // the sections the run was saved with.
+        || report.sections.len() < embedded.sections.len()
         || report
             .sections
             .iter()
@@ -1193,6 +1203,7 @@ mod tests {
     use std::io::Write;
     mod async_browse;
     mod index_concurrency;
+    mod unreadable_run;
     fn facts_for_health(
         health: serde_json::Value,
         recording_error: serde_json::Value,

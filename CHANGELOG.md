@@ -14,6 +14,15 @@ x86 programs by their own table.
 
 ### Host
 
+- **Run History lists every saved run (ANT-T0415).** A run whose analysis
+  report was extended after the run ended (Analyse more adds a check to the
+  report file only) was skipped as "not matching the run", so a run with all
+  its files vanished from Run History and the Triage picker. The report file
+  may now hold more checks than the run was saved with. A run whose record
+  cannot be read at all is listed with the reason ("run record unreadable: ...")
+  instead of being left out, and an analysis report that cannot be used no
+  longer hides its run: the run shows with a note.
+
 - **The data folder says who owns it.** The process that takes the data folder
   writes `run/owner.json` (its pid, whether it is the window, a daemon or a
   command, when it started) and removes it on a clean exit. A second Antinomie

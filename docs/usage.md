@@ -1808,6 +1808,10 @@ the web layer are not shipped yet; this list is what `antinomie-cli --help` show
 
 ## Troubleshooting
 
+- **A run is missing from Run History.** A run whose files cannot be read still
+  shows (0.9.0), with "run record unreadable" and the reason; its folder is
+  untouched. Older builds skipped a run whose analysis report had gained a check
+  after the run (Analyse more); 0.9.0 lists it.
 - **"Data folder is already in use" (0.9.0).** One process owns a data folder at a
   time: the window or an `antinomie-cli` command that needs the engine. The message
   now names the owner (its pid, whether it is the window or a command, and since
