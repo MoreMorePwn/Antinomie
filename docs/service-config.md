@@ -2,8 +2,13 @@
 
 [← Back to the overview](../README.md)
 
-Headless mode (`antinomie-cli auto ...`) reads two kinds of file from the data
-directory. A person writes them; the program never rewrites them.
+> **Status in 0.9.0.** The files, their keys and `antinomie-cli config validate`
+> exist and are checked. The daemon that reads them (`antinomie-cli auto ...`,
+> its socket, lanes, inbox and watch folders, reload on `SIGHUP`) is not shipped
+> yet, so settings that name those only describe what the daemon will do.
+
+Headless mode reads two kinds of file from the data directory. A person writes
+them; the program never rewrites them.
 
 | File | Purpose |
 |---|---|

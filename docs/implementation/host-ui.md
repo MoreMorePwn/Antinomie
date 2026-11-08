@@ -304,6 +304,69 @@ Two small helpers keep slow disks and programs off the frame (`monitor-ui/src/ba
 * The memory result view looks up the run's files folder once, when the result loads,
   not on every frame.
 
+### Headless foundations: shared settings, data-folder owner, `antinomie-cli` and `antinomie-service` (0.9.0)
+
+Cards of the headless/CLI work (design: `Headless and Auto Mode`). What a user can
+run is in `docs/usage.md`, "Command line (0.9.0)"; this section is the contract
+behind it.
+
+* **Crates and dependency direction.** `antinomie-cli` (binary `antinomie-cli`,
+  `crates/cli/`) depends on `antinomie-service` (`crates/service/`) and
+  `antinomie-monitor-core`. The service depends on core. Neither links egui,
+  eframe, winit or `antinomie-monitor-ui`; `crates/cli/tests/dependency_tree.rs`
+  runs `cargo tree` and fails if one of them appears. The window depends on core
+  only. The CLI is not a second implementation: every engine step it takes
+  (`Command::AnalyzeSample`, the rule registry, the sample library, custody) is a
+  core function the window calls too.
+* **Data-folder owner (`data_owner.rs`).** The lock on `.app-owner.lock` stays the
+  authority. The process that takes it also writes `run/owner.json` (atomic
+  replace, mode 0600: pid, kind `gui`, `daemon` or `cli`, start time) and removes
+  it on a clean exit. A record whose process is gone, or that no lock backs, is
+  stale and ignored; the file describes the owner and is never a lock. A second
+  process that finds the lock taken reports "data folder is already in use" with
+  the owner's description (the CLI exits 21, `busy`), and the migration of an old
+  data folder first checks the owner. `doctor` reports `data_dir.owner`.
+* **Shared settings (`settings.rs`).** `<data>/settings.json` holds the engine
+  settings every front end needs (triage and detection options, quotas, limits,
+  report export, disk view and so on). Version 1; written only by the process
+  that holds the data lock (mode 0600, atomic replace); a field that is absent
+  reads as its default; fields this version does not know are kept on rewrite; a
+  file that cannot be read is an error and is never replaced by defaults, and a
+  newer `settings_version` is refused for writing. The window reads and writes
+  it (a read error is shown as a warning and the file is left alone);
+  `antinomie-cli config get` reads it without a lock and `config set` takes the
+  lock.
+* **CLI contract.** Every reply is one object with `api_version` 1. JSON mode
+  prints `{"ok":true,"result":...}` or `{"ok":false,"error":{code,message,
+  retryable,details}}`; ndjson prints list items one per line and a closing
+  `{"result":{"count","next_cursor"}}`; log lines go to standard error. Error
+  codes map to the fixed exit codes of the usage guide (`exit.rs`). `--direct`
+  takes the data lock in the process; `--daemon` and `--socket` are accepted but
+  nothing listens yet. Commands that only read (`sample`, `custody verify`,
+  `config get`, `config validate`, `rules list`) take no lock.
+* **`antinomie-service`.** `api/` holds the job and query objects, errors and
+  `job-api-1.schema.json` (generated with `schemars`; a test fails when the
+  checked-in file is stale). `config/` loads and validates `service.toml` and
+  `policies/*.toml` (unknown keys are errors, ceilings, the v1 routes `drop` and
+  `inet_sim`, the lane VM); `antinomie-cli config validate` is its only caller
+  today. `store/` is the job store under `<data>/service/`: SQLite in WAL mode
+  with one writer, the `jobs` table as queue and source of truth, every state
+  change one transaction that also inserts its event rows, an events mirror in
+  `jobs/<id>/events.ndjson` appended after the commit, idempotency keys, and a
+  recovery pass that repairs the mirror and requeues jobs a dead process left
+  running. `intake/` stages uploads and applies the common checks (regular file
+  opened without following links, size ceiling, type and architecture
+  acceptance, library add with origin `Added`, de-duplication by SHA-256). A
+  staged file never runs on the host. `custody.rs` names the custody actor of
+  a job (`local:<uid>`, `web:<user>` or `auto:policy-<name>`, its `client_id`),
+  sets it for the length of the job so the engine's own threads record it too,
+  and writes one `automation` entry per job with the policy digest, the route
+  and the submitter (the kind and its verifier support are in core). `query/` is the read-only recording API (run lists, calls, process and
+  file reads, safe artifact reads, packet reads through the no-cache packet
+  worker, cursors with generations and row and byte limits). None of it is
+  reachable from a command yet except through the tests in `crates/service/tests/`.
+* **Tests.** `cargo test --release -p antinomie-cli -p antinomie-service`.
+
 ### Historical initial requirements
 
 - Linux 6.12.94 existing baseline, BusyBox filesystem; Debian userspace later.

@@ -332,6 +332,12 @@ The monitor crates follow the Rust book's layout: a module is a file named
 for it, and its children live in a directory of the same name (`app.rs` with
 `app/vm.rs`). New code does not use `mod.rs` files or `#[path]` attributes.
 
+- **Crates (0.9.0).** `antinomie-monitor-core` is the engine, `antinomie-monitor-ui`
+  the window, `antinomie-service` the job and query layer and `antinomie-cli` the
+  command line. The window may depend on the others, never the reverse: `service`
+  and `cli` must not link egui, eframe, winit or the UI crate, and
+  `crates/cli/tests/dependency_tree.rs` fails if they do. New front-end-neutral
+  logic belongs in core or service so the window and the command line share it.
 - **One responsibility per file.** Name a file for what it does (`saving.rs`,
   `pcap_scan.rs`), not for a kind of item (`types.rs`, `helpers.rs`).
 - **Large types stay one type.** The parent file keeps the struct, its
