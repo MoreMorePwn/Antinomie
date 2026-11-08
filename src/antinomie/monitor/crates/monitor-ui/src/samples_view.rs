@@ -388,6 +388,8 @@ pub(crate) struct SamplesView {
     key: String,
     key_saved: bool,
     key_loaded: bool,
+    /// [`api_keys::generation`] when the keys were read.
+    key_generation: u64,
     /// The person asked for Tools > API keys; the app opens it.
     want_keys: bool,
     /// The warning before first use was accepted in this data folder.
@@ -710,6 +712,11 @@ impl SamplesView {
             // The keys are set elsewhere: read them again when it opens.
             self.key_loaded = false;
             return None;
+        }
+        if self.key_generation != antinomie_monitor_core::api_keys::generation() {
+            // A key was saved or removed (Tools > API keys) while this is open.
+            self.key_generation = antinomie_monitor_core::api_keys::generation();
+            self.key_loaded = false;
         }
         if !self.key_loaded {
             self.key = samples::source_key(cx.data_dir, self.source);
@@ -1204,6 +1211,7 @@ mod tests {
                 view.key = "fixture".into();
                 view.key_saved = true;
                 view.key_loaded = true;
+                view.key_generation = antinomie_monitor_core::api_keys::generation();
                 view.acknowledged = true;
                 view.listed = true;
                 view.listing = "Newest Linux uploads".into();

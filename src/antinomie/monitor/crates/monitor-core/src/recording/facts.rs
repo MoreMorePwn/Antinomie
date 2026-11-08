@@ -21,6 +21,10 @@ pub struct RunFilterFacts {
     /// The guest was asked to hash the files the run writes (and, with it,
     /// the program's own image): `tracer_hashing` in the manifest.
     pub hashed_writes: bool,
+    /// The run's tree ended and its recording was handed to the writer whole
+    /// while the VM kept running (`saved` in the manifest). A run saved when
+    /// the VM stopped has its final totals instead.
+    pub saved: bool,
 }
 
 /// Read bounded sidecars on an archive worker; all three run identities must match.
@@ -87,6 +91,20 @@ pub fn run_filter_facts(
             facts.storage_loss = health
                 .and_then(|health| health.get("storage_dropped_packets"))
                 .and_then(serde_json::Value::as_u64);
+            let sealed = manifest
+                .get("saved")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            facts.saved = sealed;
+            if sealed && health.is_none() {
+                // Saved before the VM stopped: the losses counted so far.
+                facts.transport_loss = manifest
+                    .get("telemetry_loss")
+                    .and_then(|loss| loss.get("lost_packets"))
+                    .and_then(serde_json::Value::as_u64)
+                    .or(Some(0));
+                facts.storage_loss = Some(0);
+            }
             facts.complete = run
                 .get("execution")
                 .and_then(|execution| execution.get("flags"))

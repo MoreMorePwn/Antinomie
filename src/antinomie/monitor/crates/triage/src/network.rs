@@ -5,23 +5,12 @@ use super::*;
 use antinomie_monitor_core::ioc::indicator::{
     Collector, Evidence, Jump, Seen, Source, TlsFacts, Via,
 };
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 
-/// How a public destination receives a country and organization.
-/// Local addresses are never queried.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum AddressLookup {
-    /// Installed TShark GeoIP fields only.
-    #[default]
-    Tshark,
-    /// `dig` and `whois` on this machine. TShark GeoIP fields are not requested.
-    Whois,
-    /// TShark GeoIP first. `dig` and `whois` fill a missing country or organization.
-    TsharkThenWhois,
-}
+/// How a public destination receives a country and organization; the setting
+/// lives in `settings.json` (core).
+pub use antinomie_monitor_core::settings::AddressLookup;
 pub const INVENTORY_LIMIT: usize = 16384;
 
 /// Only an identity-matching artifact manifest proves capture ownership.

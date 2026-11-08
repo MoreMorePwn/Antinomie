@@ -395,3 +395,48 @@ fn an_arm64_vm_says_its_memory_cannot_be_analysed() {
         "{note}"
     );
 }
+
+#[test]
+fn a_dump_links_to_its_run_by_provenance_then_by_the_runs_own_record() {
+    use antinomie_monitor_core::provenance::{Certainty, Provenance};
+    let mut view = MemoryView::default();
+    let mut dump = MemoryDump {
+        id: "d".into(),
+        dir: PathBuf::from("/rec/memory/d"),
+        ..Default::default()
+    };
+    // Saved before the field: not in a run.
+    let link = view.link_of(&dump);
+    assert!(link.run.is_none() && link.certainty == Certainty::Unknown);
+    assert_eq!(view.cell_of(&link).line().text, "Run: Not in a run");
+    // The run's own record names the folder.
+    view.legacy_links.insert(
+        dump.dir.clone(),
+        Provenance::run_exit("vm", "boot", "r1", 0),
+    );
+    assert_eq!(view.link_of(&dump).run.as_deref(), Some("r1"));
+    // A by-hand dump taken while two runs were live: by time.
+    dump.provenance = Some(Provenance::by_hand(
+        "vm",
+        "boot",
+        None,
+        vec!["r1".into(), "r2".into()],
+        0,
+    ));
+    let link = view.link_of(&dump);
+    assert_eq!(link.certainty, Certainty::ByTime);
+    assert!(view
+        .cell_of(&link)
+        .line()
+        .text
+        .starts_with("Run: by time: r1"));
+    view.this_run_only = true;
+    view.triage_run = Some("r2".into());
+    assert!(view.of_this_run(&link));
+    view.triage_run = Some("r3".into());
+    assert!(!view.of_this_run(&link));
+    // Taken while no run was live: VM-wide.
+    dump.provenance = Some(Provenance::by_hand("vm", "boot", None, Vec::new(), 0));
+    let wide = view.link_of(&dump);
+    assert_eq!(view.cell_of(&wide).line().text, "Run: VM-wide");
+}

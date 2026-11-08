@@ -417,6 +417,19 @@ pub fn exec_cloexec_and_shared_tables_keep_parent_descriptor_provenance_separate
 }
 
 #[test]
+fn a_clone3_without_readable_flags_still_hands_its_child_the_parents_descriptors() {
+    use crate::process_tree_tests::{clone3_with_args, with_child_record};
+    let mut opened = path_call(1, 257, "openat", 7, "/etc/test");
+    opened.entry.as_mut().unwrap().args = Some([AT_FDCWD, 0, 0x80000, 0, 0, 0]);
+    // A process: the guest's record says so, and the child gets its own copy.
+    let clone = with_child_record(clone3_with_args(1, 42, None), 42, 42);
+    let mut child = call(42, 1, "write", 3);
+    child.entry.as_mut().unwrap().args = Some([7, 0, 3, 0, 0, 0]);
+    let rows = file_rows(&[opened, clone, child], &["write"]);
+    assert_eq!(rows.rows[0][0].text, "/etc/test");
+}
+
+#[test]
 pub fn encrypted_and_binary_sessions_h2c_requests_and_quic_hosts_come_from_tshark() {
     if std::process::Command::new("tshark")
         .arg("--version")

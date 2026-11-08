@@ -21,12 +21,13 @@ use eframe::egui::{self, RichText};
 // every module of it is named here as it was when the modules were this
 // crate's, so that the views below reach them as before.
 pub(crate) use antinomie_triage::family;
+pub(crate) use antinomie_triage::run_end;
 #[allow(unused_imports)]
 use antinomie_triage::*;
 use antinomie_triage::{
     archive_scan, file_category, file_location, file_type, file_visibility, files, findings,
     ioc_scan, lineage_index, live_judge, pcap_scan, process_cells, process_env, process_record,
-    rules, run_end,
+    rules, scan_progress,
 };
 #[cfg(test)]
 use antinomie_triage::{async_files, descriptors, file_content, kernel_records};
@@ -71,6 +72,7 @@ mod ioc_view;
 pub(crate) use ioc_view::{count_tab as ioc_count_tab, source_tone_of as ioc_source_tone};
 mod net_tabs;
 mod network;
+mod not_started;
 mod presentation;
 mod process_details;
 mod process_mermaid;
@@ -262,6 +264,10 @@ pub(crate) struct TriageView {
     route: crate::route_ui::RouteText,
     /// The selected run's notes, shown at the bottom of the Summary.
     notes: Vec<String>,
+    /// The Summary's Run artifacts box: what the selected run saved.
+    run_box: crate::app::samples_page::detail::RunBoxState,
+    /// An artifact of the Run artifacts box the user asked to open.
+    open_artifact: Option<crate::app::samples_page::detail::ArtifactOpen>,
     /// Export report: the dialog, its choices and the running export.
     report: report_export::Dialog,
     /// The Summary's Relationships box and the data derived for it.
@@ -344,6 +350,8 @@ impl Default for TriageView {
             changed_paths: Arc::default(),
             route: crate::route_ui::RouteText::default(),
             notes: Vec::new(),
+            run_box: Default::default(),
+            open_artifact: None,
             report: report_export::Dialog::default(),
             summary_state: Default::default(),
             run_facts: Default::default(),
@@ -387,6 +395,24 @@ impl TriageView {
     /// instead of between the pane's other warnings.
     pub(crate) fn set_notes(&mut self, notes: Vec<String>) {
         self.notes = notes;
+    }
+
+    /// The selected run, for the Summary's Run artifacts box: its cores,
+    /// memory dumps, capture segments and trigger log.
+    pub(crate) fn set_run_artifacts(
+        &mut self,
+        run: &antinomie_monitor_core::RunSummary,
+        live: bool,
+    ) {
+        let ended = self.run_ended_ms();
+        self.run_box.refresh(run, live, ended);
+    }
+
+    /// An artifact the Run artifacts box was asked to open, once.
+    pub(crate) fn take_open_artifact(
+        &mut self,
+    ) -> Option<crate::app::samples_page::detail::ArtifactOpen> {
+        self.open_artifact.take()
     }
 
     /// Settings › Notifications: raise a toast for a HIGH finding of a live run.
@@ -455,16 +481,7 @@ impl TriageView {
     }
 
     pub(crate) fn tick(&mut self, ctx: &egui::Context, input: TriageInput<'_>) {
-        let key = format!(
-            "{}\n{}\n{}\n{}",
-            input.vm_id.unwrap_or(""),
-            input.boot_id.unwrap_or(""),
-            input.run_id.unwrap_or(""),
-            input
-                .archive
-                .map(|path| path.display().to_string())
-                .unwrap_or_default()
-        );
+        let key = report_export::context_key(&input);
         if self.context_key.as_deref() != Some(&key) {
             self.stop_scan();
             details::clear(ctx);
@@ -477,6 +494,8 @@ impl TriageView {
         self.details_directory = input.archive.map(Path::to_path_buf);
         self.ioc_tick(ctx);
         self.properties.tick(ctx, &input);
+        self.detection
+            .set_index(self.index_state(input.archive.is_some()));
         self.detection.tick(ctx, &input);
         self.scan_request.clock_anchor = input.clock_anchor;
         self.scan_request.started_ms = input.started_ms;
@@ -489,6 +508,7 @@ impl TriageView {
             .zip(input.boot_id)
             .zip(input.run_id)
             .map(|((vm, boot), run)| (vm.into(), boot.into(), run.into()));
+        self.follow_report(&input);
         if input.archive.is_some() {
             self.schedule_refresh(ctx, input.run_finished);
         }
@@ -945,6 +965,9 @@ impl TriageView {
         }
     }
 }
+
+pub(crate) use not_started::not_started_panel;
+pub(crate) use report_export::NotStartedRun;
 
 /// Triage without a run selected: what it shows and how to get a run.
 pub(crate) fn no_run(ui: &mut egui::Ui) {

@@ -714,18 +714,18 @@ pub mod tests {
             0,
             "anonymous mappings are not file-access observations"
         );
-        request.event_cache = first.event_cache;
+        request.event_cache = first.event_cache.clone();
         request.filters[0] = "finding.rule == \"never\"".into();
         let second = scan_archive_query(&temp.directory, None, false, &cancel, &request).unwrap();
         assert!(second.findings.is_empty());
         assert_eq!(stamp(&path).unwrap(), original);
-        request.event_cache = second.event_cache;
+        request.event_cache = second.event_cache.clone();
         crate::tests::write_rwx_calls(&mut raw, 3..4);
         raw.sync_all().unwrap();
         let third = scan_archive_query(&temp.directory, None, false, &cancel, &request).unwrap();
         assert_eq!(third.counts.calls, 4);
         assert_ne!(stamp(&path).unwrap(), original);
-        request.event_cache = third.event_cache;
+        request.event_cache = third.event_cache.clone();
         std::fs::write(&path, b"invalid journal").unwrap();
         let repaired = scan_archive_query(&temp.directory, None, false, &cancel, &request).unwrap();
         assert!(repaired.event_error.is_none());

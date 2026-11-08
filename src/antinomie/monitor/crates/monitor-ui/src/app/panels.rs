@@ -451,6 +451,8 @@ impl MonitorApp {
             .map(|location| location.recording_directories.clone())
             .unwrap_or_default();
         let unavailable = self.manual_core_unavailable();
+        let runs = self.triage_runs();
+        self.core_view.set_runs(&runs, self.selected_run.clone());
         self.core_view
             .set_tools_dir(antinomie_monitor_core::analysis_tools::tools_dir(
                 &self.options.data_dir,
@@ -481,6 +483,7 @@ impl MonitorApp {
             Some(crate::core_view::CoreAction::Delete(deletion)) => {
                 self.ask_delete_evidence(deletion)
             }
+            Some(crate::core_view::CoreAction::OpenRun(run_id)) => self.open_run_in_triage(&run_id),
             None => {}
         }
     }
@@ -527,6 +530,8 @@ impl MonitorApp {
             .tool_install
             .as_ref()
             .is_some_and(|install| install.id == "memnixfs" && !install.finished);
+        let runs = self.triage_runs();
+        self.memory_view.set_runs(&runs, self.selected_run.clone());
         let action = self.memory_view.show(
             ui,
             crate::memory_view::MemoryContext {
@@ -554,6 +559,9 @@ impl MonitorApp {
         );
         match action {
             Some(crate::memory_view::MemoryAction::Dump) => self.send(Command::DumpMemory),
+            Some(crate::memory_view::MemoryAction::OpenRun(run_id)) => {
+                self.open_run_in_triage(&run_id)
+            }
             Some(crate::memory_view::MemoryAction::InstallVolatility) => {
                 self.send(Command::InstallTool {
                     id: "volatility3".into(),

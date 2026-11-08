@@ -17,7 +17,7 @@ mod add;
 mod custody_all;
 mod custody_parts;
 mod delete_run;
-mod detail;
+pub(crate) mod detail;
 mod export;
 mod list;
 mod note_picker;
@@ -469,7 +469,7 @@ impl MonitorApp {
         let (sender, receiver) = mpsc::channel();
         let folder = self.options.data_dir.join("samples").join("analysis-input");
         let (sha256, wake) = (record.sha256.clone(), ctx.clone());
-        let file = folder.join(detail::guest_name(record).trim_start_matches("/tmp/"));
+        let file = folder.join(record.guest_path().trim_start_matches("/tmp/"));
         let started = std::thread::Builder::new()
             .name("sample-analyze".into())
             .spawn(move || {

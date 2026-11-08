@@ -90,6 +90,109 @@ pub(super) fn detection_tab(counts: [Count; 3]) -> TabItem {
     ))
 }
 
+/// A section tab with several counts, "Network 4 · 9 · 2 · 0": each capped at
+/// "99+", the hover naming every number ("12 processes · 3 findings"). A count
+/// not known yet shows as "–" (or "…" while it is being made).
+pub(super) fn multi_tab(title: &str, parts: &[(Count, &str, &str)]) -> TabItem {
+    let any = parts
+        .iter()
+        .any(|(count, ..)| matches!(count, Count::Ready(found) if *found > 0));
+    let text = parts
+        .iter()
+        .map(|(count, ..)| count.capped_label())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let hover = parts
+        .iter()
+        .map(|(count, one, many)| match count {
+            Count::Ready(1) => format!("1 {one}"),
+            Count::Ready(found) => format!(
+                "{} {many}",
+                antinomie_monitor_core::analysis::detection::group_digits(*found)
+            ),
+            Count::Pending => format!("{many} updating"),
+            Count::Unavailable | Count::NotScanned => format!("{many} not scanned"),
+            Count::Shown { .. } => format!("{} {many}", count.label()),
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    TabItem::new(title)
+        .badge(text, if any { Tone::Accent } else { Tone::Neutral })
+        .tooltip(hover)
+}
+
+/// A count that is not known: "–" once the run has no scan, "…" while it is
+/// being made.
+fn known(view: &TriageView, count: impl FnOnce(&ArchiveScan) -> Option<u64>) -> Count {
+    if view.preparing() {
+        return Count::Pending;
+    }
+    view.scan
+        .as_ref()
+        .and_then(count)
+        .map_or(Count::NotScanned, Count::Ready)
+}
+
+impl TriageView {
+    /// The tab of a Triage section: the Process, Files, Network and eBPF
+    /// tabs carry their counts; the others are plain.
+    pub(super) fn section_tab(&self, section: Section) -> TabItem {
+        match section {
+            Section::Process => multi_tab(
+                "Process",
+                &[
+                    (
+                        self.section_count(Metric::Processes),
+                        "process",
+                        "processes",
+                    ),
+                    (
+                        // The Suspicious activity badge: its default visibility.
+                        known(self, |scan| Some(scan.counts.findings)),
+                        "finding",
+                        "findings",
+                    ),
+                ],
+            ),
+            Section::Files => multi_tab(
+                "Files",
+                &[(
+                    // The By file table with its default filter.
+                    known(self, |scan| {
+                        let activity = &scan.file_activity;
+                        Some(file_activity::Window::default().shown(activity).len() as u64)
+                    }),
+                    "file in the per-file history",
+                    "files in the per-file history",
+                )],
+            ),
+            Section::Network => multi_tab(
+                "Network",
+                &[
+                    (self.new_count(NewTab::Endpoints), "endpoint", "endpoints"),
+                    (self.new_count(NewTab::Domains), "domain", "domains"),
+                    (self.new_count(NewTab::Urls), "URL", "URLs"),
+                    (self.new_count(NewTab::Tls), "TLS session", "TLS sessions"),
+                ],
+            ),
+            Section::Bpf => multi_tab(
+                "eBPF",
+                &[(
+                    known(self, |scan| Some(scan.bpf.len() as u64 + scan.bpf_omitted)),
+                    "observation",
+                    "observations",
+                )],
+            ),
+            _ => TabItem::new(match section {
+                Section::Summary => "Summary",
+                Section::Properties => "Properties",
+                Section::Detection => "Detection",
+                _ => "IOC",
+            }),
+        }
+    }
+}
+
 /// One navigation unit: a thin-bordered tab with a count badge. Call it
 /// inside `widgets::tab_row`.
 pub(super) fn tab(
@@ -152,7 +255,7 @@ impl TriageView {
             return hidden;
         }
         let count = match metric {
-            Metric::Processes => scan.process.len() as u64,
+            Metric::Processes => scan.process.iter().filter(|node| !node.thread).count() as u64,
             Metric::Findings => scan.counts.findings,
             Metric::Opened => scan.counts.opened,
             Metric::Reads => scan.counts.reads,
@@ -323,5 +426,32 @@ mod detection_tab_tests {
             tip.contains("IDS not scanned") && tip.contains("Sigma not scanned"),
             "{tip}"
         );
+    }
+
+    #[test]
+    fn a_multi_count_tab_caps_each_number_and_names_them_in_the_hover() {
+        let item = multi_tab(
+            "Process",
+            &[
+                (Count::Ready(12), "process", "processes"),
+                (Count::Ready(1), "finding", "findings"),
+            ],
+        );
+        assert!(item.tooltip.unwrap().contains("12 processes · 1 finding"));
+        let item = multi_tab(
+            "Network",
+            &[
+                (Count::Ready(250), "endpoint", "endpoints"),
+                (Count::NotScanned, "domain", "domains"),
+                (Count::Pending, "URL", "URLs"),
+                (Count::Ready(0), "TLS session", "TLS sessions"),
+            ],
+        );
+        let tip = item.tooltip.clone().unwrap();
+        assert!(
+            tip.contains("250 endpoints · domains not scanned") && tip.contains("0 TLS sessions"),
+            "{tip}"
+        );
+        assert_eq!(item.badge.unwrap().0, "99+ · – · … · 0");
     }
 }

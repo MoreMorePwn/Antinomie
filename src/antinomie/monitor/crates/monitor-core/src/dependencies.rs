@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Runtime prerequisites, checked at startup and again before using a feature.
 //! Build tools and optional analysis adapters have their own existing checks.
-use crate::{BackendOptions, VmAcceleration, VmLaunchOptions};
+use crate::{BackendOptions, Snapshot, VmAcceleration, VmLaunchOptions};
 pub use install::{
     InstallPlan, KVM_GROUP_COMMAND, KvmAdvice, PACKAGES, PackageManager, kvm_member, package,
 };
@@ -415,6 +415,66 @@ pub fn vm_requirements(options: &BackendOptions, launch: &VmLaunchOptions) -> Ve
     required
 }
 
+/// The tools a command needs before it may run: a job or a click fails early
+/// with the missing tool named, not halfway. Empty means no external tool.
+pub fn requirements(
+    command: &crate::Command,
+    options: &BackendOptions,
+    snapshot: &Snapshot,
+) -> Vec<Dependency> {
+    use crate::Command;
+    use Dependency::*;
+    match command {
+        Command::Start { vm_id } | Command::RestoreVmSnapshot { vm_id, .. } => {
+            let launch = snapshot
+                .vms
+                .iter()
+                .find(|vm| &vm.id == vm_id)
+                .map(|vm| vm.launch.clone())
+                .unwrap_or_default();
+            let mut required = vm_requirements(options, &launch);
+            if matches!(command, Command::RestoreVmSnapshot { .. }) {
+                required.push(QemuImg);
+            }
+            required
+        }
+        // Resetting a VM with a Debian account provisions its new disk again.
+        Command::Reset { vm_id, .. }
+            if snapshot
+                .vms
+                .iter()
+                .find(|vm| &vm.id == vm_id)
+                .and_then(|vm| {
+                    crate::stealth::vm_base(vm.base_identity.as_deref(), &snapshot.bases)
+                })
+                .and_then(|base| base.guest.as_ref())
+                .is_some_and(|guest| guest.requires_credentials) =>
+        {
+            vec![QemuImg, DebianAccount]
+        }
+        Command::Create(_) | Command::Reset { .. } | Command::CreateVmSnapshot { .. } => {
+            vec![QemuImg]
+        }
+        Command::CreateWithCredentials { .. } => vec![QemuImg, DebianAccount],
+        Command::RefreshRemoteBases
+        | Command::DownloadBase { .. }
+        | Command::InstallTool { .. } => vec![Curl],
+        Command::AnalyzeOnly { .. }
+        | Command::AnalyzeHostFile { .. }
+        | Command::AnalyzeSample { .. }
+        | Command::AnalyzeMore { .. } => vec![Bubblewrap],
+        Command::MeasureDisk { .. }
+        | Command::OpenDiskReference { .. }
+        | Command::SaveDiskPartition { .. } => vec![QemuImg],
+        Command::OpenCurrentDisk { .. }
+        | Command::DumpDisk { .. }
+        | Command::ImportQcow2Disk { .. }
+        | Command::KeepCurrentDiskAsDump { .. } => vec![QemuImg, Bubblewrap, Prlimit],
+        Command::Execute(request) if request.analysis.enabled => vec![Bubblewrap],
+        _ => Vec::new(),
+    }
+}
+
 /// Revalidate launch requirements before allocating RAM or spawning a guest.
 pub(crate) fn require_vm(options: &BackendOptions, launch: &VmLaunchOptions) -> Result<(), String> {
     require_tool(&options.qemu, "qemu-system-x86")?;
@@ -541,6 +601,42 @@ fn probe_output(program: &Path, args: &[&str], timeout: Duration) -> Result<Stri
 mod tests {
     use super::*;
     use std::{fs, os::unix::fs::PermissionsExt};
+
+    #[test]
+    fn a_command_names_the_tools_it_needs() {
+        use crate::Command;
+        let options = BackendOptions::default();
+        let snapshot = Snapshot::default();
+        let of = |command: Command| requirements(&command, &options, &snapshot);
+        assert_eq!(
+            of(Command::Create(Default::default())),
+            [Dependency::QemuImg]
+        );
+        assert_eq!(
+            of(Command::AnalyzeHostFile {
+                vm_id: "x".into(),
+                path: PathBuf::from("/x"),
+                analysis: Default::default()
+            }),
+            [Dependency::Bubblewrap]
+        );
+        assert_eq!(
+            of(Command::DownloadBase {
+                identity: "x".into()
+            }),
+            [Dependency::Curl]
+        );
+        assert!(of(Command::Stop).is_empty());
+        let restore = of(Command::RestoreVmSnapshot {
+            vm_id: "none".into(),
+            snapshot_id: "s".into(),
+            boot_from_disk: true,
+            save_current: None,
+            confirmed: false,
+            switch_profile: false,
+        });
+        assert!(restore.contains(&Dependency::Qemu) && restore.contains(&Dependency::QemuImg));
+    }
 
     #[test]
     fn a_probe_that_only_timed_out_is_not_something_to_repair() {

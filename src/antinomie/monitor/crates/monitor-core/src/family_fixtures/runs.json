@@ -680,5 +680,151 @@
 "source": "selection/pack/sigmahq-linux/rules/linux/process_creation/proc_creation_lnx_susp_execution_tmp_folder.yml"
 }
 ]
+},
+{
+"run": "f9c3d854",
+"expected": "BPFDoor",
+"hits": [
+{
+"engine": "YARA",
+"rule_id": "s580::LIN_Sample_Unique_77c0c768",
+"title": "LIN_Sample_Unique_77c0c768",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/LIN_Sample_Unique_77c0c768.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1072::TH_Generic_MassHunt_Linux_Malware_2026_CYFARE",
+"title": "TH_Generic_MassHunt_Linux_Malware_2026_CYFARE",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/TH_Generic_MassHunt_Linux_Malware_2026_CYFARE.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1616::meth_stackstrings",
+"title": "meth_stackstrings",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/meth_stackstrings.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1838::Linux_Trojan_BPFDoor_f690fe3b",
+"title": "Linux_Trojan_BPFDoor_f690fe3b",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_BPFDoor.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s2756::SEKOIA_Backdoor_Lin_Bpfdoor",
+"title": "SEKOIA_Backdoor_Lin_Bpfdoor",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/yara-forge-core/sekoia.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s2757::SIGNATURE_BASE_APT_MAL_LNX_Redmenshen_Bpfdoor_Controller_May22_1",
+"title": "SIGNATURE_BASE_APT_MAL_LNX_Redmenshen_Bpfdoor_Controller_May22_1",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/yara-forge-core/signature-base.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s2757::SIGNATURE_BASE_APT_MAL_LNX_Redmenshen_Bpfdoor_Controller_May22_3",
+"title": "SIGNATURE_BASE_APT_MAL_LNX_Redmenshen_Bpfdoor_Controller_May22_3",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/yara-forge-core/signature-base.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s2757::SIGNATURE_BASE_APT_MAL_LNX_Redmenshen_Bpfdoor_Controller_Generic_May22_1",
+"title": "SIGNATURE_BASE_APT_MAL_LNX_Redmenshen_Bpfdoor_Controller_Generic_May22_1",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/yara-forge-core/signature-base.yar"
+},
+{
+"engine": "Sigma",
+"rule_id": "808146b2-9332-4d78-9416-d7e47012d83d",
+"title": "BPFDoor Abnormal Process ID or Lock File Accessed",
+"severity": "high",
+"family": "",
+"source": "selection/pack/sigmahq-linux/rules/linux/auditd/path/lnx_auditd_bpfdoor_file_accessed.yml"
+},
+{
+"engine": "Sigma",
+"rule_id": "312b42b1-bded-4441-8b58-163a3af58775",
+"title": "Potentially Suspicious Execution From Tmp Folder",
+"severity": "medium",
+"family": "",
+"source": "selection/pack/sigmahq-linux/rules/linux/process_creation/proc_creation_lnx_susp_execution_tmp_folder.yml"
+}
+]
+},
+{
+"run": "c1415529",
+"expected": "Ebury",
+"hits": [
+{
+"engine": "YARA",
+"rule_id": "s1855::Linux_Trojan_Ebury_7b13e9b6",
+"title": "Linux_Trojan_Ebury_7b13e9b6",
+"severity": "100",
+"family": "",
+"source": "selection/pack/elastic-protections-yara/yara/rules/Linux_Trojan_Ebury.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s2751::ESET_Ebury_V1_7_Crypto",
+"title": "ESET_Ebury_V1_7_Crypto",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/yara-forge-core/eset.yar"
+}
+]
+},
+{
+"run": "469c1c9b",
+"expected": "Mirai",
+"hits": [
+{
+"engine": "YARA",
+"rule_id": "s681::MIRAI_OHSHIT_payload",
+"title": "MIRAI_OHSHIT_payload",
+"severity": "indicator",
+"family": "MIRAI_OHSHIT",
+"source": "selection/pack/abuse-ch-yarahub/MIRAI_OHSHIT_payload.yar"
+},
+{
+"engine": "YARA",
+"rule_id": "s1072::TH_Generic_MassHunt_Linux_Malware_2026_CYFARE",
+"title": "TH_Generic_MassHunt_Linux_Malware_2026_CYFARE",
+"severity": "indicator",
+"family": "",
+"source": "selection/pack/abuse-ch-yarahub/TH_Generic_MassHunt_Linux_Malware_2026_CYFARE.yar"
+},
+{
+"engine": "Sigma",
+"rule_id": "a39d7fa7-3fbd-4dc2-97e1-d87f546b1bbc",
+"title": "Program Executions in Suspicious Folders",
+"severity": "medium",
+"family": "",
+"source": "selection/pack/sigmahq-linux/rules/linux/auditd/syscall/lnx_auditd_susp_exe_folders.yml"
+},
+{
+"engine": "Sigma",
+"rule_id": "312b42b1-bded-4441-8b58-163a3af58775",
+"title": "Potentially Suspicious Execution From Tmp Folder",
+"severity": "medium",
+"family": "",
+"source": "selection/pack/sigmahq-linux/rules/linux/process_creation/proc_creation_lnx_susp_execution_tmp_folder.yml"
+}
+]
 }
 ]

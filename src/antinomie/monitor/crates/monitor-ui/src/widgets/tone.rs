@@ -24,7 +24,7 @@ impl From<crate::triage::Tone> for Tone {
         use crate::triage::Tone as Role;
         match tone {
             Role::Good => Tone::Good,
-            Role::Warn => Tone::Warn,
+            Role::Warn | Role::Elevated => Tone::Warn,
             Role::Bad => Tone::Error,
             Role::Info => Tone::Info,
             Role::Muted => Tone::Neutral,

@@ -137,8 +137,18 @@ pub(in crate::report) fn attributes(indicator: &Indicator, seed: &str, at: u64) 
             } else {
                 indicator.sha256.as_str()
             };
+            // A folder (`/tmp`, a file that had no name of its own) is no file
+            // name: the hash alone, with where it was seen in the comment.
+            let named = indicator.path.len() > 1
+                && !indicator.path.ends_with('/')
+                && indicator.path.trim_start_matches('/').contains('/');
             if hash.len() == 64 {
-                if indicator.path.is_empty() {
+                if !named {
+                    let note = if indicator.path.is_empty() {
+                        note.clone()
+                    } else {
+                        format!("{note}; written through {}", indicator.path)
+                    };
                     out.push(attribute(
                         "sha256",
                         "Artifacts dropped",
@@ -198,38 +208,67 @@ pub fn render(report: &Report) -> Result<String, String> {
         .summary
         .as_ref()
         .map_or("", |summary| summary.assessment.as_str());
+    let families: Vec<&str> = report
+        .summary
+        .as_ref()
+        .map(|summary| summary.families.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+    // An observed-only run is not evidence against its sample: the sample's
+    // hash is for blocking only when a dataset matched or a rule named a family.
+    let not_started = report.not_started();
+    let strong = !not_started
+        && (matches!(assessment, "matched_indicators" | "suspicious_behaviour")
+            || !families.is_empty());
     let mut attrs = Vec::new();
+    let mut objects = Vec::new();
     if let Some(sample) = &report.sample
         && sample.sha256.len() == 64
     {
-        attrs.push(attribute(
-            "sha256",
-            "Payload delivery",
-            &sample.sha256,
-            true,
-            "the sample the run executed",
-            &seed,
-            at,
-        ));
-        if !sample.name.is_empty() {
-            attrs.push(attribute(
-                "filename",
+        let relation = |relation: &str, kind: &str, value: &str, ids: bool| {
+            let mut attr = attribute(
+                kind,
                 "Payload delivery",
-                &sample.name,
-                false,
-                "the sample's file name",
-                &seed,
+                value,
+                ids,
+                "",
+                &format!("{seed}:file-object"),
                 at,
+            );
+            attr["object_relation"] = json!(relation);
+            attr
+        };
+        let mut members = vec![relation("sha256", "sha256", &sample.sha256, strong)];
+        if !sample.name.is_empty() {
+            members.push(relation("filename", "filename", &sample.name, false));
+        }
+        if let Some(size) = sample.size {
+            members.push(relation(
+                "size-in-bytes",
+                "size-in-bytes",
+                &size.to_string(),
+                false,
             ));
         }
+        objects.push(json!({
+            "uuid": uuid5(&format!("misp-object:{seed}:file")),
+            "name": "file",
+            "meta-category": "file",
+            "description": if not_started {
+                "the sample the run was to execute; it did not start".to_owned()
+            } else if sample.role.is_empty() {
+                "the sample the run executed".to_owned()
+            } else {
+                format!("the {} of the run", sample.role)
+            },
+            "template_uuid": "688c46fb-5edb-40a3-8273-1af7923e2215",
+            "template_version": "24",
+            "distribution": "0",
+            "timestamp": (at / 1000).to_string(),
+            "Attribute": members,
+        }));
     }
     let mut dropped_seen = std::collections::BTreeSet::new();
-    for indicator in report
-        .indicators
-        .iter()
-        .flatten()
-        .filter(|i| i.base_noise.is_empty())
-    {
+    for indicator in report.indicators.iter().flatten().filter(|i| i.shared()) {
         for attr in attributes(indicator, &seed, at) {
             // One attribute per value, even when two indicators give it.
             if dropped_seen.insert((attr["type"].to_string(), attr["value"].to_string())) {
@@ -244,8 +283,8 @@ pub fn render(report: &Report) -> Result<String, String> {
             &format!(
                 "{} rule {} ({}) matched {} time(s). Author: {}. License: {}. Source: {}{}",
                 hit.engine,
-                hit.rule_id,
-                hit.title,
+                super::layout::plain_rule(&hit.rule_id),
+                super::layout::plain_rule(&hit.title),
                 hit.count,
                 if hit.author.is_empty() {
                     "unknown"
@@ -274,6 +313,20 @@ pub fn render(report: &Report) -> Result<String, String> {
             at,
         ));
     }
+    if not_started {
+        attrs.push(attribute(
+            "comment",
+            "Other",
+            &format!(
+                "Run {} did not start: {}",
+                report.run.run_id, report.run.state
+            ),
+            false,
+            "nothing ran, so nothing was observed",
+            &seed,
+            at,
+        ));
+    }
     attrs.push(attribute(
         "comment",
         "Other",
@@ -288,10 +341,18 @@ pub fn render(report: &Report) -> Result<String, String> {
         at,
     ));
     let mut tags = vec![json!({"name": "antinomie:triage-report", "colour": "#0b5cad"})];
+    let assessment = if not_started {
+        "not_started"
+    } else {
+        assessment
+    };
     if !assessment.is_empty() {
         tags.push(
             json!({"name": format!("antinomie:assessment=\"{assessment}\""), "colour": "#6b4e00"}),
         );
+    }
+    for family in &families {
+        tags.push(json!({"name": format!("antinomie:family=\"{family}\""), "colour": "#7a1f5c"}));
     }
     let mut cluster = Vec::new();
     for technique in report.attack.iter().flatten() {
@@ -316,15 +377,27 @@ pub fn render(report: &Report) -> Result<String, String> {
         "threat_level_id": match assessment {
             "matched_indicators" => "1",
             "suspicious_behaviour" => "2",
+            "observed_only" => "3",
             _ => "4",
         },
-        "analysis": "2",
+        // 1 is ongoing: a run the person ended with Stop run is not a finished
+        // analysis of the sample.
+        "analysis": if not_started {
+            "0"
+        } else if report.run.stopped_by_user {
+            "1"
+        } else {
+            "2"
+        },
         "distribution": "0",
         "published": false,
         "Orgc": {"uuid": uuid5("misp-org:antinomie"), "name": "Antinomie"},
         "Attribute": attrs,
         "Tag": tags,
     });
+    if !objects.is_empty() {
+        event["Object"] = json!(objects);
+    }
     if !cluster.is_empty() {
         event["Galaxy"] = json!([{
             "uuid": uuid5("misp-galaxy:mitre-attack-pattern"),

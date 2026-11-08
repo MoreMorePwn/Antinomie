@@ -403,13 +403,32 @@ fn row_text<'a>(row: &'a [Cell], key: &str) -> Option<&'a str> {
     })
 }
 
+/// The colour role of a rule score (Elastic's 0 to 100): red (Bad) from 90,
+/// orange (Elevated) from 70, amber (Warn) from 40 and muted below.
+pub(crate) fn score_tone(score: u32) -> Tone {
+    match score {
+        90.. => Tone::Bad,
+        70..=89 => Tone::Elevated,
+        40..=69 => Tone::Warn,
+        _ => Tone::Muted,
+    }
+}
+
+/// The colour of a rule's severity tag: a named level, Suricata's priority
+/// 1 to 4, or (any other whole number) a rule score.
 pub(super) fn severity_color(severity: &str) -> egui::Color32 {
     theme::tone(severity_tone(severity))
 }
 
 /// The colour role of a detection's severity.
 pub(super) fn severity_tone(severity: &str) -> Tone {
-    match severity.trim().to_ascii_lowercase().as_str() {
+    let trimmed = severity.trim();
+    if let Ok(score) = trimmed.parse::<u32>() {
+        if score > 4 {
+            return score_tone(score);
+        }
+    }
+    match trimmed.to_ascii_lowercase().as_str() {
         "1" | "critical" | "high" => Tone::Bad,
         "2" | "medium" | "indicator" => Tone::Warn,
         "3" | "4" | "low" | "informational" | "info" => Tone::Info,
@@ -442,6 +461,21 @@ mod tests {
         assert_eq!(severity_color("4"), theme::blue());
         assert_eq!(severity_color("informational"), theme::blue());
         assert_eq!(severity_color("unspecified"), theme::muted());
+    }
+
+    #[test]
+    fn rule_scores_are_coloured_by_range() {
+        assert_eq!(severity_color("100"), theme::error());
+        assert_eq!(severity_color("90"), theme::error());
+        assert_eq!(severity_color("89"), theme::orange());
+        assert_eq!(severity_color("70"), theme::orange());
+        assert_eq!(severity_color("69"), theme::warn());
+        assert_eq!(severity_color("50"), theme::warn());
+        assert_eq!(severity_color("40"), theme::warn());
+        assert_eq!(severity_color("39"), theme::muted());
+        assert_eq!(severity_color("5"), theme::muted());
+        assert_ne!(theme::orange(), theme::error());
+        assert_ne!(theme::orange(), theme::warn());
     }
 
     #[test]

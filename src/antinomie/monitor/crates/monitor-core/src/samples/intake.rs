@@ -125,6 +125,15 @@ fn describe(origin: &NewOrigin) -> String {
         .into_iter()
         .find(|text| !text.is_empty());
     match place {
+        // A file added from this computer is named by its file name in the
+        // custody log, which is exported: the folder above it (and the user
+        // name in it) stays in the library's own origin record.
+        Some(place) if origin.kind == OriginKind::Added => {
+            let name = Path::new(place)
+                .file_name()
+                .map_or_else(|| place.clone(), |name| name.to_string_lossy().into_owned());
+            format!("{kind}: {name}")
+        }
         Some(place) => format!("{kind}: {place}"),
         None => kind.to_owned(),
     }
@@ -182,7 +191,10 @@ impl Library {
                 &added.sha256,
                 "analyst",
                 CustodyEvent::OriginalDeleted {
-                    path: path.display().to_string(),
+                    path: path.file_name().map_or_else(
+                        || path.display().to_string(),
+                        |n| n.to_string_lossy().into_owned(),
+                    ),
                 },
             )?;
         }

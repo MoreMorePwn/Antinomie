@@ -629,6 +629,39 @@ pub struct ExecRequest {
     pub sample: Option<crate::samples::SampleRef>,
 }
 
+impl ExecRequest {
+    /// Refuse a request that cannot be launched whatever the guest is: what
+    /// the app dialog checks and what a job spec is checked with. The checks
+    /// that need the running guest (base revision, graphical base, debugger)
+    /// stay in the launch.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.path.trim().is_empty() {
+            return Err("the program path is empty".into());
+        }
+        let has_nul = |value: &str| value.contains('\0');
+        if has_nul(&self.path)
+            || has_nul(&self.cwd)
+            || self.args.iter().any(|value| has_nul(value))
+            || self.env.iter().any(|value| has_nul(value))
+        {
+            return Err(
+                "the program path, arguments, folder and environment cannot hold a NUL byte".into(),
+            );
+        }
+        self.analysis.validate()?;
+        if self.core_dump_on_exit && self.run_in.guest_desktop() {
+            return Err("process Core Dump on Exit currently requires App Terminal; desktop wrappers do not identify the selected executable as the root group".into());
+        }
+        if self.debug_on_start && self.run_in.guest_desktop() {
+            return Err("Debug on start needs Run in: App terminal; a desktop launcher runs a shell wrapper, which is what would stop".into());
+        }
+        if let Some(plan) = &self.dump_trigger {
+            plan.validate()?;
+        }
+        Ok(())
+    }
+}
+
 /// Persisted `artifacts.json` in a run directory links independently retained evidence.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -674,13 +707,61 @@ pub struct RunArtifacts {
     pub core_deleted: bool,
     /// The dumps the run's dump trigger took, the same records `run.json`
     /// keeps under `triggers`. `core_state` above describes the exit core only
-    /// (Core dump on exit), so a run whose exit core is off but whose trigger
-    /// took a core no longer reads as having no core at all.
+    /// (Core dump on exit): `Disabled` there means the run did not ask for an
+    /// exit core, not that it has no core. A reader that wants to know whether
+    /// the run has cores uses [`RunArtifacts::has_cores`].
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub trigger_dumps: Vec<crate::dump_trigger::TriggerRecord>,
 }
 
 impl RunArtifacts {
+    /// The cores the dump trigger took, in the order it took them.
+    pub fn trigger_cores(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &crate::dump_trigger::TriggerRecord,
+            &crate::dump_trigger::TriggerDump,
+        ),
+    > {
+        self.trigger_dumps
+            .iter()
+            .filter_map(|record| record.core.as_ref().map(|core| (record, core)))
+    }
+
+    /// The memory dumps the dump trigger took.
+    pub fn trigger_memory(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &crate::dump_trigger::TriggerRecord,
+            &crate::dump_trigger::TriggerDump,
+        ),
+    > {
+        self.trigger_dumps
+            .iter()
+            .filter_map(|record| record.memory.as_ref().map(|dump| (record, dump)))
+    }
+
+    /// The run has a core of any kind: the exit core (kept or deleted) or a
+    /// core its dump trigger took. `core_state` alone never says this.
+    pub fn has_cores(&self) -> bool {
+        self.core_dump.is_some()
+            || self.core_deleted
+            || self.core_state != RunArtifactState::Disabled
+            || self.trigger_cores().next().is_some()
+    }
+
+    /// The provenance of the run's exit core or exit memory dump.
+    pub fn exit_provenance(&self, started_ms: u64) -> crate::provenance::Provenance {
+        crate::provenance::Provenance::run_exit(
+            &self.vm_id,
+            &self.boot_id,
+            &self.run_id,
+            started_ms,
+        )
+    }
+
     /// What the capture state reads as: a deleted capture says so.
     pub fn network_label(&self) -> &'static str {
         if self.network_deleted {
@@ -785,6 +866,9 @@ pub struct ProcessCoreCapture {
     /// The guest's largest budget when the request was made.
     #[serde(default)]
     pub guest_max_size: Option<u64>,
+    /// Where the core came from: its run, why it was taken, its process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::provenance::Provenance>,
     /// Bytes the guest held (its stored count) once the core was finished.
     #[serde(default)]
     pub stored_bytes: Option<u64>,
@@ -975,6 +1059,10 @@ pub struct RunSummary {
     /// finish. Absent in runs saved before it existed and in runs not stopped.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stopped_by_user: bool,
+    /// Host Unix milliseconds when Stop run was pressed, so the run reads
+    /// "Stopped by you at 5 min 9 s" whatever time the tree took to end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped_at_ms: Option<u64>,
 }
 
 impl RunSummary {
@@ -1040,6 +1128,124 @@ pub fn run_note_text(note: &str) -> &str {
         ASYNC_ATTRIBUTION_NOTE
     } else {
         note
+    }
+}
+
+/// One skipped-dump note, taken apart: "Dump skipped for RULE (TIER, process
+/// PID): REASON".
+fn skipped_parts(note: &str) -> Option<(&str, &str, u32, &str)> {
+    let rest = note.strip_prefix("Dump skipped for ")?;
+    let (rule, rest) = rest.split_once(" (")?;
+    let (tier, rest) = rest.split_once(", process ")?;
+    let (pid, reason) = rest.split_once("): ")?;
+    Some((rule, tier, pid.parse().ok()?, reason))
+}
+
+/// The notes with the skipped dumps folded to one line per rule and tier:
+/// a sample whose children each match a rule and exit within milliseconds
+/// would otherwise note every one. The full list stays in the run's trigger
+/// log. A rule skipped once keeps its own line.
+pub fn fold_skipped_notes<'a>(notes: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    struct Group<'a> {
+        rule: &'a str,
+        tier: &'a str,
+        pids: Vec<u32>,
+        ms: Vec<u64>,
+        all_exits: bool,
+        first: &'a str,
+        at: usize,
+    }
+    let mut out: Vec<Option<String>> = Vec::new();
+    let mut groups: Vec<Group<'a>> = Vec::new();
+    for note in notes {
+        let Some((rule, tier, pid, reason)) = skipped_parts(note) else {
+            out.push(Some(note.to_owned()));
+            continue;
+        };
+        let ms = reason
+            .split_once("exited ")
+            .and_then(|(_, rest)| rest.split_once(" ms after"))
+            .and_then(|(ms, _)| ms.trim().parse::<u64>().ok());
+        match groups.iter_mut().find(|g| g.rule == rule && g.tier == tier) {
+            Some(group) => {
+                group.pids.push(pid);
+                group.all_exits &= ms.is_some();
+                group.ms.extend(ms);
+            }
+            None => {
+                groups.push(Group {
+                    rule,
+                    tier,
+                    pids: vec![pid],
+                    ms: ms.into_iter().collect(),
+                    all_exits: ms.is_some(),
+                    first: note,
+                    at: out.len(),
+                });
+                out.push(None);
+            }
+        }
+    }
+    for group in groups {
+        out[group.at] = Some(if group.pids.len() == 1 {
+            group.first.to_owned()
+        } else {
+            let listed: Vec<String> = group.pids.iter().take(2).map(u32::to_string).collect();
+            let more = group.pids.len() - listed.len();
+            let why = match (
+                group.all_exits,
+                group.ms.iter().min(),
+                group.ms.iter().max(),
+            ) {
+                (true, Some(low), Some(high)) if low == high => {
+                    format!("the processes exited {low} ms after the match")
+                }
+                (true, Some(low), Some(high)) => {
+                    format!("the processes exited {low}\u{2013}{high} ms after the match")
+                }
+                _ => "the processes were gone".to_owned(),
+            };
+            format!(
+                "Dump skipped {} times for {} ({}): {why}, before a core could be taken (processes {}{})",
+                group.pids.len(),
+                group.rule,
+                group.tier,
+                listed.join(", "),
+                if more > 0 {
+                    format!(", \u{2026} +{more}")
+                } else {
+                    String::new()
+                }
+            )
+        });
+    }
+    out.into_iter().flatten().collect()
+}
+
+#[cfg(test)]
+mod fold_tests {
+    use super::fold_skipped_notes;
+
+    #[test]
+    fn thirteen_misses_of_one_rule_are_one_line() {
+        let mut notes: Vec<String> = vec!["Uses io_uring".into()];
+        for (index, pid) in (1362..1375).enumerate() {
+            notes.push(format!(
+                "Dump skipped for credential.shadow_read (High, process {pid}): The process exited {} ms after the match, before the core could be taken.",
+                index % 3
+            ));
+        }
+        notes.push("Dump skipped for other.rule (Low, process 9): The process exited 5 ms after the match, before the core could be taken.".into());
+        let folded = fold_skipped_notes(notes.iter().map(String::as_str));
+        assert_eq!(folded.len(), 3, "{folded:?}");
+        assert_eq!(
+            folded[1],
+            "Dump skipped 13 times for credential.shadow_read (High): the processes exited 0\u{2013}2 ms after the match, before a core could be taken (processes 1362, 1363, \u{2026} +11)"
+        );
+        assert!(
+            folded[2].starts_with("Dump skipped for other.rule"),
+            "a single miss keeps its line"
+        );
     }
 }
 
@@ -2154,6 +2360,10 @@ pub enum Command {
         run_id: String,
         data: Vec<u8>,
     },
+    /// Poll a run's terminal. The answer is a `Terminal` notification, if
+    /// there is output, and **no `CommandResult` when the read succeeds** (a
+    /// failed read does answer): the window polls often and a result for each
+    /// would flood it. A caller that needs a per-read acknowledgement has none.
     TerminalRead {
         run_id: String,
     },
@@ -2288,6 +2498,17 @@ pub enum Command {
         vm_id: String,
         path: PathBuf,
         analysis: crate::analysis::AnalysisSelection,
+    },
+    /// Run static analysis on the library copy of `sha256` on the host, in the
+    /// sandbox, with no VM running (it also runs while another VM boots or
+    /// stops). The sample is decrypted in memory and verified first. The
+    /// report is kept in its own folder, `<data>/analyses/<id>`
+    /// ([`crate::analysis::sample_analysis_directory`]), apart from any VM or
+    /// recording. The result's message is the report id; the report and the
+    /// layers unpacking finds join `Snapshot.analysis_reports`.
+    AnalyzeSample {
+        sha256: String,
+        selection: crate::analysis::AnalysisSelection,
     },
     /// Run checks the finished analysis kept in `directory` was not asked for
     /// and add them to its report, without a VM and without analyzing again.
@@ -2609,6 +2830,12 @@ pub struct Snapshot {
     /// Recordings of stopped boots that are still being made durable. The VM
     /// is already Stopped; this is the host finishing its disk work.
     pub recording_flush: Option<crate::RecordingFlushStatus>,
+    /// The VMs whose automatic disk layer is pending, with the stage of each
+    /// (`live`, `saving`, `finalizing`); a VM with no entry has none. After
+    /// `Stop` the entry is `saving` until the recording is saved, then
+    /// `finalizing` until the earlier bytes are copied and the layer merged:
+    /// the recording is final only when the entry is gone.
+    pub disk_layers: Vec<crate::disk_layers::DiskLayer>,
     pub process_page: Option<crate::observation::GuestProcessPage>,
     pub capture_dir: Option<PathBuf>,
     pub serial_log: Option<PathBuf>,
@@ -2943,6 +3170,30 @@ pub fn pair_events(events: &[EventSummary]) -> Vec<InvocationSummary> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exec_request_validate_refuses_what_no_guest_could_launch() {
+        assert!(ExecRequest::default().validate().is_ok());
+        fn bad(edit: impl FnOnce(&mut ExecRequest)) -> String {
+            let mut request = ExecRequest::default();
+            edit(&mut request);
+            request.validate().unwrap_err()
+        }
+        assert!(bad(|r| r.path = " ".into()).contains("empty"));
+        assert!(bad(|r| r.args = vec!["a\0b".into()]).contains("NUL"));
+        let desktop = |edit: fn(&mut ExecRequest)| {
+            bad(|r| {
+                r.run_in = RunIn::GuestDesktop;
+                edit(r);
+            })
+        };
+        assert!(desktop(|r| r.core_dump_on_exit = true).contains("Core Dump on Exit"));
+        assert!(desktop(|r| r.debug_on_start = true).contains("Debug on start"));
+        let ok = ExecRequest {
+            run_in: RunIn::GuestDesktop,
+            ..ExecRequest::default()
+        };
+        assert!(ok.validate().is_ok());
+    }
     #[test]
     fn a_catalog_label_loses_its_trailing_antinomie_version() {
         assert_eq!(

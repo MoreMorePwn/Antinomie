@@ -288,6 +288,7 @@ impl CoreView {
         self.acquired.extend(pending_acquired);
         self.manual = catalog.manual;
         self.manual.extend(pending_manual);
+        self.trigger_twins = catalog.triggers.into_iter().collect();
         self.catalog_issues = catalog.issues;
         self.catalog_checked = Some(Instant::now());
     }
@@ -436,11 +437,16 @@ pub(super) fn catalog(roots: &[PathBuf], vm_id: Option<&str>) -> Result<CoreCata
                     continue;
                 }
             };
-            // A deleted core stays listed, as a Deleted row.
-            if artifacts.vm_id != vm_id
-                || (!artifacts.core_deleted
-                    && artifacts.core_state == antinomie_monitor_core::RunArtifactState::Disabled)
-            {
+            if artifacts.vm_id != vm_id {
+                continue;
+            }
+            // The exit core: a deleted one stays listed, as a Deleted row. A
+            // run that did not ask for one (`core_state` Disabled) has none
+            // to list, but its dump trigger may have taken cores.
+            let exit_core = artifacts.core_deleted
+                || artifacts.core_state != antinomie_monitor_core::RunArtifactState::Disabled;
+            let triggered: Vec<_> = artifacts.trigger_cores().collect();
+            if !exit_core && triggered.is_empty() {
                 continue;
             }
             for issue in &artifacts.issues {
@@ -455,10 +461,14 @@ pub(super) fn catalog(roots: &[PathBuf], vm_id: Option<&str>) -> Result<CoreCata
                     .issues
                     .push(format!("Run {}: {issue_text}", artifacts.run_id));
             }
-            if result
-                .acquired
-                .iter()
-                .any(|core| core.run_id == artifacts.run_id)
+            for (record, dump) in &triggered {
+                trigger_row(&mut result, &artifacts, record, dump);
+            }
+            if !exit_core
+                || result
+                    .acquired
+                    .iter()
+                    .any(|core| core.run_id == artifacts.run_id && core.trigger.is_none())
             {
                 continue;
             }
@@ -466,6 +476,9 @@ pub(super) fn catalog(roots: &[PathBuf], vm_id: Option<&str>) -> Result<CoreCata
             result.acquired.push(AcquiredCore {
                 deleted,
                 sizes: sizes::CoreSizes::of(&artifacts),
+                trigger: None,
+                note: None,
+                provenance: Some(artifacts.exit_provenance(0)),
                 vm_id: artifacts.vm_id,
                 boot_id: artifacts.boot_id,
                 run_id: artifacts.run_id,
@@ -482,6 +495,81 @@ pub(super) fn catalog(roots: &[PathBuf], vm_id: Option<&str>) -> Result<CoreCata
         .acquired
         .sort_by(|left, right| right.run_id.cmp(&left.run_id));
     Ok(result)
+}
+
+/// List one core a run's dump trigger took: as the manual core it is, when
+/// the capture folder is among the manual cores (it only gains the "Trigger"
+/// label), else as a row of its own from the run's record, so a run with the
+/// trigger on and Core dump on exit off still lists its cores.
+fn trigger_row(
+    result: &mut CoreCatalog,
+    artifacts: &antinomie_monitor_core::RunArtifacts,
+    record: &antinomie_monitor_core::dump_trigger::TriggerRecord,
+    dump: &antinomie_monitor_core::dump_trigger::TriggerDump,
+) {
+    let label = format!("Trigger: {}", record.finding.rule_with_tier());
+    let Some(path) = dump.path.clone() else {
+        return;
+    };
+    let directory = match path.file_name() {
+        Some(name) if name == "process.elf" => path.parent().map(Path::to_owned),
+        _ => None,
+    }
+    .unwrap_or_else(|| path.clone());
+    if result.manual.iter().any(|core| core.directory == directory) {
+        result
+            .triggers
+            .push((directory, (label, artifacts.run_id.clone())));
+        return;
+    }
+    if result
+        .acquired
+        .iter()
+        .any(|core| core.directory == directory)
+    {
+        return;
+    }
+    let note = dump
+        .error
+        .as_ref()
+        .map(|error| error.chars().take(160).collect::<String>())
+        .or_else(|| dump.size.map(crate::values::short_size));
+    result.acquired.push(AcquiredCore {
+        deleted: None,
+        sizes: None,
+        trigger: Some(label),
+        note,
+        provenance: Some(record.provenance(
+            &artifacts.vm_id,
+            &artifacts.boot_id,
+            &artifacts.run_id,
+        )),
+        vm_id: artifacts.vm_id.clone(),
+        boot_id: artifacts.boot_id.clone(),
+        run_id: artifacts.run_id.clone(),
+        directory,
+        file: path.is_file().then_some(path),
+        state: dump.state,
+    });
+}
+
+/// What an opened core's folder says of where it came from, for a core whose
+/// record has none yet: a manual core's own record, or the run's artifacts
+/// for an exit core (its folder is `<run>/core`).
+fn recorded_provenance(directory: &Path) -> Option<antinomie_monitor_core::provenance::Provenance> {
+    use antinomie_monitor_core::provenance::Provenance;
+    if let Ok(file) = fs::File::open(directory.join("core.json")) {
+        let capture: antinomie_monitor_core::ProcessCoreCapture =
+            serde_json::from_reader(file.take(64 * 1024 + 1)).ok()?;
+        return capture.provenance.or_else(|| {
+            capture.source_run_id.as_deref().map(|run| {
+                Provenance::by_hand(&capture.vm_id, &capture.boot_id, Some(run), Vec::new(), 0)
+                    .of_process(capture.target.tgid, capture.target.task_cookie)
+            })
+        });
+    }
+    let artifacts = antinomie_monitor_core::RunArtifacts::load(directory.parent()?).ok()??;
+    (directory.file_name()? == "core").then(|| artifacts.exit_provenance(0))
 }
 
 pub(super) fn acquired_record(source: &Path) -> Result<CoreRecord, String> {
@@ -503,6 +591,9 @@ pub(super) fn acquired_record(source: &Path) -> Result<CoreRecord, String> {
             if saved.core.source != core.source {
                 return Err("Core metadata source identity does not match this run core".into());
             }
+            if saved.provenance.is_none() {
+                saved.provenance = recorded_provenance(&directory);
+            }
             saved.dir = directory;
             saved.core = core;
             saved
@@ -514,6 +605,7 @@ pub(super) fn acquired_record(source: &Path) -> Result<CoreRecord, String> {
                 .to_string_lossy()
                 .into_owned(),
             tags: String::new(),
+            provenance: recorded_provenance(&directory),
             dir: directory,
             core,
         },

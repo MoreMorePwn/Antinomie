@@ -276,3 +276,20 @@ fn a_finished_run_the_vm_still_holds_is_read_again_once_the_recording_is_saved()
         reasons(&view)
     );
 }
+
+#[test]
+fn a_finished_run_says_when_it_was_read_not_a_counter_that_only_grows() {
+    let (spool, _raw) = spool_with_calls(0..2);
+    let mut view = TriageView::default();
+    view.last_refresh = Some(view.clock.now());
+    view.clock.advance(Duration::from_secs(415));
+    // A finished run is read once and no timer reads it again.
+    let finished = view.refresh_status(&input(&spool.directory, true));
+    assert!(
+        finished.starts_with("Read at ") && !finished.contains(" ago"),
+        "{finished}"
+    );
+    // A live run is read every few seconds: the counter is the time since the last read.
+    let live = view.refresh_status(&input(&spool.directory, false));
+    assert_eq!(live, "Refreshed 415 s ago");
+}

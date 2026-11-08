@@ -77,6 +77,37 @@ impl Qmp {
         qmp.reply("{\"execute\":\"qmp_capabilities\"}\n")?;
         Ok(qmp)
     }
+    /// [`Qmp::connect_with`], tried again when the greeting or the capabilities
+    /// answer is late. Nothing has been sent by then that changes anything, so
+    /// asking again is safe for every command: a QEMU under load (heavy
+    /// builds, a restore just loaded) often answers the first connection
+    /// late and the second at once. A closed or refused socket is not retried.
+    pub(super) fn connect_retrying(
+        path: &Path,
+        wait: Duration,
+        reply: Duration,
+        attempts: u32,
+    ) -> Result<Self, String> {
+        let mut attempt = 1;
+        loop {
+            match Self::connect_with(path, wait, reply) {
+                Err(error) if is_timeout(&error) && attempt < attempts => attempt += 1,
+                Err(error) if is_timeout(&error) => {
+                    return Err(format!(
+                        "{error} (tried {attempt} times; QEMU is not answering, it may be overloaded or may have died)"
+                    ));
+                }
+                other => return other,
+            }
+        }
+    }
+    /// How long the next reply may take.
+    pub(super) fn set_reply_wait(&mut self, wait: Duration) -> Result<(), String> {
+        self.reader
+            .get_mut()
+            .set_read_timeout(Some(wait))
+            .map_err(|e| e.to_string())
+    }
     /// Sends `command` (unless empty) and returns the next greeting or
     /// return value, skipping events.
     pub(super) fn reply(&mut self, command: &str) -> Result<serde_json::Value, String> {
@@ -112,6 +143,14 @@ impl Qmp {
 }
 /// Times a read-only QMP question is asked before QEMU is taken for dead.
 pub(super) const QMP_ATTEMPTS: u32 = 3;
+
+/// Commands that can be sent again after a timeout because running them twice
+/// changes nothing: questions, and stopping or continuing a VM.
+pub(super) fn repeatable(command: &serde_json::Value) -> bool {
+    command["execute"]
+        .as_str()
+        .is_some_and(|name| name.starts_with("query-") || matches!(name, "stop" | "cont"))
+}
 
 /// A QMP error that is only a missing reply, not a closed or refused socket.
 pub(super) fn is_timeout(error: &str) -> bool {

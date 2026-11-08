@@ -49,6 +49,25 @@ impl TriageView {
         })
     }
 
+    /// Where the event index of the selected run stands, for the Detection
+    /// scans that wait on it.
+    pub(super) fn index_state(&self, has_run: bool) -> detection::IndexState {
+        use detection::IndexState;
+        if !has_run {
+            return IndexState::Unknown;
+        }
+        let Some(scan) = self.scan.as_ref() else {
+            return IndexState::Building;
+        };
+        if self.scan_waits_for_saving() {
+            IndexState::Saving
+        } else if let Some(error) = &scan.event_error {
+            IndexState::Failed(error.clone())
+        } else {
+            IndexState::Ready
+        }
+    }
+
     /// Decide whether the index of the selected run is read again now.
     ///
     /// | Run | Pane | Re-read |
@@ -173,31 +192,52 @@ impl TriageView {
         input: &TriageInput<'_>,
         room: Option<f32>,
     ) -> bool {
-        let mut text = format!(
-            "{} · every {} s",
-            self.refresh_status(input),
-            self.refresh_seconds
-        );
+        let mut text = if self.auto_refreshing(input) {
+            format!(
+                "{} · every {} s",
+                self.refresh_status(input),
+                self.refresh_seconds
+            )
+        } else {
+            self.refresh_status(input)
+        };
         if text.chars().count() > 64 {
             text = text.chars().take(63).collect::<String>() + "…";
         }
-        let rich = RichText::new(text).small().color(theme::muted());
         if let Some(room) = room {
-            let width = ui.fonts_mut(|fonts| {
-                fonts
-                    .layout_no_wrap(
-                        rich.text().to_owned(),
-                        egui::TextStyle::Small.resolve(ui.style()),
-                        theme::muted(),
-                    )
-                    .size()
-                    .x
-            });
+            let measure = |ui: &egui::Ui, text: &str| {
+                ui.fonts_mut(|fonts| {
+                    fonts
+                        .layout_no_wrap(
+                            text.to_owned(),
+                            egui::TextStyle::Small.resolve(ui.style()),
+                            theme::muted(),
+                        )
+                        .size()
+                        .x
+                })
+            };
             // The label, the menu button's padding and the spinner.
-            if width + 56.0 > room {
-                return false;
+            let room = room - 56.0;
+            if measure(ui, &text) > room {
+                // Cut the state in the middle, so the interval stays at the
+                // end, before the status goes under the tab bar.
+                let (state, interval) = text.rsplit_once(" · ").unwrap_or((text.as_str(), ""));
+                let mut state: Vec<char> = state.chars().collect();
+                let fitted = loop {
+                    if state.len() < 14 {
+                        return false;
+                    }
+                    state.pop();
+                    let cut = format!("{}… · {interval}", state.iter().collect::<String>());
+                    if measure(ui, &cut) <= room {
+                        break cut;
+                    }
+                };
+                text = fitted;
             }
         }
+        let rich = RichText::new(text).small().color(theme::muted());
         ui.scope(|ui| {
             let widgets = &mut ui.visuals_mut().widgets;
             for style in [&mut widgets.inactive, &mut widgets.noninteractive] {
@@ -246,6 +286,12 @@ impl TriageView {
         })
     }
 
+    /// A timer reads the index again: the run is still going, or its
+    /// recording has not yet saved its totals.
+    fn auto_refreshing(&self, input: &TriageInput<'_>) -> bool {
+        !input.run_finished || self.scan_waits_for_saving()
+    }
+
     pub(super) fn refresh_status(&self, input: &TriageInput<'_>) -> String {
         if self.scan_rx.is_some() {
             return self.last_refresh.map_or_else(
@@ -262,15 +308,22 @@ impl TriageView {
             return format!("Refresh failed: {error}");
         }
         if let Some(when) = self.last_refresh {
-            return format!(
-                "Refreshed {} s ago{}",
-                self.clock.now().saturating_duration_since(when).as_secs(),
-                if self.scan.as_ref().is_some_and(|scan| scan.partial) {
-                    "; incomplete"
-                } else {
-                    ""
-                }
-            );
+            let incomplete = if self.scan.as_ref().is_some_and(|scan| scan.partial) {
+                "; incomplete"
+            } else {
+                ""
+            };
+            let age = self.clock.now().saturating_duration_since(when);
+            // A finished run is read once and not again by a timer: a counter
+            // of seconds since that read would only grow. Say when it was read.
+            if !self.auto_refreshing(input) {
+                let read = (crate::time_format::now_ms() / 1000).saturating_sub(age.as_secs());
+                return format!(
+                    "Read at {}{incomplete}",
+                    crate::time_format::time_of_day(read)
+                );
+            }
+            return format!("Refreshed {} s ago{incomplete}", age.as_secs());
         }
         if input.archive.is_some() {
             "Waiting to index the saved recording".into()

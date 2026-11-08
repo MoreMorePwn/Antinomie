@@ -2,9 +2,10 @@
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! The PDF writer: a small, deterministic PDF 1.4 file from the laid-out
 //! pages. Standard fonts, Flate-compressed content streams, a bookmark per
-//! section, a document title and a page number footer. Nothing is fetched
-//! and no browser is involved.
-use super::layout::Document;
+//! section, a named destination (`/Dests`) per anchor of the document and a
+//! `/Link` annotation for each internal link, a document title and a page
+//! number footer. Nothing is fetched and no browser is involved.
+use super::page::Document;
 use super::pdf_font::{Font, encode, width};
 use super::pdf_layout::{Laid, Op, PAGE_H, PAGE_W, Rgb, lay_out};
 use flate2::{Compression, write::ZlibEncoder};
@@ -37,7 +38,7 @@ fn literal(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-fn content(ops: &[Op], footer: &str) -> Vec<u8> {
+fn content(ops: &[Op], header: Option<&str>, footer: &str) -> Vec<u8> {
     let mut out: Vec<u8> = Vec::new();
     for op in ops {
         match op {
@@ -115,6 +116,17 @@ fn content(ops: &[Op], footer: &str) -> Vec<u8> {
             }
         }
     }
+    if let Some(header) = header {
+        out.extend(
+            format!(
+                "BT /F1 7.5 Tf 0.45 0.45 0.45 rg 36 {} Td ",
+                num(PAGE_H - 22.0)
+            )
+            .bytes(),
+        );
+        out.extend(literal(&encode(header)));
+        out.extend(b" Tj ET\n");
+    }
     let footer_width = width(Font::Regular, 7.5, footer);
     out.extend(
         format!(
@@ -125,6 +137,20 @@ fn content(ops: &[Op], footer: &str) -> Vec<u8> {
     );
     out.extend(literal(&encode(footer)));
     out.extend(b" Tj ET\n");
+    out
+}
+
+/// A PDF name object for an anchor id: regular characters as they are, the
+/// rest as `#xx`.
+pub(super) fn name(id: &str) -> String {
+    let mut out = String::from("/");
+    for byte in id.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("#{byte:02X}"));
+        }
+    }
     out
 }
 
@@ -142,19 +168,43 @@ fn pdf_date(ms: u64) -> String {
 }
 
 /// Objects are numbered in this order: catalog 1, pages 2, fonts 3 to 6, info
-/// 7, outline root 8, the outline items, then a page and its stream each.
+/// 7, outline root 8, the outline items, then a page and its stream each, the
+/// destinations, and the link annotations.
 pub(super) fn render(document: &Document, generated_ms: u64) -> Result<Vec<u8>, String> {
-    let Laid { pages, bookmarks } = lay_out(document);
+    let Laid {
+        pages,
+        bookmarks,
+        dests,
+    } = lay_out(document);
     let first_item = 9;
     let first_page = first_item + bookmarks.len();
     let page_obj = |index: usize| first_page + index * 2;
     let total = pages.len();
+    let dests_obj = first_page + total * 2;
+    let mut next_annot = dests_obj + 1;
 
     let mut objects: Vec<(usize, Vec<u8>)> = Vec::new();
     objects.push((
         1,
-        b"<< /Type /Catalog /Pages 2 0 R /Outlines 8 0 R /PageMode /UseOutlines >>".to_vec(),
+        format!(
+            "<< /Type /Catalog /Pages 2 0 R /Outlines 8 0 R /Dests {dests_obj} 0 R \
+             /PageMode /UseOutlines /Lang (en) >>"
+        )
+        .into_bytes(),
     ));
+    let mut dict = String::from("<<");
+    for (id, dest) in &dests {
+        write!(
+            dict,
+            " {} [{} 0 R /XYZ 0 {} 0]",
+            name(id),
+            page_obj(dest.page),
+            num(dest.y)
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    dict.push_str(" >>");
+    objects.push((dests_obj, dict.into_bytes()));
     let kids: String = (0..total)
         .map(|i| format!("{} 0 R", page_obj(i)))
         .collect::<Vec<_>>()
@@ -178,7 +228,22 @@ pub(super) fn render(document: &Document, generated_ms: u64) -> Result<Vec<u8>, 
     }
     let mut info = b"<< /Title ".to_vec();
     info.extend(literal(&encode(&document.title)));
-    info.extend(b" /Producer (Antinomie) /Creator (Antinomie Triage report) /CreationDate ");
+    for (key, value) in [
+        ("Subject", document.meta.subject.as_str()),
+        ("Keywords", document.meta.keywords.as_str()),
+    ] {
+        if !value.is_empty() {
+            info.extend(format!(" /{key} ").bytes());
+            info.extend(literal(&encode(value)));
+        }
+    }
+    info.extend(b" /Producer (Antinomie) /Creator ");
+    info.extend(literal(&encode(if document.meta.creator.is_empty() {
+        "Antinomie"
+    } else {
+        &document.meta.creator
+    })));
+    info.extend(b" /CreationDate ");
     info.extend(literal(pdf_date(generated_ms).as_bytes()));
     info.extend(b" >>");
     objects.push((7, info));
@@ -216,18 +281,53 @@ pub(super) fn render(document: &Document, generated_ms: u64) -> Result<Vec<u8>, 
     }
     for (index, page) in pages.iter().enumerate() {
         let id = page_obj(index);
+        let mut annots = Vec::new();
+        for link in &page.links {
+            let [x1, y1, x2, y2] = link.rect;
+            objects.push((
+                next_annot,
+                format!(
+                    "<< /Type /Annot /Subtype /Link /Rect [{} {} {} {}] /Border [0 0 0] /Dest {} >>",
+                    num(x1),
+                    num(y1),
+                    num(x2),
+                    num(y2),
+                    name(&link.dest)
+                )
+                .into_bytes(),
+            ));
+            annots.push(format!("{next_annot} 0 R"));
+            next_annot += 1;
+        }
+        let annots = if annots.is_empty() {
+            String::new()
+        } else {
+            format!(" /Annots [{}]", annots.join(" "))
+        };
         objects.push((
             id,
             format!(
                 "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /Font << \
-                 /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >> >> /Contents {} 0 R >>",
+                 /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >> >> /Contents {} 0 R{annots} >>",
                 num(PAGE_W),
                 num(PAGE_H),
                 id + 1
             )
             .into_bytes(),
         ));
-        let raw = content(&page.ops, &format!("Page {} of {total}", index + 1));
+        let raw = content(
+            &page.ops,
+            (index > 0).then_some(document.meta.header.as_str()),
+            &format!(
+                "{}Page {} of {total}",
+                if document.meta.footer.is_empty() {
+                    String::new()
+                } else {
+                    format!("{} - ", document.meta.footer)
+                },
+                index + 1
+            ),
+        );
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::new(6));
         encoder.write_all(&raw).map_err(|e| e.to_string())?;
         let packed = encoder.finish().map_err(|e| e.to_string())?;

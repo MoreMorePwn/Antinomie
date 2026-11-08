@@ -58,6 +58,8 @@ pub(super) struct RuleList {
     edits: u64,
     selected: Option<usize>,
     details: Option<Details>,
+    /// The list's share of the window's width; the divider changes it.
+    split: f32,
     data_dir: PathBuf,
     pub raise: Cell<bool>,
 }
@@ -99,6 +101,7 @@ impl RuleList {
             edits: 0,
             selected: None,
             details: None,
+            split: LIST_SHARE,
             data_dir: data_dir.to_path_buf(),
             raise: Cell::new(false),
         };
@@ -529,33 +532,44 @@ impl RuleList {
     /// the selected rule's details at the right. Each pane scrolls inside the
     /// window, so neither makes it grow.
     fn panes(&mut self, ui: &mut egui::Ui, model: &Model) -> Asked {
-        let width = ui.available_width();
-        let mut asked = Asked::default();
-        egui::Panel::left(self.id().with("list-pane"))
-            .resizable(true)
-            .frame(egui::Frame::new().inner_margin(egui::Margin {
-                right: 8,
-                ..Default::default()
-            }))
-            .default_size(width * 0.5)
-            .size_range(egui::Rangef::new(240.0, (width - 260.0).max(241.0)))
-            .show(ui, |ui| {
-                asked = self.list_pane(ui, model);
-            });
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().inner_margin(egui::Margin {
-                left: 8,
-                ..Default::default()
-            }))
-            .show(ui, |ui| {
-                let rule = self.selected.and_then(|index| self.rows.get(index));
-                let Some(rule) = rule else {
-                    ui.label(
-                        RichText::new("Select a rule on the left to see its details.")
-                            .color(theme::muted()),
-                    );
-                    return;
-                };
+        let full = ui.available_rect_before_wrap();
+        let total = full.width();
+        let low = LIST_MIN.min(total * 0.5);
+        let high = (total - DETAILS_MIN).max(low + 1.0);
+        let list_width = (total * self.split).clamp(low, high);
+        let divider = egui::Rect::from_min_max(
+            egui::pos2(full.left() + list_width, full.top()),
+            egui::pos2(full.left() + list_width + 2.0 * PANE_GAP, full.bottom()),
+        );
+        let response = ui.interact(divider, self.id().with("divider"), egui::Sense::drag());
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        if response.dragged() {
+            self.split = ((list_width + response.drag_delta().x) / total).clamp(0.05, 0.95);
+        }
+        let stroke = if response.hovered() || response.dragged() {
+            ui.visuals().widgets.hovered.bg_stroke
+        } else {
+            ui.visuals().widgets.noninteractive.bg_stroke
+        };
+        ui.painter()
+            .vline(divider.center().x, divider.y_range(), stroke);
+        let list_rect = egui::Rect::from_min_max(
+            full.min,
+            egui::pos2(divider.left() - PANE_GAP, full.bottom()),
+        );
+        let mut list_ui = ui.new_child(egui::UiBuilder::new().max_rect(list_rect));
+        list_ui.set_clip_rect(list_rect.intersect(ui.clip_rect()));
+        let mut asked = self.list_pane(&mut list_ui, model);
+        let details_rect =
+            egui::Rect::from_min_max(egui::pos2(divider.right(), full.top()), full.right_bottom());
+        let mut details_ui = ui.new_child(egui::UiBuilder::new().max_rect(details_rect));
+        details_ui.set_clip_rect(details_rect.intersect(ui.clip_rect()));
+        {
+            let ui = &mut details_ui;
+            let rule = self.selected.and_then(|index| self.rows.get(index));
+            if let Some(rule) = rule {
                 let state = model.state_in(&self.key, rule);
                 let text = self.details.as_ref().and_then(|d| d.text.as_ref());
                 let pane =
@@ -563,7 +577,22 @@ impl RuleList {
                 if pane.remove {
                     asked.remove = Some(rule.id.clone());
                 }
-            });
+            } else {
+                ui.label(
+                    RichText::new("Select a rule on the left to see its details.")
+                        .color(theme::muted()),
+                );
+            }
+        }
+        ui.allocate_rect(full, egui::Sense::hover());
         asked
     }
 }
+
+/// The list's share of a rules window's width when it opens: 40 : 60.
+const LIST_SHARE: f32 = 0.4;
+/// The least room the list and the details each keep.
+const LIST_MIN: f32 = 290.0;
+const DETAILS_MIN: f32 = 220.0;
+/// The space either side of the divider.
+const PANE_GAP: f32 = 8.0;

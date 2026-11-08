@@ -51,7 +51,7 @@ pub use chain_export::{
     Exported, Format as ExportFormat, RecordCheck, SSH_NAMESPACE, SignWith, Signer, VERIFIER,
     VERIFIER_NAME, sign_file, verify_record,
 };
-pub use custody::{ActionKind, CustodyEvent, CustodySink, KINDS, NoCustody};
+pub use custody::{ActionKind, CustodyEvent, CustodySink, KINDS, NoCustody, host_file};
 pub use delete_run::{
     Deleted as DeletedRun, PROCESS_TREE_FILE, Place as ArtifactPlace, PlanItem as RunPlanItem,
     RunPlan, SavedTree, delete as delete_run, plan as plan_run_deletion, saved_process_tree,

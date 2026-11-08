@@ -36,7 +36,21 @@
         "boot_id": {"type": "string"},
         "run_id": {"type": "string"},
         "started_ms": {"type": ["integer", "null"], "minimum": 0},
-        "finished": {"type": "boolean"}
+        "finished": {"type": "boolean"},
+        "state": {"type": "string"},
+        "exit": {"type": "string"},
+        "stopped_by_user": {"type": "boolean"},
+        "ended_ms": {"type": ["integer", "null"], "minimum": 0},
+        "duration_ms": {"type": ["integer", "null"], "minimum": 0},
+        "command": {"type": "string"},
+        "route": {"type": "string"},
+        "environment": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "value": {"type": "string"}}
+          }
+        }
       }
     },
     "sample": {

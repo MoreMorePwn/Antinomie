@@ -162,7 +162,25 @@ fn analyze_reports_a_host_file_and_copies_the_report_folder() {
         kinds.contains(&"metadata") && kinds.contains(&"entropy"),
         "{kinds:?}"
     );
-    assert!(Path::new(result["directory"].as_str().unwrap()).is_dir());
+    let directory = Path::new(result["directory"].as_str().unwrap());
+    assert!(directory.is_dir());
+    // The report is in the data directory's own analyses folder, not a VM's,
+    // and the file went into the library first.
+    assert_eq!(
+        directory,
+        data.join("analyses")
+            .join(result["report_id"].as_str().unwrap())
+    );
+    let (code, library) = cli(&[
+        "-o",
+        "json",
+        "--data-dir",
+        data.to_str().unwrap(),
+        "sample",
+        "list",
+    ]);
+    assert_eq!(code, 0, "{library}");
+    assert_eq!(library["result"]["items"][0]["sha256"], sha);
     let copy = Path::new(result["copies"][0].as_str().unwrap());
     assert!(copy.starts_with(&out) && copy.is_dir());
     // The data directory is free again.

@@ -383,6 +383,7 @@ impl Recording {
             boot_wait: None,
             triggers: None,
             stopped_by_user: false,
+            stopped_at_ms: None,
             started_ms: Some(1000),
             clock_anchor: None,
             id: id.into(),

@@ -632,9 +632,31 @@ The network capture is the guest's own view on every route.
   In a process's Details, **Show its calls** opens **Syscall Trace**
   filtered to that process (clear the filter to see all).
 - **Export report…** (right of the Triage tabs): writes the whole Triage as
-  HTML, PDF, JSON, MISP or STIX 2.1, with a checkbox per section, optional IoC
-  defanging and an optional evidence bundle. See
+  HTML, PDF, Markdown, JSON, MISP or STIX 2.1, with a checkbox per section,
+  optional IoC defanging and an optional evidence bundle. The key findings are
+  a table, and every process, file, endpoint, domain, rule, finding, detection
+  and technique a report mentions is a link to its entry (the PDF has a
+  contents block and internal links). See
   [the report guide](triage-report.md).
+- **Other exports** (Summary > Indicators **Export**, the IOC tab's CSV and JSON,
+  eBPF **Export binary and JSON**, Static analysis **Export**, **Export custody
+  record…**) name what they write `antinomie-<kind>-<run or sample, 8
+  characters>-<yyyymmdd-hhmmss in UTC>Z.<ext>` (the Static analysis export keeps
+  its analysis id and the eBPF export its program hash), tell you in a toast and
+  an Activity row (file, size and folder), and open in a folder that is not your
+  home folder: the run's `ioc` or `bpf` folder, or `exports/static` and
+  `exports/custody` in the data folder (made on the first export), or the folder
+  the last export of that kind went to (a custody export never opens where a
+  static-analysis export went). The eBPF export names its files after the
+  capture, so a second press says "Already exported: <name> in <folder>" beside
+  the button instead of failing. **Export custody record…** gives a path on
+  this computer (an import, a deleted original) as its file name only and marks
+  the entry withheld; `verify-custody.py` still checks every link and says which
+  entries it took as recorded. **Keep paths on this computer** keeps them.
+  A run's Data window **Copy** copies the format shown, and Hex
+  for bytes the text views would change (UTF-8 for bytes that are not valid
+  UTF-8, ASCII for control bytes); **Copy as** switches those two off for such
+  bytes.
 - **Triage › Process › Process tree**: one row per task, in the columns
   **Process** (tree lines, the executable's file name and `(pid · tid)`; the
   full path on hover; a fork that has not exec'd shows its parent's image
@@ -763,7 +785,7 @@ The network capture is the guest's own view on every route.
   finding in time, ↑/↓ lane, Enter evidence, `T` spacing, `F` fit, `+`/`-` zoom at the
   selection, Space fold the lane, `H` `M` `L` `I` the tier chips and Show INFO,
   `1`…`9` and `0` the first ten category chips.
-- **Triage › Files › By file** is the first tab of Files and opens by default: one row
+- **Triage › Files › By file** is the first tab of Files and opens by default (its filter bar ends with "x / y rows", the files listed out of all the run touched, as the Process tree's does): one row
   for each file the run touched, with **Path** (the path only) and
   **Tags** (where it lives, such as `/tmp`, `home`, `system`, `proc`, `hidden`,
   `persistence` and `credentials`; `+2 names` when it was also seen under other names,
@@ -823,7 +845,10 @@ The network capture is the guest's own view on every route.
   sample's MalwareBazaar record, strongest first, each with its source (an Elastic
   `Linux_Trojan_<Family>` rule, a `family` or Malpedia metadata, MalwareBazaar's
   signature and its tags, which may name two families; name fragments such as
-  MassHunt, IoT or Unique are never a family); and behaviour tags), **Key findings** (the six worst by tier and
+  MassHunt, IoT or Unique, and a rule pack's vendor or author in a rule name such as
+  `SEKOIA_` or `ESET_`, are never a family; a family is the one family word of the
+  rule, so `SEKOIA_Backdoor_Lin_Bpfdoor` and `MIRAI_OHSHIT_payload` name BPFDoor and
+  Mirai); and behaviour tags), **Key findings** (the six worst by tier and
   then first time, each with its description on a line below, cut to its first sentence
   with "…" when there is more: a click on the description shows all of it and another
   folds it; a click on the row opens the finding's Details, **all N** opens Suspicious activity, **Show more** turns
@@ -838,12 +863,12 @@ The network capture is the guest's own view on every route.
   (hover underlines it and shows the pointing hand; nothing is link-blue); each
   branch shows five and **Show N more** turns the five rows into one scroll area of every item,
   as tall as the five rows were, with its scroll bar always drawn (**Show fewer** puts the five back); the branch titles (Endpoints, DNS names, URLs, Files) are bold, each in a colour of its own that is neither the text colour nor link blue, with a muted count; the one-line rows (MITRE
-  ATT&CK, Processes of interest, Files, Network) show numbers strong and words muted; **Copy all** and **Export**, which writes JSON to the run's `ioc`
+  ATT&CK, Processes of interest, Files, Network) show numbers strong and words muted, stay one line each and scroll sideways when wider than the box (a scroll bar shows then, and Shift and the wheel scroll it; the plain wheel still scrolls the page); **Copy all** and **Export**, which writes JSON to the run's `ioc`
   folder; the header says how many indicators matched the IOC datasets), **Relationships**
   (a process, file, endpoint and injection graph laid out as a tree from the root
   at the top left: each process has the processes it started, the files it wrote or
-  ran and the endpoints it contacted to its right, and a process with many children
-  spreads them over several lanes; children of one parent that ran the same image
+  ran and the endpoints it contacted to its right, and every level is one column however
+  many children there are (a tall column is reached by scrolling or panning); children of one parent that ran the same image
   and have no finding are one stacked box (`ps ×120`), and the files one process
   wrote into one folder are one box (`/tmp/x/ · 1,240 files written`); a click on
   a stacked box opens it and a click on its header shuts it, and a node with a
@@ -859,10 +884,10 @@ The network capture is the guest's own view on every route.
   in the window; **Laying out…** shows while a big run is
   placed; the icon beside **Mermaid** opens the graph in a window of its own with the
   same controls; drag the background to pan, Ctrl and the wheel or the
-  buttons (a small bar that fits its buttons) to zoom, the plain wheel scrolls the page everywhere, over the graph too, and the Key findings and Indicators lists and the Activity graph's lanes take it only while they can still scroll that way; a process whose children sit in several lanes draws its fork and exec edges as one trunk beside each lane with a stub to every child (a child with a finding keeps its tier colour on its stub); click a node to open it,
+  buttons (a small bar that fits its buttons: **Fit** shows the whole graph when it can be read, else its top as wide as the box; **Fit all** shows every box, however small) to zoom, the plain wheel scrolls the page everywhere, over the graph too, and the Key findings and Indicators lists and the Activity graph's lanes take it only while they can still scroll that way; click a node to open it,
   **Mermaid** to copy what is shown; edges read fork, exec, write, run, connect, inject, signal),
   then one line each for **MITRE ATT&CK**, **Processes of interest**, **Files** and
-  **Network**, the folded **MITRE ATT&CK techniques** list, the **Detection engines**,
+  **Network**, the folded **MITRE ATT&CK techniques** list, the **Detection engines** (three cards of one height, so the state tag and **Open results** line up),
   the notes and the run's last screenshot. The Summary states observations only: no
   verdict and no score. Family
   candidates and tags show only what a detection or rule named, so a run nothing
@@ -923,7 +948,15 @@ The network capture is the guest's own view on every route.
   toggle ("Show the N rules not applicable") as the title line, the counts under
   it and the list under them. The **Detection** tab of the Triage strip shows
   the matched rules of YARA, IDS and Sigma as "x · y · z", each capped at 99+;
-  hover it for the engines by name. A scan that starts by itself and fails never replaces the result
+  hover it for the engines by name. The **Process**, **Files**, **Network** and
+  **eBPF** tabs carry the same kind of badge: processes (not threads) and
+  Suspicious activity findings as "p · f"; the files of By file with its default
+  filter; Endpoints, Domains, URLs and TLS as "p · q · r · s" in the tab order;
+  and the eBPF observations. Each is capped at 99+, shows a dash when the run
+  has no scan yet, and names its numbers in the hover ("12 processes · 3
+  findings"). A rule score (Elastic's 0 to 100) is coloured by range in the
+  match cards and their Details: red from 90, orange from 70, amber from 40,
+  muted below. A scan that starts by itself and fails never replaces the result
   on screen, and no scan starts by itself while an engine tool has not answered.
   **Settings > Detection > Scan runs with IDS and Sigma when they end** (on by
   default) makes each engine scan a run once its evidence is ready, and again
@@ -934,6 +967,15 @@ The network capture is the guest's own view on every route.
   button; in the tab badge it shows as a dash whose hover says "not scanned"
   (a zero would mean the engine scanned and found nothing). A result made with
   an older rule set says "Scanned with an older rule set." with **Rescan**.
+  A run on a VM that keeps running is scanned as soon as its recording is
+  **saved** (its tree ended, its terminal closed, every byte written and its
+  pcap segment closed), without a VM stop; until then the engine says "Waiting
+  for the recording to be saved." Sigma reads the run's event journal, which
+  Triage builds for the selected run: without one the tab says "Waiting for the
+  run's event index to be built.", or, when building it failed, "The run's event
+  journal is incomplete: <why>" and never a raw "No such file or directory".
+  Only the run selected in Triage gets an event index, so a run you never
+  selected has no Sigma scan until you select it.
 - **Failed launches.** A program the guest could not start because its file is
   cut off says "This ELF is truncated: its segments need 30.3 MB, the file has
   2.0 MB. A partial upload or download; get a full copy." in the run's failure
@@ -1198,6 +1240,11 @@ root exited while children live on, shows **Running** in every list and keeps it
 **Stop run** button (toolbar, Run menu, the command palette and the Run History
 row).
 
+Stop run works from any page, not only for the run selected in Triage: with no
+live run selected it acts on the newest live run, and the confirmation names the
+run it will stop ("the newest of 2 live runs"). Select a live run in Run history
+or Triage to stop that one instead.
+
 **Stop run** ends the whole recorded process tree, every live task of the run and
 not only the root, with SIGTERM and then SIGKILL after the grace period, while
 the VM keeps running. The run then ends the way any run ends: the recording
@@ -1209,8 +1256,12 @@ backdoor; stopping the VM instead cuts the run where it stands.
 How a cut or stopped run is worded, in Run History, the sample window's Runs
 list and Summary, Triage's state line and the reports:
 
-- **Stopped by you · root exited 0** (or "root killed by signal 15"): Stop run
-  ended it.
+- **Stopped by you at 5 min 9 s · root exited 0** (or "root killed by signal
+  15"): Stop run ended it, and the time is when the button was pressed. When the
+  tree took 2 s or more to end it adds "tree ended 3 s later"; the run's tooltip
+  gives the press time and the end time. Runs saved before 0.8.3 do not record
+  the press and read "Stopped by you after 6 min 59 s" (to the end of the
+  recording).
 - **Ended by VM stop · root exited 0 · 1 process still running**: the VM stopped
   while the tree was alive. The words give what the root did and how many
   processes were left; the run's pcap is closed at the stop and its route counts
@@ -1256,8 +1307,8 @@ line is cut, the whole of it is on hover) and **Tree status**, **Root exit** and
   otherwise opens the run's Triage on the row, where the existing lookup with its
   **Cancel** and rate limits is. **Export** writes the rows listed (or the
   selected row) as CSV, JSON, a MISP event or a STIX 2.1 bundle into the data
-  folder's `sample-reports`, defanged in CSV and JSON on request, and notes it in
-  the sample's custody log. Runs Triage has not read are named in a note: open the
+  folder's `sample-reports`, with raw values in every file (the **Defanged** chip
+  changes the table and Copy only), and notes it in the sample's custody log. Runs Triage has not read are named in a note: open the
   run in Triage once to fill them in. IDS, YARA and Sigma rules match runs, not
   single indicators, and stay in Summary > Detections.
 - **Custody log** and **Notes**: the sample's history and notes; a note chip jumps
@@ -1282,7 +1333,7 @@ text.
 **Spawned windows** (a rules window, a rule hit's Details, Relationships and
 the like) never grow past 80 % of the app's content area each way (a window
 still opens at its own size when that fits), and not below a small minimum. What does not fit scrolls inside the window: code scrolls
-sideways in its box, and long text wraps.
+sideways in its box, and long text wraps. A rules window opens with the list at 40 % and the details at 60 % of its width (drag the divider to change it).
 
 Menus: **File**, **VM**, **Run**, **View**, **Tools** and **Help**; the menu bar's
 **Search** button at the right (with its key) opens the command palette. Menus and
@@ -1461,6 +1512,31 @@ explained in plain words ("The process had already exited, or had started over
 running under a new identity (a thread of it called exec, which replaces the
 main thread's start time), the host asks once more for that process.
 
+Every core and memory dump records where it came from, in its own metadata
+(`metadata.json` of a core, `core.json` of a manual core, `dump.json` of a memory
+dump): the VM, boot and run (or none), why it was taken (the run's exit, a trigger,
+by hand or imported), the process of a core (pid, tid and task cookie), the finding
+of a trigger dump (rule and tier) and the time window. The link to the run is
+**exact** for a dump the run asked for and for a core whose task is in the run's
+process tree, **by time** for a memory dump taken by hand while runs were live
+(the dump holds the whole VM, so the live runs are only linked by the time), and
+**VM-wide** when no run was live. A record from before this field reads as
+unknown ("Not in a run").
+
+**Core dumps** and **Memory** show this as a **Run** line under each entry: the
+run's short id and the sample's name; a click opens the run in Triage. The
+**This run only** checkbox keeps only the entries of the run selected in Triage
+and follows that selection. **Core dumps** also lists the cores a trigger took,
+as "Trigger: <rule> (<tier>)", for a run whose Core dump on exit is off, whether
+the VM is running or stopped. `core_state` in `artifacts.json` means the exit
+core only; "Disabled" there never means the run has no cores.
+
+**Triage > Summary** ends with a **Run artifacts** box: the selected run's cores,
+memory dumps and capture segments in the rows of the sample page's Artifacts
+(same columns; **Open** shows the tab for this run only), the run's time window,
+the packet count of each capture segment and the trigger log (each match that took
+a dump, each that came too late, and how many more the budget held back).
+
 ### Country and organization of addresses (GeoIP)
 
 **Tools > Settings > Network lookup** decides how the public destination
@@ -1514,6 +1590,13 @@ copied. The
 **Attribution.** DB-IP's licence (CC BY 4.0) asks for credit wherever the data
 appears, so the page ends with "IP geolocation by DB-IP" (linking db-ip.com) and
 "DB-IP Lite databases, CC BY 4.0" (linking the licence).
+
+### Zooming a graph
+
+In every graph (the Relationships graph, the lineage graph, the VM snapshot graph,
+the file activity graph and the Activity graph) the plain mouse wheel scrolls
+the page, also over the graph; Ctrl + wheel or a pinch zooms the graph, and a
+drag moves it.
 
 ### Copy as Mermaid
 

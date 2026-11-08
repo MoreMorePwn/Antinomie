@@ -26,6 +26,8 @@ pub enum Tone {
     Muted,
     Good,
     Warn,
+    /// Between Warn and Bad: a rule score of 70 to 89 (the theme's orange).
+    Elevated,
     /// An error, or a HIGH finding.
     Bad,
     /// A LOW finding, a known false positive: the blue of links.

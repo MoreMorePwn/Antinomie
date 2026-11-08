@@ -93,6 +93,31 @@ impl<W: Write> Write for Hashing<'_, W> {
     }
 }
 
+/// What a person finds in the bundle and how to check it.
+fn readme(run_id: &str, generated_ms: u64) -> String {
+    format!(
+        "Antinomie evidence bundle for run {run}\n\
+         Generated {when} UTC\n\
+         \n\
+         capture/*.pcap        the run's network capture(s), all the sample's traffic, unmodified\n\
+         dropped-files.zip     files the run created, each whose bytes are all known; an AES-256\n\
+         \x20                     (WinZip AE-2) archive, password \"{password}\" (the malware-sharing\n\
+         \x20                     convention). It holds malware: open it only in a sandbox.\n\
+         custody/              the sample's custody log (JSON) and verify-custody.py, which checks\n\
+         \x20                     the log's hash chain without Antinomie\n\
+         manifest.json         every file with its size and SHA-256, the dropped files' guest paths\n\
+         \x20                     and what was skipped and why\n\
+         manifest.sha256       the same hashes for `sha256sum -c manifest.sha256`\n\
+         \n\
+         The outer archive is not encrypted, so the manifest can be read and checked. The\n\
+         modification times of its members are zero (1980-01-01) on purpose: the archive does\n\
+         not depend on when it was written.\n",
+        run = run_id,
+        when = iso(generated_ms),
+        password = DROPPED_PASSWORD,
+    )
+}
+
 fn hex(digest: &[u8]) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -282,6 +307,11 @@ fn write_into(out: File, temp: &Path, input: BundleInput, path: &Path) -> Result
         let bytes = std::fs::read(custody).map_err(|e| format!("{}: {e}", custody.display()))?;
         files.push(add_bytes(&mut zip, &format!("custody/{name}"), &bytes)?);
     }
+    files.push(add_bytes(
+        &mut zip,
+        "README.txt",
+        readme(&input.run_id, input.generated_ms).as_bytes(),
+    )?);
     let listing: Vec<_> = files
         .iter()
         .map(|f| json!({"path": f.path, "size": f.size, "sha256": f.sha256}))

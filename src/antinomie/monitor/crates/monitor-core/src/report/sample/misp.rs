@@ -27,13 +27,20 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
     let mut add = |kind: &str, category: &str, value: &str, ids: bool, note: &str| {
         attrs.push(attribute(kind, category, value, ids, note, &seed, at));
     };
+    // The sample's hashes are for blocking only when something says it is
+    // malware: a dataset matched, a rule named a family, a run was suspicious.
+    let strong = matches!(
+        report.assessment(),
+        "matched_indicators" | "suspicious_behaviour"
+    ) || !sample.family.is_empty()
+        || !sample.family_candidates.is_empty();
     for (kind, value, len) in [
         ("sha256", &sample.sha256, 64),
         ("sha1", &sample.sha1, 40),
         ("md5", &sample.md5, 32),
     ] {
         if is_hash(value, len) {
-            add(kind, "Payload delivery", value, true, "the sample");
+            add(kind, "Payload delivery", value, strong, "the sample");
         }
     }
     if !sample.tlsh.is_empty() {
@@ -98,8 +105,13 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
         }
     }
     let mut seen = std::collections::BTreeSet::new();
-    for item in &report.indicators {
-        for attr in attributes(&as_indicator(item), &seed, at) {
+    for item in report
+        .indicators
+        .iter()
+        .map(as_indicator)
+        .filter(|i| i.shared())
+    {
+        for attr in attributes(&item, &seed, at) {
             if seen.insert((attr["type"].to_string(), attr["value"].to_string())) {
                 attrs.push(attr);
             }
@@ -112,8 +124,8 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
             &format!(
                 "{} rule {} ({}) matched {} time(s){}. Author: {}. License: {}. Source: {}{}",
                 hit.engine,
-                hit.rule_id,
-                hit.title,
+                crate::report::layout::plain_rule(&hit.rule_id),
+                crate::report::layout::plain_rule(&hit.title),
                 hit.count,
                 if hit.runs.is_empty() {
                     String::new()
@@ -209,6 +221,17 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
         tags.push(json!({
             "name": format!("antinomie:{}=\"{}\"", tag.kind, tag.value.replace('"', "")),
             "colour": "#5c6670",
+        }));
+    }
+    let mut named: Vec<&str> = std::iter::once(sample.family.as_str())
+        .chain(sample.family_candidates.iter().map(|c| c.name.as_str()))
+        .filter(|name| !name.is_empty())
+        .collect();
+    named.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    for family in named {
+        tags.push(json!({
+            "name": format!("antinomie:family=\"{}\"", family.replace('"', "")),
+            "colour": "#7a1f5c",
         }));
     }
     let mut cluster = Vec::new();

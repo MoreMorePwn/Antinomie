@@ -12,23 +12,36 @@
 //! documented in `docs/triage-report.md` and versioned by [`SCHEMA_VERSION`].
 use serde::{Deserialize, Serialize};
 
+pub mod anchor;
 pub mod bundle;
 pub mod defang;
 pub mod export;
+pub mod fold;
 mod html;
 pub mod layout;
+mod layout_files;
+mod layout_parts;
+pub mod markdown;
 pub mod misp;
+pub mod page;
 mod pdf;
 mod pdf_font;
 mod pdf_layout;
+mod pdf_wrap;
+pub mod refs;
 pub mod sample;
+pub mod shared;
 pub mod stix;
+
+pub use refs::{KeyFinding, RowData};
 
 /// The schema name every JSON export carries in `schema`.
 pub const SCHEMA: &str = "antinomie-triage-report";
 /// Bumped when a field changes meaning or goes away; a new optional field
-/// does not bump it.
-pub const SCHEMA_VERSION: u32 = 1;
+/// does not bump it. Version 2: `summary.key_findings` are objects (the
+/// version 1 sentences are `summary.key_findings_text`), and tables and
+/// entries carry anchor `id`s, `*_ref` links and typed row values (`data`).
+pub const SCHEMA_VERSION: u32 = 2;
 /// Rows of one table in the HTML and the PDF; the JSON keeps every row the
 /// index held. More are counted in the table's `omitted`.
 pub const DOCUMENT_ROWS: usize = 1000;
@@ -71,6 +84,18 @@ pub struct Table {
     pub omitted: u64,
     /// Columns whose cells are indicators, so HTML and PDF can defang them.
     pub indicator_columns: Vec<IndicatorColumn>,
+    /// One per row when the table has them: the row's anchor id, its values
+    /// as numbers (pid, times in ms, counts, bytes) and its links to other
+    /// entries of the report. Empty for a table without them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub data: Vec<RowData>,
+}
+
+impl Table {
+    /// The data of row `at`, when the table has data.
+    pub fn row_data(&self, at: usize) -> Option<&RowData> {
+        self.data.get(at)
+    }
 }
 
 /// One column of a [`Table`] that holds indicators.
@@ -99,6 +124,43 @@ pub struct RunInfo {
     pub started_ms: Option<u64>,
     /// Whether the run had finished when the index was read.
     pub finished: bool,
+    /// The run's state in the app's words: "Stopped by you at 6 min 25 s ·
+    /// root exited 0", "Ran for 1 min 20 s · exit 255", "Ended by VM stop".
+    pub state: String,
+    /// How the root program ended, "exit 0" or "signal 11 (SIGSEGV)"; empty
+    /// when the guest never reported it.
+    pub exit: String,
+    /// The run was ended with Stop run.
+    pub stopped_by_user: bool,
+    /// When the run's process tree ended, ms since the epoch, when known.
+    pub ended_ms: Option<u64>,
+    /// Start to end (or to the Stop press), in ms, when both are known.
+    pub duration_ms: Option<u64>,
+    /// The command the run started when the run has no library sample (a
+    /// shell running a one-liner, a preloaded library): path and arguments.
+    pub command: String,
+    /// The network route the run used, as the app words it.
+    pub route: String,
+    /// What the run was recorded on: base image, kernel, route, stealth
+    /// profile, rule packs and tools.
+    pub environment: Vec<Fact>,
+}
+
+/// A name and a value of a facts list.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Fact {
+    pub name: String,
+    pub value: String,
+}
+
+impl Fact {
+    pub fn new(name: &str, value: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            value: value.into(),
+        }
+    }
 }
 
 /// The sample the run executed.
@@ -108,6 +170,9 @@ pub struct SampleInfo {
     pub name: String,
     pub sha256: String,
     pub size: Option<u64>,
+    /// `preloaded library` when the run started another program (a shell)
+    /// with this library in `LD_PRELOAD`; empty for the program itself.
+    pub role: String,
 }
 
 /// One rule of the behaviour engine that matched.
@@ -136,6 +201,19 @@ pub struct Counts {
     pub domains: u64,
 }
 
+/// Rules of the run that fired, by tier.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TierCounts {
+    pub high: u64,
+    pub medium: u64,
+    pub low: u64,
+    pub info: u64,
+    /// INFO findings the run has but the report's tables do not list (the
+    /// whole-run index keeps LOW and above in Suspicious activity).
+    pub info_not_listed: u64,
+}
+
 /// What the run showed, in a sentence and the numbers behind it. This is an
 /// observation summary, not a verdict on the sample.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,8 +230,21 @@ pub struct Summary {
     pub families: Vec<String>,
     /// Who named each family: `Kaiji: IDS: ET MALWARE Kaiji Variant Activity (15)`.
     pub family_sources: Vec<String>,
+    /// Families fewer or weaker rules named (one Mirai rule beside twenty
+    /// Gafgyt ones): said, but not the report's family, MISP tag or STIX
+    /// malware name.
+    pub other_families: Vec<String>,
     /// HIGH and MEDIUM rules that matched, worst first.
     pub key_behaviours: Vec<Behaviour>,
+    /// Behaviour rules that fired, by tier.
+    pub tiers: TierCounts,
+    /// The findings the app's Summary lists under Key findings, worst first.
+    pub key_findings: Vec<KeyFinding>,
+    /// The same as sentences, the form `key_findings` had in schema version 1.
+    pub key_findings_text: Vec<String>,
+    /// How many findings of LOW and above there are (`key_findings` holds the
+    /// worst of them).
+    pub key_findings_total: u64,
     pub counts: Counts,
 }
 
@@ -161,6 +252,9 @@ pub struct Summary {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Indicator {
+    /// The anchor of its row: `ioc-<n>`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub id: String,
     /// `endpoint`, `domain`, `url`, `tls` or `file`.
     pub kind: String,
     pub value: String,
@@ -195,6 +289,32 @@ pub struct Indicator {
     /// the sample's; empty for the run's indicators. Such rows are listed in the
     /// JSON only, not in the document tables, MISP or STIX.
     pub base_noise: String,
+    /// For an endpoint on the Tor gateway's stand-in range: the name the
+    /// run's DNS answers handed that address out for.
+    pub stand_in: String,
+    /// Why this indicator is in the document and the JSON but not in MISP and
+    /// STIX (a stand-in address, a private one, a file with no content); empty
+    /// for an indicator worth sharing.
+    pub not_shared: String,
+    /// The processes it was seen in, by pid (the `process` text names them).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pids: Vec<u32>,
+    /// The entry it is about: an endpoint, domain or file row.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub target_ref: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub process_refs: Vec<String>,
+    /// The findings about the same object.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub finding_refs: Vec<String>,
+}
+
+impl Indicator {
+    /// Whether MISP and STIX carry it: the run's own, with something a
+    /// consumer could match.
+    pub fn shared(&self) -> bool {
+        self.base_noise.is_empty() && self.not_shared.is_empty()
+    }
 }
 
 /// An ATT&CK technique the run's rules cite.
@@ -205,6 +325,10 @@ pub struct Technique {
     pub name: String,
     pub rules: Vec<String>,
     pub count: u64,
+    /// One per rule: the anchor of its first finding (`rule-<id>`) or its
+    /// detection row (`det-…`); empty when the rule has no entry.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rule_refs: Vec<String>,
 }
 
 /// The header of the table column that names a technique's tactics; the HTML
@@ -232,6 +356,9 @@ pub(crate) fn cell_tactics(cell: &str) -> Vec<crate::mitre::Tactic> {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Detection {
+    /// The anchor of its row: `det-<engine>-<rule>`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub engine: String,
     pub rule_id: String,
     pub title: String,
@@ -246,12 +373,23 @@ pub struct Detection {
     pub source: String,
     /// The rule's own reference link, when it names one.
     pub reference: String,
+    /// For a YARA match: how much it says about the sample (`strong`, `weak`,
+    /// `wrong platform`), as Triage's detection cards judge it.
+    pub strength: String,
+    /// The family this rule names, when it names one.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub family: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attack_refs: Vec<String>,
 }
 
 /// What the Files > File activity window knows of one file.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FileRecord {
+    /// The anchor of the file's entry: `file-<hash of the path>`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub path: String,
     pub created: bool,
     pub deleted: bool,
@@ -266,6 +404,12 @@ pub struct FileRecord {
     pub bytes_unknown: u64,
     /// The file's name inside the dropped-files archive, when it is in one.
     pub bundle_entry: String,
+    /// The process that created or changed it first.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub process_ref: String,
+    /// The findings about this file.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub finding_refs: Vec<String>,
 }
 
 /// The file section: the Files tabs and the per-file history.
@@ -287,6 +431,9 @@ pub struct EvidenceRef {
     pub size: u64,
     /// Empty past the hashing limit.
     pub sha256: String,
+    /// A folder: how many files it holds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<u64>,
 }
 
 /// The sample's custody log at export time.
@@ -337,6 +484,12 @@ impl Report {
             run,
             ..Self::default()
         }
+    }
+
+    /// The run never started (the guest refused the launch, the route did not
+    /// come up): there is a request and a sample, but no behaviour.
+    pub fn not_started(&self) -> bool {
+        self.run.state.starts_with("Not started")
     }
 
     /// The versioned machine-readable form.
@@ -403,10 +556,18 @@ pub enum Format {
     Json,
     Misp,
     Stix,
+    Markdown,
 }
 
 impl Format {
-    pub const ALL: [Format; 5] = [Self::Html, Self::Pdf, Self::Json, Self::Misp, Self::Stix];
+    pub const ALL: [Format; 6] = [
+        Self::Html,
+        Self::Pdf,
+        Self::Markdown,
+        Self::Json,
+        Self::Misp,
+        Self::Stix,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -415,6 +576,7 @@ impl Format {
             Self::Json => "JSON",
             Self::Misp => "MISP",
             Self::Stix => "STIX 2.1",
+            Self::Markdown => "Markdown",
         }
     }
 
@@ -426,6 +588,7 @@ impl Format {
             Self::Json => ".json",
             Self::Misp => ".misp.json",
             Self::Stix => ".stix.json",
+            Self::Markdown => ".md",
         }
     }
 }
@@ -438,6 +601,10 @@ pub struct Choices {
     pub formats: Vec<Format>,
     pub bundle: bool,
     pub defang: bool,
+    /// Keep the bytes a sample read in the JSON's Read files rows (clipped to
+    /// 120 characters, never for a file the run wrote). Off by default: they
+    /// can carry guest secrets and the sample's own bytes.
+    pub include_content: bool,
     /// Where the files go; empty means `<recording>/report`.
     pub folder: String,
 }
@@ -448,7 +615,9 @@ impl Default for Choices {
             parts: Part::ALL.to_vec(),
             formats: vec![Format::Html, Format::Pdf],
             bundle: false,
-            defang: false,
+            // The readable formats defang by default, like the sample report.
+            defang: true,
+            include_content: false,
             folder: String::new(),
         }
     }
@@ -496,6 +665,26 @@ pub fn iso(ms: u64) -> String {
     format!("{}T{}.{:03}Z", &text[..10], &text[11..], ms % 1000)
 }
 
+/// `HH:MM:SS.mmm` in the zone the app shows: a time of day in a table whose
+/// date the document says once.
+pub fn clock(ms: u64) -> String {
+    let text = shown(ms);
+    format!("{}.{:03}", &text[11..19], ms % 1000)
+}
+
+/// A time in a document table: `+5.463 s · 17:38:21.480`, the time since
+/// the run's first call and the time of day; either alone when the other is
+/// not known, empty when neither is.
+pub fn stamp(relative_ms: Option<u64>, time_ms: Option<u64>) -> String {
+    let relative = relative_ms.map(|ms| format!("+{}.{:03} s", ms / 1000, ms % 1000));
+    match (relative, time_ms) {
+        (Some(relative), Some(at)) => format!("{relative} \u{b7} {}", clock(at)),
+        (Some(relative), None) => relative,
+        (None, Some(at)) => clock(at),
+        (None, None) => String::new(),
+    }
+}
+
 /// A version-5 UUID of `name` in a fixed namespace, so the same input gives
 /// the same id in every export.
 pub fn uuid5(name: &str) -> String {
@@ -524,5 +713,9 @@ pub fn uuid5(name: &str) -> String {
     )
 }
 
+#[cfg(test)]
+mod format_tests;
+#[cfg(test)]
+mod link_tests;
 #[cfg(test)]
 mod tests;

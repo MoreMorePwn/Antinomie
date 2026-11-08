@@ -40,7 +40,7 @@ pub(super) struct State {
     pub(super) only_selected: bool,
     pub(super) status: Option<(String, bool)>,
     pub(super) job: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
-    key: Option<(bool, Instant)>,
+    key: Option<(bool, Instant, u64)>,
 }
 
 impl Default for State {
@@ -140,11 +140,16 @@ impl State {
     /// Whether an abuse.ch key is stored (looked at every two seconds; the
     /// key itself is never kept).
     pub(super) fn has_key(&mut self, data_dir: &std::path::Path) -> bool {
+        let generation = api_keys::generation();
         match self.key {
-            Some((have, at)) if at.elapsed() < Duration::from_secs(2) => have,
+            Some((have, at, seen))
+                if seen == generation && at.elapsed() < Duration::from_secs(2) =>
+            {
+                have
+            }
             _ => {
                 let have = !api_keys::get(data_dir, ApiKey::Abusech).is_empty();
-                self.key = Some((have, Instant::now()));
+                self.key = Some((have, Instant::now(), generation));
                 have
             }
         }

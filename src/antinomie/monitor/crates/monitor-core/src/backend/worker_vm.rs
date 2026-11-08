@@ -101,6 +101,7 @@ impl Worker {
                 Err(error) if error.contains("chain limit") => {}
                 Err(error) => return Err(error),
             }
+            self.refresh_disk_layers();
             // The disk as the boot finds it, before QEMU opens it: what a run's
             // earlier file bytes are read from later.
             let disk_start = crate::snapshots::active_disk(&self.options, &vm)
@@ -259,8 +260,9 @@ impl Worker {
             }
             Err(e) => {
                 // Nothing ran: give the automatic layer back at once.
-                crate::snapshots::run_layer::ended(id);
+                crate::snapshots::run_layer::ended(&self.options, id);
                 crate::snapshots::run_layer::mark_due(id);
+                self.refresh_disk_layers();
                 self.snapshot.active_vm = None;
                 self.snapshot.vm_screen = None;
                 self.snapshot.accelerator = None;
@@ -507,8 +509,10 @@ impl Worker {
         abandon_memory_dump(&mut self.snapshot);
         // QEMU is gone: the automatic layer is finished once the recording is
         // saved (see `poll_flush`).
-        crate::snapshots::run_layer::ended(&session.vm.id);
+        crate::snapshots::run_layer::ended(&self.options, &session.vm.id);
         crate::snapshots::run_layer::mark_due(&session.vm.id);
+        // The layer is `saving` in the snapshot the Stop result goes with.
+        self.refresh_disk_layers();
         self.snapshot.active_vm = None;
         self.snapshot.vm_screen = None;
         self.snapshot.accelerator = None;

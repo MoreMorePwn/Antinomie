@@ -153,7 +153,27 @@ pub fn a_child_that_execs_before_its_vfork_returns_still_names_its_parent() {
 }
 
 #[test]
-pub fn a_child_exec_names_its_parent_and_the_launch_directory() {
+fn a_clone3_child_names_its_parent_without_the_calls_flags() {
+    use super::process_tree_tests::{as_task, clone3_with_args, with_child_record};
+    let calls = [
+        as_task(exec(1351, "/bin/rota", &["rota"]), 1351, 1351, 1351),
+        // The child execs before the main thread's clone3 returns.
+        as_task(exec(1352, "/bin/sh", &["sh", "-c", "id"]), 1352, 1352, 1352),
+        with_child_record(clone3_with_args(1351, 1352, None), 1352, 1352),
+    ];
+    let mut whole = std::collections::BTreeMap::new();
+    observe_processes(&mut whole, &calls);
+    let mut files = FdState::default();
+    files.journal.root_cookie = 1351;
+    files.settled_parents = process_tree::settled_parents(&whole);
+    let events = run(&mut files, &calls);
+    let child = &of(&events, "process_creation")[1]["fields"];
+    assert_eq!(child["ParentProcessId"], 1351);
+    assert_eq!(child["ParentImage"], "/bin/rota");
+}
+
+#[test]
+fn a_child_exec_names_its_parent_and_the_launch_directory() {
     let mut files = FdState::default();
     files.journal.launch_cwd = Some("/work".into());
     files.journal.root_cookie = 1;

@@ -149,9 +149,6 @@ pub fn millis(ns: u64) -> String {
 /// What the end of the run says.
 pub struct RunEnd {
     pub text: String,
-    /// The whole tree ended within seconds (the report puts this note in its
-    /// statement too).
-    pub short_tree: bool,
 }
 
 /// The note for a run whose tree ended at once, or whose tasks were killed by a signal.
@@ -165,17 +162,9 @@ pub fn run_end(scan: &ArchiveScan) -> Option<RunEnd> {
     let killed = killed_text(scan, &tasks, start);
     match (short, killed) {
         (None, None) => None,
-        (Some(text), None) => Some(RunEnd {
-            text,
-            short_tree: true,
-        }),
+        (Some(text), None) | (None, Some(text)) => Some(RunEnd { text }),
         (Some(text), Some(killed)) => Some(RunEnd {
             text: format!("{text} {killed}"),
-            short_tree: true,
-        }),
-        (None, Some(text)) => Some(RunEnd {
-            text,
-            short_tree: false,
         }),
     }
 }

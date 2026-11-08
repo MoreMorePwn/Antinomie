@@ -94,6 +94,10 @@ pub(crate) struct Jobs {
     /// Room the last submitter said the recordings have, for the analyses of
     /// unpacked layers that follow an analysis.
     available: u64,
+    /// This queue holds analyses a finished VM session left running: the run
+    /// that owned them is closed, so their final report is written into the
+    /// run's own record here (nothing else will).
+    session_ended: bool,
     /// Ids of the jobs handed on by `detach_host_side`: still running, no
     /// longer this queue's, so not orphans.
     detached: Vec<String>,
@@ -387,6 +391,13 @@ impl Jobs {
         }
         let retained = job.retained_len();
         self.retained_len = self.retained_len.saturating_add(retained);
+        if self.session_ended
+            && let (Some(run_id), Some(run_directory)) = (&job.run_id, job.directory.parent())
+        {
+            // The session that held the run is gone: without this the run's
+            // record keeps the last progress it saw, "running", for good.
+            let _ = save_run_analysis(run_directory, run_id, &job.report);
+        }
         self.updates.push((job.run_id, job.report));
     }
     pub fn next(&mut self) -> Option<Action> {
@@ -723,6 +734,38 @@ impl Drop for Jobs {
 /// Time the durable report of an acquired specimen has to be written.
 const PUBLICATION_DEADLINE: Duration = Duration::from_secs(30);
 
+/// Write `report` as the analysis of the run recorded in `run_directory`, in
+/// `run.json` and in the run copy inside `manifest.json`. Nothing is written
+/// for a record of another run or one that cannot be read.
+pub(crate) fn save_run_analysis(
+    run_directory: &Path,
+    run_id: &str,
+    report: &AnalysisReport,
+) -> Result<(), String> {
+    let analysis = serde_json::to_value(report).map_err(|e| e.to_string())?;
+    for (name, nested) in [("run.json", false), ("manifest.json", true)] {
+        let path = run_directory.join(name);
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.to_string()),
+        };
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        let record = if nested {
+            value.get_mut("run")
+        } else {
+            Some(&mut value)
+        };
+        let Some(record) = record.filter(|record| record["id"].as_str() == Some(run_id)) else {
+            continue;
+        };
+        record["analysis"] = analysis.clone();
+        storage::atomic_json(&path, &value)?;
+    }
+    Ok(())
+}
+
 fn persist_report(directory: &Path, report: &AnalysisReport) -> Result<(), String> {
     let encoded = serde_json::to_vec(report).map_err(|e| e.to_string())?;
     if encoded.len() > REPORT_MAX_SIZE {
@@ -961,6 +1004,7 @@ mod tests {
                 updates: Vec::new(),
                 tools_dir: None,
                 available: 0,
+                session_ended: false,
                 detached: Vec::new(),
                 carried: Vec::new(),
                 owner: Default::default(),

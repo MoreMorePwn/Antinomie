@@ -117,16 +117,47 @@ pub fn render(report: &Report) -> Result<String, String> {
         ));
         let file_id = id_of(&file);
         objects.push(file);
+        if report.not_started() {
+            // Nothing ran: the sample is a file and a note says why; there is
+            // no malware analysis and nothing it was seen doing.
+            objects.push(object(
+                "note",
+                &format!("{run}:not-started"),
+                &at,
+                json!({
+                    "abstract": format!("Run {run} did not start"),
+                    "content": format!("Run {run} did not start, so nothing was observed. {}", report.run.state),
+                    "object_refs": [file_id],
+                    "created_by_ref": identity_id,
+                }),
+            ));
+            let bundle = json!({
+                "type": "bundle",
+                "id": format!("bundle--{}", uuid5(&format!("stix:bundle:{run}:{}", report.generated_ms))),
+                "objects": objects,
+            });
+            return serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string());
+        }
+        // The family the rules name, when they name one, is the malware
+        // object; the sample is its file. Otherwise the sample is the malware.
+        let family = report
+            .summary
+            .as_ref()
+            .and_then(|summary| summary.families.first())
+            .cloned();
         let mut fields = json!({
-            "is_family": false,
+            "is_family": family.is_some(),
+            "malware_types": ["unknown"],
             "sample_refs": [file_id],
             "created_by_ref": identity_id,
         });
-        fields["name"] = json!(if sample.name.is_empty() {
-            &sample.sha256
-        } else {
-            &sample.name
-        });
+        fields["name"] = json!(family.clone().unwrap_or_else(|| {
+            if sample.name.is_empty() {
+                sample.sha256.clone()
+            } else {
+                sample.name.clone()
+            }
+        }));
         let malware = object("malware", &sample.sha256, &at, fields);
         malware_id = Some(id_of(&malware));
         sample_ref = Some(file_id);
@@ -157,38 +188,64 @@ pub fn render(report: &Report) -> Result<String, String> {
         ));
     }
 
-    for indicator in report
-        .indicators
-        .iter()
-        .flatten()
-        .filter(|i| i.base_noise.is_empty())
-    {
+    // One indicator per pattern: several indicators can give the same one (a
+    // hash under many paths, a name seen as DNS and as SNI), and a bundle with
+    // two objects of one id is invalid. Their places go in the description.
+    let mut by_pattern: Vec<(String, Vec<&Indicator>)> = Vec::new();
+    for indicator in report.indicators.iter().flatten().filter(|i| i.shared()) {
         let Some(pattern) = pattern(indicator) else {
             continue;
         };
-        let kinds = if indicator.matched {
+        match by_pattern.iter_mut().find(|(known, _)| *known == pattern) {
+            Some((_, group)) => group.push(indicator),
+            None => by_pattern.push((pattern, vec![indicator])),
+        }
+    }
+    for (pattern, group) in by_pattern {
+        let first = group[0];
+        let kinds = if group.iter().any(|i| i.matched) {
             json!(["malicious-activity"])
         } else {
             json!(["anomalous-activity"])
         };
+        let mut paths: Vec<&str> = group
+            .iter()
+            .map(|i| i.path.as_str())
+            .filter(|path| !path.is_empty())
+            .collect();
+        paths.sort_unstable();
+        paths.dedup();
+        let verdict = first.verdict.trim();
+        let mut description = format!("Observed in run {run}");
+        if !paths.is_empty() {
+            let shown: Vec<&str> = paths.iter().take(10).copied().collect();
+            description.push_str(&format!(
+                " at {} path(s): {}{}",
+                paths.len(),
+                shown.join(", "),
+                if paths.len() > shown.len() {
+                    ", ..."
+                } else {
+                    ""
+                }
+            ));
+        }
+        if !verdict.is_empty() && !verdict.to_ascii_lowercase().starts_with("not checked") {
+            description.push_str(&format!("; dataset verdict: {verdict}"));
+        }
         let mut fields = json!({
-            "name": format!("{} {}", indicator.kind, indicator.value),
+            "name": format!("{} {}", first.kind, first.value),
             "pattern": pattern,
             "pattern_type": "stix",
             "valid_from": at,
             "indicator_types": kinds,
             "created_by_ref": identity_id,
-            "description": format!("Observed in run {run}; dataset verdict: {}", indicator.verdict),
+            "description": description,
         });
-        if let Some(confidence) = indicator.confidence {
+        if let Some(confidence) = first.confidence {
             fields["confidence"] = json!(confidence);
         }
-        let item = object(
-            "indicator",
-            &format!("{run}:{}", pattern_seed(indicator)),
-            &at,
-            fields,
-        );
+        let item = object("indicator", &format!("{run}:{pattern}"), &at, fields);
         if let Some(malware) = &malware_id {
             objects.push(relationship("indicates", &id_of(&item), malware, &at));
         }
@@ -221,12 +278,16 @@ pub fn render(report: &Report) -> Result<String, String> {
     for hit in report.detections.iter().flatten() {
         let credit = |value: &str| if value.is_empty() { "unknown" } else { value }.to_owned();
         let mut fields = json!({
-            "abstract": format!("{} rule {} matched", hit.engine, hit.rule_id),
+            "abstract": format!(
+                "{} rule {} matched",
+                hit.engine,
+                super::layout::plain_rule(&hit.rule_id)
+            ),
             "content": format!(
                 "{} rule {} ({}) matched {} time(s) in run {run}. Author: {}. License: {}. Source: {}.",
                 hit.engine,
-                hit.rule_id,
-                hit.title,
+                super::layout::plain_rule(&hit.rule_id),
+                super::layout::plain_rule(&hit.title),
                 hit.count,
                 credit(&hit.author),
                 credit(&hit.license),
@@ -250,6 +311,29 @@ pub fn render(report: &Report) -> Result<String, String> {
         ));
     }
 
+    // A report ties the bundle together for importers that list reports.
+    if let Some(malware) = &malware_id {
+        let refs: Vec<String> = objects
+            .iter()
+            .filter(|o| !matches!(o["type"].as_str(), Some("identity" | "relationship")))
+            .map(id_of)
+            .collect();
+        objects.push(object(
+            "report",
+            &format!("{run}:{malware}"),
+            &at,
+            json!({
+                "name": format!("Antinomie triage of run {run}"),
+                "published": at,
+                "report_types": ["malware"],
+                "object_refs": refs,
+                "created_by_ref": identity_id,
+            }),
+        ));
+    }
+    // The safety net: never two objects of one id.
+    let mut seen = std::collections::BTreeSet::new();
+    objects.retain(|object| seen.insert(id_of(object)));
     let bundle = json!({
         "type": "bundle",
         "id": format!("bundle--{}", uuid5(&format!("stix:bundle:{run}:{}", report.generated_ms))),

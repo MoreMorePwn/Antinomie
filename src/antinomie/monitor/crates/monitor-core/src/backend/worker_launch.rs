@@ -113,6 +113,7 @@ impl Worker {
     }
     /// Refuse a launch this guest or this boot cannot take, and name the library sample.
     fn launch_checks(&mut self, request: &mut ExecRequest) -> Result<(), String> {
+        request.validate()?;
         let session = self.session.as_mut().ok_or("VM is stopped")?;
         // A program the library sent into this VM is the library's
         // sample; the run record names it.
@@ -151,7 +152,6 @@ impl Worker {
             )?;
         }
         if let Some(plan) = &request.dump_trigger {
-            plan.validate()?;
             if plan.core {
                 if !self
                     .snapshot
@@ -172,13 +172,7 @@ impl Worker {
                 return Err("this build has no live Triage rules to trigger a dump".into());
             }
         }
-        if request.core_dump_on_exit && request.run_in.guest_desktop() {
-            return Err("process Core Dump on Exit currently requires App Terminal; desktop wrappers do not identify the selected executable as the root group".into());
-        }
         if request.debug_on_start {
-            if request.run_in.guest_desktop() {
-                return Err("Debug on start needs Run in: App terminal; a desktop launcher runs a shell wrapper, which is what would stop".into());
-            }
             if self.debug.is_active() {
                 return Err("a debugger is already attached; detach it before debugging another program from its start".into());
             }
@@ -333,6 +327,7 @@ impl Worker {
             boot_wait: None,
             triggers: None,
             stopped_by_user: false,
+            stopped_at_ms: None,
             execution: None,
             analysis: selected
                 .then(|| crate::analysis::jobs::new_report(&request.path, &request.analysis)),

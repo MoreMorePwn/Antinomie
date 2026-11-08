@@ -13,6 +13,9 @@ pub const ENDPOINT_HEADERS: &[&str] = &[
     "First seen",
     "Last seen",
 ];
+/// The columns of the Endpoints table that hold the geolocation.
+pub const ENDPOINT_COUNTRY: usize = 5;
+pub const ENDPOINT_ORGANIZATION: usize = 6;
 pub const DOMAIN_HEADERS: &[&str] = &[
     "Domain",
     "IOC",

@@ -12,7 +12,8 @@ How paths are written. A path such as `scripts/check-kernel-btf.py`,
 `tests/monitor/route-probe.c` or `docs/usage.md` is relative to the repository
 root. A Rust path such as `debug/rsp_client.rs` or `triage/files.rs` is relative to
 `src/antinomie/monitor/crates/monitor-core/src/` or `.../monitor-ui/src/`, whichever
-holds it. A path under `kernel/antinomie/`, `arch/`, `fs/` or `include/`, and the
+holds it. From 0.9.0 the Triage model (scan, activity rules, query language, bpf decoder) is in
+the `antinomie-triage` crate: a `triage/<file>.rs` of it is `.../crates/triage/src/<file>.rs`. A path under `kernel/antinomie/`, `arch/`, `fs/` or `include/`, and the
 kernel's own `scripts/` files (`scripts/antinomie_btf.py`, `scripts/link-vmlinux.sh`,
 `scripts/Makefile.modfinal`), belong to the patched Linux 6.12 tree that the
 series in `src/antinomie/core/6.12/` builds, not to a folder of this repository;

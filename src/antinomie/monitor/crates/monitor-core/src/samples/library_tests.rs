@@ -758,3 +758,24 @@ fn an_unknown_or_hash_only_name_becomes_the_family_or_type_and_twelve_hex_digits
         );
     }
 }
+
+#[test]
+fn a_sample_takes_a_safe_guest_path_without_the_product_name() {
+    let record = SampleRecord {
+        sha256: "0123456789abcdef".into(),
+        name: "evil one/\u{e9}.exe".into(),
+        ..Default::default()
+    };
+    assert_eq!(record.guest_path(), "/tmp/01234567-evil_one__.exe");
+    let long = SampleRecord {
+        sha256: "0123456789abcdef".into(),
+        name: "a".repeat(80),
+        ..Default::default()
+    };
+    assert_eq!(long.guest_path().len(), "/tmp/01234567-".len() + 48);
+    let unnamed = SampleRecord {
+        sha256: "0123456789abcdef".into(),
+        ..Default::default()
+    };
+    assert_eq!(unnamed.guest_path(), "/tmp/01234567-sample");
+}

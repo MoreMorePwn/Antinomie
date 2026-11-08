@@ -10,7 +10,7 @@ use crate::widgets;
 pub(super) use antinomie_triage::net_tabs::*;
 
 impl TriageView {
-    fn new_count(&self, which: NewTab) -> Count {
+    pub(super) fn new_count(&self, which: NewTab) -> Count {
         if self.preparing() {
             return Count::Pending;
         }
@@ -212,5 +212,13 @@ mod tests {
         journal.ingest(&ctx);
         assert_eq!(journal.counts(), (1, 0));
         assert_eq!(journal.messages().len(), 2);
+    }
+
+    #[test]
+    fn the_geolocation_columns_are_the_countries_and_organizations() {
+        // The Summary's indicator export reads these two (a shift by one put
+        // the byte count under "country").
+        assert_eq!(ENDPOINT_HEADERS[ENDPOINT_COUNTRY], "Country");
+        assert_eq!(ENDPOINT_HEADERS[ENDPOINT_ORGANIZATION], "Organization");
     }
 }

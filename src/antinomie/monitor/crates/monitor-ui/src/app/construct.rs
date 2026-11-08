@@ -14,6 +14,10 @@ impl MonitorApp {
             .storage
             .and_then(|storage| eframe::get_value(storage, "settings"))
             .unwrap_or_default();
+        // The settings every front end shares come from the data folder; with
+        // no file yet, the stored ones are written to it once the backend holds
+        // the lock (below).
+        let settings_file = settings_file::SettingsFile::open(&options.data_dir, &mut settings);
         if settings.bundle.is_empty() || !restore_bundle {
             settings.bundle = options.bundle_dir.to_string_lossy().into_owned();
         }
@@ -176,6 +180,8 @@ impl MonitorApp {
             jobs: Default::default(),
             quit_confirmed: false,
             status_notice: None,
+            settings_file,
+            settings_file_reported: None,
             exec,
             args: String::new(),
             env,
@@ -195,6 +201,7 @@ impl MonitorApp {
             backend_disconnected: false,
             run_list_cache: None,
             run_selector_cache: Default::default(),
+            triage_page_cache: Default::default(),
             started: Instant::now(),
             smoke,
             closing: false,
@@ -204,6 +211,12 @@ impl MonitorApp {
             launch_action_rects: None,
         };
         app.configure_detection();
+        if let Some(error) = app.settings_file.error.clone() {
+            let message = format!("settings.json is not used: {error}");
+            app.log("ERROR", message.clone());
+            app.status_notice = Some((crate::activity::Level::Warn, message));
+        }
+        app.persist_engine_settings();
         match ArchiveWorker::new(Some(cc.egui_ctx.clone())) {
             Ok(worker) => {
                 app.archive = Some(worker);

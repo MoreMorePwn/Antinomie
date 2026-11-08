@@ -62,6 +62,7 @@ pub mod process_tree_tests;
 pub mod refresh;
 pub mod rules;
 pub mod run_end;
+pub mod scan_progress;
 pub mod segments;
 pub mod sigma_events;
 #[cfg(test)]
@@ -367,6 +368,27 @@ pub struct ScanRequest {
     /// recording: each changed file asked about is added to it.
     pub before_copy:
         Option<Arc<std::sync::Mutex<antinomie_monitor_core::file_before_store::Writer>>>,
+    /// Written by the scan as it goes, for a screen that waits for it (the
+    /// export dialog); `None` for the index the tables show.
+    pub progress: Option<Arc<scan_progress::ScanProgress>>,
+    /// An index of exactly this recording that is already made and current:
+    /// the scan answers with it instead of reading the recording again.
+    pub reuse: Option<ArchiveScan>,
+}
+
+impl ScanRequest {
+    /// A phase begins.
+    pub fn phase(&self, phase: scan_progress::Phase, total: u64) {
+        if let Some(progress) = &self.progress {
+            progress.begin(phase, total);
+        }
+    }
+    /// `units` more of the phase are done.
+    pub fn advance(&self, units: usize) {
+        if let Some(progress) = &self.progress {
+            progress.advance(units as u64);
+        }
+    }
 }
 
 /// The default most rows one Triage table keeps per page.
@@ -384,6 +406,33 @@ impl ScanRequest {
         }
     }
 }
+/// The request has no filter, sort, page or toggle: it reads the run whole,
+/// as a report does.
+pub fn is_whole_run(request: &ScanRequest) -> bool {
+    request.filters.iter().all(String::is_empty)
+        && request.offsets == [0; SLOTS]
+        && request.sorts.iter().all(Option::is_none)
+        && request.file_visibility == Default::default()
+        && request.finding_view == Default::default()
+}
+
+/// The scan's request as the screen has it, with every filter, sort, page and
+/// toggle back to the default: the report is of the whole run, not of what
+/// the tables are showing.
+pub fn whole_run_request(screen: &ScanRequest) -> ScanRequest {
+    let mut request = screen.clone();
+    request.filters = Default::default();
+    request.offsets = [0; SLOTS];
+    request.sorts = Default::default();
+    request.file_visibility = Default::default();
+    request.finding_view = Default::default();
+    request.unchanged_since = None;
+    request.before_copy = None;
+    request.event_cache = None;
+    request.ioc_cache = None;
+    request
+}
+
 /// Query tables with their own filter, sort and page: findings 0, opened 1,
 /// changed 2, http 3, dns 4, read 5, ips 6, hosts 7, the file categories 8 to
 /// 15, then the TLS, QUIC and SSH sessions, then the rebuilt Network section's
@@ -433,9 +482,38 @@ pub struct FileRows {
     pub omitted: u64,
 }
 
-pub struct ArchiveScan {
+/// A finished index. It is shared: the index on screen and a report export
+/// that finds it current hold the same one, so the export does not read the
+/// recording a second time. It is only changed while it is not shared (a test
+/// setting up its fixture).
+#[derive(Clone)]
+pub struct ArchiveScan(pub Arc<ScanData>);
+
+impl ArchiveScan {
+    pub fn new(data: ScanData) -> Self {
+        Self(Arc::new(data))
+    }
+}
+
+impl std::ops::Deref for ArchiveScan {
+    type Target = ScanData;
+    fn deref(&self) -> &ScanData {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ArchiveScan {
+    fn deref_mut(&mut self) -> &mut ScanData {
+        Arc::get_mut(&mut self.0).expect("an index is changed only while it is not shared")
+    }
+}
+
+pub struct ScanData {
     /// [`source_stamp`] of the recording when this index began.
     pub stamp: String,
+    /// The index was made with no filter, sort, page or toggle: the whole run
+    /// as a report reads it.
+    pub whole_run: bool,
     /// When the run's process tree ended, recorded or estimated from its last call (host Unix ms).
     pub ended_ms: Option<u64>,
     pub event_cache: Option<normalized::Cache>,

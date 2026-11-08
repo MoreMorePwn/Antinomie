@@ -16,50 +16,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Debug)]
-pub enum RecordingError {
-    Io(std::io::Error),
-    Format(serde_json::Error),
-    Limit(&'static str),
-    MissingRange,
-    Index(rusqlite::Error),
-}
-impl std::fmt::Display for RecordingError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(e) => write!(f, "recording I/O: {e}"),
-            Self::Format(e) => write!(f, "recording format: {e}"),
-            Self::Limit(e) => f.write_str(e),
-            Self::MissingRange => f.write_str("requested range includes missing capture bytes"),
-            Self::Index(e) => write!(f, "archive index: {e}; saved raw archive retained"),
-        }
-    }
-}
-impl std::error::Error for RecordingError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Io(e) => Some(e),
-            Self::Format(e) => Some(e),
-            Self::Index(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-impl From<rusqlite::Error> for RecordingError {
-    fn from(e: rusqlite::Error) -> Self {
-        Self::Index(e)
-    }
-}
-impl From<std::io::Error> for RecordingError {
-    fn from(e: std::io::Error) -> Self {
-        Self::Io(e)
-    }
-}
-impl From<serde_json::Error> for RecordingError {
-    fn from(e: serde_json::Error) -> Self {
-        Self::Format(e)
-    }
-}
+mod error;
+pub use error::RecordingError;
 
 /// Most processes a recorded tree lists. A busier recording lists the first
 /// ones and reports that the rest were left out.
@@ -333,12 +291,41 @@ fn archive_index_path(directory: &Path) -> Result<PathBuf, RecordingError> {
     Ok(cache_root.join(format!("{name}.sqlite")))
 }
 
-/// Layout of the cached packet index. 2: a lifecycle row's `task_exit` column
+/// Layout of the cached packet index. 3: the child task records of a fork or
+/// clone are kernel notes of their call. 2: a lifecycle row's `task_exit` column
 /// is a kind (see `async_page::LifecycleKind`), so credential and hash records
 /// can be read back with their call; an index built before is rebuilt. Every
 /// cursor row carries this number (`indexed.writer`): an older build that
 /// appends to the index rewrites the row without it, which forces a rebuild.
-const INDEX_VERSION: i64 = 2;
+const INDEX_VERSION: i64 = 3;
+
+/// Told `(bytes indexed, bytes in all)`.
+type IndexProgress = Box<dyn Fn(u64, u64)>;
+
+thread_local! {
+    /// Told how far an archive index built on this thread has got.
+    static INDEX_PROGRESS: std::cell::RefCell<Option<IndexProgress>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `read`; while it builds or extends an archive index on this thread,
+/// `report(bytes_indexed, bytes_total)` is called about every 16 MiB. A first
+/// index of a multi-GiB recording takes minutes, and its reader has nothing
+/// else to show for them.
+pub fn with_index_progress<R>(report: impl Fn(u64, u64) + 'static, read: impl FnOnce() -> R) -> R {
+    INDEX_PROGRESS.with(|slot| *slot.borrow_mut() = Some(Box::new(report)));
+    let result = read();
+    INDEX_PROGRESS.with(|slot| *slot.borrow_mut() = None);
+    result
+}
+
+fn report_index_progress(done: u64, total: u64) {
+    INDEX_PROGRESS.with(|slot| {
+        if let Some(report) = slot.borrow().as_ref() {
+            report(done, total);
+        }
+    });
+}
 
 /// Bytes of the archive indexed per transaction. A first index of a large
 /// archive commits at this pace, so a crash or a cancel keeps what was indexed
@@ -449,6 +436,7 @@ fn index_archive(
             return Ok((connection, identity));
         }
         let mut indexed = start;
+        let mut reported = start;
         let mut finished = true;
         {
             let mut invocation = transaction.prepare(
@@ -488,6 +476,10 @@ fn index_archive(
                     break;
                 }
                 indexed = reader.stream_position()?;
+                if indexed - reported >= 16 * 1024 * 1024 {
+                    reported = indexed;
+                    report_index_progress(indexed, length);
+                }
                 if let Some((header, key)) = packet_key(&packet) {
                     let key = key_blob(key);
                     let offset = i64::try_from(offset).map_err(|_| {
@@ -992,6 +984,7 @@ pub fn list_runs(data_root: &Path) -> Result<Vec<RunSummary>, RecordingError> {
                 boot_wait: None,
                 triggers: None,
                 stopped_by_user: false,
+                stopped_at_ms: None,
                 started_ms: None,
                 clock_anchor: None,
                 id,
@@ -1304,6 +1297,7 @@ mod tests {
                 boot_wait: None,
                 triggers: None,
                 stopped_by_user: false,
+                stopped_at_ms: None,
                 started_ms: None,
                 clock_anchor: None,
                 id: "run".into(),
@@ -1436,6 +1430,7 @@ mod tests {
             boot_wait: None,
             triggers: None,
             stopped_by_user: false,
+            stopped_at_ms: None,
             started_ms: None,
             clock_anchor: None,
             id: "run".into(),

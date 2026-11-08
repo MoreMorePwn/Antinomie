@@ -3,6 +3,8 @@
 use super::*;
 
 pub mod stages;
+#[cfg(test)]
+mod timing;
 
 impl FindingJournal {
     pub fn new(directory: &Path) -> Result<Self, String> {
@@ -104,8 +106,24 @@ pub fn scan_archive_query(
     cancel: &Arc<AtomicBool>,
     request: &ScanRequest,
 ) -> Result<ArchiveScan, String> {
-    let mut scan = stages::open_scan(directory, pcap, pcap_open, cancel, request)?;
+    if let Some(done) = &request.reuse {
+        return Ok(done.clone());
+    }
+    // The index of a large recording is built on this thread, in the first
+    // call that counts the calls: it tells the request's progress as it goes.
+    let opened = match &request.progress {
+        Some(progress) => {
+            let progress = Arc::clone(progress);
+            antinomie_monitor_core::recording::with_index_progress(
+                move |done, total| progress.set(scan_progress::Phase::Indexing, done, total),
+                || stages::open_scan(directory, pcap, pcap_open, cancel, request),
+            )
+        }
+        None => stages::open_scan(directory, pcap, pcap_open, cancel, request),
+    };
+    let mut scan = opened?;
     let mut files = scan.read_files(cancel, request)?;
+    request.phase(scan_progress::Phase::Settling, 0);
     let network = scan.read_network(&mut files.pending, pcap, pcap_open, cancel, request)?;
     scan.finish(files, network, pcap, pcap_open, cancel, request)
 }

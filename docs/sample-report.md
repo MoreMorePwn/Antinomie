@@ -32,15 +32,22 @@ notes, and similar samples.
 ## Formats
 
 - **HTML** and **PDF** use the run report's page model and writers: one
-  self-contained file, no script or link. A run's own report is named by its
-  path, since a report holds no links.
-- **Markdown** is the same document as pipe tables; text is escaped, hashes and
-  paths are code spans.
+  self-contained file, no script. Each rule's row is an anchor (`det-…`, as
+  in the run report), each run's `run-<n>` and each indicator's `ioc-<n>`;
+  a rule's runs, an indicator's runs and a technique's rules link to them. A
+  run's own report (the export with the most sections, the newest of those) is
+  named by its path inside the data folder and, in the HTML and Markdown,
+  linked relative to the data folder's `sample-reports` folder, where the
+  report is written unless you choose another.
+- **Markdown** is the same document as pipe tables with the same anchors
+  (`<a id>`) and links; text is escaped, hashes and paths are code spans.
 - **JSON** is `docs/sample-report-schema-1.json` (`antinomie-sample-report`,
   `schema_version` 1). New optional fields do not change the version.
 - **MISP** is one event: the sample's `sha256`, `sha1`, `md5`, `tlsh`,
-  `filename`, `size-in-bytes`, parents and children by hash, the merged
-  indicators (`to_ids` only for those a dataset matched), a `comment` per rule
+  `filename`, `size-in-bytes` (the hashes `to_ids` only when a run was
+  suspicious, a dataset matched or a rule named a family), parents and children
+  by hash, the merged indicators (`to_ids` only for those a dataset matched), a
+  `comment` per rule
   with its credit, per-run comments, the custody head, and an ATT&CK galaxy
   cluster per technique.
 - **STIX 2.1** is a bundle: identity, the sample as `file` and `malware` (a
@@ -58,7 +65,8 @@ keeps at most 5 000 rows; both say how many were left out.
 
 Files go to the folder you give (empty: `<data folder>/sample-reports/`), are
 never overwritten, are owner-only (0600), and are named
-`antinomie-sample-report-<sha8>-<yyyymmdd-hhmmss>` plus the format's ending.
+`antinomie-sample-report-<sha8>-<yyyymmdd-hhmmss>Z` (the time is UTC) plus the format's ending.
+No format carries a path on this computer: the custody log's "added", "original deleted" and "recorded before" entries and the Origins table name the file, not its folder. A rule the static scan and a run both matched is one row ("static scan + runs 1, 4"), and a sample with no recorded family lists the families its matched rules name. The Rules table says how much each match says in the run report's words (`strong (score 100)`, `weak`, `Sigma high`), names the family a rule names, leaves Title out when it repeats the rule, and lists each rule's author, licence, pack and reference in a credits table under it. The merged indicators say whether MISP and STIX carry each one.
 Writing them adds an `Exported` entry to the sample's custody log (after the
 head the report shows).
 

@@ -72,7 +72,27 @@ pub(crate) fn describe(
                 None => ran,
             }
         }
-        RunState::Stopped => with_detail(after("Stopped by you")),
+        RunState::Stopped => match run.started_ms.zip(run.stopped_at_ms) {
+            // The moment Stop run was pressed; the tree's end only when it took
+            // noticeably longer.
+            Some((start, stopped)) => {
+                let mut head = format!(
+                    "Stopped by you at {}",
+                    crate::time_format::duration_ms(stopped.saturating_sub(start))
+                );
+                if let Some(late) = ended_ms
+                    .map(|end| end.saturating_sub(stopped))
+                    .filter(|late| *late >= 2000)
+                {
+                    head.push_str(&format!(
+                        " · tree ended {} later",
+                        crate::time_format::duration_ms(late)
+                    ));
+                }
+                with_detail(head)
+            }
+            None => with_detail(after("Stopped by you")),
+        },
         RunState::Finalized | RunState::Interrupted if ended_by_vm_stop(run) => {
             with_detail(after("Ended by VM stop"))
         }
@@ -86,6 +106,50 @@ pub(crate) fn describe(
         ),
         RunState::LaunchUnconfirmed => "Launch unconfirmed".into(),
         RunState::Unknown => "State unknown".into(),
+    }
+}
+
+/// How the run ended in a line for a list or a report: "Not started", "Stopped
+/// by you at 6 min 25 s · root exited 0", "Ended by VM stop", "Exit 255",
+/// "Signal 11 (SIGSEGV)". Without the clock-dependent words of [`describe`].
+pub(crate) fn exit_summary(run: &RunSummary) -> String {
+    let root = run
+        .execution
+        .as_ref()
+        .and_then(|status| status.root_exit.as_ref());
+    let exit = || match root {
+        Some(WaitStatus::Exited { code }) => format!("Exit {code}"),
+        Some(WaitStatus::Signaled { signal, .. }) => format!(
+            "Signal {signal} ({})",
+            crate::triage::run_end::signal_name(*signal)
+        ),
+        None => "Unknown".to_owned(),
+    };
+    match run.state {
+        RunState::FailedToStart => "Not started".into(),
+        RunState::LaunchUnconfirmed => "Not recorded".into(),
+        _ if run.state.is_live() => "Running".into(),
+        RunState::Stopped => {
+            let at = run
+                .started_ms
+                .zip(run.stopped_at_ms)
+                .map(|(start, stopped)| {
+                    format!(
+                        " at {}",
+                        crate::time_format::duration_ms(stopped.saturating_sub(start))
+                    )
+                })
+                .unwrap_or_default();
+            match detail(run) {
+                Some(detail) => format!("Stopped by you{at} · {detail}"),
+                None => format!("Stopped by you{at}"),
+            }
+        }
+        _ if ended_by_vm_stop(run) => match detail(run) {
+            Some(detail) => format!("Ended by VM stop · {detail}"),
+            None => "Ended by VM stop".into(),
+        },
+        _ => exit(),
     }
 }
 
@@ -122,9 +186,14 @@ pub(crate) fn detail(run: &RunSummary) -> Option<String> {
 pub(crate) fn times(run: &RunSummary, ended_ms: Option<u64>) -> Option<String> {
     let start = run.started_ms?;
     let at = |ms: u64| crate::time_format::local_seconds(ms / 1000);
+    let pressed = run
+        .stopped_at_ms
+        .map_or_else(String::new, |ms| format!("\nStop run pressed {}", at(ms)));
     Some(match ended_ms {
-        Some(end) if !run.state.is_live() => format!("Started {}\nEnded {}", at(start), at(end)),
-        _ => format!("Started {}", at(start)),
+        Some(end) if !run.state.is_live() => {
+            format!("Started {}{pressed}\nEnded {}", at(start), at(end))
+        }
+        _ => format!("Started {}{pressed}", at(start)),
     })
 }
 
@@ -236,6 +305,7 @@ mod tests {
             boot_wait: None,
             triggers: None,
             stopped_by_user: false,
+            stopped_at_ms: None,
             started_ms: Some(1_700_000_000_000),
             clock_anchor: None,
             id: "r".into(),
@@ -340,6 +410,22 @@ mod tests {
         assert_eq!(
             describe(&signalled, 0, None, None),
             "Stopped by you · root killed by signal 15"
+        );
+        // The press time is shown, and the tree's end only when it was late.
+        let mut pressed = run.clone();
+        pressed.stopped_at_ms = Some(1_700_000_000_000 + 309_000);
+        let end = 1_700_000_000_000 + 312_000;
+        assert_eq!(
+            describe(&pressed, end, Some(end), None),
+            "Stopped by you at 5 min 9 s · tree ended 3 s later · root exited 0"
+        );
+        assert_eq!(
+            describe(&pressed, end, Some(end - 1500), None),
+            "Stopped by you at 5 min 9 s · root exited 0"
+        );
+        assert_eq!(
+            describe(&pressed, end, Some(end + 600_000), None),
+            "Stopped by you at 5 min 9 s · tree ended 10 min 3 s later · root exited 0"
         );
         // Waiting for the guest to report the end.
         let stopping = with_live(

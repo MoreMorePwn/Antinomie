@@ -141,7 +141,7 @@ pub fn run_start(scan: &ArchiveScan) -> Option<u64> {
         })
 }
 
-impl ArchiveScan {
+impl ScanData {
     /// Rows kept for a tab and the matches left out of them.
     pub fn file_rows(&self, tab: FileTab) -> (usize, u64) {
         match tab {

@@ -214,6 +214,7 @@ impl Worker {
                 path,
                 analysis,
             } => self.analyze_host_file(&vm_id, &path, analysis),
+            Command::AnalyzeSample { sha256, selection } => self.analyze_sample(&sha256, selection),
             Command::AnalyzeMore {
                 directory,
                 run_id,

@@ -56,9 +56,11 @@ pub(crate) fn tooltip(run: &RunSummary) -> String {
         lines.push(format!("Recording incomplete: saving stopped: {error}"));
     }
     lines.extend(
-        run.notes
-            .iter()
-            .map(|note| format!("Note: {}", run_note_text(note))),
+        antinomie_monitor_core::fold_skipped_notes(
+            run.notes.iter().map(|note| run_note_text(note)),
+        )
+        .into_iter()
+        .map(|note| format!("Note: {note}")),
     );
     lines.extend(reduced_lines(run).into_iter().take(1));
     lines.join("\n")
@@ -138,9 +140,9 @@ fn quiet_notes(run: &RunSummary) -> impl Iterator<Item = &String> {
 
 /// The run's notes but the telemetry loss (a warning), one line each, as plain text.
 pub(crate) fn note_lines(run: &RunSummary) -> Vec<String> {
-    let mut lines: Vec<String> = quiet_notes(run)
-        .map(|note| run_note_text(note).to_owned())
-        .collect();
+    let mut lines: Vec<String> = antinomie_monitor_core::fold_skipped_notes(
+        quiet_notes(run).map(|note| run_note_text(note)),
+    );
     // What the static analysis found in the file's headers: a cut-off
     // download, a library run as if it were a program.
     if let Some(report) = &run.analysis {
@@ -190,5 +192,24 @@ pub(crate) fn health_errors(ui: &mut egui::Ui, snapshot: &Snapshot) {
         .flatten()
     {
         crate::activity::error(ui, error);
+    }
+}
+
+#[cfg(test)]
+mod skipped_tests {
+    use super::*;
+
+    #[test]
+    fn a_run_with_thirteen_skipped_dumps_notes_one_line_in_every_place() {
+        let mut run = crate::run_link::test_run("r", "/tmp/x");
+        run.notes = (1362..1375)
+            .map(|pid| {
+                format!("Dump skipped for credential.shadow_read (High, process {pid}): The process exited 1 ms after the match, before the core could be taken.")
+            })
+            .collect();
+        let lines = note_lines(&run);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].starts_with("Dump skipped 13 times for credential.shadow_read (High)"));
+        assert_eq!(tooltip(&run).matches("Dump skipped").count(), 1);
     }
 }

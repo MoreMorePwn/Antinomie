@@ -18,6 +18,7 @@ mod disk_view;
 mod evidence;
 mod evidence_delete;
 mod evidence_jobs;
+mod export_dirs;
 mod folders;
 mod getting_started;
 mod hex_view;
@@ -33,6 +34,7 @@ mod regex_matches;
 mod route_ui;
 mod rules_window;
 mod run_filter;
+mod run_link;
 mod run_recording;
 mod run_state_line;
 mod runs;
@@ -60,7 +62,7 @@ mod workspace;
 
 pub(crate) use antinomie_triage::{bpf, time_format, tzone, values};
 
-use antinomie_monitor_core::{Backend, BackendOptions, Command, Notification};
+use antinomie_monitor_core::BackendOptions;
 use clap::Parser;
 use std::{path::PathBuf, time::Duration};
 
@@ -127,6 +129,30 @@ mod graphics_option_tests {
     }
 }
 
+/// An absolute, canonical data directory. Helpers (Sigma's interpreter, the
+/// capa and IDS workers) are started from other working directories, so a
+/// relative path would resolve to something else there.
+fn absolute_data_dir(path: &std::path::Path) -> PathBuf {
+    std::fs::canonicalize(path)
+        .or_else(|_| std::path::absolute(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+#[cfg(test)]
+mod data_dir_tests {
+    use super::*;
+
+    #[test]
+    fn a_relative_data_dir_becomes_absolute() {
+        let relative = absolute_data_dir(std::path::Path::new("data/not-yet-created"));
+        assert!(relative.is_absolute());
+        assert!(relative.ends_with("data/not-yet-created"));
+        let dot = absolute_data_dir(std::path::Path::new("."));
+        assert!(dot.is_absolute());
+        assert!(!dot.ends_with("."));
+    }
+}
+
 fn hexadecimal(value: &str) -> Result<u64, String> {
     u64::from_str_radix(value.trim_start_matches("0x"), 16).map_err(|error| error.to_string())
 }
@@ -160,7 +186,7 @@ fn main() -> eframe::Result<()> {
         options.bundle_dir = bundle;
     }
     if let Some(data_dir) = args.data_dir {
-        options.data_dir = data_dir;
+        options.data_dir = absolute_data_dir(&data_dir);
     }
     options.bootstrap_gpa = args.bootstrap_gpa;
     options.force_tcg = args.tcg;
@@ -190,9 +216,12 @@ fn main() -> eframe::Result<()> {
     }
     if let Some(directory) = args.install_base {
         // A plain message and exit code 1, not eframe's Debug form of the error.
-        if let Err(message) = install_base(options, directory) {
-            eprintln!("{}", failure_line(&message));
-            std::process::exit(1);
+        match antinomie_monitor_core::direct::install_base(options, directory) {
+            Ok(message) => println!("{message}"),
+            Err(message) => {
+                eprintln!("{}", failure_line(&message));
+                std::process::exit(1);
+            }
         }
         return Ok(());
     }
@@ -246,42 +275,6 @@ fn failure_line(message: &str) -> String {
     format!("Error: {message}")
 }
 
-fn install_base(options: BackendOptions, directory: PathBuf) -> Result<(), String> {
-    let mut backend = Backend::new(options)?;
-    let id = backend.send(Command::ImportBase { directory })?;
-    // Copying and verifying a desktop image can exceed two minutes. The worker
-    // owns that operation until completion, including during shutdown, so a
-    // frontend deadline cannot cancel it or truthfully report its outcome.
-    let result = wait_for_base_import(id, |timeout| backend.recv_timeout(timeout));
-    let shutdown = backend.shutdown();
-    match (result, shutdown) {
-        (Ok(message), Ok(())) => {
-            println!("{message}");
-            Ok(())
-        }
-        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
-        (Err(error), Err(shutdown)) => Err(format!("{error}; shutdown: {shutdown}")),
-    }
-}
-
-fn wait_for_base_import(
-    id: u64,
-    mut receive: impl FnMut(Duration) -> Result<Option<Notification>, String>,
-) -> Result<String, String> {
-    loop {
-        if let Some(Notification::CommandResult {
-            id: reply,
-            success,
-            message,
-        }) = receive(Duration::from_secs(1))?
-        {
-            if reply == id {
-                return if success { Ok(message) } else { Err(message) };
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,49 +282,5 @@ mod tests {
     #[test]
     fn command_line_failures_are_plain_text() {
         assert_eq!(failure_line("no bundle"), "Error: no bundle");
-    }
-
-    #[test]
-    fn base_import_waits_past_two_minutes_of_receive_timeouts_for_its_result() {
-        let mut polls = 0;
-        let result = wait_for_base_import(7, |timeout| {
-            assert_eq!(timeout, Duration::from_secs(1));
-            polls += 1;
-            Ok((polls > 130).then(|| Notification::CommandResult {
-                id: 7,
-                success: true,
-                message: "base imported".into(),
-            }))
-        });
-        assert_eq!(result.as_deref(), Ok("base imported"));
-        assert_eq!(polls, 131);
-    }
-
-    #[test]
-    fn base_import_ignores_other_commands_and_preserves_its_failure() {
-        let mut notifications = [
-            Notification::CommandResult {
-                id: 6,
-                success: true,
-                message: "another command completed".into(),
-            },
-            Notification::CommandResult {
-                id: 7,
-                success: false,
-                message: "bundle changed during import; copies rejected".into(),
-            },
-        ]
-        .into_iter();
-        let result = wait_for_base_import(7, |_| Ok(notifications.next()));
-        assert_eq!(
-            result,
-            Err("bundle changed during import; copies rejected".into())
-        );
-    }
-
-    #[test]
-    fn base_import_reports_disconnected_worker_without_claiming_success() {
-        let result = wait_for_base_import(7, |_| Err("backend owner disconnected".into()));
-        assert_eq!(result, Err("backend owner disconnected".into()));
     }
 }

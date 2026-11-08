@@ -386,7 +386,9 @@ pub fn inherit_open_fds(
 ) {
     let name = event.syscall_name.as_str();
     if !matches!(name, "fork" | "vfork" | "clone" | "clone3")
-        || (name == "clone3" && clone3_flags(invocation).is_none())
+        || (name == "clone3"
+            && clone3_flags(invocation).is_none()
+            && super::process_tree::lifecycle_born(invocation, event.pid).is_none())
     {
         return;
     }
@@ -431,25 +433,43 @@ pub fn shares_fs(invocation: &InvocationSummary, event: &EventSummary) -> bool {
 pub fn clone_flag(invocation: &InvocationSummary, event: &EventSummary, flag: u64) -> bool {
     match event.syscall_name.as_str() {
         "clone" => call_args(invocation).is_some_and(|args| clone_flags(&args) & flag != 0),
-        "clone3" => clone3_flags(invocation).is_some_and(|flags| flags & flag != 0),
+        // Flags that were not captured: the guest's child record still says
+        // whether the task is a thread (which shares files and directory) or a
+        // process (which gets copies).
+        "clone3" => match clone3_flags(invocation) {
+            Some(flags) => flags & flag != 0,
+            None => matches!(
+                super::process_tree::lifecycle_born(invocation, event.pid),
+                Some(super::process_tree::Born::Thread)
+            ),
+        },
         _ => false,
     }
 }
 
+/// The flags of a `clone3`: the first word of the `clone_args` struct the call
+/// was given (the field `arg0.clone_args`), or a field of its own that holds
+/// only the flags, 4 or 8 bytes long.
 pub fn clone3_flags(invocation: &InvocationSummary) -> Option<u64> {
-    let field = invocation
+    invocation
         .entry
         .iter()
         .chain(invocation.exit.iter())
         .chain(invocation.async_events.iter())
         .flat_map(|event| event.fields.iter())
-        .find(|field| field.key.contains("clone_args") && field.key.contains("flags"))?;
-    let bytes = trace::covered_preview(field);
-    match bytes.len() {
-        4 => Some(u64::from(u32::from_le_bytes(bytes.try_into().ok()?))),
-        8 => Some(u64::from_le_bytes(bytes.try_into().ok()?)),
-        _ => None,
-    }
+        .filter(|field| field.key.contains("clone_args"))
+        .find_map(|field| {
+            let bytes = trace::covered_preview(field);
+            if field.key.contains("flags") {
+                match bytes.len() {
+                    4 => Some(u64::from(u32::from_le_bytes(bytes.try_into().ok()?))),
+                    8 => Some(u64::from_le_bytes(bytes.try_into().ok()?)),
+                    _ => None,
+                }
+            } else {
+                Some(u64::from_le_bytes(bytes.get(..8)?.try_into().ok()?))
+            }
+        })
 }
 
 pub fn displayed_path(
