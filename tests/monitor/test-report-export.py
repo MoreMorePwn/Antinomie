@@ -60,7 +60,7 @@ def produce():
     out = Path(tempfile.mkdtemp(prefix="antinomie-report-"))
     env = dict(os.environ, ANTINOMIE_REPORT_OUT=str(out))
     cmd = ["nice", "-n", "15", "cargo", "test", "--release", "--locked", "-j", "2",
-           "-p", "antinomie-monitor-ui", "--bin", "antinomie-monitor", "report_export"]
+           "-p", "antinomie-triage", "--lib", "report_export"]
     done = subprocess.run(cmd, cwd=ROOT / "src/antinomie/monitor", env=env)
     if done.returncode != 0:
         sys.exit("the fixture tests failed")
