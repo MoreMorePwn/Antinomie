@@ -10,11 +10,10 @@ the `antinomie-service` crate (`src/api/`) with `schemars` and checked in; a tes
 fails when the file is stale. The recording reads (`recording.*`) are in the
 second part of this document.
 
-> **Status in 0.9.0.** The types, the schema, the job store and the read-only
-> recording queries exist in the `antinomie-service` crate and are tested. Nothing
-> a user runs submits a job yet: the daemon, the socket and the `auto` commands
-> are not shipped. `antinomie-cli` uses its object types (such as `Sample`) but cannot submit or
-> wait for a job in this build.
+> **Status in 0.9.0.** The types, the schema, the job store, the read-only
+> recording queries and the daemon's local socket ship. `antinomie-cli auto daemon`
+> serves the operations below on the socket; the `auto` commands of the CLI are its
+> client. The web binding (ANT-T0192) is not part of 0.9.0.
 
 Names here are final for version 1. The API changes only additively: a new
 optional field does not change the version; a changed meaning or a removed field
@@ -187,15 +186,78 @@ Every failed operation returns `{"error": {"code", "message", "field?", "retryab
 
 ## Local socket
 
-The socket is `<data dir>/run/antinomie.sock` (directory mode 0700, socket mode
-0600, same UID only). One JSON object per line. A request is
-`{"id": 7, "op": "job.submit", "params": {...}}`; a reply is
-`{"id": 7, "ok": true, "result": {...}}` or `{"id": 7, "ok": false, "error": {...}}`.
-`events.subscribe` answers with `{"id": 7, "event": {...}}` lines until the client
-closes or sends `{"id": 7, "op": "cancel"}`. The first line on a connection is
-`{"frame": "engine.hello", "data": {"api_version", "app_version", "owner", "epoch", "gseq", "truncated"}}`.
-Limits: 2 MiB per line, 16 requests in flight per connection, 300 s idle, 64
-connections. Socket uploads carry base64 in `params.data`, at most 1 MiB per call.
+`antinomie-cli auto daemon` serves the operations of this document, and the
+`recording.*` reads of the second part, on a Unix socket.
+
+| Item | Value |
+|---|---|
+| Path | `<data dir>/run/antinomie.sock` (or `[daemon] socket` in `service.toml`, or `--socket`); at most 107 bytes |
+| Folder | Must be a real directory owned by the daemon's user with mode 0700; the daemon refuses to start otherwise (a symlink, another owner, group or other access) |
+| Socket file | Mode 0600, set right after `bind`. An old socket file is replaced (the daemon holds the data-directory lock, so no one else serves it); any other file at the path is left alone and the start fails. The daemon removes its own socket when it stops |
+| Who may connect | Peer credentials (`SO_PEERCRED`) are read on accept: only the daemon's own UID. Another UID is closed without a byte, not even the hello |
+| Identity | The caller is `local:<uid>` with every scope (`read`, `submit`, `artifacts:sensitive`, `manage`): the socket is the owner's single-user view. Nothing in a request changes it |
+| Framing | One JSON object per line, UTF-8, at most 2 MiB per line, both ways. A request is `{"id": N, "op": "...", "params": {...}}` and nothing else: `id` an integer from 0 to 2^53 - 1, `op` 1 to 64 printable ASCII characters, `params` an object (absent or `null` reads as `{}`). Any other member is `invalid_argument` naming it |
+| Replies | `{"id": N, "ok": true, "result": ...}` or `{"id": N, "ok": false, "error": {...}}` |
+| Hello | The first line of a connection is `{"frame": "engine.hello", "data": {"api_version", "app_version", "owner", "epoch", "gseq", "truncated"}}`, with no `id`. A client that does not know the `api_version` closes |
+| Cancel | `{"id": N, "op": "cancel"}` cancels the request `N` in flight; that request answers for itself (a subscription with `{"cancelled": true, ...}`, another request with `unavailable`, reason `cancelled`). A cancel of an id not in flight is `not_found`. Closing the connection cancels everything it had in flight, including a recording read |
+| Host paths | `sample.path` is refused on the socket (`invalid_argument`, field `sample.path`): a file arrives with `upload.begin`, `upload.put` and `upload.finish`, so no client makes the daemon open a path of its choosing. `artifact.get` and `report.get` answer with the file's `path` (local-only), resolved inside the job's directory: a recorded location that is absolute, has `..`, or leads through a symlink out of the job directory is not served |
+
+Limits (a refusal is an error reply; the connection stays open unless the table
+says it closes):
+
+| Limit | Value | Over it |
+|---|---|---|
+| Line | 2 MiB | A request line: `payload_too_large`, then the connection closes (the stream cannot be framed again). A reply: replaced by `payload_too_large` for the same `id` (ask for fewer items or a byte range) |
+| Requests in flight | 16 per connection, 256 in all | `quota_exceeded`, `details.reason = "too_many_requests"`; an `id` already in flight is `conflict` |
+| Request rate | 50 a second per connection with bursts of 100 (500 a second in all) | `quota_exceeded`, reason `rate_limited`, `details.retry_after_s` |
+| Connections | 64 | One line `unavailable`, reason `too_many_connections`, then closed |
+| Subscriptions | 64 per client, 256 in all | `quota_exceeded`, reason `too_many_subscriptions` |
+| Idle connection | 300 s with nothing in flight (a subscription is not idle) | Closed |
+| A line begun and not finished | 30 s | Closed |
+| Writing one line to the client | 10 s | The client is a slow consumer: closed (a subscription first tries to send `engine.alert` code `slow_consumer`) |
+| `upload.put` data | Base64 of at most 1 MiB, strictly sequential (`offset` equal to `received`, else `conflict`) | `payload_too_large` or `invalid_argument` on `data` |
+| `artifact.get` range | 1 MiB, answered as Base64 in `range.data` | `payload_too_large` |
+
+**Event streams.** `events.subscribe` answers with the `engine.hello` frame
+(carrying the request `id`, the highest stored `gseq` and `truncated`), then event
+lines `{"id": N, "event": {...}}`, `{"id": N, "frame": "engine.ping", "data": {}}`
+after 15 s without an event, and a last line:
+
+| Stream | Resume | Without a resume point | Ends |
+|---|---|---|---|
+| One job (`job_id`, `since_seq`) | Every stored event of that job with `seq` above `since_seq`, then live ones; never an event of another job | The job's whole history | After `job.finished` (the job's last event): `{"id": N, "ok": true, "result": {"finished": true, "last_seq": ...}}` |
+| All jobs and the engine (`since_gseq`) | Every stored event with `gseq` above `since_gseq`, then live ones | From now | On cancel, or when the daemon stops (`unavailable`, reason `service_stopping`) |
+
+There is no gap and no duplicate across the resume: the stream subscribes to the
+live events first, then reads the table, then skips what the table gave; the store
+publishes events in commit order. A stream whose live buffer overflows (4096
+events) reads the table again from the last event it sent, so a burst loses
+nothing. `truncated` is true when `since_gseq` is older than the oldest retained
+event (engine events are kept 7 days or 100 000 rows) or higher than any `gseq`
+this store has stored (another or a restored store); the client re-synchronises
+with `job.list`. `since_seq` without `job_id`, `since_gseq` with it, and an
+unknown name in `types` are `invalid_argument`; an unknown job is `not_found`.
+Ephemeral events (`job.progress`, `job.metrics`) are sent live only.
+
+**Operations served in 0.9.0.** `capabilities`, `health`, `upload.*`,
+`job.submit`, `job.get`, `job.list`, `job.cancel`, `job.retry`, `events.subscribe`,
+`events.list`, `artifact.list`, `artifact.get`, `report.get`, `policy.list`,
+`queue.status`, `queue.pause`, `queue.resume`, and every `recording.*` read. Not
+served by the daemon in 0.9.0 (`unsupported`; the direct commands work beside a
+running daemon): `job.delete`, `sample.*`, `vm.list`, `base.list`,
+`custody.verify`. The reserved names of 5.11 (`run.`, `terminal.`, `rule.`,
+`settings.`, writes of `vm.` and `base.`) are `unsupported`; any other unknown
+name is `invalid_argument` on `op`. While the daemon stops, `job.submit`,
+`job.retry` and `upload.*` are `unavailable` with reason `service_stopping`.
+
+`job.retry` makes a new job from a finished one: the spec the client first sent,
+the sample named by its library hash, no idempotency key, the given `overrides`
+replacing the original's one field at a time, the current policy, and
+`repeat_of` set. The job must be terminal (`precondition_failed` otherwise) and
+the caller its owner or a holder of `manage`.
+
+New `details.reason` values of this binding: `too_many_requests`, `rate_limited`,
+`too_many_connections`, `too_many_subscriptions`, `service_stopping`, `cancelled`.
 
 # Recording queries, version 1
 

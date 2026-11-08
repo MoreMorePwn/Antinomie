@@ -6,6 +6,7 @@ use crate::{context::Context, error::CliError, output::Reply};
 use clap::Subcommand;
 
 mod analyze;
+mod auto;
 mod base;
 mod capabilities;
 mod config;
@@ -64,6 +65,9 @@ pub enum Command {
     /// Write a saved run's report (HTML, PDF, JSON, MISP, STIX, Markdown), the
     /// same files the window's Export report writes. No engine lock needed.
     Report(report::Report),
+    /// Auto mode: the daemon, the lane, jobs and their results.
+    #[command(subcommand)]
+    Auto(auto::Auto),
 }
 
 impl Command {
@@ -89,5 +93,6 @@ pub fn run(command: &Command, context: &Context) -> Result<Reply, CliError> {
         Command::Triage(arguments) => triage::run(arguments, context),
         Command::Detect(arguments) => detect::run(arguments, context),
         Command::Report(arguments) => report::run(arguments, context),
+        Command::Auto(auto) => auto::run(auto, context),
     }
 }

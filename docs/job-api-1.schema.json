@@ -4042,6 +4042,36 @@
           "type": "string",
           "const": "recording_unreadable",
           "description": "`internal`: the recording is corrupt or its index cannot be built."
+        },
+        {
+          "type": "string",
+          "const": "too_many_requests",
+          "description": "`quota_exceeded`: the connection has 16 requests in flight (or the\nsocket 256) (local socket, 5.9)."
+        },
+        {
+          "type": "string",
+          "const": "rate_limited",
+          "description": "`quota_exceeded`: requests come faster than the socket's rate;\n`details.retry_after_s`."
+        },
+        {
+          "type": "string",
+          "const": "too_many_connections",
+          "description": "`unavailable`: the socket serves 64 connections already."
+        },
+        {
+          "type": "string",
+          "const": "too_many_subscriptions",
+          "description": "`quota_exceeded`: 64 subscriptions of this client or 256 in all (A18)."
+        },
+        {
+          "type": "string",
+          "const": "service_stopping",
+          "description": "`unavailable`: the daemon is stopping; queued jobs stay queued."
+        },
+        {
+          "type": "string",
+          "const": "cancelled",
+          "description": "`unavailable`: a request was cancelled by `{\"op\": \"cancel\"}` or by the\nconnection closing."
         }
       ],
       "description": "The values of `details.reason` the contract names (5.7, 5.12.1, 5.12.8)."

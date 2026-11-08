@@ -46,13 +46,13 @@ pub struct Global {
     /// Boot bundle folder, for engine commands [default: $ANTINOMIE_BUNDLE or images].
     #[arg(long, global = true, value_name = "PATH")]
     pub bundle: Option<PathBuf>,
-    /// Daemon socket [default: <data>/run/antinomie.sock]. No daemon ships yet.
+    /// Daemon socket [default: <data>/run/antinomie.sock].
     #[arg(long, global = true, value_name = "PATH")]
     pub socket: Option<PathBuf>,
-    /// Run the command in this process, taking the data-directory lock.
+    /// Run the command in this process, taking the data-directory lock, even when a daemon could serve it.
     #[arg(long, global = true, conflicts_with = "daemon")]
     pub direct: bool,
-    /// Send the command to a running daemon. Reserved: no daemon ships yet, so commands run in this process.
+    /// Send an `auto` command to the running daemon; fail when none answers.
     #[arg(long, global = true)]
     pub daemon: bool,
     /// Output format [default: human on a terminal, json otherwise].

@@ -1,0 +1,114 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! The real [`LaneRunner`]: the stages of cards P3-4 and P3-5 on the lane's
+//! waiter, the resource governor of P3-5c, and the lane commands of P3-5b.
+
+use super::lane::{JobEnd, LaneRunner};
+use crate::{
+    api::{
+        error::{ApiError, ErrorCode},
+        ids::LaneId,
+        job::Job,
+    },
+    config::PolicyLookup,
+    engine::Engine,
+    lane::{LaneDir, Processes},
+    resources::Governor,
+    stages::{
+        Driven, HostChecks, Hosted, LaneEnv, LaneStages,
+        host::{HostTriage, SampleTags},
+    },
+    store::{Eligibility, Store},
+    waiter::Waiter,
+};
+use serde_json::Value;
+
+/// What the stages borrow from the daemon's thread.
+pub struct RunnerEnv<'a> {
+    pub store: &'a Store,
+    pub lanes: &'a LaneDir,
+    pub policies: &'a dyn PolicyLookup,
+    pub procs: &'a dyn Processes,
+    pub host: &'a dyn HostChecks,
+    pub triage: &'a dyn HostTriage,
+    pub tags: &'a dyn SampleTags,
+}
+
+pub struct StagesRunner<'a, E: Engine> {
+    pub waiter: Waiter<E>,
+    pub env: RunnerEnv<'a>,
+    pub lane: LaneId,
+    pub governor: Option<Governor<'a>>,
+    pub log: &'a (dyn Fn(&str) + Send + Sync),
+}
+
+impl<'a, E: Engine> StagesRunner<'a, E> {
+    fn stages(&mut self) -> LaneStages<'_, E> {
+        LaneStages {
+            waiter: &mut self.waiter,
+            env: LaneEnv {
+                store: self.env.store,
+                lanes: self.env.lanes,
+                policies: self.env.policies,
+                procs: self.env.procs,
+                host: self.env.host,
+                evidence: &crate::waiter::load_artifacts,
+                triage: self.env.triage,
+                tags: self.env.tags,
+            },
+            lane: self.lane.clone(),
+        }
+    }
+
+    /// The waiter back, for the engine's shutdown.
+    pub fn into_waiter(self) -> Waiter<E> {
+        self.waiter
+    }
+}
+
+fn hosted_end(hosted: &Hosted) -> JobEnd {
+    match hosted {
+        Hosted::Aborted(_) => JobEnd::Aborted,
+        _ => JobEnd::Done,
+    }
+}
+
+impl<E: Engine> LaneRunner for StagesRunner<'_, E> {
+    fn tick(&mut self) -> Result<(), String> {
+        self.waiter.drain().map_err(|e| e.to_string())
+    }
+
+    fn eligibility(&mut self) -> Eligibility {
+        self.stages().eligibility()
+    }
+
+    fn run_job(&mut self, job: &Job, to_host: &mut dyn FnMut()) -> JobEnd {
+        let mut stages = self.stages();
+        match stages.drive(job) {
+            Driven::Collected(end) => {
+                to_host();
+                hosted_end(&stages.host(job, &end))
+            }
+            Driven::Aborted(_) => JobEnd::Aborted,
+            _ => JobEnd::Done,
+        }
+    }
+
+    fn resume(&mut self, job: &Job) -> JobEnd {
+        hosted_end(&self.stages().resume_host(job))
+    }
+
+    fn govern(&mut self, now_ms: u64) {
+        if let Some(governor) = &mut self.governor
+            && let Err(error) = governor.tick(now_ms)
+        {
+            (self.log)(&format!("resource check: {error}"));
+        }
+    }
+
+    fn command(&mut self, op: &str, _params: Value) -> Result<Value, ApiError> {
+        Err(ApiError::new(
+            ErrorCode::Unsupported,
+            format!("{op} is not served by this daemon"),
+        ))
+    }
+}

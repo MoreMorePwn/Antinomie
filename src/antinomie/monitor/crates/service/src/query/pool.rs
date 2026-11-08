@@ -336,7 +336,10 @@ mod tests {
             })
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::Unavailable);
-        assert_eq!(error.reason(), None);
+        assert_eq!(
+            error.reason(),
+            Some(crate::api::error::ErrorReason::Cancelled)
+        );
         // The next read starts cancelled.
         let again = pool
             .run(ReadClass::Light, &context, |_| Ok(()))

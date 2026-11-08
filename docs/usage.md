@@ -1827,6 +1827,50 @@ the web layer are not shipped yet; this list is what `antinomie-cli --help` show
   `run show`, `run export`). The job contract they will
   use is written down in [Job API, version 1](job-api-1.md).
 
+### Auto mode (0.9.0)
+
+Auto mode runs samples unattended: a sample goes in, it runs in a VM that is
+reset to a clean snapshot first, the recording is analysed, and a report and a
+label come out. Give it a data folder of its own (`--data-dir`), never the one
+the window uses: one process owns a data folder at a time, and the daemon keeps
+it for as long as it runs.
+
+**The daemon.** `antinomie-cli --data-dir ~/auto auto daemon` runs in the
+foreground until it is stopped; put it in the background with your service
+manager or `&`. It owns the data folder (`run/owner.json` says "daemon" and names
+its socket), so the window, another daemon or a command that needs the engine on
+that folder is refused with exit 21 and told who owns it. It reads
+`service.toml` and `policies/` (see [service configuration](service-config.md)),
+finishes what a crash left behind, runs the queue one job at a time on its lane,
+and serves the job API on `<data>/run/antinomie.sock`.
+
+| Signal | What the daemon does |
+|---|---|
+| `SIGTERM` or Ctrl-C | Stops taking jobs (queued jobs stay queued). A job that is past its VM stages finishes its analysis and report first, for up to 120 s (`[daemon] shutdown_host_grace_s`). A job still in the VM is stopped and put back in the queue without using an attempt |
+| a second one within 5 s | Stops at once, VM included (exit 130); the next start finishes the rest |
+| `SIGHUP` | Reads `policies/` and `service.toml` again; a file with an error keeps the old settings. Jobs already queued keep the policy they were submitted under |
+| `SIGUSR1` | Writes the queue's state to the log |
+
+**Who can talk to the daemon.** Only you. The socket file can be opened only by
+its owner (mode 0600, in a folder only you can enter, 0700), and on every
+connection the daemon asks the system which user is on the other end and closes
+the connection, without a word, unless it is the user the daemon runs as. Every
+local client therefore acts as you, with every right. The daemon never opens a
+file a client names: a sample travels over the socket in pieces and is checked and
+stored by the daemon, and a report path it hands back is checked to be inside the
+job's own folder. Each request is checked strictly (an unknown field is an error
+that names it), and the socket has limits so a broken or hostile local program
+cannot wear the daemon down: 2 MiB per message, 16 requests at a time and 50 a
+second per connection, 64 connections, 64 event subscriptions, idle connections
+closed after 5 minutes, and a client that stops reading is dropped. Nothing the
+daemon does contacts the network on its own; a sample's traffic is dropped unless
+its policy chooses the simulated internet (`inet_sim`).
+
+**Event streams.** Every change of a job is an event with a number: `seq` counts
+the events of one job, `gseq` counts every event of the daemon and never repeats.
+A client that lost its connection asks for the events after the last number it
+saw and gets each one exactly once, then the new ones as they happen.
+
 ## Troubleshooting
 
 - **Moving the data folder (0.9.0).** Close Antinomie, move or copy the whole data

@@ -5,7 +5,6 @@
 //!
 //! This crate must stay UI-free: it never depends on egui, eframe, winit or
 //! `antinomie-monitor-ui` (checked by `crates/cli/tests/dependency_tree.rs`).
-//! It is a skeleton; later cards fill the modules below.
 
 // `ApiError` is the contract's error type and the design's trait signatures
 // return it by value (`Result<_, ApiError>`, design 2.8, 5.12.1); it carries
@@ -24,6 +23,9 @@ pub mod clock;
 pub mod config;
 /// Custody actors and the `automation` entry of a job (card P3-7).
 pub mod custody;
+/// The daemon: the lane's thread, the operations behind the socket, the
+/// shutdown (card P3-6a).
+pub mod daemon;
 /// The seam to the engine, and the fake behind it (design 7.1).
 pub mod engine;
 /// Staging, uploads and the common intake checks (card P3-2b).
@@ -36,6 +38,9 @@ pub mod query;
 pub mod resources;
 /// The JSON Schema generated from the types above.
 pub mod schema;
+/// The local socket: framing, limits, connections, subscriptions, the client
+/// (card P3-6a).
+pub mod server;
 /// The lane stages `prechecks` to `collect`, retries and the watchdog (cards P3-4b, P3-4c).
 pub mod stages;
 /// The job store: SQLite, the state machine and the queue (card P3-2).

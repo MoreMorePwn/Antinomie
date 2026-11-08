@@ -115,6 +115,18 @@ impl Store {
     /// `job.submit`. Returns the stored job: `queued`, or `rejected` with its
     /// `failure`; `replayed` when an idempotency key returned the original.
     pub fn submit(&self, caller: &Caller, spec: JobSpec, ctx: &SubmitContext<'_>) -> R<Submitted> {
+        self.submit_with(caller, spec, ctx, None)
+    }
+
+    /// `submit` for `job.retry`: the duplicate rule does not apply (a retry
+    /// asks to run again) and the new job's `repeat_of` is `retry_of`.
+    pub(super) fn submit_with(
+        &self,
+        caller: &Caller,
+        spec: JobSpec,
+        ctx: &SubmitContext<'_>,
+        retry_of: Option<&JobId>,
+    ) -> R<Submitted> {
         if !caller.has(Scope::Submit) {
             return Err(ApiError::new(
                 ErrorCode::Forbidden,
@@ -200,8 +212,11 @@ impl Store {
                     let on_duplicate = ctx
                         .on_duplicate
                         .unwrap_or(policy.policy.sample.on_duplicate);
-                    let earlier = latest_finished(&tx.tx, sample.sha256.as_str())?;
-                    let mut repeat_of = None;
+                    let earlier = match retry_of {
+                        Some(_) => None,
+                        None => latest_finished(&tx.tx, sample.sha256.as_str())?,
+                    };
+                    let mut repeat_of = retry_of.map(|id| id.as_str().to_owned());
                     if let Some(earlier) = earlier {
                         match on_duplicate {
                             OnDuplicate::Reject => {

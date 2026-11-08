@@ -109,6 +109,21 @@ x86 programs by their own table.
   same for the same run and choices; the window's dialog and Detection tab work
   as before. See "Command line" in docs/usage.md.
 
+- **The Auto mode daemon (ANT-T0380).** `antinomie-cli auto daemon` owns a
+  data folder (`run/owner.json` says "daemon" and names its socket; the window,
+  a command or a second daemon is refused with the owner named), runs the job
+  queue on its lane and serves the job API on a local socket,
+  `<data>/run/antinomie.sock`. The socket is for its owner only: mode 0600 in a
+  0700 folder, and the peer's user id is checked on every connection. Requests are
+  checked strictly and bounded (2 MiB per line, 16 in flight and 50 a second per
+  connection, 64 connections, 64 event subscriptions per client, idle and slow
+  clients closed), files arrive by upload rather than by a path the client names,
+  and an event stream resumes from a sequence number with no gap and no
+  duplicate. SIGTERM lets a job that is past its VM stages finish its analysis
+  and report (up to 120 s, `[daemon] shutdown_host_grace_s`) and puts a job in
+  its VM stages back in the queue; a second signal within 5 s stops at once;
+  SIGHUP reloads the policies. See docs/job-api-1.md and docs/service-config.md.
+
 - **Exporting a large run no longer reads its recording a second time
   (ANT-T0412).** The index Triage makes of a run when it opens it is kept for
   the report: an export, or `antinomie-cli report`, of a recording that has not
