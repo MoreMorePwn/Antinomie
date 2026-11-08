@@ -45,6 +45,12 @@ pub struct RowData {
     /// When, ms since the run's first call.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relative_ms: Option<u64>,
+    /// A network row's last packet: ms since the epoch, and ms since the run's
+    /// first call (`time_ms` and `relative_ms` are its first).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_relative_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]

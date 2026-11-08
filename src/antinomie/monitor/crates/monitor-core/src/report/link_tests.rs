@@ -126,7 +126,7 @@ pub(super) fn bpfdoor() -> Report {
             ),
             (
                 vec![
-                    "- fd1b20ee-elf-fd1b20ee5bd4 (1352 \u{b7} 1352)  fork",
+                    "fd1b20ee-elf-fd1b20ee5bd4 (1352 \u{b7} 1352)  fork",
                     "/tmp/fd1b20ee-elf-fd1b20ee5bd4",
                     "8",
                     "0",
@@ -349,7 +349,13 @@ pub(super) fn bpfdoor() -> Report {
                             "17:40:42.662 (UTC+7)",
                             "17:44:01.554 (UTC+7)",
                         ],
-                        endpoint("198.18.0.5:443"),
+                        RowData {
+                            time_ms: Some(START + 7_000),
+                            relative_ms: Some(5_463),
+                            last_ms: Some(START + 12_500),
+                            last_relative_ms: Some(10_963),
+                            ..endpoint("198.18.0.5:443")
+                        },
                     ),
                     (
                         vec![
@@ -917,5 +923,145 @@ fn write_the_linked_fixture_when_asked() {
             bytes,
         )
         .unwrap();
+    }
+}
+
+/// Every cell of every table of the section `id`, as text, row by row.
+fn section_rows(report: &Report, id: &str) -> Vec<Vec<String>> {
+    let document = layout::document(report, false);
+    let section = document.sections.iter().find(|s| s.id == id).unwrap();
+    section
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            layout::Block::Table(table) => Some(table),
+            _ => None,
+        })
+        .flat_map(|table| &table.rows)
+        .map(|row| row.iter().map(|cell| cell.text()).collect())
+        .collect()
+}
+
+#[test]
+fn network_times_are_written_like_the_other_tables() {
+    let report = bpfdoor();
+    let rows = section_rows(&report, "network");
+    let row = rows.iter().find(|r| r[0] == "198.18.0.5:443").unwrap();
+    let [.., first, last] = row.as_slice() else {
+        panic!("{row:?}")
+    };
+    assert_eq!(
+        *first,
+        format!("+5.463 s \u{b7} {}", clock(START + 7_000)),
+        "{row:?}"
+    );
+    assert_eq!(*last, format!("+10.963 s \u{b7} {}", clock(START + 12_500)));
+    // A row with no typed time keeps the text the table had.
+    let other = rows.iter().find(|r| r[0] == "203.0.113.9:8443").unwrap();
+    assert_eq!(other[other.len() - 2], "17:41:00.000 (UTC+7)");
+}
+
+#[test]
+fn an_indicators_time_is_relative_then_the_time_of_day() {
+    let at = START + 3_250;
+    assert_eq!(layout::iso_ms(&iso(at)), Some(at));
+    assert_eq!(layout::iso_ms("created, deleted"), None);
+    assert_eq!(
+        layout::indicator_stamp(&iso(at), Some(3_250)),
+        format!("+3.250 s \u{b7} {}", clock(at))
+    );
+    assert_eq!(layout::indicator_stamp(&iso(at), None), clock(at));
+    assert_eq!(layout::indicator_stamp("-", Some(1)), "-");
+}
+
+#[test]
+fn a_child_process_is_indented_under_its_parent() {
+    let report = bpfdoor();
+    let rows = section_rows(&report, "processes");
+    assert!(!rows[0][0].starts_with("+- "), "the root is not indented");
+    assert!(
+        rows[1][0].starts_with("+- fd1b20ee-elf"),
+        "{:?}",
+        rows[1][0]
+    );
+    // Two levels in: a step of no-break spaces first.
+    let mut deeper = bpfdoor();
+    deeper.processes.as_mut().unwrap().data[1].depth = Some(2);
+    let rows = section_rows(&deeper, "processes");
+    assert!(
+        rows[1][0].starts_with("\u{a0}\u{a0}\u{a0}+- "),
+        "{:?}",
+        rows[1][0]
+    );
+}
+
+#[test]
+fn the_pdf_contents_lists_every_sub_heading_like_the_bookmarks() {
+    use super::layout::{Block, DocTable, Document, Section};
+    use super::pdf_layout::{Op, lay_out};
+    let section = |id: &str, title: &str, subs: &[(&str, &str)]| Section {
+        id: id.into(),
+        title: title.into(),
+        blocks: subs
+            .iter()
+            .flat_map(|(sub_id, sub_title)| {
+                [
+                    Block::Sub {
+                        title: (*sub_title).into(),
+                        id: (*sub_id).into(),
+                    },
+                    Block::Table(DocTable::plain(vec!["A".into()], vec![vec!["x".into()]])),
+                ]
+            })
+            .collect(),
+    };
+    let document = Document {
+        title: "t".into(),
+        subtitle: "s".into(),
+        defanged: false,
+        sections: vec![
+            section("processes", "Processes", &[("p-tree", "Process tree")]),
+            section(
+                "indicators",
+                "Indicators",
+                &[("i-url", "URLs"), ("i-ip", "Addresses")],
+            ),
+            section("files", "Files", &[("f-w", "Written files")]),
+        ],
+        meta: Default::default(),
+        aliases: Default::default(),
+    };
+    let laid = lay_out(&document);
+    let words: Vec<&str> = laid
+        .pages
+        .iter()
+        .flat_map(|page| &page.ops)
+        .filter_map(|op| match op {
+            Op::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    for title in ["Process tree", "URLs", "Addresses", "Written files"] {
+        // Once in the contents, once as the heading.
+        assert_eq!(
+            words.iter().filter(|w| **w == title).count(),
+            2,
+            "{title} in {words:?}"
+        );
+    }
+    let first_page_links: Vec<&str> = laid.pages[0]
+        .links
+        .iter()
+        .map(|l| l.dest.as_str())
+        .collect();
+    for id in ["p-tree", "i-url", "i-ip", "f-w"] {
+        assert!(
+            first_page_links.contains(&id),
+            "{id} in {first_page_links:?}"
+        );
+    }
+    // The bookmarks hold the same sub-headings.
+    for title in ["Process tree", "URLs", "Addresses", "Written files"] {
+        assert!(laid.bookmarks.iter().any(|b| b.title == title), "{title}");
     }
 }

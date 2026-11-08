@@ -312,7 +312,6 @@ pub(super) fn indicators(
     built: &Built,
     matched: Option<(usize, usize, String)>,
     more: &mut [bool; 4],
-    status: &mut Option<String>,
     acts: &mut Vec<Act>,
 ) {
     let found = &built.indicators;
@@ -436,15 +435,16 @@ pub(super) fn indicators(
                     rows::item(ui, &parts, &hint)
                 },
             );
-            if let Some(text) = status.as_ref() {
-                ui.label(RichText::new(text).small().color(theme::muted()));
-            }
         },
     );
     if copy {
         let opened: [bool; 3] = std::array::from_fn(|group| background_open(ui, group));
         ui.ctx().copy_text(found.copy_text_with(&opened));
-        *status = Some(format!("Copied {} indicators", found.total()));
+        crate::activity::report(
+            ui.ctx(),
+            crate::activity::Level::Info,
+            format!("Copied {} indicators", found.total()),
+        );
     }
     if export {
         acts.push(Act::ExportIndicators);

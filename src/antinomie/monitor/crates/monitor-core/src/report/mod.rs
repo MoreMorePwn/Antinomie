@@ -264,6 +264,9 @@ pub struct Indicator {
     pub sources: String,
     pub process: String,
     pub first_seen: String,
+    /// `first_seen` as ms since the run's first call, when both are known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_seen_relative_ms: Option<u64>,
     pub last_seen: String,
     pub count: String,
     /// The dataset answer: `matched`, `no match`, `not checked`, ...

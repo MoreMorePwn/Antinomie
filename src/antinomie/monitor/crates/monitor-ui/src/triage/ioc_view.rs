@@ -76,6 +76,9 @@ pub(super) struct View {
     online_on: bool,
     job: Option<(std::sync::mpsc::Receiver<OnlineDone>, Arc<AtomicBool>)>,
     status: Option<(String, bool)>,
+    /// What an export said: told as a toast and an Activity row at the next
+    /// frame, never as a line that moves the page.
+    told: Vec<(String, bool)>,
     listings: BTreeMap<Type, list::Listing>,
     reason: String,
     open_datasets: bool,
@@ -128,6 +131,7 @@ impl View {
         self.selected.clear();
         self.listings.clear();
         self.status = None;
+        self.told.clear();
         self.job = None;
         self.run_dir = run_dir.map(std::path::Path::to_path_buf);
         if let Some(dir) = run_dir {
@@ -265,6 +269,11 @@ impl View {
 
     fn message(&mut self, text: impl Into<String>, error: bool) {
         self.status = Some((text.into(), error));
+    }
+
+    /// Say `text` as a toast and an Activity row; the page keeps its size.
+    fn tell(&mut self, text: impl Into<String>, error: bool) {
+        self.told.push((text.into(), error));
     }
 
     /// Mark a match as a false positive: one entry per dataset that lists it.
@@ -615,6 +624,14 @@ impl View {
     fn status_bar(&mut self, ui: &mut egui::Ui, ioc: &IocScan) {
         let now = feeds::now_unix();
         let key = self.key_state().map(str::to_owned);
+        for (text, error) in std::mem::take(&mut self.told) {
+            let level = if error {
+                crate::activity::Level::Error
+            } else {
+                crate::activity::Level::Info
+            };
+            crate::activity::report(ui.ctx(), level, text);
+        }
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Datasets").small().color(theme::muted()));
             if ioc.scan.loaded.is_empty() {

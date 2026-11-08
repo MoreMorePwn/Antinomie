@@ -100,6 +100,16 @@ x86 programs by their own table.
   standard error and in its JSON result (`large_recording`); the progress line
   and Cancel are unchanged.
 
+- **Run report polish (ANT-T0413).** The PDF contents page lists the
+  sub-headings of every section, the same entries as the PDF bookmarks. Network
+  and Indicators times read `+5.463 s · 17:38:21.480` like the other tables (the
+  JSON gains `last_ms`, `last_relative_ms` on Network rows and
+  `first_seen_relative_ms` on indicators). The process table shows an indented
+  tree (`+- child` under its parent) besides the Parent column; in the JSON the
+  Process cell no longer starts with hyphens (use the row's `depth`). The
+  Summary's Copy all and Export, and the IOC tab's Export, tell you with a
+  toast and an Activity row instead of a line that moved the page.
+
 - **Clock model for the boot age.** A new Clock model setting in a VM's Device
   profile (Auto, Always running, Suspend) chooses whether the boot age steps
   both guest clocks or only CLOCK_BOOTTIME. Auto picks Suspend on Debian bases,

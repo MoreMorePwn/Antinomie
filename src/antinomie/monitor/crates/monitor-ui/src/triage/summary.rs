@@ -175,7 +175,11 @@ impl TriageView {
             self.details_directory.clone(),
             self.summary_state.built.as_ref(),
         ) else {
-            self.summary_state.status = Some("This run has no folder to write to.".into());
+            crate::activity::report(
+                ctx,
+                crate::activity::Level::Error,
+                "This run has no folder to write to.",
+            );
             return;
         };
         let run = dir
@@ -183,19 +187,20 @@ impl TriageView {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
         let name = crate::export_dirs::stamped("indicators", &run, "json");
-        self.summary_state.status = Some(
-            match write_new(&dir.join("ioc"), &name, built.indicators.json().as_bytes()) {
-                Ok(path) => {
-                    crate::export_dirs::reported(ctx, "Indicators", &path);
-                    format!(
-                        "Exported {} indicators to {}",
-                        built.indicators.total(),
-                        path.display()
-                    )
-                }
-                Err(error) => error,
-            },
-        );
+        // Told as a toast and an Activity row, not as a line in the card: a
+        // line that appears moves the page under the reader.
+        match write_new(&dir.join("ioc"), &name, built.indicators.json().as_bytes()) {
+            Ok(path) => crate::activity::report(
+                ctx,
+                crate::activity::Level::Info,
+                format!(
+                    "Exported {} indicators to {}",
+                    built.indicators.total(),
+                    path.display()
+                ),
+            ),
+            Err(error) => crate::activity::report(ctx, crate::activity::Level::Error, error),
+        }
     }
 
     /// The run's last screenshot was clicked in the Summary.

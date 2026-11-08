@@ -679,6 +679,35 @@ fn zone_note(at_ms: u64, started_ms: Option<u64>) -> String {
     )
 }
 
+/// An ISO time of the JSON (`2026-11-07T10:40:42.662Z`) as ms since the epoch.
+pub(crate) fn iso_ms(text: &str) -> Option<u64> {
+    let bytes = text.as_bytes();
+    if bytes.len() < 20 || bytes[4] != b'-' || bytes[10] != b'T' || !text.ends_with('Z') {
+        return None;
+    }
+    let number = |from: usize, to: usize| text.get(from..to)?.parse::<i64>().ok();
+    let days = crate::date::days_from_civil(
+        number(0, 4)? as i32,
+        number(5, 7)? as u32,
+        number(8, 10)? as u32,
+    )?;
+    let seconds = days * 86_400 + number(11, 13)? * 3600 + number(14, 16)? * 60 + number(17, 19)?;
+    let millis = match bytes.get(19) {
+        Some(b'.') => text.get(20..23)?.parse::<i64>().ok()?,
+        _ => 0,
+    };
+    u64::try_from(seconds * 1000 + millis).ok()
+}
+
+/// A time of an indicator in a document table, as the other tables write
+/// theirs: `+5.463 s · 17:38:21.480`. Text that is not an ISO time is kept.
+pub(crate) fn indicator_stamp(text: &str, relative_ms: Option<u64>) -> String {
+    match iso_ms(text) {
+        Some(ms) => super::stamp(relative_ms, Some(ms)),
+        None => shown_iso(text),
+    }
+}
+
 /// An ISO time of the JSON (`2026-11-07T10:40:42.662Z`) in the document's
 /// zone and notation; other text is left as it is.
 pub(crate) fn shown_iso(text: &str) -> String {

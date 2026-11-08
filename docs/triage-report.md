@@ -124,8 +124,8 @@ the file's entry (its first row: what the run wrote, else the first tab that
 lists it); a process, a file, an endpoint and an indicator list the findings
 about them. A link whose entry is not in the document (a section left out, a
 row past the cap) is plain text, so no link is ever dangling. The PDF has a
-**Contents** block with the page of each section and of each Files and Network
-tab, every entry is a named destination, and every link a link annotation; the
+**Contents** block with the page of each section and of every sub-heading in it
+(the same entries as the bookmarks), every entry is a named destination, and every link a link annotation; the
 HTML highlights the row a link jumps to; the Markdown uses `<a id>` anchors and
 `[text](#id)` links (GitHub keeps both). The JSON carries the same ids (`id`)
 and links (`*_ref`, `*_refs`), and each one names an id of the same file.
@@ -171,7 +171,8 @@ and links (`*_ref`, `*_refs`), and each one names an id of the same file.
   (`Antinomie Triage report: elf-fd1b20ee5bd4 - BPFDoor · HIGH · run f9c3d854`).
 - Times in a document are in the zone the app shows (the overview says which),
   with the date; a time marked `~` is estimated from the guest clock and `+N s`
-  is the time since the run's first call. File names carry the UTC time and a
+  is the time since the run's first call. Every table writes a time as
+  `+5.463 s · 17:38:21.480` (the Network and Indicators tables too). File names carry the UTC time and a
   trailing `Z`.
 - The overview says how the run ended in the app's words ("Stopped by you at 6
   min 25 s · root exited 0", "Ran for 1 min 20 s · exit 255", "Ended by VM
@@ -260,7 +261,7 @@ the anchors and links. `docs/triage-report-schema-1.json` describes version 1.
 | `summary` | `assessment` (`matched_indicators`, `suspicious_behaviour`, `observed_only`, `no_findings`), `statement`, `highest_tier`, `families` (the families the report names) with `family_sources` (who named each) and `other_families`, `tiers` (findings by tier as the app counts them; `info_not_listed` INFO findings are not in `findings`), `key_findings` (objects: `tier`, `rule`, `title`, `target`, `process`, `pid`, `cookie`, `count`, `first_ms`, `relative_ms`, `attack`, `why`, `finding` and the links `finding_ref`, `process_ref`, `target_ref`, `attack_refs`), `key_findings_text`, `key_findings_total`, `key_behaviours` (HIGH and MEDIUM rules), `counts`. |
 | `indicators` | `id` (`ioc-<n>`), `kind` (`endpoint`, `domain`, `url`, `tls`, `file`), `value`, the dataset answer (`verdict`, `matched`, `dataset`, `record_id`, `family`, `confidence`, `reference`), where it was seen (`pids`), and per kind `url`, `sni`/`ja3`/`ja4`/`cert_sha1`, `sha256`/`md5`/`sha1`/`path`, `stand_in` (the name a Tor stand-in address was handed out for), `not_shared` (why MISP and STIX leave it out) and `base_noise` (the reason, when the row is the base image's own clock sync, DHCP, apt traffic or the guest's resolver; such rows are left out of the document tables, MISP and STIX); `target_ref`, `process_refs`, `finding_refs`. Raw values. |
 | `attack` | Techniques the run's rules cite: `id`, `name`, `rules`, `count`, `rule_refs` (one per rule: its first finding's `rule-…` or its detection's `det-…`). |
-| `processes`, `findings` | A table: `columns`, `rows` (text), `omitted`, `indicator_columns`, and `data`: one object per row with its `id`, typed values (`pid`, `cookie`, `parent_pid`, `depth`, `time_ms`, `relative_ms`, `count`, `bytes`, `path`, `endpoint`, `domain`, `rule`, `tier`, `target`, `attack`) and links (`process_ref`, `parent_ref`, `target_ref`, `domain_ref`, `endpoint_refs`, `attack_refs`, `finding_refs`, `file_refs`). Empty values are left out. |
+| `processes`, `findings` | A table: `columns`, `rows` (text), `omitted`, `indicator_columns`, and `data`: one object per row with its `id`, typed values (`pid`, `cookie`, `parent_pid`, `depth`, `time_ms`, `relative_ms`, `last_ms`, `last_relative_ms`, `count`, `bytes`, `path`, `endpoint`, `domain`, `rule`, `tier`, `target`, `attack`) and links (`process_ref`, `parent_ref`, `target_ref`, `domain_ref`, `endpoint_refs`, `attack_refs`, `finding_refs`, `file_refs`). Empty values are left out. In `processes` the first cell is the process alone: the tree is the row order and `depth` (the documents indent a child under its parent). The Network tables carry the same typed times (`time_ms`, `relative_ms` for the first packet, `last_ms`, `last_relative_ms` for the last). |
 | `files` | `tabs`: one named table for each Files tab. |
 | `file_activity` | Per created or changed file: `id`, `path`, `created`, `changed`, `deleted`, `final_size`, `guest_sha256`, `reconstruction` (`complete` or `incomplete`), `bytes_written`, `bytes_not_captured`, `bytes_unknown`, `bundle_entry`, `process_ref`, `finding_refs`. |
 | `network` | Named tables: Endpoints, Domains, URLs, TLS. |

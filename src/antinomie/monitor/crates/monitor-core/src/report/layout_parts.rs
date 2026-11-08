@@ -4,8 +4,8 @@
 //! indicators, techniques, processes, suspicious activity, files, network and
 //! detections, each cell linked to the entry it names.
 use super::layout::{
-    Block, Builder, Cell, DocTable, FAMILY_EVIDENCE, Span, or_unknown, plain_rule, severity_text,
-    shown_iso, thousands,
+    Block, Builder, Cell, DocTable, FAMILY_EVIDENCE, Span, indicator_stamp, or_unknown, plain_rule,
+    severity_text, thousands,
 };
 use super::refs::RowData;
 use super::{DOCUMENT_ROWS, Indicator, IndicatorKind, KeyFinding, Report, Summary, Table, stamp};
@@ -164,7 +164,7 @@ impl Builder {
                     ),
                     Cell::plain(i.verdict.clone()),
                     self.process_cell(i),
-                    Cell::plain(shown_iso(&i.first_seen)),
+                    Cell::plain(indicator_stamp(&i.first_seen, i.first_seen_relative_ms)),
                 ]
             })
             .collect();
@@ -278,7 +278,10 @@ impl Builder {
                         Cell::plain(indicator.dataset.clone()),
                         Cell::plain(indicator.family.clone()),
                         self.process_cell(indicator),
-                        Cell::plain(shown_iso(&indicator.first_seen)),
+                        Cell::plain(indicator_stamp(
+                            &indicator.first_seen,
+                            indicator.first_seen_relative_ms,
+                        )),
                         Cell::plain(indicator_seen(group)),
                         Cell::plain(if indicator.not_shared.is_empty() {
                             "yes".to_owned()
@@ -437,6 +440,13 @@ impl Builder {
                     .collect();
                 if let Some(first) = cells.first_mut() {
                     *first = std::mem::take(first).with_id(&d.id);
+                    // The process tree: a child sits under its parent, one
+                    // step in for each level (no-break spaces, so the
+                    // indentation survives wrapping and HTML).
+                    if is_processes && let Some(depth) = d.depth.filter(|d| *d > 0) {
+                        let indent = "\u{a0}".repeat(3 * (depth as usize - 1).min(12));
+                        first.spans.insert(0, Span::plain(format!("{indent}+- ")));
+                    }
                 }
                 // A rule's anchor sits on its first finding's Rule cell.
                 if let Some(rule) = col("Rule").and_then(|c| cells.get_mut(c)) {
@@ -491,6 +501,12 @@ impl Builder {
         match column {
             "Time" | "Started" if d.time_ms.is_some() || d.relative_ms.is_some() => {
                 Cell::plain(stamp(d.relative_ms, d.time_ms))
+            }
+            "First seen" if d.time_ms.is_some() || d.relative_ms.is_some() => {
+                Cell::plain(stamp(d.relative_ms, d.time_ms))
+            }
+            "Last seen" if d.last_ms.is_some() || d.last_relative_ms.is_some() => {
+                Cell::plain(stamp(d.last_relative_ms, d.last_ms))
             }
             "Tier" => Cell::plain(text.to_uppercase()),
             "Process" if !d.process_ref.is_empty() => Cell::link(text, &d.process_ref),

@@ -74,6 +74,7 @@ fn tier_rank(tier: &str) -> usize {
 }
 
 fn indicators(job: &Job, scan: &ArchiveScan) -> Vec<(report::Indicator, bool)> {
+    let run_ms = super::rows::run_start_ms(scan.clock_anchor.or(job.clock), run_start(scan));
     let Some(ioc) = &scan.ioc else {
         return Vec::new();
     };
@@ -140,6 +141,7 @@ fn indicators(job: &Job, scan: &ArchiveScan) -> Vec<(report::Indicator, bool)> {
                 sources: cell("sources"),
                 process: cell("process"),
                 first_seen: cell("first_seen_in_run"),
+                first_seen_relative_ms: super::rows::capture_time(indicator.first_us, run_ms).1,
                 last_seen: cell("last_seen_in_run"),
                 count: indicator.count.clone(),
                 verdict: cell("verdict"),
@@ -436,16 +438,9 @@ fn processes(scan: &ArchiveScan, clock: Option<antinomie_monitor_core::HostClock
     let rows = super::super::process_tree::process_rows(&scan.process, clock, &scan.suspicious);
     let headers = super::super::process_tree::PROCESS_HEADERS;
     let mut out = table(&headers, &[0, 1, 2, 3, 4, 5, 6, 7, 8], &rows, 0, &[]);
+    // The tree is the rows' order and each row's `depth`: the document draws
+    // the indentation from it, the JSON's first cell is the process alone.
     out.data = super::rows::processes(&rows, clock, run_start(scan));
-    for (row, source) in out.rows.iter_mut().zip(&rows) {
-        let depth = files::number(&source[0].values, "process.depth").unwrap_or(0) as usize;
-        row[0] = format!(
-            "{}{}{}",
-            "-".repeat(depth),
-            if depth > 0 { " " } else { "" },
-            row[0]
-        );
-    }
     out
 }
 
@@ -804,7 +799,10 @@ pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
         }
     }
     if choices.has(Part::Network) {
-        report.network = Some(super::build_sources::network(scan));
+        report.network = Some(super::build_sources::network(
+            scan,
+            super::rows::run_start_ms(clock, run_start(scan)),
+        ));
     }
     if choices.has(Part::Detections) {
         report.detections = Some(super::build_sources::detections(&job.archive));
