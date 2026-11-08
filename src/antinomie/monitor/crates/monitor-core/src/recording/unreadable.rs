@@ -58,3 +58,27 @@ fn unreadable_run(directory: &Path, vm_id: &str, error: &RecordingError) -> RunS
         analysis: None,
     }
 }
+
+/// An analysis embedded in `run.json` that breaks the reader's bounds is left
+/// out, with a note, and the run is still listed.
+pub(super) fn bound_embedded_analysis(run: &mut RunSummary) {
+    if let Some(report) = &run.analysis
+        && crate::analysis::validation::validate_report(report).is_err()
+    {
+        run.analysis = None;
+        run.notes.push(
+            "The analysis saved with this run violates the reader's bounds and is not shown."
+                .into(),
+        );
+    }
+}
+
+/// An analysis report file that cannot be used becomes a note on the run; the
+/// copy saved with the run is shown.
+pub(super) fn note_sidecar(run: &mut RunSummary, opened: Result<(), RecordingError>) {
+    if let Err(error) = opened {
+        run.notes.push(format!(
+            "The analysis report file could not be used ({error}); the copy saved with the run is shown."
+        ));
+    }
+}

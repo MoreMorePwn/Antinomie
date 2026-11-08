@@ -34,8 +34,8 @@ fn an_old_absolute_bundle_moved_to_a_new_root_loads_from_the_new_folder() {
     // Recorded by an older build in a folder that no longer exists.
     write(
         &root,
-        "/home/old/data/bases/abc/kernel",
-        "/home/old/data/bases/abc/base.qcow2",
+        "/srv/old-data/data/bases/abc/kernel",
+        "/srv/old-data/data/bases/abc/base.qcow2",
     );
     let bundle = Bundle::load(&root).unwrap();
     assert_eq!(bundle.kernel, root.join("kernel"));
@@ -83,7 +83,7 @@ fn a_path_that_escapes_the_bundle_folder_is_still_refused() {
     write(&root, "../kernel", "base.qcow2");
     let error = Bundle::load(&root).unwrap_err();
     assert!(error.contains("escapes bundle directory"), "{error}");
-    write(&root, "/home/old/../../etc/passwd", "base.qcow2");
+    write(&root, "/srv/old-data/../../etc/passwd", "base.qcow2");
     let error = Bundle::load(&root).unwrap_err();
     assert!(error.contains("escapes bundle directory"), "{error}");
     // A link inside the folder that leaves it.
@@ -93,7 +93,7 @@ fn a_path_that_escapes_the_bundle_folder_is_still_refused() {
     let error = Bundle::load(&root).unwrap_err();
     assert!(error.contains("escapes bundle directory"), "{error}");
     // A name that is not in the folder at all says so.
-    write(&root, "/home/old/bases/abc/missing", "base.qcow2");
+    write(&root, "/srv/old-data/bases/abc/missing", "base.qcow2");
     let error = Bundle::load(&root).unwrap_err();
     assert!(error.contains("not found in the bundle folder"), "{error}");
     fs::remove_dir_all(&root).unwrap();
