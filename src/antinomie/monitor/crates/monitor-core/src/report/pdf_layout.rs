@@ -90,6 +90,8 @@ pub(super) struct Page {
 
 /// A bookmark: a section title and where it sits.
 pub(super) struct Bookmark {
+    /// 0 for a section, 1 for a sub-heading under the section before it.
+    pub level: u8,
     pub title: String,
     pub page: usize,
     pub y: f32,
@@ -217,6 +219,7 @@ impl Cursor {
         let (page, y) = (self.pages.len() - 1, self.y + 16.0);
         if bookmark {
             self.bookmarks.push(Bookmark {
+                level: 0,
                 title: title.to_owned(),
                 page,
                 y,
@@ -241,6 +244,15 @@ impl Cursor {
         self.y -= 12.0;
         let y = self.y + 2.0;
         self.dest(id, y);
+        if !id.is_empty() {
+            let page = self.pages.len() - 1;
+            self.bookmarks.push(Bookmark {
+                level: 1,
+                title: title.to_owned(),
+                page,
+                y,
+            });
+        }
         let size = 10.0;
         self.y -= size;
         let y = self.y;
@@ -258,8 +270,6 @@ impl Cursor {
         first_bold: bool,
     ) {
         let leading = size * 1.3;
-        let tactic_column =
-            header.and_then(|header| header.iter().position(|c| c == super::TACTIC_COLUMN));
         let tier_column = header.and_then(|header| header.iter().position(|c| c == "Tier"));
         type Prepared = (Vec<Vec<Frag>>, Font, Vec<String>);
         let draw_row = |this: &mut Self, cells: &[Prepared], height: f32, head: bool| {
@@ -277,24 +287,6 @@ impl Cursor {
                     .iter()
                     .map(|line| line.iter().map(|f| f.text.as_str()).collect())
                     .collect();
-                // A bar of the tactics' colours at the cell's left edge; the
-                // names stay in the text.
-                if !head && Some(column) == tactic_column {
-                    let tactics = super::cell_tactics(&joined.join(" "));
-                    let part = (height - 2.0) / tactics.len().max(1) as f32;
-                    for (n, tactic) in tactics.iter().enumerate() {
-                        let [r, g, b] = tactic.rgb(true);
-                        let fill = [r, g, b].map(|c| f32::from(c) / 255.0);
-                        this_rect(
-                            this,
-                            x + 1.0,
-                            bottom + 1.0 + part * n as f32,
-                            1.8,
-                            part,
-                            fill,
-                        );
-                    }
-                }
                 for (i, line) in lines.iter().enumerate() {
                     let y = top - PAD - size - i as f32 * leading + (size * 0.15);
                     // The tier words in the colours of the app's chips.
@@ -466,7 +458,7 @@ impl Cursor {
             self.frags(MARGIN + indent, y, Font::Regular, size, INK, &frags[0]);
             let number = pages
                 .and_then(|pages| pages.get(&id))
-                .map_or(String::new(), |page| format!("page {}", page + 1));
+                .map_or(String::new(), |page| (page + 1).to_string());
             let w = width(Font::Regular, size, &number);
             let right = MARGIN + 620.0;
             self.text(right - w, y, Font::Regular, size, MUTED, &number);

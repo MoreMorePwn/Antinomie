@@ -223,8 +223,8 @@ def check_pdf(folder, doc):
         check((title in text) == present or key == "custody", f"PDF {'has' if present else 'omits'} the {title} section")
     if doc.get("summary") is not None:
         contents = text.split("At a glance", 2)
-        check(len(contents) == 3 and "Contents" in contents[0] and "page 1" in contents[1],
-              "PDF starts with a Contents block that lists At a glance on page 1")
+        check(len(contents) == 3 and "Contents" in contents[0] and "page" not in contents[1] and contents[1].lstrip().startswith("1"),
+              "PDF starts with a Contents block that lists At a glance with a bare page number 1")
     outline = run("mutool", "show", str(path), "outline").stdout
     check("At a glance" in outline or run("qpdf", "--show-npages", str(path)).returncode == 0, "PDF has bookmarks or opens")
     return text
