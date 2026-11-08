@@ -56,7 +56,7 @@ is the recorded run; no VM is running.</sub>
 > sample can still do.
 
 > [!NOTE]
-> This README describes **0.8.2**, a host-only release on the 0.8 line. Download it
+> This README describes **0.8.3**, a host-only release on the 0.8 line. Download it
 > from [Releases](https://github.com/MoreMorePwn/Antinomie/releases); the
 > [changelog](CHANGELOG.md) lists every change.
 
@@ -169,14 +169,14 @@ and network card into its disk without root; BusyBox VMs do not need it:
 sudo apt install qemu-system-x86 qemu-utils qemu-system-gui curl libsqlite3-0 bubblewrap tshark util-linux libguestfs-tools
 ```
 
-Download `antinomie-0.8.2-linux-x86_64.tar.gz` and `SHA256SUMS` from
+Download `antinomie-0.8.3-linux-x86_64.tar.gz` and `SHA256SUMS` from
 [Releases](https://github.com/MoreMorePwn/Antinomie/releases) into one folder,
 then verify, extract and install for your user (no root):
 
 ```sh
 sha256sum --check SHA256SUMS
-tar -xzf antinomie-0.8.2-linux-x86_64.tar.gz
-cd antinomie-0.8.2
+tar -xzf antinomie-0.8.3-linux-x86_64.tar.gz
+cd antinomie-0.8.3
 ./install.sh
 antinomie --check-dependencies
 antinomie
@@ -202,7 +202,7 @@ antinomie
 Install the [host build prerequisites](src/antinomie/monitor/README.md#build-and-run), then:
 
 ```sh
-git clone --branch v0.8.2 https://github.com/MoreMorePwn/Antinomie.git
+git clone --branch v0.8.3 https://github.com/MoreMorePwn/Antinomie.git
 cd Antinomie
 ./run.sh
 ```
@@ -374,6 +374,49 @@ Import the output folder with **Add base → Import base…**.
 The app checks dependencies at startup (**Tools → App dependencies**). From a
 terminal: `antinomie --check-dependencies`. The
 [full dependency list](docs/usage.md#dependencies-and-analysis-tools) names every tool.
+
+## What's new in 0.8.3
+
+0.8.3 runs the same revision-20 bases as 0.8.0 to 0.8.2; the
+[changelog](CHANGELOG.md) has every change, including the fixes.
+
+* **A new Triage Summary:** a header strip with the sample, its packer, the base,
+  route and exit; family candidates; **Key findings** (the worst findings, each
+  opening its Details); an **Indicators** tree of endpoints, DNS names, URLs and
+  files with Copy all and Export; and a **Relationships** graph of processes,
+  files, endpoints and injections, with Compact and Full views and Mermaid copy.
+* **Suspicious activity in plain words:** coloured tier chips with a hover that
+  says why a row has its tier, and descriptions that say what happened and why it
+  matters.
+* **Process tree and By file:** a Process tree with executable names, pids and
+  findings, a click that opens the process, and a **By file** table with one row
+  for each file the run touched and its per-file history.
+* **Stop run:** ends a run that never exits without stopping the VM, works from
+  any page, and records "Stopped by you at 5 min 9 s".
+* **Dumps when suspicious activity is seen:** a run can take a memory dump or a
+  core the moment a rule of the tier you chose matches. Every core and memory dump
+  says which run it belongs to and why it was taken, with **Run** columns and a
+  **This run only** filter.
+* **IDS and Sigma after every run:** a finished run is scanned as soon as its
+  recording is saved, or says "Not scanned" and why.
+* **Family candidates:** families come from rules that name one on purpose, and
+  vendor names are never a family.
+* **The VM's screen in the app:** a **VM screen** tab with click-to-type, Fit and
+  1:1, Ctrl+Alt+Del and Screenshot, and a **Screenshots** gallery in the Library.
+* **Keyboard shortcuts you can change:** **Settings > Keyboard** has one row for
+  each action, refuses a key another action holds, and the defaults suit a 60 %
+  keyboard.
+* **A foldable sidebar and panes:** the sidebar folds to a rail of icons
+  (**Ctrl+B**), Details, Activity and Jobs fold to their tab strip (**Ctrl+J**),
+  and the toolbar has one Start/Stop button.
+* **abuse.ch YARAhub:** about 1,700 community YARA rules as a rule pack beside
+  YARA-Forge and Elastic.
+* **Reports:** the run report opens with **At a glance** and a key-findings table,
+  links every process, file, endpoint and rule, has a contents list and a
+  bookmark tree in the PDF, and comes as a **Markdown** report too; the JSON
+  report is schema 2.
+* **Samples and static analysis:** the sample page shows Triage's family, a failed
+  capa reads as a sentence, and every filter box has a cross that clears it.
 
 ## What's new in 0.8.2
 

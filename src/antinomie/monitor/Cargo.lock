@@ -166,7 +166,7 @@ dependencies = [
 
 [[package]]
 name = "antinomie-monitor-core"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "cc",
  "ext4-view",
@@ -194,7 +194,7 @@ dependencies = [
 
 [[package]]
 name = "antinomie-monitor-ui"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "antinomie-monitor-core",
  "chrono",

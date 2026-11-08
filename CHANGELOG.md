@@ -4,7 +4,17 @@ All notable changes to Antinomie. Versions follow semantic versioning; see
 [CONTRIBUTING.md](CONTRIBUTING.md#12-versioning). Each version says which bases
 it runs.
 
-## 0.8.3 — 2026-MM-DD
+## 0.8.3 — 2026-11-08
+
+Antinomie 0.8.3 is a host-only release on the 0.8 line; it runs the same
+revision-20 bases as 0.8.0, 0.8.1 and 0.8.2. It follows an evaluation of 15 real
+malware samples: a new Triage Summary with key findings, an indicators tree and a
+Relationships graph; Suspicious activity in plain words; a clearer Process tree
+and a By file table; dumps taken when suspicious activity is seen, each saying
+which run it belongs to; IDS and Sigma scans after every run; the VM screen in
+the app with a Screenshots gallery; changeable keyboard shortcuts; foldable
+sidebar and panes; YARAhub rules; and reports that open with an At a glance
+section, link every entry and come as HTML, PDF and Markdown. Details follow.
 
 ### Host
 
