@@ -3448,7 +3448,7 @@ fn categories_and_identity_cards_end_at_the_same_height() {
 }
 
 #[test]
-fn decompilation_lines_sit_one_font_row_apart() {
+fn decompilation_lines_are_a_font_row_and_a_little_air_apart() {
     let ctx = egui::Context::default();
     crate::theme::install(&ctx);
     let (report, page) = code_report(AnalysisKind::Decompilation, &[("main", 0x2000, 8)]);
@@ -3466,12 +3466,13 @@ fn decompilation_lines_sit_one_font_row_apart() {
         })
         .collect();
     numbers.sort_by(|a, b| a.top().total_cmp(&b.top()));
-    // A number's text rect is one row of the monospace font.
+    // A number's text rect is one row of the monospace font; lines are that
+    // row plus 6 points of air, evenly, so they neither touch nor drift apart.
     let font_row = numbers[0].height();
     for pair in numbers.windows(2) {
         let step = pair[1].top() - pair[0].top();
         assert!(
-            step <= font_row + 0.5 && step > 0.0,
+            (step - (font_row + 6.0)).abs() <= 0.5,
             "lines {step} apart, font row {font_row}"
         );
     }
