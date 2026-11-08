@@ -45,5 +45,6 @@ order, and each is headed with its release.
 | [Host UI](implementation/host-ui.md) | The debugger tabs, performance and background tasks, status cards, upload and picker follow-ups, tab docking, display settings and terminal windows. |
 | [Triage and analysis](implementation/triage-and-analysis.md) | Run triage, Suspicious activity, the activity graph, file activity, static analysis, regex matches, IOC datasets, detection inputs and run state questions. |
 | [Network and routes](implementation/network-and-routes.md) | Network routes, the IOC window and Network tabs, abuse.ch Suricata rule packs. |
+| [Headless lanes](implementation/headless-lanes.md) | The engine seam and its fake, the lane state file, the checks of a lane and its recovery after a crash. |
 | [Disks, memory and recording](implementation/disks-memory.md) | The Disks tab, process cores, MemNixFS, the recording quota and recording disk work. |
 | [Bases and stealth](implementation/bases-and-stealth.md) | Debian module ABI and base builds, Debian bases, VM stealth profiles, Guest stealth and Cloud VPS profiles. |

@@ -19,12 +19,12 @@ mod mirror;
 mod model;
 mod patch;
 mod query;
-mod recover;
+pub mod recover;
 pub mod schema;
 mod submit;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use artifacts::NewArtifact;
 pub use lifecycle::{Eligibility, RequeueKind};

@@ -25,14 +25,14 @@ use crate::{
 };
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
-pub(super) const T0: u64 = 1_794_000_000_000;
+pub(crate) const T0: u64 = 1_794_000_000_000;
 
-pub(super) fn sha(n: u8) -> Sha256Hex {
+pub(crate) fn sha(n: u8) -> Sha256Hex {
     Sha256Hex::try_from(format!("{n:02x}").repeat(32)).unwrap()
 }
 
 /// The intake of a test: a table of samples.
-pub(super) struct FakeIntake {
+pub(crate) struct FakeIntake {
     pub samples: BTreeMap<String, JobSample>,
 }
 
@@ -66,7 +66,7 @@ impl SampleAdmission for FakeIntake {
     }
 }
 
-pub(super) struct Fx {
+pub(crate) struct Fx {
     pub dir: PathBuf,
     pub store: Store,
     pub clock: Arc<ManualClock>,
@@ -75,14 +75,14 @@ pub(super) struct Fx {
     pub limits: SubmitLimits,
 }
 
-pub(super) fn scratch(name: &str) -> PathBuf {
+pub(crate) fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("ant-store-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
 
-pub(super) fn policy(name: &str, edit: impl FnOnce(&mut Policy)) -> LoadedPolicy {
+pub(crate) fn policy(name: &str, edit: impl FnOnce(&mut Policy)) -> LoadedPolicy {
     let mut policy = Policy::default();
     policy.vm.lane_vm = Some("auto-1".into());
     edit(&mut policy);
@@ -191,11 +191,11 @@ impl Fx {
     }
 }
 
-pub(super) fn lane() -> LaneId {
+pub(crate) fn lane() -> LaneId {
     LaneId::new(1)
 }
 
-pub(super) fn caller(uid: u32) -> Caller {
+pub(crate) fn caller(uid: u32) -> Caller {
     Caller {
         client_id: format!("local:{uid}"),
         scopes: vec![Scope::Read, Scope::Submit],
@@ -203,7 +203,7 @@ pub(super) fn caller(uid: u32) -> Caller {
     }
 }
 
-pub(super) fn manager() -> Caller {
+pub(crate) fn manager() -> Caller {
     Caller {
         client_id: "local:0".into(),
         scopes: vec![Scope::Read, Scope::Submit, Scope::Manage],
@@ -211,7 +211,7 @@ pub(super) fn manager() -> Caller {
     }
 }
 
-pub(super) fn spec(n: u8) -> JobSpec {
+pub(crate) fn spec(n: u8) -> JobSpec {
     JobSpec {
         sample: SampleSource {
             sha256: Some(sha(n)),
@@ -227,19 +227,19 @@ pub(super) fn spec(n: u8) -> JobSpec {
     }
 }
 
-pub(super) fn keyed(n: u8, key: &str) -> JobSpec {
+pub(crate) fn keyed(n: u8, key: &str) -> JobSpec {
     JobSpec {
         idempotency_key: Some(key.into()),
         ..spec(n)
     }
 }
 
-pub(super) fn on_dup(policy: &mut Policy, mode: OnDuplicate) {
+pub(crate) fn on_dup(policy: &mut Policy, mode: OnDuplicate) {
     policy.sample.on_duplicate = mode;
 }
 
 /// The event types of a job, in order.
-pub(super) fn kinds(fx: &Fx, job: &JobId) -> Vec<String> {
+pub(crate) fn kinds(fx: &Fx, job: &JobId) -> Vec<String> {
     let mut events = Vec::new();
     let mut after = 0;
     loop {

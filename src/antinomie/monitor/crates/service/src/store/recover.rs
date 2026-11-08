@@ -14,6 +14,8 @@ use super::{
     lifecycle::{RequeueKind, current, requeue_in, terminate},
     model::{from_name, load_job},
 };
+use std::collections::HashSet;
+
 use crate::api::{
     failure::{Failure, FailureCode},
     ids::JobId,
@@ -29,6 +31,8 @@ pub struct RecoveryReport {
     pub failed: Vec<JobId>,
     /// Jobs found `cancelling` for a user's cancel, now `cancelled`.
     pub cancelled: Vec<JobId>,
+    /// Jobs found `running` that the caller asked to leave (`keep`).
+    pub kept: Vec<JobId>,
     /// Mirror lines appended again.
     pub mirror_lines: usize,
     /// `spec.json` files written again.
@@ -39,6 +43,15 @@ impl Store {
     /// Run the recovery of 4.8. Safe to run twice: the second run finds
     /// nothing to do.
     pub fn recover(&self) -> R<RecoveryReport> {
+        self.recover_keeping(&HashSet::new())
+    }
+
+    /// [`recover`](Self::recover), except that the `running` jobs named in
+    /// `keep` stay as they are: their lane stages are over (`collect`
+    /// finished, the lane file says so) and their host stages resume at
+    /// `analyse`, so putting them back in the queue would run the VM again
+    /// (design 4.1, idempotent re-entry).
+    pub fn recover_keeping(&self, keep: &HashSet<JobId>) -> R<RecoveryReport> {
         let mut report = RecoveryReport::default();
         let stuck: Vec<String> = {
             let conn = self.conn();
@@ -53,6 +66,10 @@ impl Store {
         };
         for id in stuck {
             let id = JobId::try_from(id).map_err(internal)?;
+            if keep.contains(&id) && self.raw_state(&id)? == JobState::Running {
+                report.kept.push(id);
+                continue;
+            }
             self.write(|tx| {
                 let cur = current(tx, &id)?;
                 let failure = Failure::new(

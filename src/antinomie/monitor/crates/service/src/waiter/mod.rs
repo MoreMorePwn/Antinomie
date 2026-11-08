@@ -14,7 +14,7 @@
 //!
 //! [`ManualClock`]: crate::clock::ManualClock
 use crate::clock::Clock;
-use antinomie_monitor_core::{Backend, Command, Notification, Snapshot};
+use antinomie_monitor_core::{Command, Notification, Snapshot};
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
@@ -39,22 +39,7 @@ pub const LANE_SILENCE: Duration = Duration::from_secs(60);
 /// program stopped, small enough to leave in a result.
 pub const TERMINAL_TAIL: usize = 64 * 1024;
 
-/// How the waiter talks to an engine. `Backend` is the real one; tests script
-/// a fake.
-pub trait Engine {
-    fn send(&mut self, command: Command) -> Result<u64, String>;
-    /// The next notification within `timeout`, or `None`.
-    fn recv(&mut self, timeout: Duration) -> Result<Option<Notification>, String>;
-}
-
-impl Engine for Backend {
-    fn send(&mut self, command: Command) -> Result<u64, String> {
-        Backend::send(self, command)
-    }
-    fn recv(&mut self, timeout: Duration) -> Result<Option<Notification>, String> {
-        self.recv_timeout(timeout)
-    }
-}
+pub use crate::engine::Engine;
 
 /// Why a wait ended without the thing waited for.
 #[derive(Clone, Debug, PartialEq, Eq)]

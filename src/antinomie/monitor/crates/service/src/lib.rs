@@ -24,8 +24,12 @@ pub mod clock;
 pub mod config;
 /// Custody actors and the `automation` entry of a job (card P3-7).
 pub mod custody;
+/// The seam to the engine, and the fake behind it (design 7.1).
+pub mod engine;
 /// Staging, uploads and the common intake checks (card P3-2b).
 pub mod intake;
+/// Lanes: the state file, the checks and recovery (card P3-4a).
+pub mod lane;
 /// `QueryApi`, the read-only recording queries (cards Q-1 and later).
 pub mod query;
 /// The JSON Schema generated from the types above.
