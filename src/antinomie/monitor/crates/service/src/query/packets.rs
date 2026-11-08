@@ -47,7 +47,7 @@ fn cut(text: &str) -> String {
     text.chars().take(COLUMN_LIMIT).collect()
 }
 
-fn row_of(packet: &NetworkPacket) -> PacketRow {
+fn row_of(packet: &NetworkPacket, made_by: Option<MadeBy>) -> PacketRow {
     PacketRow {
         n: packet.number,
         time_us: packet.time_us,
@@ -66,6 +66,7 @@ fn row_of(packet: &NetworkPacket) -> PacketRow {
             Transport::Tcp => PacketTransport::Tcp,
             Transport::Udp => PacketTransport::Udp,
         }),
+        made_by,
     }
 }
 
@@ -261,7 +262,18 @@ impl QueryService {
         };
         let packets = result.map_err(|e| super::errors::text_error(&e, &self.scrub))?;
         let _ = rows_done;
-        let rows: Vec<PacketRow> = packets.iter().take(limit).map(row_of).collect();
+        // What made each packet needs the run's calls: one Triage index, kept.
+        let attribution = self.attribution(&opened);
+        let rows: Vec<PacketRow> = packets
+            .iter()
+            .take(limit)
+            .map(|packet| {
+                let made_by = attribution
+                    .as_deref()
+                    .map(|found| super::attribution::made_by(found, packet, &self.scrub));
+                row_of(packet, made_by)
+            })
+            .collect();
         let total = index.matching_count;
         let next = start + rows.len() as u64;
         let mut page = opened.page(rows, true);

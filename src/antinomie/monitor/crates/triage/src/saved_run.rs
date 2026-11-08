@@ -232,6 +232,16 @@ impl SavedRun {
         request
     }
 
+    /// The run's network calls for attributing its capture's flows, read
+    /// straight from the recording without writing into the run's folder
+    /// (the read-only service's form of what the scan keeps).
+    pub fn net_attribution(
+        &self,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<net_attr::NetAttribution, String> {
+        net_attr_read::read_calls(&self.run.directory, &self.request(), cancel)
+    }
+
     /// Index the whole run, as the GUI does when it is selected.
     pub fn scan(&self, cancel: &Arc<AtomicBool>) -> Result<ArchiveScan, String> {
         self.scan_with(self.request(), cancel)

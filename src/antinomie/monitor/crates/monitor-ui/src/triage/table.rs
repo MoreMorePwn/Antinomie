@@ -5,6 +5,13 @@ use super::*;
 use crate::widgets::fit_table;
 pub(super) use antinomie_triage::table::*;
 
+/// The process a Source cell names, from its row's values: `(pid, task cookie)`.
+fn source_process(values: &[(&str, RowValue)]) -> Option<(u32, u64)> {
+    let pid = files::number(values, "network.source_pid")?;
+    let cookie = files::number(values, "network.source_cookie")?;
+    (pid != 0 && cookie != 0).then_some((pid as u32, cookie))
+}
+
 /// An outcome cell "failed (EACCES)" gets the errno number on hover.
 fn hover_errno(response: egui::Response, text: &str) {
     if let Some(hover) = crate::values::outcome_hover(text) {
@@ -38,6 +45,7 @@ pub(super) fn column_widths<'a>(
                 "Path" | "URI" | "Hostname" | "Transferred / content" | "Argv" => (250.0, 650.0),
                 "Time" | "First seen" | "Last seen" => (230.0, 500.0),
                 "Behaviour" => (170.0, 260.0),
+                "Source" => (200.0, 420.0),
                 "Target" => (220.0, 560.0),
                 "ATT&CK" => (150.0, 300.0),
                 "When" => (150.0, 320.0),
@@ -301,24 +309,60 @@ fn table_rows_with(
                             branch.paint(ui.painter(), lines, branch_char);
                             branch.width(branch_char)
                         });
-                        let mut text = RichText::new(display_cell(&cell.text)).color(cell.color());
+                        // A Source that names a process opens it in Details.
+                        let source_link = (id == "triage-endpoints" && headers[column] == "Source")
+                            .then(|| source_process(&cells[0].values))
+                            .flatten();
+                        let mut text = RichText::new(display_cell(&cell.text)).color(
+                            if source_link.is_some() {
+                                ui.visuals().hyperlink_color
+                            } else {
+                                cell.color()
+                            },
+                        );
                         if cell.mono {
                             text = text.monospace();
                         }
-                        let label = egui::Label::new(text)
-                            .truncate()
-                            .selectable(false)
-                            .sense(egui::Sense::hover());
+                        let label = egui::Label::new(text).truncate().selectable(false).sense(
+                            if source_link.is_some() {
+                                egui::Sense::click()
+                            } else {
+                                egui::Sense::hover()
+                            },
+                        );
                         // A process cell may carry a note of its own (the full
                         // path, why a command line is flagged, a time).
                         let note = (id == "triage-process")
                             .then(|| process_tree::cell_hover(column, cell, &cells[0]))
                             .flatten();
-                        let hover = |response: egui::Response| match (&note, &cell.note) {
-                            (Some(note), _) | (None, Some(note)) => {
-                                response.on_hover_text(note);
+                        let hover = |response: egui::Response| {
+                            let response = match source_link {
+                                Some((pid, cookie)) => {
+                                    let response =
+                                        response.on_hover_cursor(egui::CursorIcon::PointingHand);
+                                    if response.clicked() {
+                                        response.ctx.data_mut(|data| {
+                                            data.insert_temp(
+                                                egui::Id::new(finding_cells::OPEN_PROCESS),
+                                                (pid, cookie),
+                                            )
+                                        });
+                                    }
+                                    response
+                                }
+                                None => response,
+                            };
+                            match (&note, &cell.note) {
+                                (Some(note), _) | (None, Some(note)) => {
+                                    let note = if source_link.is_some() {
+                                        format!("{note}\n\nClick to open this process in Details.")
+                                    } else {
+                                        note.clone()
+                                    };
+                                    response.on_hover_text(note);
+                                }
+                                (None, None) => hover_errno(response, &cell.text),
                             }
-                            (None, None) => hover_errno(response, &cell.text),
                         };
                         let draw = |ui: &mut egui::Ui| match indent {
                             Some(width) => {

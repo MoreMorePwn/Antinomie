@@ -289,3 +289,45 @@ fn packet_reads_write_nothing_under_the_data_directory() {
     .unwrap();
     assert_eq!(data.snapshot(), before);
 }
+
+#[test]
+fn a_capture_segment_says_which_run_started_it_and_which_were_live() {
+    let data = Data::new("capture-link");
+    let run = standard(&data);
+    // The segment's own summary: written 1 s into the run, 4 s long.
+    let started = 1_700_000_001_000u64;
+    std::fs::write(
+        data.vm_dir()
+            .join("boots")
+            .join(&run.boot)
+            .join("network")
+            .join("seg-1.json"),
+        json!({"id": "seg-1", "boot_id": run.boot, "file": "seg-1.pcap",
+               "started_ms": started, "stopped_ms": started + 4_000, "packets": 3})
+        .to_string(),
+    )
+    .unwrap();
+    // A second run on the VM that was live while the segment was written.
+    let other = add_run(&data, &run.boot, "run-2", started + 1_000, "Finalized");
+    let service = data.service();
+    let key = run.key();
+    let page = match call(
+        &service,
+        "recording.network.captures",
+        json!({"run_key": key}),
+        &ctx(),
+    )
+    .unwrap()
+    {
+        RecordingReply::Captures(page) => page,
+        other => panic!("{other:?}"),
+    };
+    let item = serde_json::to_value(&page.items[0]).unwrap();
+    assert_eq!(item["first_ms"], started);
+    assert_eq!(item["packets"], 3);
+    assert_eq!(item["link"]["certainty"], "exact");
+    assert_eq!(item["link"]["run_id"], run.id);
+    let _ = other;
+    // The run that only overlapped is named, by its id.
+    assert_eq!(item["link"]["live_runs"], json!(["run-2"]));
+}

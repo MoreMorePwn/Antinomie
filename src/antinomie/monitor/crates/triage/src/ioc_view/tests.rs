@@ -31,7 +31,9 @@ fn a_capture_gives_endpoints_domains_and_urls_with_no_datasets_unchecked() {
     let new = &scan.new_tabs;
     assert_eq!(new.endpoints.len(), 1);
     assert_eq!(new.endpoints[0][0].text, "93.184.216.34:80");
-    assert_eq!(new.endpoints[0][2].text, "tcp");
+    // No call names the flow: the Source says so.
+    assert_eq!(new.endpoints[0][2].text, "Unattributed");
+    assert_eq!(new.endpoints[0][3].text, "tcp");
     assert_eq!(new.endpoints[0][1].text, "Not checked");
     assert_eq!(new.domains[0][0].text, "example.com");
     assert_eq!(new.urls.len(), 1);

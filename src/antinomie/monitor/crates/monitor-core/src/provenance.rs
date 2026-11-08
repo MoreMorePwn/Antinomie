@@ -26,6 +26,8 @@ pub enum Origin {
     ByHand,
     /// A file made elsewhere that the analyst imported.
     Imported,
+    /// A network capture segment a run started with its launch.
+    RunCapture,
 }
 
 impl Origin {
@@ -36,6 +38,7 @@ impl Origin {
             Self::Trigger => "Trigger",
             Self::ByHand => "By hand",
             Self::Imported => "Imported",
+            Self::RunCapture => "Run capture",
         }
     }
 }
@@ -173,6 +176,28 @@ impl Provenance {
             origin: Origin::ByHand,
             certainty,
             from_ms: now_ms,
+            ..Self::default()
+        }
+    }
+
+    /// A capture segment the run started (the run lists it in its artifacts):
+    /// exact. `live_runs` are the other runs that were live while it wrote.
+    pub fn run_capture(
+        vm_id: &str,
+        boot_id: &str,
+        run_id: &str,
+        live_runs: Vec<String>,
+        window: (u64, Option<u64>),
+    ) -> Self {
+        Self {
+            vm_id: vm_id.into(),
+            boot_id: Some(boot_id.into()),
+            run_id: Some(run_id.into()),
+            live_runs,
+            origin: Origin::RunCapture,
+            certainty: Certainty::Exact,
+            from_ms: window.0,
+            to_ms: window.1,
             ..Self::default()
         }
     }

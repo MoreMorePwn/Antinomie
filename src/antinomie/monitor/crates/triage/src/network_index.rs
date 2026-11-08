@@ -43,7 +43,10 @@ pub fn collect(
     }
     let mut http_page = sorting::Page::new(request, 3, cancel);
     let http_query = query::compile_table(&request.filters[3], HTTP_FIELDS);
-    let mut inventory = network::Inventory::default();
+    let mut inventory = network::Inventory {
+        attribution: request.attribution.clone(),
+        ..network::Inventory::default()
+    };
     let mut inner = request.clone();
     inner.offsets = [0; SLOTS];
     inner.filters = Default::default();
@@ -119,6 +122,7 @@ pub fn collect(
     // The tabs: the same filter, sort and page machinery, own slots.
     let tables = inventory.finish();
     let ioc = std::mem::take(&mut inventory.ioc);
+    let attribution = inventory.attributed.take();
     let mut new_tabs = NewTabs::default();
     for (slot, rows, fields) in [
         (ENDPOINT_SLOT, tables.endpoints, network::ENDPOINT_FIELDS),
@@ -141,6 +145,7 @@ pub fn collect(
     }
     Ok(PacketIndex {
         new_tabs,
+        attribution,
         ioc,
         counts,
         coverage: coverage.join(". "),

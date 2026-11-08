@@ -408,6 +408,12 @@ impl MonitorApp {
             .vms
             .iter()
             .any(|config| Some(&config.id) == vm.as_ref() && config.has_network());
+        let runs = self.triage_runs();
+        self.network_view.set_runs(
+            &runs,
+            self.selected_run.clone(),
+            self.triage.net_attribution(),
+        );
         let action = self.network_view.show(
             ui,
             NetworkContext {
@@ -431,6 +437,7 @@ impl MonitorApp {
         );
         match action {
             Some(NetworkAction::Delete(deletion)) => self.ask_delete_evidence(deletion),
+            Some(NetworkAction::OpenRun(run_id)) => self.open_run_in_triage(&run_id),
             Some(NetworkAction::Start) if self.network_toggle_enabled() => {
                 self.send(Command::StartNetworkCapture);
             }

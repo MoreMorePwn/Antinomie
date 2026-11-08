@@ -370,6 +370,17 @@ Class **C** needs only the engine. Class **T** needs the Triage scan and can ans
 | `recording.artifact.list` | C | N | | `Page<RecordingArtifact>` |
 | `recording.artifact.get` | C | S or N | `artifact_id`, `range?` | bytes |
 
+`recording.network.captures` items carry `link`, which run the segment belongs
+to: `certainty` is `exact` (the run started it and lists it), `by_time` or
+`vm_wide` or `unknown`, `run_id` names the owner and `live_runs` the other runs
+that were live while the segment was written. `recording.network.packets` rows
+carry `made_by` when the run's recording can be read: `kind` is `process`,
+`background` (the base image's NTP, DHCP or apt traffic) or `unattributed`, with
+a `label`, and for a process its `process`, `pid`, `tid` and the `also` that
+made a matching call. Both are matched on the host from the run's recorded
+network calls (address, protocol and time), so runs recorded earlier have them
+too; the first `made_by` read of a run indexes the run once and is a heavy read.
+
 Every list also takes `limit` and `cursor`. `capabilities.queries` lists, for the
 build in front of you, every operation with its class, scope, subject, filters,
 sortable fields, default order, maximum limit and (for operations with a `tab`) the

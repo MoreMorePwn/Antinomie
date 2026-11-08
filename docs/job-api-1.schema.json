@@ -7705,6 +7705,17 @@
             "null"
           ],
           "description": "L"
+        },
+        "link": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CaptureLink"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Which run the segment belongs to, from the runs' own records; none\nwhen no run record could be read."
         }
       },
       "required": [
@@ -7714,6 +7725,58 @@
         "state"
       ],
       "description": "`recording.network.captures` item. The host path is L and never sent."
+    },
+    "CaptureLink": {
+      "type": "object",
+      "properties": {
+        "certainty": {
+          "$ref": "#/$defs/LinkCertainty"
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The run that started the segment (`exact` only)."
+        },
+        "live_runs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Other runs that were live while the segment was written, oldest first."
+        }
+      },
+      "required": [
+        "certainty"
+      ],
+      "description": "The run behind a capture segment."
+    },
+    "LinkCertainty": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "unknown"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "exact",
+          "description": "The run started the segment and lists it in its artifacts."
+        },
+        {
+          "type": "string",
+          "const": "by_time",
+          "description": "The segment was written while the runs in `live_runs` were live: the\ntime is the only link."
+        },
+        {
+          "type": "string",
+          "const": "vm_wide",
+          "description": "The segment holds the whole VM's traffic and no run was live."
+        }
+      ],
+      "description": "How sure a link to a run is (the provenance of cores and memory dumps\nuses the same four)."
     },
     "Page9": {
       "type": "object",
@@ -7882,6 +7945,17 @@
               "type": "null"
             }
           ]
+        },
+        "made_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MadeBy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What made the packet's flow; absent when the run's calls could not be\nread."
         }
       },
       "required": [
@@ -7902,6 +7976,73 @@
         "tcp",
         "udp"
       ]
+    },
+    "MadeBy": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/MadeByKind"
+        },
+        "label": {
+          "type": "string",
+          "description": "`curl (412 \\u{b7} 413)`, `Base image background: NTP` or `Unattributed`."
+        },
+        "process": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The first process and its thread, for `process`."
+        },
+        "pid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "tid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "also": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Further processes that made a matching call."
+        }
+      },
+      "required": [
+        "kind",
+        "label"
+      ],
+      "description": "The `made_by` of a packet row."
+    },
+    "MadeByKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "process",
+          "description": "A process of the run."
+        },
+        {
+          "type": "string",
+          "const": "background",
+          "description": "The base image's own traffic (NTP, DHCP, apt)."
+        },
+        {
+          "type": "string",
+          "const": "unattributed",
+          "description": "No recorded call matches."
+        }
+      ],
+      "description": "What made a packet's flow, matched on the host from the run's recorded\nnetwork calls (address, protocol and time)."
     },
     "Single8": {
       "type": "object",

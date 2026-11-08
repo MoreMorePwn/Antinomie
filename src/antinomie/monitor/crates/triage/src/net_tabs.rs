@@ -5,6 +5,7 @@ use super::*;
 pub const ENDPOINT_HEADERS: &[&str] = &[
     "Endpoint",
     "IOC",
+    "Source",
     "Proto",
     "Frames",
     "Bytes",
@@ -14,8 +15,8 @@ pub const ENDPOINT_HEADERS: &[&str] = &[
     "Last seen",
 ];
 /// The columns of the Endpoints table that hold the geolocation.
-pub const ENDPOINT_COUNTRY: usize = 5;
-pub const ENDPOINT_ORGANIZATION: usize = 6;
+pub const ENDPOINT_COUNTRY: usize = 6;
+pub const ENDPOINT_ORGANIZATION: usize = 7;
 pub const DOMAIN_HEADERS: &[&str] = &[
     "Domain",
     "IOC",
@@ -49,6 +50,7 @@ pub const TLS_HEADERS: &[&str] = &[
 /// (a sort is made on the stored rows).
 pub const ENDPOINT_STORED: &[&str] = &[
     "Endpoint",
+    "Source",
     "Proto",
     "Frames",
     "Bytes",
@@ -100,6 +102,41 @@ pub fn stored_column(slot: usize, shown: usize) -> usize {
         std::cmp::Ordering::Equal => 0,
         std::cmp::Ordering::Greater => shown - 1,
     }
+}
+
+/// The Source cell of a flow: its label, and the full explanation on hover.
+pub fn source_cell(source: &crate::net_attr::Source) -> Cell {
+    use crate::net_attr::Source as S;
+    let tone = match source {
+        S::Process(_) => tone::text(),
+        S::Background { .. } | S::Unattributed => tone::muted(),
+    };
+    let mut cell = cell(source.label(), tone, false);
+    cell.note = Some(source.explain());
+    cell
+}
+
+/// The values a row carries for the filter keys of its Source.
+pub fn source_values(source: &crate::net_attr::Source) -> Vec<(&'static str, RowValue)> {
+    let mut values = vec![
+        ("network.source", RowValue::Text(source.label())),
+        ("network.source_kind", RowValue::Text(source.kind().into())),
+    ];
+    if let Some(caller) = source.first() {
+        values.push((
+            "network.source_process",
+            RowValue::Text(caller.name.clone()),
+        ));
+        values.push((
+            "network.source_pid",
+            RowValue::Number(i128::from(caller.pid)),
+        ));
+        values.push((
+            "network.source_cookie",
+            RowValue::Number(i128::from(caller.cookie)),
+        ));
+    }
+    values
 }
 
 /// Whether the earliest packet of the run is a whole zone offset (a non-zero

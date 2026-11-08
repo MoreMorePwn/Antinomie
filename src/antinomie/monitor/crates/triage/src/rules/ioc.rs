@@ -10,6 +10,7 @@ use super::{
     noise::{flag, Agg, Gaps},
     spec, Hit,
 };
+use crate::net_attr::Role;
 use crate::*;
 use antinomie_monitor_core::kernel_notes::HashKind;
 use std::net::IpAddr;
@@ -35,6 +36,7 @@ pub struct Connection {
 pub struct Who {
     pub cookie: u64,
     pub pid: u32,
+    pub tid: u32,
     pub image: Option<String>,
     pub time_ns: u64,
     pub stream: u64,
@@ -51,8 +53,26 @@ pub struct Executed {
     pub who: Who,
 }
 
+/// A network call for flow attribution: the address it named, in which role,
+/// and when (a burst of calls to one peer by one task is one record).
+#[derive(Clone, Debug)]
+pub struct NetCall {
+    pub ip: IpAddr,
+    pub port: u16,
+    pub udp: bool,
+    pub role: Role,
+    pub name: &'static str,
+    pub who: Who,
+    /// Guest time of the last call of the burst.
+    pub last_ns: u64,
+}
+
 #[derive(Default)]
 pub struct Log {
+    /// Every network call that names an address, for [`crate::net_attr`].
+    pub net: Vec<NetCall>,
+    /// Where each task's latest record to a peer is in `net`.
+    pub(crate) net_at: std::collections::HashMap<(u64, IpAddr, u16, bool, Role), usize>,
     pub connections: Vec<Connection>,
     pub executed: Vec<Executed>,
     /// Entries dropped past the limit.
@@ -63,6 +83,7 @@ pub fn who(cx: &Ctx) -> Who {
     Who {
         cookie: cx.call.task_cookie,
         pid: cx.event.pid,
+        tid: cx.event.tid,
         image: cx.image.map(str::to_owned),
         time_ns: cx.time(),
         stream: cx.call.stream_id,
@@ -75,7 +96,68 @@ pub fn address(cx: &Ctx, argument: usize) -> Option<(IpAddr, u16)> {
     Some((found.ip.parse().ok()?, found.port))
 }
 
+/// Record the network call `cx` is, if it names an address.
+pub fn observe_net(cx: &Ctx, log: &mut Log) {
+    let (role, name, argument, fd) = match cx.name {
+        "connect" => (Role::Remote, "connect", 1, cx.args[0]),
+        "sendto" => (Role::Remote, "sendto", 4, cx.args[0]),
+        "sendmsg" | "sendmmsg" => (Role::Remote, "sendmsg", 0, cx.args[0]),
+        "accept" | "accept4" => (Role::Accepted, "accept", 1, cx.args[0]),
+        "recvfrom" => (Role::Received, "recvfrom", 4, cx.args[0]),
+        "bind" => (Role::Bound, "bind", 1, cx.args[0]),
+        _ => return,
+    };
+    // `accept` and `recvfrom` only name a peer when they returned one.
+    if matches!(role, Role::Accepted | Role::Received) && !cx.ok {
+        return;
+    }
+    let socket = cx.socket(fd);
+    let peer = if argument == 0 {
+        // `sendmsg` carries its address in a message header the trace does
+        // not decode: a connected datagram socket's peer is all it gives.
+        socket.and_then(|socket| socket.peer)
+    } else {
+        address(cx, argument).or_else(|| {
+            socket
+                .filter(|_| role == Role::Remote)
+                .and_then(|socket| socket.peer)
+        })
+    };
+    let Some((ip, port)) = peer else {
+        return;
+    };
+    let udp = match (role, socket) {
+        (_, Some(socket)) => socket.is_datagram(),
+        (Role::Received, None) => true,
+        _ => false,
+    };
+    let time = cx.time();
+    let key = (cx.call.task_cookie, ip, port, udp, role);
+    if let Some(&at) = log.net_at.get(&key)
+        && let Some(held) = log.net.get_mut(at)
+        && time.saturating_sub(held.last_ns) <= crate::net_attr::BURST_NS
+    {
+        held.last_ns = held.last_ns.max(time);
+        return;
+    }
+    if log.net.len() >= LIMIT {
+        log.omitted += 1;
+        return;
+    }
+    log.net_at.insert(key, log.net.len());
+    log.net.push(NetCall {
+        ip,
+        port,
+        udp,
+        role,
+        name,
+        who: who(cx),
+        last_ns: time,
+    });
+}
+
 pub fn observe(cx: &Ctx, log: &mut Log) {
+    observe_net(cx, log);
     match cx.name {
         "connect" => {
             let Some((ip, port)) = address(cx, 1) else {
@@ -182,6 +264,11 @@ pub struct IocHit {
 }
 
 impl Engine {
+    /// The network calls seen so far, for flow attribution.
+    pub fn net_calls(&self) -> &[NetCall] {
+        &self.state.ioc.net
+    }
+
     /// What the run's calls left for the IOC window.
     pub fn take_ioc(&mut self) -> Log {
         std::mem::take(&mut self.state.ioc)
@@ -528,6 +615,79 @@ pub mod tests {
         assert!(engine.take_ioc().connections.is_empty());
     }
 
+    fn sendto(pid: u32, fd: u64, ip: [u8; 4], port: u16) -> InvocationSummary {
+        let row = sys(pid, 44, "sendto", [fd, 0, 32, 0, 0, 16], 32);
+        with_entry(
+            row,
+            "arg4.address",
+            &super::super::tests::support::address(2, ip, port),
+        )
+    }
+
+    fn bind(pid: u32, fd: u64, ip: [u8; 4], port: u16) -> InvocationSummary {
+        let row = sys(pid, 49, "bind", [fd, 0, 16, 0, 0, 0], 0);
+        with_entry(
+            row,
+            "arg1.address",
+            &super::super::tests::support::address(2, ip, port),
+        )
+    }
+
+    fn accept(pid: u32, fd: u64, ip: [u8; 4], port: u16, new_fd: i64) -> InvocationSummary {
+        let row = sys(pid, 43, "accept", [fd, 0, 0, 0, 0, 0], new_fd);
+        with_exit(
+            row,
+            "arg1.address",
+            &super::super::tests::support::address(2, ip, port),
+        )
+    }
+
+    #[test]
+    fn network_calls_are_kept_with_their_role_protocol_and_task() {
+        let (mut engine, _) = engine_over(vec![
+            // A TCP connect.
+            socket(10, 2, 1, 3),
+            connect(10, 3, [192, 0, 2, 9], 80),
+            // A UDP DNS lookup through sendto, twice in one burst.
+            socket(11, 2, 2, 4),
+            sendto(11, 4, [10, 0, 2, 3], 53),
+            sendto(11, 4, [10, 0, 2, 3], 53),
+            // A listener that accepts one client.
+            socket(12, 2, 1, 5),
+            bind(12, 5, [0, 0, 0, 0], 8080),
+            accept(12, 5, [10, 0, 2, 2], 51000, 6),
+        ]);
+        let calls = engine.net_calls().to_vec();
+        let find = |name: &str| calls.iter().find(|call| call.name == name).unwrap();
+        let connect = find("connect");
+        assert_eq!((connect.who.pid, connect.who.tid), (10, 10));
+        assert_eq!(
+            (connect.ip.to_string(), connect.port, connect.udp),
+            ("192.0.2.9".into(), 80, false)
+        );
+        assert_eq!(connect.role, Role::Remote);
+        let send = find("sendto");
+        assert_eq!((send.port, send.udp, send.role), (53, true, Role::Remote));
+        assert_eq!(
+            calls.iter().filter(|call| call.name == "sendto").count(),
+            1,
+            "a burst to one peer is one record"
+        );
+        let bound = find("bind");
+        assert_eq!(
+            (bound.port, bound.udp, bound.role),
+            (8080, false, Role::Bound)
+        );
+        let accepted = find("accept");
+        assert_eq!(
+            (accepted.ip.to_string(), accepted.port, accepted.role),
+            ("10.0.2.2".into(), 51000, Role::Accepted)
+        );
+        // The IOC list's connections are unchanged by the new record: the
+        // connect and each of the two sends.
+        assert_eq!(engine.take_ioc().connections.len(), 3);
+    }
+
     #[test]
     fn a_dataset_match_becomes_one_finding_with_its_packet_evidence() {
         let (mut engine, files) = engine_over(vec![socket(1, 2, 1, 3)]);
@@ -545,6 +705,7 @@ pub mod tests {
             who: Some(Who {
                 cookie: 1,
                 pid: 1,
+                tid: 1,
                 image: Some("kworkerd".into()),
                 ..Who::default()
             }),

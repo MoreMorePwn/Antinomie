@@ -22,7 +22,8 @@ use crate::api::{
     ops::Scope,
 };
 use antinomie_monitor_core::{
-    RunArtifactState, RunArtifacts, core_dump::CoreDump, recording::open_member,
+    RunArtifactState, RunArtifacts, core_dump::CoreDump, network::NetworkCapture, network_link,
+    recording::open_member,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -333,6 +334,17 @@ impl QueryService {
             }
         }
         let last = ordered.len().saturating_sub(1);
+        // Which run each segment belongs to, from the runs' own records: this
+        // run lists its segments (exact); any other run live while one was
+        // written is linked by time.
+        let saved: Vec<Option<NetworkCapture>> = ordered
+            .iter()
+            .map(|(_, entry)| network_link::saved_capture(&entry.root.join(&entry.relative)))
+            .collect();
+        let runs = antinomie_monitor_core::recording::list_runs_read_only(&opened.location)
+            .unwrap_or_default();
+        let windows = network_link::run_windows(&runs);
+        let known: Vec<NetworkCapture> = saved.iter().flatten().cloned().collect();
         let items: Vec<Capture> = ordered
             .iter()
             .enumerate()
@@ -340,9 +352,15 @@ impl QueryService {
                 capture_id: entry.id.to_string(),
                 segment: *segment,
                 size: entry.size,
-                packets: None,
-                first_ms: None,
-                last_ms: None,
+                packets: saved[at].as_ref().and_then(|capture| capture.packets),
+                first_ms: saved[at].as_ref().map(|capture| capture.started_ms),
+                last_ms: saved[at].as_ref().and_then(|capture| capture.stopped_ms),
+                link: Some(capture_link(
+                    &opened.key,
+                    saved[at].as_ref(),
+                    &windows,
+                    &known,
+                )),
                 // Only the newest segment can still be recording.
                 state: if at == last {
                     artifact_state(links.network_state)
@@ -419,5 +437,48 @@ impl QueryService {
         items.sort_by(|a, b| a.core_id.cmp(&b.core_id));
         let total = items.len() as u64;
         Ok(opened.counted_page(items, total, true))
+    }
+}
+
+/// The link of one segment of the run `key`: the run lists it, so it is the
+/// run's (exact), whatever its own summary says; other runs live in its
+/// window are listed by time.
+fn capture_link(
+    key: &super::key::RunKey,
+    saved: Option<&NetworkCapture>,
+    windows: &[network_link::RunWindow],
+    known: &[NetworkCapture],
+) -> CaptureLink {
+    let (_, _, run_id) = key.parts();
+    let run_id: String = run_id;
+    let others = |link: &antinomie_monitor_core::provenance::Provenance| -> Vec<String> {
+        link.live_runs
+            .iter()
+            .filter(|id| **id != run_id)
+            .cloned()
+            .collect()
+    };
+    let live_runs = saved
+        .map(|capture| {
+            // The run owns the segment: the link of the same file with this run
+            // taken as its owner lists the others.
+            let mut windows = windows.to_vec();
+            let name = capture
+                .file
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if let Some(window) = windows.iter_mut().find(|window| window.run_id == run_id)
+                && !window.owned.contains(&name)
+            {
+                window.owned.push(name);
+            }
+            others(&network_link::link(capture, &windows, known))
+        })
+        .unwrap_or_default();
+    CaptureLink {
+        certainty: LinkCertainty::Exact,
+        run_id: Some(run_id),
+        live_runs,
     }
 }

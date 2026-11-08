@@ -80,6 +80,7 @@ pub struct QueryService {
     pub(super) scrub: Scrub,
     pub(super) trees: Mutex<super::process::TreeCache>,
     pub(super) scans: super::scan::ScanStore,
+    pub(super) attributions: Mutex<super::attribution::AttributionCache>,
 }
 
 impl QueryService {
@@ -102,6 +103,7 @@ impl QueryService {
             layers: None,
             jobs: None,
             trees: Mutex::new(super::process::TreeCache::default()),
+            attributions: Mutex::new(super::attribution::AttributionCache::default()),
         }
     }
 

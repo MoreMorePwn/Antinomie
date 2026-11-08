@@ -61,6 +61,7 @@ impl NetworkView {
         }
         ui.add_space(2.0);
         let mut open = None;
+        let mut open_run = None;
         let mut delete = None;
         let font_size = cx.font_size;
         egui::ScrollArea::vertical()
@@ -79,19 +80,28 @@ impl NetworkView {
                         &active.file.with_extension("metadata"),
                         &format!("{} Live capture", egui_phosphor::regular::RECORD),
                     );
-                    let response = capture_row(
+                    let run = self.run_line(active);
+                    let (response, run_clicked) = capture_row_run(
                         ui,
                         selected,
                         (&title, theme::error()),
                         &capture_detail(active, true, loaded),
+                        Some(RunLine {
+                            text: &run.text,
+                            clickable: run.run_id.is_some(),
+                        }),
                         font_size,
                     );
+                    if run_clicked {
+                        open_run = run.run_id.clone();
+                    }
+                    let response = response.on_hover_text(&run.tip);
                     response.context_menu(|ui| {
                         delete = self
                             .capture_menu(ui, active, &title, Some(CAPTURE_LIVE), cx.vm_id)
                             .or(delete.take());
                     });
-                    if response.clicked() {
+                    if response.clicked() && !run_clicked {
                         self.capture_details = Some((active.clone(), true));
                         open = Some(active.file.clone());
                     }
@@ -113,13 +123,22 @@ impl NetworkView {
                         &capture.file.with_extension("metadata"),
                         &started,
                     );
-                    let response = capture_row(
+                    let run = self.run_line(capture);
+                    let (response, run_clicked) = capture_row_run(
                         ui,
                         selected,
                         (&title, theme::text()),
                         &capture_detail(capture, false, None),
+                        Some(RunLine {
+                            text: &run.text,
+                            clickable: run.run_id.is_some(),
+                        }),
                         font_size,
                     );
+                    if run_clicked {
+                        open_run = run.run_id.clone();
+                    }
+                    let response = response.on_hover_text(&run.tip);
                     let writing = (capture.stopped_ms.is_none()
                         && cx.running
                         && cx.boot_id == Some(capture.boot_id.as_str()))
@@ -129,7 +148,7 @@ impl NetworkView {
                             .capture_menu(ui, capture, &title, writing, cx.vm_id)
                             .or(delete.take());
                     });
-                    if response.clicked() {
+                    if response.clicked() && !run_clicked {
                         self.capture_details = Some((capture.clone(), false));
                         open = Some(capture.file.clone());
                     }
@@ -148,6 +167,9 @@ impl NetworkView {
         }
         if let Some(deletion) = delete {
             action = Some(NetworkAction::Delete(deletion));
+        }
+        if let Some(run) = open_run {
+            action = Some(NetworkAction::OpenRun(run));
         }
         action
     }
@@ -229,6 +251,8 @@ impl NetworkView {
                 antinomie_monitor_core::byte_size::file_size,
             ),
         ));
+        let run = self.run_line(capture);
+        rows.push(("Run", run.text.trim_start_matches("Run: ").to_owned()));
         rows.push(("PCAP file", capture.file.display().to_string()));
         rows.push((
             "Metadata",

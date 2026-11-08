@@ -290,6 +290,7 @@ pub fn feed(gathered: &mut Gathered<'_>) {
             let who = log::Who {
                 cookie: file.cookie,
                 pid: file.pid,
+                tid: file.pid,
                 image: file.image.clone(),
                 time_ns: file.time_ns,
                 stream: file.stream,
@@ -839,6 +840,7 @@ pub mod tests {
         log::Who {
             cookie: u64::from(pid),
             pid,
+            tid: pid,
             image: Some(image.into()),
             time_ns: call * 1_000,
             stream: 1,
@@ -958,6 +960,7 @@ pub mod tests {
                 who: who(1420, "/tmp/.kd", 9),
             }],
             omitted: 0,
+            ..log::Log::default()
         };
         let disk = std::collections::BTreeMap::from([(
             "/etc/cron.d/kd-update".to_owned(),

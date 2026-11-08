@@ -1275,3 +1275,134 @@ fn a_note_chip_opens_its_capture_and_frame_and_a_deleted_capture_says_so() {
     assert!(reference.label.contains("TCP 10.0.0.2 to 1.1.1.1"));
     assert!(view.packet_note(None, &packet).is_none());
 }
+
+fn udp_packet(number: u64, from: &str, to: &str, time_us: u64) -> NetworkPacket {
+    NetworkPacket {
+        number,
+        time_us,
+        transport: Some(Transport::Udp),
+        ..packet("UDP", from, to)
+    }
+}
+
+/// A view over a capture that a run (`r1`) started, with that run's calls.
+fn attributed_view() -> NetworkView {
+    use antinomie_monitor_core::provenance::Provenance;
+    use antinomie_triage::net_attr::{Caller, FlowCall, NetAttribution, Role};
+    let file = PathBuf::from("/fixture/net/cap-1.pcap");
+    let mut view = NetworkView::default();
+    view.open(Some(file.clone()));
+    view.links.by_file.insert(
+        file,
+        Provenance::run_capture("vm", "b", "r1", vec!["r2".into()], (1_000, Some(9_000))),
+    );
+    let call = FlowCall {
+        ip: "10.0.2.3".parse().unwrap(),
+        port: 53,
+        udp: true,
+        role: Role::Remote,
+        call: "sendto",
+        caller: Caller {
+            pid: 52,
+            tid: 53,
+            cookie: 520,
+            name: "nslookup".into(),
+        },
+        first_us: Some(5_000_000),
+        last_us: Some(5_000_000),
+        stream: 1,
+        call_id: 3,
+    };
+    view.attribution = Some(("r1".into(), Arc::new(NetAttribution::new(vec![call]))));
+    view
+}
+
+#[test]
+fn the_packet_list_names_the_process_that_made_a_packet() {
+    let view = attributed_view();
+    assert!(view.has_made_by());
+    let query = udp_packet(1, "10.0.2.15:41000", "10.0.2.3:53", 5_000_100);
+    let reply = udp_packet(2, "10.0.2.3:53", "10.0.2.15:41000", 5_020_000);
+    assert_eq!(view.made_by_text(&query), "nslookup (52 \u{b7} 53)");
+    assert_eq!(view.made_by_text(&reply), "nslookup (52 \u{b7} 53)");
+    // A flow no call names, and a frame with no ports.
+    let other = udp_packet(3, "10.0.2.15:5000", "198.51.100.9:9", 5_000_200);
+    assert_eq!(view.made_by_text(&other), "Unattributed");
+    assert_eq!(view.made_by_text(&packet("ARP", "", "")), "Unattributed");
+    // The column is for the run Triage has open: another run's capture has none.
+    let mut elsewhere = attributed_view();
+    elsewhere.attribution.as_mut().unwrap().0 = "r9".into();
+    assert!(!elsewhere.has_made_by());
+    assert_eq!(elsewhere.made_by_text(&query), "");
+}
+
+#[test]
+fn the_source_quick_filter_picks_packets_by_their_process() {
+    let view = attributed_view();
+    let packets = [
+        udp_packet(1, "10.0.2.15:41000", "10.0.2.3:53", 5_000_100),
+        udp_packet(2, "10.0.2.15:5000", "198.51.100.9:9", 5_000_200),
+    ];
+    let keep = |text: &str| -> Vec<u64> {
+        let filter = Filter::parse(text);
+        packets
+            .iter()
+            .filter(|packet| filter.matches_with(packet, &|p| view.made_by_text(p)))
+            .map(|packet| packet.number)
+            .collect()
+    };
+    assert_eq!(Filter::parse("source curl"), Filter::Source("curl".into()));
+    assert_eq!(keep("source nslookup"), [1]);
+    assert_eq!(keep("source unattributed"), [2]);
+    assert_eq!(keep("source nothing"), Vec::<u64>::new());
+    // Sorted by the column's text: "nslookup ..." before "Unattributed".
+    let rows = [0, 1];
+    let sorted = super::packets::ordered_rows_by(
+        &rows,
+        &packets,
+        Some(crate::triage::SortSpec {
+            column: 7,
+            descending: false,
+        }),
+        &|p| view.made_by_text(p),
+    );
+    assert_eq!(sorted, [0, 1]);
+    let reversed = super::packets::ordered_rows_by(
+        &rows,
+        &packets,
+        Some(crate::triage::SortSpec {
+            column: 7,
+            descending: true,
+        }),
+        &|p| view.made_by_text(p),
+    );
+    assert_eq!(reversed, [1, 0]);
+}
+
+#[test]
+fn a_capture_row_says_which_run_it_belongs_to() {
+    use antinomie_monitor_core::provenance::Provenance;
+    let mut view = attributed_view();
+    let capture = NetworkCapture {
+        file: PathBuf::from("/fixture/net/cap-1.pcap"),
+        ..NetworkCapture::default()
+    };
+    let exact = view.run_line(&capture);
+    assert!(exact.text.starts_with("Run: r1"), "{}", exact.text);
+    assert_eq!(exact.run_id.as_deref(), Some("r1"));
+    assert!(exact.tip.contains("exact"), "{}", exact.tip);
+    view.links.by_file.insert(
+        capture.file.clone(),
+        Provenance::by_hand("vm", "b", None, vec!["r2".into()], 1),
+    );
+    let timed = view.run_line(&capture);
+    assert!(timed.text.starts_with("Run: by time"), "{}", timed.text);
+    assert_eq!(timed.run_id.as_deref(), Some("r2"));
+    view.links.by_file.insert(
+        capture.file.clone(),
+        Provenance::by_hand("vm", "b", None, vec![], 1),
+    );
+    let idle = view.run_line(&capture);
+    assert_eq!(idle.text, "Run: VM-wide");
+    assert_eq!(idle.run_id, None);
+}

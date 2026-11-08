@@ -68,6 +68,16 @@ pub const ENDPOINT_FIELDS: &[FieldSpec<'static>] = &[
         "Last observed packet time in the capture clock",
     ),
     FieldSpec::number("frame.number", "First observed frame"),
+    FieldSpec::text(
+        "network.source",
+        "What made the flow: the process (name (pid · tid)), Base image background: NTP, or Unattributed",
+    ),
+    FieldSpec::text(
+        "network.source_kind",
+        "process, background or unattributed",
+    ),
+    FieldSpec::text("network.source_process", "Name of the process that made it"),
+    FieldSpec::number("network.source_pid", "Process ID of the process that made it"),
 ];
 
 /// The rebuilt Domains tab: the Hosts fields, and the DNS names they merge.
@@ -136,6 +146,9 @@ pub struct Endpoint {
     pub bytes: u64,
     pub first: Option<u64>,
     pub last: Option<u64>,
+    /// The other side of its frames when the endpoint is a local address
+    /// (the client of an accepted connection), a few of them.
+    pub others: BTreeSet<(IpAddr, u16)>,
 }
 
 /// One TLS session, as far as its hellos showed.
@@ -209,6 +222,11 @@ pub struct Inventory {
     pub ioc: Collector,
     pub capture: String,
     pub omitted: u64,
+    /// The run's network calls, to say what made each flow.
+    pub attribution: Option<std::sync::Arc<crate::net_attr::NetAttribution>>,
+    /// The same with the names the capture's DNS answers gave, once
+    /// [`Inventory::finish`] has run.
+    pub attributed: Option<std::sync::Arc<crate::net_attr::NetAttribution>>,
 }
 
 /// The tables of the Network section's rebuilt tabs.
@@ -390,6 +408,14 @@ impl Inventory {
         endpoint.bytes = endpoint.bytes.saturating_add(facts.length);
         endpoint.first = endpoint.first.into_iter().chain(facts.time).min();
         endpoint.last = endpoint.last.into_iter().chain(facts.time).max();
+        if local_address(&ip.to_string()) && endpoint.others.len() < 16 {
+            let other = if to_destination {
+                (source, source_port)
+            } else {
+                (destination, destination_port)
+            };
+            endpoint.others.insert(other);
+        }
         // The first frame is the evidence; later ones only count.
         let evidence = fresh.then(|| packet_evidence(&self.capture, facts.frame));
         self.ioc.endpoint(
@@ -511,7 +537,27 @@ impl Inventory {
     /// the IOC window. Call once, when every segment has been read.
     pub fn finish(&mut self) -> Tables {
         let mut tables = Tables::default();
+        // What the capture's own DNS answers say about addresses: an address
+        // only the base image's lookups led to is the base image's.
+        let mut attribution = self.attribution.as_deref().cloned().unwrap_or_default();
+        for (name, host) in &self.hosts {
+            if host.sources.contains("DNS lookup") {
+                for address in &host.addresses {
+                    if let Ok(ip) = address.parse::<IpAddr>() {
+                        attribution.learn_name(ip, name);
+                    }
+                }
+            }
+        }
         for ((ip, port, protocol), endpoint) in &self.endpoints {
+            let others: Vec<(IpAddr, u16)> = endpoint.others.iter().copied().collect();
+            let source = attribution.source_of(&crate::net_attr::FlowKey {
+                udp: Some(*protocol == "udp"),
+                endpoint: (*ip, *port),
+                others: &others,
+                first_us: endpoint.first,
+                last_us: endpoint.last,
+            });
             let address = ip.to_string();
             let (country, organization) = self
                 .ips
@@ -522,6 +568,7 @@ impl Inventory {
             let shown = antinomie_monitor_core::ioc::kind::ip_port(*ip, *port);
             let mut row = vec![
                 cell(&shown, tone::text(), true),
+                net_tabs::source_cell(&source),
                 cell(*protocol, tone::text(), false),
                 cell(endpoint.frames.to_string(), tone::text(), true),
                 cell(crate::values::file_size(endpoint.bytes), tone::text(), true),
@@ -572,6 +619,7 @@ impl Inventory {
                 ),
                 ("frame.number", RowValue::Number(i128::from(endpoint.frame))),
             ];
+            row[0].values.extend(net_tabs::source_values(&source));
             tables.endpoints.push(row);
         }
         for (name, host) in &self.hosts {
@@ -745,6 +793,7 @@ impl Inventory {
             ];
             tables.tls.push(row);
         }
+        self.attributed = Some(std::sync::Arc::new(attribution));
         tables
     }
 

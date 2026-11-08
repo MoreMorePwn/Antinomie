@@ -50,7 +50,7 @@ pub struct Indicators {
 }
 
 /// What kind of base image traffic a noise tag is about.
-fn background_kind(value: &str, why: &str) -> &'static str {
+pub fn background_kind(value: &str, why: &str) -> &'static str {
     let text = format!("{value} {why}").to_ascii_lowercase();
     if text.contains("ntp") || text.contains("clock sync") {
         "NTP"
