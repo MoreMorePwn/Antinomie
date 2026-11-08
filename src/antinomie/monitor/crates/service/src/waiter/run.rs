@@ -217,7 +217,7 @@ fn guest_not_ready(message: &str) -> bool {
 }
 
 /// Why a stage ended the run early.
-enum Stop {
+pub(crate) enum Stop {
     Failed(Failure),
     /// A signal or a dead engine: not a result.
     Abort(WaitError),
@@ -544,15 +544,29 @@ impl<E: Engine> Waiter<E> {
     }
 
     fn upload(&mut self, plan: &RunPlan, sink: &mut dyn FnMut(EventBody)) -> Result<(), Stop> {
-        let deadline = self.now_ms() + super::millis(UPLOAD_WAIT);
+        self.upload_sample(&plan.sample.sha256, &plan.guest_path, UPLOAD_WAIT, sink)
+            .map(|_| ())
+    }
+
+    /// Send a library sample into the guest. The first upload after boot fails
+    /// for about a second while the disk mounts; that is retried until `wait`
+    /// has passed. The engine's own words about the transfer are returned.
+    pub(crate) fn upload_sample(
+        &mut self,
+        sha256: &str,
+        destination: &str,
+        wait: Duration,
+        sink: &mut dyn FnMut(EventBody),
+    ) -> Result<String, Stop> {
+        let deadline = self.now_ms() + super::millis(wait);
         loop {
             let result = self.lane_command(Command::UploadSample {
-                sha256: plan.sample.sha256.clone(),
-                destination: plan.guest_path.clone(),
+                sha256: sha256.to_owned(),
+                destination: destination.to_owned(),
                 executable: true,
             });
             match result {
-                Ok(_) => return Ok(()),
+                Ok(message) => return Ok(message),
                 Err(WaitError::Failed(message))
                     if guest_not_ready(&message) && self.now_ms() < deadline =>
                 {
@@ -585,15 +599,21 @@ impl<E: Engine> Waiter<E> {
     }
 
     fn launch(&mut self, plan: &RunPlan) -> Result<RunSummary, Stop> {
+        let mut request = plan.request.clone();
+        request.path = plan.guest_path.clone();
+        request.sample = Some(plan.sample.clone());
+        self.launch_request(request)
+    }
+
+    /// `Execute` the request and wait for the new run to appear in the
+    /// snapshot (`launch_s`).
+    pub(crate) fn launch_request(&mut self, request: ExecRequest) -> Result<RunSummary, Stop> {
         let known: Vec<String> = self
             .snapshot
             .runs
             .iter()
             .map(|run| run.id.clone())
             .collect();
-        let mut request = plan.request.clone();
-        request.path = plan.guest_path.clone();
-        request.sample = Some(plan.sample.clone());
         self.lane_command(Command::Execute(request))
             .map_err(|error| match error {
                 WaitError::Failed(message) => Stop::Failed(Failure::new(
@@ -791,7 +811,7 @@ impl<E: Engine> Waiter<E> {
 
 /// The route the run used, for the `job.run` event: the one asked for, else
 /// the one the engine recorded, else the default (nothing leaves the VM).
-fn route_of(request: &ExecRequest, run: &RunSummary) -> Route {
+pub(crate) fn route_of(request: &ExecRequest, run: &RunSummary) -> Route {
     let kind = request
         .route
         .or_else(|| run.route.as_ref().map(|record| record.kind))

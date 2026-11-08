@@ -287,20 +287,8 @@ fn recover_lane<E: Engine>(
     lanes.save(&file)?;
 
     let quarantined = file.quarantine.as_ref().map(|q| q.reason);
-    if let (Some(quarantine), false) = (&file.quarantine, was_quarantined) {
-        store.emit_engine(EventBody::LaneState {
-            lane: file.lane.clone(),
-            state: LaneState::Quarantined,
-            job_id: interrupted.as_ref().map(|w| w.job_id.clone()),
-            reason: Some(serde_json::to_value(quarantine.reason).map_or_else(
-                |_| "lane_changed".into(),
-                |v| v.as_str().unwrap_or("lane_changed").to_owned(),
-            )),
-        })?;
-        store.emit_engine(EventBody::EngineAlert {
-            code: "lane_quarantined".into(),
-            text: format!("{}: {}", file.lane, quarantine.detail),
-        })?;
+    if let (Some(_), false) = (&file.quarantine, was_quarantined) {
+        announce_quarantine(store, &file, interrupted.as_ref().map(|w| w.job_id.clone()))?;
     } else if interrupted.is_some() && quarantined.is_none() {
         store.emit_engine(EventBody::LaneState {
             lane: file.lane.clone(),
@@ -321,5 +309,31 @@ fn recover_lane<E: Engine>(
         quarantined,
         resume,
         dropped,
+    })
+}
+
+/// Store `lane.state` (`quarantined`) and `engine.alert` for a lane whose file
+/// now holds a quarantine (design 4.5.3).
+pub(crate) fn announce_quarantine(
+    store: &Store,
+    file: &LaneFile,
+    job_id: Option<JobId>,
+) -> Result<(), ApiError> {
+    let Some(quarantine) = &file.quarantine else {
+        return Ok(());
+    };
+    let reason = serde_json::to_value(quarantine.reason)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "lane_changed".into());
+    store.emit_engine(EventBody::LaneState {
+        lane: file.lane.clone(),
+        state: LaneState::Quarantined,
+        job_id,
+        reason: Some(reason),
+    })?;
+    store.emit_engine(EventBody::EngineAlert {
+        code: "lane_quarantined".into(),
+        text: format!("{}: {}", file.lane, quarantine.detail),
     })
 }
