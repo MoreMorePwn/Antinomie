@@ -14,6 +14,24 @@ x86 programs by their own table.
 
 ### Host
 
+- **Network flows name the process that made them, and a capture names its run
+  (ANT-T0397).** The capture is VM-wide and the guest tags no packet, so the app
+  now matches each flow on the host to the run's recorded network calls
+  (`connect`, `sendto`, `sendmsg`, `accept`, `recvfrom`, `bind`) by address,
+  protocol and time. **Triage > Network > Endpoints** has a **Source** column
+  (and a `network.source` filter key): the process as `name (pid · tid)`, which
+  opens it in Details, **Base image background: NTP** (or DHCP or apt, the same
+  traffic the Summary's Indicators set apart), or **Unattributed** when no call
+  matches (a raw socket, say). The **Network** tab's packet list gets a
+  **Made by** column once Triage has the run open (a `source curl` quick
+  filter), and every capture in its list says **Run: ...** (exact when the run
+  started the segment, by time when it only ran while it was written, VM-wide
+  when no run did). The run report's Endpoints table carries the Source, and the
+  service's `recording.network.captures` and `recording.network.packets` reads
+  expose the same as `link` and `made_by`. It reads only what the recording
+  holds, so runs recorded before 0.9.0 attribute too. Per-packet tagging in the
+  guest kernel stays a 0.10.0 card.
+
 - **Run History lists every saved run (ANT-T0415).** A run whose analysis
   report was extended after the run ended (Analyse more adds a check to the
   report file only) was skipped as "not matching the run", so a run with all

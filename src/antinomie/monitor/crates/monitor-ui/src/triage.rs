@@ -409,6 +409,19 @@ impl TriageView {
         self.run_box.refresh(run, live, ended);
     }
 
+    /// The run on screen with its network calls, for the Packets list's
+    /// Made by column; none until its index has been made.
+    pub(crate) fn net_attribution(
+        &self,
+    ) -> Option<(
+        String,
+        std::sync::Arc<antinomie_triage::net_attr::NetAttribution>,
+    )> {
+        let attribution = self.scan.as_ref()?.attribution.clone()?;
+        let (_, _, run) = self.scan_request.identity.as_ref()?;
+        Some((run.clone(), attribution))
+    }
+
     /// An artifact the Run artifacts box was asked to open, once.
     pub(crate) fn take_open_artifact(
         &mut self,

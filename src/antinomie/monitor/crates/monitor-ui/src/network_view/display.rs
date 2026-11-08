@@ -117,12 +117,17 @@ impl NetworkView {
         self.filter_error = None;
         if !self.raw_frames() {
             let parsed = Filter::parse(text);
-            self.list.rows = self
+            let rows = self
                 .display_page
                 .iter()
                 .enumerate()
-                .filter_map(|(i, packet)| parsed.matches(packet).then_some(i))
+                .filter_map(|(i, packet)| {
+                    parsed
+                        .matches_with(packet, &|packet| self.made_by_text(packet))
+                        .then_some(i)
+                })
                 .collect();
+            self.list.rows = rows;
             self.list.rows_for = None;
         } else {
             self.list.filter_rows(&self.applied_filter);

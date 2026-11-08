@@ -5,17 +5,36 @@ use std::cmp::Ordering;
 
 /// The sort state of the Packets table.
 const PACKETS_TABLE: &str = "network_packets";
+/// The Made by column's id (after the seven the table always has).
+const MADE_BY: usize = 7;
 
 /// `rows` (indices into `packets`) in the order `sort` picks; unchanged without one.
+#[cfg(test)]
 pub(super) fn ordered_rows(
     rows: &[usize],
     packets: &[NetworkPacket],
     sort: Option<crate::triage::SortSpec>,
 ) -> Vec<usize> {
+    ordered_rows_by(rows, packets, sort, &|_| String::new())
+}
+
+/// [`ordered_rows`] with the text of the Made by column.
+pub(super) fn ordered_rows_by(
+    rows: &[usize],
+    packets: &[NetworkPacket],
+    sort: Option<crate::triage::SortSpec>,
+    made_by: &dyn Fn(&NetworkPacket) -> String,
+) -> Vec<usize> {
     let mut rows = rows.to_vec();
     if let Some(spec) = sort {
         rows.sort_by(|&a, &b| {
-            let order = compare_packets(spec.column, &packets[a], &packets[b]);
+            let order = if spec.column == MADE_BY {
+                made_by(&packets[a])
+                    .to_lowercase()
+                    .cmp(&made_by(&packets[b]).to_lowercase())
+            } else {
+                compare_packets(spec.column, &packets[a], &packets[b])
+            };
             if spec.descending {
                 order.reverse()
             } else {
@@ -106,22 +125,25 @@ impl NetworkView {
         // capture, all of them for raw frames.
         let sort = crate::triage::sort_current(ui.ctx(), PACKETS_TABLE);
         let mut cached = std::mem::take(&mut self.packet_order);
+        let made_by = self.has_made_by();
         let key = sort.map(|spec| {
             (
                 spec,
                 list.rows.len(),
                 packets.len(),
                 self.display_page_start,
-                self.raw_frames(),
+                self.raw_frames() || made_by,
             )
         });
         if cached.key != key || cached.rows.len() != list.rows.len() {
-            cached.rows = ordered_rows(&list.rows, packets, sort);
+            cached.rows = ordered_rows_by(&list.rows, packets, sort, &|packet| {
+                self.made_by_text(packet)
+            });
             cached.key = key;
         }
         let ordered = &cached.rows;
         ui.scope(|ui| {
-            FitBuilder::new(ui)
+            let mut table = FitBuilder::new(ui)
                 .id_salt(("network_packets", self.display_page_start))
                 .sense(egui::Sense::click())
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
@@ -145,22 +167,32 @@ impl NetworkView {
                         .clip(true),
                 )
                 .column(Col::fixed(chars(7.0)).clip(true))
-                .column(Col::fixed(chars(6.0)))
-                .column(Col::rest(80.0).at_least(chars(12.0)).clip(true))
+                .column(Col::fixed(chars(6.0)));
+            if made_by {
+                table = table.column(
+                    Col::flex(chars(26.0))
+                        .at_least(chars(8.0))
+                        .resizable(true)
+                        .clip(true),
+                );
+            }
+            table = table.column(Col::rest(80.0).at_least(chars(12.0)).clip(true));
+            table
                 .header(
                     crate::widgets::fit_table::header_height(font_size),
                     |mut header| {
                         for (column, label) in [
-                            "No.",
-                            "Time",
-                            "Source",
-                            "Destination",
-                            "Protocol",
-                            "Length",
-                            "Info",
+                            (0, "No."),
+                            (1, "Time"),
+                            (2, "Source"),
+                            (3, "Destination"),
+                            (4, "Protocol"),
+                            (5, "Length"),
+                            (MADE_BY, "Made by"),
+                            (6, "Info"),
                         ]
                         .into_iter()
-                        .enumerate()
+                        .filter(|(column, _)| made_by || *column != MADE_BY)
                         {
                             header.col(|ui| {
                                 crate::table_sort::header(ui, PACKETS_TABLE, column, label)
@@ -184,7 +216,9 @@ impl NetworkView {
                                 .filter(|_| !selected)
                                 .map(PacketColor::tint);
                             let elapsed = packet.time_us.saturating_sub(start) as f64 / 1e6;
-                            for column in 0..7 {
+                            let source = made_by.then(|| self.made_by(packet)).flatten();
+                            let columns = [0, 1, 2, 3, 4, 5, MADE_BY, 6];
+                            for column in columns.into_iter().filter(|c| made_by || *c != MADE_BY) {
                                 row.col(|ui| {
                                     packet_cell(
                                         ui,
@@ -196,6 +230,7 @@ impl NetworkView {
                                             elapsed,
                                             mono: &mono,
                                             font_size,
+                                            made_by: source.as_ref(),
                                         },
                                         &mut filter,
                                     );
@@ -748,6 +783,8 @@ struct PacketCell<'a> {
     elapsed: f64,
     mono: &'a egui::FontId,
     font_size: f32,
+    /// What made the packet, when the column is shown.
+    made_by: Option<&'a antinomie_triage::net_attr::Source>,
 }
 
 /// One cell of a packet row: the mark, the tint band and the column's content.
@@ -764,6 +801,7 @@ fn packet_cell(
         elapsed,
         mono,
         font_size,
+        made_by,
     } = *style;
     if column == 0 {
         let mark = if selected {
@@ -805,6 +843,7 @@ fn packet_cell(
             &format!("Filter by protocol {}", packet.protocol),
         )
         .then(|| format!("proto {}", packet.protocol)),
+        MADE_BY => made_by_cell(ui, made_by, mono),
         6 => {
             ui.add(
                 egui::Label::new(info_text(packet, font_size))
@@ -830,6 +869,37 @@ fn packet_cell(
     if set.is_some() {
         *filter = set;
     }
+}
+
+/// The Made by cell: the process, the base image or nothing known. A click
+/// filters the list to the same source.
+fn made_by_cell(
+    ui: &mut egui::Ui,
+    source: Option<&antinomie_triage::net_attr::Source>,
+    mono: &egui::FontId,
+) -> Option<String> {
+    use antinomie_triage::net_attr::Source;
+    let source = source?;
+    let color = match source {
+        Source::Process(_) => theme::text(),
+        _ => theme::muted(),
+    };
+    let label = source.label();
+    let response = ui
+        .add(
+            egui::Label::new(RichText::new(&label).font(mono.clone()).color(color))
+                .truncate()
+                .selectable(false)
+                .sense(egui::Sense::click()),
+        )
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(format!(
+            "{}\n\nClick to list the packets with this source.",
+            source.explain()
+        ));
+    response
+        .clicked()
+        .then(|| format!("source {}", source.kind_filter()))
 }
 
 /// A Source or Destination cell: its address and port filter separately.

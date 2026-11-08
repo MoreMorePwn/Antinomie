@@ -1067,8 +1067,17 @@ The network capture is the guest's own view on every route.
   folder (`ioc-online.json`). **Triage › Summary** says how many indicators matched
   and the dataset date in its Indicators header.
 - **Triage › Network** shows **Endpoints**, **Domains**, **URLs** and **TLS**, all
-  read from TShark (the capture is VM-wide, so no row names a process), each with
-  an IOC column. The 0.7.0 tabs (IPs, Hosts, HTTP, DNS, Sessions) and the switch
+  read from TShark, each with an IOC column. The capture is VM-wide and the guest
+  tags no packet, so **Endpoints** has a **Source** column made on the host from
+  the run's recorded network calls (`connect`, `sendto`, `sendmsg`, `accept`,
+  `recvfrom`, `bind`), matched by address, protocol and time: a process as
+  `name (pid · tid)` (a click opens it in Details; several processes show the
+  first and `+N`), **Base image background: NTP** (or DHCP, apt: the traffic the
+  Summary's Indicators set apart, and a base program's own flows), or
+  **Unattributed** when no recorded call matches, as for a raw socket. Filter it
+  with `network.source`, `network.source_kind` (`process`, `background`,
+  `unattributed`), `network.source_process` and `network.source_pid`. A run
+  recorded before 0.9.0 attributes the same way, from its recording. The 0.7.0 tabs (IPs, Hosts, HTTP, DNS, Sessions) and the switch
   between the layouts are gone. The filter field names of the old tabs
   (`http.method`, `dns.name`, `session.alpn`, `network.country`, ...) work in the
   new ones, so a saved filter keeps working; Endpoints add the port, protocol,
@@ -1080,7 +1089,16 @@ The network capture is the guest's own view on every route.
   expandable details tree are exactly what the installed TShark prints
   (protocol, info, every field), with a byte view that marks the bytes of the
   selected line. Without TShark you see raw frames and bytes and a note to
-  install it. **Open in Wireshark** opens the capture when installed.
+  install it. **Open in Wireshark** opens the capture when installed. Each capture
+  in the list has a **Run:** line saying which run it belongs to, like the Core
+  dumps and Memory tabs: the run itself when it started the segment (exact), the
+  runs live while a hand-started segment was written (**by time**), or **VM-wide**
+  when no run was; a click opens the run in Triage. While Triage has a run open
+  whose capture you look at, the packet list adds a **Made by** column (the
+  process, **Base image background: ...** or **Unattributed**, as in Triage ›
+  Network; the Source column there is the packet's address) that sorts, and the
+  quick filter `source curl`, `source background` or `source unattributed` lists
+  the packets of one source.
 - **Memory**: dumps of a VM's memory (or imported ones) and their analysis.
   **Analyse with** picks the backend: Volatility 3 (plugins, any system) or
   MemNixFS (Linux only; reports instead of plugins: processes, process tree,

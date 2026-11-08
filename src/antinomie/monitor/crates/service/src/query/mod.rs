@@ -5,6 +5,8 @@
 pub mod analysis;
 /// The files, captures and cores a run kept (Q-2).
 pub mod artifacts;
+/// What made each packet: the run's network calls matched to its flows (T0397).
+pub mod attribution;
 /// `capabilities.queries` (design 5.12.4a).
 pub mod catalogue;
 /// `ReadContext`: caller, cancel flag, deadline (Q-3).

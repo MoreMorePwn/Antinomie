@@ -169,6 +169,68 @@ pub struct Capture {
     /// L
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Which run the segment belongs to, from the runs' own records; none
+    /// when no run record could be read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<CaptureLink>,
+}
+
+/// How sure a link to a run is (the provenance of cores and memory dumps
+/// uses the same four).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkCertainty {
+    /// The run started the segment and lists it in its artifacts.
+    Exact,
+    /// The segment was written while the runs in `live_runs` were live: the
+    /// time is the only link.
+    ByTime,
+    /// The segment holds the whole VM's traffic and no run was live.
+    VmWide,
+    Unknown,
+}
+
+/// The run behind a capture segment.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CaptureLink {
+    pub certainty: LinkCertainty,
+    /// The run that started the segment (`exact` only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// Other runs that were live while the segment was written, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub live_runs: Vec<String>,
+}
+
+/// What made a packet's flow, matched on the host from the run's recorded
+/// network calls (address, protocol and time).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MadeByKind {
+    /// A process of the run.
+    Process,
+    /// The base image's own traffic (NTP, DHCP, apt).
+    Background,
+    /// No recorded call matches.
+    Unattributed,
+}
+
+/// The `made_by` of a packet row.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MadeBy {
+    pub kind: MadeByKind,
+    /// `curl (412 \u{b7} 413)`, `Base image background: NTP` or `Unattributed`.
+    pub label: String,
+    /// The first process and its thread, for `process`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tid: Option<u32>,
+    /// Further processes that made a matching call.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -200,6 +262,10 @@ pub struct PacketRow {
     pub dst_port: Option<u16>,
     pub tcp_flags: Option<u16>,
     pub transport: Option<PacketTransport>,
+    /// What made the packet's flow; absent when the run's calls could not be
+    /// read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub made_by: Option<MadeBy>,
 }
 
 /// A node of a decoded packet.

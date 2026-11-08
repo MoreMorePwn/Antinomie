@@ -23,9 +23,10 @@ mod captures;
 mod detail_tree;
 mod display;
 mod packets;
+mod runs;
 mod toolbar;
 
-use self::{captures::*, detail_tree::*, display::*, packets::*, toolbar::*};
+use self::{captures::*, detail_tree::*, display::*, packets::*, runs::*, toolbar::*};
 
 /// Raw frames kept in the list when TShark is not installed; older ones stay
 /// in the file (open it in Wireshark).
@@ -42,6 +43,8 @@ pub(crate) enum NetworkAction {
     Stop,
     /// Delete a saved capture, once the user confirms.
     Delete(crate::evidence_delete::Deletion),
+    /// Open this run in Triage: a capture's Run line was clicked.
+    OpenRun(String),
 }
 
 /// The selected VM, as the panel needs it.
@@ -152,6 +155,15 @@ pub(crate) struct NetworkView {
     detail_node: Option<usize>,
     /// Rows TShark had parsed when the page on screen was read.
     display_page_progress: u64,
+    /// The runs of the VM, for the Run line of a capture.
+    run_names: crate::run_link::RunNames,
+    names_for: Option<Arc<Vec<antinomie_monitor_core::RunSummary>>>,
+    /// The run selected in Triage, whose calls name the packets' processes.
+    triage_run: Option<String>,
+    links: Links,
+    /// The selected run's network calls, with its id.
+    attribution: Option<(String, Arc<antinomie_triage::net_attr::NetAttribution>)>,
+    made_by: std::cell::RefCell<MadeBy>,
 }
 
 /// The selected packet's details from TShark.
@@ -175,6 +187,8 @@ enum Filter {
     Address(IpAddr),
     Endpoint(IpAddr, u16),
     Protocol(String),
+    /// What made the packet: `source curl`, `source background`.
+    Source(String),
     Text(String),
 }
 
@@ -198,6 +212,9 @@ impl Filter {
         {
             return Filter::Address(address);
         }
+        if let Some(source) = lower.strip_prefix("source ") {
+            return Filter::Source(source.trim().into());
+        }
         if let Some(protocol) = lower.strip_prefix("proto ") {
             return Filter::Protocol(protocol.trim().into());
         }
@@ -211,8 +228,19 @@ impl Filter {
     }
 
     fn matches(&self, packet: &NetworkPacket) -> bool {
+        self.matches_with(packet, &|_| String::new())
+    }
+
+    /// [`matches`](Self::matches), with the text of the packet's Made by
+    /// column for a `source` filter.
+    fn matches_with(
+        &self,
+        packet: &NetworkPacket,
+        made_by: &dyn Fn(&NetworkPacket) -> String,
+    ) -> bool {
         match self {
             Filter::All => true,
+            Filter::Source(needle) => made_by(packet).to_lowercase().contains(needle),
             Filter::Port(port) => packet.src_port == Some(*port) || packet.dst_port == Some(*port),
             Filter::Address(address) => {
                 packet.src_ip == Some(*address) || packet.dst_ip == Some(*address)
@@ -501,6 +529,7 @@ impl NetworkView {
             .active
             .map(|capture| (capture.id.clone(), capture.file.clone()));
         self.collect_listing();
+        self.refresh_links(cx.active);
         if self
             .captures_for
             .as_ref()
