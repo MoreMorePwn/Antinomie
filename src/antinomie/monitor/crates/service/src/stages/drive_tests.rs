@@ -650,7 +650,11 @@ fn a_cancel_while_the_program_runs_stops_it_stops_the_vm_and_keeps_the_recording
     let stored = w.job(&job.id);
     assert_eq!(stored.state, JobState::Cancelled);
     assert_eq!(stored.run.unwrap().end_reason, Some(EndReason::Stopped));
-    assert!(stored.recording.is_some(), "the recording is kept");
+    assert_eq!(
+        stored.recording.map(|r| r.phase),
+        Some(RecordingPhase::Complete),
+        "the recording is kept and settled"
+    );
     lane_is_free(&w);
 }
 

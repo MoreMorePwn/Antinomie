@@ -262,12 +262,12 @@ impl<E: Engine> LaneStages<'_, E> {
     /// stage; a failed stage is ended `failed` and its stop returned. The job
     /// stays `running`: ending it or retrying is the caller's.
     pub fn run_to_launch(&mut self, job: &Job) -> Result<Launched, StageStop> {
-        self.to_launch(job).map(|(_, launched)| launched)
+        self.launch_cycle(job).map(|(_, launched)| launched)
     }
 
     /// [`run_to_launch`](Self::run_to_launch), keeping what `prechecks` settled
     /// for the stages after `launch`.
-    pub(crate) fn to_launch(&mut self, job: &Job) -> Result<(Prepared, Launched), StageStop> {
+    pub(crate) fn launch_cycle(&mut self, job: &Job) -> Result<(Prepared, Launched), StageStop> {
         let store = self.env.store;
         let now = self.waiter.now_ms();
         let prepared = self.stage(job, Stage::Prechecks, false, |this| this.prechecks(job))?;

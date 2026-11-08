@@ -184,8 +184,10 @@ mod tests {
 
     #[test]
     fn permanent_codes_stay_final_even_when_the_policy_lists_them() {
-        let mut policy = RetryPolicy::default();
-        policy.retry_on = FailureCode::ALL.to_vec();
+        let policy = RetryPolicy {
+            retry_on: FailureCode::ALL.to_vec(),
+            ..RetryPolicy::default()
+        };
         for code in [
             FailureCode::SampleMissing,
             FailureCode::SampleTypeDenied,

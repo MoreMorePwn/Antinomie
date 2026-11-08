@@ -116,7 +116,7 @@ pub(super) fn qemu(w: &W, pid: u32, ticks: u64) {
 
 /// Run `prechecks` to `launch`.
 pub(super) fn launched(w: &W, waiter: &mut Waiter<FakeEngine>, job: &Job) -> (Prepared, Launched) {
-    w.stages(waiter).to_launch(job).expect("the launch")
+    w.stages(waiter).launch_cycle(job).expect("the launch")
 }
 
 fn run_stage(

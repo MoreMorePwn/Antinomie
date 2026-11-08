@@ -29,7 +29,7 @@ use crate::{
     api::{
         event::{EventBody, StageStatus},
         failure::{Failure, FailureCode},
-        job::{Job, JobState, Outcome, Stage, WaitingFor},
+        job::{Job, JobState, Outcome, RecordingPhase, Stage, WaitingFor},
     },
     engine::Engine,
     lane::state::Checkpoint,
@@ -42,7 +42,7 @@ use crate::{
 #[derive(Debug)]
 pub enum Driven {
     /// Every lane stage finished.
-    Collected(CollectEnd),
+    Collected(Box<CollectEnd>),
     /// The job failed and was queued for another attempt.
     Retried { failure: Failure, backoff_s: u32 },
     /// The job ended `failed`.
@@ -103,7 +103,7 @@ impl<E: Engine> LaneStages<'_, E> {
 
     fn lane_cycle(&mut self, job: &Job) -> Result<CollectEnd, StageStop> {
         self.cancel_point(job)?;
-        let (prepared, launched) = self.to_launch(job)?;
+        let (prepared, launched) = self.launch_cycle(job)?;
         self.cancel_point(job)?;
         self.stage(job, Stage::Run, true, |this| {
             this.run(job, &prepared, &launched)
@@ -163,7 +163,7 @@ impl<E: Engine> LaneStages<'_, E> {
 
     fn settle(&mut self, job: &Job, result: Result<CollectEnd, StageStop>) -> Driven {
         let stop = match result {
-            Ok(end) => return Driven::Collected(end),
+            Ok(end) => return Driven::Collected(Box::new(end)),
             Err(stop) => stop,
         };
         match stop {
@@ -230,6 +230,13 @@ impl<E: Engine> LaneStages<'_, E> {
                 "vm_not_stopped",
                 &format!("the lane VM was not left stopped and settled: {settled:?}"),
             );
+        }
+        if clean
+            && let Ok(stored) = self.env.store.get(&job.id)
+            && stored.recording.as_ref().map(|r| r.phase) == Some(RecordingPhase::Finalizing)
+        {
+            // The VM is stopped and the recording settled: it is complete.
+            let _ = self.set_recording_phase(job, RecordingPhase::Complete);
         }
         let _ = self.update_lane(|file| {
             file.end_work(now);
