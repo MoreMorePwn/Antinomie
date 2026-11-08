@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The lineage graph's viewport: a layered layout (parents left, the sample in
-//! the middle, children right), pan by dragging, zoom with the wheel about the
+//! the middle, children right), pan by dragging, zoom with Ctrl and the wheel about the
 //! pointer, a zoom bar, a minimap and keyboard control. It draws nodes and
 //! labelled edges and says what was clicked; it keeps no data of its own.
 use super::{parts, *};
@@ -541,13 +541,10 @@ fn navigate(
         view.moved = true;
     }
     if response.hovered() {
-        let wheel = crate::widgets::raw_delta(ui).y;
-        let (scroll, pinch, pointer) =
-            ui.input(|input| (wheel, input.zoom_delta(), input.pointer.hover_pos()));
+        // Ctrl and the wheel arrive as egui's zoom, as a pinch does; the plain
+        // wheel is left to the page that holds the graph.
+        let (pinch, pointer) = ui.input(|input| (input.zoom_delta(), input.pointer.hover_pos()));
         let pivot = pointer.map_or(viewport / 2.0, |at| at - origin);
-        if scroll != 0.0 {
-            view.zoom_about(pivot, (scroll * 0.0015).exp());
-        }
         if pinch != 1.0 {
             view.zoom_about(pivot, pinch);
         }
@@ -925,5 +922,100 @@ mod tests {
         assert_eq!(view.zoom, MAX_ZOOM);
         view.zoom_about(pivot, 0.0001);
         assert_eq!(view.zoom, MIN_ZOOM);
+    }
+
+    /// The graph in a page that scrolls; returns where the page's marker is.
+    fn page(ctx: &egui::Context, view: &mut View, time: f64, events: Vec<egui::Event>) -> f32 {
+        let graph = LineageGraph {
+            nodes: vec![node("p", -1), node("s", 0), node("a", 1), node("b", 1)],
+            ..LineageGraph::default()
+        };
+        let layout = Layout::of(&graph);
+        let mut marker = 0.0;
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 400.0))),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        let (rect, _) = ui.allocate_exact_size(
+                            Vec2::new(ui.available_width(), 300.0),
+                            egui::Sense::hover(),
+                        );
+                        marker = rect.min.y;
+                        show(
+                            ui,
+                            rect,
+                            &graph,
+                            &layout,
+                            view,
+                            None,
+                            None,
+                            &Default::default(),
+                            "s",
+                            &mut None,
+                            &mut |_, _| {},
+                        );
+                        ui.allocate_space(Vec2::new(10.0, 2000.0));
+                    });
+                });
+            },
+        );
+        marker
+    }
+
+    fn turn(
+        ctx: &egui::Context,
+        view: &mut View,
+        time: &mut f64,
+        modifiers: egui::Modifiers,
+    ) -> f32 {
+        let at = Pos2::new(300.0, 150.0);
+        let mut marker = 0.0;
+        for n in 0..30 {
+            let events = if n == 0 {
+                vec![
+                    egui::Event::PointerMoved(at),
+                    egui::Event::MouseWheel {
+                        phase: egui::TouchPhase::Move,
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: Vec2::new(0.0, if modifiers.command { 60.0 } else { -60.0 }),
+                        modifiers,
+                    },
+                ]
+            } else {
+                vec![]
+            };
+            *time += 0.02;
+            marker = page(ctx, view, *time, events);
+        }
+        marker
+    }
+
+    #[test]
+    fn the_plain_wheel_scrolls_the_page_and_ctrl_wheel_zooms_the_graph() {
+        let ctx = egui::Context::default();
+        let mut view = View::default();
+        let mut time = 0.0;
+        let start = page(&ctx, &mut view, time, vec![]);
+        page(&ctx, &mut view, 0.02, vec![]);
+        time = 0.02;
+        let zoom = view.zoom;
+        let marker = turn(&ctx, &mut view, &mut time, egui::Modifiers::NONE);
+        assert_eq!(view.zoom, zoom, "the plain wheel leaves the zoom");
+        assert!(
+            marker < start - 20.0,
+            "the page scrolled: {start} -> {marker}"
+        );
+        turn(&ctx, &mut view, &mut time, egui::Modifiers::COMMAND);
+        assert!(
+            view.zoom > zoom,
+            "Ctrl and the wheel zoom: {zoom} -> {}",
+            view.zoom
+        );
     }
 }

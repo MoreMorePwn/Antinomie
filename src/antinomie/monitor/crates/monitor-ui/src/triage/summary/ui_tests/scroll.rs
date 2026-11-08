@@ -131,3 +131,100 @@ fn the_wheel_over_the_main_activity_graph_scrolls_the_page() {
         "the page scrolled over the strip"
     );
 }
+
+impl Rig {
+    fn press(&mut self, at: egui::Pos2, pressed: bool) {
+        let events = vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        self.frames(1, events);
+    }
+
+    fn glide(&mut self, to: egui::Pos2) {
+        self.frames(1, vec![egui::Event::PointerMoved(to)]);
+    }
+
+    fn click(&mut self, at: egui::Pos2) {
+        self.press(at, true);
+        self.press(at, false);
+        self.frames(3, vec![]);
+    }
+
+    /// The plain wheel at `at` scrolls the page: `text` moves up.
+    fn page_scrolls(&mut self, at: egui::Pos2, text: &str, why: &str) {
+        let out = self.frames(2, vec![]);
+        let before = find(&out, text).min.y;
+        let out = self.spin(at, -40.0, egui::Modifiers::NONE);
+        let after = find(&out, text).min.y;
+        assert!(after < before - 8.0, "{why}: {text} {before} -> {after}");
+    }
+}
+
+#[test]
+fn the_page_still_scrolls_after_every_way_of_using_the_graph() {
+    let mut rig = Rig::new();
+    let out = rig.bring("Fit");
+    let fit = find(&out, "Fit");
+    let over = egui::pos2(fit.min.x - 300.0, fit.max.y + 60.0);
+    let outside = egui::pos2(over.x, fit.min.y - 200.0);
+    let edge = egui::pos2(1270.0, 200.0);
+    // Drag to pan, released inside, then outside the box.
+    rig.glide(over);
+    rig.press(over, true);
+    rig.glide(over + egui::vec2(40.0, 10.0));
+    rig.press(over + egui::vec2(40.0, 10.0), false);
+    rig.page_scrolls(over, "Fit", "after a drag released inside");
+    rig.press(over, true);
+    rig.glide(over + egui::vec2(40.0, 10.0));
+    rig.glide(outside);
+    rig.press(outside, false);
+    rig.frames(3, vec![]);
+    rig.page_scrolls(over, "Fit", "after a drag released outside");
+    rig.page_scrolls(edge, "Fit", "at the page edge after a drag");
+    // Ctrl+wheel zoom.
+    rig.spin(over, 120.0, egui::Modifiers::COMMAND);
+    rig.page_scrolls(over, "Fit", "after Ctrl+wheel");
+    // Fit, then Fit all.
+    let out = rig.frames(2, vec![]);
+    let fit = find(&out, "Fit");
+    rig.click(fit.center());
+    rig.page_scrolls(over, "Fit", "after Fit");
+    let out = rig.frames(2, vec![]);
+    let all = find(&out, "Fit all");
+    rig.click(all.center());
+    rig.page_scrolls(over, "Fit", "after Fit all");
+    // The zoom buttons.
+    let out = rig.frames(2, vec![]);
+    let plus = find(&out, "+");
+    rig.click(plus.center());
+    rig.page_scrolls(over, "Fit", "after the zoom button");
+    // A click on the graph.
+    rig.click(over);
+    rig.page_scrolls(over, "Fit", "after a click");
+    rig.page_scrolls(edge, "Fit", "away from the graph");
+}
+
+#[test]
+fn the_page_scrolls_after_the_graph_is_dragged_out_of_the_window_and_let_go_outside() {
+    // egui-winit drops a button release that happens outside the window, so
+    // egui never sees the drag end.
+    let mut rig = Rig::new();
+    let out = rig.bring("Fit");
+    let fit = find(&out, "Fit");
+    let over = egui::pos2(fit.min.x - 300.0, fit.max.y + 60.0);
+    rig.glide(over);
+    rig.press(over, true);
+    rig.glide(over + egui::vec2(40.0, 10.0));
+    rig.glide(over + egui::vec2(80.0, 20.0));
+    rig.frames(1, vec![egui::Event::PointerGone]);
+    rig.frames(3, vec![]);
+    rig.glide(over);
+    rig.page_scrolls(over, "Fit", "after a drag out of the window");
+    rig.page_scrolls(egui::pos2(1270.0, 200.0), "Fit", "away from the graph");
+}
