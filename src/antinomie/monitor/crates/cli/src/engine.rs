@@ -133,6 +133,11 @@ pub fn wait_error(error: WaitError) -> CliError {
         )
         .with_exit(Exit::WaitTimeout),
         silent @ WaitError::Silent { .. } => CliError::internal(silent.to_string()),
+        WaitError::DeadlineExceeded => CliError::new(
+            ErrorCode::Unavailable,
+            "the time limit of the command (--timeout) passed; the VM was stopped",
+        )
+        .with_exit(Exit::WaitTimeout),
         WaitError::Interrupted => CliError::internal("interrupted").with_exit(Exit::Interrupted),
         WaitError::Disconnected(message) => CliError::internal(message),
     }

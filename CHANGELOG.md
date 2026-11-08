@@ -42,6 +42,13 @@ x86 programs by their own table.
   only, Ctrl-C stops the VM cleanly, and a VM ends with the command that started
   it (`vm start --hold` keeps it up). See "Command line" in docs/usage.md.
 
+- **`antinomie-cli run exec`.** Uploads a library sample into a VM, runs it,
+  waits until its evidence is complete (the 300-second rule the window uses), stops
+  the VM and waits until the recording is final, then prints the outcome, the run,
+  the evidence, the time per stage and the end of the program's output. A run limit
+  (`--timeout-run`) stops a program that never ends; `--events` streams the progress
+  as it happens. The exit code is 0, 11 for partial evidence, 10 for a failure.
+
 - **Clock model for the boot age.** A new Clock model setting in a VM's Device
   profile (Auto, Always running, Suspend) chooses whether the boot age steps
   both guest clocks or only CLOCK_BOOTTIME. Auto picks Suspend on Debian bases,

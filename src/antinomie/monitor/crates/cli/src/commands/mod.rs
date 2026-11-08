@@ -14,6 +14,7 @@ mod doctor;
 mod library;
 mod machine;
 mod rules;
+mod run;
 mod sample;
 mod snapshot;
 mod vm;
@@ -41,12 +42,22 @@ pub enum Command {
     /// VM snapshots: list, create, restore, delete; takes the engine lock.
     #[command(subcommand)]
     Snapshot(snapshot::Snapshot),
+    /// Run a library sample in a VM: `run exec`; takes the engine lock.
+    #[command(subcommand)]
+    Run(run::Run),
     /// Samples in the library; no engine lock needed.
     #[command(subcommand)]
     Sample(sample::Sample),
     /// Custody chains of the samples; no engine lock needed.
     #[command(subcommand)]
     Custody(custody::Custody),
+}
+
+impl Command {
+    /// The command prints events as they happen (`run exec --events`).
+    pub fn streams_events(&self) -> bool {
+        matches!(self, Command::Run(run) if run.streams_events())
+    }
 }
 
 pub fn run(command: &Command, context: &Context) -> Result<Reply, CliError> {
@@ -59,6 +70,7 @@ pub fn run(command: &Command, context: &Context) -> Result<Reply, CliError> {
         Command::Base(base) => base::run(base, context),
         Command::Vm(vm) => vm::run(vm, context),
         Command::Snapshot(snapshot) => snapshot::run(snapshot, context),
+        Command::Run(run) => run::run(run, context),
         Command::Sample(sample) => sample::run(sample, context),
         Command::Custody(custody) => custody::run(custody, context),
     }

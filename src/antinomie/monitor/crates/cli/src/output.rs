@@ -4,7 +4,7 @@
 //! A command returns a [`Reply`]; this module turns a reply or a [`CliError`]
 //! into the text for standard output and standard error. Nothing else prints
 //! results, so every command obeys the same envelope.
-use crate::error::CliError;
+use crate::{error::CliError, exit::Exit};
 use antinomie_service::API_VERSION;
 use clap::ValueEnum;
 use serde::Serialize;
@@ -54,6 +54,9 @@ pub struct Reply {
     pub body: Body,
     /// Text for the human format; absent, a generic rendering of the value is used.
     pub human: Option<String>,
+    /// The exit code of a command that succeeded in running but whose subject
+    /// ended badly: a waited run that is `partial` (11) or `failed` (10).
+    pub exit: Exit,
 }
 
 #[derive(Clone, Debug)]
@@ -73,6 +76,7 @@ impl Reply {
         Self {
             body: Body::Value(value),
             human: None,
+            exit: Exit::Ok,
         }
     }
 
@@ -80,11 +84,17 @@ impl Reply {
         Self {
             body: Body::List { items, next_cursor },
             human: None,
+            exit: Exit::Ok,
         }
     }
 
     pub fn with_human(mut self, text: String) -> Self {
         self.human = Some(text);
+        self
+    }
+
+    pub fn with_exit(mut self, exit: Exit) -> Self {
+        self.exit = exit;
         self
     }
 

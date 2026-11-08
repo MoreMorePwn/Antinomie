@@ -1696,6 +1696,27 @@ per line: a list command prints its items and then a last line
   [--description TEXT]`, `snapshot restore VM ID [--cold-boot] --yes` and `snapshot
   delete VM ID --yes`. A Disk snapshot keeps the stopped VM's disk; a Full one also keeps
   the memory of the running guest. A snapshot is named by its identity or its name.
+- **Run a program.** `run exec SAMPLE` uploads one library sample into a VM, runs it, and
+  waits until the recording is complete and settled. `SAMPLE` is a SHA-256 from `sample
+  list`, or a file, which is added to the library first. The low-level form of what an
+  Auto job does: no revert, no triage, no report. Flags: `--vm ID` (optional when there is
+  one VM), `--start` (boot a stopped VM; without it a stopped VM is refused), `--args A B
+  ...` (or after `--`), `--env K=V`, `--as user|root|UID:GID` (`user` is UID 1000),
+  `--route drop|internet|inet_sim|tor|vpn|socks5` (a routed VM only), `--timeout-run
+  SECONDS` (default 300: the run is then told to stop), `--net-capture`, `--memory-dump`,
+  `--core-dump`, `--static CHECKS` (the guest-side analysis too) and `--wait` (always on in
+  direct mode). The program runs in the app terminal as `/tmp/<sha8>-<name>`; the end of
+  its output is in the result. The wait covers the evidence the way the window's runs do
+  (network capture, memory dump and core finished, up to 300 s), then stops the VM and
+  waits until the recording is final: the stop is saved and the disk layer is gone.
+  The result says `outcome`: `succeeded` (exit 0), `partial` (exit 11: a piece of evidence
+  finished incomplete), or `failed` (exit 10, with `failure.code` such as `no_vm`,
+  `upload_failed`, `launch_failed`, `guest_lost`, `recording_failed`, `internal`). It also
+  gives the run (state, exit status, why it ended: `exited` or `run_limit`), the evidence
+  states and paths, the time per stage and the output. `--events` prints the progress as it
+  happens, one event of the job API per line (`job.stage`, `job.progress`, `job.run`,
+  `job.warning`, `job.finished`; `job_id` is null, `seq` counts from 1), then the result;
+  it implies `-o ndjson`. `--timeout SECONDS` limits the whole command (exit 14).
 - **A VM lives as long as the command.** In direct mode the engine runs inside the
   command and stops the VM when the command ends, so `vm start` boots the guest, waits
   until it answers, reports how long that took and stops it again; `--hold` keeps it

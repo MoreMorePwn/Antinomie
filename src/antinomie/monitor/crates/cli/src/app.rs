@@ -41,13 +41,17 @@ pub fn execute(args: Vec<OsString>, environment: &Environment) -> (Exit, Rendere
         .global
         .color
         .enabled(environment.stderr_is_terminal, environment.no_color);
-    let context = Context::new(
+    let mut context = Context::new(
         cli.global.clone(),
         environment.stdout_is_terminal,
         environment.home.clone(),
     );
+    // A command that streams events speaks ndjson whatever was asked for.
+    if cli.command.streams_events() {
+        context.format = Format::Ndjson;
+    }
     match commands::run(&cli.command, &context) {
-        Ok(reply) => (Exit::Ok, render_success(context.format, &reply)),
+        Ok(reply) => (reply.exit, render_success(context.format, &reply)),
         Err(error) => finish_failure(context.format, error, color),
     }
 }
