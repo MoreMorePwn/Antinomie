@@ -16,6 +16,7 @@
 //! queued.
 use super::{
     Library, Push, SampleRef,
+    actor::{self, ANALYST},
     chain::ChainedEvents,
     custody::{ActionKind, CustodyEvent, CustodySink},
     library::{DATABASE, now_ms},
@@ -29,10 +30,6 @@ use std::{
     sync::{OnceLock, mpsc},
 };
 
-/// The analyst, as the log names them.
-const ANALYST: &str = "analyst";
-/// The app, as the log names it.
-const APP: &str = "app";
 /// Entries that may wait for the custody writer; past that, an entry is
 /// dropped like one the database refused.
 const QUEUED_ENTRIES: usize = 4096;
@@ -42,7 +39,7 @@ enum Job {
     Entry {
         database: PathBuf,
         sha256: String,
-        by: &'static str,
+        by: String,
         at_ms: u64,
         event: CustodyEvent,
     },
@@ -51,6 +48,7 @@ enum Job {
         data_dir: PathBuf,
         sha256: String,
         push: Push,
+        by: String,
     },
     /// Answered once everything queued before it is written.
     Settle(mpsc::SyncSender<()>),
@@ -74,12 +72,13 @@ fn queue() -> Option<&'static mpsc::SyncSender<Job>> {
                                 by,
                                 at_ms,
                                 event,
-                            } => write(&database, &sha256, by, at_ms, &event),
+                            } => write(&database, &sha256, &by, at_ms, &event),
                             Job::Push {
                                 data_dir,
                                 sha256,
                                 push,
-                            } => write_push(&data_dir, &sha256, push),
+                                by,
+                            } => write_push(&data_dir, &sha256, push, &by),
                             Job::Settle(done) => {
                                 let _ = done.send(());
                             }
@@ -96,8 +95,10 @@ fn write(database: &Path, sha256: &str, by: &str, at_ms: u64, event: &CustodyEve
     let _ = ChainedEvents::new(database).record(sha256, by, at_ms, event);
 }
 
-fn write_push(data_dir: &Path, sha256: &str, push: Push) {
-    let _ = Library::open(data_dir).and_then(|mut library| library.record_push(sha256, push));
+fn write_push(data_dir: &Path, sha256: &str, push: Push, by: &str) {
+    let _ = Library::open(data_dir)
+        .and_then(|library| library.with_actor(by))
+        .and_then(|mut library| library.record_push(sha256, push));
 }
 
 /// Record that a sample was sent into a VM, now, without waiting for the
@@ -108,14 +109,16 @@ pub fn record_push_later(data_dir: &Path, sha256: &str, push: Push) {
         at_ms: now_ms(),
         ..push
     };
+    let by = actor::current();
     let Some(queue) = queue() else {
-        write_push(data_dir, sha256, push);
+        write_push(data_dir, sha256, push, &by);
         return;
     };
     let _ = queue.try_send(Job::Push {
         data_dir: data_dir.to_path_buf(),
         sha256: sha256.to_ascii_lowercase(),
         push,
+        by,
     });
 }
 
@@ -131,6 +134,9 @@ pub fn settle_custody() {
 }
 
 pub struct RunLog {
+    /// Who the program's own entries name ([`actor::current`] when the run
+    /// started).
+    app: String,
     database: PathBuf,
     sha256: String,
     run: String,
@@ -141,7 +147,15 @@ pub struct RunLog {
 
 impl RunLog {
     pub fn new(data_dir: &Path, sample: &SampleRef, run: &str, vm: &str) -> Self {
+        Self::with_actor(data_dir, sample, run, vm, &actor::current())
+    }
+
+    /// A run log whose program entries (start, end) name `app` as their
+    /// actor: the caller that caused the run. What the analyst does to the
+    /// guest is always `analyst`.
+    pub fn with_actor(data_dir: &Path, sample: &SampleRef, run: &str, vm: &str, app: &str) -> Self {
         Self {
+            app: app.to_owned(),
             database: samples_dir(data_dir).join(DATABASE),
             sha256: sample.sha256.to_ascii_lowercase(),
             run: run.into(),
@@ -150,7 +164,7 @@ impl RunLog {
         }
     }
 
-    fn note(&self, by: &'static str, event: CustodyEvent) {
+    fn note(&self, by: &str, event: CustodyEvent) {
         let at_ms = now_ms();
         let Some(queue) = queue() else {
             write(&self.database, &self.sha256, by, at_ms, &event);
@@ -159,7 +173,7 @@ impl RunLog {
         let _ = queue.try_send(Job::Entry {
             database: self.database.clone(),
             sha256: self.sha256.clone(),
-            by,
+            by: by.to_owned(),
             at_ms,
             event,
         });
@@ -168,7 +182,7 @@ impl RunLog {
     /// The run started: what it ran on and under.
     pub fn started(&self, detail: String) {
         self.note(
-            APP,
+            &self.app,
             CustodyEvent::RunStarted {
                 vm: self.vm.clone(),
                 run: self.run.clone(),
@@ -218,7 +232,7 @@ impl RunLog {
     pub fn ended(&mut self, detail: String) {
         self.flush_typed();
         self.note(
-            APP,
+            &self.app,
             CustodyEvent::RunEnded {
                 vm: self.vm.clone(),
                 run: self.run.clone(),

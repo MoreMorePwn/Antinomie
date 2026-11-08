@@ -18,7 +18,17 @@ pub const API_VERSION: u32 = 1;
 
 /// `JobApi`, the job objects, events and errors (cards P3-1 and later).
 pub mod api;
+/// Time and ids behind small seams.
+pub mod clock;
+/// `service.toml`, `policies/*.toml` and `config validate` (card P3-3).
+pub mod config;
+/// Custody actors and the `automation` entry of a job (card P3-7).
+pub mod custody;
+/// Staging, uploads and the common intake checks (card P3-2b).
+pub mod intake;
 /// `QueryApi`, the read-only recording queries (cards Q-1 and later).
 pub mod query;
 /// The JSON Schema generated from the types above.
 pub mod schema;
+/// The job store: SQLite, the state machine and the queue (card P3-2).
+pub mod store;
