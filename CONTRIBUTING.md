@@ -437,13 +437,13 @@ screenshot whose UI changed.
 The README screenshots are captures of an X display.
 `assets/screenshots/getting-started.png` is the release build on an empty data
 directory (`antinomie --data-dir` pointing at a new folder) while the base
-catalog loads, at 1280×820. `assets/screenshots/inc-walkthrough.gif` walks a
-real recorded run (the INC ransomware sample of the malware evaluation) on a
-1920×1080 X display: Run History, Triage (Summary, Process, Suspicious activity,
-Files, Per-file history), the Syscall Trace with a filter and Static analysis.
+catalog loads, at 1280×820. `assets/screenshots/rotajakiro-walkthrough.gif` walks a
+real recorded run (a RotaJakiro sample of the malware evaluation) on a
+1920×1080 X display: Run History, Triage (Summary with the relationships graph,
+Process, Files, Network, Detection) and the Export report dialog.
 It only opens views of the recording; it never starts a VM. It is recorded with
-ffmpeg's `x11grab`, sped up 1.3×, and encoded at 12 fps and 1280 px wide with a
-128-colour palette (under 3 MB).
+ffmpeg's `x11grab`, sped up 1.75×, and encoded at 12 fps and 1280 px wide with a
+128-colour palette without dithering (about 4 MB).
 
 Run the app with `HOME` and the XDG directories pointing at an empty throwaway
 home, so no path of your own appears in the frame.

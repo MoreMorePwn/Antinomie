@@ -30,11 +30,10 @@ the guest kernel, and investigate everything it did in one desktop app.
 
 <br>
 
-<img src="assets/screenshots/inc-walkthrough.gif" alt="A recorded run of INC ransomware in Antinomie: Run History, the Triage summary with ATT&amp;CK T1036, T1486 and T1622, the sample's process and its five worker threads, the high-severity mass-rewrite finding, the twelve files renamed to .INC, one file's history from open to rename, the system-call trace filtered to pwrite64 and rename, and the capa ATT&amp;CK matrix" width="860">
+<img src="assets/screenshots/rotajakiro-walkthrough.gif" alt="A recorded run of the RotaJakiro Linux backdoor in Antinomie 0.8.3: Run History, the Triage summary with the RotaJakiro family candidate, four HIGH findings and the key findings, the indicators and the relationships graph (zoomed with its buttons), the process tree with the details of a systemctl process, the files list with one file's evidence, the network endpoints, the YARA match, and the Export report dialog" width="860">
 
-<sub>A real recording: INC ransomware (MalwareBazaar, SHA-256 <code>86d04474…7f0d13</code>) run as
-root on Debian 13 Minimal against decoy VM files, with the InetSim route. Every view
-is the recorded run; no VM is running.</sub>
+<sub>A real recording: a RotaJakiro sample (SHA-256 <code>d1cdeea8…fd6d</code>) run as root
+on Debian 13 Minimal over the Tor route. Every view is the recorded run; no VM is running.</sub>
 
 </div>
 
