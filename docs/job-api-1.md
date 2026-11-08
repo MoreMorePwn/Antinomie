@@ -443,15 +443,49 @@ the read is cancelled.
 `recording.export.*` and every write are reserved; the service answers
 `unsupported`.
 
-## Implementation notes (cards Q-2, Q-3 and Q-5)
+## Implementation notes (cards Q-2 to Q-5)
 
 - `recording.captured.read` takes the `field` string of an `Invocation` event
   field unchanged. The string is opaque (`<stream>.<task>.<call>.<event_seq>.
   <object_id>:<key>` today): it names the call, so no other state is needed.
-- `q` on `recording.trace.page` is `unsupported` until the service uses the
-  Triage filter language (the language is in `antinomie-triage` since card P2-0,
-  but the service does not link that crate yet; it is planned with card Q-4).
-  Class T operations are `unsupported` until card Q-4.
+- `q` is the Triage filter language of `antinomie-triage` (the one the window's
+  tables and trace use). `recording.trace.page` takes the syscall filter
+  (`syscall.name == "openat"`, a bare word matches the call text); the Triage
+  tables take their own fields. A syntax or unknown-field error is
+  `invalid_argument` with `field: "q"` and `details.position` (the 1-based column).
+  The fields of each table, and its sortable columns, are the Triage crate's own
+  `FieldSpec` names (`finding.rule`, `file.path`, `network.bytes`, `ioc.value`,
+  `http.host`, ...), published in `capabilities.queries.ops[].tables`; every
+  column of a table is sortable.
+- **Triage reads (class T, card Q-4).** The first class T read of a run starts
+  its Triage scan on a thread of its own and answers `building` with the
+  scan's progress (`progress {done, total}`, `retry_after_ms`); ask again after
+  that time. The scan is the index the window makes when the run is selected
+  (`SavedRun`), run read-only: it writes no finding journal, no event journal and
+  never `triage-digest.json`. Two scans are kept in memory (the least recently
+  used goes first) and a scan of a recording whose `generation` changed is dropped;
+  `heavy_concurrency` scans run at once, one more is `quota_exceeded`; a scan that
+  runs past 900 s is cancelled and the next read starts it again (`scan_failed`).
+  Filter, sort and paging run over the whole row set of the scan. A table the scan
+  holds only in part (more rows than its page limit, 2 000 by default) says
+  `partial: true` and `total_exact: false`. A recording that is `live` is refused
+  with `recording_open`; `finalizing` and `interrupted` recordings are read.
+- `recording.summary` is the report summary of the export (`Summary` without the
+  policy `label` and `score`): the same builder as `antinomie-cli report`, so the
+  counts are the window's. `recording.indicators.list` rows are the report's
+  indicators with the dataset verdict; with `defang: true` the `value` is the
+  defanged form and `raw_indicators` is false.
+- `recording.findings.get` returns the representative call as `evidence_refs[0]`
+  and the rest of the folded occurrences as `evidence_omitted`: the scan keeps
+  one row per folded finding. `recording.files.list` rows of the `changed` tab
+  carry the reconstruction state and the earlier-bytes state; `files.versions`
+  gives the earlier version (the recording's `file-before/` copy) and the later
+  one (rebuilt from the recorded writes; available only when the writes cover the
+  whole file). `recording.timeline` merges process start and exit, findings,
+  changed and executed files and network first-seen rows; detection hits carry
+  no time and are not part of it; events with no host time (no clock anchor) are
+  left out and the page says `partial`. `network.list` `urls` is one row per
+  distinct request (method, host, URI).
 - Reads run in two pools (light 16, heavy 2 by default). A full heavy pool is
   `quota_exceeded` with `details.reason = "heavy_read_limit"` and
   `retry_after_s`; a read past its deadline (10 s light, 60 s heavy) is

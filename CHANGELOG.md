@@ -149,6 +149,24 @@ x86 programs by their own table.
   tags the sample `auto:label=...` and `auto:policy=...` in the library, with the
   automation actor in its custody chain. See "Auto mode" in docs/usage.md.
 
+- **`antinomie-cli run list`, `run show` and `run export`, and Triage reads
+  through the query API (ANT-T0367, ANT-T0369).** `run list` lists the recorded
+  runs of the data directory (`--vm`, `--sample`, `--job`, `--state`, `--since`,
+  `--limit`, `--cursor`), `run show RUN [--summary]` shows one run and, with
+  `--summary`, its Triage summary, and `run export RUN --out DIR [--part
+  LIST] [--sensitive]` writes the trace, processes, findings, indicators, files,
+  network, timeline, analysis, custody and artifacts of a run as NDJSON and
+  evidence files into `DIR` only (the bytes the sample produced need
+  `--sensitive`). They need no engine lock, so they work while the window is
+  open. `triage RUN` now reads its summary through the same read-only query the
+  web pages will use (`recording.summary`) and writes nothing into the
+  recording; it prints the summary's counts, families, techniques, key
+  behaviours and detections, and `--parts` still adds report parts. The query
+  API (`docs/job-api-1.md`) serves the Triage reads: the summary, findings,
+  indicators, files, network and a merged timeline, with the window's filter
+  language, server-side sort and paging, and the `trace.page` filter (`q`). Their
+  counts are the window's: a test compares them with the report builder.
+
 - **Exporting a large run no longer reads its recording a second time
   (ANT-T0412).** The index Triage makes of a run when it opens it is kept for
   the report: an export, or `antinomie-cli report`, of a recording that has not

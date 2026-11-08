@@ -102,6 +102,25 @@ impl QueryService {
         RunArtifacts::load(&opened.dir).ok().flatten()
     }
 
+    /// The network captures of the run as `(absolute path, capture_id)`: how a
+    /// Triage row's capture is named in a reply.
+    pub(super) fn capture_paths(&self, opened: &Opened) -> Vec<(String, String)> {
+        self.recording_entries(opened)
+            .into_iter()
+            .filter(|entry| entry.kind == RecordingArtifactKind::NetworkCapture)
+            .map(|entry| {
+                (
+                    entry
+                        .root
+                        .join(&entry.relative)
+                        .to_string_lossy()
+                        .into_owned(),
+                    entry.id.to_string(),
+                )
+            })
+            .collect()
+    }
+
     /// Every file of the run a caller may fetch, in `name` order.
     pub(super) fn recording_entries(&self, opened: &Opened) -> Vec<Entry> {
         let mut entries: Vec<Entry> = Vec::new();

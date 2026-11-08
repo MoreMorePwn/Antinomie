@@ -208,7 +208,7 @@ pub fn open_scan(
     let mut event_journal = request
         .identity
         .as_ref()
-        .filter(|_| request.root_cookie != 0 && cached_events.is_none())
+        .filter(|_| request.root_cookie != 0 && cached_events.is_none() && !request.read_only)
         .and_then(|(vm, boot, run)| {
             let identity = antinomie_monitor_core::analysis::detection::Identity {
                 vm_id: vm.clone(),
@@ -229,13 +229,20 @@ pub fn open_scan(
         });
     // A scan that was killed (a timed-out export that ended the process) left
     // its temporary files; the journals clean up after themselves otherwise.
-    antinomie_monitor_core::analysis::detection::remove_stale_temporaries(
-        &recording.directory,
-        antinomie_monitor_core::analysis::detection::STALE_TEMPORARY,
-    );
-    let (journal, journal_error) = match FindingJournal::new(&recording.directory) {
-        Ok(journal) => (Some(journal), None),
-        Err(error) => (None, Some(error)),
+    // A read-only scan (the query API) writes no journal and removes nothing.
+    if !request.read_only {
+        antinomie_monitor_core::analysis::detection::remove_stale_temporaries(
+            &recording.directory,
+            antinomie_monitor_core::analysis::detection::STALE_TEMPORARY,
+        );
+    }
+    let (journal, journal_error) = if request.read_only {
+        (None, None)
+    } else {
+        match FindingJournal::new(&recording.directory) {
+            Ok(journal) => (Some(journal), None),
+            Err(error) => (None, Some(error)),
+        }
     };
     let mut files = FdState {
         settled_parents: process_tree::settled_parents(&nodes),

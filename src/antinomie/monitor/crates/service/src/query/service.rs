@@ -79,6 +79,7 @@ pub struct QueryService {
     pub(super) jobs: Option<Arc<dyn JobIndex>>,
     pub(super) scrub: Scrub,
     pub(super) trees: Mutex<super::process::TreeCache>,
+    pub(super) scans: super::scan::ScanStore,
 }
 
 impl QueryService {
@@ -91,6 +92,10 @@ impl QueryService {
         Self {
             scrub: Scrub::new(&options.data_dir, &[]),
             pool: ReadPool::new(&settings),
+            scans: super::scan::ScanStore::new(
+                settings.limits.heavy_concurrency,
+                settings.scan_deadline,
+            ),
             options,
             settings,
             leases: Arc::new(Leases::default()),
@@ -120,6 +125,11 @@ impl QueryService {
     /// `(light, heavy)` reads in flight.
     pub fn reads_in_flight(&self) -> (usize, usize) {
         self.pool.in_flight()
+    }
+
+    /// Triage scans held in memory (finished or being made).
+    pub fn scans_in_memory(&self) -> usize {
+        self.scans.len()
     }
 
     pub fn settings(&self) -> &QuerySettings {
@@ -351,24 +361,50 @@ impl QueryApi for QueryService {
                     .run(heavy, ctx, |c| self.network_packet(&p, c))
                     .map(P::Packet)
             }
-            // Class T: the Triage scan (card Q-4).
-            other @ (R::Summary(_)
-            | R::FindingsList(_)
-            | R::FindingsGet(_)
-            | R::IndicatorsList(_)
-            | R::FilesList(_)
-            | R::FilesVersions(_)
-            | R::FilesContent(_)
-            | R::NetworkSummary(_)
-            | R::NetworkList(_)
-            | R::Timeline(_)) => Err(ApiError::new(
-                ErrorCode::Unsupported,
-                format!(
-                    "{} needs the Triage scan, which this build does not have yet",
-                    other.op()
-                ),
-            )
-            .with_detail("class", serde_json::json!("T"))),
+            // Class T: the Triage scan (card Q-4). A read whose scan is not
+            // built yet answers `building`; the scan runs on its own thread.
+            R::Summary(p) => self
+                .pool
+                .run(heavy, ctx, |_| self.summary(&p))
+                .map(P::Summary),
+            R::FindingsList(p) => self
+                .pool
+                .run(heavy, ctx, |_| self.findings_list(&p))
+                .map(P::Findings),
+            R::FindingsGet(p) => self
+                .pool
+                .run(heavy, ctx, |_| self.findings_get(&p))
+                .map(P::Finding),
+            R::IndicatorsList(p) => self
+                .pool
+                .run(heavy, ctx, |_| self.indicators_list(&p))
+                .map(P::Indicators),
+            R::FilesList(p) => self
+                .pool
+                .run(heavy, ctx, |_| self.files_list(&p))
+                .map(P::Files),
+            R::FilesVersions(p) => self
+                .pool
+                .run(heavy, ctx, |_| self.files_versions(&p))
+                .map(P::Versions),
+            R::FilesContent(p) => {
+                ctx.require(Scope::ArtifactsSensitive)?;
+                self.pool
+                    .run(heavy, ctx, |_| self.files_content(&p, ctx))
+                    .map(P::Bytes)
+            }
+            R::NetworkSummary(p) => self
+                .pool
+                .run(heavy, ctx, |_| self.network_summary(&p))
+                .map(P::NetworkSummary),
+            R::NetworkList(p) => self
+                .pool
+                .run(heavy, ctx, |_| self.network_list(&p))
+                .map(P::Network),
+            R::Timeline(p) => self
+                .pool
+                .run(heavy, ctx, |_| self.timeline(&p))
+                .map(P::Timeline),
         }
     }
 }

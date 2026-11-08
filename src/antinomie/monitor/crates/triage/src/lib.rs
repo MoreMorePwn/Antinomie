@@ -388,6 +388,10 @@ pub struct ScanRequest {
     /// Leave the index in the process ([`scan_cache`]) when it reads the run
     /// whole, for the export or report that follows.
     pub keep_index: bool,
+    /// Write nothing into the recording: no finding journal, no Sigma event
+    /// journal, no clean-up of stale temporaries. The query API reads this way
+    /// (design 5.12.2); the window and the CLI's `triage` keep the journals.
+    pub read_only: bool,
 }
 
 impl ScanRequest {

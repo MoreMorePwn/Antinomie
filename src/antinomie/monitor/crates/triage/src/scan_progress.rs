@@ -63,6 +63,14 @@ impl ScanProgress {
         self.done.store(done, Ordering::Relaxed);
     }
 
+    /// Units done and units in the phase (0 when unknown).
+    pub fn counts(&self) -> (u64, u64) {
+        (
+            self.done.load(Ordering::Relaxed),
+            self.total.load(Ordering::Relaxed),
+        )
+    }
+
     pub fn phase(&self) -> Phase {
         Phase::of(self.phase.load(Ordering::Relaxed))
     }

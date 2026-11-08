@@ -13,7 +13,7 @@ use super::{
     service::QueryService,
     types::*,
 };
-use crate::api::error::{ApiError, ErrorCode};
+use crate::api::error::ApiError;
 use antinomie_monitor_core::{InvocationSummary, recording::Recording};
 use std::sync::atomic::AtomicBool;
 
@@ -44,15 +44,11 @@ impl QueryService {
         params: &TracePageParams,
         cancel: &AtomicBool,
     ) -> Result<Page<TraceRow>, ApiError> {
-        if params.q.as_deref().is_some_and(|q| !q.trim().is_empty()) {
-            // The `q` language lives in `antinomie-triage` (P2-0), but the
-            // service does not link that crate yet: the filter needs the
-            // service to use it, which is planned with card Q-4.
-            return Err(ApiError::new(
-                ErrorCode::Unsupported,
-                "q needs the Triage filter language, which the service does not use yet (planned with card Q-4)",
-            )
-            .with_field("q"));
+        // `q` is the Triage crate's syscall filter language, the one the
+        // trace tab of the window uses; a bad filter is `invalid_argument`.
+        let filter = antinomie_triage::query::compile_note(params.q.as_deref().unwrap_or(""));
+        if let Some(error) = &filter.error {
+            return Err(super::tables::q_error(error));
         }
         let (default, max) = self.settings.rows();
         let request = PageRequest {
@@ -65,18 +61,19 @@ impl QueryService {
         let mut hide = params.hide_groups.clone();
         hide.sort();
         hide.dedup();
-        let binding = opened.binding(&(params.pid, &hide), &serde_json::Value::Null);
+        let binding = opened.binding(&(params.pid, &hide, &params.q), &serde_json::Value::Null);
         let start = match &request.cursor {
             Some(text) => Cursor::resume(text, binding)?,
             None => 0,
         };
         let keep = |call: &InvocationSummary| {
-            hide.is_empty()
+            (hide.is_empty()
                 || call
                     .entry
                     .as_ref()
                     .or(call.exit.as_ref())
-                    .is_none_or(|event| !hide.contains(&group_of(&event.syscall_name)))
+                    .is_none_or(|event| !hide.contains(&group_of(&event.syscall_name))))
+                && filter.keep(call)
         };
         let mut shrinks = 0;
         loop {
@@ -92,7 +89,7 @@ impl QueryService {
                 shrinks += 1;
                 continue;
             }
-            let total = if hide.is_empty() {
+            let total = if hide.is_empty() && filter.keeps_everything() {
                 recording
                     .invocation_count_cancellable(params.pid, cancel)
                     .map_err(|e| self.engine_error(&e))?

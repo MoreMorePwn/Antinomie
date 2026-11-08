@@ -40,19 +40,6 @@ fn enum_filter<T: serde::Serialize>(name: &str, values: &[T], required: bool) ->
     }
 }
 
-/// Table columns: every column of a published table is sortable.
-fn columns(fields: &[(&str, FieldType, &str)]) -> Vec<FieldInfo> {
-    fields
-        .iter()
-        .map(|(name, kind, description)| FieldInfo {
-            name: (*name).into(),
-            kind: *kind,
-            description: (*description).into(),
-            sortable: true,
-        })
-        .collect()
-}
-
 fn sortable_of(tables: &BTreeMap<String, TableInfo>, default: &str) -> Vec<SortableInfo> {
     let mut seen: BTreeMap<String, FieldType> = BTreeMap::new();
     for table in tables.values() {
@@ -69,196 +56,14 @@ fn sortable_of(tables: &BTreeMap<String, TableInfo>, default: &str) -> Vec<Sorta
         .collect()
 }
 
-use FieldType::{Boolean, Number, Tags, Text};
+use super::tables::table_info;
+use FieldType::{Number, Text};
+use antinomie_triage::{FINDING_FIELDS, file_category::FILE_FIELDS, ioc_view};
 
-fn finding_table() -> TableInfo {
-    TableInfo {
-        fields: columns(&[
-            ("rule", Text, "Stable activity rule"),
-            ("version", Number, "Rule version"),
-            ("tier", Text, "Tier after context"),
-            ("base_tier", Text, "The rule's own tier"),
-            ("category", Text, "ATT&CK-style category"),
-            ("techniques", Tags, "Technique and detection ids"),
-            ("count", Number, "Occurrences folded into the row"),
-            ("flags", Tags, "Row flags"),
-            ("hidden", Boolean, "Hidden as housekeeping"),
-            ("confidence", Text, "high or limited"),
-            ("summary", Text, "Matching facts"),
-            ("object", Text, "What repeats are folded by"),
-            ("success", Boolean, "Observed non-negative exit"),
-            ("first_guest_ns", Number, "First occurrence, guest time"),
-            ("last_guest_ns", Number, "Last occurrence, guest time"),
-            ("pid", Number, "Guest thread group"),
-            ("exe", Text, "Process executable"),
-        ]),
-    }
-}
-
-fn indicator_table() -> TableInfo {
-    TableInfo {
-        fields: columns(&[
-            ("kind", Text, "endpoint, domain, url, tls or file"),
-            ("value", Text, "The raw indicator"),
-            ("match", Text, "matched, known_fp, no_match or not_checked"),
-            ("dataset", Text, "Dataset that answered"),
-            ("family", Text, "Family of the record"),
-            ("confidence", Number, "Record confidence"),
-            ("sources", Tags, "pcap, syscall, disk or static"),
-            ("process", Text, "The process that made a matching call"),
-            ("first_us", Number, "First seen, capture clock"),
-            ("count", Number, "Occurrences"),
-        ]),
-    }
-}
-
-fn operation_file_table() -> TableInfo {
-    TableInfo {
-        fields: columns(&[
-            ("path", Text, "File path"),
-            ("operation", Text, "The call as the tables name it"),
-            ("via", Text, "syscall, io_uring or AIO"),
-            ("success", Boolean, "The call succeeded"),
-            ("access", Text, "Access mode"),
-            ("read_size", Number, "Bytes read"),
-            ("written_size", Number, "Bytes written"),
-            ("count", Number, "Calls folded into the row"),
-            ("interpreter", Text, "Interpreter of a script"),
-            ("content", Text, "Captured first octets, as text"),
-            ("pid", Number, "Guest thread group"),
-            ("exe", Text, "Process executable"),
-            ("guest_ns", Number, "Guest time"),
-        ]),
-    }
-}
-
-fn changed_file_table() -> TableInfo {
-    TableInfo {
-        fields: columns(&[
-            ("path", Text, "File path"),
-            ("names", Tags, "Every name seen"),
-            ("created", Boolean, "Created during the run"),
-            ("deleted", Boolean, "Deleted during the run"),
-            ("original_size", Number, "Size before"),
-            ("final_size", Number, "Size after"),
-            ("diff_count", Number, "Changed ranges"),
-            ("complete", Boolean, "Fully reconstructed"),
-            (
-                "reconstruction",
-                Text,
-                "complete, incomplete or not reconstructed",
-            ),
-            ("bytes_written", Number, "Bytes written"),
-            (
-                "bytes_not_captured",
-                Number,
-                "Written bytes the recording lacks",
-            ),
-            ("earlier", Text, "State of the earlier-bytes copy"),
-            ("first_guest_ns", Number, "First change, guest time"),
-            ("last_guest_ns", Number, "Last change, guest time"),
-        ]),
-    }
-}
-
-fn network_tables() -> BTreeMap<String, TableInfo> {
-    let mut tables = BTreeMap::new();
-    let mut add = |tab: &str, fields: &[(&str, FieldType, &str)]| {
-        tables.insert(
-            tab.to_owned(),
-            TableInfo {
-                fields: columns(fields),
-            },
-        );
-    };
-    add(
-        "endpoints",
-        &[
-            ("endpoint", Text, "Address and port"),
-            ("ip", Text, "IP address"),
-            ("port", Number, "Port"),
-            ("protocol", Text, "tcp or udp"),
-            ("frames", Number, "Frames"),
-            ("bytes", Number, "Bytes"),
-            ("country", Text, "Country"),
-            ("organization", Text, "Organization"),
-            ("first_us", Number, "First seen"),
-            ("last_us", Number, "Last seen"),
-        ],
-    );
-    add(
-        "domains",
-        &[
-            ("hostname", Text, "Name"),
-            ("addresses", Tags, "Addresses"),
-            ("count", Number, "Occurrences"),
-            ("sources", Tags, "DNS, HTTP or TLS"),
-            ("rcodes", Tags, "DNS response codes"),
-            ("first_us", Number, "First seen"),
-            ("last_us", Number, "Last seen"),
-        ],
-    );
-    add(
-        "dns",
-        &[
-            ("hostname", Text, "Name"),
-            ("rcodes", Tags, "DNS response codes"),
-            ("addresses", Tags, "Addresses"),
-            ("count", Number, "Occurrences"),
-            ("first_us", Number, "First seen"),
-        ],
-    );
-    add(
-        "urls",
-        &[
-            ("url", Text, "Request URL"),
-            ("method", Text, "HTTP method"),
-            ("host", Text, "Host"),
-            ("uri", Text, "Request target"),
-            ("status", Number, "Response status"),
-            ("count", Number, "Requests"),
-            ("first_us", Number, "First seen"),
-        ],
-    );
-    add(
-        "tls",
-        &[
-            ("time_us", Number, "Time"),
-            ("endpoint", Text, "Server"),
-            ("sni", Text, "Server name"),
-            ("alpn", Tags, "Protocols offered"),
-            ("version", Text, "TLS version"),
-            ("ja3", Text, "JA3"),
-            ("ja4", Text, "JA4"),
-            ("ja3s", Text, "JA3S"),
-            ("cert_sha1", Text, "Certificate SHA-1"),
-            ("sessions", Number, "Sessions"),
-        ],
-    );
-    add(
-        "http",
-        &[
-            ("time_us", Number, "Time"),
-            ("endpoints", Text, "Connection"),
-            ("method", Text, "HTTP method"),
-            ("host", Text, "Host"),
-            ("uri", Text, "Request target"),
-            ("version", Text, "HTTP version"),
-            ("status", Number, "Response status"),
-            ("complete", Boolean, "Request and response both seen"),
-            (
-                "attribution",
-                Text,
-                "Process, when the socket identity proves it",
-            ),
-        ],
-    );
-    tables
-}
-
+/// The tables of `recording.files.list`: the same Triage field list for every
+/// tab (the window filters every file table by it).
 fn file_tables() -> BTreeMap<String, TableInfo> {
-    let mut tables = BTreeMap::new();
-    for tab in [
+    [
         "opened",
         "created",
         "read",
@@ -269,11 +74,33 @@ fn file_tables() -> BTreeMap<String, TableInfo> {
         "attributes",
         "probed",
         "other",
-    ] {
-        tables.insert(tab.to_owned(), operation_file_table());
-    }
-    tables.insert("changed".to_owned(), changed_file_table());
-    tables
+        "changed",
+    ]
+    .iter()
+    .map(|tab| ((*tab).to_owned(), table_info(FILE_FIELDS)))
+    .collect()
+}
+
+/// The tables of `recording.network.list`, one Triage field list per tab.
+fn network_tables() -> BTreeMap<String, TableInfo> {
+    use super::network::fields_of;
+    [
+        NetworkTab::Endpoints,
+        NetworkTab::Domains,
+        NetworkTab::Urls,
+        NetworkTab::Tls,
+        NetworkTab::Dns,
+        NetworkTab::Http,
+    ]
+    .into_iter()
+    .map(|tab| {
+        let name = serde_json::to_value(tab)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default();
+        (name, table_info(fields_of(tab)))
+    })
+    .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -735,23 +562,24 @@ pub fn definitions() -> Vec<OpDef> {
     for def in &mut defs {
         match def.info.op.as_str() {
             "recording.findings.list" => {
-                let tables = BTreeMap::from([("findings".to_owned(), finding_table())]);
-                def.info.sortable = sortable_of(&tables, "first_guest_ns");
+                let tables = BTreeMap::from([("findings".to_owned(), table_info(FINDING_FIELDS))]);
+                def.info.sortable = sortable_of(&tables, "finding.first_ns");
                 def.info.tables = Some(tables);
             }
             "recording.indicators.list" => {
-                let tables = BTreeMap::from([("indicators".to_owned(), indicator_table())]);
-                def.info.sortable = sortable_of(&tables, "value");
+                let tables =
+                    BTreeMap::from([("indicators".to_owned(), table_info(ioc_view::FIELDS))]);
+                def.info.sortable = sortable_of(&tables, "ioc.value");
                 def.info.tables = Some(tables);
             }
             "recording.files.list" => {
                 let tables = file_tables();
-                def.info.sortable = sortable_of(&tables, "guest_ns");
+                def.info.sortable = sortable_of(&tables, "event.time_ns");
                 def.info.tables = Some(tables);
             }
             "recording.network.list" => {
                 let tables = network_tables();
-                def.info.sortable = sortable_of(&tables, "first_us");
+                def.info.sortable = sortable_of(&tables, "network.first_us");
                 def.info.tables = Some(tables);
             }
             // The engine sorts a listing by Strings column or `StructureField`.

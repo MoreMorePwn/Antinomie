@@ -20,6 +20,8 @@ pub struct QuerySettings {
     pub heavy_timeout: Duration,
     /// What `retry_after_s` says when the heavy pool is full.
     pub heavy_retry_after_s: u64,
+    /// A Triage scan that runs longer is cancelled (`scan_s`, 900 s).
+    pub scan_deadline: Duration,
 }
 
 impl Default for QuerySettings {
@@ -29,6 +31,7 @@ impl Default for QuerySettings {
             light_timeout: Duration::from_secs(10),
             heavy_timeout: Duration::from_secs(60),
             heavy_retry_after_s: 2,
+            scan_deadline: Duration::from_secs(900),
         }
     }
 }
