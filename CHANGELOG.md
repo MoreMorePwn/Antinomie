@@ -34,6 +34,14 @@ x86 programs by their own table.
   analyze FILE` runs the static analysis of a host file and prints a summary;
   `rules list, enable, disable` use the rule registry of the data directory.
 
+- **Bases, VMs and snapshots from the command line.** `antinomie-cli base list,
+  install, download, build, delete`, `vm list, create, start, stop, status, reset,
+  duplicate, delete` and `snapshot list, create, restore, delete` run the engine
+  in the command and print the same objects in human, json or ndjson. Destructive
+  commands refuse without `--yes`, a guest password is read from standard input
+  only, Ctrl-C stops the VM cleanly, and a VM ends with the command that started
+  it (`vm start --hold` keeps it up). See "Command line" in docs/usage.md.
+
 - **Clock model for the boot age.** A new Clock model setting in a VM's Device
   profile (Auto, Always running, Suspend) chooses whether the boot age steps
   both guest clocks or only CLOCK_BOOTTIME. Auto picks Suspend on Debian bases,

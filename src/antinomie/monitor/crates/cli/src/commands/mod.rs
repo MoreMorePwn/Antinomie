@@ -6,13 +6,17 @@ use crate::{context::Context, error::CliError, output::Reply};
 use clap::Subcommand;
 
 mod analyze;
+mod base;
 mod capabilities;
 mod config;
 mod custody;
 mod doctor;
 mod library;
+mod machine;
 mod rules;
 mod sample;
+mod snapshot;
+mod vm;
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -28,6 +32,15 @@ pub enum Command {
     /// Rule packs and groups: list, enable, disable.
     #[command(subcommand)]
     Rules(rules::Rules),
+    /// Bases: list, install, download, build, delete; takes the engine lock.
+    #[command(subcommand)]
+    Base(base::Base),
+    /// VMs: create, start, stop, status, reset, duplicate, delete; takes the engine lock.
+    #[command(subcommand)]
+    Vm(vm::Vm),
+    /// VM snapshots: list, create, restore, delete; takes the engine lock.
+    #[command(subcommand)]
+    Snapshot(snapshot::Snapshot),
     /// Samples in the library; no engine lock needed.
     #[command(subcommand)]
     Sample(sample::Sample),
@@ -43,6 +56,9 @@ pub fn run(command: &Command, context: &Context) -> Result<Reply, CliError> {
         Command::Config(config) => config::run(config, context),
         Command::Analyze(arguments) => analyze::run(arguments, context),
         Command::Rules(rules) => rules::run(rules, context),
+        Command::Base(base) => base::run(base, context),
+        Command::Vm(vm) => vm::run(vm, context),
+        Command::Snapshot(snapshot) => snapshot::run(snapshot, context),
         Command::Sample(sample) => sample::run(sample, context),
         Command::Custody(custody) => custody::run(custody, context),
     }

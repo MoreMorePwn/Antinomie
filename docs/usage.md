@@ -1672,6 +1672,39 @@ per line: a list command prints its items and then a last line
 - `doctor` also reports who owns the data directory (`data_dir.owner`, from
   `run/owner.json`, ignored when its process is gone). A command that needs the
   engine while the window owns the directory exits 21 and names the window.
+- **Bases.** `base list` lists the installed bases (`--remote` fetches and lists the
+  catalog's; needs `config set outbound_catalog true`, exit 5 otherwise). `base install
+  DIR` installs a boot-bundle folder. `base download ID [--wait]` fetches one from the
+  catalog and `base build [--profile busybox|debian-minimal|debian-xfce] [--engine
+  automatic|native|podman|docker|qemu] [--name N]` builds one here; both wait for the
+  end in direct mode, because leaving would cancel them. `base delete ID --yes` removes a
+  base no VM uses. A base is named by its identity, the start of it (4 characters or
+  more) or its label.
+- **VMs.** `vm list`, `vm status ID` (state, boot, guest kernel, snapshots, a pending
+  disk layer), `vm create NAME [--base ID] [--cpus N] [--ram-mib N] [--disk-gib N]
+  [--network disconnected|isolated|routed|nat] [--stealth realistic-desktop|
+  realistic-laptop|realistic-server|transparent] [--user NAME] [--password-stdin]`,
+  `vm start ID [--wait] [--hold [SECONDS]]`, `vm stop ID`, `vm reset ID --yes`,
+  `vm duplicate ID NAME` and `vm delete ID --yes`. A VM is named by its identity or
+  its name. The defaults are the window's (4 CPUs, 2048 MiB, 8 GiB, disconnected,
+  realistic desktop). A Debian base needs a guest account: give the password as one
+  line on standard input with `--password-stdin` (never on the command line); a base
+  with no account refuses the flag. `vm reset` is refused for a VM that has snapshots
+  (duplicate it first). Every destructive command (`base delete`, `vm reset`, `vm
+  delete`, `snapshot restore`, `snapshot delete`) refuses without `--yes` and exits 4.
+- **Snapshots.** `snapshot list VM`, `snapshot create VM NAME [--mode disk|full]
+  [--description TEXT]`, `snapshot restore VM ID [--cold-boot] --yes` and `snapshot
+  delete VM ID --yes`. A Disk snapshot keeps the stopped VM's disk; a Full one also keeps
+  the memory of the running guest. A snapshot is named by its identity or its name.
+- **A VM lives as long as the command.** In direct mode the engine runs inside the
+  command and stops the VM when the command ends, so `vm start` boots the guest, waits
+  until it answers, reports how long that took and stops it again; `--hold` keeps it
+  up for that many seconds, or until Ctrl-C (exit 130) when no number is given. `vm
+  stop` stops a VM this process started, and says so when there is none. `snapshot
+  create --mode full` boots the VM first, and `snapshot restore` shows the restored
+  guest answering and stops it. Keeping a VM up between commands is what the daemon
+  (`--daemon`, not built yet) is for. Progress lines go to standard error, Ctrl-C
+  stops the VM cleanly, and `--timeout SECONDS` limits the waits (exit 14).
 - `sample add FILE... [--name N] [--tag K=V] [--delete-original]` hashes and archives
   files in the library (never runs them) and prints the SHA-256 of each; a tag is
   `verdict=`, `category=`, `technique=` or `custom=` plus a value, or a bare custom
@@ -1689,12 +1722,11 @@ per line: a list command prints its items and then a last line
   SHA-256 is given (exit 1 when something does not verify). `--export` writes the
   custody record of the sample (JSON with `verify-custody.py` beside it, or a
   readable page for a `.html` path), optionally signed with your own key.
-- `analyze FILE [--checks LIST] [--time-limit-min N] [--out DIR] [--vm ID]` runs
-  the static analysis of a file on the host, with no VM, and prints a summary of
-  each check. It starts the engine itself (so it needs the data directory to be
-  free: exit 21 names the owner) and needs bubblewrap. The report folder is
-  `<data>/<ID>/analyses/<report id>` (`ID` defaults to `cli-analysis`, which is
-  not a VM); `--out` also copies the report folder, and the folders of any
+- `analyze FILE [--checks LIST] [--time-limit-min N] [--out DIR]` adds the file to the
+  sample library, runs the static analysis of that copy on the host, with no VM, and
+  prints a summary of each check. It starts the engine itself (so it needs the data
+  directory to be free: exit 21 names the owner) and needs bubblewrap. The report folder
+  is `<data>/analyses/<report id>`; `--out` also copies it, and the folders of any
   unpacked layers, into `DIR`. `--checks` takes the names metadata, structures,
   strings, regex, entropy, hardening, rules, identification, capabilities,
   disassembly, decompilation, embedded, floss, unpacking; the default is the
