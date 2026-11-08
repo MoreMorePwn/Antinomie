@@ -10,13 +10,17 @@ mod base;
 mod capabilities;
 mod config;
 mod custody;
+mod detect;
 mod doctor;
 mod library;
 mod machine;
+mod recording;
+mod report;
 mod rules;
 mod run;
 mod sample;
 mod snapshot;
+mod triage;
 mod vm;
 
 #[derive(Subcommand, Debug)]
@@ -51,6 +55,15 @@ pub enum Command {
     /// Custody chains of the samples; no engine lock needed.
     #[command(subcommand)]
     Custody(custody::Custody),
+    /// Index a saved run as Triage does and print its summary: the assessment,
+    /// the counts and the key behaviours. No engine lock needed.
+    Triage(triage::Triage),
+    /// Run YARA, Sigma and IDS over a saved run's evidence; no engine lock
+    /// needed unless --save keeps the results in the recording.
+    Detect(detect::Detect),
+    /// Write a saved run's report (HTML, PDF, JSON, MISP, STIX, Markdown), the
+    /// same files the window's Export report writes. No engine lock needed.
+    Report(report::Report),
 }
 
 impl Command {
@@ -73,5 +86,8 @@ pub fn run(command: &Command, context: &Context) -> Result<Reply, CliError> {
         Command::Run(run) => run::run(run, context),
         Command::Sample(sample) => sample::run(sample, context),
         Command::Custody(custody) => custody::run(custody, context),
+        Command::Triage(arguments) => triage::run(arguments, context),
+        Command::Detect(arguments) => detect::run(arguments, context),
+        Command::Report(arguments) => report::run(arguments, context),
     }
 }

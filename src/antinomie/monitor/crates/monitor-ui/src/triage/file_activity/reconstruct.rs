@@ -10,7 +10,7 @@ mod text_mode;
 pub(in crate::triage) use before_deletion::DATA_DIR;
 use text_mode::View;
 
-use super::{Activity, FileActivity};
+use super::{start_of, Activity, FileActivity};
 use crate::theme;
 use crate::widgets::{self, Tone};
 use antinomie_monitor_core::file_reconstruct::{
@@ -120,22 +120,6 @@ impl<T: Send + 'static> Pending<T> {
 struct Hashed {
     position: usize,
     result: Result<model::Digests, Incomplete>,
-}
-
-/// The file's bytes before the run: from the starting disk, empty for a file
-/// the run created, unknown otherwise.
-pub(in crate::triage) fn start_of(file: &FileActivity) -> Start {
-    let start = match file.earlier.as_ref() {
-        Some(earlier) => Start::from_earlier(Some(&earlier.before), earlier.file.as_ref()),
-        None => Start::default(),
-    };
-    // A file the run made began empty, whatever the earlier-bytes store holds
-    // for the path (nothing, or no answer): without this the size stays unknown
-    // and a fully written file reads as "incomplete".
-    if file.created && start.size.is_none() {
-        return Start::empty();
-    }
-    start
 }
 
 /// An open reconstruction of one file.

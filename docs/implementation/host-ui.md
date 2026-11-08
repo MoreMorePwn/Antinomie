@@ -319,7 +319,25 @@ behind it.
   binary hosts the earlier-bytes copier: `antinomie_triage::copier::host_copier()`
   first thing in `main` serves `--copy-earlier-bytes` or registers the running
   program with `file_before_store::register_copier_host()` (`ANTINOMIE_COPIER`
-  still overrides it). The CLI is not a second implementation: every engine step it takes
+  still overrides it). Triage of a saved run needs no window either: a
+  `RunSummary` becomes Triage's input and scan request through
+  `antinomie_triage::SavedRun` (`TriageInput::for_run`, `ScanRequest::for_run`,
+  the run's capture from its `artifacts.json`, `TriageSettings::headless` from
+  `settings.json` with `dig` and `whois` off), which the window's own selection
+  path uses too. The report the Export report dialog writes is
+  `antinomie_triage::report_export` (the job, the builder, the run facts, the
+  not-started report), the run digest is `antinomie_triage::digest`, and the
+  Detection tab's evidence key, scan request, frozen rule selection and run
+  identity are `antinomie_triage::detection`; the dialog and the tab keep only
+  their state and drawing. `analysis::detection::run_unsaved` runs an engine
+  without writing its result, manifest or log into the run's folder.
+  `antinomie-cli triage`, `detect` and `report` (`crates/cli/src/commands/`)
+  find the run read-only (`recording::list_runs_read_only`, `find_run_read_only`),
+  index it through `SavedRun`, and run `report_export::Job::for_saved` /
+  `build_report` / `write_built` and `detection::scan`; `detect --save` takes the
+  data-folder lock and writes the digest with `digest::Update`, as the window's
+  digest tick does.
+  The CLI is not a second implementation: every engine step it takes
   (`Command::AnalyzeSample`, the rule registry, the sample library, custody) is a
   core function the window calls too.
 * **Data-folder owner (`data_owner.rs`).** The lock on `.app-owner.lock` stays the

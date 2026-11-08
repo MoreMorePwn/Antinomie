@@ -64,6 +64,20 @@ counter is added to the name), are owner-only (0600) and are named
 `antinomie-report-<run>-<yyyymmdd-hhmmss>Z` (the time is UTC) plus `.html`, `.pdf`, `.md`,
 `.json`, `.misp.json`, `.stix.json` or `-evidence.zip`.
 
+## From the command line
+
+`antinomie-cli report RUN` writes the same report with no window (see "Command
+line" in [usage](usage.md)): it indexes the whole run the way Triage does when
+the run is selected and runs the same export job as the dialog, so for the same
+run and choices the files are the same, apart from the time they were made.
+`--formats`, `--parts`, `--evidence-bundle`, `--defang` or `--no-defang`,
+`--include-content` and `--out DIR` are the dialog's choices; what is not given
+comes from the export choices the window keeps in the data directory's
+`settings.json`. The files go to `--out` (default `report-<first 8 characters of
+the run id>` in the current folder), not into the recording. Detections are in
+the report when the run's Detection tab, or `antinomie-cli detect RUN --save`,
+has scanned it.
+
 ## What a report holds, in order
 
 1. **At a glance**: the sample, its SHA-256 and size, the family (a link to its

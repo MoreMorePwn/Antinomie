@@ -225,16 +225,8 @@ pub(super) fn capture_pcap_file(capture: &CaptureSummary) -> Option<std::path::P
     None
 }
 
-pub(super) fn pcap_magic(path: &std::path::Path) -> bool {
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return false;
-    };
-    let mut magic = [0u8; 4];
-    if std::io::Read::read_exact(&mut file, &mut magic).is_err() {
-        return false;
-    }
-    matches!(magic, [0xd4, 0xc3, 0xb2, 0xa1] | [0xa1, 0xb2, 0xc3, 0xd4])
-}
+// Whether a file starts with a pcap magic number: `antinomie_triage`'s.
+pub(super) use antinomie_triage::saved_run::pcap_magic;
 
 pub(crate) fn core_capture_status(state: antinomie_monitor_core::RunArtifactState) -> &'static str {
     use antinomie_monitor_core::RunArtifactState;

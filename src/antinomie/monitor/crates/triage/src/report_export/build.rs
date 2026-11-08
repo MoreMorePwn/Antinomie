@@ -21,13 +21,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// What the build made: the report, and the bundle's inputs when asked for.
-pub(super) struct Built {
+pub struct Built {
     pub report: Report,
     pub bundle: Option<BundleInput>,
 }
 
 /// Rows of `rows` at `keep`, as a table with `columns` named.
-pub(super) fn table(
+pub fn table(
     headers: &[&str],
     keep: &[usize],
     rows: &[Vec<Cell>],
@@ -62,7 +62,7 @@ fn run_start(scan: &ArchiveScan) -> Option<u64> {
     scan.process.iter().filter_map(|node| node.first_ns).min()
 }
 
-pub(super) fn all(n: usize) -> Vec<usize> {
+pub fn all(n: usize) -> Vec<usize> {
     (0..n).collect()
 }
 
@@ -494,7 +494,7 @@ fn written_paths(scan: &ArchiveScan) -> BTreeSet<String> {
 /// the report keeps the size, and the bytes only when asked (clipped, with
 /// control characters escaped, and never for a file the run wrote): what a
 /// sample reads can be the guest's secrets or its own bytes.
-pub(super) fn transferred(table: &mut Table, include_content: bool, written: &BTreeSet<String>) {
+pub fn transferred(table: &mut Table, include_content: bool, written: &BTreeSet<String>) {
     let Some(at) = table
         .columns
         .iter()
@@ -708,7 +708,7 @@ fn file_activity(
 }
 
 /// The report for `scan` with the parts of `job.choices`.
-pub(super) fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
+pub fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
     let choices = &job.choices;
     let clock = scan.clock_anchor.or(job.clock);
     let mut report = Report::new(job.run.clone(), job.now_ms);
@@ -884,7 +884,7 @@ pub(super) fn build(scan: &ArchiveScan, job: &Job) -> Result<Built, String> {
 /// What the run's final manifest says of its lost telemetry, as the run's
 /// note words it; `None` for a run that lost none, is not final yet, or was
 /// recorded before the count existed.
-pub(super) fn telemetry_loss_note(archive: &Path) -> Option<String> {
+pub fn telemetry_loss_note(archive: &Path) -> Option<String> {
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(archive.join("manifest.json")).ok()?).ok()?;
     serde_json::from_value::<antinomie_monitor_core::TelemetryLoss>(

@@ -7,52 +7,23 @@
 use super::*;
 use antinomie_monitor_core::report::{self, export::Written, Choices, Format, Part};
 use std::path::PathBuf;
+// The job, the builder and the run facts are `antinomie_triage::report_export`'s:
+// the command line's `report` runs the same job.
+pub(super) use antinomie_triage::report_export::context_key;
+#[cfg(test)]
+use antinomie_triage::report_export::{build, run_facts};
+use antinomie_triage::report_export::{
+    folder_of, not_started, report_request, run_info_of, run_job, sample_of, Job,
+};
 
-mod build;
-mod build_sources;
 #[cfg(test)]
 mod dialog_tests;
-mod not_started;
 #[cfg(test)]
 mod reexport_tests;
-mod rows;
-mod run_facts;
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod timing;
-
-/// The Triage context of `input`: equal keys are the same run in the same folder.
-pub(super) fn context_key(input: &TriageInput<'_>) -> String {
-    format!(
-        "{}\n{}\n{}\n{}",
-        input.vm_id.unwrap_or(""),
-        input.boot_id.unwrap_or(""),
-        input.run_id.unwrap_or(""),
-        input
-            .archive
-            .map(|path| path.display().to_string())
-            .unwrap_or_default()
-    )
-}
 
 pub(crate) use not_started::NotStartedRun;
-
-/// Everything the worker needs, owned.
-#[derive(Clone)]
-pub(super) struct Job {
-    pub archive: PathBuf,
-    pub pcap: Option<PathBuf>,
-    /// The scan's request with every filter, sort and page cleared.
-    pub request: ScanRequest,
-    pub choices: Choices,
-    pub run: report::RunInfo,
-    pub sample: Option<report::SampleInfo>,
-    pub clock: Option<antinomie_monitor_core::HostClockAnchor>,
-    pub data_dir: Option<PathBuf>,
-    pub now_ms: u64,
-    pub folder: PathBuf,
-}
 
 /// The run the dialog is bound to: the one on screen when it was opened, or
 /// when the person last switched runs with the dialog open. It carries the
@@ -127,6 +98,7 @@ impl Default for Dialog {
 
 // Whether a request reads the run whole, and the whole-run request of the
 // screen's: in `antinomie_triage`, where the scan marks its index with it.
+#[cfg(test)]
 use antinomie_triage::whole_run_request;
 
 impl Dialog {
@@ -152,79 +124,6 @@ impl Dialog {
     }
 }
 
-/// Index the whole run, build the report and write it.
-pub(super) fn run_job(
-    job: &Job,
-    cancel: &Arc<AtomicBool>,
-    status: &dyn Fn(&str),
-) -> Result<Written, String> {
-    status(if job.request.reuse.is_some() {
-        "Using the index Triage already made..."
-    } else {
-        "Indexing the whole run..."
-    });
-    let scan = scan_archive_query(
-        &job.archive,
-        job.pcap.as_deref(),
-        false,
-        cancel,
-        &job.request,
-    )?;
-    if cancel.load(Ordering::Relaxed) {
-        return Err("cancelled".into());
-    }
-    status("Building the report...");
-    // The run's state, command, sample and environment come from its record.
-    let job = &run_facts::apply(job, &scan);
-    let mut built = build::build(&scan, job)?;
-    if cancel.load(Ordering::Relaxed) {
-        return Err("cancelled".into());
-    }
-    let mut scratch = None;
-    if let Some(input) = &mut built.bundle {
-        status("Reading the custody log...");
-        if let Some((sample, data_dir)) = job.sample.as_ref().zip(job.data_dir.as_ref()) {
-            let temp = job.folder.join(format!(".custody-{}", std::process::id()));
-            let exported = std::fs::create_dir_all(&temp)
-                .map_err(|e| e.to_string())
-                .and_then(|()| {
-                    let mut library = antinomie_monitor_core::samples::Library::open(data_dir)?;
-                    library.export_custody(
-                        &sample.sha256,
-                        antinomie_monitor_core::samples::ExportFormat::Json,
-                        &temp.join(format!(
-                            "custody-{}.json",
-                            &sample.sha256[..8.min(sample.sha256.len())]
-                        )),
-                        None,
-                    )
-                });
-            match exported {
-                Ok(done) => {
-                    input.custody.push(done.path);
-                    input.custody.extend(done.verifier);
-                }
-                Err(error) => input.skipped.push(("custody export".into(), error)),
-            }
-            scratch = Some(temp);
-        } else {
-            input.skipped.push((
-                "custody export".into(),
-                "the run has no sample record".into(),
-            ));
-        }
-    }
-    if cancel.load(Ordering::Relaxed) {
-        return Err("cancelled".into());
-    }
-    status("Writing the files...");
-    let written = report::export::write(&built.report, &job.choices, &job.folder, built.bundle);
-    if let Some(temp) = scratch {
-        let _ = std::fs::remove_dir_all(temp);
-    }
-    written
-}
-
 impl TriageView {
     /// Settings > the choices the dialog starts with (applied unless the
     /// person has just changed them here).
@@ -243,18 +142,7 @@ impl TriageView {
     /// that run whole. `None` when the run has no saved recording.
     fn report_target(&self, input: &TriageInput<'_>) -> Option<Target> {
         let archive = input.archive?;
-        let sample = input.analysis.and_then(|analysis| {
-            let sha256 = analysis.specimen_sha256.clone()?;
-            Some(report::SampleInfo {
-                name: Path::new(&analysis.source_path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-                sha256,
-                size: analysis.specimen_len,
-                role: String::new(),
-            })
-        });
+        let sample = sample_of(input);
         let run_id = input.run_id.unwrap_or_default();
         let title = match &sample {
             Some(sample) if !sample.name.is_empty() => format!(
@@ -267,8 +155,7 @@ impl TriageView {
                 run_id.chars().take(8).collect::<String>()
             ),
         };
-        let mut request = whole_run_request(&self.scan_request);
-        request.run_finished = input.run_finished;
+        let request = report_request(&self.scan_request, input);
         Some(Target {
             key: context_key(input),
             title,
@@ -277,14 +164,7 @@ impl TriageView {
             archive: archive.to_path_buf(),
             pcap: input.pcap.map(Path::to_path_buf),
             pcap_open: input.pcap_open,
-            run: report::RunInfo {
-                vm_id: input.vm_id.unwrap_or_default().into(),
-                boot_id: input.boot_id.unwrap_or_default().into(),
-                run_id: run_id.into(),
-                started_ms: input.started_ms,
-                finished: input.run_finished,
-                ..Default::default()
-            },
+            run: run_info_of(input),
             sample,
             clock: input.clock_anchor,
         })
@@ -417,11 +297,7 @@ impl TriageView {
         }
         let progress = Arc::new(scan_progress::ScanProgress::default());
         request.progress = Some(Arc::clone(&progress));
-        let folder = if choices.folder.trim().is_empty() {
-            target.archive.join("report")
-        } else {
-            PathBuf::from(choices.folder.trim())
-        };
+        let folder = folder_of(&choices, &target.archive);
         if let Some(run) = target.not_started.clone() {
             // No recording to read: the report is made from the run's record.
             let now_ms = crate::time_format::now_ms();

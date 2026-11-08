@@ -17,7 +17,7 @@ const COMMAND_CHARS: usize = 400;
 
 /// The job with its run and sample facts read from the run's record. A
 /// record that cannot be read leaves the job as it was.
-pub(super) fn apply(job: &Job, scan: &ArchiveScan) -> Job {
+pub fn apply(job: &Job, scan: &ArchiveScan) -> Job {
     let mut job = job.clone();
     let Some(run) = read_run(&job.archive) else {
         return job;
@@ -48,7 +48,7 @@ fn read_run(archive: &Path) -> Option<RunSummary> {
 }
 
 /// "exit 0" or "signal 11 (SIGSEGV)".
-pub(super) fn exit_text(status: &WaitStatus) -> String {
+pub fn exit_text(status: &WaitStatus) -> String {
     match status {
         WaitStatus::Exited { code } => format!("exit {code}"),
         WaitStatus::Signaled { signal, .. } => {
@@ -63,7 +63,7 @@ pub(super) fn exit_text(status: &WaitStatus) -> String {
 /// The run block of the report.
 /// Also the entry for a run that never started (its short report calls this
 /// with the run's record): the state then reads "Not started: <reason>".
-pub(super) fn run_info(
+pub fn run_info(
     base: &RunInfo,
     run: &RunSummary,
     ended_ms: Option<u64>,
@@ -94,7 +94,7 @@ pub(super) fn run_info(
                 .0
             )
         } else {
-            crate::run_state_line::describe(run, now_ms, ended_ms, Some(alive))
+            crate::run_state::describe(run, now_ms, ended_ms, Some(alive))
         },
         exit: root.map(exit_text).unwrap_or_default(),
         stopped_by_user: run.stopped_by_user,
@@ -212,13 +212,13 @@ fn sample(job: &Job, run: &RunSummary) -> Option<SampleInfo> {
 }
 
 /// [`sample`] and [`command`] for the re-export check.
-#[cfg(test)]
-pub(super) fn sample_for_test(job: &Job, run: &RunSummary) -> Option<SampleInfo> {
+#[cfg(any(test, feature = "test-support"))]
+pub fn sample_for_test(job: &Job, run: &RunSummary) -> Option<SampleInfo> {
     sample(job, run)
 }
 
-#[cfg(test)]
-pub(super) fn command_for_test(run: &RunSummary) -> String {
+#[cfg(any(test, feature = "test-support"))]
+pub fn command_for_test(run: &RunSummary) -> String {
     command(run)
 }
 
@@ -271,7 +271,7 @@ mod tests {
     use antinomie_monitor_core::{ExecRequest, RunExecution, RunState};
 
     fn record(state: RunState, root: Option<WaitStatus>) -> RunSummary {
-        let mut run = crate::run_link::test_run("r1", "/bin/sh");
+        let mut run = super::super::fixtures::test_run("r1", "/bin/sh");
         run.state = state;
         run.started_ms = Some(1_000_000);
         run.execution = Some(RunExecution {

@@ -148,22 +148,8 @@ fn json_text(value: &serde_json::Value) -> String {
     }
 }
 
-/// The rule pack a finding came from. YARA records a namespace `sN` that
-/// indexes the report's sources, and Sigma appends the source digest.
-pub(in crate::triage) fn pack_name(report: &Report, finding: &Finding) -> String {
-    let index = finding
-        .source
-        .strip_prefix('s')
-        .and_then(|index| index.parse::<usize>().ok());
-    if let Some(source) = index.and_then(|index| report.sources.get(index)) {
-        return source.name.clone();
-    }
-    finding
-        .source
-        .split_once(" sha256:")
-        .map_or(finding.source.as_str(), |(name, _)| name)
-        .to_owned()
-}
+// The rule pack a finding came from: in `antinomie_triage::detection`.
+pub(in crate::triage) use antinomie_triage::detection::pack_name;
 
 pub(super) fn evidence_label(evidence: &Evidence) -> String {
     match evidence {

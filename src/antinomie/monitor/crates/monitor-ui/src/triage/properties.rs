@@ -163,9 +163,7 @@ impl TriageView {
     /// The launch the selected run was asked for, to name its root process
     /// when the recording holds no launch record of it.
     pub(crate) fn set_launch(&mut self, run: Option<&antinomie_monitor_core::RunSummary>) {
-        let launch = run
-            .filter(|run| run.pid != 0)
-            .map(|run| (run.pid, run.request.path.clone(), run.request.args.clone()));
+        let launch = ScanRequest::launch_of(run);
         if self.scan_request.launch != launch {
             self.scan_request.launch = launch;
         }

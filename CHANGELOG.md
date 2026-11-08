@@ -80,6 +80,15 @@ x86 programs by their own table.
   (`--timeout-run`) stops a program that never ends; `--events` streams the progress
   as it happens. The exit code is 0, 11 for partial evidence, 10 for a failure.
 
+- **`antinomie-cli triage`, `detect` and `report`.** Triage of a saved run from
+  the command line: `triage RUN` prints its Summary (assessment, counts, key
+  behaviours), `detect RUN` runs YARA, Sigma and IDS over its evidence as the
+  Detection tab does (`--save` keeps the results in the recording), and `report
+  RUN` writes the report in HTML, PDF, JSON, MISP, STIX or Markdown. The report
+  is built by the same code as the window's Export report, so the files are the
+  same for the same run and choices; the window's dialog and Detection tab work
+  as before. See "Command line" in docs/usage.md.
+
 - **Clock model for the boot age.** A new Clock model setting in a VM's Device
   profile (Auto, Always running, Suspend) chooses whether the boot age steps
   both guest clocks or only CLOCK_BOOTTIME. Auto picks Suspend on Debian bases,

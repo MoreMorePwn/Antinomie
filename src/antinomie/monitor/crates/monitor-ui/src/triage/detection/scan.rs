@@ -2,6 +2,23 @@
 //! Scan scheduling for the Detection tab: digests, the registry and engine launches (moved out of `detection`).
 use super::*;
 
+/// The evidence files as the Detection tab knows them: from its caches,
+/// with a digest computed off the UI thread.
+struct Files<'a> {
+    view: &'a mut View,
+    ctx: &'a egui::Context,
+}
+
+impl antinomie_triage::detection::EvidenceFiles for Files<'_> {
+    fn digest(&mut self, path: &Path) -> Option<String> {
+        self.view.cached_file_digest(self.ctx, path)
+    }
+
+    fn present(&mut self, path: &Path) -> bool {
+        self.view.stat(&path.display().to_string(), path).is_some()
+    }
+}
+
 impl View {
     /// Size and modification time of a regular file, `None` if it is not one.
     /// Read from the disk at most once per [`STAT_KEEP`].
@@ -65,91 +82,15 @@ impl View {
         engine: Engine,
         input: &TriageInput<'_>,
     ) -> String {
-        match engine {
-            Engine::Yara => {
-                let Some(analysis) = input.analysis else {
-                    return "wait:sample".into();
-                };
-                let archive = match input.archive {
-                    Some(archive) => {
-                        let artifacts =
-                            self.cached_file_digest(ctx, &archive.join("artifacts.json"));
-                        let journal =
-                            self.cached_file_digest(ctx, &archive.join(engine::JOURNAL_FILE));
-                        match (artifacts, journal) {
-                            (Some(artifacts), Some(journal)) => format!("{artifacts}:{journal}"),
-                            _ => return "wait:digest".into(),
-                        }
-                    }
-                    None => "no-archive".into(),
-                };
-                format!(
-                    "ready:yara:{}:{}:{archive}:mem={}:recovered={}",
-                    analysis.id,
-                    analysis.specimen_sha256.as_deref().unwrap_or(""),
-                    self.settings.scan_memory,
-                    self.settings.scan_recovered
-                )
-            }
-            Engine::Ids => match (input.pcap, input.pcap_open) {
-                (None, _) => "missing:pcap".into(),
-                (Some(_), true) => "wait:pcap".into(),
-                // The run's recording is not saved yet: the capture may still
-                // be closing and the run's own totals are not written.
-                (Some(_), false) if self.waits_for_saving() => "wait:saved".into(),
-                (Some(path), false) => {
-                    let Some(digest) = self.cached_file_digest(ctx, path) else {
-                        return "wait:digest".into();
-                    };
-                    format!(
-                        "ready:pcap:{}:{digest}:{}",
-                        path.display(),
-                        input.run_id.unwrap_or("")
-                    )
-                }
-            },
-            Engine::Sigma => {
-                if !input.run_finished {
-                    return "wait:journal".into();
-                }
-                let Some(archive) = input.archive else {
-                    return format!("ready:journal:{}:no-archive", input.run_id.unwrap_or(""));
-                };
-                if self.index == IndexState::Saving {
-                    return "wait:saved".into();
-                }
-                let journal_present = self
-                    .stat(
-                        &archive.join(engine::JOURNAL_FILE).display().to_string(),
-                        &archive.join(engine::JOURNAL_FILE),
-                    )
-                    .is_some();
-                if !journal_present {
-                    // No journal to scan: say why in words, never scan a
-                    // missing file.
-                    return match &self.index {
-                        IndexState::Failed(why) => format!("failed:index:{why}"),
-                        IndexState::Ready => "missing:journal".into(),
-                        _ => "wait:index".into(),
-                    };
-                }
-                let Some(digest) =
-                    self.cached_file_digest(ctx, &archive.join(engine::JOURNAL_FILE))
-                else {
-                    return "wait:digest".into();
-                };
-                format!("ready:journal:{}:{digest}", input.run_id.unwrap_or(""))
-            }
-        }
-    }
-    /// The run is on a VM that is up and its recording is not saved yet (the
-    /// index has not seen it saved), so a scan would only see a prefix.
-    pub(super) fn waits_for_saving(&self) -> bool {
-        self.current_boot
-            && matches!(
-                self.index,
-                IndexState::Unknown | IndexState::Building | IndexState::Saving
-            )
+        let settings = self.settings.clone();
+        let index = self.index.clone();
+        antinomie_triage::detection::evidence_key(
+            engine,
+            input,
+            &settings,
+            (&index, self.current_boot),
+            &mut Files { view: self, ctx },
+        )
     }
     pub(super) fn consider_auto(&mut self, ctx: &egui::Context, input: &TriageInput<'_>) {
         if self.seen_generation != self.rules_generation {
@@ -249,8 +190,7 @@ impl View {
             .name("triage-rules-registry".into())
             .spawn(move || {
                 let result = (|| {
-                    antinomie_monitor_core::ruleset::migrate_indexes(&dir)?;
-                    let registry = antinomie_monitor_core::ruleset::load_registry(&dir)?;
+                    let registry = antinomie_triage::detection::registry(&dir)?;
                     let sets = ["yara", "ids", "sigma"].map(|engine| {
                         antinomie_monitor_core::ruleset::engine_sets(&dir, &registry, engine)
                     });
@@ -335,10 +275,6 @@ impl View {
         let epoch = self.epoch;
         let generation = self.rules_generation;
         let root = request.settings.rules_root.clone();
-        let tools = antinomie_monitor_core::ruleset::ToolConfig::from_sigma_setting(
-            &request.settings.effective_sigma_python(),
-        );
-        let engine_name = engine_key(request.engine).to_owned();
         match std::thread::Builder::new()
             .name("triage-detector".into())
             .spawn(move || {
@@ -346,29 +282,11 @@ impl View {
                     if !root.is_empty() {
                         let registry =
                             registry.ok_or_else(|| "rules registry was not captured".to_owned())?;
-                        let data_dir = Path::new(&root);
-                        let _ = antinomie_monitor_core::ruleset::reap_staging(
-                            data_dir,
-                            Duration::from_secs(3600),
-                        );
-                        if worker_cancel.load(Ordering::Relaxed) {
-                            return Err("cancelled".into());
-                        }
-                        let facts = antinomie_monitor_core::ruleset::tool_facts(&tools);
-                        let snap = antinomie_monitor_core::ruleset::snapshot_from(
-                            data_dir,
-                            &engine_name,
+                        antinomie_triage::detection::freeze(
+                            &mut request,
                             &registry,
-                            &facts,
-                            Some(&worker_cancel),
+                            &worker_cancel,
                         )?;
-                        request.frozen = Some(engine::FrozenSelection {
-                            digest: snap.digest,
-                            directory: snap.directory,
-                            enabled_rules: snap.enabled_rules,
-                            excluded_rules: snap.excluded_rules,
-                            warnings: snap.warnings,
-                        });
                     }
                     engine::run_with_progress(request, &worker_cancel, Some(progress_tx))
                 })();
