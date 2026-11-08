@@ -39,6 +39,11 @@ impl Context {
         self.global.mode()
     }
 
+    /// `--timeout` as a duration: the limit for a waiting command.
+    pub fn timeout(&self) -> Option<std::time::Duration> {
+        self.global.timeout.map(std::time::Duration::from_secs)
+    }
+
     /// The daemon socket: `--socket` or `<data>/run/antinomie.sock`.
     pub fn socket(&self) -> PathBuf {
         self.global

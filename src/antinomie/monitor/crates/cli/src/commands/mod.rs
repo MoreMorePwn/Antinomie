@@ -6,13 +6,18 @@ use crate::{context::Context, error::CliError, output::Reply};
 use clap::Subcommand;
 
 mod analyze;
+mod base;
 mod capabilities;
 mod config;
 mod custody;
 mod doctor;
 mod library;
+mod machine;
 mod rules;
+mod run;
 mod sample;
+mod snapshot;
+mod vm;
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -28,12 +33,31 @@ pub enum Command {
     /// Rule packs and groups: list, enable, disable.
     #[command(subcommand)]
     Rules(rules::Rules),
+    /// Bases: list, install, download, build, delete; takes the engine lock.
+    #[command(subcommand)]
+    Base(base::Base),
+    /// VMs: create, start, stop, status, reset, duplicate, delete; takes the engine lock.
+    #[command(subcommand)]
+    Vm(vm::Vm),
+    /// VM snapshots: list, create, restore, delete; takes the engine lock.
+    #[command(subcommand)]
+    Snapshot(snapshot::Snapshot),
+    /// Run a library sample in a VM: `run exec`; takes the engine lock.
+    #[command(subcommand)]
+    Run(run::Run),
     /// Samples in the library; no engine lock needed.
     #[command(subcommand)]
     Sample(sample::Sample),
     /// Custody chains of the samples; no engine lock needed.
     #[command(subcommand)]
     Custody(custody::Custody),
+}
+
+impl Command {
+    /// The command prints events as they happen (`run exec --events`).
+    pub fn streams_events(&self) -> bool {
+        matches!(self, Command::Run(run) if run.streams_events())
+    }
 }
 
 pub fn run(command: &Command, context: &Context) -> Result<Reply, CliError> {
@@ -43,6 +67,10 @@ pub fn run(command: &Command, context: &Context) -> Result<Reply, CliError> {
         Command::Config(config) => config::run(config, context),
         Command::Analyze(arguments) => analyze::run(arguments, context),
         Command::Rules(rules) => rules::run(rules, context),
+        Command::Base(base) => base::run(base, context),
+        Command::Vm(vm) => vm::run(vm, context),
+        Command::Snapshot(snapshot) => snapshot::run(snapshot, context),
+        Command::Run(run) => run::run(run, context),
         Command::Sample(sample) => sample::run(sample, context),
         Command::Custody(custody) => custody::run(custody, context),
     }
