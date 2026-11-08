@@ -32,3 +32,5 @@ pub mod query;
 pub mod schema;
 /// The job store: SQLite, the state machine and the queue (card P3-2).
 pub mod store;
+/// The engine waiter: commands, results and the waits a headless caller needs.
+pub mod waiter;
