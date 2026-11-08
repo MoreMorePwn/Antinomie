@@ -31,10 +31,13 @@ pub fn fold_events(table: &Table) -> (Table, u64) {
         first: String,
         last: String,
         count: u64,
+        /// The data of the group's first row, with every row's findings.
+        data: Option<super::RowData>,
     }
     let mut groups: Vec<Group> = Vec::new();
     let mut index: std::collections::HashMap<Vec<String>, usize> = std::collections::HashMap::new();
-    for row in &table.rows {
+    for (at_row, row) in table.rows.iter().enumerate() {
+        let data = table.data.get(at_row);
         let key: Vec<String> = kept
             .iter()
             .map(|&at| row.get(at).cloned().unwrap_or_default())
@@ -44,6 +47,17 @@ pub fn fold_events(table: &Table) -> (Table, u64) {
             Some(&at) => {
                 groups[at].count += 1;
                 groups[at].last = when;
+                if let (Some(group), Some(data)) = (groups[at].data.as_mut(), data) {
+                    for id in &data.finding_refs {
+                        if !group.finding_refs.contains(id) {
+                            group.finding_refs.push(id.clone());
+                        }
+                    }
+                    if group.time_ms.is_none() {
+                        group.time_ms = data.time_ms;
+                        group.relative_ms = data.relative_ms;
+                    }
+                }
             }
             None => {
                 index.insert(key.clone(), groups.len());
@@ -52,6 +66,7 @@ pub fn fold_events(table: &Table) -> (Table, u64) {
                     first: when.clone(),
                     last: when,
                     count: 1,
+                    data: data.cloned(),
                 });
             }
         }
@@ -59,6 +74,18 @@ pub fn fold_events(table: &Table) -> (Table, u64) {
     let folded = (table.rows.len() - groups.len()) as u64;
     let mut columns = vec!["Count".to_owned(), "First seen".into(), "Last seen".into()];
     columns.extend(kept.iter().map(|&at| table.columns[at].clone()));
+    let data: Vec<super::RowData> = if table.data.is_empty() {
+        Vec::new()
+    } else {
+        groups
+            .iter()
+            .map(|group| {
+                let mut data = group.data.clone().unwrap_or_default();
+                data.count = Some(group.count);
+                data
+            })
+            .collect()
+    };
     let rows = groups
         .into_iter()
         .map(|group| {
@@ -93,6 +120,7 @@ pub fn fold_events(table: &Table) -> (Table, u64) {
             rows,
             omitted: table.omitted,
             indicator_columns,
+            data,
         },
         folded,
     )
@@ -124,6 +152,7 @@ mod tests {
             ],
             omitted: 5,
             indicator_columns: Vec::new(),
+            data: Vec::new(),
         }
     }
 

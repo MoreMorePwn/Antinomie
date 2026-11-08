@@ -314,14 +314,15 @@ fn a_narrow_column_keeps_its_word_whole_beside_a_column_of_long_hashes() {
         sections: vec![Section {
             id: "a".into(),
             title: "A".into(),
-            blocks: vec![Block::Table(DocTable {
-                columns: ["Name", "State", "Reconstruction", "Hash one", "Hash two"]
+            blocks: vec![Block::Table(DocTable::plain(
+                ["Name", "State", "Reconstruction", "Hash one", "Hash two"]
                     .map(String::from)
                     .to_vec(),
                 rows,
-            })],
+            ))],
         }],
         meta: Default::default(),
+        aliases: Default::default(),
     };
     let laid = lay_out(&document);
     let words: Vec<String> = laid
@@ -363,13 +364,23 @@ fn the_summary_counts_findings_by_tier_and_lists_the_key_findings() {
             medium: 2,
             low: 1,
             info: 0,
+            info_not_listed: 0,
         };
-        summary.key_findings = vec!["MEDIUM Waiting for chosen packets: BPF on raw socket".into()];
+        summary.key_findings = vec![KeyFinding {
+            tier: "medium".into(),
+            rule: "bpf.socket_filter".into(),
+            title: "Waiting for chosen packets: BPF on raw socket".into(),
+            ..KeyFinding::default()
+        }];
         summary.key_behaviours[0].count = 167_040;
     }
     let html = String::from_utf8(export::render(&report, Format::Html, false).unwrap()).unwrap();
-    assert!(html.contains("0 HIGH, 2 MEDIUM, 1 LOW, 0 INFO"));
-    assert!(html.contains("<li>MEDIUM Waiting for chosen packets: BPF on raw socket</li>"));
+    assert!(
+        html.contains("0 HIGH</a> \u{b7} <a href=\"#findings\">2 MEDIUM</a>"),
+        "each tier count opens Suspicious activity"
+    );
+    assert!(html.contains("<caption>Key findings</caption>"));
+    assert!(html.contains(">Waiting for chosen packets: BPF on raw socket</td>"));
     assert!(html.contains("167,040"));
     assert!(html.contains("<span class=\"tier high\">HIGH</span>"));
 }
@@ -386,12 +397,14 @@ fn the_geolocation_credit_closes_the_document_and_evidence_lists_recordings() {
             path: "telemetry.raw".into(),
             size: 229_072_586,
             sha256: String::new(),
+            files: None,
         },
         EvidenceRef {
             kind: "other".into(),
             path: "terminal.journal".into(),
             size: 23,
             sha256: "ab".repeat(32),
+            files: None,
         },
     ]);
     let document = layout::document(&report, false);

@@ -117,6 +117,27 @@ pub fn render(report: &Report) -> Result<String, String> {
         ));
         let file_id = id_of(&file);
         objects.push(file);
+        if report.not_started() {
+            // Nothing ran: the sample is a file and a note says why; there is
+            // no malware analysis and nothing it was seen doing.
+            objects.push(object(
+                "note",
+                &format!("{run}:not-started"),
+                &at,
+                json!({
+                    "abstract": format!("Run {run} did not start"),
+                    "content": format!("Run {run} did not start, so nothing was observed. {}", report.run.state),
+                    "object_refs": [file_id],
+                    "created_by_ref": identity_id,
+                }),
+            ));
+            let bundle = json!({
+                "type": "bundle",
+                "id": format!("bundle--{}", uuid5(&format!("stix:bundle:{run}:{}", report.generated_ms))),
+                "objects": objects,
+            });
+            return serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string());
+        }
         // The family the rules name, when they name one, is the malware
         // object; the sample is its file. Otherwise the sample is the malware.
         let family = report
@@ -257,12 +278,16 @@ pub fn render(report: &Report) -> Result<String, String> {
     for hit in report.detections.iter().flatten() {
         let credit = |value: &str| if value.is_empty() { "unknown" } else { value }.to_owned();
         let mut fields = json!({
-            "abstract": format!("{} rule {} matched", hit.engine, hit.rule_id),
+            "abstract": format!(
+                "{} rule {} matched",
+                hit.engine,
+                super::layout::plain_rule(&hit.rule_id)
+            ),
             "content": format!(
                 "{} rule {} ({}) matched {} time(s) in run {run}. Author: {}. License: {}. Source: {}.",
                 hit.engine,
-                hit.rule_id,
-                hit.title,
+                super::layout::plain_rule(&hit.rule_id),
+                super::layout::plain_rule(&hit.title),
                 hit.count,
                 credit(&hit.author),
                 credit(&hit.license),

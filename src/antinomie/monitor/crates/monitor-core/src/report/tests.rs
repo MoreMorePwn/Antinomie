@@ -21,6 +21,7 @@ fn table(rows: usize) -> Table {
             column: 0,
             kind: IndicatorKind::Endpoint,
         }],
+        data: Vec::new(),
     }
 }
 
@@ -50,6 +51,9 @@ pub(super) fn fixture() -> Report {
         family_sources: vec!["Mirai: dataset threatfox".into()],
         tiers: TierCounts::default(),
         key_findings: Vec::new(),
+        key_findings_text: Vec::new(),
+        key_findings_total: 0,
+        other_families: Vec::new(),
         key_behaviours: vec![Behaviour {
             rule: "exec-from-tmp".into(),
             tier: "high".into(),
@@ -103,12 +107,14 @@ pub(super) fn fixture() -> Report {
             name: "Command and Scripting Interpreter: Unix Shell".into(),
             rules: vec!["exec-from-tmp".into()],
             count: 3,
+            rule_refs: Vec::new(),
         },
         Technique {
             id: "T1105".into(),
             name: "Ingress Tool Transfer".into(),
             rules: vec!["download".into()],
             count: 1,
+            rule_refs: Vec::new(),
         },
     ]);
     report.processes = Some(table(3));
@@ -144,12 +150,14 @@ pub(super) fn fixture() -> Report {
         source: "Example Pack".into(),
         reference: "https://example.org/r1".into(),
         strength: String::new(),
+        ..Detection::default()
     }]);
     report.evidence = Some(vec![EvidenceRef {
         kind: "telemetry".into(),
         path: "telemetry.raw".into(),
         size: 10,
         sha256: "ef".repeat(32),
+        files: None,
     }]);
     report.custody = Some(Custody {
         sample_sha256: "ab".repeat(32),
@@ -185,7 +193,7 @@ fn an_unchosen_part_is_absent_everywhere() {
     let doc = layout::document(&report, false);
     let ids: Vec<_> = doc.sections.iter().map(|s| s.id.as_str()).collect();
     assert!(!ids.contains(&"network") && !ids.contains(&"indicators"));
-    assert!(ids.contains(&"summary") && ids.contains(&"processes"));
+    assert!(ids.contains(&"overview") && ids.contains(&"processes"));
     let misp: serde_json::Value = serde_json::from_str(&misp::render(&report).unwrap()).unwrap();
     assert!(
         !misp["Event"]["Attribute"]
@@ -311,7 +319,7 @@ fn pdf_has_valid_offsets_pages_bookmarks_and_the_sections() {
     assert_eq!(streams, pages);
     assert!(text.contains(&format!("/Count {pages} ")));
     for title in [
-        "Summary",
+        "At a glance",
         "Indicators of compromise",
         "ATT&CK techniques",
         "Processes",
@@ -330,7 +338,7 @@ fn pdf_has_valid_offsets_pages_bookmarks_and_the_sections() {
     // The table header repeats on the next page.
     assert!(content.matches("(Endpoint) Tj").count() >= 3);
     assert!(content.contains("Page 1 of"));
-    assert!(text.contains("/Title (Antinomie Triage report: dropper <1>.elf)"));
+    assert!(text.contains("/Title (Antinomie Triage report: dropper <1>.elf "));
     assert!(content.contains("203.0.113.5:443"));
 }
 

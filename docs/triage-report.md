@@ -21,7 +21,7 @@ tier") and says so.
 | Control | Meaning |
 |---|---|
 | Sections | One checkbox each: Summary, Indicators of compromise, ATT&CK techniques, Processes, Suspicious activity, Files (every tab), File activity and reconstruction, Network, Detection engines, Evidence references, Custody log head. An unchecked section is absent from every format. |
-| Formats | HTML, PDF, JSON, MISP, STIX 2.1. |
+| Formats | HTML, PDF, Markdown, JSON, MISP, STIX 2.1. |
 | Evidence bundle | A `.zip` next to the report (see below). |
 | Defang indicators | On by default, like the sample report's. HTML and PDF only: `hxxp://example[.]com`, `203[.]0[.]113[.]5`. JSON, MISP and STIX keep raw values. |
 | Folder | Where the files go. Empty means `<recording>/report/`. |
@@ -50,18 +50,81 @@ A run that never started (the guest refused the launch, the Tor route did not
 come up) has no recording: it is in the run picker as `(not started)`, Triage
 shows why, and **Export report…** there writes a short report with the failure,
 the request, the route, the static analysis there is and the sample's identity,
-in HTML, PDF, JSON, MISP or STIX (Formats, Defang and Folder only).
+in HTML, PDF, Markdown, JSON, MISP or STIX (Formats, Defang and Folder only).
+The failure is said once ("Not started: the Tor route did not become ready in
+120 s"); the route's log and its last lines are a separate "Failure detail"
+note. Only paths on this computer are cut to their file name; the guest paths
+of the request (`/proc/net/tcp`, `/etc/shadow`) stay whole. MISP and STIX of
+such a run carry the sample as a file and a note that the run did not start: no
+`malware` or `malware-analysis` object, `to_ids` off, and the MISP tag
+`antinomie:assessment="not_started"`.
 
 The choices are remembered between exports. Files are never overwritten (a
 counter is added to the name), are owner-only (0600) and are named
-`antinomie-report-<run>-<yyyymmdd-hhmmss>Z` (the time is UTC) plus `.html`, `.pdf`, `.json`,
-`.misp.json`, `.stix.json` or `-evidence.zip`.
+`antinomie-report-<run>-<yyyymmdd-hhmmss>Z` (the time is UTC) plus `.html`, `.pdf`, `.md`,
+`.json`, `.misp.json`, `.stix.json` or `-evidence.zip`.
+
+## What a report holds, in order
+
+1. **At a glance**: the sample, its SHA-256 and size, the family (a link to its
+   evidence), how the run ended, when and for how long, the route, base image
+   and kernel; then the Summary's statement, the findings by tier (each count
+   opens Suspicious activity; INFO findings the index does not list are counted
+   and said), what was observed (each count opens its section), the **Key
+   findings** table (#, Tier, Rule, Behaviour, Object, Process, Count, First
+   seen, ATT&CK; up to 10, worst first), the **Family evidence** table (Family,
+   Engine, Rule, Pack, Strength, Count), the key behaviours, up to eight
+   indicators worth sharing, and the notes about the run.
+2. **Indicators of compromise**: the ones MISP and STIX carry first, then the
+   ones they leave out with the reason; a Tor stand-in address names the domain
+   it stands for.
+3. **ATT&CK techniques**, 4. **Processes** (with the parent, the files each
+   wrote and the findings in it), 5. **Suspicious activity** (a rule that fired
+   four times or more with one tier and result is one row with the count, the
+   first object and process and how many others; the JSON lists every finding),
+   6. **Files** (what the run wrote or changed first, with its lifecycle and
+   reconstruction, then Executed, Created, Deleted, Renamed, Written,
+   Attributes, Opened, Read, Metadata probed and Other; empty tabs are one
+   line), 7. **Network** (Endpoints with the name a stand-in address stands for
+   and no country for private and reserved addresses, Domains, URLs, TLS),
+   8. **Detection engines** (one strength vocabulary, the family a rule names,
+   and the credits each rule's licence asks for in a table under it),
+   9. **Evidence references**, 10. **Custody log**, 11. **Notes**, and an
+   **Appendix: Environment** (rule packs and tools one per row with their full
+   versions).
+
+Times in tables read `+5.463 s · 17:38:21.480`: the time since the run's first
+call, then the time of day; the date and the zone are said once at the top.
+
+## Links inside a report
+
+Every entry is an anchor and every mention of it a link, in the HTML, the PDF
+and the Markdown: a process `proc-<pid>` (`proc-<pid>-2` for a second process
+with the same pid), a file `file-<12 hex digits of its path's hash>` (by path:
+one hash can sit at many paths), an endpoint `ep-<address>-<port>`, a domain
+`dom-<name>`, a behaviour rule `rule-<id>` (on its first finding), a finding
+`finding-<n>`, a detection `det-<engine>-<rule>`, a technique
+`attack-<Txxxx>` and an indicator `ioc-<n>`. A key finding links to its row,
+its process, its object and its techniques; a path in any Files tab links to
+the file's entry (its first row: what the run wrote, else the first tab that
+lists it); a process, a file, an endpoint and an indicator list the findings
+about them. A link whose entry is not in the document (a section left out, a
+row past the cap) is plain text, so no link is ever dangling. The PDF has a
+**Contents** block with the page of each section and of each Files and Network
+tab, every entry is a named destination, and every link a link annotation; the
+HTML highlights the row a link jumps to; the Markdown uses `<a id>` anchors and
+`[text](#id)` links (GitHub keeps both). The JSON carries the same ids (`id`)
+and links (`*_ref`, `*_refs`), and each one names an id of the same file.
 
 ## Formats
 
 - **HTML** is one self-contained file: inline CSS (light and dark by
-  `prefers-color-scheme`, print styles), no script, no link and no reference to
-  another file or address. It is also well-formed XML.
+  `prefers-color-scheme`, print styles), no script, and no link or reference to
+  another file or address; its only links are to its own anchors. Rule
+  references are written without their scheme (the JSON, MISP and STIX keep
+  them whole). It is also well-formed XML.
+- **Markdown** is the same document as GitHub-flavoured pipe tables, with the
+  same anchors and links.
 - Column titles in the HTML and PDF tables never break inside a word: a title wraps
   only at spaces, a table whose longest words side by side are wider than a page
   takes a smaller font a step at a time and, as a last resort, is split into column
@@ -76,19 +139,22 @@ counter is added to the name), are owner-only (0600) and are named
   says "The sample's process tree ended after N ms (P processes). Last failing step:
   ..." with the last refused create, write, delete, rename, link, permission change
   or exec.
-- **PDF** is the same layout on A4 landscape pages: the same sections in the
-  same order, tables with repeated header rows, bookmarks per section, page
+- **PDF** is the same layout on A4 landscape pages: a contents block, the same
+  sections in the same order, internal links, tables with repeated header rows,
+  bookmarks per section, page
   numbers and the document title. It is written by Antinomie itself with the
   standard Helvetica and Courier fonts: no browser, no network and no embedded
   font. Characters outside Latin-1 (and the few Windows-1252 extras) print as
   `?` in the PDF, except a few symbols that have a plain spelling (`->` for the
   arrow of a lifecycle cell, `~`, `<=`, `>=`); the JSON keeps them all. A table
-  cell is cut after 24 lines. HTML and PDF show at most 1 000 rows per table
+  cell is cut after 24 lines; a long rule name or path breaks after a `_`,
+  `/`, `.`, `-` or `:` rather than inside a word. HTML and PDF show at most 1 000 rows per table
   (200 for each Files tab, where identical rows are folded into one with a
   count and the first and last time); the JSON keeps all the rows the index held.
   The PDF has the report's kind, subject and keywords in its properties, a
   running header after the first page, and "Generated <time> - Page N of M" as
-  its footer.
+  its footer. The title names the family, the highest tier and the run
+  (`Antinomie Triage report: elf-fd1b20ee5bd4 - BPFDoor · HIGH · run f9c3d854`).
 - Times in a document are in the zone the app shows (the overview says which),
   with the date; a time marked `~` is estimated from the guest clock and `+N s`
   is the time since the run's first call. File names carry the UTC time and a
@@ -107,17 +173,20 @@ counter is added to the name), are owner-only (0600) and are named
 - **MISP** is one event in MISP's core format (`{"Event": {...}}`): the sample
   as a `file` object (`sha256`, `filename`, `size-in-bytes`; `to_ids` only when
   a dataset matched or a rule named a family), an `antinomie:family="..."` tag
-  for each family, each indicator as an attribute (`ip-dst|port`,
+  for each family the report names (the strongest; a family fewer or weaker
+  rules named is only said in the document and the JSON's
+  `summary.other_families`), each indicator as an attribute (`ip-dst|port`,
   `domain`, `url`, `hostname`, `ja3-fingerprint-md5`, `x509-fingerprint-sha1`,
-  `sha256`, `filename|sha256`) with `to_ids` true only for indicators a stored
+  `sha256`, `filename|sha256`; a hash seen through a folder such as `/tmp`, with
+  no file name of its own, is `sha256` alone) with `to_ids` true only for indicators a stored
   dataset matched, a `misp-galaxy:mitre-attack-pattern="Name - Txxxx"` tag and
   a `Galaxy`/`GalaxyCluster` entry per ATT&CK technique. The event is
   unpublished with distribution 0 (your organisation only). The cluster uuids
   are derived from the technique id; MISP matches clusters by their tag name
   when its ATT&CK galaxy is loaded. URL indicators carry the cleartext scheme
   `http://`, since only cleartext HTTP is indexed as a URL. Each matching
-  detection rule is a `comment` attribute that names the rule, its author,
-  licence and source.
+  detection rule is a `comment` attribute that names the rule (without the
+  pack's `sNNN::` number), its author, licence and source.
 - **STIX 2.1** is a bundle: an `identity`, the sample as a `file` and a
   `malware` object, a `malware-analysis` (result `suspicious` when an indicator
   matched or a HIGH or MEDIUM rule fired, else `unknown`), an `indicator` for
@@ -159,26 +228,30 @@ counter is added to the name), are owner-only (0600) and are named
   (`sha256sum -c` format; extract the bundle and run
   `sha256sum -c manifest.sha256`).
 
-## JSON schema, version 1
+## JSON schema, version 2
 
-`docs/triage-report-schema-1.json` is the JSON Schema (2020-12). Every export
-has `schema` = `antinomie-triage-report` and `schema_version` = 1. The version
+`docs/triage-report-schema-2.json` is the JSON Schema (2020-12). Every export
+has `schema` = `antinomie-triage-report` and `schema_version` = 2. The version
 changes only when a field changes meaning or goes away; a new optional field
-does not change it, so read with unknown fields ignored.
+does not change it, so read with unknown fields ignored. Version 2 changed
+`summary.key_findings` from sentences to objects (the sentences are
+`summary.key_findings_text`, for one version) and `summary.families` to the
+families the report names (the others are `summary.other_families`), and added
+the anchors and links. `docs/triage-report-schema-1.json` describes version 1.
 
 | Key | Content |
 |---|---|
 | `generated_ms`, `app`, `run` | When, by which version, for which run (`vm_id`, `boot_id`, `run_id`, `started_ms`, `finished`, and when known `state` in the app's words, `exit`, `stopped_by_user`, `ended_ms`, `duration_ms`, `command`, `route`, `environment` as name and value pairs). |
 | `sample` | `name`, `sha256`, `size` of the library sample the run executed, when there is one; `role` is `preloaded library` when the run started another program with this library in `LD_PRELOAD`. A run that started a command which is no library sample has `null` and `run.command`. |
-| `summary` | `assessment` (`matched_indicators`, `suspicious_behaviour`, `observed_only`, `no_findings`), `statement`, `highest_tier`, `families` (named by dataset matches and Triage's family candidates) with `family_sources` (who named each), `tiers` (findings by tier), `key_findings` (the sentences of the Summary's Key findings), `key_behaviours` (HIGH and MEDIUM rules), `counts`. |
-| `indicators` | `kind` (`endpoint`, `domain`, `url`, `tls`, `file`), `value`, the dataset answer (`verdict`, `matched`, `dataset`, `record_id`, `family`, `confidence`, `reference`), where it was seen, and per kind `url`, `sni`/`ja3`/`ja4`/`cert_sha1`, `sha256`/`md5`/`sha1`/`path`, `stand_in` (the name a Tor stand-in address was handed out for), `not_shared` (why MISP and STIX leave it out) and `base_noise` (the reason, when the row is the base image's own clock sync, DHCP, apt traffic or the guest's resolver; such rows are left out of the document tables, MISP and STIX). Raw values. |
-| `attack` | Techniques the run's rules cite: `id`, `name`, `rules`, `count`. |
-| `processes`, `findings` | A table: `columns`, `rows` (text), `omitted`, `indicator_columns`. |
+| `summary` | `assessment` (`matched_indicators`, `suspicious_behaviour`, `observed_only`, `no_findings`), `statement`, `highest_tier`, `families` (the families the report names) with `family_sources` (who named each) and `other_families`, `tiers` (findings by tier as the app counts them; `info_not_listed` INFO findings are not in `findings`), `key_findings` (objects: `tier`, `rule`, `title`, `target`, `process`, `pid`, `cookie`, `count`, `first_ms`, `relative_ms`, `attack`, `why`, `finding` and the links `finding_ref`, `process_ref`, `target_ref`, `attack_refs`), `key_findings_text`, `key_findings_total`, `key_behaviours` (HIGH and MEDIUM rules), `counts`. |
+| `indicators` | `id` (`ioc-<n>`), `kind` (`endpoint`, `domain`, `url`, `tls`, `file`), `value`, the dataset answer (`verdict`, `matched`, `dataset`, `record_id`, `family`, `confidence`, `reference`), where it was seen (`pids`), and per kind `url`, `sni`/`ja3`/`ja4`/`cert_sha1`, `sha256`/`md5`/`sha1`/`path`, `stand_in` (the name a Tor stand-in address was handed out for), `not_shared` (why MISP and STIX leave it out) and `base_noise` (the reason, when the row is the base image's own clock sync, DHCP, apt traffic or the guest's resolver; such rows are left out of the document tables, MISP and STIX); `target_ref`, `process_refs`, `finding_refs`. Raw values. |
+| `attack` | Techniques the run's rules cite: `id`, `name`, `rules`, `count`, `rule_refs` (one per rule: its first finding's `rule-…` or its detection's `det-…`). |
+| `processes`, `findings` | A table: `columns`, `rows` (text), `omitted`, `indicator_columns`, and `data`: one object per row with its `id`, typed values (`pid`, `cookie`, `parent_pid`, `depth`, `time_ms`, `relative_ms`, `count`, `bytes`, `path`, `endpoint`, `domain`, `rule`, `tier`, `target`, `attack`) and links (`process_ref`, `parent_ref`, `target_ref`, `domain_ref`, `endpoint_refs`, `attack_refs`, `finding_refs`, `file_refs`). Empty values are left out. |
 | `files` | `tabs`: one named table for each Files tab. |
-| `file_activity` | Per created or changed file: `path`, `created`, `changed`, `deleted`, `final_size`, `guest_sha256`, `reconstruction` (`complete` or `incomplete`), `bytes_written`, `bytes_not_captured`, `bytes_unknown`, `bundle_entry`. |
+| `file_activity` | Per created or changed file: `id`, `path`, `created`, `changed`, `deleted`, `final_size`, `guest_sha256`, `reconstruction` (`complete` or `incomplete`), `bytes_written`, `bytes_not_captured`, `bytes_unknown`, `bundle_entry`, `process_ref`, `finding_refs`. |
 | `network` | Named tables: Endpoints, Domains, URLs, TLS. |
-| `detections` | Matches of the YARA, IDS and Sigma engines whose reports are complete (from the run's Triage digest): `engine`, `rule_id`, `title`, `severity`, `mitre`, `count`, and the rule's `author` (as the rule gives it), `license`, `source` (the rule pack) and `reference` (the rule's own link) and, for YARA, `strength` (`strong`, `weak`, `wrong platform`). A rule's licence asks that its author stay with every message that reports a match, so every format carries them (the HTML and PDF show the pack's own `sNNN::` number only in the JSON). |
-| `evidence` | The run folder's files and folders: `kind`, `path`, `size`, `sha256` (files up to 64 MiB). |
+| `detections` | Matches of the YARA, IDS and Sigma engines whose reports are complete (from the run's Triage digest): `id`, `engine`, `rule_id`, `title`, `severity`, `mitre`, `count`, and the rule's `author` (as the rule gives it), `license`, `source` (the rule pack) and `reference` (the rule's own link), for YARA `strength` (`strong`, `weak`, `wrong platform`), `family` (the family the rule names) and `attack_refs`. A rule's licence asks that its author stay with every message that reports a match, so every format carries them (the HTML and PDF show the pack's own `sNNN::` number only in the JSON). |
+| `evidence` | The run folder's files and folders: `kind` (`telemetry`, `network capture`, `static analysis`, `ebpf programs`, ...), `path`, `size`, `sha256` (files up to 64 MiB), `files` (a folder's file count). |
 | `custody` | The sample's custody log head hash, entry count and whether the chain verified. |
 | `notes` | What the report could not say. |
 

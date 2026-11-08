@@ -27,13 +27,20 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
     let mut add = |kind: &str, category: &str, value: &str, ids: bool, note: &str| {
         attrs.push(attribute(kind, category, value, ids, note, &seed, at));
     };
+    // The sample's hashes are for blocking only when something says it is
+    // malware: a dataset matched, a rule named a family, a run was suspicious.
+    let strong = matches!(
+        report.assessment(),
+        "matched_indicators" | "suspicious_behaviour"
+    ) || !sample.family.is_empty()
+        || !sample.family_candidates.is_empty();
     for (kind, value, len) in [
         ("sha256", &sample.sha256, 64),
         ("sha1", &sample.sha1, 40),
         ("md5", &sample.md5, 32),
     ] {
         if is_hash(value, len) {
-            add(kind, "Payload delivery", value, true, "the sample");
+            add(kind, "Payload delivery", value, strong, "the sample");
         }
     }
     if !sample.tlsh.is_empty() {
@@ -117,8 +124,8 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
             &format!(
                 "{} rule {} ({}) matched {} time(s){}. Author: {}. License: {}. Source: {}{}",
                 hit.engine,
-                hit.rule_id,
-                hit.title,
+                crate::report::layout::plain_rule(&hit.rule_id),
+                crate::report::layout::plain_rule(&hit.title),
                 hit.count,
                 if hit.runs.is_empty() {
                     String::new()

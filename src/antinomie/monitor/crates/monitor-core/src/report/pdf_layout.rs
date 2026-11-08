@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
-//! Laying a [`Document`] out on A4 landscape pages: wrapped text, tables with
-//! repeated header rows, section bookmarks. The result is a list of drawing
-//! operations per page; `pdf.rs` writes them.
-use super::layout::{Block, DocTable, Document};
-use super::pdf_font::{Font, char_width, width};
+//! Laying a [`Document`] out on A4 landscape pages: a contents block, wrapped
+//! text, tables with repeated header rows, section bookmarks. Every anchor of
+//! the document becomes a named destination where it is drawn, and every
+//! internal link a link rectangle over its text. The result is a list of
+//! drawing operations and links per page; `pdf.rs` writes them.
+use super::page::{Block, Cell, DocTable, Document, Span, TOP};
+use super::pdf_font::{Font, width};
+use super::pdf_wrap::{Frag, wrap, wrap_spans};
+use std::collections::BTreeMap;
 
 pub(super) const PAGE_W: f32 = 841.89;
 pub(super) const PAGE_H: f32 = 595.28;
@@ -33,6 +37,8 @@ const MUTED: Rgb = [0.36, 0.4, 0.44];
 const NOTE: Rgb = [0.42, 0.31, 0.0];
 const HEAD_FILL: Rgb = [0.93, 0.94, 0.96];
 const LINE: Rgb = [0.78, 0.8, 0.83];
+/// Link text, the accent of the HTML's light theme.
+const LINK: Rgb = [0.04, 0.36, 0.68];
 
 /// One drawing operation; `y` is from the page bottom, as in PDF.
 #[derive(Clone, Debug)]
@@ -69,9 +75,17 @@ pub(super) enum Op {
     },
 }
 
+/// A link rectangle on a page: `[x1 y1 x2 y2]` and the destination's name.
+#[derive(Clone, Debug)]
+pub(super) struct Link {
+    pub rect: [f32; 4],
+    pub dest: String,
+}
+
 #[derive(Default)]
 pub(super) struct Page {
     pub ops: Vec<Op>,
+    pub links: Vec<Link>,
 }
 
 /// A bookmark: a section title and where it sits.
@@ -81,69 +95,29 @@ pub(super) struct Bookmark {
     pub y: f32,
 }
 
+/// A named destination: an anchor id and where it is drawn.
+#[derive(Clone, Debug)]
+pub(super) struct Dest {
+    pub page: usize,
+    pub y: f32,
+}
+
 pub(super) struct Laid {
     pub pages: Vec<Page>,
     pub bookmarks: Vec<Bookmark>,
+    /// Every anchor, in the order it was first drawn.
+    pub dests: Vec<(String, Dest)>,
 }
 
 struct Cursor {
     pages: Vec<Page>,
     bookmarks: Vec<Bookmark>,
+    dests: Vec<(String, Dest)>,
+    /// Anchors already placed: a cell drawn twice (a repeated first column)
+    /// keeps its first place.
+    placed: std::collections::BTreeSet<String>,
     /// Top of the free space on the current page.
     y: f32,
-}
-
-/// `text` broken into lines no wider than `limit`; a word wider than the line
-/// is broken at a character. `max_lines` cuts the result with `...`.
-fn wrap(text: &str, font: Font, size: f32, limit: f32, max_lines: usize) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
-    for paragraph in text.split('\n') {
-        let mut line = String::new();
-        let mut line_w = 0.0;
-        for word in paragraph.split(' ').filter(|w| !w.is_empty()) {
-            let word_w = width(font, size, word);
-            let space = if line.is_empty() {
-                0.0
-            } else {
-                char_width(font, size, ' ')
-            };
-            if line_w + space + word_w <= limit {
-                if !line.is_empty() {
-                    line.push(' ');
-                }
-                line.push_str(word);
-                line_w += space + word_w;
-                continue;
-            }
-            if !line.is_empty() {
-                lines.push(std::mem::take(&mut line));
-                line_w = 0.0;
-            }
-            if word_w <= limit {
-                line.push_str(word);
-                line_w = word_w;
-                continue;
-            }
-            // Longer than a line: break it at a character.
-            for c in word.chars() {
-                let cw = char_width(font, size, c);
-                if line_w + cw > limit && !line.is_empty() {
-                    lines.push(std::mem::take(&mut line));
-                    line_w = 0.0;
-                }
-                line.push(c);
-                line_w += cw;
-            }
-        }
-        lines.push(line);
-    }
-    if lines.len() > max_lines {
-        lines.truncate(max_lines);
-        if let Some(last) = lines.last_mut() {
-            last.push_str(" ...");
-        }
-    }
-    lines
 }
 
 /// A cell that is a hash, a path or an address is drawn in Courier.
@@ -157,7 +131,41 @@ impl Cursor {
         Self {
             pages: vec![Page::default()],
             bookmarks: Vec::new(),
+            dests: Vec::new(),
+            placed: std::collections::BTreeSet::new(),
             y: PAGE_H - MARGIN,
+        }
+    }
+
+    /// Anchor `id` at height `y` of the current page.
+    fn dest(&mut self, id: &str, y: f32) {
+        if !id.is_empty() && self.placed.insert(id.to_owned()) {
+            let page = self.pages.len() - 1;
+            self.dests.push((id.to_owned(), Dest { page, y }));
+        }
+    }
+
+    /// Draw a wrapped line of fragments at `x`, `y`: link text in the accent
+    /// colour with a link rectangle over it.
+    fn frags(&mut self, x: f32, y: f32, font: Font, size: f32, ink: Rgb, line: &[Frag]) {
+        for frag in line {
+            let internal = frag.href.as_deref().and_then(|h| h.strip_prefix('#'));
+            let color = if internal.is_some() { LINK } else { ink };
+            if !frag.text.trim().is_empty() {
+                self.text(x + frag.x, y, font, size, color, &frag.text);
+            }
+            if let Some(dest) = internal {
+                let rect = [
+                    x + frag.x,
+                    y - size * 0.25,
+                    x + frag.x + frag.w,
+                    y + size * 0.85,
+                ];
+                self.page().links.push(Link {
+                    rect,
+                    dest: dest.to_owned(),
+                });
+            }
         }
     }
 
@@ -203,17 +211,18 @@ impl Cursor {
         self.y -= size * 0.5;
     }
 
-    fn heading(&mut self, title: &str, bookmark: bool) {
+    fn heading(&mut self, title: &str, id: &str, bookmark: bool) {
         self.need(90.0);
         self.y -= 22.0;
+        let (page, y) = (self.pages.len() - 1, self.y + 16.0);
         if bookmark {
-            let (page, y) = (self.pages.len() - 1, self.y + 16.0);
             self.bookmarks.push(Bookmark {
                 title: title.to_owned(),
                 page,
                 y,
             });
         }
+        self.dest(id, y);
         let y = self.y;
         self.text(MARGIN, y, Font::Bold, 13.0, INK, title);
         self.y -= 5.0;
@@ -227,9 +236,11 @@ impl Cursor {
         self.y -= 4.0;
     }
 
-    fn sub(&mut self, title: &str) {
+    fn sub(&mut self, title: &str, id: &str) {
         self.need(70.0);
         self.y -= 12.0;
+        let y = self.y + 2.0;
+        self.dest(id, y);
         let size = 10.0;
         self.y -= size;
         let y = self.y;
@@ -242,7 +253,7 @@ impl Cursor {
         &mut self,
         widths: &[f32],
         header: Option<&[String]>,
-        rows: &[Vec<String>],
+        rows: &[Vec<Cell>],
         size: f32,
         first_bold: bool,
     ) {
@@ -250,18 +261,26 @@ impl Cursor {
         let tactic_column =
             header.and_then(|header| header.iter().position(|c| c == super::TACTIC_COLUMN));
         let tier_column = header.and_then(|header| header.iter().position(|c| c == "Tier"));
-        let draw_row = |this: &mut Self, cells: &[(Vec<String>, Font)], height: f32, head: bool| {
+        type Prepared = (Vec<Vec<Frag>>, Font, Vec<String>);
+        let draw_row = |this: &mut Self, cells: &[Prepared], height: f32, head: bool| {
             let top = this.y;
             let bottom = top - height;
             let mut x = MARGIN;
             if head {
                 this_rect(this, x, bottom, widths.iter().sum(), height, HEAD_FILL);
             }
-            for (column, ((lines, font), w)) in cells.iter().zip(widths).enumerate() {
+            for (column, ((lines, font, ids), w)) in cells.iter().zip(widths).enumerate() {
+                for id in ids {
+                    this.dest(id, top);
+                }
+                let joined: Vec<String> = lines
+                    .iter()
+                    .map(|line| line.iter().map(|f| f.text.as_str()).collect())
+                    .collect();
                 // A bar of the tactics' colours at the cell's left edge; the
                 // names stay in the text.
                 if !head && Some(column) == tactic_column {
-                    let tactics = super::cell_tactics(&lines.join(" "));
+                    let tactics = super::cell_tactics(&joined.join(" "));
                     let part = (height - 2.0) / tactics.len().max(1) as f32;
                     for (n, tactic) in tactics.iter().enumerate() {
                         let [r, g, b] = tactic.rgb(true);
@@ -282,7 +301,7 @@ impl Cursor {
                     let ink = match (
                         head,
                         Some(column) == tier_column,
-                        line.to_ascii_lowercase().as_str(),
+                        joined[i].to_ascii_lowercase().as_str(),
                     ) {
                         (false, true, "high") => [0.70, 0.15, 0.12],
                         (false, true, "medium") => [0.63, 0.36, 0.0],
@@ -290,7 +309,7 @@ impl Cursor {
                         _ => INK,
                     };
                     let font = if ink == INK { *font } else { Font::Bold };
-                    this.text(x + PAD, y, font, size, ink, line);
+                    this.frags(x + PAD, y, font, size, ink, line);
                 }
                 this.page().ops.push(Op::Frame {
                     x,
@@ -303,29 +322,38 @@ impl Cursor {
             }
             this.y = bottom;
         };
-        let prepare = |row: &[String], bold_all: bool| -> (Vec<(Vec<String>, Font)>, f32) {
-            let cells: Vec<(Vec<String>, Font)> = row
+        let prepare = |row: &[Cell], bold_all: bool| -> (Vec<Prepared>, f32) {
+            let cells: Vec<Prepared> = row
                 .iter()
                 .enumerate()
                 .zip(widths)
                 .map(|((column, cell), w)| {
+                    let text = cell.text();
                     let font = if bold_all || (first_bold && column == 0) {
                         Font::Bold
-                    } else if is_mono(cell) {
+                    } else if is_mono(&text) {
                         Font::Mono
                     } else {
                         Font::Regular
                     };
                     (
-                        wrap(cell, font, size, w - 2.0 * PAD + 0.05, CELL_LINES),
+                        wrap_spans(&cell.spans, font, size, w - 2.0 * PAD + 0.05, CELL_LINES),
                         font,
+                        cell.ids().cloned().collect(),
                     )
                 })
                 .collect();
-            let lines = cells.iter().map(|(l, _)| l.len()).max().unwrap_or(1).max(1);
+            let lines = cells
+                .iter()
+                .map(|(l, _, _)| l.len())
+                .max()
+                .unwrap_or(1)
+                .max(1);
             (cells, lines as f32 * leading + 2.0 * PAD)
         };
-        let head = header.map(|header| prepare(header, true));
+        let header_cells: Option<Vec<Cell>> =
+            header.map(|header| header.iter().map(|h| Cell::plain(h.clone())).collect());
+        let head = header_cells.as_deref().map(|header| prepare(header, true));
         if let Some((cells, height)) = &head {
             self.need(height + 40.0);
             draw_row(self, cells, *height, true);
@@ -399,15 +427,55 @@ impl Cursor {
         }
     }
 
-    fn facts(&mut self, facts: &[(String, String)]) {
+    fn facts(&mut self, facts: &[(String, Cell)]) {
         let size = 8.5;
         let label = 130.0;
         let widths = [label, PAGE_W - 2.0 * MARGIN - label];
-        let rows: Vec<Vec<String>> = facts
+        let rows: Vec<Vec<Cell>> = facts
             .iter()
-            .map(|(name, value)| vec![name.clone(), value.clone()])
+            .map(|(name, value)| vec![Cell::plain(name.clone()), value.clone()])
             .collect();
         self.rows(&widths, None, &rows, size, true);
+    }
+
+    /// The contents block: one line per section and per sub-heading of Files
+    /// and Network, each a link, with its page once `pages` knows it.
+    fn contents(&mut self, document: &Document, pages: Option<&BTreeMap<String, usize>>) {
+        self.heading("Contents", "contents", false);
+        let size = 9.0;
+        let leading = size * 1.45;
+        let mut entries: Vec<(String, String, f32)> = Vec::new();
+        for section in &document.sections {
+            entries.push((section.title.clone(), section.id.clone(), 0.0));
+            if matches!(section.id.as_str(), "files" | "network") {
+                for block in &section.blocks {
+                    if let Block::Sub { title, id } = block
+                        && !id.is_empty()
+                    {
+                        entries.push((title.clone(), id.clone(), 14.0));
+                    }
+                }
+            }
+        }
+        for (title, id, indent) in entries {
+            self.need(leading);
+            self.y -= leading;
+            let y = self.y;
+            let line = [Span::to(title, &id)];
+            let frags = wrap_spans(&line, Font::Regular, size, 520.0, 1);
+            self.frags(MARGIN + indent, y, Font::Regular, size, INK, &frags[0]);
+            let number = pages
+                .and_then(|pages| pages.get(&id))
+                .map_or(String::new(), |page| format!("page {}", page + 1));
+            let w = width(Font::Regular, size, &number);
+            let right = MARGIN + 620.0;
+            self.text(right - w, y, Font::Regular, size, MUTED, &number);
+            self.page().links.push(Link {
+                rect: [MARGIN + indent, y - size * 0.25, right, y + size * 0.85],
+                dest: id,
+            });
+        }
+        self.y -= 6.0;
     }
 }
 
@@ -446,7 +514,7 @@ fn column_widths(table: &DocTable, size: f32) -> Vec<f32> {
     }
     for row in table.rows.iter().take(400) {
         for (column, cell) in row.iter().enumerate().take(columns) {
-            measure(cell, column, &mut natural, &mut floor);
+            measure(&cell.text(), column, &mut natural, &mut floor);
         }
     }
     // A single word of a cell is never worth more than a third of the page as
@@ -515,11 +583,24 @@ fn column_widths(table: &DocTable, size: f32) -> Vec<f32> {
         .collect()
 }
 
-/// The document as pages.
+/// The document as pages, laid out twice: the second time the contents block
+/// knows the page of every section (it is the same height both times, so
+/// nothing moves).
 pub(super) fn lay_out(document: &Document) -> Laid {
+    let first = lay(document, None);
+    let pages: BTreeMap<String, usize> = first
+        .dests
+        .iter()
+        .map(|(id, dest)| (id.clone(), dest.page))
+        .collect();
+    lay(document, Some(&pages))
+}
+
+fn lay(document: &Document, pages: Option<&BTreeMap<String, usize>>) -> Laid {
     let mut cursor = Cursor::new();
     cursor.y -= 18.0;
     let y = cursor.y;
+    cursor.dest(TOP, y + 18.0);
     let title_lines = wrap(&document.title, Font::Bold, 18.0, PAGE_W - 2.0 * MARGIN, 3);
     let mut y = y;
     for line in &title_lines {
@@ -528,25 +609,29 @@ pub(super) fn lay_out(document: &Document) -> Laid {
     }
     cursor.text(MARGIN, y, Font::Regular, 9.0, MUTED, &document.subtitle);
     cursor.y = y - 8.0;
+    if document.sections.len() > 1 {
+        cursor.contents(document, pages);
+    }
     for section in &document.sections {
-        cursor.heading(&section.title, true);
+        cursor.heading(&section.title, &section.id, true);
         for block in &section.blocks {
             match block {
                 Block::Paragraph(text) => cursor.paragraph(text, Font::Regular, 9.5, INK),
                 Block::Note(text) => cursor.paragraph(text, Font::Oblique, 8.5, NOTE),
-                Block::Sub(text) => cursor.sub(text),
-                Block::List(items) => {
-                    for item in items {
-                        cursor.paragraph(&format!("- {item}"), Font::Regular, 9.0, INK);
-                    }
-                }
+                Block::Sub { title, id } => cursor.sub(title, id),
                 Block::Facts(facts) => cursor.facts(facts),
                 Block::Table(table) => cursor.table(table),
             }
         }
     }
+    let placed: std::collections::BTreeSet<String> =
+        cursor.dests.iter().map(|(id, _)| id.clone()).collect();
+    for page in &mut cursor.pages {
+        page.links.retain(|link| placed.contains(&link.dest));
+    }
     Laid {
         pages: cursor.pages,
         bookmarks: cursor.bookmarks,
+        dests: cursor.dests,
     }
 }

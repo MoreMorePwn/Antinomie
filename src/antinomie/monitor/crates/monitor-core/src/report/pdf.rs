@@ -2,9 +2,10 @@
 // Copyright (c) 2026 MikiMiku (MoreMorePwn)
 //! The PDF writer: a small, deterministic PDF 1.4 file from the laid-out
 //! pages. Standard fonts, Flate-compressed content streams, a bookmark per
-//! section, a document title and a page number footer. Nothing is fetched
-//! and no browser is involved.
-use super::layout::Document;
+//! section, a named destination (`/Dests`) per anchor of the document and a
+//! `/Link` annotation for each internal link, a document title and a page
+//! number footer. Nothing is fetched and no browser is involved.
+use super::page::Document;
 use super::pdf_font::{Font, encode, width};
 use super::pdf_layout::{Laid, Op, PAGE_H, PAGE_W, Rgb, lay_out};
 use flate2::{Compression, write::ZlibEncoder};
@@ -139,6 +140,20 @@ fn content(ops: &[Op], header: Option<&str>, footer: &str) -> Vec<u8> {
     out
 }
 
+/// A PDF name object for an anchor id: regular characters as they are, the
+/// rest as `#xx`.
+pub(super) fn name(id: &str) -> String {
+    let mut out = String::from("/");
+    for byte in id.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("#{byte:02X}"));
+        }
+    }
+    out
+}
+
 fn pdf_date(ms: u64) -> String {
     let text = super::utc(ms);
     format!(
@@ -153,20 +168,43 @@ fn pdf_date(ms: u64) -> String {
 }
 
 /// Objects are numbered in this order: catalog 1, pages 2, fonts 3 to 6, info
-/// 7, outline root 8, the outline items, then a page and its stream each.
+/// 7, outline root 8, the outline items, then a page and its stream each, the
+/// destinations, and the link annotations.
 pub(super) fn render(document: &Document, generated_ms: u64) -> Result<Vec<u8>, String> {
-    let Laid { pages, bookmarks } = lay_out(document);
+    let Laid {
+        pages,
+        bookmarks,
+        dests,
+    } = lay_out(document);
     let first_item = 9;
     let first_page = first_item + bookmarks.len();
     let page_obj = |index: usize| first_page + index * 2;
     let total = pages.len();
+    let dests_obj = first_page + total * 2;
+    let mut next_annot = dests_obj + 1;
 
     let mut objects: Vec<(usize, Vec<u8>)> = Vec::new();
     objects.push((
         1,
-        b"<< /Type /Catalog /Pages 2 0 R /Outlines 8 0 R /PageMode /UseOutlines /Lang (en) >>"
-            .to_vec(),
+        format!(
+            "<< /Type /Catalog /Pages 2 0 R /Outlines 8 0 R /Dests {dests_obj} 0 R \
+             /PageMode /UseOutlines /Lang (en) >>"
+        )
+        .into_bytes(),
     ));
+    let mut dict = String::from("<<");
+    for (id, dest) in &dests {
+        write!(
+            dict,
+            " {} [{} 0 R /XYZ 0 {} 0]",
+            name(id),
+            page_obj(dest.page),
+            num(dest.y)
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    dict.push_str(" >>");
+    objects.push((dests_obj, dict.into_bytes()));
     let kids: String = (0..total)
         .map(|i| format!("{} 0 R", page_obj(i)))
         .collect::<Vec<_>>()
@@ -243,11 +281,34 @@ pub(super) fn render(document: &Document, generated_ms: u64) -> Result<Vec<u8>, 
     }
     for (index, page) in pages.iter().enumerate() {
         let id = page_obj(index);
+        let mut annots = Vec::new();
+        for link in &page.links {
+            let [x1, y1, x2, y2] = link.rect;
+            objects.push((
+                next_annot,
+                format!(
+                    "<< /Type /Annot /Subtype /Link /Rect [{} {} {} {}] /Border [0 0 0] /Dest {} >>",
+                    num(x1),
+                    num(y1),
+                    num(x2),
+                    num(y2),
+                    name(&link.dest)
+                )
+                .into_bytes(),
+            ));
+            annots.push(format!("{next_annot} 0 R"));
+            next_annot += 1;
+        }
+        let annots = if annots.is_empty() {
+            String::new()
+        } else {
+            format!(" /Annots [{}]", annots.join(" "))
+        };
         objects.push((
             id,
             format!(
                 "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /Font << \
-                 /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >> >> /Contents {} 0 R >>",
+                 /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >> >> /Contents {} 0 R{annots} >>",
                 num(PAGE_W),
                 num(PAGE_H),
                 id + 1

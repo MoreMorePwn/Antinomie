@@ -196,6 +196,7 @@ mod tests {
             name: name.into(),
             rules: Vec::new(),
             count: 1,
+            rule_refs: Vec::new(),
         };
         let detail = |id: &str, primary| attack::Detail {
             id: id.into(),

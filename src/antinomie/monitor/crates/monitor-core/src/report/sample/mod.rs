@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 pub mod build;
 pub mod export;
 pub mod layout;
-pub mod markdown;
+pub use super::markdown;
 pub mod misp;
 pub mod stix;
 #[cfg(test)]

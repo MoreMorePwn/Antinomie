@@ -241,12 +241,16 @@ pub fn render(report: &SampleReport) -> Result<String, String> {
 
     for hit in &report.detections {
         let mut fields = json!({
-            "abstract": format!("{} rule {} matched", hit.engine, hit.rule_id),
+            "abstract": format!(
+                "{} rule {} matched",
+                hit.engine,
+                crate::report::layout::plain_rule(&hit.rule_id)
+            ),
             "content": format!(
                 "{} rule {} ({}) matched {} time(s){}. Author: {}. License: {}. Source: {}.",
                 hit.engine,
-                hit.rule_id,
-                hit.title,
+                crate::report::layout::plain_rule(&hit.rule_id),
+                crate::report::layout::plain_rule(&hit.title),
                 hit.count,
                 if hit.runs.is_empty() {
                     " in the static scan".to_owned()
