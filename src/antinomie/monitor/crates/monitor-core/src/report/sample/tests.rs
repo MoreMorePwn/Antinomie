@@ -499,6 +499,26 @@ fn pdf_is_valid_has_bookmarks_and_the_credits() {
             && content.contains("DRL 1.1")
     );
     assert!(content.contains("Page 1 of"));
+    // The outline is a consistent tree and the contents hold bare numbers.
+    let (items, _) = crate::report::tests::outline(&bytes);
+    assert!(items.iter().any(|i| i.title == "Runs"));
+    assert!(!content.contains("(page "));
+    let html = String::from_utf8(export::render(&report, Format::Html, true).unwrap()).unwrap();
+    assert!(
+        !html.contains("--c:") && !html.contains(".t0{"),
+        "no tactic classes"
+    );
+    for tactic in crate::mitre::Tactic::ALL {
+        let [r, g, b] = tactic.rgb(true);
+        assert!(
+            !html.contains(&format!("#{r:02x}{g:02x}{b:02x}")),
+            "tactic colour"
+        );
+    }
+    for item in items.iter().filter(|i| i.parent != 8) {
+        let parent = items.iter().find(|p| p.obj == item.parent).unwrap();
+        assert_eq!(parent.parent, 8, "two levels at most");
+    }
 }
 
 #[test]
