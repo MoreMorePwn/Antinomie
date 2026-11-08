@@ -10,6 +10,12 @@ the `antinomie-service` crate (`src/api/`) with `schemars` and checked in; a tes
 fails when the file is stale. The recording reads (`recording.*`) are in the
 second part of this document.
 
+> **Status in 0.9.0.** The types, the schema, the job store and the read-only
+> recording queries exist in the `antinomie-service` crate and are tested. Nothing
+> a user runs submits a job yet: the daemon, the socket and the `auto` commands
+> are not shipped. `antinomie-cli` uses its object types (such as `Sample`) but cannot submit or
+> wait for a job in this build.
+
 Names here are final for version 1. The API changes only additively: a new
 optional field does not change the version; a changed meaning or a removed field
 does. Clients ignore unknown fields in replies. Requests do not: an unknown field

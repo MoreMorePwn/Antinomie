@@ -1632,7 +1632,7 @@ global flags may also follow the command.
 |---|---|
 | `--data-dir PATH` | Data directory (default `$HOME/antinomie`; `~` is expanded). Use a directory of its own for automation, never the one the window uses |
 | `--bundle PATH`, `--qemu PATH`, `--qemu-img PATH`, `--tcg`, `--no-headless` | Engine options, as in the window. The CLI is headless unless `--no-headless` is given |
-| `--direct`, `--daemon`, `--socket PATH` | Choose direct mode or a running daemon (they conflict) |
+| `--direct`, `--daemon`, `--socket PATH` | Reserved for the job daemon, which this build does not have: every command runs in the calling process (`--direct` and `--daemon` conflict) |
 | `-o, --format human\|json\|ndjson` | Output format; `human` on a terminal, `json` otherwise |
 | `--color auto\|always\|never` | Colour of human output; `NO_COLOR` is honoured |
 | `-q`, `-v`, `-vv`, `--log-format text\|json` | Log lines on standard error |
@@ -1656,14 +1656,15 @@ per line: a list command prints its items and then a last line
 | 3 | not_found | Sample, run, VM, base or job does not exist |
 | 4 | invalid | The arguments were refused (`invalid_argument`, `precondition_failed`, `conflict`) |
 | 5 | denied | Policy or file permission |
-| 10 to 14 | job_failed, job_partial, job_cancelled, job_rejected, wait_timeout | A waited job did not succeed (Auto mode) |
+| 10 to 14 | job_failed, job_partial, job_cancelled, job_rejected, wait_timeout | A waited job did not succeed (reserved for Auto mode, not produced yet) |
 | 20 | dependency | A required tool is missing; `doctor` shows which |
 | 21 | busy | The data directory is owned by another process, or the daemon is starting or stopping |
 | 22 | quota | `quota_exceeded` |
-| 30 to 32 | suspicious, malicious, inconclusive | With `--verdict-exit` only (Auto mode) |
+| 30 to 32 | suspicious, malicious, inconclusive | With `--verdict-exit` only (reserved for Auto mode, not produced yet) |
 | 130 | interrupted | Interrupted with Ctrl-C |
 
-**Commands so far.**
+**Commands in this build.** The job daemon, the `auto` commands, watch folders and
+the web layer are not shipped yet; this list is what `antinomie-cli --help` shows.
 
 - `doctor [--require tool,...]` lists the runtime tools and exits 20 when a
   required one is missing. Without `--require` the tools the window also treats as
@@ -1707,9 +1708,25 @@ per line: a list command prints its items and then a last line
   one (`pack:ID` or `group:ID` when an id names both). Changing the selection
   takes the data-directory lock; listing does not.
 - `config path` prints the paths of `settings.json`, `service.toml` and `policies/`.
+  `config get [KEY]` prints one engine setting, or all of them; a dotted key reaches
+  into an object (`disks.hide_dotfiles`) and the command takes no lock.
+  `config set KEY VALUE` changes one (the value is JSON when it parses, else text) and
+  takes the engine lock, so it refuses while the window owns the data directory.
+  `settings.json` is the file the window itself now uses for its engine settings.
+  `config validate [--policy NAME]` checks `service.toml` and `policies/*.toml`
+  without starting anything (see [service configuration](service-config.md)); it
+  prints each problem as `file:line:column` and exits 4 when there is an error.
+- Not shipped yet: submitting and waiting for jobs, the daemon and its socket, watch
+  folders, and reading recordings from the command line. The job contract they will
+  use is written down in [Job API, version 1](job-api-1.md).
 
 ## Troubleshooting
 
+- **"Data folder is already in use" (0.9.0).** One process owns a data folder at a
+  time: the window or an `antinomie-cli` command that needs the engine. The message
+  now names the owner (its pid, whether it is the window or a command, and since
+  when), taken from `run/owner.json`. Close that process, or give the second one a
+  folder of its own with `--data-dir`. A record whose process is gone is ignored.
 - **Settings did not survive a restart** (0.8.1 and earlier): fixed in 0.8.2; the
   debugger's remembered choices were saved in a form the settings file could not
   read back, so every start used the defaults. Set them once more.

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 #[command(
     name = "antinomie-cli",
     version = antinomie_monitor_core::api::APP_BUILD,
-    about = "Antinomie command line: headless analysis and Auto mode",
+    about = "Antinomie command line: the sample library and static analysis without a window",
     propagate_version = true
 )]
 pub struct Cli {
@@ -43,16 +43,16 @@ pub struct Global {
     /// Data directory [default: $HOME/antinomie]; `~` is expanded.
     #[arg(long, global = true, value_name = "PATH")]
     pub data_dir: Option<PathBuf>,
-    /// Boot bundle folder for `base install` and `vm create` [default: $ANTINOMIE_BUNDLE or images].
+    /// Boot bundle folder, for engine commands [default: $ANTINOMIE_BUNDLE or images].
     #[arg(long, global = true, value_name = "PATH")]
     pub bundle: Option<PathBuf>,
-    /// Daemon socket [default: <data>/run/antinomie.sock].
+    /// Daemon socket [default: <data>/run/antinomie.sock]. No daemon ships yet.
     #[arg(long, global = true, value_name = "PATH")]
     pub socket: Option<PathBuf>,
     /// Run the command in this process, taking the data-directory lock.
     #[arg(long, global = true, conflicts_with = "daemon")]
     pub direct: bool,
-    /// Send the command to a running daemon.
+    /// Send the command to a running daemon. Reserved: no daemon ships yet, so commands run in this process.
     #[arg(long, global = true)]
     pub daemon: bool,
     /// Output format [default: human on a terminal, json otherwise].
@@ -82,7 +82,7 @@ pub struct Global {
         value_name = "FORMAT"
     )]
     pub log_format: LogFormat,
-    /// Overall limit for the command, also the `--wait` limit.
+    /// Overall limit for the command.
     #[arg(long, global = true, value_name = "SECONDS")]
     pub timeout: Option<u64>,
     /// Force software emulation (TCG).

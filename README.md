@@ -507,7 +507,8 @@ list.
 
 Planned and undated:
 
-- **Headless mode**
+- **Headless mode**: a job daemon (the `antinomie-cli` commands for samples,
+  custody, static analysis and rules arrive in 0.9.0)
 - **Docker-based web interface and API**
 - **Auto mode**: a sample in, a report out
 - **MIPS** guests
@@ -521,6 +522,8 @@ Planned and undated:
 | Read | For |
 |---|---|
 | [User guide](docs/usage.md) | Bases, VMs, runs, routes and reading results. |
+| [Command line](docs/usage.md#command-line-090) | `antinomie-cli` (0.9.0): doctor, samples, custody, static analysis and rules without a window. |
+| [Job API](docs/job-api-1.md) and [service configuration](docs/service-config.md) | The contract and the configuration files of the coming job daemon (0.9.0 ships the contract and `config validate`; the daemon is not shipped). |
 | [Triage report](docs/triage-report.md) | Export formats, evidence bundle and the JSON schema. |
 | [Security model](docs/security.md) | Trust boundaries, network modes, sensitive data and safe use. |
 | [Security policy](SECURITY.md) | Supported versions and how to report a vulnerability privately. |
