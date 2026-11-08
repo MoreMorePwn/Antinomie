@@ -10,6 +10,9 @@ mod workspace_drag;
 mod workspace_migrate;
 #[path = "workspace_tabs.rs"]
 mod workspace_tabs;
+#[cfg(test)]
+#[path = "workspace_test_support.rs"]
+mod workspace_test_support;
 #[path = "workspace_viewer.rs"]
 mod workspace_viewer;
 use crate::{app::MonitorApp, theme};
@@ -131,6 +134,10 @@ pub(crate) struct WorkspaceLayout {
     geometry: BTreeMap<usize, Rect>,
     #[serde(skip)]
     native_builders: BTreeMap<usize, egui::ViewportBuilder>,
+    /// Where the main window's panes start on the screen (below its title
+    /// bar, menu and toolbar), so a new window opens clear of them.
+    #[serde(skip)]
+    content_origin: Option<egui::Pos2>,
     #[serde(skip)]
     drag: Option<(Panel, SurfaceIndex)>,
     #[serde(skip)]
@@ -196,6 +203,7 @@ impl Default for WorkspaceLayout {
             dock,
             geometry: BTreeMap::new(),
             native_builders: BTreeMap::new(),
+            content_origin: None,
             drag: None,
             targets: Vec::new(),
             target_headers: Vec::new(),
@@ -759,6 +767,12 @@ impl WorkspaceLayout {
                 .with_min_inner_size([360.0, 220.0]);
             if let Some(rect) = self.geometry.get(&index) {
                 builder = builder.with_position(rect.min).with_inner_size(rect.size());
+            } else if let Some(origin) = self.content_origin {
+                // No window manager places it (or it would place it over the
+                // toolbar at 0,0): open inside the main window's panes, each
+                // new one a step further.
+                let step = 28.0 * ((index.saturating_sub(1) % 6) as f32);
+                builder = builder.with_position(origin + egui::vec2(40.0 + step, 40.0 + step));
             }
             builder
         });
@@ -805,6 +819,7 @@ impl WorkspaceLayout {
             .input(|input| input.viewport().inner_rect.map(|rect| rect.min))
             .unwrap_or_default();
         if surface.is_main() {
+            self.content_origin = Some(origin + ui.max_rect().min.to_vec2());
             let bar = theme::dock_style(ui.style()).tab_bar.height;
             self.apply_bottom(local.main_surface_mut(), ui.max_rect().height(), bar);
             self.bottom_edge = origin.y + ui.max_rect().bottom() - 4.0;

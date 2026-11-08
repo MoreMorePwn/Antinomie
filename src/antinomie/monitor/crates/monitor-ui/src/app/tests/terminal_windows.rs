@@ -288,3 +288,29 @@ fn native_terminal_window_maximizes_and_grows_its_grid() {
     assert!(maximized_size.x > size.x + 100.0 && maximized_size.y > size.y + 100.0);
     assert!(maximized_grid.0 > grid.0 && maximized_grid.1 > grid.1);
 }
+
+/// A new terminal window has no position of its own; without a window manager
+/// it opened at the corner of the screen, over the main window's title bar
+/// and toolbar. It now opens inside the panes, below the toolbar.
+#[test]
+fn a_new_terminal_window_opens_below_the_toolbar() {
+    let ctx = egui::Context::default();
+    theme::install(&ctx);
+    let mut app = app();
+    assert_eq!(app.layout.new_window_position(), None, "nothing drawn yet");
+    // The panes start under the title bar, menu and toolbar: the first dock
+    // tab (Overview) is the highest thing in them.
+    let output = render(&mut app, &ctx, egui::vec2(1280.0, 900.0));
+    let all = texts(&output);
+    let find = |name: &str| all.iter().find(|(text, _)| text == name).map(|(_, r)| *r);
+    let menu = find("Tools").expect("the menu bar");
+    let panes = find("Overview").expect("the first tab of the panes");
+    assert!(panes.top() > menu.bottom(), "{panes:?} under {menu:?}");
+    let toolbar = panes.top();
+    let position = app.layout.new_window_position().expect("a position");
+    assert!(
+        position.y > toolbar,
+        "{position:?} is over the toolbar ({toolbar})"
+    );
+    assert!(position.x > 0.0);
+}

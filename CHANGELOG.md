@@ -265,6 +265,16 @@ x86 programs by their own table.
   locked, so one tor uses it at a time, and folders of VMs unused for 30 days are
   removed. The evaluation saw two bootstraps stuck at 55% and 62% in 22 runs.
 
+- **The VM screen says when it holds the keyboard.** A click on the picture
+  captures the keyboard with an amber frame and a banner over the screen ("Keyboard
+  captured. Press Ctrl+Alt to release it."). The keyboard is also given back when
+  the window loses focus or another tab comes to the front.
+
+- **New workspace windows open clear of the toolbar.** A terminal or other
+  detached window had no position of its own and, without a window manager, opened
+  at the corner of the screen over the main window's toolbar. It now opens inside
+  the main window's panes.
+
 ### Guest
 
 - Patches 31-41 (shared ones compile out of x86-64, whose objects are

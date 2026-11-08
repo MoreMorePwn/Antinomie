@@ -74,6 +74,7 @@ mod trace_view;
 mod ui_polish_shots;
 mod upload;
 mod vm_dialog;
+mod vm_screen_capture;
 mod vm_screen_fold;
 mod workspace;
 
