@@ -14,10 +14,10 @@ use crate::{
     output::{Reply, block, table},
 };
 use antinomie_monitor_core::{
-    analysis::detection::{self as engine, Engine, Report},
+    analysis::detection::Engine,
     data_owner::{self, OwnerClaim, OwnerKind},
 };
-use antinomie_triage::detection::{self, DiskFiles, ENGINES, IndexState, Keep};
+use antinomie_triage::detection::{self, ENGINES, Keep, Outcome};
 use clap::Args;
 use serde_json::{Value, json};
 use std::{
@@ -67,14 +67,6 @@ fn parse_engines(items: &[String]) -> Result<Vec<Engine>, CliError> {
     Ok(engines)
 }
 
-/// One engine's outcome.
-enum Outcome {
-    Scanned(Box<Report>),
-    /// The evidence is not there or not final: the key and its words.
-    Skipped(String, String),
-    Failed(String),
-}
-
 pub fn run(arguments: &Detect, context: &Context) -> Result<Reply, CliError> {
     let engines = parse_engines(&arguments.engine)?;
     let saved = open_saved(context, &arguments.run)?;
@@ -101,52 +93,22 @@ pub fn run(arguments: &Detect, context: &Context) -> Result<Reply, CliError> {
     })?;
     // The index builds the event journal Sigma reads.
     let scan = index(context, &saved)?;
-    let input = saved.input();
-    let (directory, identity) = detection::identity(&input).ok_or_else(|| {
-        CliError::new(
-            ErrorCode::PreconditionFailed,
-            "the run has no recorded program to scan",
-        )
-    })?;
     let keep = if arguments.save {
         Keep::Save
     } else {
         Keep::Discard
     };
     let cancel = Arc::new(AtomicBool::new(false));
-    let mut outcomes = Vec::new();
-    for engine in &engines {
-        let key = detection::evidence_key(
-            *engine,
-            &input,
-            &settings,
-            (&IndexState::Ready, false),
-            &mut DiskFiles,
-        );
-        if !key.starts_with("ready:") {
-            let words = detection::evidence_note(&key);
-            context.logger.info(&format!(
-                "{}: not scanned: {words}",
-                detection::name(*engine)
-            ));
-            outcomes.push((*engine, Outcome::Skipped(key, words)));
-            continue;
-        }
-        let mut engine_settings = settings.clone();
-        engine_settings.evidence_key = key;
-        engine_settings.partial = false;
-        let request = detection::request(*engine, (&directory, &identity), &engine_settings, None);
-        context
-            .logger
-            .info(&format!("{}: scanning", detection::name(*engine)));
-        let outcome = match detection::scan(request, keep, &cancel, None) {
-            Ok(report) => Outcome::Scanned(Box::new(report)),
-            Err(error) => Outcome::Failed(error),
-        };
-        outcomes.push((*engine, outcome));
-    }
+    let logger = context.logger;
+    let results = detection::detect_saved(&saved, &engines, &settings, keep, &cancel, &|line| {
+        logger.info(line)
+    })
+    .map_err(|error| CliError::new(ErrorCode::PreconditionFailed, error))?;
+    let outcomes: Vec<(Engine, Outcome)> = results;
     if arguments.save {
-        save_digest(&saved, &scan, &directory, &identity, &settings, &outcomes)?;
+        detection::save_digest(&saved, &scan, &settings, &outcomes).map_err(|error| {
+            CliError::internal(format!("cannot update the run's digest: {error}"))
+        })?;
     }
     let mut written = Vec::new();
     if let Some(out) = &arguments.out {
@@ -185,37 +147,6 @@ pub fn run(arguments: &Detect, context: &Context) -> Result<Reply, CliError> {
     } else {
         reply
     })
-}
-
-/// Add the engines' results to the run's digest, as the GUI does once it
-/// shows them: what this command scanned, and for the other engines what the
-/// recording already keeps.
-fn save_digest(
-    saved: &antinomie_triage::SavedRun,
-    scan: &antinomie_triage::ArchiveScan,
-    directory: &std::path::Path,
-    identity: &engine::Identity,
-    settings: &engine::Settings,
-    outcomes: &[(Engine, Outcome)],
-) -> Result<(), CliError> {
-    let results =
-        ENGINES.map(
-            |engine| match outcomes.iter().find(|(scanned, _)| *scanned == engine) {
-                Some((_, Outcome::Scanned(report))) => Some(Ok((**report).clone())),
-                Some((_, Outcome::Failed(error))) => Some(Err(error.clone())),
-                _ => engine::load(&detection::request(
-                    engine,
-                    (directory, identity),
-                    settings,
-                    None,
-                ))
-                .ok()
-                .map(Ok),
-            },
-        );
-    antinomie_triage::digest::Update::of(scan, antinomie_triage::digest::detections(&results))
-        .write(&saved.run.directory)
-        .map_err(|error| CliError::internal(format!("cannot update the run's digest: {error}")))
 }
 
 fn engine_value(engine: Engine, outcome: &Outcome, file: Option<PathBuf>) -> Value {

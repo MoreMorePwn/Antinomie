@@ -4,13 +4,20 @@
 //! audit G7.
 use crate::{
     api::{
-        job::Job,
-        spec::{CoreDump, Route, RunAs, RunAsName, RunIn},
+        failure::FailureCode,
+        job::{Job, Stage},
+        spec::{
+            CoreDump, ReportFormat, Route, RunAs, RunAsName, RunIn, StaticCheck, StaticChecks,
+            StaticPreset,
+        },
     },
     config::{Policy, policy::RevertMode},
 };
 use antinomie_monitor_core::{
-    ExecRequest, RunIn as CoreRunIn, analysis::AnalysisSelection, route::RouteKind,
+    ExecRequest, RunIn as CoreRunIn,
+    analysis::{AnalysisKind, AnalysisSelection, detection::Engine as DetectionEngine},
+    report::Format as ReportEngineFormat,
+    route::RouteKind,
     samples::guest_path_of,
 };
 use std::time::Duration;
@@ -119,4 +126,131 @@ pub fn guest_path(guest_dir: &str, sha256: &str, name: &str) -> String {
 /// `upload_s` (4.1): 60 seconds plus one second per 10 MiB.
 pub fn upload_wait(size: u64) -> Duration {
     Duration::from_secs(60 + size / (10 << 20))
+}
+
+/// `analyse_s` (design 4.1): the Triage scan and the detection engines.
+pub const ANALYSE_WAIT: Duration = Duration::from_secs(900);
+/// `report_s` (design 4.1).
+pub const REPORT_WAIT: Duration = Duration::from_secs(300);
+/// `cleanup_s` (design 4.1).
+pub const CLEANUP_WAIT: Duration = Duration::from_secs(60);
+/// The time a static tool may take when the limit is 0 ("each tool's own
+/// limit"): the engine's own bound is not published, so the stage assumes this.
+pub const TOOL_OWN_LIMIT_MIN: u32 = 5;
+
+/// What the host stages do for a job, settled against its frozen policy.
+#[derive(Clone, Debug)]
+pub struct HostPlan {
+    /// The static checks of the host-side analysis; empty: none.
+    pub static_checks: Vec<AnalysisKind>,
+    pub static_limit_min: u32,
+    pub triage: bool,
+    pub engines: Vec<DetectionEngine>,
+    pub formats: Vec<ReportFormat>,
+    pub bundle: bool,
+    pub defang: bool,
+    /// Stages whose failure fails the job (`analysis.required_stages`).
+    pub required: Vec<Stage>,
+    pub retry_analysis: bool,
+    pub max_attempts: u32,
+}
+
+impl HostPlan {
+    /// Nothing for `analyse` to do.
+    pub fn analyse_skipped(&self) -> bool {
+        self.static_checks.is_empty() && !self.triage && self.engines.is_empty()
+    }
+
+    /// Nothing for `report` to write.
+    pub fn report_skipped(&self) -> bool {
+        self.formats.is_empty() && !self.bundle
+    }
+
+    /// `static_s` = tools x limit x 60 + 60 (design 4.1).
+    pub fn static_wait(&self) -> Duration {
+        let minutes = if self.static_limit_min == 0 {
+            TOOL_OWN_LIMIT_MIN
+        } else {
+            self.static_limit_min
+        };
+        Duration::from_secs(self.static_checks.len() as u64 * u64::from(minutes) * 60 + 60)
+    }
+
+    pub fn requires(&self, stage: Stage) -> bool {
+        self.required.contains(&stage)
+    }
+}
+
+fn kind_of(check: StaticCheck) -> AnalysisKind {
+    match check {
+        StaticCheck::Metadata => AnalysisKind::Metadata,
+        StaticCheck::Structures => AnalysisKind::Structures,
+        StaticCheck::Strings => AnalysisKind::Strings,
+        StaticCheck::Regex => AnalysisKind::Regex,
+        StaticCheck::Entropy => AnalysisKind::Entropy,
+        StaticCheck::Hardening => AnalysisKind::Hardening,
+        StaticCheck::Rules => AnalysisKind::Rules,
+        StaticCheck::Identification => AnalysisKind::Identification,
+        StaticCheck::Capabilities => AnalysisKind::Capabilities,
+        StaticCheck::Disassembly => AnalysisKind::Disassembly,
+        StaticCheck::Decompilation => AnalysisKind::Decompilation,
+        StaticCheck::Embedded => AnalysisKind::Embedded,
+        StaticCheck::Floss => AnalysisKind::Floss,
+        StaticCheck::Unpacking => AnalysisKind::Unpacking,
+    }
+}
+
+/// The report format of the job API as the report builder names it.
+pub fn format_of(format: ReportFormat) -> ReportEngineFormat {
+    match format {
+        ReportFormat::Html => ReportEngineFormat::Html,
+        ReportFormat::Pdf => ReportEngineFormat::Pdf,
+        ReportFormat::Json => ReportEngineFormat::Json,
+        ReportFormat::Misp => ReportEngineFormat::Misp,
+        ReportFormat::Stix => ReportEngineFormat::Stix,
+        ReportFormat::Md => ReportEngineFormat::Markdown,
+    }
+}
+
+/// Settle the host stages of `job` against `policy` (the policy it froze).
+pub fn hosted(job: &Job, policy: &Policy) -> HostPlan {
+    let o = &job.spec.overrides;
+    let checks = o
+        .static_checks
+        .clone()
+        .unwrap_or_else(|| policy.analysis.static_checks.clone());
+    let static_checks = match checks {
+        StaticChecks::Preset(StaticPreset::None) => Vec::new(),
+        StaticChecks::Preset(StaticPreset::Triage) => AnalysisKind::TRIAGE.to_vec(),
+        StaticChecks::Names(names) => names.into_iter().map(kind_of).collect(),
+    };
+    let wanted = o.detection.unwrap_or_default();
+    let detection = &policy.analysis.detection;
+    let mut engines = Vec::new();
+    for (engine, asked, allowed) in [
+        (DetectionEngine::Yara, wanted.yara, detection.yara),
+        (DetectionEngine::Ids, wanted.ids, detection.ids),
+        (DetectionEngine::Sigma, wanted.sigma, detection.sigma),
+    ] {
+        if asked.unwrap_or(allowed) {
+            engines.push(engine);
+        }
+    }
+    HostPlan {
+        static_checks,
+        static_limit_min: o
+            .static_time_limit_min
+            .unwrap_or(policy.analysis.static_time_limit_min),
+        triage: policy.analysis.triage,
+        engines,
+        formats: o
+            .reports
+            .clone()
+            .unwrap_or_else(|| policy.report.formats.clone()),
+        bundle: o.report_bundle.unwrap_or(policy.report.bundle),
+        defang: o.report_defang.unwrap_or(policy.report.defang),
+        required: policy.analysis.required_stages.clone(),
+        retry_analysis: policy.retry.retry_on.contains(&FailureCode::AnalysisFailed),
+        max_attempts: policy.retry.max_attempts,
+    }
 }

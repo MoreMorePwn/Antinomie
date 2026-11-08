@@ -402,6 +402,9 @@ fn check_policy(policy: &Policy, catalog: &dyn VmCatalog, sink: &mut Sink<'_>) {
             );
         }
     }
+    if let Err(error) = crate::verdict::Mapping::compile(&policy.verdict) {
+        sink.error(&error.key(), error.to_string());
+    }
     if policy.report.formats.is_empty() && !policy.report.bundle {
         sink.warn("report.formats", "no report is produced");
     }

@@ -35,6 +35,9 @@ use std::time::Duration;
 /// How often the run is looked at.
 const POLL: Duration = Duration::from_millis(200);
 
+/// How often the disk floor is looked at while the program runs (4.6.3).
+const FLOOR_EVERY_MS: u64 = 60_000;
+
 /// How the run ended.
 #[derive(Clone, Debug)]
 pub struct RunEnd {
@@ -93,6 +96,8 @@ impl<E: Engine> LaneStages<'_, E> {
         let mut dog = Watchdog::new(Stage::Run, begun, None, Some(ENGINE_SILENCE));
         let mut stop_sent_ms: Option<u64> = None;
         let mut limit_stop = false;
+        let mut floor_stop = false;
+        let mut next_floor_ms = begun + FLOOR_EVERY_MS;
         let mut cancelled = false;
 
         let ended = loop {
@@ -165,6 +170,24 @@ impl<E: Engine> LaneStages<'_, E> {
                     })?;
                 }
             }
+            // The disk floor (4.6.3) is looked at once a minute.
+            if stop_sent_ms.is_none() && now >= next_floor_ms {
+                next_floor_ms = now + FLOOR_EVERY_MS;
+                if let Some(words) = self.env.host.low_disk() {
+                    floor_stop = true;
+                    stop_sent_ms = Some(now);
+                    self.progress(
+                        job,
+                        Stage::Run,
+                        "the disk is below its floor; stopping the run",
+                    );
+                    self.warn(job, "low_disk", &format!("the run was stopped: {words}"));
+                    crate::resources::pause_for_low_disk(self.env.store, &words);
+                    self.waiter.send(Command::StopRun {
+                        run_id: run_id.clone(),
+                    })?;
+                }
+            }
             let elapsed = now.saturating_sub(begun);
             if stop_sent_ms.is_none() && elapsed >= limit_ms {
                 stop_sent_ms = Some(now);
@@ -206,7 +229,7 @@ impl<E: Engine> LaneStages<'_, E> {
         self.waiter.drain()?;
         self.waiter.discard_results();
 
-        let (reason, exit, signal, core_dumped) = if cancelled {
+        let (reason, exit, signal, core_dumped) = if cancelled || floor_stop {
             (EndReason::Stopped, None, None, false)
         } else if limit_stop {
             (EndReason::TimeLimit, None, None, false)

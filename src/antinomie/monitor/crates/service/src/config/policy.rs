@@ -227,7 +227,8 @@ impl Default for ReportPolicy {
     }
 }
 
-/// `verdict.mapping`: a name, or a table (its grammar is card P3-5's).
+/// `verdict.mapping`: the name `default`. (A table is refused by `config
+/// validate`; custom rules are `[[verdict.rule]]`.)
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum VerdictMapping {
@@ -235,16 +236,32 @@ pub enum VerdictMapping {
     Table(BTreeMap<String, toml::Value>),
 }
 
+/// One `[[verdict.rule]]` (design 4.9.2): the first rule whose `when` holds
+/// gives the label; `score` is the largest score of the rules that hold.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerdictRule {
+    /// An expression of `crate::verdict::expr` over a closed set of fields.
+    pub when: String,
+    pub label: crate::api::assessment::Label,
+    /// 0 to 100.
+    #[serde(default)]
+    pub score: Option<u8>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct VerdictPolicy {
     pub mapping: VerdictMapping,
+    /// A custom mapping; with none, the default mapping of 4.9.2 applies.
+    pub rule: Vec<VerdictRule>,
 }
 
 impl Default for VerdictPolicy {
     fn default() -> Self {
         Self {
             mapping: VerdictMapping::Name("default".into()),
+            rule: Vec::new(),
         }
     }
 }

@@ -6,8 +6,14 @@
 //! ```text
 //! ANTINOMIE_LANE_VM_BUNDLE=/path/to/bases/.../busybox \
 //! ANTINOMIE_LANE_VM_DATA=/path/to/empty/private/dir \
-//!   cargo test --release -p antinomie-service --test lane_vm -- --ignored --nocapture
+//!   cargo test --release -p antinomie-service --test lane_vm -- NAME --nocapture
 //! ```
+//!
+//! `NAME` is `the_stages_prechecks` or `whole_jobs` (a prefix of the test's
+//! name); with none, nothing runs. This test has its own `main` (no libtest):
+//! the engine's sandboxed workers (static analysis, detection, the earlier-bytes
+//! copier) re-run the running program with a role flag, so the program must
+//! serve those roles before anything else, as `antinomie-cli` does.
 //!
 //! It imports the bundle, creates the lane VM, takes the `auto-clean` Disk
 //! snapshot, adds a benign shell script to the library, and runs two jobs
@@ -33,7 +39,10 @@ use antinomie_service::{
     clock::SystemClock,
     config::{LoadedPolicy, Policy, PolicySet},
     lane::{LaneDir, LaneFile, ProcFs, Processes},
-    stages::{Driven, LaneEnv, LaneStages, NoHostChecks},
+    stages::{
+        Driven, Hosted, LaneEnv, LaneStages, NoHostChecks,
+        host::{NoTags, RealTriage},
+    },
     store::{Eligibility, IntakeError, SampleAdmission, Store, SubmitContext, SubmitLimits},
     waiter::{Phase, Waiter, phase},
 };
@@ -55,6 +64,14 @@ impl SampleAdmission for Admit {
     ) -> Result<JobSample, IntakeError> {
         Ok(self.sample.clone())
     }
+}
+
+/// The Triage crate on the test's private data directory.
+fn triage(data: &std::path::Path) -> RealTriage {
+    RealTriage::new(BackendOptions {
+        data_dir: data.to_path_buf(),
+        ..BackendOptions::default()
+    })
 }
 
 fn env_path(name: &str) -> PathBuf {
@@ -154,8 +171,6 @@ fn setup_lane(
     (waiter, vm_id, clean, base)
 }
 
-#[test]
-#[ignore = "needs KVM, a base bundle and a private data directory"]
 fn the_stages_prechecks_to_launch_on_a_real_vm() {
     let bundle = env_path("ANTINOMIE_LANE_VM_BUNDLE");
     let data = env_path("ANTINOMIE_LANE_VM_DATA");
@@ -246,6 +261,8 @@ fn the_stages_prechecks_to_launch_on_a_real_vm() {
                 procs: &procs,
                 host: &NoHostChecks,
                 evidence: &antinomie_service::waiter::load_artifacts,
+                triage: &triage(&data),
+                tags: &NoTags,
             },
             lane: LaneId::new(1),
         };
@@ -339,8 +356,6 @@ fn add_script(data: &std::path::Path, name: &str, script: &str) -> JobSample {
     }
 }
 
-#[test]
-#[ignore = "needs KVM, a base bundle and a private data directory"]
 fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
     let bundle = env_path("ANTINOMIE_LANE_VM_BUNDLE");
     let data = env_path("ANTINOMIE_LANE_VM_DATA");
@@ -361,6 +376,25 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
     policy.vm.lane_vm = Some(vm_id.clone());
     policy.sample.accept_types = vec!["sh".into()];
     policy.run.timeout_s = 60;
+    // The host stages on the private data directory: a few static checks in
+    // bubblewrap, the Triage scan, no detection engines (the private
+    // directory has no rule packs), three report formats.
+    policy.analysis.static_checks = antinomie_service::api::spec::StaticChecks::Names(vec![
+        antinomie_service::api::spec::StaticCheck::Metadata,
+        antinomie_service::api::spec::StaticCheck::Strings,
+        antinomie_service::api::spec::StaticCheck::Entropy,
+    ]);
+    policy.analysis.static_time_limit_min = 1;
+    policy.analysis.detection = antinomie_service::config::policy::Detection {
+        yara: false,
+        sigma: false,
+        ids: false,
+    };
+    policy.report.formats = vec![
+        antinomie_service::api::spec::ReportFormat::Html,
+        antinomie_service::api::spec::ReportFormat::Json,
+        antinomie_service::api::spec::ReportFormat::Md,
+    ];
     let policies = PolicySet::single(LoadedPolicy {
         name: "default".into(),
         digest: "test".into(),
@@ -378,7 +412,9 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
     let jobs: [(&str, &str, u32); 3] = [
         (
             "ends.sh",
-            "#!/bin/sh\necho whole-job\nsleep 2\necho done\nexit 3\n",
+            // Benign: reads the account file, drops a copy of a system
+            // binary into /tmp and makes it executable.
+            "#!/bin/sh\necho whole-job\ncat /etc/passwd > /dev/null\ncp /bin/busybox /tmp/dropped.bin\nchmod +x /tmp/dropped.bin\necho note > /tmp/note.txt\nsleep 2\necho done\nexit 3\n",
             60,
         ),
         ("limit.sh", "#!/bin/sh\necho limit\nsleep 300\n", 15),
@@ -443,12 +479,21 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
                     procs: &procs,
                     host: &NoHostChecks,
                     evidence: &antinomie_service::waiter::load_artifacts,
+                    triage: &triage(&data),
+                    tags: &NoTags,
                 },
                 lane: LaneId::new(1),
             };
             let driven = stages.drive(&job);
             if let Driven::Collected(end) = &driven {
-                stages.finish_collected(&job, end).expect("finish");
+                match stages.host(&job, end) {
+                    Hosted::Finished(done) => println!(
+                        "job {round} ({name}): host stages done, {:?}, label {:?}",
+                        done.state,
+                        done.assessment.as_ref().and_then(|a| a.label)
+                    ),
+                    other => panic!("host stages: {other:?}"),
+                }
             }
             driven
         });
@@ -466,14 +511,45 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
         match *name {
             "ends.sh" => {
                 assert!(matches!(driven, Driven::Collected(_)), "{driven:?}");
-                assert_eq!(stored.state, JobState::Succeeded);
+                assert_eq!(stored.state, JobState::Succeeded, "{:?}", stored.warnings);
                 assert_eq!(run.end_reason, Some(EndReason::Exited));
                 assert_eq!(run.exit, Some(3));
+                let a = stored.assessment.as_ref().expect("an assessment");
+                println!(
+                    "ASSESSMENT: {:?} / tier {:?} / label {:?} / score {:?}\nBASIS: {}\nCOUNTS: {:?}",
+                    a.assessment, a.highest_tier, a.label, a.score, a.basis, a.counts
+                );
+                for b in &a.key_behaviours {
+                    println!(
+                        "BEHAVIOUR: {:?} {} ({}) x{}",
+                        b.tier, b.rule, b.category, b.count
+                    );
+                }
+                assert!(stored.artifacts.len() == 3, "{:?}", stored.artifacts);
+                for artifact in &stored.artifacts {
+                    let path = store
+                        .job_dir(&job.id)
+                        .join("artifacts")
+                        .join(&artifact.name);
+                    let size = std::fs::metadata(&path).expect("report file").len();
+                    println!(
+                        "REPORT: {} ({} bytes, sha256 {})",
+                        path.display(),
+                        size,
+                        artifact.sha256
+                    );
+                    assert_eq!(size, artifact.size);
+                }
+                assert!(store.job_dir(&job.id).join("job.json").is_file());
             }
             "limit.sh" => {
                 assert!(matches!(driven, Driven::Collected(_)), "{driven:?}");
-                assert_eq!(stored.state, JobState::Succeeded);
+                assert_eq!(stored.state, JobState::Succeeded, "{:?}", stored.warnings);
                 assert_eq!(run.end_reason, Some(EndReason::TimeLimit));
+                println!(
+                    "limit.sh label {:?}",
+                    stored.assessment.as_ref().and_then(|a| a.label)
+                );
             }
             _ => {
                 assert!(matches!(driven, Driven::Cancelled), "{driven:?}");
@@ -496,4 +572,50 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
         assert!(file.current.is_none() && file.collected.is_empty() && file.qemu.is_none());
     }
     waiter.into_engine().shutdown().expect("shutdown");
+}
+
+/// The worker roles the engine re-runs this program for.
+fn serve_worker_roles() -> Option<i32> {
+    use antinomie_monitor_core::{analysis, disks};
+    analysis::detection::worker_main_if_requested()
+        .or_else(analysis::properties::worker_main_if_requested)
+        .or_else(analysis::worker_main_if_requested)
+        .or_else(disks::reader::worker_main_if_requested)
+        .or_else(antinomie_triage::copier::host_copier)
+}
+
+fn main() {
+    if let Some(code) = serve_worker_roles() {
+        std::process::exit(code);
+    }
+    let tests: [(&str, fn()); 2] = [
+        (
+            "the_stages_prechecks_to_launch_on_a_real_vm",
+            the_stages_prechecks_to_launch_on_a_real_vm,
+        ),
+        (
+            "whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm",
+            whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm,
+        ),
+    ];
+    let wanted: Vec<String> = std::env::args()
+        .skip(1)
+        .filter(|arg| !arg.starts_with('-'))
+        .collect();
+    if wanted.is_empty() {
+        println!(
+            "lane_vm: name a test to run it (needs KVM, a base bundle and a private data directory):"
+        );
+        for (name, _) in tests {
+            println!("  {name}");
+        }
+        return;
+    }
+    for (name, test) in tests {
+        if wanted.iter().any(|w| name.starts_with(w.as_str())) {
+            println!("test {name} ...");
+            test();
+            println!("test {name} ... ok");
+        }
+    }
 }

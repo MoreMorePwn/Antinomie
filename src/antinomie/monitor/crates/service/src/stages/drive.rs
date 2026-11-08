@@ -32,7 +32,7 @@ use crate::{
         job::{Job, JobState, Outcome, RecordingPhase, Stage, WaitingFor},
     },
     engine::Engine,
-    lane::state::Checkpoint,
+    lane::{recover::announce_quarantine, state::Checkpoint},
     store::RequeueKind,
     waiter::{BOOT_WAIT, WaitError},
     watchdog::job_hard,
@@ -82,6 +82,13 @@ impl<E: Engine> LaneStages<'_, E> {
             .map_err(|e| self.store_error(Stage::Prechecks, e))?;
         let limit = plan::effective(job, &frozen.policy).run_limit;
         self.waiter.deadline_in(job_hard(limit));
+        self.cancel_hook(job);
+        Ok(())
+    }
+
+    /// Arm the waiter's cancel hook for `job`: a subscription to the store's
+    /// `job.state` events that turns true on this job's `cancelling`.
+    pub(super) fn cancel_hook(&mut self, job: &Job) {
         let events = self.env.store.subscribe();
         let id = job.id.clone();
         self.waiter.cancel_when(true, move || {
@@ -98,7 +105,6 @@ impl<E: Engine> LaneStages<'_, E> {
             }
             cancel
         });
-        Ok(())
     }
 
     fn lane_cycle(&mut self, job: &Job) -> Result<CollectEnd, StageStop> {
@@ -127,7 +133,16 @@ impl<E: Engine> LaneStages<'_, E> {
         let now = self.waiter.now_ms();
         self.update_lane(|file| file.checkpoint(Stage::Collect, Checkpoint::Started, now))?;
         let end = match self.collect(job, launched) {
-            Ok(end) => end,
+            Ok(mut end) => {
+                // A run stopped for the disk floor is a partial result.
+                if store
+                    .get(&job.id)
+                    .is_ok_and(|stored| stored.warnings.iter().any(|w| w.code == "low_disk"))
+                {
+                    end.outcome = Outcome::Partial;
+                }
+                end
+            }
             Err(stop) => {
                 if matches!(stop, StageStop::Failed(_)) {
                     let _ = store.end_stage(&job.id, StageStatus::Failed);
@@ -217,20 +232,27 @@ impl<E: Engine> LaneStages<'_, E> {
         // A command a cancel or the job limit interrupted is still running
         // in the engine; the VM state is only known once it has ended.
         let _ = self.waiter.finish_abandoned(STOP_WAIT + BOOT_WAIT);
-        let settled = match self.stop_lane_vm(job, &file.vm_id, STOP_WAIT + BOOT_WAIT) {
+        let mut settled = match self.stop_lane_vm(job, &file.vm_id, STOP_WAIT + BOOT_WAIT) {
             Ok(stopped) => stopped,
             Err(StageStop::Abort(error)) => return Err(error),
             Err(_) => Stopped::Unsettled("the lane state could not be used".into()),
         };
-        let now = self.waiter.now_ms();
-        let clean = settled == Stopped::Settled;
-        if !clean {
+        if settled != Stopped::Settled {
+            // The forced kill leaves the engine in `Failed`: it is asked to
+            // stop once more, and that answer is the last one.
             self.warn(
                 job,
                 "vm_not_stopped",
                 &format!("the lane VM was not left stopped and settled: {settled:?}"),
             );
+            settled = match self.stop_lane_vm(job, &file.vm_id, STOP_WAIT) {
+                Ok(stopped) => stopped,
+                Err(StageStop::Abort(error)) => return Err(error),
+                Err(_) => Stopped::Unsettled("the lane state could not be used".into()),
+            };
         }
+        let now = self.waiter.now_ms();
+        let clean = settled == Stopped::Settled;
         if clean
             && let Ok(stored) = self.env.store.get(&job.id)
             && stored.recording.as_ref().map(|r| r.phase) == Some(RecordingPhase::Finalizing)
@@ -238,12 +260,29 @@ impl<E: Engine> LaneStages<'_, E> {
             // The VM is stopped and the recording settled: it is complete.
             let _ = self.set_recording_phase(job, RecordingPhase::Complete);
         }
-        let _ = self.update_lane(|file| {
+        let quarantined = self.update_lane(|file| {
             file.end_work(now);
             if clean {
                 file.clear_qemu(now);
+                None
+            } else {
+                // A VM that will not stop cannot be reverted: the next job
+                // would start on a machine the engine still holds. The
+                // closest reason of 4.5.3 is `revert_failed`, which also
+                // keeps the lane out of service until `auto lane reset`.
+                file.quarantine(
+                    FailureCode::RevertFailed,
+                    &format!(
+                        "the lane VM did not stop and settle after a forced stop: {settled:?}"
+                    ),
+                    now,
+                );
+                Some(file.clone())
             }
         });
+        if let Ok(Some(file)) = quarantined {
+            let _ = announce_quarantine(self.env.store, &file, Some(job.id.clone()));
+        }
         Ok(())
     }
 
@@ -284,6 +323,19 @@ impl<E: Engine> LaneStages<'_, E> {
                 "crashes_guest",
                 "the sample ended the guest in two attempts; it is not run again",
             );
+            match self.env.tags.add_tag(job, super::host::CRASHES_GUEST_TAG) {
+                Ok(_) => {}
+                Err(error) => {
+                    let _ = store.add_warning(
+                        &job.id,
+                        "tag_failed",
+                        &format!(
+                            "the library tag {} was not written: {error}",
+                            super::host::CRASHES_GUEST_TAG
+                        ),
+                    );
+                }
+            }
         }
         match store.finish(&job.id, Outcome::Failed, Some(failure.clone())) {
             Ok(_) => Driven::Failed(failure),

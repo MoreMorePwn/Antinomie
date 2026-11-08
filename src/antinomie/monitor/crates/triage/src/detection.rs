@@ -335,3 +335,87 @@ pub fn evidence_note(key: &str) -> String {
         _ => String::new(),
     }
 }
+
+/// One engine's outcome over a saved run ([`detect_saved`]).
+#[derive(Clone, Debug)]
+pub enum Outcome {
+    Scanned(Box<Report>),
+    /// The evidence is not there or not final: the evidence key and its words.
+    Skipped(String, String),
+    Failed(String),
+}
+
+/// Run `engines` over the saved run `saved`, as the Detection tab does for the
+/// run on screen and `detect` does on the command line: the same evidence key,
+/// request and frozen rule selection, the same sandboxed engines.
+/// `scan` is the run's finished index (the Sigma journal is built by it).
+/// `note` receives one line per engine. Nothing is written into the run's
+/// folder with [`Keep::Discard`]; [`Keep::Save`] keeps each result where the
+/// Detection tab keeps it.
+pub fn detect_saved(
+    saved: &crate::SavedRun,
+    engines: &[Engine],
+    settings: &Settings,
+    keep: Keep,
+    cancel: &Arc<AtomicBool>,
+    note: &dyn Fn(&str),
+) -> Result<Vec<(Engine, Outcome)>, String> {
+    let input = saved.input();
+    let (directory, identity) =
+        identity(&input).ok_or_else(|| "the run has no recorded program to scan".to_owned())?;
+    let mut outcomes = Vec::new();
+    for engine in engines {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
+        let key = evidence_key(
+            *engine,
+            &input,
+            settings,
+            (&IndexState::Ready, false),
+            &mut DiskFiles,
+        );
+        if !key.starts_with("ready:") {
+            let words = evidence_note(&key);
+            note(&format!("{}: not scanned: {words}", name(*engine)));
+            outcomes.push((*engine, Outcome::Skipped(key, words)));
+            continue;
+        }
+        let mut engine_settings = settings.clone();
+        engine_settings.evidence_key = key;
+        engine_settings.partial = false;
+        let request = request(*engine, (&directory, &identity), &engine_settings, None);
+        note(&format!("{}: scanning", name(*engine)));
+        let outcome = match scan(request, keep, cancel, None) {
+            Ok(report) => Outcome::Scanned(Box::new(report)),
+            Err(error) => Outcome::Failed(error),
+        };
+        outcomes.push((*engine, outcome));
+    }
+    Ok(outcomes)
+}
+
+/// Add the engines' results to the run's digest, as the GUI does once it shows
+/// them: what `outcomes` scanned, and for the other engines what the recording
+/// already keeps.
+pub fn save_digest(
+    saved: &crate::SavedRun,
+    scan: &crate::ArchiveScan,
+    settings: &Settings,
+    outcomes: &[(Engine, Outcome)],
+) -> Result<(), String> {
+    let input = saved.input();
+    let (directory, identity) =
+        identity(&input).ok_or_else(|| "the run has no recorded program to scan".to_owned())?;
+    let results =
+        ENGINES.map(
+            |wanted| match outcomes.iter().find(|(engine, _)| *engine == wanted) {
+                Some((_, Outcome::Scanned(report))) => Some(Ok((**report).clone())),
+                Some((_, Outcome::Failed(error))) => Some(Err(error.clone())),
+                _ => engine::load(&request(wanted, (&directory, &identity), settings, None))
+                    .ok()
+                    .map(Ok),
+            },
+        );
+    crate::digest::Update::of(scan, crate::digest::detections(&results)).write(&saved.run.directory)
+}

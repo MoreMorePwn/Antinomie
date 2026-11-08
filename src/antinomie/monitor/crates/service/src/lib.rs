@@ -32,12 +32,16 @@ pub mod intake;
 pub mod lane;
 /// `QueryApi`, the read-only recording queries (cards Q-1 and later).
 pub mod query;
+/// Resource floors and the queue pause (card P3-5c).
+pub mod resources;
 /// The JSON Schema generated from the types above.
 pub mod schema;
 /// The lane stages `prechecks` to `collect`, retries and the watchdog (cards P3-4b, P3-4c).
 pub mod stages;
 /// The job store: SQLite, the state machine and the queue (card P3-2).
 pub mod store;
+/// The assessment and the label, and the policy's verdict rules (card P3-5).
+pub mod verdict;
 /// The engine waiter: commands, results and the waits a headless caller needs.
 pub mod waiter;
 /// The watchdog of a lane job (design 4.7.1).

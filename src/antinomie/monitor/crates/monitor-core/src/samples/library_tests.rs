@@ -779,3 +779,54 @@ fn a_sample_takes_a_safe_guest_path_without_the_product_name() {
     };
     assert_eq!(unnamed.guest_path(), "/tmp/01234567-sample");
 }
+
+#[test]
+fn add_tag_keeps_the_other_tags_and_writes_the_custody_entry_under_the_actor() {
+    let root = temp("add-tag");
+    let mut library = Library::open(&root)
+        .unwrap()
+        .with_actor("auto:policy-default")
+        .unwrap();
+    let hash = library
+        .add_bytes(SCRIPT, added_from("/x/a"))
+        .unwrap()
+        .sha256;
+    library
+        .set_tags(&hash, &[Tag::new(TagKind::Custom, "mine")])
+        .unwrap();
+    let before = library.events(&hash).unwrap().len();
+    assert!(
+        library
+            .add_tag(&hash, Tag::new(TagKind::Custom, "auto:crashes-guest"))
+            .unwrap()
+    );
+    let values: Vec<String> = library
+        .tags(&hash)
+        .unwrap()
+        .into_iter()
+        .map(|tag| tag.value)
+        .collect();
+    assert_eq!(values, ["auto:crashes-guest", "mine"]);
+    let events = library.events(&hash).unwrap();
+    assert_eq!(events.len(), before + 1);
+    assert_eq!(events.last().unwrap().by, "auto:policy-default");
+    // Again: nothing is added and nothing is written.
+    assert!(
+        !library
+            .add_tag(&hash, Tag::new(TagKind::Custom, "auto:crashes-guest"))
+            .unwrap()
+    );
+    assert_eq!(library.events(&hash).unwrap().len(), before + 1);
+    // Refused: a bad tag, an unknown sample.
+    assert!(
+        library
+            .add_tag(&hash, Tag::new(TagKind::Verdict, "nonsense"))
+            .is_err()
+    );
+    assert!(
+        library
+            .add_tag(&"0".repeat(64), Tag::new(TagKind::Custom, "x"))
+            .is_err()
+    );
+    fs::remove_dir_all(root).unwrap();
+}

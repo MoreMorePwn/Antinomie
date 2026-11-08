@@ -15,7 +15,7 @@ pub mod canon;
 mod events;
 mod lifecycle;
 pub mod machine;
-mod mirror;
+pub(crate) mod mirror;
 mod model;
 mod patch;
 mod query;
