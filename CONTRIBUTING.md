@@ -334,7 +334,7 @@ for it, and its children live in a directory of the same name (`app.rs` with
 
 - **Crates (0.9.0).** `antinomie-monitor-core` is the engine, `antinomie-monitor-ui`
   the window, `antinomie-triage` the Triage model (scan, activity rules, filter
-  language, eBPF decoder), `antinomie-service` the job and query layer and
+  language, eBPF decoder, run digest, report builder, detection requests), `antinomie-service` the job and query layer and
   `antinomie-cli` the command line. The window may depend on the others, never the
   reverse: `triage`, `service` and `cli` must not link egui, eframe, winit or the UI
   crate, and `crates/cli/tests/dependency_tree.rs` fails if they do. Triage rows

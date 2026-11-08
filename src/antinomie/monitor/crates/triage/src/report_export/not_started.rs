@@ -11,7 +11,7 @@ use antinomie_monitor_core::RunSummary;
 
 /// What the report says of a run that did not start.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct NotStartedRun {
+pub struct NotStartedRun {
     pub run: report::RunInfo,
     pub sample: Option<report::SampleInfo>,
     /// Why it did not start, without host paths: the first part of the
@@ -50,7 +50,7 @@ fn host_prefixes() -> Vec<String> {
 /// `text` with every absolute host path cut to its last component: a report
 /// is shared, and the analyst's folders are not for others. Guest paths, the
 /// ones the request names, stay whole.
-pub(crate) fn without_host_paths(text: &str) -> String {
+pub fn without_host_paths(text: &str) -> String {
     let prefixes = host_prefixes();
     text.split(' ')
         .map(|word| {
@@ -73,7 +73,7 @@ pub(crate) fn without_host_paths(text: &str) -> String {
 /// A failure text as (reason, detail): without a leading "Not started: "
 /// (the report adds its own), the reason up to the route's log, the log
 /// name and its last lines as the detail.
-pub(crate) fn split_failure(text: &str) -> (String, String) {
+pub fn split_failure(text: &str) -> (String, String) {
     let mut text = text.trim();
     while let Some(rest) = text.strip_prefix("Not started:") {
         text = rest.trim_start();
@@ -89,7 +89,7 @@ pub(crate) fn split_failure(text: &str) -> (String, String) {
 }
 
 impl NotStartedRun {
-    pub(crate) fn of(run: &RunSummary) -> Self {
+    pub fn of(run: &RunSummary) -> Self {
         let sample = run
             .request
             .sample
@@ -201,7 +201,7 @@ impl NotStartedRun {
 
 /// The report: the overview with the failure first, then the request, the
 /// route, the environment and the static analysis, each as an overview note.
-pub(crate) fn build(run: &NotStartedRun, now_ms: u64) -> report::Report {
+pub fn build(run: &NotStartedRun, now_ms: u64) -> report::Report {
     let mut report = report::Report::new(run.run.clone(), now_ms);
     // Every format reads the state to know the run did not start.
     if !report.not_started() {

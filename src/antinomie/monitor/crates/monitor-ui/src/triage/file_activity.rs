@@ -13,7 +13,7 @@ pub(super) use antinomie_triage::file_activity::earlier;
 pub(super) use antinomie_triage::file_activity::*;
 
 pub(super) use reconstruct::{
-    menu as reconstruct_menu, start_of, DATA_DIR as RECONSTRUCT_DATA_DIR, HISTORY_REQUEST,
+    menu as reconstruct_menu, DATA_DIR as RECONSTRUCT_DATA_DIR, HISTORY_REQUEST,
     REQUEST as RECONSTRUCT_REQUEST,
 };
 pub(super) use window::{Window, CALLS_TABLE, FILE_TABLE};

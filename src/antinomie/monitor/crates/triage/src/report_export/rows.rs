@@ -64,7 +64,7 @@ fn pid(value: Option<u64>) -> Option<u32> {
 }
 
 /// The Process tree's rows.
-pub(super) fn processes(
+pub fn processes(
     rows: &[Vec<Cell>],
     clock: Option<HostClockAnchor>,
     start: Option<u64>,
@@ -88,7 +88,7 @@ pub(super) fn processes(
 }
 
 /// Suspicious activity's rows.
-pub(super) fn findings(
+pub fn findings(
     findings: &[Finding],
     clock: Option<HostClockAnchor>,
     start: Option<u64>,
@@ -126,7 +126,7 @@ pub(super) fn findings(
 }
 
 /// A Files tab's rows: the path, the process and when.
-pub(super) fn files(
+pub fn files(
     rows: &[Vec<Cell>],
     path_column: usize,
     clock: Option<HostClockAnchor>,
@@ -170,7 +170,7 @@ fn leading(text: &str) -> Option<u64> {
 }
 
 /// A Network tab's rows, by the tab's columns.
-pub(super) fn network(name: &str, headers: &[&str], rows: &[Vec<Cell>]) -> Vec<RowData> {
+pub fn network(name: &str, headers: &[&str], rows: &[Vec<Cell>]) -> Vec<RowData> {
     let col = |title: &str| headers.iter().position(|h| *h == title);
     let cell = |row: &[Cell], title: &str| -> String {
         col(title)
@@ -214,7 +214,7 @@ pub(super) fn network(name: &str, headers: &[&str], rows: &[Vec<Cell>]) -> Vec<R
 }
 
 /// The Summary's Key findings, worst first, with how many there are.
-pub(super) fn key_findings(
+pub fn key_findings(
     findings: &[Finding],
     clock: Option<HostClockAnchor>,
     start: Option<u64>,

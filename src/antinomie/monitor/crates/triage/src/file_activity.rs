@@ -885,3 +885,22 @@ impl FileActivity {
         }
     }
 }
+
+/// The file's bytes before the run: from the starting disk, empty for a file
+/// the run created, unknown otherwise.
+pub fn start_of(file: &FileActivity) -> antinomie_monitor_core::file_reconstruct::Start {
+    let start = match file.earlier.as_ref() {
+        Some(earlier) => antinomie_monitor_core::file_reconstruct::Start::from_earlier(
+            Some(&earlier.before),
+            earlier.file.as_ref(),
+        ),
+        None => antinomie_monitor_core::file_reconstruct::Start::default(),
+    };
+    // A file the run made began empty, whatever the earlier-bytes store holds
+    // for the path (nothing, or no answer): without this the size stays unknown
+    // and a fully written file reads as "incomplete".
+    if file.created && start.size.is_none() {
+        return antinomie_monitor_core::file_reconstruct::Start::empty();
+    }
+    start
+}

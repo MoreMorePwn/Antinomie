@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Times the export job on a copy of a real recording, by hand:
 //! `ANT_TIMING_RUN=<run dir> XDG_CACHE_HOME=<empty dir> cargo test --release -p
-//! antinomie-monitor-ui report_export::timing -- --ignored --nocapture`.
+//! antinomie-triage report_export::timing -- --ignored --nocapture`.
 use super::*;
+use antinomie_monitor_core::report::Format;
 use std::time::Instant;
 
 #[test]

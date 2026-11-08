@@ -37,7 +37,6 @@ mod memory_view;
 mod mermaid;
 mod network_view;
 mod query;
-mod reduced_text;
 mod regex_matches;
 mod route_ui;
 mod rules_window;
@@ -68,7 +67,7 @@ mod vm_screen;
 mod widgets;
 mod workspace;
 
-pub(crate) use antinomie_triage::{bpf, time_format, tzone, values};
+pub(crate) use antinomie_triage::{bpf, reduced_text, time_format, tzone, values};
 
 use antinomie_monitor_core::BackendOptions;
 use clap::Parser;

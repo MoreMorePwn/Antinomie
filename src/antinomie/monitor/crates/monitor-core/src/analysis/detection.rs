@@ -634,8 +634,8 @@ pub use coverage::{
 };
 pub use inputs::{InputKind, InputOutcome, SIGMA_COVERAGE_WARNING, ScannedInput};
 pub use runner::{
-    FrozenSelection, Request, load, read_evidence, result_directory, run, run_with_progress,
-    worker_main_if_requested,
+    FrozenSelection, Request, load, read_evidence, result_directory, run, run_unsaved,
+    run_with_progress, worker_main_if_requested,
 };
 
 /// One step a running scan can name. YARA and Suricata are a single pass over

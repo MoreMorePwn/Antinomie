@@ -603,11 +603,35 @@ pub fn run_with_progress(
     run_program(request, cancel, &executable, progress)
 }
 
+/// [`run_with_progress`] that writes nothing into the run's folder: the
+/// report, its selection manifest and the worker's log are not kept (the
+/// command line's `detect` without `--save`). The report's
+/// `provenance_saved` stays unset.
+pub fn run_unsaved(
+    request: Request,
+    cancel: &Arc<AtomicBool>,
+    progress: Option<std::sync::mpsc::Sender<ScanProgress>>,
+) -> Result<Report, String> {
+    let executable = super::super::jobs::worker_executable()?;
+    run_program_with(request, cancel, &executable, progress, false)
+}
+
 fn run_program(
+    request: Request,
+    cancel: &Arc<AtomicBool>,
+    executable: &Path,
+    progress: Option<std::sync::mpsc::Sender<ScanProgress>>,
+) -> Result<Report, String> {
+    run_program_with(request, cancel, executable, progress, true)
+}
+
+/// Run the worker; `save` keeps its report, manifest and log in the run.
+fn run_program_with(
     mut request: Request,
     cancel: &Arc<AtomicBool>,
     executable: &Path,
     progress: Option<std::sync::mpsc::Sender<ScanProgress>>,
+    save: bool,
 ) -> Result<Report, String> {
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
@@ -667,7 +691,7 @@ fn run_program(
         Ok(report)
     })();
     let directory = result_directory(&request.directory, request.engine);
-    let diagnostics = if attempted {
+    let diagnostics = if attempted && save {
         fs::read_dir(&work)
             .map_err(|error| error.to_string())
             .and_then(|entries| {
@@ -699,7 +723,7 @@ fn run_program(
             Ok(report)
         }
         (Err(error), Err(log)) => Err(format!("{error}; detector diagnostics unavailable: {log}")),
-        (Err(error), Ok(())) if attempted => Err(format!(
+        (Err(error), Ok(())) if attempted && save => Err(format!(
             "{error}; retained detector log: {}",
             directory.join("worker.log").display()
         )),
@@ -719,6 +743,9 @@ fn run_program(
         (Err(error), Err(cleanup)) => Err(format!("{error}; detector cleanup: {cleanup}")),
         (result, Ok(())) => result,
     };
+    if !save {
+        return result;
+    }
     result.map(|report| commit_provenance(&request, &directory, report))
 }
 

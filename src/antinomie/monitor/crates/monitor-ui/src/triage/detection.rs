@@ -280,21 +280,8 @@ pub(super) struct View {
     current_boot: bool,
 }
 
-/// Where the selected run's event index (the Sigma journal) stands.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) enum IndexState {
-    /// No run, or the index has not started.
-    #[default]
-    Unknown,
-    /// Being built.
-    Building,
-    /// Built from a recording the VM still holds open and has not saved.
-    Saving,
-    /// The journal could not be written; the words say why.
-    Failed(String),
-    /// Built from a saved recording.
-    Ready,
-}
+// Where the selected run's event index (the Sigma journal) stands.
+pub(crate) use antinomie_triage::detection::IndexState;
 
 /// An input's caveat above the findings. How Sigma events are converted is
 /// the hover text of Scanned inputs, so only another caveat (an IDS limit) is
@@ -389,16 +376,14 @@ impl View {
         // shows zero enabled sets while fresh_registry still accepts the cache.
     }
     fn request(&self, engine: Engine, digest: Option<String>) -> Option<engine::Request> {
-        self.identity
-            .as_ref()
-            .map(|(directory, identity)| engine::Request {
+        self.identity.as_ref().map(|(directory, identity)| {
+            antinomie_triage::detection::request(
                 engine,
-                identity: identity.clone(),
-                directory: directory.clone(),
-                settings: self.settings.clone(),
-                source_digest: digest,
-                frozen: None,
-            })
+                (directory, identity),
+                &self.settings,
+                digest,
+            )
+        })
     }
     /// Why an automatic scan's `result` must not replace the complete result
     /// of `index` that is shown, or `None` when it may.
@@ -522,21 +507,7 @@ impl View {
     pub fn tick(&mut self, ctx: &egui::Context, input: &TriageInput<'_>) {
         self.clock = input.clock_anchor;
         self.current_boot = input.current_boot;
-        let identity = input
-            .archive
-            .zip(input.vm_id.zip(input.boot_id).zip(input.run_id))
-            .filter(|_| input.root_cookie != 0)
-            .map(|(directory, ((vm, boot), run))| {
-                (
-                    directory.to_path_buf(),
-                    Identity {
-                        vm_id: vm.into(),
-                        boot_id: boot.into(),
-                        run_id: run.into(),
-                        root_cookie: input.root_cookie,
-                    },
-                )
-            });
+        let identity = antinomie_triage::detection::identity(input);
         if self.identity != identity && self.switch_identity(identity) {
             if let Some(request) = self.request(Engine::Yara, None) {
                 let (tx, rx) = mpsc::sync_channel(1);

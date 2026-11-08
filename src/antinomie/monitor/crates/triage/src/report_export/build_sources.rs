@@ -11,7 +11,7 @@ use antinomie_monitor_core::{
 };
 use std::path::Path;
 
-pub(super) fn network(scan: &ArchiveScan) -> Vec<NamedTable> {
+pub fn network(scan: &ArchiveScan) -> Vec<NamedTable> {
     let mut tabs = network_tables(scan);
     let sources: [(&[&str], &[Vec<Cell>]); 4] = [
         (net_tabs::ENDPOINT_HEADERS, &scan.new_tabs.endpoints),
@@ -73,7 +73,7 @@ fn network_tables(scan: &ArchiveScan) -> Vec<NamedTable> {
     ]
 }
 
-pub(super) fn detections(run_dir: &Path) -> Vec<Detection> {
+pub fn detections(run_dir: &Path) -> Vec<Detection> {
     RunDigest::read(run_dir)
         .and_then(|digest| digest.detections)
         .unwrap_or_default()
@@ -134,7 +134,7 @@ fn tree_size(path: &Path, depth: usize, budget: &mut usize, files: &mut u64) -> 
     total
 }
 
-pub(super) fn evidence(run_dir: &Path) -> Vec<EvidenceRef> {
+pub fn evidence(run_dir: &Path) -> Vec<EvidenceRef> {
     let Ok(entries) = std::fs::read_dir(run_dir) else {
         return Vec::new();
     };
@@ -199,7 +199,7 @@ pub(super) fn evidence(run_dir: &Path) -> Vec<EvidenceRef> {
     out
 }
 
-pub(super) fn custody(job: &Job) -> Result<Custody, String> {
+pub fn custody(job: &Job) -> Result<Custody, String> {
     let (sample, data_dir) = job
         .sample
         .as_ref()

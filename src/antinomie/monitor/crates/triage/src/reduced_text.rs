@@ -23,7 +23,7 @@ fn grouped(count: u64) -> String {
 
 /// The lines to show: the headline, what was dropped, and how it ended.
 /// `started_ms` puts the switch on the run's own clock.
-pub(crate) fn lines(reduced: &ReducedRecording, started_ms: Option<u64>) -> Vec<String> {
+pub fn lines(reduced: &ReducedRecording, started_ms: Option<u64>) -> Vec<String> {
     let into = started_ms
         .filter(|start| reduced.at_ms >= *start)
         .map(|start| format!(" ({} into the run)", elapsed(reduced.at_ms - start)))

@@ -125,38 +125,7 @@ pub(crate) fn cell(
 
 /// A run for tests: its id and the program it ran.
 #[cfg(test)]
-pub(crate) fn test_run(id: &str, path: &str) -> RunSummary {
-    use antinomie_monitor_core::{ExecRequest, RunState};
-    RunSummary {
-        environment: None,
-        reduced: None,
-        boot_wait: None,
-        triggers: None,
-        stopped_by_user: false,
-        stopped_at_ms: None,
-        started_ms: None,
-        clock_anchor: None,
-        id: id.into(),
-        vm_id: "chosen".into(),
-        boot_id: "boot".into(),
-        session_id: 1,
-        root_task_cookie: 7,
-        pid: 42,
-        request: ExecRequest {
-            path: path.into(),
-            ..ExecRequest::default()
-        },
-        directory: std::path::PathBuf::new(),
-        terminal_eof: false,
-        state: RunState::Running,
-        notes: Vec::new(),
-        machine: None,
-        route: None,
-        recording_error: None,
-        execution: None,
-        analysis: None,
-    }
-}
+pub(crate) use antinomie_triage::report_export::fixtures::test_run;
 
 #[cfg(test)]
 mod tests {

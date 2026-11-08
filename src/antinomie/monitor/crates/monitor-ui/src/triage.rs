@@ -26,8 +26,7 @@ pub(crate) use antinomie_triage::run_end;
 use antinomie_triage::*;
 use antinomie_triage::{
     archive_scan, file_category, file_location, file_type, file_visibility, files, findings,
-    ioc_scan, live_judge, pcap_scan, process_cells, process_env, process_record, rules,
-    scan_progress,
+    ioc_scan, live_judge, process_cells, process_env, process_record, rules, scan_progress,
 };
 #[cfg(test)]
 use antinomie_triage::{async_files, descriptors, file_content, kernel_records};
