@@ -189,6 +189,24 @@ impl Library {
         Ok(added)
     }
 
+    /// [`Self::add_bytes`] with the custody entry written under `by` (see
+    /// [`super::actor`]): the caller that causes an intake is its actor. An
+    /// invalid name is refused before anything is written.
+    pub fn add_bytes_as(
+        &mut self,
+        bytes: &[u8],
+        new: NewSample,
+        by: &str,
+    ) -> Result<Added, String> {
+        if !super::actor::is_valid(by) {
+            return Err(format!("{by:?} is not a custody actor"));
+        }
+        let previous = self.actor.replace(by.to_owned());
+        let added = self.add_bytes(bytes, new);
+        self.actor = previous;
+        added
+    }
+
     /// Add held bytes. A sample already here gains the origin; a sample
     /// whose archive was removed gets its archive back.
     pub fn add_bytes(&mut self, bytes: &[u8], new: NewSample) -> Result<Added, String> {
@@ -333,7 +351,7 @@ impl Library {
         let origin = describe(&new.origin);
         self.note(
             &sha256,
-            "app",
+            &self.actor(),
             if is_new {
                 CustodyEvent::Added { origin }
             } else {
@@ -368,7 +386,7 @@ impl Library {
         let result = archive::verify(&self.archive_path(&record.sha256)?, &record.sha256);
         self.note(
             &record.sha256,
-            "app",
+            &self.actor(),
             CustodyEvent::Verified {
                 ok: result.is_ok(),
                 detail: match &result {

@@ -122,7 +122,7 @@ pub(crate) fn specimen_request(revision: Option<u32>, ram_mib: u32) -> Option<u3
 
 /// A quarter of `ram_mib` MiB, in bytes: the largest specimen a VM with that
 /// much RAM is given.
-pub(crate) fn specimen_ram_bound(ram_mib: u32) -> u64 {
+pub fn specimen_ram_bound(ram_mib: u32) -> u64 {
     u64::from(ram_mib) << 18
 }
 pub(crate) const SPECIMEN_CHUNK_SIZE: u32 = 16328;

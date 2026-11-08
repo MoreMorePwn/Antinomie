@@ -20,6 +20,7 @@ use std::{
 };
 
 mod activity;
+pub mod actor;
 mod archive;
 mod bazaar;
 mod chain;
@@ -895,6 +896,8 @@ pub const STARTERS: &[(&str, &str)] = &[
     ("CoinMiner", "XMRig-based miners"),
 ];
 
+#[cfg(test)]
+mod actor_tests;
 #[cfg(test)]
 mod bazaar_tests;
 #[cfg(test)]
