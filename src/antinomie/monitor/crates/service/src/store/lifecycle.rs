@@ -465,6 +465,65 @@ impl Store {
         })
     }
 
+    /// A running job cannot start yet and says why (design 4.1: waits are
+    /// `queued` with `waiting_for`, not failures): back to the queue with the
+    /// reason, the attempt not counted.
+    pub fn requeue_waiting(&self, id: &JobId, waiting_for: WaitingFor, reason: &str) -> R<Job> {
+        self.write(|tx| {
+            let cur = current(tx, id)?;
+            requeue_in(
+                tx,
+                id,
+                &cur,
+                RequeueKind::ServiceRestart,
+                reason,
+                None,
+                None,
+            )?;
+            set_waiting(tx, id, &cur, Some(waiting_for))?;
+            load_job(&tx.tx, id.as_str())
+        })
+    }
+
+    /// The failure codes of the job's finished attempts, oldest first
+    /// (4.7.2: a sample that kills the guest twice is final).
+    pub fn previous_failures(&self, id: &JobId) -> R<Vec<FailureCode>> {
+        {
+            let conn = self.conn();
+            let mut statement = conn
+                .prepare(
+                    "SELECT failure_code FROM attempts
+                     WHERE job_id = ?1 AND finished_ms IS NOT NULL AND failure_code IS NOT NULL
+                     ORDER BY n",
+                )
+                .map_err(db)?;
+            let rows = statement
+                .query_map([id.as_str()], |r| r.get::<_, String>(0))
+                .map_err(db)?;
+            let mut codes = Vec::new();
+            for row in rows {
+                let text = row.map_err(db)?;
+                if let Ok(code) = serde_json::from_value(serde_json::Value::String(text)) {
+                    codes.push(code);
+                }
+            }
+            Ok(codes)
+        }
+    }
+
+    /// Whether the cancel the job is `cancelling` for is the daemon's own
+    /// shutdown (it goes back to the queue) and not a user's (it ends
+    /// `cancelled`).
+    pub fn cancel_is_shutdown(&self, id: &JobId) -> R<bool> {
+        self.conn()
+            .query_row(
+                "SELECT cancel_shutdown FROM jobs WHERE id = ?1",
+                [id.as_str()],
+                |r| r.get::<_, bool>(0),
+            )
+            .map_err(db)
+    }
+
     /// Fail queued jobs that waited past `wait_s` for resources, a dependency,
     /// quota or a pending disk layer (5.6). The failure code is the wait's.
     pub fn expire_waits(&self) -> R<Vec<Job>> {

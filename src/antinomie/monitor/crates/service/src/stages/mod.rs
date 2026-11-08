@@ -22,10 +22,19 @@
 //! restore starts the VM itself, so `provision` waits for it and does not
 //! send `Start`; only `reset` sends `Start`. The first upload after boot may
 //! fail with "read-only file system" and is retried inside `upload_s`.
+mod cleanup;
+mod collect;
+mod drive;
+#[cfg(test)]
+mod drive_tests;
 mod launch;
 pub mod plan;
 mod prechecks;
 mod provision;
+pub mod retry;
+mod run;
+#[cfg(test)]
+mod run_tests;
 #[cfg(test)]
 mod tests;
 mod upload;
@@ -44,7 +53,11 @@ use crate::{
     waiter::{WaitError, Waiter},
 };
 use antinomie_monitor_core::RunSummary;
+pub use cleanup::Stopped;
+pub use collect::CollectEnd;
+pub use drive::Driven;
 pub use plan::Effective;
+pub use run::RunEnd;
 use std::time::Duration;
 
 /// `precheck_s`.
@@ -144,6 +157,8 @@ pub struct LaneEnv<'a> {
     pub policies: &'a dyn PolicyLookup,
     pub procs: &'a dyn Processes,
     pub host: &'a dyn HostChecks,
+    /// Reads a run's `artifacts.json` ([`crate::waiter::load_artifacts`]).
+    pub evidence: crate::waiter::Evidence<'a>,
 }
 
 pub struct LaneStages<'a, E: Engine> {
@@ -235,7 +250,7 @@ impl<E: Engine> LaneStages<'_, E> {
         }
     }
 
-    fn cancelled(&self, job: &Job) -> bool {
+    pub(crate) fn cancelled(&self, job: &Job) -> bool {
         self.env
             .store
             .get(&job.id)
@@ -247,6 +262,12 @@ impl<E: Engine> LaneStages<'_, E> {
     /// stage; a failed stage is ended `failed` and its stop returned. The job
     /// stays `running`: ending it or retrying is the caller's.
     pub fn run_to_launch(&mut self, job: &Job) -> Result<Launched, StageStop> {
+        self.launch_cycle(job).map(|(_, launched)| launched)
+    }
+
+    /// [`run_to_launch`](Self::run_to_launch), keeping what `prechecks` settled
+    /// for the stages after `launch`.
+    pub(crate) fn launch_cycle(&mut self, job: &Job) -> Result<(Prepared, Launched), StageStop> {
         let store = self.env.store;
         let now = self.waiter.now_ms();
         let prepared = self.stage(job, Stage::Prechecks, false, |this| this.prechecks(job))?;
@@ -272,10 +293,10 @@ impl<E: Engine> LaneStages<'_, E> {
         store
             .end_stage(&job.id, StageStatus::Finished)
             .map_err(|e| self.store_error(Stage::Launch, e))?;
-        Ok(launched)
+        Ok((prepared, launched))
     }
 
-    fn cancel_point(&self, job: &Job) -> Result<(), StageStop> {
+    pub(crate) fn cancel_point(&self, job: &Job) -> Result<(), StageStop> {
         if self.cancelled(job) {
             Err(StageStop::Cancelled)
         } else {
@@ -285,7 +306,7 @@ impl<E: Engine> LaneStages<'_, E> {
 
     /// One stage with its records: the store's `stage` rows (`prechecks` is
     /// already begun by the claim) and the lane checkpoints.
-    fn stage<T>(
+    pub(crate) fn stage<T>(
         &mut self,
         job: &Job,
         stage: Stage,

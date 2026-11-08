@@ -139,6 +139,7 @@ pub fn wait_error(error: WaitError) -> CliError {
         )
         .with_exit(Exit::WaitTimeout),
         WaitError::Interrupted => CliError::internal("interrupted").with_exit(Exit::Interrupted),
+        WaitError::Cancelled => CliError::internal("cancelled"),
         WaitError::Disconnected(message) => CliError::internal(message),
     }
 }

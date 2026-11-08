@@ -34,10 +34,10 @@ use antinomie_monitor_core::{
 use serde_json::json;
 use std::{path::PathBuf, time::Duration};
 
-const SECOND: Duration = Duration::from_secs(1);
-const MS: Duration = Duration::from_millis(1);
+pub(super) const SECOND: Duration = Duration::from_secs(1);
+pub(super) const MS: Duration = Duration::from_millis(1);
 
-fn run_summary(state: &str) -> RunSummary {
+pub(super) fn run_summary(state: &str) -> RunSummary {
     serde_json::from_value(json!({
         "id": "r1", "vm_id": VM, "boot_id": "b2", "session_id": 1,
         "root_task_cookie": 7, "pid": 750,
@@ -48,26 +48,30 @@ fn run_summary(state: &str) -> RunSummary {
     .expect("a run summary")
 }
 
-fn kernel(revision: u32) -> GuestKernel {
+pub(super) fn kernel(revision: u32) -> GuestKernel {
     GuestKernel {
         revision: Some(revision),
         ..GuestKernel::default()
     }
 }
 
-struct W {
-    fx: Fx,
-    lanes: LaneDir,
-    procs: Table,
-    host: Box<dyn HostChecks>,
+pub(super) type EvidenceFn =
+    Box<dyn Fn(&std::path::Path) -> Result<Option<antinomie_monitor_core::RunArtifacts>, String>>;
+
+pub(super) struct W {
+    pub(super) fx: Fx,
+    pub(super) lanes: LaneDir,
+    pub(super) procs: Table,
+    pub(super) host: Box<dyn HostChecks>,
+    pub(super) evidence: EvidenceFn,
 }
 
 impl W {
-    fn new(name: &str) -> Self {
+    pub(super) fn new(name: &str) -> Self {
         Self::with(name, |_| {})
     }
 
-    fn with(name: &str, edit: impl FnOnce(&mut crate::config::Policy)) -> Self {
+    pub(super) fn with(name: &str, edit: impl FnOnce(&mut crate::config::Policy)) -> Self {
         let fx = Fx::with_policy(name, edit);
         let lanes = LaneDir::new(&fx.dir.join("service"));
         lanes.save(&file()).unwrap();
@@ -76,10 +80,18 @@ impl W {
             lanes,
             procs: Table::new(),
             host: Box::new(NoHostChecks),
+            evidence: Box::new(|_| {
+                Ok(Some(antinomie_monitor_core::RunArtifacts {
+                    network_state: antinomie_monitor_core::RunArtifactState::Complete,
+                    memory_state: antinomie_monitor_core::RunArtifactState::Disabled,
+                    core_state: antinomie_monitor_core::RunArtifactState::Disabled,
+                    ..antinomie_monitor_core::RunArtifacts::default()
+                }))
+            }),
         }
     }
 
-    fn engine(&self, build: impl FnOnce(&mut FakeEngine)) -> Waiter<FakeEngine> {
+    pub(super) fn engine(&self, build: impl FnOnce(&mut FakeEngine)) -> Waiter<FakeEngine> {
         let mut fake = FakeEngine::new(self.fx.clock.clone());
         fake.start_with(|s| {
             healthy(s);
@@ -97,7 +109,10 @@ impl W {
         waiter
     }
 
-    fn stages<'a>(&'a self, waiter: &'a mut Waiter<FakeEngine>) -> LaneStages<'a, FakeEngine> {
+    pub(super) fn stages<'a>(
+        &'a self,
+        waiter: &'a mut Waiter<FakeEngine>,
+    ) -> LaneStages<'a, FakeEngine> {
         LaneStages {
             waiter,
             env: LaneEnv {
@@ -106,12 +121,13 @@ impl W {
                 policies: &self.fx.policies,
                 procs: &self.procs,
                 host: self.host.as_ref(),
+                evidence: self.evidence.as_ref(),
             },
             lane: lane(),
         }
     }
 
-    fn prepared(&self, job: &Job) -> Prepared {
+    pub(super) fn prepared(&self, job: &Job) -> Prepared {
         let frozen = self.fx.store.frozen_policy(&job.id).unwrap();
         Prepared {
             effective: plan::effective(job, &frozen.policy),
@@ -120,15 +136,15 @@ impl W {
         }
     }
 
-    fn lane_file(&self) -> LaneFile {
+    pub(super) fn lane_file(&self) -> LaneFile {
         self.lanes.load(&lane()).unwrap().unwrap()
     }
 
-    fn job(&self, id: &JobId) -> Job {
+    pub(super) fn job(&self, id: &JobId) -> Job {
         self.fx.store.get(id).unwrap()
     }
 
-    fn engine_events(&self) -> Vec<EventBody> {
+    pub(super) fn engine_events(&self) -> Vec<EventBody> {
         self.fx
             .store
             .events_since(0, 1000)
@@ -141,7 +157,7 @@ impl W {
 
 /// A Disk restore as the spike recorded it: the VM starts inside the command
 /// and the guest answers a little later.
-fn restore_ok(fake: &mut FakeEngine) {
+pub(super) fn restore_ok(fake: &mut FakeEngine) {
     fake.on("RestoreVmSnapshot")
         .after(2 * SECOND)
         .then(100 * MS, |s| {
@@ -156,7 +172,7 @@ fn restore_ok(fake: &mut FakeEngine) {
         .ok("Snapshot disk restored; guest booted in a new timeline");
 }
 
-fn upload_ok(fake: &mut FakeEngine) {
+pub(super) fn upload_ok(fake: &mut FakeEngine) {
     fake.on("UploadSample")
         .after(50 * MS)
         .fail("guest command 0x1001: Read-only file system (os error 30)");
@@ -165,20 +181,20 @@ fn upload_ok(fake: &mut FakeEngine) {
         .ok("uploaded 4096 bytes to /tmp/01010101-sample-1");
 }
 
-fn execute_ok(fake: &mut FakeEngine) {
+pub(super) fn execute_ok(fake: &mut FakeEngine) {
     fake.on("Execute")
         .after(SECOND)
         .then(500 * MS, |s| s.runs.push(run_summary("Running")))
         .ok("launched pid 750, terminal session 1");
 }
 
-fn cycle(fake: &mut FakeEngine) {
+pub(super) fn cycle(fake: &mut FakeEngine) {
     restore_ok(fake);
     upload_ok(fake);
     execute_ok(fake);
 }
 
-fn code(stop: &StageStop) -> FailureCode {
+pub(super) fn code(stop: &StageStop) -> FailureCode {
     stop.failure().unwrap_or_else(|| panic!("{stop:?}")).code
 }
 
@@ -286,7 +302,7 @@ fn a_policy_that_is_gone_or_closed_to_the_client_denies_the_job() {
     assert_eq!(code(&stop), FailureCode::PolicyDenied);
 }
 
-struct Host(Option<HostProblem>);
+pub(super) struct Host(pub(super) Option<HostProblem>);
 
 impl HostChecks for Host {
     fn check(&self, _: &Job, _: &crate::config::Policy) -> Result<(), HostProblem> {

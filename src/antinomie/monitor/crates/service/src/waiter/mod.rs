@@ -55,6 +55,8 @@ pub enum WaitError {
     Interrupted,
     /// The deadline the caller set for the whole command passed.
     DeadlineExceeded,
+    /// The job was cancelled while the lane waited (a cancel hook is armed).
+    Cancelled,
     /// The engine is gone.
     Disconnected(String),
 }
@@ -71,6 +73,7 @@ impl std::fmt::Display for WaitError {
             ),
             Self::Interrupted => f.write_str("interrupted"),
             Self::DeadlineExceeded => f.write_str("the time limit of the command passed"),
+            Self::Cancelled => f.write_str("cancelled"),
         }
     }
 }
@@ -97,6 +100,10 @@ pub struct Waiter<E: Engine> {
     observer: Option<Observer>,
     interrupted: Option<Box<dyn Fn() -> bool + Send>>,
     deadline_ms: Option<u64>,
+    cancel: Option<Box<dyn FnMut() -> bool + Send>>,
+    cancel_seen: bool,
+    cancel_interrupts: bool,
+    abandoned: Vec<u64>,
 }
 
 impl<E: Engine> Waiter<E> {
@@ -110,6 +117,10 @@ impl<E: Engine> Waiter<E> {
             observer: None,
             interrupted: None,
             deadline_ms: None,
+            cancel: None,
+            cancel_seen: false,
+            cancel_interrupts: false,
+            abandoned: Vec::new(),
         }
     }
 
@@ -128,6 +139,46 @@ impl<E: Engine> Waiter<E> {
     /// passes `after` from now: the limit of the whole command.
     pub fn deadline_in(&mut self, after: Duration) {
         self.deadline_ms = Some(self.now_ms() + millis(after));
+    }
+
+    /// Forget the deadline of [`deadline_in`](Self::deadline_in): a cleanup
+    /// after the watchdog fired must be able to wait.
+    pub fn clear_deadline(&mut self) {
+        self.deadline_ms = None;
+    }
+
+    /// Arm a cancel hook (design 4.1: cancellation is polled inside waits).
+    /// `poll` is called in every wait; once it has said true the request is
+    /// remembered ([`cancel_requested`](Self::cancel_requested)). While
+    /// `interrupts` is true the wait also ends with [`WaitError::Cancelled`].
+    pub fn cancel_when(&mut self, interrupts: bool, poll: impl FnMut() -> bool + Send + 'static) {
+        self.cancel = Some(Box::new(poll));
+        self.cancel_seen = false;
+        self.cancel_interrupts = interrupts;
+    }
+
+    /// Drop the cancel hook and the request it saw.
+    pub fn clear_cancel(&mut self) {
+        self.cancel = None;
+        self.cancel_seen = false;
+        self.cancel_interrupts = false;
+    }
+
+    /// Whether waits end with [`WaitError::Cancelled`] once a cancel is seen.
+    /// The run and collect stages turn it off and act on the request
+    /// themselves: they must still stop the run and the VM.
+    pub fn set_cancel_interrupts(&mut self, interrupts: bool) {
+        self.cancel_interrupts = interrupts;
+    }
+
+    /// Has a cancel been asked for (polls the hook)?
+    pub fn cancel_requested(&mut self) -> bool {
+        if !self.cancel_seen
+            && let Some(poll) = self.cancel.as_mut()
+        {
+            self.cancel_seen = poll();
+        }
+        self.cancel_seen
     }
 
     pub fn snapshot(&self) -> &Snapshot {
@@ -155,10 +206,13 @@ impl<E: Engine> Waiter<E> {
         self.terminals.get(run_id)
     }
 
-    fn check_interrupt(&self) -> Result<(), WaitError> {
+    fn check_interrupt(&mut self) -> Result<(), WaitError> {
         match &self.interrupted {
             Some(interrupted) if interrupted() => return Err(WaitError::Interrupted),
             _ => {}
+        }
+        if self.cancel_interrupts && self.cancel_requested() {
+            return Err(WaitError::Cancelled);
         }
         match self.deadline_ms {
             Some(deadline) if self.now_ms() >= deadline => Err(WaitError::DeadlineExceeded),
@@ -245,8 +299,40 @@ impl<E: Engine> Waiter<E> {
             if deadline.is_some_and(|deadline| self.now_ms() >= deadline) {
                 return Err(WaitError::TimedOut { what: name });
             }
+            if let Err(error) = self.pump(Duration::from_millis(200)) {
+                // The engine still works on the command: a caller that cleans
+                // up must wait for it ([`finish_abandoned`](Self::finish_abandoned)).
+                if matches!(
+                    error,
+                    WaitError::Interrupted | WaitError::Cancelled | WaitError::DeadlineExceeded
+                ) {
+                    self.abandoned.push(id);
+                }
+                return Err(error);
+            }
+        }
+    }
+
+    /// Wait for the results of commands a cancel, a signal or the job limit
+    /// made the caller stop waiting for. The engine finishes them anyway (a
+    /// restore starts the VM after we gave up), so a cleanup that looks at the
+    /// VM must wait for them first.
+    pub fn finish_abandoned(&mut self, limit: Duration) -> Result<(), WaitError> {
+        let deadline = self.now_ms() + millis(limit);
+        while let Some(&id) = self.abandoned.first() {
+            if self.results.remove(&id).is_some() {
+                self.abandoned.remove(0);
+                continue;
+            }
+            if self.now_ms() >= deadline {
+                self.abandoned.clear();
+                return Err(WaitError::TimedOut {
+                    what: "a command that was given up".into(),
+                });
+            }
             self.pump(Duration::from_millis(200))?;
         }
+        Ok(())
     }
 
     /// A command to the guest: no result within [`LANE_SILENCE`] means the
