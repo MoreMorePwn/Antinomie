@@ -6,8 +6,14 @@
 //! ```text
 //! ANTINOMIE_LANE_VM_BUNDLE=/path/to/bases/.../busybox \
 //! ANTINOMIE_LANE_VM_DATA=/path/to/empty/private/dir \
-//!   cargo test --release -p antinomie-service --test lane_vm -- --ignored --nocapture
+//!   cargo test --release -p antinomie-service --test lane_vm -- NAME --nocapture
 //! ```
+//!
+//! `NAME` is `the_stages_prechecks` or `whole_jobs` (a prefix of the test's
+//! name); with none, nothing runs. This test has its own `main` (no libtest):
+//! the engine's sandboxed workers (static analysis, detection, the earlier-bytes
+//! copier) re-run the running program with a role flag, so the program must
+//! serve those roles before anything else, as `antinomie-cli` does.
 //!
 //! It imports the bundle, creates the lane VM, takes the `auto-clean` Disk
 //! snapshot, adds a benign shell script to the library, and runs two jobs
@@ -165,8 +171,6 @@ fn setup_lane(
     (waiter, vm_id, clean, base)
 }
 
-#[test]
-#[ignore = "needs KVM, a base bundle and a private data directory"]
 fn the_stages_prechecks_to_launch_on_a_real_vm() {
     let bundle = env_path("ANTINOMIE_LANE_VM_BUNDLE");
     let data = env_path("ANTINOMIE_LANE_VM_DATA");
@@ -352,8 +356,6 @@ fn add_script(data: &std::path::Path, name: &str, script: &str) -> JobSample {
     }
 }
 
-#[test]
-#[ignore = "needs KVM, a base bundle and a private data directory"]
 fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
     let bundle = env_path("ANTINOMIE_LANE_VM_BUNDLE");
     let data = env_path("ANTINOMIE_LANE_VM_DATA");
@@ -570,4 +572,50 @@ fn whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm() {
         assert!(file.current.is_none() && file.collected.is_empty() && file.qemu.is_none());
     }
     waiter.into_engine().shutdown().expect("shutdown");
+}
+
+/// The worker roles the engine re-runs this program for.
+fn serve_worker_roles() -> Option<i32> {
+    use antinomie_monitor_core::{analysis, disks};
+    analysis::detection::worker_main_if_requested()
+        .or_else(analysis::properties::worker_main_if_requested)
+        .or_else(analysis::worker_main_if_requested)
+        .or_else(disks::reader::worker_main_if_requested)
+        .or_else(antinomie_triage::copier::host_copier)
+}
+
+fn main() {
+    if let Some(code) = serve_worker_roles() {
+        std::process::exit(code);
+    }
+    let tests: [(&str, fn()); 2] = [
+        (
+            "the_stages_prechecks_to_launch_on_a_real_vm",
+            the_stages_prechecks_to_launch_on_a_real_vm,
+        ),
+        (
+            "whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm",
+            whole_jobs_to_collect_with_a_run_limit_and_a_cancel_on_a_real_vm,
+        ),
+    ];
+    let wanted: Vec<String> = std::env::args()
+        .skip(1)
+        .filter(|arg| !arg.starts_with('-'))
+        .collect();
+    if wanted.is_empty() {
+        println!(
+            "lane_vm: name a test to run it (needs KVM, a base bundle and a private data directory):"
+        );
+        for (name, _) in tests {
+            println!("  {name}");
+        }
+        return;
+    }
+    for (name, test) in tests {
+        if wanted.iter().any(|w| name.starts_with(w.as_str())) {
+            println!("test {name} ...");
+            test();
+            println!("test {name} ... ok");
+        }
+    }
 }

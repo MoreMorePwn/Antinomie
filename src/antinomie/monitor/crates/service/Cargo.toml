@@ -20,3 +20,8 @@ toml = { version = "1", default-features = false, features = ["std", "serde", "p
 
 [dev-dependencies]
 antinomie-triage = { path = "../triage", features = ["test-support"] }
+
+# A real-VM check with its own main: the engine's workers re-run the program.
+[[test]]
+name = "lane_vm"
+harness = false
