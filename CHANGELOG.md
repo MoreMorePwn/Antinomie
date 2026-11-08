@@ -257,6 +257,14 @@ x86 programs by their own table.
 
 - **Texts no longer call the app x86-64 only.** The Core Dump on Exit and core-trigger hints, the Core view's import texts, the Samples page's refusal, the seccomp pseudocode note and the usage guide name the guests that now work (x86-64, arm64, and 32-bit ARM programs on arm64) instead of x86-64 alone; the README roadmap drops arm64. Memory analysis, capa and FLOSS still say they are x86-64 only, because they are. The Samples page now decides by the selected VM's architecture, as Run program does: an x86-64 VM takes x86-64 and 32-bit x86 programs and shell scripts, an arm64 VM takes aarch64 and 32-bit ARM programs and shell scripts, a refused program is named with the VM ("This is an AArch64 program; the selected VM is x86-64. Choose an arm64 VM."), and with no VM selected the table says which VM kinds run the program.
 
+- **Tor keeps its state between runs.** The own tor of the Tor route now keeps
+  one data folder per VM (`network/tor/<VM id>`) instead of a new one for every
+  VM start, so a run finds the consensus, descriptors and guards of the earlier
+  ones and bootstraps faster. A bootstrap that stalls, or a tor that exits, is
+  tried once more (after an exit with the cached state cleared); the folder is
+  locked, so one tor uses it at a time, and folders of VMs unused for 30 days are
+  removed. The evaluation saw two bootstraps stuck at 55% and 62% in 22 runs.
+
 ### Guest
 
 - Patches 31-41 (shared ones compile out of x86-64, whose objects are

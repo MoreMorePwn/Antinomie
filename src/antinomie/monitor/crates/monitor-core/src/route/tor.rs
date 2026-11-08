@@ -5,8 +5,13 @@
 //! * The process dies with the app and is recorded for the next start
 //!   (`helpers.rs`).
 //! * The data directory is private (mode 0700) under the app's data folder,
-//!   one per gateway so two VMs never share a lock, and kept between runs so
-//!   the next start finds its consensus.
+//!   one per VM (the slot is the VM's id, not the start's), so two VMs never
+//!   share a lock, and kept between runs so the next start finds its
+//!   consensus, descriptors and guards. A `lock` file in the slot is held
+//!   (flock) for as long as the tor runs: one tor per data directory.
+//! * A start that stalls or whose tor exits is tried once more; after an exit
+//!   the cached `data` folder is removed first, as it may be corrupt. Slots
+//!   not used for a month are removed.
 //! * The SocksPort is a free port on 127.0.0.1 picked for each start; tor
 //!   offers nothing else: no ControlPort, no listener on another address.
 //! * Tor logs to its stdout, which is the private `tor.log` (stderr goes to
@@ -115,9 +120,85 @@ fn last_n_lines(path: &Path, count: usize) -> String {
     lines[lines.len().saturating_sub(count)..].join(" | ")
 }
 
+/// Slots untouched for this long are removed at the next start.
+const STALE_SLOT: Duration = Duration::from_secs(30 * 24 * 3600);
+
+/// Takes the slot's lock; an error when another tor (this app or another
+/// instance) holds it.
+pub(crate) fn lock_slot(state: &Path) -> Result<File, String> {
+    let path = state.join("lock");
+    let file = private_file(&path, false)?;
+    file.try_lock().map_err(|_| {
+        format!(
+            "Tor: another tor is already using {}; one tor runs per data folder. Wait for \
+             that run to end",
+            state.display()
+        )
+    })?;
+    // A use of the slot, for the month-old check.
+    let _ = file.set_modified(std::time::SystemTime::now());
+    Ok(file)
+}
+
+/// Removes the other slots under `root` that nothing has touched for a month
+/// and that are not locked: the folders of VMs that are gone, and the
+/// per-start folders of earlier versions.
+fn prune_stale_slots(root: &Path, keep: &Path, now: std::time::SystemTime) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let old = entry
+            .metadata()
+            .ok()
+            .filter(|meta| meta.is_dir() && !meta.file_type().is_symlink())
+            .and_then(|meta| meta.modified().ok())
+            .into_iter()
+            .chain(
+                fs::metadata(path.join("lock"))
+                    .ok()
+                    .and_then(|meta| meta.modified().ok()),
+            )
+            .max()
+            .and_then(|time| now.duration_since(time).ok())
+            .is_some_and(|age| age >= STALE_SLOT);
+        if path == keep || !old {
+            continue;
+        }
+        // Only a slot nobody holds.
+        if let Ok(lock) = lock_slot(&path)
+            && fs::remove_dir_all(&path).is_ok()
+        {
+            drop(lock);
+        }
+    }
+}
+
+/// Why one start of tor failed.
+enum Failure {
+    /// The tor exited before it was ready: its cached state may be corrupt.
+    Exited(String),
+    /// No progress, or not at 100% in time.
+    Stalled(String),
+    /// Nothing a second try would change.
+    Fatal(String),
+}
+
+impl Failure {
+    fn into_message(self) -> String {
+        match self {
+            Failure::Exited(m) | Failure::Stalled(m) | Failure::Fatal(m) => m,
+        }
+    }
+}
+
 /// Starts tor in `<state_root>/<slot>` and waits until it has bootstrapped.
-/// Returns the process (killed when dropped) and its SOCKS port on
-/// 127.0.0.1.
+/// Returns the process (killed when dropped; it also holds the slot's lock)
+/// and its SOCKS port on 127.0.0.1.
+///
+/// The folder is reused from run to run. One retry follows a stalled
+/// bootstrap or an exited tor; after an exit the `data` folder is rebuilt.
 pub(crate) fn start_tor(
     launch: &TorLaunch,
     slot: &str,
@@ -127,19 +208,51 @@ pub(crate) fn start_tor(
     for dir in [&launch.state_root, &state, &state.join("data")] {
         crate::storage::private_dir(dir).map_err(|e| format!("Tor: {}: {e}", dir.display()))?;
     }
-    let port = free_port()?;
+    let lock = lock_slot(&state)?;
+    prune_stale_slots(&launch.state_root, &state, std::time::SystemTime::now());
+    let mut retried = false;
+    loop {
+        match start_once(launch, &state, wait) {
+            Ok((managed, port)) => return Ok((managed.holding(lock), port)),
+            Err(Failure::Fatal(error)) => return Err(error),
+            Err(failure) if retried => {
+                return Err(format!(
+                    "{} (after a second start of tor)",
+                    failure.into_message()
+                ));
+            }
+            Err(failure) => {
+                retried = true;
+                if matches!(failure, Failure::Exited(_)) {
+                    let data = state.join("data");
+                    let _ = fs::remove_dir_all(&data);
+                    crate::storage::private_dir(&data)
+                        .map_err(|e| format!("Tor: {}: {e}", data.display()))?;
+                }
+            }
+        }
+    }
+}
+
+fn start_once(launch: &TorLaunch, state: &Path, wait: Duration) -> Result<(Managed, u16), Failure> {
+    let fatal = Failure::Fatal;
+    let port = free_port().map_err(fatal)?;
     let log_path = state.join("tor.log");
     // A fresh log, so an earlier start's "Bootstrapped 100%" is never read.
-    let log_file = private_file(&log_path, true)?;
-    let output = private_file(&state.join("tor.out"), true)?;
-    let errors = output.try_clone().map_err(|e| format!("Tor: {e}"))?;
+    let log_file = private_file(&log_path, true).map_err(fatal)?;
+    let output = private_file(&state.join("tor.out"), true).map_err(fatal)?;
+    let errors = output
+        .try_clone()
+        .map_err(|e| Failure::Fatal(format!("Tor: {e}")))?;
     // An empty defaults file stops tor reading the system's torrc-defaults.
     let defaults = state.join("torrc-defaults");
-    fs::write(&defaults, b"").map_err(|e| format!("Tor: {}: {e}", defaults.display()))?;
+    fs::write(&defaults, b"")
+        .map_err(|e| Failure::Fatal(format!("Tor: {}: {e}", defaults.display())))?;
     let config = state.join("torrc");
-    private_file(&config, true)?
-        .write_all(torrc(launch, &state, port)?.as_bytes())
-        .map_err(|e| format!("Tor: {}: {e}", config.display()))?;
+    private_file(&config, true)
+        .map_err(fatal)?
+        .write_all(torrc(launch, state, port).map_err(fatal)?.as_bytes())
+        .map_err(|e| Failure::Fatal(format!("Tor: {}: {e}", config.display())))?;
     let mut command = Command::new(&launch.binary);
     command
         .arg("--defaults-torrc")
@@ -154,15 +267,24 @@ pub(crate) fn start_tor(
         // The bundle's own libevent and OpenSSL, next to its tor.
         command.env("LD_LIBRARY_PATH", libraries);
     }
-    let (child, record) = super::helpers::spawn(command, &launch.helpers_dir, "tor")
-        .map_err(|e| format!("Tor: cannot start {}: {e}", launch.binary.display()))?;
+    let (child, record) =
+        super::helpers::spawn(command, &launch.helpers_dir, "tor").map_err(|e| {
+            Failure::Fatal(format!(
+                "Tor: cannot start {}: {e}",
+                launch.binary.display()
+            ))
+        })?;
     let mut managed = Managed::new(child, record, "tor");
-    let deadline = Instant::now() + wait;
+    let started = Instant::now();
+    let deadline = started + wait;
+    // No progress for half the wait is a stall: the retry then has time.
+    let stall = wait / 2;
+    let mut last = (None, started);
     loop {
         if let Some(status) = managed
             .child_mut()
             .try_wait()
-            .map_err(|e| format!("Tor: {e}"))?
+            .map_err(|e| Failure::Fatal(format!("Tor: {e}")))?
         {
             let said = last_lines(&state.join("tor.out"));
             let said = if said.is_empty() {
@@ -170,9 +292,9 @@ pub(crate) fn start_tor(
             } else {
                 said
             };
-            return Err(format!(
+            return Err(Failure::Exited(format!(
                 "Tor: tor stopped before it was ready ({status}): {said}"
-            ));
+            )));
         }
         let progress = bootstrap_progress(&read_tail(&log_path, 0));
         if progress
@@ -181,19 +303,23 @@ pub(crate) fn start_tor(
         {
             return Ok((managed, port));
         }
-        if Instant::now() >= deadline {
+        let percent = progress.as_ref().map(|(percent, _)| *percent);
+        if percent != last.0 {
+            last = (percent, Instant::now());
+        }
+        if Instant::now() >= deadline || last.1.elapsed() >= stall {
             let at = progress.map_or_else(
                 || "nothing was reported".to_owned(),
                 |(percent, summary)| format!("stuck at {percent}% {summary}"),
             );
-            return Err(format!(
+            return Err(Failure::Stalled(format!(
                 "Tor: tor did not finish bootstrapping within {} s ({at}); check that this \
                  computer can reach the Tor network, or set an existing SOCKS address \
                  in Settings. Log: {}. Last log lines: {}",
                 wait.as_secs(),
                 log_path.display(),
                 last_n_lines(&log_path, 6)
-            ));
+            )));
         }
         thread::sleep(Duration::from_millis(100));
     }

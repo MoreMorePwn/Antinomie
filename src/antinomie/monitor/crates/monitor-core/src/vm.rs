@@ -560,7 +560,8 @@ impl VmProcess {
                 let id = provider.instance_id(&stealth.identity.system_uuid);
                 crate::route::MetadataService::new(provider, &id, &provider.hostname(&id))
             });
-            gateway = Some(crate::route::Gateway::start_with(&dir, net, metadata)?);
+            gateway =
+                Some(crate::route::Gateway::start_with(&dir, net, metadata)?.with_tor_slot(&vm.id));
         }
         if cloud.is_some() && vm.network() != VmNetwork::Routed {
             fallbacks.push(

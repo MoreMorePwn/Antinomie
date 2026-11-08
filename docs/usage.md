@@ -501,10 +501,14 @@ Pick the route in the Run form (**Network > Route**); the default comes from
 * **Tor**: either *Antinomie runs its own tor* (the default) or *Use a SOCKS
   address*. With its own tor, Antinomie starts `tor` when the run claims the
   route, on a free port of `127.0.0.1`, with a private data folder under its data
-  folder (`network/tor`, readable by you only) and no control port, and stops it
-  when the run ends. The run waits for Tor to finish bootstrapping (up to two
-  minutes) and does not start if it cannot; a first start is slower than later
-  ones, which reuse the folder. The other mode connects to a Tor you run yourself
+  folder (`network/tor/<VM id>`, readable by you only) and no control port, and stops it
+  when the run ends. The folder belongs to the VM and is kept between its runs,
+  so later runs reuse the consensus and guards that the first one downloaded and
+  start faster; only one tor uses it at a time. The run waits for Tor to finish
+  bootstrapping (up to two minutes). A start that makes no progress, or whose tor
+  exits, is tried once more (after an exit with the cached state cleared), and
+  the run does not start if the second try fails. Folders of VMs not used for 30
+  days are removed. The other mode connects to a Tor you run yourself
   (a `tor` service listens on `127.0.0.1:9050`) and starts nothing.
 * **Getting Tor and wireproxy**: you do not have to install them. A program you
   name in Settings is used first, then one on `PATH` or in the usual system
