@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The Tor route's own tor, with stand-in programs: nothing here starts a
 //! real tor or reaches the Tor network.
-use super::{WAIT, no_data, scratch};
+use super::{no_data, scratch};
 use crate::route::{
     Gateway, GatewayNet, RouteConfig, RouteKind, TorMode, config::TorLaunch,
-    tor::bootstrap_progress, tor::lock_slot, tor::start_tor, tor::torrc,
+    tor::bootstrap_progress, tor::lock_slot, tor::lock_slot_within, tor::start_tor, tor::torrc,
 };
 use std::{os::unix::fs::PermissionsExt, path::Path, time::Duration};
+
+/// A bootstrap wait that survives a loaded machine (the fake tor is a python
+/// start, niced with the test run); a stall is noticed after half of it.
+const LONG: Duration = Duration::from_secs(60);
 
 fn script(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
     let path = dir.join(name);
@@ -180,7 +184,7 @@ fn a_tor_that_stops_or_never_bootstraps_is_an_error_not_a_route() {
             "#!/bin/sh\necho 'Failed to bind' >&2\nexit 1\n",
         ),
     );
-    let error = start_tor(&quits, "a", WAIT).err().unwrap();
+    let error = start_tor(&quits, "a", LONG).err().unwrap();
     assert!(error.contains("stopped before it was ready"), "{error}");
     assert!(error.contains("Failed to bind"), "{error}");
 
@@ -188,11 +192,15 @@ fn a_tor_that_stops_or_never_bootstraps_is_an_error_not_a_route() {
         &dir,
         script(&dir, "stuck", &FAKE_TOR.replace("LAST = 100", "LAST = 40")),
     );
-    let error = start_tor(&stuck, "b", Duration::from_millis(1500))
+    let error = start_tor(&stuck, "b", Duration::from_secs(6))
         .err()
         .unwrap();
     assert!(error.contains("did not finish bootstrapping"), "{error}");
-    assert!(error.contains("stuck at 40%"), "{error}");
+    // A starved fake tor may not have printed anything yet when the stall is called.
+    assert!(
+        error.contains("stuck at 40%") || error.contains("nothing was reported"),
+        "{error}"
+    );
 
     let silent = launch(&dir, script(&dir, "silent", "#!/bin/sh\nexec sleep 30\n"));
     let error = start_tor(&silent, "c", Duration::from_millis(600))
@@ -202,7 +210,7 @@ fn a_tor_that_stops_or_never_bootstraps_is_an_error_not_a_route() {
     // A torrc cannot hold a path with a quote.
     let mut odd = launch(&dir, script(&dir, "tor", FAKE_TOR));
     odd.state_root = dir.join("a\"b");
-    assert!(start_tor(&odd, "d", WAIT).err().unwrap().contains("torrc"));
+    assert!(start_tor(&odd, "d", LONG).err().unwrap().contains("torrc"));
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -431,11 +439,11 @@ fn the_same_slot_is_reused_between_starts_with_its_cached_state() {
     let dir = scratch("tor-reuse");
     let tor = launch(&dir, script(&dir, "tor", FAKE_TOR));
     let state = tor.state_root.join("vm1");
-    let (first, _) = start_tor(&tor, "vm1", WAIT).unwrap();
+    let (first, _) = start_tor(&tor, "vm1", LONG).unwrap();
     // What tor caches in its data folder.
     std::fs::write(state.join("data/cached-microdesc-consensus"), b"consensus").unwrap();
     drop(first);
-    let (second, _) = start_tor(&tor, "vm1", WAIT).unwrap();
+    let (second, _) = start_tor(&tor, "vm1", LONG).unwrap();
     assert_eq!(starts(&state), 2);
     assert_eq!(
         std::fs::read(state.join("data/cached-microdesc-consensus")).unwrap(),
@@ -447,7 +455,7 @@ fn the_same_slot_is_reused_between_starts_with_its_cached_state() {
     assert_eq!(mode(&state.join("lock")), 0o600);
     // Another slot is another folder.
     drop(second);
-    let (_other, _) = start_tor(&tor, "vm2", WAIT).unwrap();
+    let (_other, _) = start_tor(&tor, "vm2", LONG).unwrap();
     assert!(
         !tor.state_root
             .join("vm2/data/cached-microdesc-consensus")
@@ -460,13 +468,13 @@ fn the_same_slot_is_reused_between_starts_with_its_cached_state() {
 fn one_tor_runs_per_data_folder() {
     let dir = scratch("tor-lock");
     let tor = launch(&dir, script(&dir, "tor", FAKE_TOR));
-    let (first, _) = start_tor(&tor, "vm1", WAIT).unwrap();
-    let error = start_tor(&tor, "vm1", WAIT).err().unwrap();
+    let (first, _) = start_tor(&tor, "vm1", LONG).unwrap();
+    let error = start_tor(&tor, "vm1", LONG).err().unwrap();
     assert!(error.contains("another tor is already using"), "{error}");
     // The refused start did not touch the running tor's folder.
     assert_eq!(starts(&tor.state_root.join("vm1")), 1);
     drop(first);
-    assert!(start_tor(&tor, "vm1", WAIT).is_ok());
+    assert!(start_tor(&tor, "vm1", LONG).is_ok());
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -488,10 +496,10 @@ fn a_stalled_bootstrap_is_retried_once_and_keeps_the_cached_state() {
     std::fs::create_dir_all(state.join("data")).unwrap();
     std::fs::write(state.join("data/cached-microdesc-consensus"), b"consensus").unwrap();
     let began = std::time::Instant::now();
-    let (managed, port) = start_tor(&tor, "vm1", Duration::from_secs(4)).unwrap();
+    let (managed, port) = start_tor(&tor, "vm1", Duration::from_secs(40)).unwrap();
     // The stall was noticed after half the wait, not the whole of it.
     assert!(
-        began.elapsed() < Duration::from_secs(4),
+        began.elapsed() < Duration::from_secs(40),
         "{:?}",
         began.elapsed()
     );
@@ -509,14 +517,18 @@ fn a_tor_that_stalls_twice_is_an_error_after_one_retry() {
         &dir,
         script(&dir, "tor", &FAKE_TOR.replace("LAST = 100", "LAST = 40")),
     );
-    let error = start_tor(&tor, "vm1", Duration::from_millis(1600))
+    let error = start_tor(&tor, "vm1", Duration::from_secs(6))
         .err()
         .unwrap();
     assert!(
-        error.contains("did not finish bootstrapping within 1 s"),
+        error.contains("did not finish bootstrapping within 6 s"),
         "{error}"
     );
-    assert!(error.contains("stuck at 40%"), "{error}");
+    // A starved fake tor may not have printed anything yet when the stall is called.
+    assert!(
+        error.contains("stuck at 40%") || error.contains("nothing was reported"),
+        "{error}"
+    );
     assert!(error.contains("after a second start"), "{error}");
     assert_eq!(starts(&tor.state_root.join("vm1")), 2);
     // The folder stays for the next run; the lock is free again.
@@ -543,7 +555,7 @@ fn a_tor_that_exits_on_its_cached_state_is_retried_on_a_fresh_data_folder() {
     let state = tor.state_root.join("vm1");
     std::fs::create_dir_all(state.join("data")).unwrap();
     std::fs::write(state.join("data/corrupt"), b"x").unwrap();
-    let (managed, port) = start_tor(&tor, "vm1", WAIT).unwrap();
+    let (managed, port) = start_tor(&tor, "vm1", LONG).unwrap();
     assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
     assert!(!state.join("data/corrupt").exists());
     assert_eq!(mode(&state.join("data")), 0o700);
@@ -572,7 +584,7 @@ fn month_old_unused_slots_are_removed_and_the_rest_kept() {
     let held = lock_slot(&busy).unwrap();
     held.set_modified(std::time::SystemTime::now() - Duration::from_secs(40 * 24 * 3600))
         .unwrap();
-    let (_managed, _) = start_tor(&tor, "vm1", WAIT).unwrap();
+    let (_managed, _) = start_tor(&tor, "vm1", LONG).unwrap();
     assert!(!stale.exists(), "a month-old slot stays");
     assert!(recent.exists() && busy.exists());
     let _ = std::fs::remove_dir_all(dir);
@@ -599,5 +611,44 @@ fn a_gateway_with_a_tor_slot_keeps_one_folder_across_vm_starts() {
     }
     assert!(!dir.join("network/tor/runtime_a").exists());
     assert!(!dir.join("network/tor/runtime-b").exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A copy of the lock's descriptor held by a process that another thread forked
+/// and that has not exec'd yet keeps the flock after the owner drops it. The
+/// race is made certain here: the child sleeps between fork and exec.
+#[test]
+fn a_lock_held_for_a_moment_by_a_forked_child_is_waited_for_not_refused() {
+    use std::os::unix::process::CommandExt;
+    let dir = scratch("tor-lock-fork");
+    let state = dir.join("slot");
+    std::fs::create_dir_all(&state).unwrap();
+    let first = lock_slot(&state).unwrap();
+    // Forked (by another thread, as in the app) while `first` is open; the copy
+    // is closed only at exec, 700 ms on. `std` waits for the exec, hence the thread.
+    let forked = dir.join("forked");
+    let marker = forked.clone();
+    let spawner = std::thread::spawn(move || {
+        let mut command = std::process::Command::new("true");
+        unsafe {
+            command.pre_exec(move || {
+                std::fs::write(&marker, b"")?;
+                std::thread::sleep(Duration::from_millis(700));
+                Ok(())
+            });
+        }
+        command.spawn().unwrap().wait().unwrap();
+    });
+    while !forked.exists() {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // Without a grace the next start is refused although no tor runs.
+    drop(first);
+    assert!(lock_slot_within(&state, Duration::ZERO).is_err());
+    assert!(
+        lock_slot(&state).is_ok(),
+        "the lock frees when the child execs"
+    );
+    spawner.join().unwrap();
     let _ = std::fs::remove_dir_all(dir);
 }

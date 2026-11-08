@@ -126,15 +126,31 @@ const STALE_SLOT: Duration = Duration::from_secs(30 * 24 * 3600);
 /// Takes the slot's lock; an error when another tor (this app or another
 /// instance) holds it.
 pub(crate) fn lock_slot(state: &Path) -> Result<File, String> {
+    lock_slot_within(state, LOCK_GRACE)
+}
+
+/// How long a start waits for a slot's lock before it calls the slot busy.
+/// The file is opened close-on-exec, but a process forked by another thread
+/// of the app (a helper being spawned, a VM's QEMU) holds a copy of the
+/// descriptor, and so the lock, until its exec a moment later; the lock of a
+/// tor that was just stopped can also take a moment to go. Neither is "another
+/// tor is using the folder".
+const LOCK_GRACE: Duration = Duration::from_secs(3);
+
+pub(crate) fn lock_slot_within(state: &Path, grace: Duration) -> Result<File, String> {
     let path = state.join("lock");
     let file = private_file(&path, false)?;
-    file.try_lock().map_err(|_| {
-        format!(
-            "Tor: another tor is already using {}; one tor runs per data folder. Wait for \
-             that run to end",
-            state.display()
-        )
-    })?;
+    let give_up = Instant::now() + grace;
+    while file.try_lock().is_err() {
+        if Instant::now() >= give_up {
+            return Err(format!(
+                "Tor: another tor is already using {}; one tor runs per data folder. Wait for \
+                 that run to end",
+                state.display()
+            ));
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
     // A use of the slot, for the month-old check.
     let _ = file.set_modified(std::time::SystemTime::now());
     Ok(file)
