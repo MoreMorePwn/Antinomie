@@ -58,12 +58,29 @@ pub(super) fn kernel(revision: u32) -> GuestKernel {
 pub(super) type EvidenceFn =
     Box<dyn Fn(&std::path::Path) -> Result<Option<antinomie_monitor_core::RunArtifacts>, String>>;
 
+/// The library tags the service asked for: `(sample sha256, tag)`.
+#[derive(Default)]
+pub(super) struct TagLog(pub(super) std::sync::Mutex<Vec<(String, String)>>);
+
+impl super::host::SampleTags for TagLog {
+    fn add_tag(&self, job: &Job, tag: &str) -> Result<bool, String> {
+        let sha = job.sample.as_ref().map(|s| s.sha256.to_string());
+        self.0
+            .lock()
+            .unwrap()
+            .push((sha.unwrap_or_default(), tag.to_owned()));
+        Ok(true)
+    }
+}
+
 pub(super) struct W {
     pub(super) fx: Fx,
     pub(super) lanes: LaneDir,
     pub(super) procs: Table,
     pub(super) host: Box<dyn HostChecks>,
     pub(super) evidence: EvidenceFn,
+    pub(super) triage: Box<dyn super::host::HostTriage>,
+    pub(super) tags: TagLog,
 }
 
 impl W {
@@ -80,6 +97,10 @@ impl W {
             lanes,
             procs: Table::new(),
             host: Box::new(NoHostChecks),
+            triage: Box::new(super::host::RealTriage::new(
+                antinomie_monitor_core::BackendOptions::default(),
+            )),
+            tags: TagLog::default(),
             evidence: Box::new(|_| {
                 Ok(Some(antinomie_monitor_core::RunArtifacts {
                     network_state: antinomie_monitor_core::RunArtifactState::Complete,
@@ -122,6 +143,8 @@ impl W {
                 procs: &self.procs,
                 host: self.host.as_ref(),
                 evidence: self.evidence.as_ref(),
+                triage: self.triage.as_ref(),
+                tags: &self.tags,
             },
             lane: lane(),
         }

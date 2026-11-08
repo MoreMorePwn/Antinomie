@@ -97,7 +97,7 @@ The run record of the job (`job.run`) gets `ended_ms`, `end_reason` (`exited`, `
 
 | The cycle ends with | The lane | The job |
 |---|---|---|
-| `collect` finished | `collected` entry, free | stays `running`; `finish_collected` ends it with the outcome until the host stages exist |
+| `collect` finished | `collected` entry, free | stays `running`; `LaneStages::host` runs `analyse`, `report` and `cleanup` and ends it (`finish_collected` is the shortcut that skips them) |
 | a failure the policy retries | VM stopped and settled, work ended, QEMU record cleared | `queued` with `waiting_for: backoff` and `job.requeued`; the failure is kept on the attempt |
 | any other failure | the same | `failed` with the failure |
 | a cancel | the same; the recording is kept | `cancelled` (back in the queue when the cancel is the daemon's shutdown) |
@@ -119,6 +119,43 @@ The run record of the job (`job.run`) gets `ended_ms`, `end_reason` (`exited`, `
 | the engine, during `run` | 60 s with nothing from it (the lane reads the terminal every 200 ms, so it answers all the time) | `internal`, then cleanup |
 | a quiet `collect` | `stall_s` 120 s with nothing heard is a job warning (`collect_stalled`); twice that ends the wait | `recording_failed` |
 | a stage | the deadlines of 4.1 (`boot_s` 180, `upload_s`, `launch_s` 30, `collect_s` 300, `stop_s` 120, `layer_s` 1800) | the stage's failure code |
-| a hung `Stop` | no answer in `stop_s`: the **hard path** kills the QEMU recorded in the lane file, only if its `/proc/<pid>/cmdline` and start time still match, and gives the engine 30 s to notice; the job gets the warning `vm_hard_stop` | `recording_failed` |
+| a hung `Stop` | no answer in `stop_s`: the **hard path** kills the QEMU recorded in the lane file, only if its `/proc/<pid>/cmdline` and start time still match, and gives the engine 30 s to notice; the job gets the warning `vm_hard_stop` | `recording_failed`; if the cleanup's own `Stop` (asked twice) does not settle the VM either, the lane is quarantined (below) |
 
 `FakeEngine` can run a callback at a point of its script (`StepBuilder::call`, `FakeEngine::call_after`), which the tests use to cancel a job or arm a lane-file fault at an exact moment.
+
+**A stop that never settles.** The cleanup after a failed, cancelled or timed-out job asks for the VM to stop and settle. If the first answer is not "settled" (a `Stop` that was killed through the hard path, a flush or layer that does not clear), it asks once more. If that does not settle the VM either, the lane is **quarantined** with the reason `revert_failed` and the detail "the lane VM did not stop and settle after a forced stop": the next job's revert could not happen on a machine the engine still holds, and the lane waits for `auto lane reset`. `lane.state` (`quarantined`) and `engine.alert` (`lane_quarantined`) are sent, the QEMU record stays in the lane file, and queued jobs wait with `waiting_for: lane_quarantined`. (Design 4.5.3 lists four quarantine reasons; `revert_failed` is the closest.)
+
+**The library tag `auto:crashes-guest`.** When a job ends `failed` with the warning `crashes_guest` (the sample ended the guest in two attempts), the service adds the custom tag `auto:crashes-guest` to the library sample through `Library::add_tag`, which keeps the other tags and writes the custody entry (`edited`, tags) under the actor `auto:policy-<policy name>` (`custody::automation_actor`), not `analyst`. A tag that cannot be written is the job warning `tag_failed`. Adding it twice writes nothing.
+
+### The host stages: `LaneStages::host`
+
+`drive` returns `Driven::Collected(end)` when the lane stages are over; `host(job, end)` then runs the host stages and ends the job. The lane is free, and the stages need no VM, so a daemon with a second waiter can run them beside the next job's lane stages (this card runs them on the waiter it is given). The Triage work is the crate `antinomie-triage`, the same builders the GUI and `antinomie-cli triage`, `detect` and `report` call, behind the seam `HostTriage` (`stages/host.rs`; the real one is `RealTriage`).
+
+| Stage | What it does | Deadline | Failure |
+|---|---|---|---|
+| `analyse` | (1) `Command::AnalyzeSample` for the policy's checks on the library copy, then waits for the report: `static_s` = tools x `static_time_limit_min` x 60 + 60 (a limit of 0 assumes 5 minutes a tool). (2) On a worker thread: open the saved run read-only (`find_run_read_only`), index it (`SavedRun::scan`), run the policy's engines (`detection::detect_saved`, results kept in the recording as the Detection tab keeps them) and write the digest (`detection::save_digest`). (3) Build the summary and detections and store the **assessment** (`job.assessment`) through the verdict mapping | `analyse_s` 900 s for (2) and (3), a cancel flag the scan honours; the worker is always joined | `analysis_failed` if the policy requires `analyse` (`analysis.required_stages`, default yes); otherwise one warning per problem and the job ends `partial` |
+| `report` | Builds the report for the policy's formats, bundle and defang choice (`report_export::build_report` and `write_built`) into `jobs/<id>/artifacts/`, renames the files to `report-<sha8>.<suffix>` and `report-<sha8>-bundle.zip`, hashes them and records them as artifacts (`job.artifact`). Skipped when no format and no bundle is asked for | `report_s` 300 s | `analysis_failed`, or a warning and `partial` when `report` is not required; with no Triage scan there is nothing to report |
+| `cleanup` | Ends the job with the outcome the stages settled, releases the lane's `collected` entry, writes `jobs/<id>/job.json` | `cleanup_s` 60 s (never reached: nothing waits) | never fails the job |
+
+Departures from 4.1: the assessment is built at the end of `analyse`, not in `report`, so a job that asks for no report still has its label; the report files carry the design's stable names, not the writer's `antinomie-report-<run8>-<time>`; `cleanup` only ends the job and writes `job.json` (retention, notifications and the `[results]` drop belong to the daemon cards); `job_hard_s` is not enforced in the host stages, only their own deadlines.
+
+**Endings** (`Hosted`):
+
+| The stages end with | The job |
+|---|---|
+| all worked | the outcome `collect` found (`succeeded`, or `partial` for incomplete evidence) |
+| a problem in a stage the policy does not require | `partial`, one warning per problem (`analysis_failed`, `report_failed`, `detection_skipped`) |
+| a failure in a required stage | `failed`, `analysis_failed`, stage `analyse` or `report` |
+| a cancel | `cancelled`; the recording and the reports written so far are kept |
+| a shutdown cancel | back in the queue (a new attempt: the VM runs again) |
+| a signal or a dead engine | untouched; the lane file keeps the `collected` entry, and `resume_host` finishes the job |
+
+`analysis_failed` is repeated in place (analyse and report only, no VM) when the policy lists it in `retry.retry_on`, up to `max_attempts` runs of the two stages, with no backoff and a `analysis_retry` warning each time. A stage that failed or was interrupted may be entered again in the same attempt (`Store::begin_stage` re-opens a `started` or `failed` row; a `finished` or `skipped` one is still a conflict).
+
+**After a crash.** The `collected` entry stays in the lane file until the job is final, so `recover` lists the job in `resume` and keeps it `running`; `resume_host(job)` runs the stages again from `analyse`. The outcome `collect` found is read again from the run's `artifacts.json`; its warnings are already in the job. A digest or an assessment written before the crash is simply written again.
+
+### The verdict (`verdict/`)
+
+The assessment is the Triage summary and the detections plus a label, a score and the `basis` sentence. The default mapping is the table of design 4.9.2 (first match wins): the run did not complete (`end_reason` not `exited`, `signaled` or `time_limit`) or Triage did not run: `inconclusive`; matched indicators with a named family, a high or critical YARA hit, or matched indicators: `malicious`; highest tier `high` or the assessment `suspicious_behaviour`: `suspicious`; `observed_only` or `no_findings`: `clean_observed` (the basis says that this is not "clean"). The default sets no score. With no indicator dataset loaded, the basis says that indicators were not checked.
+
+A policy may give its own rules instead: `[[verdict.rule]] when = "..." label = "..." score = 70`. The first rule that holds gives the label, the score is the largest of the rules that hold, and no rule holding is `inconclusive`. The `when` text is parsed by `verdict/expr.rs`: equality, comparison, `and`, `or`, `in`, parentheses and list literals over a closed field set (`assessment`, `highest_tier`, `counts.*`, `detections.engine`, `detections.severity`, `families`, `techniques`, `run.end_reason`); strings compare without case; a list field matches when any element does; nothing in it is executable. `config validate` parses every rule and names the key (`verdict.rule.<n>.when`); `verdict.mapping` may only be `default`.

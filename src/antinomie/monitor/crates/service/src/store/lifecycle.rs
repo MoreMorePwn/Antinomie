@@ -330,24 +330,41 @@ impl Store {
             if cur.state != JobState::Running {
                 return Err(conflict(id, cur.state, "start a stage"));
             }
-            let duplicate: bool = tx
+            // A stage may be entered again in the same attempt only if its
+            // last run did not finish: the host stages resume after a crash
+            // (`started` is left behind) or are repeated after a failure.
+            let earlier: Option<String> = tx
                 .tx
                 .query_row(
-                    "SELECT 1 FROM stages WHERE job_id = ?1 AND attempt = ?2 AND stage = ?3",
+                    "SELECT status FROM stages WHERE job_id = ?1 AND attempt = ?2 AND stage = ?3",
                     rusqlite::params![id.as_str(), cur.attempt, name_of(&stage)],
-                    |_| Ok(true),
+                    |r| r.get(0),
                 )
                 .optional()
-                .map_err(db)?
-                .unwrap_or(false);
-            if duplicate {
+                .map_err(db)?;
+            if earlier
+                .as_deref()
+                .is_some_and(|status| !matches!(status, "started" | "failed"))
+            {
                 return Err(ApiError::new(
                     ErrorCode::Conflict,
                     format!("stage {} already ran in this attempt", name_of(&stage)),
                 ));
             }
-            close_stage(tx, id, &cur, StageStatus::Finished)?;
-            insert_stage(tx, id, cur.attempt, stage)?;
+            if cur.stage != Some(stage) {
+                close_stage(tx, id, &cur, StageStatus::Finished)?;
+            }
+            if earlier.is_some() {
+                tx.tx
+                    .execute(
+                        "UPDATE stages SET status = 'started', started_ms = ?4, finished_ms = NULL
+                         WHERE job_id = ?1 AND attempt = ?2 AND stage = ?3",
+                        rusqlite::params![id.as_str(), cur.attempt, name_of(&stage), tx.now],
+                    )
+                    .map_err(db)?;
+            } else {
+                insert_stage(tx, id, cur.attempt, stage)?;
+            }
             tx.tx
                 .execute(
                     "UPDATE jobs SET stage = ?2 WHERE id = ?1",

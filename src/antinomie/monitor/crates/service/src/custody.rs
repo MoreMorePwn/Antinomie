@@ -24,6 +24,17 @@ pub fn actor_of(job: &Job) -> String {
     }
 }
 
+/// The actor of an entry the service writes on its own account (a tag it
+/// sets on a sample): `auto:policy-<name>`, else the job's own actor.
+pub fn automation_actor(job: &Job) -> String {
+    let actor = format!("auto:policy-{}", job.policy.name);
+    if actor::is_valid(&actor) {
+        actor
+    } else {
+        actor_of(job)
+    }
+}
+
 /// Make `actor` the current actor of the process's own custody entries until
 /// the scope is dropped (then `app` again). One lane runs one job at a time
 /// (decided D4), so one slot is enough.

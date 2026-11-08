@@ -346,6 +346,14 @@ fn a_sample_that_ends_the_guest_twice_is_final_and_says_so() {
     let stored = w.job(&job.id);
     assert_eq!(stored.failure.unwrap().code, FailureCode::GuestLost);
     assert!(stored.warnings.iter().any(|w| w.code == "crashes_guest"));
+    // The library tag is asked for once, for this sample.
+    assert_eq!(
+        w.tags.0.lock().unwrap().as_slice(),
+        [(
+            job.sample.as_ref().unwrap().sha256.to_string(),
+            "auto:crashes-guest".to_owned()
+        )]
+    );
     lane_is_free(&w);
 }
 
@@ -884,4 +892,90 @@ fn a_crash_while_the_program_runs_makes_a_new_attempt() {
     let report = recover(&mut w);
     assert_eq!(report.jobs.requeued, std::slice::from_ref(&job.id));
     assert_eq!(w.job(&job.id).state, JobState::Queued);
+}
+
+// ---- a stop that never settles -----------------------------------------
+
+/// Everything up to a `Stop` that nobody answers and that leaves the engine
+/// in `Failed` after the forced kill.
+fn wedged(w: &W, second_stop: impl FnOnce(&mut FakeEngine)) -> (Job, Waiter<FakeEngine>) {
+    qemu(w, 900, 5);
+    let job = w.fx.running(1);
+    let waiter = w.engine(|fake| {
+        restore_ok(fake);
+        upload_ok(fake);
+        execute_run(fake, Some((3 * SECOND, exited(0))));
+        stop_run_ok(fake);
+        fake.on("Stop")
+            .then(125 * SECOND, |s| s.state = VmState::Failed)
+            .silent();
+        second_stop(fake);
+    });
+    (job, waiter)
+}
+
+#[test]
+fn a_stop_that_never_settles_after_the_forced_kill_quarantines_the_lane() {
+    let w = W::new("drive-wedged");
+    let (job, mut waiter) = wedged(&w, |_| {});
+    let driven = drive(&w, &mut waiter, &job);
+    assert_eq!(failure_of(&driven), FailureCode::RecordingFailed);
+    assert_eq!(w.procs.killed.borrow().as_slice(), [900]);
+    // The lane is out of service: the closest reason of 4.5.3 is a revert
+    // that cannot happen, and it stays so until `auto lane reset`.
+    let file = w.lane_file();
+    assert_eq!(file.current, None, "the lane let the job go");
+    let quarantine = file.quarantine.expect("quarantined");
+    assert_eq!(quarantine.reason, FailureCode::RevertFailed);
+    assert!(
+        quarantine.detail.contains("did not stop"),
+        "{}",
+        quarantine.detail
+    );
+    assert!(
+        w.job(&job.id)
+            .warnings
+            .iter()
+            .any(|x| x.code == "vm_not_stopped")
+    );
+    // It was announced, and no job is started on it.
+    let events = w.engine_events();
+    assert!(events.iter().any(|e| matches!(
+        e,
+        EventBody::LaneState {
+            state: crate::api::event::LaneState::Quarantined,
+            ..
+        }
+    )));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        EventBody::EngineAlert { code, .. } if code == "lane_quarantined"
+    )));
+    assert_eq!(
+        w.stages(&mut waiter).eligibility(),
+        Eligibility::Wait(WaitingFor::LaneQuarantined)
+    );
+}
+
+#[test]
+fn a_stop_that_settles_on_the_second_try_leaves_the_lane_in_service() {
+    let w = W::new("drive-wedged-ok");
+    // The first stop of the cleanup is refused, the second is answered.
+    let (job, mut waiter) = wedged(&w, |fake| {
+        fake.on("Stop").fail("the engine is busy");
+        stop_ok(fake);
+    });
+    let driven = drive(&w, &mut waiter, &job);
+    assert_eq!(failure_of(&driven), FailureCode::RecordingFailed);
+    let file = w.lane_file();
+    assert_eq!(file.quarantine, None);
+    assert_eq!(file.current, None);
+    assert_eq!(file.qemu, None, "the process record goes with a clean stop");
+    // The warning still says what happened on the way.
+    assert!(
+        w.job(&job.id)
+            .warnings
+            .iter()
+            .any(|x| x.code == "vm_not_stopped")
+    );
 }

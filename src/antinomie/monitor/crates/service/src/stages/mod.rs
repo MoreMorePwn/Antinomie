@@ -22,15 +22,22 @@
 //! restore starts the VM itself, so `provision` waits for it and does not
 //! send `Start`; only `reset` sends `Start`. The first upload after boot may
 //! fail with "read-only file system" and is retried inside `upload_s`.
+mod analyse;
 mod cleanup;
 mod collect;
 mod drive;
 #[cfg(test)]
 mod drive_tests;
+mod finish;
+pub mod host;
+#[cfg(test)]
+mod host_tests;
+mod hosted;
 mod launch;
 pub mod plan;
 mod prechecks;
 mod provision;
+mod report;
 pub mod retry;
 mod run;
 #[cfg(test)]
@@ -52,10 +59,12 @@ use crate::{
     store::{Eligibility, Store},
     waiter::{WaitError, Waiter},
 };
+pub use analyse::Analysed;
 use antinomie_monitor_core::RunSummary;
 pub use cleanup::Stopped;
 pub use collect::CollectEnd;
 pub use drive::Driven;
+pub use hosted::Hosted;
 pub use plan::Effective;
 pub use run::RunEnd;
 use std::time::Duration;
@@ -159,6 +168,10 @@ pub struct LaneEnv<'a> {
     pub host: &'a dyn HostChecks,
     /// Reads a run's `artifacts.json` ([`crate::waiter::load_artifacts`]).
     pub evidence: crate::waiter::Evidence<'a>,
+    /// The Triage crate behind the host stages (`analyse`, `report`).
+    pub triage: &'a dyn host::HostTriage,
+    /// The library tags the service writes itself.
+    pub tags: &'a dyn host::SampleTags,
 }
 
 pub struct LaneStages<'a, E: Engine> {

@@ -234,6 +234,7 @@ name = "antinomie-service"
 version = "0.9.0"
 dependencies = [
  "antinomie-monitor-core",
+ "antinomie-triage",
  "rusqlite",
  "rustix 1.1.5",
  "schemars",

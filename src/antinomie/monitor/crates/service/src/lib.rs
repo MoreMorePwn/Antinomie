@@ -38,6 +38,8 @@ pub mod schema;
 pub mod stages;
 /// The job store: SQLite, the state machine and the queue (card P3-2).
 pub mod store;
+/// The assessment and the label, and the policy's verdict rules (card P3-5).
+pub mod verdict;
 /// The engine waiter: commands, results and the waits a headless caller needs.
 pub mod waiter;
 /// The watchdog of a lane job (design 4.7.1).
