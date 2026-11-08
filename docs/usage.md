@@ -251,6 +251,12 @@ are options of that window), and **No screen** runs the VM with no display at al
 says the VM has no screen and how to change it. The guest sees the same devices
 in all three.
 
+On the VM screen tab, a click on the picture captures the keyboard for the
+guest. While it is captured the picture has an amber frame and a banner,
+"Keyboard captured. Press Ctrl+Alt to release it.", and the bar above reads
+"Keyboard captured". Ctrl+Alt gives the keyboard back; so does the window losing focus, or
+another tab coming to the front. No app shortcut fires while it is captured.
+
 The **Overview** (the first tab of the work area) shows the selected VM: its name
 and state dot, the resource cards, the **Compute** card with the vCPU count and
 the RAM side by side, the configuration cards and the **Snapshots** box.
@@ -501,10 +507,14 @@ Pick the route in the Run form (**Network > Route**); the default comes from
 * **Tor**: either *Antinomie runs its own tor* (the default) or *Use a SOCKS
   address*. With its own tor, Antinomie starts `tor` when the run claims the
   route, on a free port of `127.0.0.1`, with a private data folder under its data
-  folder (`network/tor`, readable by you only) and no control port, and stops it
-  when the run ends. The run waits for Tor to finish bootstrapping (up to two
-  minutes) and does not start if it cannot; a first start is slower than later
-  ones, which reuse the folder. The other mode connects to a Tor you run yourself
+  folder (`network/tor/<VM id>`, readable by you only) and no control port, and stops it
+  when the run ends. The folder belongs to the VM and is kept between its runs,
+  so later runs reuse the consensus and guards that the first one downloaded and
+  start faster; only one tor uses it at a time. The run waits for Tor to finish
+  bootstrapping (up to two minutes). A start that makes no progress, or whose tor
+  exits, is tried once more (after an exit with the cached state cleared), and
+  the run does not start if the second try fails. Folders of VMs not used for 30
+  days are removed. The other mode connects to a Tor you run yourself
   (a `tor` service listens on `127.0.0.1:9050`) and starts nothing.
 * **Getting Tor and wireproxy**: you do not have to install them. A program you
   name in Settings is used first, then one on `PATH` or in the usual system
@@ -1199,7 +1209,9 @@ Panels can be dragged out into their own windows and docked back;
 The main window and detached workspace windows use Antinomie's own title bar,
 matching the selected theme. Drag its title to move the window; double-click
 the title or use **Maximize/Restore** to toggle its size. The other controls
-minimize and close the window. Resize using its edges or corners. Closing a
+minimize and close the window. Resize using its edges or corners. A new
+detached window opens inside the main window's panes, below its toolbar, and
+without a window manager too. Closing a
 detached terminal hides its view and leaves its program running; closing the
 main application follows the normal VM shutdown path. Embedded floating panes
 retain their existing controls, and QEMU's separate display uses its own frame.

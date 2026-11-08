@@ -4,7 +4,7 @@
 use super::{WAIT, no_data, scratch};
 use crate::route::{
     Gateway, GatewayNet, RouteConfig, RouteKind, TorMode, config::TorLaunch,
-    tor::bootstrap_progress, tor::start_tor, tor::torrc,
+    tor::bootstrap_progress, tor::lock_slot, tor::start_tor, tor::torrc,
 };
 use std::{os::unix::fs::PermissionsExt, path::Path, time::Duration};
 
@@ -26,6 +26,8 @@ torrc = args[args.index("-f") + 1]
 text = open(torrc).read()
 port = int(re.search(r"SocksPort 127\.0\.0\.1:(\d+)", text).group(1))
 assert "Log notice stdout\n" in text, text
+with open(os.path.join(os.path.dirname(torrc), "starts.txt"), "a") as starts:
+    starts.write("start\n")
 with open(os.path.join(os.path.dirname(torrc), "seen.txt"), "w") as seen:
     seen.write(os.environ.get("LD_LIBRARY_PATH", "") + "\n" + " ".join(args) + "\n")
 srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -417,5 +419,185 @@ fn a_real_tor_accepts_the_generated_torrc_and_stays_up() {
     assert!(said.contains("DisableNetwork is set"), "{said}");
     assert!(child.try_wait().unwrap().is_none(), "tor exited");
     drop(child);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+fn starts(state: &Path) -> usize {
+    std::fs::read_to_string(state.join("starts.txt")).map_or(0, |text| text.lines().count())
+}
+
+#[test]
+fn the_same_slot_is_reused_between_starts_with_its_cached_state() {
+    let dir = scratch("tor-reuse");
+    let tor = launch(&dir, script(&dir, "tor", FAKE_TOR));
+    let state = tor.state_root.join("vm1");
+    let (first, _) = start_tor(&tor, "vm1", WAIT).unwrap();
+    // What tor caches in its data folder.
+    std::fs::write(state.join("data/cached-microdesc-consensus"), b"consensus").unwrap();
+    drop(first);
+    let (second, _) = start_tor(&tor, "vm1", WAIT).unwrap();
+    assert_eq!(starts(&state), 2);
+    assert_eq!(
+        std::fs::read(state.join("data/cached-microdesc-consensus")).unwrap(),
+        b"consensus"
+    );
+    for private in [&state, &state.join("data")] {
+        assert_eq!(mode(private), 0o700);
+    }
+    assert_eq!(mode(&state.join("lock")), 0o600);
+    // Another slot is another folder.
+    drop(second);
+    let (_other, _) = start_tor(&tor, "vm2", WAIT).unwrap();
+    assert!(
+        !tor.state_root
+            .join("vm2/data/cached-microdesc-consensus")
+            .exists()
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn one_tor_runs_per_data_folder() {
+    let dir = scratch("tor-lock");
+    let tor = launch(&dir, script(&dir, "tor", FAKE_TOR));
+    let (first, _) = start_tor(&tor, "vm1", WAIT).unwrap();
+    let error = start_tor(&tor, "vm1", WAIT).err().unwrap();
+    assert!(error.contains("another tor is already using"), "{error}");
+    // The refused start did not touch the running tor's folder.
+    assert_eq!(starts(&tor.state_root.join("vm1")), 1);
+    drop(first);
+    assert!(start_tor(&tor, "vm1", WAIT).is_ok());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A tor that stalls at 40% on its first start in a folder and is fine after.
+fn stalls_once() -> String {
+    FAKE_TOR.replace(
+        "LAST = 100",
+        "marker = os.path.join(os.path.dirname(torrc), \"stalled-once\")\n\
+         LAST = 100 if os.path.exists(marker) else 40\n\
+         open(marker, \"w\").close()",
+    )
+}
+
+#[test]
+fn a_stalled_bootstrap_is_retried_once_and_keeps_the_cached_state() {
+    let dir = scratch("tor-stall");
+    let tor = launch(&dir, script(&dir, "tor", &stalls_once()));
+    let state = tor.state_root.join("vm1");
+    std::fs::create_dir_all(state.join("data")).unwrap();
+    std::fs::write(state.join("data/cached-microdesc-consensus"), b"consensus").unwrap();
+    let began = std::time::Instant::now();
+    let (managed, port) = start_tor(&tor, "vm1", Duration::from_secs(4)).unwrap();
+    // The stall was noticed after half the wait, not the whole of it.
+    assert!(
+        began.elapsed() < Duration::from_secs(4),
+        "{:?}",
+        began.elapsed()
+    );
+    assert_eq!(starts(&state), 2);
+    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
+    assert!(state.join("data/cached-microdesc-consensus").exists());
+    drop(managed);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_tor_that_stalls_twice_is_an_error_after_one_retry() {
+    let dir = scratch("tor-stall2");
+    let tor = launch(
+        &dir,
+        script(&dir, "tor", &FAKE_TOR.replace("LAST = 100", "LAST = 40")),
+    );
+    let error = start_tor(&tor, "vm1", Duration::from_millis(1600))
+        .err()
+        .unwrap();
+    assert!(
+        error.contains("did not finish bootstrapping within 1 s"),
+        "{error}"
+    );
+    assert!(error.contains("stuck at 40%"), "{error}");
+    assert!(error.contains("after a second start"), "{error}");
+    assert_eq!(starts(&tor.state_root.join("vm1")), 2);
+    // The folder stays for the next run; the lock is free again.
+    assert!(lock_is_free(&tor.state_root.join("vm1")));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+fn lock_is_free(state: &Path) -> bool {
+    let file = std::fs::File::open(state.join("lock")).unwrap();
+    file.try_lock().is_ok()
+}
+
+#[test]
+fn a_tor_that_exits_on_its_cached_state_is_retried_on_a_fresh_data_folder() {
+    let dir = scratch("tor-corrupt");
+    let broken = FAKE_TOR.replace(
+        "port = int(",
+        "data = os.path.join(os.path.dirname(torrc), \"data\")\n\
+         if os.path.exists(os.path.join(data, \"corrupt\")):\n\
+         \x20   sys.stderr.write(\"Could not read the state file\\n\"); sys.exit(1)\n\
+         port = int(",
+    );
+    let tor = launch(&dir, script(&dir, "tor", &broken));
+    let state = tor.state_root.join("vm1");
+    std::fs::create_dir_all(state.join("data")).unwrap();
+    std::fs::write(state.join("data/corrupt"), b"x").unwrap();
+    let (managed, port) = start_tor(&tor, "vm1", WAIT).unwrap();
+    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
+    assert!(!state.join("data/corrupt").exists());
+    assert_eq!(mode(&state.join("data")), 0o700);
+    drop(managed);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn month_old_unused_slots_are_removed_and_the_rest_kept() {
+    let dir = scratch("tor-prune");
+    let tor = launch(&dir, script(&dir, "tor", FAKE_TOR));
+    let age = |name: &str, days: u64| {
+        let path = tor.state_root.join(name);
+        std::fs::create_dir_all(path.join("data")).unwrap();
+        let old = std::time::SystemTime::now() - Duration::from_secs(days * 24 * 3600);
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        path
+    };
+    std::fs::create_dir_all(&tor.state_root).unwrap();
+    let stale = age("ant-1234", 40);
+    let recent = age("vm-recent", 3);
+    let busy = age("vm-busy", 40);
+    let held = lock_slot(&busy).unwrap();
+    held.set_modified(std::time::SystemTime::now() - Duration::from_secs(40 * 24 * 3600))
+        .unwrap();
+    let (_managed, _) = start_tor(&tor, "vm1", WAIT).unwrap();
+    assert!(!stale.exists(), "a month-old slot stays");
+    assert!(recent.exists() && busy.exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_gateway_with_a_tor_slot_keeps_one_folder_across_vm_starts() {
+    let dir = scratch("tor-slot");
+    let program = script(&dir, "tor", FAKE_TOR);
+    let config = own_config(&dir, &program);
+    let net = || GatewayNet::from_nat(&crate::stealth::NatNetwork::default()).unwrap();
+    let state = dir.join("network/tor/vm-7");
+    // Two VM starts: each has a folder of its own for the gateway.
+    for (index, name) in ["runtime-a", "runtime-b"].into_iter().enumerate() {
+        let work = dir.join(name);
+        crate::storage::private_dir(&work).unwrap();
+        let gateway = Gateway::start(&work, net()).unwrap().with_tor_slot("vm-7");
+        gateway
+            .claim("run1", config.spec(&dir, RouteKind::Tor).unwrap())
+            .unwrap();
+        assert_eq!(starts(&state), index + 1);
+        gateway.release("run1");
+        drop(gateway);
+    }
+    assert!(!dir.join("network/tor/runtime_a").exists());
+    assert!(!dir.join("network/tor/runtime-b").exists());
     let _ = std::fs::remove_dir_all(dir);
 }

@@ -222,12 +222,20 @@ The gateway starts on `Drop` (nothing leaves) and a run changes it only through
   NXDOMAIN. The 198.18.0.0/16 placeholders are cleared when the route changes.
 * **Own tor** (`route/tor.rs`). `start_tor` runs in `Gateway::claim` through
   `managed::start_for`, so a failure drops the process and leaves the gateway on
-  Drop. It makes `<data>/network/tor/<slot>` (the slot is the gateway's runtime
-  folder name; one tor per gateway, so two VMs never contend for a DataDirectory
-  lock) and its `data` folder with mode 0700, writes `torrc` (0600) with
+  Drop. It makes `<data>/network/tor/<slot>` (the slot is the VM's id, set with
+  `Gateway::with_tor_slot`, so the consensus, descriptors and guards cached in
+  `data` are reused by every run of the VM; before 0.9.0 it was the gateway's
+  runtime folder, new for each VM start, and `ant-<id>` when the socket path was
+  long) and its `data` folder with mode 0700. The slot's `lock` file is held
+  with `flock` for as long as tor runs (it travels in `Managed`), so one tor
+  uses a data folder at a time; a second start is refused with a message. A
+  bootstrap with no progress for half of `TOR_WAIT`, or a tor that exits before
+  100%, is tried once more; after an exit `data` is removed first, as the cache
+  may be corrupt. Slots untouched for 30 days and not locked are removed at the
+  next start. `torrc`, writes `torrc` (0600) with
   `DataDirectory`, `SocksPort 127.0.0.1:<free port>`, `ControlPort 0`,
-  `CookieAuthentication 0`, `ClientOnly 1`, `SafeLogging 1`, `Log notice file
-  <slot>/tor.log` and, for the bundle, `GeoIPFile`/`GeoIPv6File`; no other
+  `CookieAuthentication 0`, `ClientOnly 1`, `SafeLogging 1`, `Log notice stdout`
+  (stdout is `<slot>/tor.log`) and, for the bundle, `GeoIPFile`/`GeoIPv6File`; no other
   listener is configured. The port comes from binding 127.0.0.1:0 and releasing
   it; if something takes it first tor cannot bind, exits, and the route reports
   tor's own output (`tor.out`). tor runs with `--defaults-torrc` pointing at an

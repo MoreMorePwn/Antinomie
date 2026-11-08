@@ -183,6 +183,8 @@ pub struct Gateway {
     thread: Option<JoinHandle<()>>,
     socket: PathBuf,
     work_dir: PathBuf,
+    /// Names the own tor's data folder: stable for a VM so runs reuse it.
+    tor_slot: Option<String>,
 }
 
 impl Gateway {
@@ -239,7 +241,16 @@ impl Gateway {
             thread: Some(thread),
             socket,
             work_dir: dir.to_path_buf(),
+            tor_slot: None,
         })
+    }
+
+    /// Names the own tor's data folder after `slot` (the VM's id) instead of
+    /// the gateway's folder, which is new for every VM start, so a later run
+    /// finds the consensus, descriptors and guards of the earlier ones.
+    pub fn with_tor_slot(mut self, slot: &str) -> Self {
+        self.tor_slot = Some(slot.to_owned());
+        self
     }
 
     /// The socket QEMU's `-netdev stream` connects to.
@@ -327,9 +338,9 @@ impl Gateway {
         }
         let mut spec = spec;
         let slot = self
-            .work_dir
-            .file_name()
-            .and_then(|name| name.to_str())
+            .tor_slot
+            .as_deref()
+            .or_else(|| self.work_dir.file_name().and_then(|name| name.to_str()))
             .map(|name| name.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "_"))
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "gateway".into());

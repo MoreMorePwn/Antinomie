@@ -24,6 +24,8 @@ pub struct Managed {
     _record: super::helpers::Record,
     /// The program, for messages ("wireproxy", "tor").
     name: &'static str,
+    /// A lock file held while the program runs (tor's data folder).
+    _lock: Option<std::fs::File>,
 }
 
 impl Managed {
@@ -32,7 +34,14 @@ impl Managed {
             child,
             _record: record,
             name,
+            _lock: None,
         }
+    }
+
+    /// Keeps `lock` for as long as the program lives.
+    pub(super) fn holding(mut self, lock: std::fs::File) -> Self {
+        self._lock = Some(lock);
+        self
     }
 
     /// How the program ended, when it has; `None` while it runs.
