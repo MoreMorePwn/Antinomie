@@ -242,7 +242,8 @@ Ephemeral events (`job.progress`, `job.metrics`) are sent live only.
 **Operations served in 0.9.0.** `capabilities`, `health`, `upload.*`,
 `job.submit`, `job.get`, `job.list`, `job.cancel`, `job.retry`, `events.subscribe`,
 `events.list`, `artifact.list`, `artifact.get`, `report.get`, `policy.list`,
-`queue.status`, `queue.pause`, `queue.resume`, and every `recording.*` read. Not
+`queue.status`, `queue.pause`, `queue.resume`, the `lane.*` operations below, and
+every `recording.*` read. Not
 served by the daemon in 0.9.0 (`unsupported`; the direct commands work beside a
 running daemon): `job.delete`, `sample.*`, `vm.list`, `base.list`,
 `custody.verify`. The reserved names of 5.11 (`run.`, `terminal.`, `rule.`,
@@ -255,6 +256,20 @@ the sample named by its library hash, no idempotency key, the given `overrides`
 replacing the original's one field at a time, the current policy, and
 `repeat_of` set. The job must be terminal (`precondition_failed` otherwise) and
 the caller its owner or a holder of `manage`.
+
+**Lane operations** (an addition of this binding; section 5.3 has none for lanes,
+and the CLI's `auto lane` commands need them while a daemon owns the folder):
+
+| Op | Scope | Params | Result |
+|---|---|---|---|
+| `lane.list` | `read` | `lane?` (ignored) | `[{lane, vm_id, vm_name, clean_snapshot_id, base_identity, quarantine, quarantine_detail, failures, busy_with, collected, problems[]}]`; `problems` are the checks of `lane.unquarantine` in words |
+| `lane.reset` | `manage` | `lane?` (default `lane-1`) | The lane after the revert: the clean snapshot restored, the guest answering, the VM stopped and settled; a quarantine is lifted. A failed revert keeps the lane as it was |
+| `lane.unquarantine` | `manage` | `lane?` | The lane with the quarantine lifted when the checks pass (`precondition_failed` naming the failing check otherwise) |
+
+`lane.reset` and `lane.unquarantine` are carried out by the lane's own thread and
+only while no job runs: a busy lane answers `conflict` at once (pause the queue
+first), and a request not reached within its wait (900 s, 60 s) is dropped, never
+run late. Each sends `lane.state` with the reason.
 
 New `details.reason` values of this binding: `too_many_requests`, `rate_limited`,
 `too_many_connections`, `too_many_subscriptions`, `service_stopping`, `cancelled`.

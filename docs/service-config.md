@@ -70,6 +70,16 @@ VM and exits 130; recovery at the next start finishes the rest. `SIGHUP` reads
 `policies/` and `service.toml` again (a file with an error keeps the old set);
 `SIGUSR1` writes the queue's state to the log.
 
+## Verdict keys
+
+`[verdict] mapping` is `default` (the mapping of the design: `malicious`,
+`suspicious`, `clean_observed`, `inconclusive`); `[[verdict.rule]]` entries (`when`,
+`label`, `score`) replace it with rules over a small field set. `[verdict]
+tag_library = true` (default false) tags the library sample with
+`auto:label=<label>` and `auto:policy=<name>` when a job of the policy ends, under
+the custody actor `auto:policy-<name>`; a tag that cannot be written is a job
+warning (`library_tag`), never a failure.
+
 ## Policies and running jobs
 
 A job freezes the policy it was submitted under: the digest (SHA-256 of the

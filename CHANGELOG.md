@@ -45,9 +45,9 @@ x86 programs by their own table.
   (`antinomie-cli --help`) with `doctor`, `capabilities` and `config`
   (`path`, `get`, `set`, `validate`), the output formats human, json and
   ndjson, and fixed exit codes. It does not link the GUI libraries. See
-  "Command line" in docs/usage.md. The job daemon, the `auto` commands and
-  watch folders are not part of this build yet; `--daemon` and `--socket` are
-  reserved for them and commands run in the calling process.
+  "Command line" in docs/usage.md. `--daemon`, `--direct` and `--socket` choose
+  how an `auto` command reaches the job daemon; the other commands run in the
+  calling process.
 
 - **Engine settings live in the data folder.** The window now keeps its engine
   settings (detection and report options, limits, quotas, disk view) in
@@ -123,6 +123,31 @@ x86 programs by their own table.
   and report (up to 120 s, `[daemon] shutdown_host_grace_s`) and puts a job in
   its VM stages back in the queue; a second signal within 5 s stops at once;
   SIGHUP reloads the policies. See docs/job-api-1.md and docs/service-config.md.
+
+- **`antinomie-cli auto init` and the lane commands (ANT-T0378).** `auto init`
+  makes the Auto mode lane on an installed base: it creates a routed VM, boots it
+  once until the guest answers, stops it, waits until its disk has settled, takes
+  the clean snapshot every job starts from, records the lane, and writes a default
+  policy pointed at it when the folder has none. `auto lane list` shows the lane and
+  what would keep it from a job; `auto lane reset --yes` reverts it to its clean
+  snapshot now (lifting a quarantine when that works); `auto lane unquarantine`
+  lifts a quarantine without reverting when the checks pass. With a daemon running,
+  the lane commands go to it and run when no job does.
+
+- **Submitting jobs: `antinomie-cli auto submit` and friends (ANT-T0381).** `auto
+  submit FILE` uploads the file to the daemon and queues a job (`--policy`,
+  `--timeout-run`, `--args`, `--route drop|inet_sim`, `--formats`,
+  `--evidence-bundle` and more, within the policy's ceilings); `--wait` exits with
+  the job's code, `--follow` streams its events as NDJSON, `--verdict-exit` exits
+  30, 31 or 32 for a succeeded job labelled suspicious, malicious or inconclusive
+  (a partial or failed job keeps 11 or 10), and `--out DIR` copies the reports.
+  Without a daemon `auto submit` runs the job in the command and exits with its
+  code. `auto status`, `list`, `wait`, `events` (`--since`, `--follow`, `--all`),
+  `result` (the label, its basis and the report paths), `artifacts`, `fetch`,
+  `cancel`, `retry`, `queue status|pause|resume` and `policy list` complete it; the
+  reading ones work without a daemon. A policy's `[verdict] tag_library = true`
+  tags the sample `auto:label=...` and `auto:policy=...` in the library, with the
+  automation actor in its custody chain. See "Auto mode" in docs/usage.md.
 
 - **Exporting a large run no longer reads its recording a second time
   (ANT-T0412).** The index Triage makes of a run when it opens it is kept for

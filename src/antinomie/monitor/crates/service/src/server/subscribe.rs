@@ -343,6 +343,23 @@ pub fn stream(
                 });
             }
             if stopping.load(Ordering::SeqCst) {
+                // What was committed before the stop still goes out (a job's
+                // `job.finished` at shutdown among it).
+                while let Ok(event) = subscription.events.try_recv() {
+                    let sent = if event.gseq.is_none() {
+                        Sent::Ok
+                    } else {
+                        run.stored(event)
+                    };
+                    if let Sent::End(end) = sent {
+                        return Ok(end);
+                    }
+                    if run.cursor.finished {
+                        return Ok(StreamEnd::Finished {
+                            last_seq: run.cursor.last_seq,
+                        });
+                    }
+                }
                 return Ok(StreamEnd::Stopping);
             }
             if subscription.overflowed.load(Ordering::SeqCst) {

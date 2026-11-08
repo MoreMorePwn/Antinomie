@@ -255,6 +255,9 @@ pub struct VerdictPolicy {
     pub mapping: VerdictMapping,
     /// A custom mapping; with none, the default mapping of 4.9.2 applies.
     pub rule: Vec<VerdictRule>,
+    /// Tag the library sample with `auto:label=<label>` and
+    /// `auto:policy=<name>` when a job of this policy ends (4.9.3).
+    pub tag_library: bool,
 }
 
 impl Default for VerdictPolicy {
@@ -262,6 +265,7 @@ impl Default for VerdictPolicy {
         Self {
             mapping: VerdictMapping::Name("default".into()),
             rule: Vec::new(),
+            tag_library: false,
         }
     }
 }

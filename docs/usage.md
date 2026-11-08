@@ -1650,7 +1650,8 @@ global flags may also follow the command.
 |---|---|
 | `--data-dir PATH` | Data directory (default `$HOME/antinomie`; `~` is expanded). Use a directory of its own for automation, never the one the window uses |
 | `--bundle PATH`, `--qemu PATH`, `--qemu-img PATH`, `--tcg`, `--no-headless` | Engine options, as in the window. The CLI is headless unless `--no-headless` is given |
-| `--direct`, `--daemon`, `--socket PATH` | Reserved for the job daemon, which this build does not have: every command runs in the calling process (`--direct` and `--daemon` conflict) |
+| `--socket PATH` | The daemon's socket (default `<data>/run/antinomie.sock`) |
+| `--daemon`, `--direct` | For the `auto` commands: `--daemon` requires a running daemon (exit 21 when none answers), `--direct` never uses one. Without either, an `auto` command uses the daemon when one answers. The other commands always run in the calling process (`--direct` and `--daemon` conflict) |
 | `-o, --format human\|json\|ndjson` | Output format; `human` on a terminal, `json` otherwise |
 | `--color auto\|always\|never` | Colour of human output; `NO_COLOR` is honoured |
 | `-q`, `-v`, `-vv`, `--log-format text\|json` | Log lines on standard error |
@@ -1674,18 +1675,19 @@ per line: a list command prints its items and then a last line
 | 3 | not_found | Sample, run, VM, base or job does not exist |
 | 4 | invalid | The arguments were refused (`invalid_argument`, `precondition_failed`, `conflict`) |
 | 5 | denied | Policy or file permission |
-| 10 | job_failed | `run exec` waited for the run and it failed |
-| 11 | job_partial | `run exec` waited for the run and it ended partial |
-| 12, 13 | job_cancelled, job_rejected | `run exec` waited for a run that was cancelled or rejected |
-| 14 | wait_timeout | A wait ran out: the engine did not answer in time, or `--timeout` passed (the VM is stopped) |
+| 10 | job_failed | A waited job (or `run exec`) failed |
+| 11 | job_partial | A waited job (or `run exec`) ended partial |
+| 12, 13 | job_cancelled, job_rejected | A waited job was cancelled, or a submitted job was rejected |
+| 14 | wait_timeout | A wait ran out: the engine did not answer in time, or `--timeout` passed (the job is still queued or running; `run exec` stops the VM) |
 | 20 | dependency | A required tool is missing; `doctor` shows which |
 | 21 | busy | The data directory is owned by another process, or the daemon is starting or stopping |
 | 22 | quota | `quota_exceeded` |
-| 30 to 32 | suspicious, malicious, inconclusive | With `--verdict-exit` only (reserved for Auto mode, not produced yet) |
+| 30 to 32 | suspicious, malicious, inconclusive | With `--verdict-exit` only: the waited job succeeded and its label is `suspicious` (30), `malicious` (31) or `inconclusive` (32). The job's state comes first: a partial or failed job exits 11 or 10 whatever its label |
 | 130 | interrupted | Interrupted with Ctrl-C |
 
-**Commands in this build.** The job daemon, the `auto` commands, watch folders and
-the web layer are not shipped yet; this list is what `antinomie-cli --help` shows.
+**Commands in this build.** This list is what `antinomie-cli --help` shows; the
+`auto` commands are in [Auto mode](#auto-mode-090) below. Watch folders and the web
+layer are not shipped yet.
 
 - `doctor [--require tool,...]` lists the runtime tools and exits 20 when a
   required one is missing. Without `--require` the tools the window also treats as
@@ -1822,10 +1824,10 @@ the web layer are not shipped yet; this list is what `antinomie-cli --help` show
   `config validate [--policy NAME]` checks `service.toml` and `policies/*.toml`
   without starting anything (see [service configuration](service-config.md)); it
   prints each problem as `file:line:column` and exits 4 when there is an error.
-- Not shipped yet: submitting and waiting for jobs, the daemon and its socket, watch
-  folders, and listing or exporting recordings from the command line (`run list`,
-  `run show`, `run export`). The job contract they will
-  use is written down in [Job API, version 1](job-api-1.md).
+- Not shipped yet: watch folders, retention (`auto gc`), result files and
+  notifications, and listing or exporting recordings from the command line (`run
+  list`, `run show`, `run export`). The job contract is written down in [Job API,
+  version 1](job-api-1.md).
 
 ### Auto mode (0.9.0)
 
@@ -1850,6 +1852,65 @@ and serves the job API on `<data>/run/antinomie.sock`.
 | a second one within 5 s | Stops at once, VM included (exit 130); the next start finishes the rest |
 | `SIGHUP` | Reads `policies/` and `service.toml` again; a file with an error keeps the old settings. Jobs already queued keep the policy they were submitted under |
 | `SIGUSR1` | Writes the queue's state to the log |
+
+**Setting up the lane.** A lane is one VM kept for automation, with a clean
+snapshot that every job starts from.
+
+```text
+antinomie-cli --data-dir ~/auto base install ./bases/busybox
+antinomie-cli --data-dir ~/auto auto init --base busybox --cpus 2 --ram-mib 2048
+```
+
+`auto init` creates the lane VM (`--name`, default `auto-1`) on a routed network
+(each job chooses where its traffic goes; between runs nothing leaves), boots it
+once and waits for the guest to answer, stops it, waits until its disk has settled,
+takes the Disk snapshot `auto-clean` (`--snapshot`) and writes
+`<data>/service/lanes/lane-1.json`. When the folder has no policy yet it writes
+`policies/default.toml`, pointed at the new VM; that policy accepts ELF x86-64
+programs only (add `"sh"` to `[sample] accept_types` for shell scripts). A Debian
+base needs a guest account: `--user NAME --password-stdin`, the password on
+standard input. `auto init` runs in the calling process, so stop the daemon first;
+`--replace` makes a new lane VM for an existing lane (a new base) and keeps the old
+VM for you to delete. `auto lane list` shows the lane, whether it is quarantined and
+what would keep it from a job; `auto lane reset --yes` reverts the VM to its clean
+snapshot now and lifts a quarantine when that works; `auto lane unquarantine` lifts
+it without reverting when the checks pass (the clean snapshot is there, the VM is
+stopped, nothing is still being saved).
+
+**Submitting and following jobs.**
+
+| Command | What it does |
+|---|---|
+| `auto submit FILE` (or `--sha256 HEX`) | Uploads the file to the daemon and queues a job; prints the job. `--policy`, `--priority`, `--label K=V`, `--timeout-run S`, `--args ...`, `--env K=V`, `--as user\|root\|UID:GID`, `--route drop\|inet_sim`, `--static none\|triage\|CHECKS`, `--no-static`, `--formats html,pdf,json,misp,stix,md`, `--evidence-bundle`, `--defang`/`--no-defang`, `--idempotency-key K`, `--name`. The policy decides what a job may change. `--wait` waits for the end and exits with the job's code; `--follow` also prints the job's events as NDJSON; `--verdict-exit` waits and exits 30, 31 or 32 for a succeeded job labelled suspicious, malicious or inconclusive; `--out DIR` copies the report files there. A rejected job exits 13 |
+| `auto status [JOB]` | One job, or the queue and the lane |
+| `auto list` | Jobs, newest first: `--state`, `--outcome`, `--sha256`, `--label K[=V]`, `--since 24h`, `--limit`, `--cursor` |
+| `auto wait JOB...` | Waits until the jobs have ended (`--timeout` bounds it, exit 14) and exits with the worst code; `--verdict-exit` as above |
+| `auto events JOB` | The job's stored events; `--since SEQ` starts after an event, `--follow` keeps printing new ones until the job ends, `--types job.stage,job.state` filters. `auto events --all --follow [--since GSEQ]` follows every job and the engine |
+| `auto result JOB` | The outcome, the label, its score and basis sentence, and the paths of the report files |
+| `auto artifacts JOB`, `auto fetch JOB KIND [--out PATH\|-]` | The job's artifacts; copy one (`html`, `json`, ..., or `report.bundle`) to a file, a folder or standard output |
+| `auto cancel JOB [--reason TEXT]` | A queued job is cancelled at once; a running one stops its run and VM and ends `cancelled` (its recording is kept) |
+| `auto retry JOB [--override KEY=VALUE]` | A new job from a finished one, with `repeat_of` set |
+| `auto queue status\|pause\|resume` | The queue; a paused queue starts no job (running jobs finish) |
+| `auto policy list` | The policies you may submit to |
+
+Without a daemon, the reading commands read the job store directly (they work
+beside the window), `cancel` and `queue pause/resume` take the data folder for a
+moment, and **`auto submit` runs the job in the command itself**: it owns the data
+folder while the job runs and exits with the job's code, so one command takes an ELF
+to a report:
+
+```text
+antinomie-cli --data-dir ~/auto auto submit ./sample.elf --verdict-exit --out ./report
+echo $?     # 0 clean_observed, 30 suspicious, 31 malicious, 32 inconclusive, 10 failed, 11 partial
+```
+
+**The label.** A succeeded job has an assessment: the raw Triage assessment, the
+highest tier, a policy label (`malicious`, `suspicious`, `clean_observed`,
+`inconclusive`), an optional score and the `basis` sentence that says why.
+`clean_observed` means "nothing seen in this run", not "clean". With `[verdict]
+tag_library = true` in a policy, the sample also gets the library tags
+`auto:label=<label>` and `auto:policy=<name>`, recorded in its custody chain under
+the actor `auto:policy-<name>`.
 
 **Who can talk to the daemon.** Only you. The socket file can be opened only by
 its owner (mode 0600, in a folder only you can enter, 0700), and on every
