@@ -5,6 +5,9 @@
 //! checkpoints and on [`crate::engine::Engine`] for the engine.
 pub mod check;
 pub mod process;
+pub mod provision;
+#[cfg(test)]
+mod provision_tests;
 pub mod recover;
 pub mod reset;
 pub mod state;

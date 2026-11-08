@@ -71,9 +71,14 @@ pub enum Command {
 }
 
 impl Command {
-    /// The command prints events as they happen (`run exec --events`).
+    /// The command prints events as they happen (`run exec --events`,
+    /// `auto submit --follow`, `auto events --follow`).
     pub fn streams_events(&self) -> bool {
-        matches!(self, Command::Run(run) if run.streams_events())
+        match self {
+            Command::Run(run) => run.streams_events(),
+            Command::Auto(auto) => auto.streams_events(),
+            _ => false,
+        }
     }
 }
 

@@ -11,7 +11,7 @@ use crate::{
     },
     config::PolicyLookup,
     engine::Engine,
-    lane::{LaneDir, Processes},
+    lane::{LaneDir, Processes, provision},
     resources::Governor,
     stages::{
         Driven, HostChecks, Hosted, LaneEnv, LaneStages,
@@ -105,10 +105,45 @@ impl<E: Engine> LaneRunner for StagesRunner<'_, E> {
         }
     }
 
-    fn command(&mut self, op: &str, _params: Value) -> Result<Value, ApiError> {
-        Err(ApiError::new(
-            ErrorCode::Unsupported,
-            format!("{op} is not served by this daemon"),
-        ))
+    fn command(&mut self, op: &str, params: Value) -> Result<Value, ApiError> {
+        let request: super::lane_ops::LaneParams = super::service::params(params)?;
+        let lane = request.lane.unwrap_or_else(|| self.lane.clone());
+        let log = self.log;
+        let summary = match op {
+            "lane.reset" => provision::reset_lane(
+                &mut self.waiter,
+                self.env.lanes,
+                &lane,
+                self.env.procs,
+                &mut |text| log(&format!("{lane} reset: {text}")),
+            )?,
+            "lane.unquarantine" => {
+                provision::unquarantine_lane(&mut self.waiter, self.env.lanes, &lane)?
+            }
+            _ => {
+                return Err(ApiError::new(
+                    ErrorCode::Unsupported,
+                    format!("{op} is not a lane command"),
+                ));
+            }
+        };
+        if let Ok(file) = self.env.lanes.load(&lane)
+            && let Some(file) = file
+        {
+            let _ = self
+                .env
+                .store
+                .emit_engine(crate::api::event::EventBody::LaneState {
+                    lane: lane.clone(),
+                    state: if file.is_quarantined() {
+                        crate::api::event::LaneState::Quarantined
+                    } else {
+                        crate::api::event::LaneState::Idle
+                    },
+                    job_id: None,
+                    reason: Some(op.to_owned()),
+                });
+        }
+        super::service::to_value(&summary)
     }
 }
