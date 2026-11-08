@@ -392,6 +392,8 @@ impl TriageView {
         if timer {
             request.unchanged_since = self.scan.as_ref().map(|scan| scan.stamp.clone());
         }
+        // The index of the run stays for the report that follows.
+        request.keep_index = true;
         self.scan_began_finished = request.run_finished;
         self.scan_generation = self.scan_generation.saturating_add(1);
         let generation = self.scan_generation;

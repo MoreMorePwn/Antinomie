@@ -77,8 +77,6 @@ pub(in crate::triage) struct State {
     pub keys_open: bool,
     /// Indicators: the categories listed past their first few.
     pub more: [bool; 4],
-    /// The last Copy or Export said in words.
-    pub status: Option<String>,
     pub(super) built: Option<Built>,
     pub thumb: super::thumb::Thumb,
     /// The run's screenshot was clicked: the app opens it.

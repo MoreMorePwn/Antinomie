@@ -96,6 +96,10 @@ impl Logger {
     pub fn info(&self, message: &str) {
         self.log(Level::Info, message);
     }
+
+    pub fn warn(&self, message: &str) {
+        self.log(Level::Warn, message);
+    }
 }
 
 /// Control characters would let a sample name forge log lines.

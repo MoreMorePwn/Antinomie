@@ -73,7 +73,82 @@ pub fn run_info_of(input: &TriageInput<'_>) -> report::RunInfo {
 pub fn report_request(screen: &ScanRequest, input: &TriageInput<'_>) -> ScanRequest {
     let mut request = whole_run_request(screen);
     request.run_finished = input.run_finished;
+    // The index the report reads stays for the next export of the run.
+    request.keep_index = true;
     request
+}
+
+/// A recording of this many bytes or more is warned about before its export.
+pub const LARGE_RECORDING: u64 = 1 << 30;
+
+/// What reading a recording whole costs, per byte, as measured on a real run:
+/// a 3.5 GB recording took 71 minutes. It depends on what the run did (a
+/// recording of many small calls costs more per byte than one of large ones),
+/// so it is said as an estimate.
+pub const INDEX_BYTES_PER_SECOND: u64 = 850_000;
+
+/// An export that has to read a large recording.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LargeRun {
+    /// The telemetry of the run, all its segments.
+    pub bytes: u64,
+    /// About how long reading it takes, in seconds.
+    pub seconds: u64,
+}
+
+impl LargeRun {
+    /// The warning in words: how big, about how long, and what to do.
+    pub fn warning(&self) -> String {
+        let minutes = self.seconds.div_ceil(60);
+        let time = if minutes >= 120 {
+            format!("{} hours", minutes.div_ceil(30) as f64 / 2.0)
+        } else {
+            format!("{minutes} minutes")
+        };
+        format!(
+            "The recording is {} and the report has to read all of it: about {time} on \
+             this computer (an estimate). The progress shows below and Cancel stops it. \
+             The report is quicker when the run was just indexed here, with its recording \
+             unchanged.",
+            crate::values::short_size(self.bytes)
+        )
+    }
+}
+
+/// The telemetry of the run in `archive`, its earlier segments too, in bytes.
+pub fn recording_bytes(archive: &Path, request: &ScanRequest) -> u64 {
+    let archive = std::fs::canonicalize(archive).unwrap_or_else(|_| archive.to_path_buf());
+    segments::run_segments(&archive, request)
+        .iter()
+        .filter_map(|segment| std::fs::metadata(segment.directory.join("telemetry.raw")).ok())
+        .map(|meta| meta.len())
+        .sum()
+}
+
+/// Whether exporting `job` reads a large recording again: the recording is
+/// over [`LARGE_RECORDING`] and no index of it is at hand ([`scan_cache`], or
+/// `job.request.reuse`). `None` when the export is quick.
+pub fn large_run(job: &Job) -> Option<LargeRun> {
+    large_run_of(&job.archive, job.pcap.as_deref(), &job.request)
+}
+
+/// [`large_run`] for the recording in `archive` read with `request`.
+pub fn large_run_of(
+    archive: &Path,
+    pcap: Option<&Path>,
+    request: &ScanRequest,
+) -> Option<LargeRun> {
+    let bytes = recording_bytes(archive, request);
+    if bytes < LARGE_RECORDING || request.reuse.is_some() {
+        return None;
+    }
+    if scan_cache::recall(archive, pcap, false, request).is_some() {
+        return None;
+    }
+    Some(LargeRun {
+        bytes,
+        seconds: bytes / INDEX_BYTES_PER_SECOND,
+    })
 }
 
 /// Where the files go: the chosen folder, else the recording's `report`.
@@ -128,18 +203,27 @@ pub fn run_job(
     cancel: &Arc<AtomicBool>,
     status: &dyn Fn(&str),
 ) -> Result<Written, String> {
-    status(if job.request.reuse.is_some() {
+    // An index of this recording that is still current is the report's input.
+    let kept = job
+        .request
+        .reuse
+        .clone()
+        .or_else(|| scan_cache::recall(&job.archive, job.pcap.as_deref(), false, &job.request));
+    status(if kept.is_some() {
         "Using the index Triage already made..."
     } else {
         "Indexing the whole run..."
     });
-    let scan = scan_archive_query(
-        &job.archive,
-        job.pcap.as_deref(),
-        false,
-        cancel,
-        &job.request,
-    )?;
+    let scan = match kept {
+        Some(scan) => scan,
+        None => scan_archive_query(
+            &job.archive,
+            job.pcap.as_deref(),
+            false,
+            cancel,
+            &job.request,
+        )?,
+    };
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
     }

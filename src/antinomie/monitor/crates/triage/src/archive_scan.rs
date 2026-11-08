@@ -125,7 +125,11 @@ pub fn scan_archive_query(
     let mut files = scan.read_files(cancel, request)?;
     request.phase(scan_progress::Phase::Settling, 0);
     let network = scan.read_network(&mut files.pending, pcap, pcap_open, cancel, request)?;
-    scan.finish(files, network, pcap, pcap_open, cancel, request)
+    let done = scan.finish(files, network, pcap, pcap_open, cancel, request)?;
+    if request.keep_index {
+        scan_cache::remember(directory, &done);
+    }
+    Ok(done)
 }
 
 /// Count the fields of this call the guest had no decoder for (status

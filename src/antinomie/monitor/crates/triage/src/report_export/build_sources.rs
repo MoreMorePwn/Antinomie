@@ -11,7 +11,8 @@ use antinomie_monitor_core::{
 };
 use std::path::Path;
 
-pub fn network(scan: &ArchiveScan) -> Vec<NamedTable> {
+/// `run_ms`: the run's first call, ms since the epoch, for the times.
+pub fn network(scan: &ArchiveScan, run_ms: Option<u64>) -> Vec<NamedTable> {
     let mut tabs = network_tables(scan);
     let sources: [(&[&str], &[Vec<Cell>]); 4] = [
         (net_tabs::ENDPOINT_HEADERS, &scan.new_tabs.endpoints),
@@ -20,7 +21,7 @@ pub fn network(scan: &ArchiveScan) -> Vec<NamedTable> {
         (net_tabs::TLS_HEADERS, &scan.new_tabs.tls),
     ];
     for (named, (headers, rows)) in tabs.iter_mut().zip(sources) {
-        named.table.data = super::rows::network(&named.name, headers, rows);
+        named.table.data = super::rows::network(&named.name, headers, rows, run_ms);
     }
     tabs
 }

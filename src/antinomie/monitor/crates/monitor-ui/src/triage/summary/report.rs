@@ -397,14 +397,7 @@ pub(super) fn content(
                 ui.add_space(10.0);
                 panels::key_findings(ui, built, scan, &mut state.keys_open, &mut acts);
                 ui.add_space(10.0);
-                panels::indicators(
-                    ui,
-                    built,
-                    ioc_line.clone(),
-                    &mut state.more,
-                    &mut state.status,
-                    &mut acts,
-                );
+                panels::indicators(ui, built, ioc_line.clone(), &mut state.more, &mut acts);
                 ui.add_space(10.0);
             }
             relations::ui::show(ui, &mut state, &mut acts);

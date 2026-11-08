@@ -169,8 +169,28 @@ fn leading(text: &str) -> Option<u64> {
     digits.parse().ok()
 }
 
-/// A Network tab's rows, by the tab's columns.
-pub fn network(name: &str, headers: &[&str], rows: &[Vec<Cell>]) -> Vec<RowData> {
+/// A capture time (µs since the epoch) as ms since the epoch and ms since
+/// `run_ms`, the run's first call; a time before the run has no relative.
+pub fn capture_time(us: Option<u64>, run_ms: Option<u64>) -> (Option<u64>, Option<u64>) {
+    let Some(ms) = us.map(|us| us / 1000) else {
+        return (None, None);
+    };
+    (Some(ms), run_ms.and_then(|start| ms.checked_sub(start)))
+}
+
+/// The run's first call as ms since the epoch, through the clock anchor.
+pub fn run_start_ms(clock: Option<HostClockAnchor>, start_ns: Option<u64>) -> Option<u64> {
+    clock?.host_us(start_ns?).map(|us| us / 1000)
+}
+
+/// A Network tab's rows, by the tab's columns; `run_ms` is the run's first
+/// call ([`run_start_ms`]) for the times.
+pub fn network(
+    name: &str,
+    headers: &[&str],
+    rows: &[Vec<Cell>],
+    run_ms: Option<u64>,
+) -> Vec<RowData> {
     let col = |title: &str| headers.iter().position(|h| *h == title);
     let cell = |row: &[Cell], title: &str| -> String {
         col(title)
@@ -179,38 +199,49 @@ pub fn network(name: &str, headers: &[&str], rows: &[Vec<Cell>]) -> Vec<RowData>
             .unwrap_or_default()
     };
     rows.iter()
-        .map(|row| match name {
-            "Endpoints" => RowData {
-                endpoint: cell(row, "Endpoint"),
-                count: leading(&cell(row, "Frames")),
-                bytes: leading(&cell(row, "Bytes")),
-                ..RowData::default()
-            },
-            "Domains" => RowData {
-                domain: cell(row, "Domain"),
-                addresses: cell(row, "Resolved / connected IPs")
-                    .split(", ")
-                    .map(str::trim)
-                    .filter(|ip| !ip.is_empty())
-                    .map(str::to_owned)
-                    .collect(),
-                count: leading(&cell(row, "Queries")),
-                ..RowData::default()
-            },
-            "URLs" => RowData {
-                endpoint: cell(row, "Endpoint"),
-                domain: cell(row, "Host"),
-                ..RowData::default()
-            },
-            "TLS" => RowData {
-                endpoint: cell(row, "Endpoint"),
-                domain: cell(row, "Server name"),
-                count: leading(&cell(row, "Sessions")),
-                ..RowData::default()
-            },
-            _ => RowData::default(),
+        .map(|row| {
+            let mut data = network_row(name, row, &cell);
+            let first = number(row, "network.first_us").or(number(row, "frame.time_us"));
+            (data.time_ms, data.relative_ms) = capture_time(first, run_ms);
+            (data.last_ms, data.last_relative_ms) =
+                capture_time(number(row, "network.last_us"), run_ms);
+            data
         })
         .collect()
+}
+
+fn network_row(name: &str, row: &[Cell], cell: &dyn Fn(&[Cell], &str) -> String) -> RowData {
+    match name {
+        "Endpoints" => RowData {
+            endpoint: cell(row, "Endpoint"),
+            count: leading(&cell(row, "Frames")),
+            bytes: leading(&cell(row, "Bytes")),
+            ..RowData::default()
+        },
+        "Domains" => RowData {
+            domain: cell(row, "Domain"),
+            addresses: cell(row, "Resolved / connected IPs")
+                .split(", ")
+                .map(str::trim)
+                .filter(|ip| !ip.is_empty())
+                .map(str::to_owned)
+                .collect(),
+            count: leading(&cell(row, "Queries")),
+            ..RowData::default()
+        },
+        "URLs" => RowData {
+            endpoint: cell(row, "Endpoint"),
+            domain: cell(row, "Host"),
+            ..RowData::default()
+        },
+        "TLS" => RowData {
+            endpoint: cell(row, "Endpoint"),
+            domain: cell(row, "Server name"),
+            count: leading(&cell(row, "Sessions")),
+            ..RowData::default()
+        },
+        _ => RowData::default(),
+    }
 }
 
 /// The Summary's Key findings, worst first, with how many there are.

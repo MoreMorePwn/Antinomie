@@ -70,6 +70,7 @@ pub mod rules;
 pub mod run_end;
 pub mod run_state;
 pub mod saved_run;
+pub mod scan_cache;
 pub mod scan_progress;
 pub mod segments;
 pub mod sigma_events;
@@ -384,6 +385,9 @@ pub struct ScanRequest {
     /// An index of exactly this recording that is already made and current:
     /// the scan answers with it instead of reading the recording again.
     pub reuse: Option<ArchiveScan>,
+    /// Leave the index in the process ([`scan_cache`]) when it reads the run
+    /// whole, for the export or report that follows.
+    pub keep_index: bool,
 }
 
 impl ScanRequest {

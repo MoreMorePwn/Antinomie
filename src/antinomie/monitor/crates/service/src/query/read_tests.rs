@@ -420,7 +420,7 @@ fn the_trace_filters_by_process_and_hidden_groups() {
     let names: Vec<_> = hidden.items.iter().map(|row| row.name.as_str()).collect();
     assert_eq!(names, ["execve"], "openat, read and write are file calls");
     assert_eq!(hidden.total, Some(1));
-    // The q language arrives with the Triage move.
+    // The q language needs the service to use the Triage filter (card Q-4).
     let error = call(
         &service,
         "recording.trace.page",

@@ -430,8 +430,8 @@ impl Cursor {
         self.rows(&widths, None, &rows, size, true);
     }
 
-    /// The contents block: one line per section and per sub-heading of Files
-    /// and Network, each a link, with its page once `pages` knows it.
+    /// The contents block: one line per section and per sub-heading (the
+    /// same entries as the bookmarks), each a link, with its page once `pages` knows it.
     fn contents(&mut self, document: &Document, pages: Option<&BTreeMap<String, usize>>) {
         self.heading("Contents", "contents", false);
         let size = 9.0;
@@ -439,13 +439,11 @@ impl Cursor {
         let mut entries: Vec<(String, String, f32)> = Vec::new();
         for section in &document.sections {
             entries.push((section.title.clone(), section.id.clone(), 0.0));
-            if matches!(section.id.as_str(), "files" | "network") {
-                for block in &section.blocks {
-                    if let Block::Sub { title, id } = block
-                        && !id.is_empty()
-                    {
-                        entries.push((title.clone(), id.clone(), 14.0));
-                    }
+            for block in &section.blocks {
+                if let Block::Sub { title, id } = block
+                    && !id.is_empty()
+                {
+                    entries.push((title.clone(), id.clone(), 14.0));
                 }
             }
         }

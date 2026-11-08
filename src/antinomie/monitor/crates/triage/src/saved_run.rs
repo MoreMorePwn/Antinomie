@@ -226,7 +226,10 @@ impl SavedRun {
 
     /// The scan request ([`ScanRequest::for_run`]).
     pub fn request(&self) -> ScanRequest {
-        ScanRequest::for_run(&self.input(), &self.run, &self.settings)
+        let mut request = ScanRequest::for_run(&self.input(), &self.run, &self.settings);
+        // A report of the run next reads this index, not the recording again.
+        request.keep_index = true;
+        request
     }
 
     /// Index the whole run, as the GUI does when it is selected.
@@ -241,6 +244,11 @@ impl SavedRun {
         request: ScanRequest,
         cancel: &Arc<AtomicBool>,
     ) -> Result<ArchiveScan, String> {
+        if let Some(kept) =
+            scan_cache::recall(&self.run.directory, self.pcap.as_deref(), false, &request)
+        {
+            return Ok(kept);
+        }
         archive_scan::scan_archive_query(
             &self.run.directory,
             self.pcap.as_deref(),

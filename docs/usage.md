@@ -648,6 +648,12 @@ The network capture is the guest's own view on every route.
   and technique a report mentions is a link to its entry (the PDF has a
   contents block and internal links). See
   [the report guide](triage-report.md).
+  The export reads the run with no filter. When Triage already indexed the run
+  and its recording has not changed since, the report is built from that index
+  and the recording is not read again, whatever the tables on screen are
+  filtered to. A recording over 1 GB that has to be read is warned about in the
+  dialog first, with an estimate (about 70 minutes for 3.5 GB; Export becomes
+  **Export anyway**); the progress line and **Cancel** work as always.
 - **Other exports** (Summary > Indicators **Export**, the IOC tab's CSV and JSON,
   eBPF **Export binary and JSON**, Static analysis **Export**, **Export custody
   record…**) name what they write `antinomie-<kind>-<run or sample, 8
@@ -1668,7 +1674,10 @@ per line: a list command prints its items and then a last line
 | 3 | not_found | Sample, run, VM, base or job does not exist |
 | 4 | invalid | The arguments were refused (`invalid_argument`, `precondition_failed`, `conflict`) |
 | 5 | denied | Policy or file permission |
-| 10 to 14 | job_failed, job_partial, job_cancelled, job_rejected, wait_timeout | A waited job did not succeed (reserved for Auto mode, not produced yet) |
+| 10 | job_failed | `run exec` waited for the run and it failed |
+| 11 | job_partial | `run exec` waited for the run and it ended partial |
+| 12, 13 | job_cancelled, job_rejected | `run exec` waited for a run that was cancelled or rejected |
+| 14 | wait_timeout | A wait ran out: the engine did not answer in time, or `--timeout` passed (the VM is stopped) |
 | 20 | dependency | A required tool is missing; `doctor` shows which |
 | 21 | busy | The data directory is owned by another process, or the daemon is starting or stopping |
 | 22 | quota | `quota_exceeded` |
@@ -1752,7 +1761,7 @@ the web layer are not shipped yet; this list is what `antinomie-cli --help` show
   [Triage report export](triage-report.md)); formats and parts default to the
   export choices in `settings.json` (HTML and PDF, every part, defanged), and the
   files go to `--out` (default `report-<first 8 characters of the run id>` in the
-  current folder), never into the recording. `detect` runs the engines over the
+  current folder), never into the recording. A recording over 1 GB that has to be read is warned about on standard error first (and the JSON result carries `large_recording` with its size and the estimated seconds). `detect` runs the engines over the
   run's evidence as the Detection tab does: the same evidence check, the same frozen
   rule selection and the same sandbox. YARA needs the static analysis of the run's
   sample (`run exec --static`), IDS a capture (`run exec --net-capture`), Sigma the

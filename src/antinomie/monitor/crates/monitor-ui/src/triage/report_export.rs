@@ -13,7 +13,8 @@ pub(super) use antinomie_triage::report_export::context_key;
 #[cfg(test)]
 use antinomie_triage::report_export::{build, run_facts};
 use antinomie_triage::report_export::{
-    folder_of, not_started, report_request, run_info_of, run_job, sample_of, Job,
+    folder_of, large_run_of, not_started, report_request, run_info_of, run_job, sample_of, Job,
+    LargeRun,
 };
 
 #[cfg(test)]
@@ -79,6 +80,8 @@ pub(super) struct Dialog {
     close_refused: bool,
     /// The palette asked for the dialog: the Triage bar opens it on its next frame.
     pub(super) requested: bool,
+    /// The warning about a large recording, and when it was looked up.
+    large: Option<(Instant, Option<LargeRun>)>,
 }
 
 impl Default for Dialog {
@@ -92,6 +95,7 @@ impl Default for Dialog {
             exported: false,
             close_refused: false,
             requested: false,
+            large: None,
         }
     }
 }
@@ -181,6 +185,7 @@ impl TriageView {
             .as_ref()
             .is_some_and(|old| old.key == target.key);
         self.report.target = Some(target);
+        self.report.large = None;
         if !matches!(self.report.state, State::Running { .. }) {
             self.report.state = State::Idle;
         }
@@ -255,6 +260,7 @@ impl TriageView {
         match self.report_target(input) {
             Some(target) => {
                 self.report.target = Some(target);
+                self.report.large = None;
                 self.report.state = State::Idle;
                 self.report.exported = false;
             }
@@ -266,11 +272,28 @@ impl TriageView {
         }
     }
 
-    fn start_report(&mut self, ctx: &egui::Context) {
-        let Some(target) = self.report.target.clone() else {
-            return;
+    /// The warning for the Export button: the recording is large and no index
+    /// of it is at hand. Looked up again every two seconds, not every frame.
+    fn large_run_warning(&mut self) -> Option<LargeRun> {
+        if let Some((at, large)) = &self.report.large {
+            if at.elapsed() < Duration::from_secs(2) {
+                return large.clone();
+            }
+        }
+        let target = self.report.target.clone()?;
+        let large = if target.not_started.is_some() {
+            None
+        } else {
+            let request = self.report_scan_request(&target);
+            large_run_of(&target.archive, target.pcap.as_deref(), &request)
         };
-        let choices = self.report.choices.clone();
+        self.report.large = Some((Instant::now(), large.clone()));
+        large
+    }
+
+    /// The request the export reads the run with: the target's whole-run
+    /// request and, when the run is the one on screen, what its index made.
+    fn report_scan_request(&self, target: &Target) -> ScanRequest {
         let mut request = target.request.clone();
         // The screen's caches only fit the run on screen.
         if self.context_key.as_deref() == Some(target.key.as_str()) {
@@ -283,7 +306,7 @@ impl TriageView {
             // The index Triage made of the whole run, when the recording is
             // as it saw it: the export builds from it and reads nothing again.
             // That is the hour a large run's second index took.
-            let current = antinomie_triage::refresh::source_stamp(
+            let current = antinomie_triage::scan_cache::current_stamp(
                 &target.archive,
                 target.pcap.as_deref(),
                 target.pcap_open,
@@ -295,6 +318,16 @@ impl TriageView {
                 .filter(|scan| scan.whole_run && scan.stamp == current)
                 .cloned();
         }
+        request
+    }
+
+    fn start_report(&mut self, ctx: &egui::Context) {
+        let Some(target) = self.report.target.clone() else {
+            return;
+        };
+        let choices = self.report.choices.clone();
+        let mut request = self.report_scan_request(&target);
+        self.report.large = None;
         let progress = Arc::new(scan_progress::ScanProgress::default());
         request.progress = Some(Arc::clone(&progress));
         let folder = folder_of(&choices, &target.archive);
@@ -395,6 +428,13 @@ impl TriageView {
         let mut cancel_run = false;
         let mut close = false;
         let running = matches!(self.report.state, State::Running { .. });
+        // A recording over 1 GB that has to be read again: said before the
+        // wait, with an estimate, and Export becomes Export anyway.
+        let large = if running || self.report.exported {
+            None
+        } else {
+            self.large_run_warning()
+        };
         // The window is capped at a share of the content area; what the scroll
         // area leaves for the title and the footer keeps Export and Close in view.
         let tall = (crate::widgets::cap_size(crate::title_bar::content_rect(ctx)).y - 180.0)
@@ -418,6 +458,15 @@ impl TriageView {
                     .max_height(tall)
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
+                        if let Some(large) = &large {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(large.warning()).color(theme::warn()),
+                                )
+                                .wrap(),
+                            );
+                            ui.add_space(6.0);
+                        }
                         match &self.report.state {
                             State::Done(written) => {
                                 ui.label(theme::section_title(ui, "Written"));
@@ -577,7 +626,14 @@ impl TriageView {
                             }
                         } else {
                             if ui
-                                .add_enabled(ready, egui::Button::new("Export"))
+                                .add_enabled(
+                                    ready,
+                                    egui::Button::new(if large.is_some() {
+                                        "Export anyway"
+                                    } else {
+                                        "Export"
+                                    }),
+                                )
                                 .on_hover_text("Write the chosen files")
                                 .on_disabled_hover_text(if self.report.exported {
                                     "Already written. Change a choice to write another set."

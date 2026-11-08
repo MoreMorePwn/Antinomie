@@ -89,6 +89,27 @@ x86 programs by their own table.
   same for the same run and choices; the window's dialog and Detection tab work
   as before. See "Command line" in docs/usage.md.
 
+- **Exporting a large run no longer reads its recording a second time
+  (ANT-T0412).** The index Triage makes of a run when it opens it is kept for
+  the report: an export, or `antinomie-cli report`, of a recording that has not
+  changed (same files, sizes and modification times) builds the report from that
+  index and reads nothing again, even after you filtered or paged the tables on
+  screen. A 3.5 GB recording took 71 minutes to export. When a recording over
+  1 GB has to be read, the dialog says so before it starts, with an estimate
+  (Export becomes **Export anyway**) and `report` prints the same warning on
+  standard error and in its JSON result (`large_recording`); the progress line
+  and Cancel are unchanged.
+
+- **Run report polish (ANT-T0413).** The PDF contents page lists the
+  sub-headings of every section, the same entries as the PDF bookmarks. Network
+  and Indicators times read `+5.463 s · 17:38:21.480` like the other tables (the
+  JSON gains `last_ms`, `last_relative_ms` on Network rows and
+  `first_seen_relative_ms` on indicators). The process table shows an indented
+  tree (`+- child` under its parent) besides the Parent column; in the JSON the
+  Process cell no longer starts with hyphens (use the row's `depth`). The
+  Summary's Copy all and Export, and the IOC tab's Export, tell you with a
+  toast and an Activity row instead of a line that moved the page.
+
 - **Clock model for the boot age.** A new Clock model setting in a VM's Device
   profile (Auto, Always running, Suspend) chooses whether the boot age steps
   both guest clocks or only CLOCK_BOOTTIME. Auto picks Suspend on Debian bases,

@@ -393,3 +393,136 @@ fn the_option_keeps_a_clipped_escaped_preview_but_never_of_a_file_the_run_wrote(
     );
     assert!(table.rows[3][3].contains("kernel transfer"));
 }
+
+fn json_only() -> Choices {
+    Choices {
+        formats: vec![Format::Json],
+        ..Choices::default()
+    }
+}
+
+/// The statuses a job reports, to tell an index it made from one it reused.
+fn statuses(job: &Job) -> (Vec<String>, std::path::PathBuf) {
+    let said = std::sync::Mutex::new(Vec::new());
+    let written = run_job(job, &Arc::new(AtomicBool::new(false)), &|text| {
+        said.lock().unwrap().push(text.to_owned());
+    })
+    .unwrap();
+    let json = written
+        .files
+        .iter()
+        .find(|(l, _)| l == "JSON")
+        .unwrap()
+        .1
+        .clone();
+    (said.into_inner().unwrap(), json)
+}
+
+#[test]
+fn an_unchanged_recording_is_not_read_again_for_the_next_export() {
+    let (temp, pcap) = fixture();
+    let mut job = job(&temp, &pcap, json_only());
+    job.pcap = None;
+    job.request.keep_index = true;
+    let (first, first_json) = statuses(&job);
+    assert_eq!(first[0], "Indexing the whole run...");
+    let first_text = read(&first_json);
+    // The same recording again, even for a later export: the kept index.
+    job.now_ms += 1;
+    let (second, second_json) = statuses(&job);
+    assert_eq!(second[0], "Using the index Triage already made...");
+    let value = |text: &str| -> serde_json::Value {
+        let mut value: serde_json::Value = serde_json::from_str(text).unwrap();
+        value["generated_ms"] = serde_json::Value::Null;
+        value["generated"] = serde_json::Value::Null;
+        value
+    };
+    assert_eq!(value(&first_text), value(&read(&second_json)));
+    // A recording that grew is read again.
+    let mut raw = std::fs::OpenOptions::new()
+        .append(true)
+        .open(temp.directory.join("telemetry.raw"))
+        .unwrap();
+    crate::tests::write_rwx_calls(&mut raw, 3..4);
+    drop(raw);
+    let (third, _) = statuses(&job);
+    assert_eq!(third[0], "Indexing the whole run...");
+}
+
+#[test]
+fn an_export_that_asked_for_no_kept_index_leaves_none() {
+    let (temp, pcap) = fixture();
+    let mut job = job(&temp, &pcap, json_only());
+    job.pcap = None;
+    job.request.keep_index = false;
+    assert_eq!(statuses(&job).0[0], "Indexing the whole run...");
+    assert_eq!(statuses(&job).0[0], "Indexing the whole run...");
+}
+
+#[test]
+fn a_filtered_screen_index_is_never_the_report_input() {
+    let (temp, pcap) = fixture();
+    let mut job = job(&temp, &pcap, json_only());
+    job.pcap = None;
+    job.request.keep_index = true;
+    let mut filtered = job.request.clone();
+    filtered.filters[0] = "finding.rule == \"nothing-matches-this\"".into();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let screen = scan_archive_query(&temp.directory, None, false, &cancel, &filtered).unwrap();
+    assert!(!screen.whole_run);
+    assert_eq!(statuses(&job).0[0], "Indexing the whole run...");
+}
+
+#[test]
+fn a_recording_over_a_gigabyte_is_warned_about_with_an_estimate() {
+    let (temp, pcap) = fixture();
+    let job = job(&temp, &pcap, json_only());
+    assert_eq!(large_run(&job), None, "the fixture is a few kilobytes");
+    // A sparse file: 3.5 GB long, no disk used.
+    let raw = std::fs::OpenOptions::new()
+        .write(true)
+        .open(temp.directory.join("telemetry.raw"))
+        .unwrap();
+    raw.set_len(3_500_000_000).unwrap();
+    drop(raw);
+    let large = large_run(&job).expect("a 3.5 GB recording is large");
+    assert_eq!(large.bytes, 3_500_000_000);
+    // 3.5 GB at the measured rate is about 69 minutes.
+    assert_eq!(large.seconds, 3_500_000_000 / INDEX_BYTES_PER_SECOND);
+    let text = large.warning();
+    assert!(text.contains("3.3 GiB"), "{text}");
+    assert!(
+        text.contains("69 minutes") && text.contains("estimate"),
+        "{text}"
+    );
+    // Quick when an index of it is at hand.
+    let mut reuse = job.clone();
+    let small = job_with_small_scan();
+    reuse.request.reuse = Some(small);
+    assert_eq!(large_run(&reuse), None);
+}
+
+fn job_with_small_scan() -> ArchiveScan {
+    let (temp, _) = fixture();
+    let cancel = Arc::new(AtomicBool::new(false));
+    scan_archive_query(
+        &temp.directory,
+        None,
+        false,
+        &cancel,
+        &ScanRequest {
+            root_cookie: 55,
+            ..ScanRequest::default()
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn the_warning_gives_hours_for_a_very_large_recording() {
+    let large = LargeRun {
+        bytes: 40_000_000_000,
+        seconds: 40_000_000_000 / INDEX_BYTES_PER_SECOND,
+    };
+    assert!(large.warning().contains("hours"), "{}", large.warning());
+}

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! The UI-free crates must not link the GUI stack (design 2.1): none of
-//! `antinomie-cli`, `antinomie-service` (and later `antinomie-triage`) may
+//! `antinomie-cli`, `antinomie-service` and `antinomie-triage` may
 //! depend on egui, eframe, winit or `antinomie-monitor-ui`.
 use std::process::Command;
 

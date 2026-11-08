@@ -251,3 +251,33 @@ fn the_window_keeps_its_top_edge_as_the_content_grows() {
         top(&ctx)
     );
 }
+
+#[test]
+fn a_large_recording_is_warned_about_before_the_export_starts() {
+    let temp = PacketSpool::new().unwrap();
+    let raw = std::fs::File::create(temp.directory.join("telemetry.raw")).unwrap();
+    // A sparse 2 GB recording: no disk used.
+    raw.set_len(2_000_000_000).unwrap();
+    drop(raw);
+    let mut view = TriageView::default();
+    on_screen(&mut view, "aaaaaaaa-run");
+    view.open_report(&input(&temp.directory, "aaaaaaaa-run"));
+    let large = view.large_run_warning().expect("a 2 GB recording is large");
+    assert_eq!(large.bytes, 2_000_000_000);
+    let text = large.warning();
+    assert!(
+        text.contains("1.9 GiB") && text.contains("estimate"),
+        "{text}"
+    );
+    // The dialog draws without a panic and the answer is kept for a moment.
+    let ctx = egui::Context::default();
+    frame_with(&ctx, &mut view, Vec::new(), 0.0);
+    assert!(view.report.large.as_ref().is_some_and(|(_, l)| l.is_some()));
+
+    // A small recording is not warned about.
+    let small = PacketSpool::new().unwrap();
+    std::fs::write(small.directory.join("telemetry.raw"), b"").unwrap();
+    on_screen(&mut view, "bbbbbbbb-run");
+    view.follow_report(&input(&small.directory, "bbbbbbbb-run"));
+    assert!(view.large_run_warning().is_none());
+}

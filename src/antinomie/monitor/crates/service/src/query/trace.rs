@@ -45,10 +45,12 @@ impl QueryService {
         cancel: &AtomicBool,
     ) -> Result<Page<TraceRow>, ApiError> {
         if params.q.as_deref().is_some_and(|q| !q.trim().is_empty()) {
-            // The `q` language moves to the Triage crate with card P2-0.
+            // The `q` language lives in `antinomie-triage` (P2-0), but the
+            // service does not link that crate yet: the filter needs the
+            // service to use it, which is planned with card Q-4.
             return Err(ApiError::new(
                 ErrorCode::Unsupported,
-                "q needs the query language, which arrives with the Triage move (card P2-0)",
+                "q needs the Triage filter language, which the service does not use yet (planned with card Q-4)",
             )
             .with_field("q"));
         }

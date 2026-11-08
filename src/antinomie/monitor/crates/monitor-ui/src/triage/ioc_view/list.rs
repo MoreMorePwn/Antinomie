@@ -390,7 +390,7 @@ impl View {
     /// Write the rows listed as CSV or JSON beside the run's other files.
     pub(super) fn export(&mut self, ioc: &IocScan, ty: Type, rows: &[usize], json: bool) {
         let Some(dir) = self.run_dir.clone() else {
-            self.message("This run has no folder to write to.", true);
+            self.tell("This run has no folder to write to.", true);
             return;
         };
         let pairs: Vec<(&Indicator, &Verdict)> = rows
@@ -412,11 +412,11 @@ impl View {
             if json { "json" } else { "csv" },
         );
         match write_new(&dir.join("ioc"), &name, text.as_bytes()) {
-            Ok(path) => self.message(
+            Ok(path) => self.tell(
                 format!("Exported {} rows to {}", pairs.len(), path.display()),
                 false,
             ),
-            Err(error) => self.message(error, true),
+            Err(error) => self.tell(error, true),
         }
     }
 }
