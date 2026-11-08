@@ -28,7 +28,7 @@ pub(super) fn sigma(staged: &Staged, work: &Path) -> Result<Report, String> {
         report.state = State::Missing;
         report
             .warnings
-            .push("Evidence missing: the captured event journal is not ready.".into());
+            .push("Evidence missing: the run's event journal was not built (the index of this run did not finish), so Sigma had nothing to scan. This is not a clean result.".into());
         report.input(
             super::ScannedInput::new(super::InputKind::EventJournal, &original)
                 .skipped("the captured event journal is not ready"),

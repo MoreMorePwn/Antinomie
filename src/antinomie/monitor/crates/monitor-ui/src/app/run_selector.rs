@@ -49,6 +49,61 @@ impl MonitorApp {
         runs
     }
 
+    /// Runs of the selected VM that never started (the guest refused the
+    /// launch, the Tor route did not come up): no recording, so they are not
+    /// in [`Self::triage_runs`], but Triage lists them with their failure.
+    fn failed_to_start_runs(&self) -> BTreeMap<String, RunSummary> {
+        let mut runs = BTreeMap::new();
+        for run in self.snapshot.runs.iter().chain(&self.history) {
+            if Some(&run.vm_id) == self.selected.as_ref()
+                && run.root_task_cookie == 0
+                && matches!(run.state, antinomie_monitor_core::RunState::FailedToStart)
+            {
+                runs.entry(run.id.clone())
+                    .or_insert_with(|| super::history::listed(run));
+            }
+        }
+        runs
+    }
+
+    /// [`Self::triage_runs`] and the runs that never started, newest first:
+    /// the list of the Triage picker.
+    pub(super) fn triage_page_runs(&self) -> Arc<Vec<RunSummary>> {
+        let base = self.triage_runs();
+        let failed = self.failed_to_start_runs();
+        if failed.is_empty() {
+            return base;
+        }
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (Arc::as_ptr(&base) as usize).hash(&mut hasher);
+            failed.keys().for_each(|id| id.hash(&mut hasher));
+            hasher.finish()
+        };
+        let mut cache = self.triage_page_cache.borrow_mut();
+        if let Some((cached, runs)) = cache.as_ref() {
+            if *cached == key {
+                return Arc::clone(runs);
+            }
+        }
+        let mut runs: Vec<_> = base.iter().cloned().chain(failed.into_values()).collect();
+        runs.sort_by(|a, b| {
+            b.started_ms
+                .cmp(&a.started_ms)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        let runs = Arc::new(runs);
+        *cache = Some((key, Arc::clone(&runs)));
+        runs
+    }
+
+    /// The selected run, when it is one that never started.
+    pub(super) fn selected_failed_run(&self) -> Option<RunSummary> {
+        let id = self.selected_run.as_ref()?;
+        self.failed_to_start_runs().remove(id)
+    }
+
     fn list_triage_runs(&self) -> Vec<RunSummary> {
         let mut runs = BTreeMap::new();
         for run in self.snapshot.runs.iter().chain(&self.history) {
@@ -147,9 +202,14 @@ impl MonitorApp {
 
 pub(super) fn run_selector_label(run: &RunSummary) -> String {
     format!(
-        "{}  {}  [{}]",
+        "{}  {}  [{}]{}",
         crate::time_format::unix_ms(run.started_ms),
         run.request.path,
-        run.id.chars().take(8).collect::<String>()
+        run.id.chars().take(8).collect::<String>(),
+        if matches!(run.state, antinomie_monitor_core::RunState::FailedToStart) {
+            "  (not started)"
+        } else {
+            ""
+        }
     )
 }

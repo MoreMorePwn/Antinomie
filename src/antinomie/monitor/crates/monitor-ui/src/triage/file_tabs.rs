@@ -393,7 +393,7 @@ fn draw(
     details::refresh(ui.ctx(), tab.table_id(), headers, rows);
 }
 
-impl ArchiveScan {
+impl ScanData {
     /// Rows kept for a tab and the matches left out of them.
     pub(super) fn file_rows(&self, tab: FileTab) -> (usize, u64) {
         match tab {

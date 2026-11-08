@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 pub mod build;
 pub mod export;
 pub mod layout;
-pub mod markdown;
+pub use super::markdown;
 pub mod misp;
 pub mod stix;
 #[cfg(test)]
@@ -81,6 +81,14 @@ pub struct OriginRow {
     pub at_ms: u64,
 }
 
+/// A family a rule named, with who said so.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FamilyCandidate {
+    pub name: String,
+    pub source: String,
+}
+
 /// Who the sample is.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -95,6 +103,10 @@ pub struct Identity {
     pub file_type: String,
     pub arch: String,
     pub family: String,
+    /// The families the matched rules name, strongest first, as Triage's
+    /// Summary lists them: shown when the library holds no family, and the
+    /// source of the MISP family tag and the STIX family object.
+    pub family_candidates: Vec<FamilyCandidate>,
     /// When the library first held the bytes.
     pub added_ms: u64,
     /// When the archive was removed; the record stays.
@@ -189,8 +201,10 @@ pub struct RuleHit {
     pub severity: String,
     pub family: String,
     pub mitre: Vec<String>,
-    /// Run numbers, ascending; empty for the static scan.
+    /// Run numbers, ascending; empty for a rule only the static scan matched.
     pub runs: Vec<usize>,
+    /// The static YARA scan of the sample matched it too.
+    pub in_static_scan: bool,
     pub count: u64,
     /// The rule's author as the rule gives it; empty when it names none.
     pub author: String,
@@ -289,6 +303,10 @@ pub struct MergedIndicator {
     /// The dataset records that matched, `dataset: family (id)`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hits: Vec<String>,
+    /// Why MISP and STIX leave it out (the sandbox's own address, a Tor
+    /// stand-in, a base image program); empty for one worth sharing.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub not_shared: String,
 }
 
 /// One entry of the custody log.
@@ -556,6 +574,7 @@ pub(crate) fn as_indicator(item: &MergedIndicator) -> super::Indicator {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        not_shared: item.not_shared.clone(),
         ..super::Indicator::default()
     };
     match item.kind.as_str() {
@@ -585,9 +604,99 @@ pub(crate) fn as_indicator(item: &MergedIndicator) -> super::Indicator {
 }
 
 impl SampleReport {
+    /// One row per rule: the static scan's match and the runs' detections of
+    /// the same rule are merged (the static scan names the rule, a run's
+    /// report names it with its pack id), and the families the rules name
+    /// are worked out.
+    fn merge_rules(&mut self) {
+        use super::layout::plain_rule;
+        let mut merged: Vec<RuleHit> = Vec::new();
+        for hit in std::mem::take(&mut self.detections) {
+            let engine = hit.engine.trim_end_matches(" (static)").to_owned();
+            let name = plain_rule(&hit.rule_id).to_owned();
+            let from_static = hit.engine.ends_with("(static)");
+            match merged.iter_mut().find(|known| {
+                known.engine.eq_ignore_ascii_case(&engine) && plain_rule(&known.rule_id) == name
+            }) {
+                Some(known) => {
+                    known.in_static_scan |= from_static || hit.in_static_scan;
+                    if !from_static {
+                        // The run's report has the pack id, the title and the source.
+                        known.rule_id.clone_from(&hit.rule_id);
+                        if !hit.title.is_empty() {
+                            known.title.clone_from(&hit.title);
+                        }
+                        if !hit.source.is_empty() {
+                            known.source.clone_from(&hit.source);
+                        }
+                        if known.runs.is_empty() {
+                            // The static scan's own count of one is not a run's.
+                            known.count = 0;
+                        }
+                        known.count += hit.count;
+                        for run in hit.runs {
+                            if !known.runs.contains(&run) {
+                                known.runs.push(run);
+                            }
+                        }
+                        for (target, value) in [
+                            (&mut known.severity, &hit.severity),
+                            (&mut known.family, &hit.family),
+                            (&mut known.author, &hit.author),
+                            (&mut known.license, &hit.license),
+                            (&mut known.reference, &hit.reference),
+                        ] {
+                            if target.is_empty() {
+                                target.clone_from(value);
+                            }
+                        }
+                        for id in hit.mitre {
+                            if !known.mitre.contains(&id) {
+                                known.mitre.push(id);
+                            }
+                        }
+                    }
+                }
+                None => merged.push(RuleHit {
+                    engine,
+                    in_static_scan: from_static || hit.in_static_scan,
+                    ..hit
+                }),
+            }
+        }
+        for hit in &mut merged {
+            hit.runs.sort_unstable();
+        }
+        self.detections = merged;
+        let hits: Vec<crate::run_digest::DetectionHit> = self
+            .detections
+            .iter()
+            .map(|hit| crate::run_digest::DetectionHit {
+                engine: hit.engine.clone(),
+                rule_id: plain_rule(&hit.rule_id).to_owned(),
+                title: plain_rule(&hit.title).to_owned(),
+                severity: hit.severity.clone(),
+                family: hit.family.clone(),
+                source: hit.source.clone(),
+                count: hit.count,
+                ..Default::default()
+            })
+            .collect();
+        self.sample.family_candidates =
+            crate::family::family_candidates(&hits, crate::family::Bazaar::default())
+                .into_iter()
+                .take(3)
+                .map(|candidate| FamilyCandidate {
+                    name: candidate.name,
+                    source: candidate.source,
+                })
+                .collect();
+    }
+
     /// Apply the list caps and note what was cut or is missing. Call once,
     /// after the parts are filled in.
     pub fn seal(&mut self) {
+        self.merge_rules();
         self.omitted.indicators += cap(&mut self.indicators, LIST_ROWS);
         self.omitted.detections += cap(&mut self.detections, LIST_ROWS);
         self.omitted.runs += cap(&mut self.runs, LIST_ROWS);

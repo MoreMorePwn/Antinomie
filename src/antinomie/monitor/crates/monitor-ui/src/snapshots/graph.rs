@@ -110,11 +110,11 @@ pub(super) fn paint(
         view.pan += response.drag_delta();
     }
     if interactive && response.hovered() {
-        let scroll = ui.input(|input| input.smooth_scroll_delta);
-        if ui.input(|input| input.modifiers.ctrl || input.modifiers.command) {
-            view.zoom = (view.zoom * (scroll.y * 0.002).exp()).clamp(0.001, 2.0);
-        } else {
-            view.pan += scroll;
+        // Ctrl and the wheel (or a pinch) zoom; the plain wheel is left to the
+        // page that holds the graph.
+        let pinch = ui.input(|input| input.zoom_delta());
+        if pinch != 1.0 {
+            view.zoom = (view.zoom * pinch).clamp(0.001, 2.0);
         }
     }
     let transform = |point: egui::Pos2| rect.min + view.pan + point.to_vec2() * view.zoom;
@@ -196,9 +196,8 @@ pub(super) fn paint(
         font_size,
     );
     let response = if interactive {
-        response.on_hover_text(
-            "Drag to pan. Scroll to pan; Ctrl + scroll to zoom. Use Tree for keyboard navigation.",
-        )
+        response
+            .on_hover_text("Drag to pan. Ctrl + scroll to zoom. Use Tree for keyboard navigation.")
     } else {
         response
     };
@@ -257,6 +256,90 @@ fn paint_node(
             } else {
                 color
             },
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn page(ctx: &egui::Context, view: &mut GraphView, time: f64, events: Vec<egui::Event>) -> f32 {
+        let tree = super::super::tests::fixture();
+        let mut marker = 0.0;
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 400.0),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        marker = ui.cursor().min.y;
+                        paint(ui, &tree, &mut None, view, 300.0, true);
+                        ui.allocate_space(egui::vec2(10.0, 2000.0));
+                    });
+                });
+            },
+        );
+        marker
+    }
+
+    fn turn(
+        ctx: &egui::Context,
+        view: &mut GraphView,
+        time: &mut f64,
+        modifiers: egui::Modifiers,
+    ) -> f32 {
+        let mut marker = 0.0;
+        for n in 0..30 {
+            let events = if n == 0 {
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(300.0, 150.0)),
+                    egui::Event::MouseWheel {
+                        phase: egui::TouchPhase::Move,
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, if modifiers.command { 60.0 } else { -60.0 }),
+                        modifiers,
+                    },
+                ]
+            } else {
+                vec![]
+            };
+            *time += 0.02;
+            marker = page(ctx, view, *time, events);
+        }
+        marker
+    }
+
+    #[test]
+    fn the_plain_wheel_scrolls_the_page_and_ctrl_wheel_zooms_the_graph() {
+        let ctx = egui::Context::default();
+        let mut view = GraphView::default();
+        let start = page(&ctx, &mut view, 0.0, vec![]);
+        page(&ctx, &mut view, 0.02, vec![]);
+        let mut time = 0.02;
+        let (zoom, pan) = (view.zoom, view.pan);
+        let marker = turn(&ctx, &mut view, &mut time, egui::Modifiers::NONE);
+        assert_eq!(
+            (view.zoom, view.pan),
+            (zoom, pan),
+            "the plain wheel leaves the view"
+        );
+        assert!(
+            marker < start - 20.0,
+            "the page scrolled: {start} -> {marker}"
+        );
+        turn(&ctx, &mut view, &mut time, egui::Modifiers::COMMAND);
+        assert!(
+            view.zoom > zoom,
+            "Ctrl and the wheel zoom: {zoom} -> {}",
+            view.zoom
         );
     }
 }

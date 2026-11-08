@@ -56,11 +56,15 @@ impl Worker {
     /// Start writing the running VM's RAM to a new memory dump; QEMU writes
     /// it in the background and pauses the guest until it is done.
     pub(super) fn start_memory_dump(&mut self) -> Result<String, String> {
-        self.start_memory_dump_for(None)
+        self.start_memory_dump_for(None, None)
     }
+    /// `owner_cookie` is the run that asked for a dump on exit; `trigger` is
+    /// the run (by cookie) and finding of a dump trigger. With neither, the
+    /// analyst asked for it.
     pub(super) fn start_memory_dump_for(
         &mut self,
         owner_cookie: Option<u64>,
+        trigger: Option<(u64, &crate::dump_trigger::LiveFinding)>,
     ) -> Result<String, String> {
         let session = self.session.as_mut().ok_or("VM is stopped")?;
         if self.snapshot.memory_dump.is_some() {
@@ -73,13 +77,47 @@ impl Worker {
             Some(name) => format!("Linux {} · {name}", bundle.kernel_version),
             None => format!("Linux {}", bundle.kernel_version),
         };
-        let dump = crate::memory::new_vm_dump(
+        let mut dump = crate::memory::new_vm_dump(
             &recording,
             &session.vm,
             &session.boot_id,
             system,
             bundle.symbols.as_deref(),
         )?;
+        let run_of = |cookie: u64| {
+            session
+                .runs
+                .get(&cookie)
+                .map(|run| run.summary.id.clone())
+                .unwrap_or_default()
+        };
+        let (vm_id, boot_id, now) = (&session.vm.id, &session.boot_id, unix_ms());
+        dump.provenance = Some(match (trigger, owner_cookie) {
+            (Some((cookie, finding)), _) => crate::provenance::Provenance::trigger(
+                vm_id,
+                boot_id,
+                &run_of(cookie),
+                finding,
+                now,
+            ),
+            (None, Some(cookie)) => {
+                crate::provenance::Provenance::run_exit(vm_id, boot_id, &run_of(cookie), now)
+            }
+            (None, None) => crate::provenance::Provenance::by_hand(
+                vm_id,
+                boot_id,
+                None,
+                session
+                    .runs
+                    .values()
+                    .filter(|run| run.summary.state.is_live())
+                    .map(|run| run.summary.id.clone())
+                    .collect(),
+                now,
+            ),
+        });
+        dump.save()
+            .map_err(|error| format!("memory dump summary: {error}"))?;
         if let Some(cookie) = owner_cookie {
             let owner = session
                 .run_artifacts
@@ -193,6 +231,9 @@ impl Worker {
             }
             Ok(crate::memory::DumpStatus::Completed) => {
                 dump.finished_ms = Some(unix_ms());
+                if let Some(found) = dump.provenance.as_mut() {
+                    found.to_ms = dump.finished_ms;
+                }
                 match completed_memory_dump_size(&dump) {
                     Ok(size) => dump.bytes = Some(size),
                     Err(error) => dump.error = Some(format!("completed memory dump file: {error}")),
@@ -313,7 +354,7 @@ impl Worker {
             && self.snapshot.vm_snapshot_progress.is_none()
             && self.snapshot.state == VmState::Running
             && let Some(cookie) = queued
-            && let Err(error) = self.start_memory_dump_for(Some(cookie))
+            && let Err(error) = self.start_memory_dump_for(Some(cookie), None)
         {
             if let Some(owner) = self
                 .session

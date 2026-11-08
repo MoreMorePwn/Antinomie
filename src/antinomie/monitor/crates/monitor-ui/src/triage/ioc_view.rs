@@ -84,6 +84,7 @@ pub(super) struct View {
     wants_refresh: bool,
     key_masked: Option<String>,
     key_read: Option<Instant>,
+    key_generation: u64,
     /// The false-positive file as last seen (size, change time), and when it was looked at.
     fp_seen: Option<(u64, Option<std::time::SystemTime>)>,
     fp_checked: Option<Instant>,
@@ -158,10 +159,13 @@ impl View {
     }
 
     fn key_state(&mut self) -> Option<&str> {
+        let generation = api_keys::generation();
         let due = self
             .key_read
-            .is_none_or(|read| read.elapsed() > Duration::from_secs(2));
+            .is_none_or(|read| read.elapsed() > Duration::from_secs(2))
+            || self.key_generation != generation;
         if due {
+            self.key_generation = generation;
             self.key_read = Some(Instant::now());
             self.key_masked = self.data_dir.as_deref().and_then(|dir| {
                 let key = api_keys::get(dir, ApiKey::Abusech);
@@ -834,3 +838,24 @@ impl View {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    /// The Auth-Key line follows a save or a removal at once, not after the
+    /// two seconds the key used to be cached for.
+    #[test]
+    fn the_key_state_follows_a_save_and_a_removal_at_once() {
+        let dir = std::env::temp_dir().join(format!("ant-ioc-key-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut view = View::default();
+        view.set_data_dir(&dir);
+        assert!(view.key_state().is_none());
+        api_keys::set(&dir, ApiKey::Abusech, "triage-key-0003").unwrap();
+        assert_eq!(view.key_state(), Some("…0003"));
+        api_keys::clear(&dir, ApiKey::Abusech).unwrap();
+        assert!(view.key_state().is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

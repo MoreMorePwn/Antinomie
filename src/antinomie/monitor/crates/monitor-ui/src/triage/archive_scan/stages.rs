@@ -116,10 +116,12 @@ pub(super) fn open_scan(
         .started_ms
         .or_else(|| facts.as_ref().and_then(|facts| facts.started_ms));
     let scoped = in_scope(request);
+    request.phase(scan_progress::Phase::Indexing, 0);
     let total = recordings
         .iter()
         .map(|recording| recording.invocation_count_cancellable(None, cancel).ok())
         .sum::<Option<u64>>();
+    request.phase(scan_progress::Phase::Reading, total.unwrap_or(0));
     // The root's stream and its first credentials, for its launch.
     let mut root_stream = None;
     let mut root_creds = None;
@@ -136,6 +138,7 @@ pub(super) fn open_scan(
     // Calls whose saved async observations the pages only preview, and how many.
     let (mut async_partial, mut async_omitted) = (0u64, 0u64);
     let (seen, complete, issues) = walk_segments(&recordings, cancel, |segment, page| {
+        request.advance(page.len());
         let page: Vec<_> = page.iter().filter(&scoped).cloned().collect();
         for call in page
             .iter()
@@ -425,7 +428,11 @@ impl Scan {
             }
             Ok(())
         };
+        if let Some(progress) = &request.progress {
+            progress.next(scan_progress::Phase::Files);
+        }
         let (_, files_complete, _) = walk_segments(recordings, cancel, |segment, page| {
+            request.advance(page.len());
             let recording = &recordings[segment];
             for submitted in page.iter().filter(&scoped) {
                 // Requests a ring's own thread submitted, once the calls reach
@@ -931,8 +938,9 @@ impl Scan {
         } else {
             None
         };
-        Ok(ArchiveScan {
+        Ok(ArchiveScan::new(ScanData {
             stamp,
+            whole_run: super::super::report_export::is_whole_run(request),
             ended_ms: run_ended_ms,
             event_cache,
             counts,
@@ -998,6 +1006,6 @@ impl Scan {
                 gaps.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
                 gaps
             },
-        })
+        }))
     }
 }

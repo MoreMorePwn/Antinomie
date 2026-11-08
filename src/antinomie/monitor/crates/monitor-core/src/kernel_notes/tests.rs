@@ -848,3 +848,25 @@ fn mapped_bytes_are_the_next_field_only_and_a_wrong_record_is_skipped() {
     exit.phase = 2;
     assert!(file_mapped(&exit).is_empty());
 }
+
+#[test]
+fn a_childs_records_give_its_thread_group_and_task_id() {
+    let word = |key: &str, value: u64| note(key, "u64", value.to_le_bytes().to_vec());
+    let notes = [word(CHILD_PID_KEY, 1352), word(CHILD_TGID_KEY, 1352)];
+    assert!(notes.iter().all(is_note));
+    assert_eq!(
+        child_task(&notes),
+        Some(ChildTask {
+            tgid: 1352,
+            tid: Some(1352),
+            cookie: None
+        })
+    );
+    // No thread group record, or a zero one, is no child.
+    assert_eq!(child_task(&notes[..1]), None);
+    assert_eq!(child_task(&[word(CHILD_TGID_KEY, 0)]), None);
+    // A record whose bytes were not captured is not read.
+    let mut lost = word(CHILD_TGID_KEY, 7);
+    lost.fields[0].complete = false;
+    assert_eq!(child_task(&[lost]), None);
+}

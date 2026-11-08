@@ -62,53 +62,63 @@ pub(super) fn navigation(view: &mut TriageView, ui: &mut egui::Ui, input: &Triag
         Section::Process | Section::Files | Section::Network
     );
     let mut fits = true;
-    crate::widgets::tab_row(ui, |ui| {
-        let first_line = ui.cursor().min.y;
-        let detection =
-            super::counts::detection_tab([0, 1, 2].map(|i| view.detection.tab_count(i)));
-        for (section, item) in [
-            (Section::Summary, "Summary".into()),
-            (Section::Properties, "Properties".into()),
-            (Section::Detection, detection),
-            (Section::Process, "Process".into()),
-            (Section::Files, "Files".into()),
-            (Section::Network, "Network".into()),
-            (Section::Bpf, "eBPF".into()),
-        ] {
-            if crate::widgets::tab(ui, view.section == section, &item).clicked() {
-                view.section = section;
+    // The count badges widen the tabs: a narrow pane trims their padding so
+    // the bar keeps to as few lines as it had without them.
+    let mut bar = |ui: &mut egui::Ui| {
+        crate::widgets::tab_row(ui, |ui| {
+            let first_line = ui.cursor().min.y;
+            let detection =
+                super::counts::detection_tab([0, 1, 2].map(|i| view.detection.tab_count(i)));
+            for (section, item) in [
+                (Section::Summary, "Summary".into()),
+                (Section::Properties, "Properties".into()),
+                (Section::Detection, detection),
+                (Section::Process, view.section_tab(Section::Process)),
+                (Section::Files, view.section_tab(Section::Files)),
+                (Section::Network, view.section_tab(Section::Network)),
+                (Section::Bpf, view.section_tab(Section::Bpf)),
+            ] {
+                if crate::widgets::tab(ui, view.section == section, &item).clicked() {
+                    view.section = section;
+                }
             }
-        }
-        // The IOC tab: the indicators in grey, the matched ones beside it in red.
-        let ioc = match view.ioc_headline() {
-            Some((matched, total, _)) => super::ioc_view::count_tab("IOC", matched, total),
-            None => crate::widgets::TabItem::new("IOC"),
-        };
-        if crate::widgets::tab(ui, view.section == Section::Ioc, &ioc).clicked() {
-            view.section = Section::Ioc;
-        }
-        // `available_width` of a wrapping row is the whole row, not what the tabs left.
-        let room = ui.max_rect().right() - ui.cursor().min.x;
-        // Tabs that wrapped leave the status no line of its own to share.
-        let wrapped = ui.cursor().min.y - first_line > 1.0;
-        if !wrapped && room >= 110.0 {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add_enabled(input.archive.is_some(), egui::Button::new("Export report…"))
-                    .on_hover_text("Write this run's Triage as HTML, PDF, JSON, MISP or STIX")
-                    .on_disabled_hover_text("The run has no saved recording yet")
-                    .clicked()
-                {
-                    view.open_report(input);
-                }
-                if trail {
-                    fits = view.refresh_trail(ui, input, Some(room - 110.0));
-                }
-            });
-        } else {
-            fits = !trail;
-        }
-    });
+            // The IOC tab: the indicators in grey, the matched ones beside it in red.
+            let ioc = match view.ioc_headline() {
+                Some((matched, total, _)) => super::ioc_view::count_tab("IOC", matched, total),
+                None => crate::widgets::TabItem::new("IOC"),
+            };
+            if crate::widgets::tab(ui, view.section == Section::Ioc, &ioc).clicked() {
+                view.section = Section::Ioc;
+            }
+            // `available_width` of a wrapping row is the whole row, not what the tabs left.
+            let room = ui.max_rect().right() - ui.cursor().min.x;
+            // Tabs that wrapped leave the status no line of its own to share.
+            let wrapped = ui.cursor().min.y - first_line > 1.0;
+            if !wrapped && room >= 110.0 {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_enabled(input.archive.is_some(), egui::Button::new("Export report…"))
+                        .on_hover_text("Write this run's Triage as HTML, PDF, JSON, MISP or STIX")
+                        .on_disabled_hover_text("The run has no saved recording yet")
+                        .clicked()
+                    {
+                        view.open_report(input);
+                    }
+                    if trail {
+                        fits = view.refresh_trail(ui, input, Some(room - 110.0));
+                    }
+                });
+            } else {
+                fits = !trail;
+            }
+        })
+    };
+    if ui.available_width() < 720.0 {
+        crate::widgets::tight_tabs(ui, bar);
+    } else {
+        bar(ui);
+    }
+
     // A narrow pane puts the status under the bar instead.
     if !fits {
         // A line tall enough for the status; a right-to-left layout otherwise

@@ -974,6 +974,7 @@ mod tests {
             boot_wait: None,
             triggers: None,
             stopped_by_user: false,
+            stopped_at_ms: None,
             started_ms: None,
             clock_anchor: None,
             id: "run-one".into(),

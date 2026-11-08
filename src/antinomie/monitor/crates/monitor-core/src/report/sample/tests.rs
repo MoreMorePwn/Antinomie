@@ -99,6 +99,7 @@ pub(super) fn fixture() -> SampleReport {
             file_type: "elf".into(),
             arch: "x86_64".into(),
             family: "Kinsing".into(),
+            family_candidates: Vec::new(),
             added_ms: 1_791_000_000_000,
             archived: true,
             removed_ms: None,
@@ -329,7 +330,7 @@ fn indicators_and_rules_merge_across_runs_with_their_credits() {
         report
             .detections
             .iter()
-            .any(|h| h.engine == "YARA (static)" && h.author == "Static Author")
+            .any(|h| h.in_static_scan && h.author == "Static Author")
     );
     let ids: Vec<&str> = report.attack.iter().map(|t| t.id.as_str()).collect();
     assert_eq!(ids, ["T1053.003", "T1059.004"], "ids only, tactics dropped");
@@ -426,7 +427,7 @@ fn control_characters_cannot_break_the_html_or_the_markdown() {
 fn markdown_has_the_sections_tables_and_escapes_markup() {
     let report = fixture();
     let md = text(&report, Format::Markdown, true);
-    assert!(md.starts_with("# Antinomie Sample report: dropper &lt;1&gt;.elf"));
+    assert!(md.starts_with("# Antinomie Sample report: dropper &lt;1>.elf"));
     for heading in [
         "## Sample overview",
         "## Static analysis",
@@ -777,7 +778,7 @@ fn export_writes_the_chosen_formats_never_overwrites_and_is_owner_only() {
     );
     assert_eq!(
         base_name(&report),
-        "antinomie-sample-report-abababab-20261020-224140".replace(
+        "antinomie-sample-report-abababab-20261020-224140Z".replace(
             "20261020-224140",
             &crate::report::utc(report.generated_ms)
                 .replace(['-', ':'], "")
@@ -947,4 +948,191 @@ fn no_export_names_the_home_directory_of_the_data_dir() {
         assert!(!out.contains("fakeuser"), "{format:?} names the user");
     }
     assert!(text(&report, Format::Markdown, true).contains("runs/vm-1/run-9/report/"));
+}
+
+#[test]
+fn no_format_of_the_sample_report_carries_a_path_on_this_computer() {
+    use crate::samples::{ChainCheck, CustodyEvent, EventRow};
+    let events: Vec<EventRow> = [
+        CustodyEvent::Added {
+            origin: "added: /srv/alice/lab/dropper.sh".into(),
+        },
+        CustodyEvent::OriginalDeleted {
+            path: "/srv/alice/lab/dropper.sh".into(),
+        },
+        CustodyEvent::Migrated {
+            from: "/srv/alice/old.db".into(),
+        },
+        CustodyEvent::Sent {
+            vm: "lab".into(),
+            path: "/tmp/dropper.sh".into(),
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(n, event)| EventRow {
+        seq: n as u64 + 1,
+        at_ms: 1_792_000_000_000 + n as u64,
+        by: "analyst".into(),
+        event,
+        before_chain: false,
+        prev: "00".repeat(32),
+        hash: sha(n as u8),
+    })
+    .collect();
+    let check = ChainCheck {
+        entries: events.len() as u64,
+        head: sha(9),
+        problem: None,
+    };
+    let mut report = fixture();
+    let (custody, _) = build::custody(&check, &events);
+    report.custody = custody;
+    report.sample.names = vec![NameRow {
+        name: "dropper.sh".into(),
+        path: crate::samples::host_file("/srv/alice/lab/dropper.sh"),
+        seen: "added".into(),
+    }];
+    report.seal();
+    for format in Format::ALL {
+        let bytes = export::render(&report, format, false).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!text.contains("alice"), "{format:?} carries a host path");
+    }
+    // The guest path a run used is not a host path and stays.
+    let html = String::from_utf8(export::render(&report, Format::Html, false).unwrap()).unwrap();
+    assert!(html.contains("/tmp/dropper.sh"));
+}
+
+#[test]
+fn a_rule_the_static_scan_and_a_run_both_matched_is_one_row_and_names_its_family() {
+    let mut report = fixture();
+    report.detections = vec![
+        RuleHit {
+            engine: "YARA (static)".into(),
+            rule_id: "Linux_Trojan_Tsunami_30c039e2".into(),
+            title: "Linux_Trojan_Tsunami_30c039e2".into(),
+            count: 1,
+            ..RuleHit::default()
+        },
+        RuleHit {
+            engine: "YARA".into(),
+            rule_id: "s1919::Linux_Trojan_Tsunami_30c039e2".into(),
+            title: "Linux_Trojan_Tsunami_30c039e2".into(),
+            severity: "100".into(),
+            source: "elastic".into(),
+            runs: vec![1, 4],
+            count: 5,
+            ..RuleHit::default()
+        },
+    ];
+    report.sample.family.clear();
+    report.seal();
+    assert_eq!(report.detections.len(), 1);
+    let hit = &report.detections[0];
+    assert!(hit.in_static_scan && hit.runs == [1, 4] && hit.count == 5);
+    assert_eq!(hit.rule_id, "s1919::Linux_Trojan_Tsunami_30c039e2");
+    assert_eq!(report.sample.family_candidates[0].name, "Tsunami");
+    let md = String::from_utf8(export::render(&report, Format::Markdown, false).unwrap()).unwrap();
+    assert!(
+        md.contains("Tsunami") && md.contains("static scan + runs [1](#run-1), 4"),
+        "{md}"
+    );
+    assert!(
+        !md.contains("s1919::"),
+        "the pack's number stays in the JSON"
+    );
+}
+
+#[test]
+fn markdown_escapes_only_what_would_become_markup() {
+    use crate::report::layout::{Block, Document, Section};
+    let document = Document {
+        title: "t".into(),
+        subtitle: "s".into(),
+        defanged: false,
+        sections: vec![Section {
+            id: "a".into(),
+            title: "A & B".into(),
+            blocks: vec![
+                Block::Paragraph("5 run(s). The strongest".into()),
+                Block::Paragraph("1. a list item".into()),
+                Block::Paragraph("# heading".into()),
+                Block::Paragraph("- not a rule-looking-word".into()),
+                Block::Paragraph("x < y & z &amp; w".into()),
+            ],
+        }],
+        meta: Default::default(),
+        aliases: Default::default(),
+    };
+    let md = markdown::render(&document);
+    assert!(md.contains("\n5 run(s). The strongest"), "{md}");
+    assert!(md.contains("\n1\\. a list item") && md.contains("\n\\# heading"));
+    assert!(md.contains("\n\\- not a rule"));
+    assert!(md.contains("x &lt; y & z \\&amp; w"), "{md}");
+    assert!(md.contains("## A & B"));
+    assert!(!md.contains("\\5"), "no backslash before a plain digit");
+}
+
+#[test]
+fn the_fullest_run_report_is_the_one_listed_and_the_newest_of_those() {
+    let dir = std::env::temp_dir().join(format!("ant-latest-{}", std::process::id()));
+    let report = dir.join("run1").join("report");
+    std::fs::create_dir_all(&report).unwrap();
+    let sections = |n: usize, pad: usize| {
+        format!(
+            "{}{}",
+            "<section id=\"s\"></section>".repeat(n),
+            "x".repeat(pad)
+        )
+    };
+    // An old full export, large because it copied what the sample read.
+    std::fs::write(
+        report.join("antinomie-report-aaaa-20261107-175528.html"),
+        sections(11, 90_000),
+    )
+    .unwrap();
+    // A near-empty export written after it.
+    std::fs::write(
+        report.join("antinomie-report-aaaa-20261107-175727.html"),
+        sections(1, 0),
+    )
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    // The newest full export, smaller than the old one.
+    std::fs::write(
+        report.join("antinomie-report-aaaa-20261108-011903Z.html"),
+        sections(11, 10),
+    )
+    .unwrap();
+    let named = build::latest_run_report(&dir, &dir.join("run1"));
+    assert!(named.ends_with("011903Z.html"), "{named}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn sample_report_anchors_are_unique_and_every_link_resolves() {
+    let report = fixture();
+    let document = layout::document(&report, true);
+    let ids = crate::report::page::ids(&document);
+    let unique: std::collections::BTreeSet<&String> = ids.iter().collect();
+    assert_eq!(unique.len(), ids.len(), "{ids:?}");
+    for target in crate::report::page::links(&document) {
+        assert!(ids.contains(&target), "#{target} resolves");
+    }
+    let md = text(&report, Format::Markdown, true);
+    let (anchors, links) = crate::report::markdown::anchors_and_links(&md);
+    assert!(anchors.contains(&"run-1".to_owned()));
+    for link in links {
+        assert!(anchors.contains(&link), "#{link} resolves in the Markdown");
+    }
+    // With `ANTINOMIE_REPORT_OUT` set, every format is written there.
+    if let Ok(out) = std::env::var("ANTINOMIE_REPORT_OUT") {
+        let folder = std::path::Path::new(&out).join("core-fixture-sample");
+        std::fs::create_dir_all(&folder).unwrap();
+        for format in Format::ALL {
+            let bytes = export::render(&report, format, true).unwrap();
+            std::fs::write(folder.join(format!("sample{}", format.suffix())), bytes).unwrap();
+        }
+    }
 }

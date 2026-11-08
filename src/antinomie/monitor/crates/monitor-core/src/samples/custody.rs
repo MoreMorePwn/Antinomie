@@ -189,6 +189,28 @@ impl CustodyEvent {
         label_of(self.key())
     }
 
+    /// [`Self::detail`] for a file that leaves this computer (a report, a
+    /// custody export): a path on this computer is its file name, so the user
+    /// name and folder layout above it stay home. The stored event (the text
+    /// the chain hashes) is not changed.
+    pub fn detail_exported(&self) -> String {
+        match self {
+            Self::OriginalDeleted { path } => {
+                format!("the original file was deleted: {}", host_file(path))
+            }
+            Self::Added { origin } | Self::OriginAdded { origin } => {
+                match origin.split_once(": ") {
+                    Some((kind, place)) => format!("{kind}: {}", host_file(place)),
+                    None => host_file(origin),
+                }
+            }
+            Self::Migrated { from } => {
+                format!("recorded before the custody log ({})", host_file(from))
+            }
+            other => other.detail(),
+        }
+    }
+
     /// What the list shows beside the name.
     pub fn detail(&self) -> String {
         match self {
@@ -241,6 +263,21 @@ impl CustodyEvent {
         clean(&mut value);
         serde_json::to_string(&value).map_err(|e| e.to_string())
     }
+}
+
+/// A path on this computer as `<this computer>/name`; text that is not an
+/// absolute path (a site, a name) as it is.
+pub fn host_file(text: &str) -> String {
+    let absolute =
+        text.starts_with('/') || text.get(1..3) == Some(":\\") || text.starts_with("\\\\");
+    if !absolute {
+        return text.to_owned();
+    }
+    let name = text
+        .rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
+        .unwrap_or(text);
+    format!("<this computer>/{name}")
 }
 
 fn note_detail(note: u64, what: &str, hash: &str, refs: &str) -> String {

@@ -21,6 +21,7 @@ fn table(rows: usize) -> Table {
             column: 0,
             kind: IndicatorKind::Endpoint,
         }],
+        data: Vec::new(),
     }
 }
 
@@ -32,6 +33,7 @@ pub(super) fn fixture() -> Report {
             run_id: "run-0123456789".into(),
             started_ms: Some(1_792_000_000_000),
             finished: true,
+            ..RunInfo::default()
         },
         1_792_000_100_000,
     );
@@ -39,6 +41,7 @@ pub(super) fn fixture() -> Report {
         name: "dropper <1>.elf".into(),
         sha256: "ab".repeat(32),
         size: Some(1234),
+        role: String::new(),
     });
     report.summary = Some(Summary {
         assessment: "matched_indicators".into(),
@@ -46,6 +49,11 @@ pub(super) fn fixture() -> Report {
         highest_tier: "high".into(),
         families: vec!["Mirai".into()],
         family_sources: vec!["Mirai: dataset threatfox".into()],
+        tiers: TierCounts::default(),
+        key_findings: Vec::new(),
+        key_findings_text: Vec::new(),
+        key_findings_total: 0,
+        other_families: Vec::new(),
         key_behaviours: vec![Behaviour {
             rule: "exec-from-tmp".into(),
             tier: "high".into(),
@@ -99,12 +107,14 @@ pub(super) fn fixture() -> Report {
             name: "Command and Scripting Interpreter: Unix Shell".into(),
             rules: vec!["exec-from-tmp".into()],
             count: 3,
+            rule_refs: Vec::new(),
         },
         Technique {
             id: "T1105".into(),
             name: "Ingress Tool Transfer".into(),
             rules: vec!["download".into()],
             count: 1,
+            rule_refs: Vec::new(),
         },
     ]);
     report.processes = Some(table(3));
@@ -139,12 +149,15 @@ pub(super) fn fixture() -> Report {
         license: "DRL 1.1".into(),
         source: "Example Pack".into(),
         reference: "https://example.org/r1".into(),
+        strength: String::new(),
+        ..Detection::default()
     }]);
     report.evidence = Some(vec![EvidenceRef {
         kind: "telemetry".into(),
         path: "telemetry.raw".into(),
         size: 10,
         sha256: "ef".repeat(32),
+        files: None,
     }]);
     report.custody = Some(Custody {
         sample_sha256: "ab".repeat(32),
@@ -180,7 +193,7 @@ fn an_unchosen_part_is_absent_everywhere() {
     let doc = layout::document(&report, false);
     let ids: Vec<_> = doc.sections.iter().map(|s| s.id.as_str()).collect();
     assert!(!ids.contains(&"network") && !ids.contains(&"indicators"));
-    assert!(ids.contains(&"summary") && ids.contains(&"processes"));
+    assert!(ids.contains(&"overview") && ids.contains(&"processes"));
     let misp: serde_json::Value = serde_json::from_str(&misp::render(&report).unwrap()).unwrap();
     assert!(
         !misp["Event"]["Attribute"]
@@ -306,7 +319,7 @@ fn pdf_has_valid_offsets_pages_bookmarks_and_the_sections() {
     assert_eq!(streams, pages);
     assert!(text.contains(&format!("/Count {pages} ")));
     for title in [
-        "Summary",
+        "At a glance",
         "Indicators of compromise",
         "ATT&CK techniques",
         "Processes",
@@ -325,7 +338,7 @@ fn pdf_has_valid_offsets_pages_bookmarks_and_the_sections() {
     // The table header repeats on the next page.
     assert!(content.matches("(Endpoint) Tj").count() >= 3);
     assert!(content.contains("Page 1 of"));
-    assert!(text.contains("/Title (Antinomie Triage report: dropper <1>.elf)"));
+    assert!(text.contains("/Title (Antinomie Triage report: dropper <1>.elf "));
     assert!(content.contains("203.0.113.5:443"));
 }
 
@@ -359,10 +372,15 @@ fn misp_event_has_attributes_to_ids_only_for_matches_and_galaxy_tags() {
         find("filename|sha256")["value"],
         format!("/tmp/payload.bin|{}", "cd".repeat(64 / 2))
     );
+    // The sample is a file object with its hash (to_ids: a dataset matched).
+    let object = &event["Object"][0];
+    assert_eq!(object["name"], "file");
     assert_eq!(
-        attrs
+        object["Attribute"]
+            .as_array()
+            .unwrap()
             .iter()
-            .filter(|a| a["type"] == "sha256" && a["category"] == "Payload delivery")
+            .filter(|a| a["type"] == "sha256" && a["to_ids"] == true)
             .count(),
         1
     );
@@ -523,7 +541,7 @@ fn the_bundle_holds_every_file_with_a_matching_hash_and_the_password_opens_the_i
         assert_eq!(sha(&bytes), hash, "{name}");
         checked += 1;
     }
-    assert_eq!(checked, 3, "capture, inner archive, custody");
+    assert_eq!(checked, 4, "capture, inner archive, custody, README");
     let mut manifest = String::new();
     outer
         .by_name("manifest.json")

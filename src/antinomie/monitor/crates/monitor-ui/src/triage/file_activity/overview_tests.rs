@@ -175,7 +175,7 @@ fn the_table_draws_its_headers_and_a_row_for_each_shown_file() {
     assert!(texts.iter().any(|text| text == "/tmp/payload"));
     assert!(texts.iter().any(|text| text == "/etc/hosts"));
     assert!(!texts.iter().any(|text| text == "/usr/lib/libc.so.6"));
-    assert!(texts.iter().any(|text| text == "2 of 4 files"), "{texts:?}");
+    assert!(texts.iter().any(|text| text == "2 / 4 rows"), "{texts:?}");
     assert!(
         texts.iter().any(|text| text == "/tmp"),
         "the location badge"

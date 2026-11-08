@@ -100,7 +100,7 @@ impl SignalNotes {
 }
 
 /// The signal name as `kill -l` spells it; the number for the rare ones.
-fn signal_name(signal: u8) -> String {
+pub(crate) fn signal_name(signal: u8) -> String {
     match signal {
         1 => "SIGHUP".into(),
         2 => "SIGINT".into(),
@@ -149,9 +149,6 @@ fn millis(ns: u64) -> String {
 /// What the end of the run says.
 pub(super) struct RunEnd {
     pub(super) text: String,
-    /// The whole tree ended within seconds (the report puts this note in its
-    /// statement too).
-    pub(super) short_tree: bool,
 }
 
 /// The note for a run whose tree ended at once, or whose tasks were killed by a signal.
@@ -165,17 +162,9 @@ pub(super) fn run_end(scan: &ArchiveScan) -> Option<RunEnd> {
     let killed = killed_text(scan, &tasks, start);
     match (short, killed) {
         (None, None) => None,
-        (Some(text), None) => Some(RunEnd {
-            text,
-            short_tree: true,
-        }),
+        (Some(text), None) | (None, Some(text)) => Some(RunEnd { text }),
         (Some(text), Some(killed)) => Some(RunEnd {
             text: format!("{text} {killed}"),
-            short_tree: true,
-        }),
-        (None, Some(text)) => Some(RunEnd {
-            text,
-            short_tree: false,
         }),
     }
 }

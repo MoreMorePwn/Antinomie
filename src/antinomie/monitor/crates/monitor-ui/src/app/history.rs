@@ -647,6 +647,7 @@ pub(super) fn listed(run: &RunSummary) -> RunSummary {
         boot_wait: run.boot_wait.clone(),
         triggers: run.triggers.clone(),
         stopped_by_user: run.stopped_by_user,
+        stopped_at_ms: run.stopped_at_ms,
         recording_error: run.recording_error.clone(),
         execution: run.execution.clone(),
         analysis: run

@@ -287,6 +287,26 @@ pub(super) struct View {
     journal: journal::Viewer,
     /// Converts guest times in the viewer, from the selected recording.
     clock: Option<antinomie_monitor_core::HostClockAnchor>,
+    /// Where the run's event index stands, fed by Triage every frame.
+    index: IndexState,
+    /// The VM boot that recorded the run is still up.
+    current_boot: bool,
+}
+
+/// Where the selected run's event index (the Sigma journal) stands.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum IndexState {
+    /// No run, or the index has not started.
+    #[default]
+    Unknown,
+    /// Being built.
+    Building,
+    /// Built from a recording the VM still holds open and has not saved.
+    Saving,
+    /// The journal could not be written; the words say why.
+    Failed(String),
+    /// Built from a saved recording.
+    Ready,
 }
 
 /// An input's caveat above the findings. How Sigma events are converted is
@@ -509,8 +529,12 @@ impl View {
         self.pending_rule = None;
         self.pending_technique = Some(technique.to_owned());
     }
+    pub(super) fn set_index(&mut self, index: IndexState) {
+        self.index = index;
+    }
     pub fn tick(&mut self, ctx: &egui::Context, input: &TriageInput<'_>) {
         self.clock = input.clock_anchor;
+        self.current_boot = input.current_boot;
         let identity = input
             .archive
             .zip(input.vm_id.zip(input.boot_id).zip(input.run_id))

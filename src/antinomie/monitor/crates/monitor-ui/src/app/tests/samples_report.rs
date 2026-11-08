@@ -177,6 +177,35 @@ fn the_window_writes_the_files_and_notes_the_export_in_the_custody_log() {
 }
 
 #[test]
+fn a_cancelled_export_writes_no_file_and_adds_no_custody_entry() {
+    let (root, script, options) = fixture("report-cancel");
+    let before = Library::open(&root).unwrap().events(&script).unwrap().len();
+    let out = root.join("cancelled-out");
+    let result = SamplesPage::run_report_job_for_test(&options, &vms(), &script, &out, true);
+    assert_eq!(result.unwrap_err(), "cancelled");
+    assert!(!out.exists(), "nothing was written");
+    assert_eq!(
+        Library::open(&root).unwrap().events(&script).unwrap().len(),
+        before,
+        "no Exported entry"
+    );
+    // The same job, not cancelled, writes and notes once.
+    let done =
+        SamplesPage::run_report_job_for_test(&options, &vms(), &script, &out, false).unwrap();
+    assert!(!done.files.is_empty());
+    let exported = |library: &Library| {
+        library
+            .events(&script)
+            .unwrap()
+            .iter()
+            .filter(|e| e.event.key() == "exported")
+            .count()
+    };
+    assert_eq!(exported(&Library::open(&root).unwrap()), 1);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn a_sample_that_left_the_library_fails_with_a_message() {
     let (root, _, options) = fixture("report-missing");
     let error = SamplesPage::report_for_test(&options, &vms(), &"0f".repeat(32)).unwrap_err();

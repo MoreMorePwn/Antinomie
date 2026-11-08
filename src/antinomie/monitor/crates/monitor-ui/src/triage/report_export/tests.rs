@@ -2,6 +2,7 @@
 use super::super::tests::{call, captured, http_pcap, path_call, write_rwx_calls};
 use super::*;
 use antinomie_monitor_core::report::bundle::{self, BundleInput};
+use std::collections::BTreeSet;
 
 fn have_tshark() -> bool {
     std::process::Command::new("tshark")
@@ -56,11 +57,13 @@ fn job(temp: &PacketSpool, pcap: &Path, choices: Choices) -> Job {
             run_id: "run-fixture-1".into(),
             started_ms: Some(1_792_000_000_000),
             finished: true,
+            ..Default::default()
         },
         sample: Some(report::SampleInfo {
             name: "fixture.elf".into(),
             sha256: "ab".repeat(32),
             size: Some(100),
+            role: String::new(),
         }),
         clock: None,
         data_dir: None,
@@ -131,9 +134,54 @@ fn a_whole_run_exports_every_format_whatever_the_screen_filters_say() {
         json["detections"][0]["reference"],
         "https://example.org/rule"
     );
+    // The recorded run's report links its entries, and every link resolves.
+    let parsed: report::Report = serde_json::from_value(json.clone()).unwrap();
+    assert_eq!(report::refs::problems(&parsed), Vec::<String>::new());
+    assert_eq!(json["schema_version"], 2);
+    let process_ids: Vec<&str> = json["processes"]["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|d| d["id"].as_str())
+        .collect();
+    assert!(
+        process_ids.iter().all(|id| id.starts_with("proc-")) && !process_ids.is_empty(),
+        "{process_ids:?}"
+    );
+    assert!(json["findings"]["data"][0]["process_ref"]
+        .as_str()
+        .is_some_and(|id| id.starts_with("proc-")));
+    let key = &json["summary"]["key_findings"];
+    assert!(key.as_array().is_some_and(|k| !k.is_empty()), "{key}");
+    assert!(key[0]["finding_ref"]
+        .as_str()
+        .is_some_and(|id| id.starts_with("finding-")));
     let html = read(&path("HTML"));
+    let anchors: Vec<&str> = html
+        .split(" id=\"")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+        .collect();
+    let mut seen = std::collections::BTreeSet::new();
+    assert!(
+        anchors.iter().all(|id| seen.insert(*id)),
+        "anchors are unique"
+    );
+    for link in html
+        .split("href=\"#")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+    {
+        assert!(anchors.contains(&link), "#{link} resolves");
+    }
+    assert!(html.contains("<caption>Key findings</caption>"));
+    let markdown = read(&path("Markdown"));
+    let (ids, links) = report::markdown::anchors_and_links(&markdown);
+    for link in links {
+        assert!(ids.contains(&link), "#{link} resolves in the Markdown");
+    }
     assert!(html.contains("Jane Rule") && html.contains("DRL 1.1"));
-    assert!(html.contains("<h2>Processes</h2>") && html.contains("example.com"));
+    assert!(html.contains("<h2>Processes</h2>") && html.contains("example[.]com"));
     let pdf = std::fs::read(path("PDF")).unwrap();
     assert!(pdf.starts_with(b"%PDF-1.4"));
     let misp: serde_json::Value = serde_json::from_str(&read(&path("MISP"))).unwrap();
@@ -447,7 +495,7 @@ fn the_dialog_lists_every_section_and_format_remembers_changes_and_exports() {
         position(&out, format.label());
     }
     position(&out, "Evidence bundle (.zip next to the report)");
-    position(&out, "Defang indicators in HTML and PDF");
+    position(&out, "Defang indicators in HTML, PDF and Markdown");
 
     // Unchecking a section and choosing the JSON format is remembered.
     click(
@@ -587,11 +635,15 @@ fn the_summary_and_the_export_agree_on_the_attack_techniques() {
         digest.detections = stored;
     })
     .unwrap();
-    let exported = build::build(&scan, &scan_job)
+    let mut exported = build::build(&scan, &scan_job)
         .unwrap()
         .report
         .attack
         .unwrap();
+    // The export adds its links; the techniques themselves are the same.
+    for technique in &mut exported {
+        technique.rule_refs.clear();
+    }
     view.scan = Some(scan);
     let shown = view.attack_list().0.to_vec();
     assert_eq!(shown, exported);
@@ -599,4 +651,68 @@ fn the_summary_and_the_export_agree_on_the_attack_techniques() {
     assert!(ids.contains(&"T1486") && ids.contains(&"T1036"), "{ids:?}");
     let masq = shown.iter().find(|t| t.id == "T1036").unwrap();
     assert_eq!(masq.rules, ["Sigma: Masquerading"]);
+}
+
+fn read_table() -> report::Table {
+    let row = |path: &str, text: &str| {
+        vec![
+            "17:00:01".to_owned(),
+            path.to_owned(),
+            "cat".to_owned(),
+            text.to_owned(),
+            "ok".to_owned(),
+        ]
+    };
+    report::Table {
+        columns: ["Time", "Path", "Process", "Transferred / content", "Result"]
+            .map(String::from)
+            .to_vec(),
+        rows: vec![
+            row(
+                "/etc/shadow",
+                "4096 B: root:$6$salt$hash:19000:0:99999:7:::",
+            ),
+            row("/usr/share/dict/words", "4096 B: aardvark\\nabacus"),
+            row("/tmp/own-copy", "29863 B: \\x7fELF\\x02\\x01"),
+            row(
+                "/proc/1/environ",
+                "9 B: kernel transfer; bytes not captured",
+            ),
+        ],
+        ..report::Table::default()
+    }
+}
+
+#[test]
+fn what_a_sample_read_is_not_copied_into_the_report() {
+    let written: BTreeSet<String> = ["/tmp/own-copy".to_owned()].into();
+    let mut table = read_table();
+    build::transferred(&mut table, false, &written);
+    assert_eq!(table.columns[3], "Transferred");
+    let text = format!("{:?}", table.rows);
+    for secret in ["root:$6$", "aardvark", "ELF"] {
+        assert!(!text.contains(secret), "{secret} was copied");
+    }
+    assert_eq!(table.rows[0][3], "4096 B");
+    assert_eq!(table.rows[3][3], "9 B");
+}
+
+#[test]
+fn the_option_keeps_a_clipped_escaped_preview_but_never_of_a_file_the_run_wrote() {
+    let written: BTreeSet<String> = ["/tmp/own-copy".to_owned()].into();
+    let mut table = read_table();
+    table.rows[1][3] = format!("4096 B: {}", "a\u{1}".repeat(100));
+    build::transferred(&mut table, true, &written);
+    assert!(table.rows[0][3].contains("root:$6$"), "asked for");
+    assert!(
+        table.rows[1][3].ends_with("..."),
+        "clipped: {}",
+        table.rows[1][3]
+    );
+    assert!(table.rows[1][3].contains("\\x01") && !table.rows[1][3].contains('\u{1}'));
+    assert_eq!(
+        table.rows[2][3], "29863 B",
+        "a file the run wrote is never copied"
+    );
+    assert!(table.rows[3][3].contains("kernel transfer"));
 }

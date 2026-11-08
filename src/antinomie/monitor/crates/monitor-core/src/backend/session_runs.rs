@@ -539,6 +539,7 @@ impl Session {
             run.summary.execution = Some(execution);
             run.record_async_loss();
             run.record_tree_completion();
+            run.seal_if_complete();
             run.persist_summary()?;
         }
         self.run_status_poll
@@ -551,6 +552,10 @@ impl Session {
     /// on disk is complete and is what views read.
     pub(super) fn release_completed_runs(&mut self) {
         for run in self.runs.values_mut() {
+            // A run whose tree ended is saved once the writer has caught up.
+            if run.seal_if_complete() {
+                let _ = run.persist_summary();
+            }
             if run.recording_complete() && run.assembler.holds_tables() {
                 run.assembler.release_tables();
             }
@@ -628,6 +633,7 @@ mod forget_tests {
             boot_wait: None,
             triggers: None,
             stopped_by_user: false,
+            stopped_at_ms: None,
         }
     }
 

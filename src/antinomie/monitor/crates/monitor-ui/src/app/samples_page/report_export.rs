@@ -18,7 +18,11 @@ use eframe::egui::{self, RichText};
 use std::{
     collections::HashSet,
     path::PathBuf,
-    sync::mpsc::{self, Receiver},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver},
+        Arc,
+    },
 };
 
 /// The dialog and the choices it starts with (kept while the app runs).
@@ -39,6 +43,7 @@ enum State {
     Idle,
     Running {
         rx: Receiver<Message>,
+        cancel: Arc<AtomicBool>,
         status: String,
     },
     Done(Written),
@@ -58,6 +63,11 @@ pub(in crate::app) struct ReportDialog {
     open: bool,
     /// The custody log changed: the sample window reads it again.
     wrote: bool,
+    /// The files on offer were just written: Export waits for a change of
+    /// choice, so one click never writes (and notes in the custody log) twice.
+    exported: bool,
+    /// The person tried to close the window while it was writing.
+    close_refused: bool,
 }
 
 /// Everything the worker needs, owned.
@@ -120,7 +130,7 @@ pub(super) fn build_report(
                 &vm_name(&entry.run.vm_id),
                 &entry.run.id,
                 entry.run.started_ms,
-                &super::exit_label(&entry.run),
+                &crate::run_state_line::exit_summary(&entry.run),
                 data_dir,
                 &entry.run.directory,
                 entry.folder,
@@ -225,9 +235,21 @@ pub(super) fn build_report(
     report
 }
 
-fn run_job(job: &Job, status: &dyn Fn(&str)) -> Result<Written, String> {
+/// The answer of a job that was cancelled.
+const CANCELLED: &str = "cancelled";
+
+fn run_job(job: &Job, cancel: &AtomicBool, status: &dyn Fn(&str)) -> Result<Written, String> {
+    let stop = || {
+        if cancel.load(Ordering::Relaxed) {
+            Err(CANCELLED.to_owned())
+        } else {
+            Ok(())
+        }
+    };
+    stop()?;
     status("Reading the sample, its runs and its custody log...");
     let data = detail::load(&job.options, &job.vms, &job.sha256)?;
+    stop()?;
     status("Comparing with the rest of the library...");
     let exclude: HashSet<String> = data
         .links
@@ -240,6 +262,7 @@ fn run_job(job: &Job, status: &dyn Fn(&str)) -> Result<Written, String> {
         Library::open(&job.options.data_dir)
             .and_then(|library| library.similar_to(&job.sha256, &exclude))
     };
+    stop()?;
     status("Building the report...");
     let report = build_report(
         &data,
@@ -248,6 +271,9 @@ fn run_job(job: &Job, status: &dyn Fn(&str)) -> Result<Written, String> {
         similar,
         crate::time_format::now_ms(),
     );
+    // The last point to stop: once the files are written the custody log
+    // notes the export, so a cancelled job writes and notes nothing.
+    stop()?;
     status("Writing the files...");
     let library = Library::open(&job.options.data_dir)?;
     sample::export::write_and_note(&library, &report, &job.choices, &job.folder)
@@ -262,10 +288,17 @@ impl ReportDialog {
             state: State::Idle,
             open: true,
             wrote: false,
+            exported: false,
+            close_refused: false,
         }
     }
 
     fn start(&mut self, ctx: &egui::Context, options: &BackendOptions, vms: &[(String, String)]) {
+        // The Export button is off after a write until a choice changes; a
+        // second start would write a second set and a second custody entry.
+        if self.exported || matches!(self.state, State::Running { .. }) {
+            return;
+        }
         let folder = chosen_folder(&options.data_dir, &self.choices.folder);
         let job = Job {
             options: options.clone(),
@@ -276,6 +309,8 @@ impl ReportDialog {
         };
         let (tx, rx) = mpsc::channel();
         let wake = ctx.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
         let spawned = std::thread::Builder::new()
             .name("sample-report".into())
             .spawn(move || {
@@ -283,13 +318,14 @@ impl ReportDialog {
                     let _ = tx.send(Message::Status(text.to_owned()));
                     wake.request_repaint();
                 };
-                let result = run_job(&job, &notify);
+                let result = run_job(&job, &worker_cancel, &notify);
                 let _ = tx.send(Message::Done(result));
                 wake.request_repaint();
             });
         self.state = match spawned {
             Ok(_) => State::Running {
                 rx,
+                cancel,
                 status: "Starting...".into(),
             },
             Err(error) => State::Failed(format!("could not start the export: {error}")),
@@ -297,7 +333,7 @@ impl ReportDialog {
     }
 
     fn poll(&mut self, ctx: &egui::Context) {
-        let State::Running { rx, status } = &mut self.state else {
+        let State::Running { rx, status, .. } = &mut self.state else {
             return;
         };
         let mut finished = None;
@@ -310,8 +346,10 @@ impl ReportDialog {
         match finished {
             Some(Ok(written)) => {
                 self.wrote = !written.files.is_empty();
+                self.exported = self.wrote;
                 self.state = State::Done(written);
             }
+            Some(Err(error)) if error == CANCELLED => self.state = State::Idle,
             Some(Err(error)) => self.state = State::Failed(error),
             None => ctx.request_repaint_after(std::time::Duration::from_millis(200)),
         }
@@ -324,6 +362,9 @@ impl ReportDialog {
         let mut open = true;
         let mut start = false;
         let mut close = false;
+        let mut cancel_run = false;
+        let before = self.choices.clone();
+        let window_id = egui::Id::new("samples_export_report");
         let default = default_folder(&options.data_dir);
         let hint = shown_folder(&options.data_dir, &default);
         widgets::window(format!(
@@ -333,6 +374,8 @@ impl ReportDialog {
         .id(egui::Id::new("samples_export_report"))
         .open(&mut open)
         .resizable(false)
+        .pivot(egui::Align2::CENTER_TOP)
+        .default_pos(widgets::top_anchor(ctx))
         .default_width(540.0)
         .show(ctx, |ui| {
             ui.add_enabled_ui(!running, |ui| {
@@ -392,7 +435,7 @@ impl ReportDialog {
                             .iter()
                             .map(|(l, p)| (l.to_string(), p.clone()))
                             .collect::<Vec<_>>(),
-                        4,
+                        written.files.len(),
                     );
                 }
                 State::Failed(error) => {
@@ -400,38 +443,51 @@ impl ReportDialog {
                 }
                 _ => {}
             }
-            let ready = !self.choices.formats.is_empty();
+            let ready = !self.choices.formats.is_empty() && !self.exported;
+            let refused = std::mem::take(&mut self.close_refused);
             widgets::footer_split(
                 ui,
                 |ui| {
                     if let State::Running { status, .. } = &self.state {
                         theme::spinner(ui);
                         ui.label(status);
+                    } else if refused {
+                        ui.weak("Cancel stops the export.");
                     }
                 },
                 |ui| {
                     if running {
-                        close = ui.button("Cancel").clicked();
+                        cancel_run = ui.button("Cancel").clicked();
                     } else {
-                        close = ui
-                            .button(if matches!(self.state, State::Done(_)) {
-                                "Close"
-                            } else {
-                                "Cancel"
-                            })
-                            .clicked();
                         start = ui
                             .add_enabled(ready, egui::Button::new("Export"))
-                            .on_disabled_hover_text("Choose a format")
+                            .on_disabled_hover_text(if self.exported {
+                                "Already written. Change a choice to write another set."
+                            } else {
+                                "Choose a format"
+                            })
                             .clicked();
+                        close = ui.button("Close").clicked();
                     }
                 },
             );
         });
+        if self.choices != before {
+            self.exported = false;
+        }
+        if cancel_run {
+            if let State::Running { cancel, .. } = &self.state {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        }
         if start {
             self.start(ctx, options, vms);
         }
-        if close || !open {
+        if running {
+            if !open {
+                self.close_refused = true;
+            }
+        } else if close || !open || widgets::escape_closes(ctx, window_id) {
             self.open = false;
         }
     }
@@ -511,6 +567,25 @@ impl super::SamplesPage {
             dialog.choices.folder = folder.to_owned();
             dialog.start(ctx, options, vms);
         }
+    }
+
+    /// The worker's job for `sha256` into `folder`, with the cancel flag set
+    /// or not before it starts.
+    pub(in crate::app) fn run_report_job_for_test(
+        options: &BackendOptions,
+        vms: &[(String, String)],
+        sha256: &str,
+        folder: &std::path::Path,
+        cancelled: bool,
+    ) -> Result<Written, String> {
+        let job = Job {
+            options: options.clone(),
+            vms: vms.to_vec(),
+            sha256: sha256.to_owned(),
+            choices: Choices::default(),
+            folder: folder.to_path_buf(),
+        };
+        run_job(&job, &AtomicBool::new(cancelled), &|_| {})
     }
 
     /// The report the worker would build for `sha256`, read the way the

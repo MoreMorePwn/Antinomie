@@ -91,6 +91,7 @@ impl Owner {
                 issue: None,
                 requested_max_size: None,
                 guest_max_size: None,
+                provenance: None,
                 stored_bytes: None,
                 expected_size: None,
                 allocated_size: None,
@@ -388,6 +389,26 @@ impl Session {
                 })
                 .map(|run| run.summary.id.clone());
         }
+        // The run whose process tree holds the task: its root, or a task its
+        // recording shows. A core of any other process belongs to no run.
+        let in_tree = request.source_run_id.clone().or_else(|| {
+            self.runs
+                .values()
+                .find(|run| {
+                    run.summary.vm_id == request.vm_id
+                        && run.summary.boot_id == request.target.boot_id
+                        && run.tasks.contains(&request.target.task_cookie)
+                })
+                .map(|run| run.summary.id.clone())
+        });
+        let provenance = crate::provenance::Provenance::by_hand(
+            &request.vm_id,
+            &request.target.boot_id,
+            in_tree.as_deref(),
+            Vec::new(),
+            unix_ms(),
+        )
+        .of_process(request.target.tgid, request.target.task_cookie);
         let id = new_id();
         let boot_dir = self
             .capture
@@ -400,6 +421,7 @@ impl Session {
             id.clone(),
         );
         owner.summary.guest_max_size = Some(limits.max_size);
+        owner.summary.provenance = Some(provenance);
         self.manual_record_count += 1;
         self.manual_cores.insert(id.clone(), owner);
         Ok(id)
@@ -882,6 +904,9 @@ impl Session {
             if owner.disk_finished {
                 owner.done = true;
                 owner.summary.phase = ProcessCorePhase::Finished;
+                if let Some(found) = owner.summary.provenance.as_mut() {
+                    found.to_ms.get_or_insert_with(unix_ms);
+                }
                 return Ok(());
             }
             let state =
@@ -1069,6 +1094,9 @@ impl Session {
                 thread::sleep(Duration::from_millis(5));
             }
             owner.done = true;
+            if let Some(found) = owner.summary.provenance.as_mut() {
+                found.to_ms.get_or_insert_with(unix_ms);
+            }
             self.manual_cores.insert(id, owner);
         }
         snapshot.process_cores = self

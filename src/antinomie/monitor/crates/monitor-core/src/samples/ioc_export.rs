@@ -4,7 +4,9 @@
 //! report's MISP and STIX 2.1 writers turn into an event and a bundle. CSV
 //! cells that could run as a formula are defused; the defang option rewrites
 //! the indicator values (`hxxp`, `[.]`) in the CSV and JSON, never in MISP or
-//! STIX, which keep raw values for tools.
+//! STIX, which keep raw values for tools. The app writes the files raw (the
+//! JSON says `"defanged": false`): a defanged value fed to a blocklist is
+//! useless, and the readable reports are where defanging belongs.
 use super::ioc_union::SampleIoc;
 use crate::{
     ioc::export::{cell, when},
@@ -13,7 +15,7 @@ use crate::{
 use serde_json::json;
 
 /// The CSV columns, in order.
-pub const COLUMNS: [&str; 13] = [
+pub const COLUMNS: [&str; 14] = [
     "kind",
     "indicator",
     "path",
@@ -23,6 +25,7 @@ pub const COLUMNS: [&str; 13] = [
     "first_seen",
     "last_seen",
     "process",
+    "pids",
     "matched",
     "datasets",
     "families",
@@ -41,7 +44,26 @@ fn runs_text(row: &SampleIoc) -> String {
         .iter()
         .map(usize::to_string)
         .collect::<Vec<_>>()
-        .join(" ")
+        .join("; ")
+}
+
+/// The processes as names and as pids, two lists: a process reads
+/// `name \u{b7} pid`, and a machine field has no middle dot.
+fn process_columns(row: &SampleIoc) -> (String, String) {
+    let mut names: Vec<String> = Vec::new();
+    let mut pids: Vec<String> = Vec::new();
+    for process in row.processes() {
+        let (name, pid) = process
+            .rsplit_once(" \u{b7} ")
+            .unwrap_or((process.as_str(), ""));
+        if !names.iter().any(|known| known == name) {
+            names.push(name.to_owned());
+        }
+        if !pid.is_empty() && !pids.iter().any(|known| known == pid) {
+            pids.push(pid.to_owned());
+        }
+    }
+    (names.join("; "), pids.join("; "))
 }
 
 /// `dataset: family (id)` per hit.
@@ -69,6 +91,39 @@ pub fn hit_texts(row: &SampleIoc) -> Vec<String> {
 
 /// The rows as merged indicators of a sample report. `listed` is how many
 /// runs have an indicator list.
+/// Why the row stays out of MISP and STIX, from what the runs saw of it.
+fn not_shared(row: &SampleIoc) -> String {
+    // Base image traffic in every run it was seen.
+    if let Some(why) = row
+        .sightings
+        .iter()
+        .map(|seen| seen.entry.noise.as_str())
+        .find(|noise| !noise.is_empty())
+        .filter(|_| {
+            row.sightings
+                .iter()
+                .all(|seen| !seen.entry.noise.is_empty())
+        })
+    {
+        return format!("the base image's own traffic: {why}");
+    }
+    let mut roles: Vec<String> = Vec::new();
+    for seen in &row.sightings {
+        for role in &seen.entry.roles {
+            if !roles.contains(role) {
+                roles.push(role.clone());
+            }
+        }
+    }
+    let checked = row
+        .sightings
+        .iter()
+        .map(|seen| seen.entry.not_checked.as_str())
+        .find(|why| !why.is_empty())
+        .unwrap_or_default();
+    crate::report::shared::not_shared_reason(&row.ty, &row.value, &roles, checked)
+}
+
 pub fn merged(rows: &[SampleIoc], listed: usize) -> Vec<MergedIndicator> {
     rows.iter()
         .map(|row| MergedIndicator {
@@ -82,6 +137,7 @@ pub fn merged(rows: &[SampleIoc], listed: usize) -> Vec<MergedIndicator> {
             first_us: row.first_us(),
             last_us: row.last_us(),
             hits: hit_texts(row),
+            not_shared: not_shared(row),
         })
         .collect()
 }
@@ -101,7 +157,8 @@ pub fn csv(rows: &[&SampleIoc], listed: usize, defanged: bool) -> String {
             row.observed().join("; "),
             when(row.first_us()),
             when(row.last_us()),
-            row.processes().join("; "),
+            process_columns(row).0,
+            process_columns(row).1,
             row.matched().to_string(),
             hits.iter()
                 .map(|hit| hit.dataset.clone())

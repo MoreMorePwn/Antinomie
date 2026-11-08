@@ -402,8 +402,27 @@ fn row_text<'a>(row: &'a [Cell], key: &str) -> Option<&'a str> {
     })
 }
 
+/// The colour of a rule score (Elastic's 0 to 100): red from 90, orange from
+/// 70, amber from 40 and muted below.
+pub(crate) fn score_color(score: u32) -> egui::Color32 {
+    match score {
+        90.. => theme::error(),
+        70..=89 => theme::orange(),
+        40..=69 => theme::warn(),
+        _ => theme::muted(),
+    }
+}
+
+/// The colour of a rule's severity tag: a named level, Suricata's priority
+/// 1 to 4, or (any other whole number) a rule score.
 pub(super) fn severity_color(severity: &str) -> egui::Color32 {
-    match severity.trim().to_ascii_lowercase().as_str() {
+    let trimmed = severity.trim();
+    if let Ok(score) = trimmed.parse::<u32>() {
+        if score > 4 {
+            return score_color(score);
+        }
+    }
+    match trimmed.to_ascii_lowercase().as_str() {
         "1" | "critical" | "high" => theme::error(),
         "2" | "medium" | "indicator" => theme::warn(),
         "3" | "4" | "low" | "informational" | "info" => theme::blue(),
@@ -436,6 +455,21 @@ mod tests {
         assert_eq!(severity_color("4"), theme::blue());
         assert_eq!(severity_color("informational"), theme::blue());
         assert_eq!(severity_color("unspecified"), theme::muted());
+    }
+
+    #[test]
+    fn rule_scores_are_coloured_by_range() {
+        assert_eq!(severity_color("100"), theme::error());
+        assert_eq!(severity_color("90"), theme::error());
+        assert_eq!(severity_color("89"), theme::orange());
+        assert_eq!(severity_color("70"), theme::orange());
+        assert_eq!(severity_color("69"), theme::warn());
+        assert_eq!(severity_color("50"), theme::warn());
+        assert_eq!(severity_color("40"), theme::warn());
+        assert_eq!(severity_color("39"), theme::muted());
+        assert_eq!(severity_color("5"), theme::muted());
+        assert_ne!(theme::orange(), theme::error());
+        assert_ne!(theme::orange(), theme::warn());
     }
 
     #[test]

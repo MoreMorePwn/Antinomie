@@ -66,6 +66,7 @@ pub fn identity(
         file_type: record.file_type.clone(),
         arch: record.arch.clone(),
         family: record.family.clone(),
+        family_candidates: Vec::new(),
         added_ms: record.added_ms,
         removed_ms: record.removed_ms,
         archived,
@@ -89,7 +90,11 @@ pub fn identity(
             .take(LIST_ROWS)
             .map(|alias| NameRow {
                 name: alias.name.clone(),
-                path: alias.path.clone(),
+                path: if alias.host_path {
+                    "imported from a file on this computer".into()
+                } else {
+                    alias.path.clone()
+                },
                 seen: alias.seen.clone(),
             })
             .collect(),
@@ -101,7 +106,12 @@ pub fn identity(
                 source: origin.source.clone(),
                 detail: origin.detail.clone(),
                 name: origin.name.clone(),
-                path: origin.path.clone(),
+                // An added file's path is on this computer; the others are guest paths.
+                path: if origin.kind == crate::samples::OriginKind::Added {
+                    crate::samples::host_file(&origin.path)
+                } else {
+                    origin.path.clone()
+                },
                 vm: if origin.vm_name.is_empty() {
                     origin.vm_id.clone()
                 } else {
@@ -205,7 +215,7 @@ pub fn static_analysis(found: Option<(&AnalysisReport, usize)>) -> (StaticAnalys
                 (
                     AnalysisData::RuleMatch {
                         rule,
-                        namespace,
+                        namespace: _,
                         ruleset,
                         ..
                     },
@@ -218,14 +228,15 @@ pub fn static_analysis(found: Option<(&AnalysisReport, usize)>) -> (StaticAnalys
                     hits.push(RuleHit {
                         engine: "YARA (static)".into(),
                         rule_id: rule.clone(),
-                        title: namespace.clone(),
+                        // The rule's name; the namespace is the pack's number.
+                        title: rule.clone(),
                         author: if author == "unknown author" {
                             String::new()
                         } else {
                             author.into()
                         },
                         license: license.into(),
-                        source: namespace.clone(),
+                        source: String::new(),
                         count: 1,
                         ..RuleHit::default()
                     });
@@ -332,6 +343,7 @@ pub fn merge_attack(digests: &[(usize, &RunDigest)]) -> Vec<Technique> {
             id,
             rules: rules.into_iter().collect(),
             count,
+            rule_refs: Vec::new(),
         })
         .collect()
 }
@@ -348,8 +360,11 @@ pub fn in_data_dir(data_dir: &std::path::Path, path: &std::path::Path) -> String
     }
 }
 
-/// The newest report file a run's Triage export wrote: `report/antinomie-report-*.html`
-/// in the run's folder. Empty when the run has none.
+/// The fullest report file a run's Triage export wrote: of
+/// `report/antinomie-report-*.html` in the run's folder, the one with the most
+/// sections (an export with sections turned off has fewer), the newest of
+/// those. Not the largest: a report of an older version can be larger because
+/// it copied what the sample read. Empty when the run has none.
 pub fn latest_run_report(data_dir: &std::path::Path, run_directory: &std::path::Path) -> String {
     let Ok(listing) = std::fs::read_dir(run_directory.join("report")) else {
         return String::new();
@@ -358,10 +373,21 @@ pub fn latest_run_report(data_dir: &std::path::Path, run_directory: &std::path::
         .flatten()
         .filter_map(|item| {
             let name = item.file_name().to_string_lossy().into_owned();
-            (name.starts_with("antinomie-report-") && name.ends_with(".html")).then_some(name)
+            if !(name.starts_with("antinomie-report-") && name.ends_with(".html")) {
+                return None;
+            }
+            let sections = std::fs::read_to_string(item.path())
+                .map_or(0, |html| html.matches("<section id=\"").count());
+            let modified = item
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |since| since.as_millis());
+            Some((sections, modified, name))
         })
         .max()
-        .map(|name| in_data_dir(data_dir, &run_directory.join("report").join(name)))
+        .map(|(_, _, name)| in_data_dir(data_dir, &run_directory.join("report").join(name)))
         .unwrap_or_default()
 }
 
@@ -569,7 +595,7 @@ pub fn custody(check: &ChainCheck, events: &[EventRow]) -> (CustodySection, u64)
             at_ms: event.at_ms,
             by: event.by.clone(),
             event: event.event.label().into(),
-            detail: plain(&event.event.detail()),
+            detail: plain(&event.event.detail_exported()),
             state: match check.state_of(event.seq) {
                 crate::samples::EntryState::Verified => "verified",
                 crate::samples::EntryState::Changed => "changed",

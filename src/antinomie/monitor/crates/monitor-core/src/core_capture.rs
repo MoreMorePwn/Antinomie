@@ -238,6 +238,7 @@ mod tests {
             issue: None,
             requested_max_size: None,
             guest_max_size: None,
+            provenance: None,
             stored_bytes: None,
             expected_size: None,
             allocated_size: None,

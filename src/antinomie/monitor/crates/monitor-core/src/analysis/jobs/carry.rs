@@ -93,3 +93,46 @@ impl Job {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The capa case of the Merlin run: the VM stopped while capa ran, the
+    /// analysis finished later as a timeout, and the run's own record kept
+    /// "running". The carried job's final report reaches both run files.
+    #[test]
+    fn a_finished_carried_analysis_replaces_the_running_one_in_the_run_record() {
+        let directory = std::env::temp_dir().join(format!("ant-carry-{}", storage::unique_id()));
+        fs::create_dir_all(&directory).unwrap();
+        let selection = AnalysisSelection {
+            enabled: true,
+            checks: vec![AnalysisKind::Capabilities],
+            time_limit_minutes: 0,
+            limits: Default::default(),
+        };
+        let mut running = new_report("/tmp/sample", &selection);
+        running.state = AnalysisState::Running;
+        let record = serde_json::json!({"id": "run1", "state": "Finished", "analysis": running});
+        fs::write(directory.join("run.json"), record.to_string()).unwrap();
+        fs::write(
+            directory.join("manifest.json"),
+            serde_json::json!({"run": record, "ended_ms": 5}).to_string(),
+        )
+        .unwrap();
+        let mut settled = running.clone();
+        settled.state = AnalysisState::Partial;
+        settled.reason = Some("capa timed out after 240 s".into());
+        save_run_analysis(&directory, "other", &settled).unwrap();
+        let read = |name: &str| -> serde_json::Value {
+            serde_json::from_slice(&fs::read(directory.join(name)).unwrap()).unwrap()
+        };
+        assert_eq!(read("run.json")["analysis"]["state"], "running");
+        save_run_analysis(&directory, "run1", &settled).unwrap();
+        assert_eq!(read("run.json")["analysis"]["state"], "partial");
+        assert_eq!(read("run.json")["state"], "Finished");
+        assert_eq!(read("manifest.json")["run"]["analysis"]["state"], "partial");
+        assert_eq!(read("manifest.json")["ended_ms"], 5);
+        fs::remove_dir_all(directory).unwrap();
+    }
+}

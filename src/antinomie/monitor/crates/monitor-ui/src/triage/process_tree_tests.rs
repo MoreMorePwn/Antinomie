@@ -8,7 +8,12 @@ const CLONE_NR: u64 = 56;
 const CLONE3_NR: u64 = 435;
 
 /// The call as made by a task of `pid` with its own `tid` and `cookie`.
-fn as_task(mut row: InvocationSummary, pid: u32, tid: u32, cookie: u64) -> InvocationSummary {
+pub(super) fn as_task(
+    mut row: InvocationSummary,
+    pid: u32,
+    tid: u32,
+    cookie: u64,
+) -> InvocationSummary {
     row.task_cookie = cookie;
     for event in row.entry.iter_mut().chain(row.exit.iter_mut()) {
         event.pid = pid;
@@ -548,4 +553,162 @@ fn the_settled_parents_name_the_process_for_a_child_seen_before_its_clone_return
                 cookie: 1
             }
     );
+}
+
+/// The guest's child record of a call: the thread group and the task id.
+pub(super) fn with_child_record(
+    mut row: InvocationSummary,
+    tgid: u64,
+    tid: u64,
+) -> InvocationSummary {
+    for (key, value) in [("lifecycle.child_tgid", tgid), ("lifecycle.child_pid", tid)] {
+        let mut note = row.exit.clone().unwrap();
+        note.phase = 3;
+        note.fields = vec![captured(key, "u64", &value.to_le_bytes())];
+        row.kernel_notes.push(note);
+    }
+    row
+}
+
+/// A `clone3` as the guest records it: the 88-byte `clone_args` struct is one
+/// field with no `flags` in its name, and its flags are its first word.
+pub(super) fn clone3_with_args(pid: u32, result: i64, flags: Option<u64>) -> InvocationSummary {
+    let mut row = as_task(
+        sys(pid, CLONE3_NR, "clone3", [0x7000, 88, 0, 0, 0, 0], result),
+        pid,
+        pid,
+        u64::from(pid),
+    );
+    row.exit.as_mut().unwrap().result = Some(result);
+    if let Some(flags) = flags {
+        let mut bytes = flags.to_le_bytes().to_vec();
+        bytes.resize(88, 0);
+        row.entry.as_mut().unwrap().fields.push(captured(
+            "arg0.clone_args",
+            "linux-6.12.94/x86_64/clone_args",
+            &bytes,
+        ));
+    }
+    row
+}
+
+#[test]
+fn a_clone3_without_readable_flags_links_its_child_from_the_main_thread() {
+    // The child ran (and exec'd) before the parent's clone3 returned, and the
+    // struct holding the flags was not captured: the guest's record decides.
+    let calls = vec![
+        as_task(exec(1351, "/bin/rota", &["rota"]), 1351, 1351, 1351),
+        as_task(exec(1352, "/bin/sh", &["sh", "-c", "id"]), 1352, 1352, 1352),
+        with_child_record(clone3_with_args(1351, 1352, None), 1352, 1352),
+    ];
+    let nodes = process_nodes(&calls);
+    let sh = node(&nodes, 1352, 1352);
+    assert_eq!(sh.parent.unwrap().pid, 1351);
+    assert!(!sh.parent_missing);
+    assert!(!sh.thread);
+    // The Sigma parent map reads the same edge.
+    let mut whole = std::collections::BTreeMap::new();
+    observe_processes(&mut whole, &calls);
+    let settled = settled_parents(&whole);
+    let child = whole.keys().find(|key| key.pid == 1352).unwrap();
+    assert_eq!(settled[child].pid, 1351);
+}
+
+#[test]
+fn a_clone3_thread_stays_a_thread_by_flags_or_by_record() {
+    let thread_flags = super::CLONE_THREAD | 0x100;
+    // Flags in the struct say thread: no child process, whatever the result.
+    let by_flags = clone3_with_args(1, 99, Some(thread_flags));
+    assert!(process_nodes(&[by_flags]).iter().all(|node| node.pid != 99));
+    // No flags, but the record's thread group is the caller's: a thread.
+    let by_record = with_child_record(clone3_with_args(1, 98, None), 1, 98);
+    assert!(process_nodes(&[by_record])
+        .iter()
+        .all(|node| node.pid != 98));
+    // The record wins over a result that would otherwise make a child.
+    assert_eq!(
+        lifecycle_born(&with_child_record(clone3_with_args(1, 98, None), 1, 98), 1),
+        Some(Born::Thread)
+    );
+}
+
+#[test]
+fn a_clone3_struct_with_process_flags_links_its_child() {
+    // CLONE_VM | CLONE_VFORK | CLONE_CLEAR_SIGHAND, as posix_spawn makes it.
+    let calls = vec![
+        as_task(exec(1, "/bin/root", &["root"]), 1, 1, 1),
+        clone3_with_args(1, 1352, Some(0x1_0000_4100)),
+    ];
+    let nodes = process_nodes(&calls);
+    assert_eq!(node(&nodes, 1352, 0).parent.unwrap().pid, 1);
+}
+
+#[test]
+fn a_clone3_with_neither_flags_nor_record_invents_no_child() {
+    let nodes = process_nodes(&[clone3_with_args(1, 55, None)]);
+    assert!(nodes.iter().all(|node| node.pid != 55));
+}
+
+/// A recording's packets, stored as the app stores them, so the copied
+/// archive reads back with its field bytes.
+fn materialize_objects(directory: &std::path::Path) {
+    use std::io::Read;
+    let mut assembler =
+        antinomie_monitor_core::parser::Assembler::new(directory.join("objects"), 1 << 33).unwrap();
+    let mut raw =
+        std::io::BufReader::new(std::fs::File::open(directory.join("telemetry.raw")).unwrap());
+    let mut size = [0u8; 4];
+    while raw.read_exact(&mut size).is_ok() {
+        let mut packet = vec![0; u32::from_le_bytes(size) as usize];
+        raw.read_exact(&mut packet).unwrap();
+        let _ = assembler.ingest(&packet);
+    }
+    assembler.flush();
+    drop(assembler);
+    std::thread::sleep(std::time::Duration::from_secs(3));
+}
+
+fn real_invocations(directory: &std::path::Path) -> Vec<InvocationSummary> {
+    if !directory.join("objects").exists() {
+        materialize_objects(directory);
+    }
+    let recording = antinomie_monitor_core::recording::open_recording(directory).unwrap();
+    let mut all = Vec::new();
+    let mut offset = 0;
+    loop {
+        let page = recording.invocation_page(offset, 255).unwrap();
+        all.extend(page.invocations);
+        match page.next_offset {
+            Some(next) => offset = next,
+            None => return all,
+        }
+    }
+}
+
+/// The RotaJakiro evaluation run (root 1351): its `sh` children made by
+/// `clone3` (1352, 1354, 1379) were separate roots. Needs a private copy of
+/// that run's `telemetry.raw` and a `manifest.json` of `{}` in the directory
+/// named by `ANT_PROBE_DIR`; the object files are written next to them.
+#[test]
+#[ignore = "needs ANT_PROBE_DIR: a copied telemetry.raw and manifest.json"]
+fn probe_real_run() {
+    let directory = std::env::var("ANT_PROBE_DIR").expect("ANT_PROBE_DIR");
+    let all = real_invocations(std::path::Path::new(&directory));
+    let nodes = process_nodes(&all);
+    let mut shown = Vec::new();
+    for pid in [1352u32, 1353, 1354, 1355, 1379, 1380, 1381] {
+        let found = nodes.iter().find(|node| node.pid == pid && !node.thread);
+        let parent = found.and_then(|node| node.parent).map(|key| key.pid);
+        shown.push(format!("{pid} -> {parent:?}"));
+        if matches!(pid, 1352 | 1354 | 1379) {
+            assert_eq!(parent, Some(1351), "{pid} must hang under 1351");
+        }
+    }
+    eprintln!("{}", shown.join(", "));
+    let roots: Vec<u32> = nodes
+        .iter()
+        .filter(|node| node.parent.is_none() && !node.thread)
+        .map(|node| node.pid)
+        .collect();
+    eprintln!("roots: {roots:?}");
 }

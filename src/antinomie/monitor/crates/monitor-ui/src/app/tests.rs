@@ -35,6 +35,7 @@ mod rules_list;
 mod rules_startup;
 mod run_in_vm_click;
 mod run_kill;
+mod run_link_shots;
 mod run_selection;
 mod samples_custody;
 mod samples_detail;
@@ -228,6 +229,7 @@ pub(crate) fn app() -> MonitorApp {
         backend_disconnected: false,
         run_list_cache: None,
         run_selector_cache: Default::default(),
+        triage_page_cache: Default::default(),
         started: Instant::now(),
         smoke: None,
         closing: false,
@@ -340,6 +342,7 @@ pub(super) fn run(id: &str) -> RunSummary {
         boot_wait: None,
         triggers: None,
         stopped_by_user: false,
+        stopped_at_ms: None,
         started_ms: None,
         clock_anchor: None,
         id: id.into(),

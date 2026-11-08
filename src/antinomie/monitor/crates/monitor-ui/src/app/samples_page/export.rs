@@ -28,11 +28,16 @@ pub(in crate::app) struct ExportDialog {
     sign: Sign,
     key: String,
     destination: String,
+    /// The folder the default destination is in.
+    folder: PathBuf,
     /// The analyst typed the destination: the extension no longer follows
     /// the format.
     destination_edited: bool,
     working: Option<Receiver<Result<Exported, String>>>,
     result: Option<Result<Exported, String>>,
+    /// Keep paths on this computer in the entries that name one (off: the
+    /// export names the file only and marks the entry withheld).
+    keep_host_paths: bool,
     /// The log changed (the export noted itself): the page reads it again.
     pub(super) wrote: bool,
     pub(super) open: bool,
@@ -53,7 +58,8 @@ fn default_key(sign: Sign) -> String {
 }
 
 impl ExportDialog {
-    pub(super) fn new(record: &SampleRecord, check: ChainCheck) -> Self {
+    /// `folder` is where the file goes unless the analyst types another.
+    pub(super) fn new(record: &SampleRecord, check: ChainCheck, folder: PathBuf) -> Self {
         let mut dialog = Self {
             sha256: record.sha256.clone(),
             name: record.name.clone(),
@@ -62,9 +68,11 @@ impl ExportDialog {
             sign: Sign::None,
             key: String::new(),
             destination: String::new(),
+            folder,
             destination_edited: false,
             working: None,
             result: None,
+            keep_host_paths: false,
             wrote: false,
             open: true,
         };
@@ -74,23 +82,12 @@ impl ExportDialog {
 
     fn follow_format(&mut self) {
         if !self.destination_edited {
-            let file: String = self
-                .name
-                .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() || ".-_".contains(c) {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
-                .take(40)
-                .collect();
-            self.destination = home()
-                .join(format!(
-                    "custody-{file}-{}.{}",
-                    &self.sha256[..8],
-                    self.format.extension()
+            self.destination = self
+                .folder
+                .join(crate::export_dirs::stamped(
+                    "custody",
+                    &self.sha256,
+                    self.format.extension(),
                 ))
                 .display()
                 .to_string();
@@ -111,13 +108,23 @@ impl ExportDialog {
         };
         let (sender, receiver) = mpsc::channel();
         let (data_dir, sha256, format) = (data_dir.to_path_buf(), self.sha256.clone(), self.format);
+        let keep = self.keep_host_paths;
         let destination = PathBuf::from(self.destination.trim());
         let wake = ctx.clone();
         match std::thread::Builder::new()
             .name("custody-export".into())
             .spawn(move || {
-                let result = Library::open(&data_dir).and_then(|mut library| {
-                    library.export_custody(&sha256, format, &destination, signer.as_ref())
+                // The default folder (`<data>/exports/custody`) is made on first use.
+                let result = crate::export_dirs::ensure_parent(&destination).and_then(|()| {
+                    Library::open(&data_dir).and_then(|mut library| {
+                        library.export_custody_with(
+                            &sha256,
+                            format,
+                            &destination,
+                            signer.as_ref(),
+                            keep,
+                        )
+                    })
                 });
                 let _ = sender.send(result);
                 wake.request_repaint();
@@ -132,12 +139,16 @@ impl ExportDialog {
             if let Ok(result) = receiver.try_recv() {
                 self.working = None;
                 self.wrote |= result.is_ok();
+                if let Ok(done) = &result {
+                    crate::export_dirs::wrote(ctx, "custody", "Custody record", &done.path);
+                }
                 self.result = Some(result);
             }
         }
         let mut open = true;
         let mut start = false;
         let mut close = false;
+        let window_id = egui::Id::new("samples_export_custody");
         widgets::window(format!("Export custody record: {}", crate::widgets::short_name(&self.name)))
             .id(egui::Id::new("samples_export_custody"))
             .open(&mut open)
@@ -209,6 +220,14 @@ impl ExportDialog {
                         );
                     }
                     ui.add_space(4.0);
+                    ui.checkbox(&mut self.keep_host_paths, "Keep paths on this computer")
+                        .on_hover_text(
+                            "Off: an entry that names a file on this computer (an import, a deleted \
+                             original) gives only its name and is marked withheld; the verifier \
+                             still checks every link. On: the paths stay and every entry can be \
+                             checked on its own. For internal use.",
+                        );
+                    ui.add_space(4.0);
                     ui.label(RichText::new("Save as").color(theme::muted()));
                     if ui
                         .add(
@@ -267,7 +286,7 @@ impl ExportDialog {
         if start {
             self.start(ctx, data_dir);
         }
-        if close || !open {
+        if close || !open || widgets::escape_closes(ctx, window_id) {
             self.open = false;
         }
     }

@@ -20,6 +20,7 @@ use std::{
 
 mod artifact_rows;
 mod custody;
+mod family_field;
 mod iocs;
 mod iocs_details;
 mod iocs_export;
@@ -30,6 +31,10 @@ use load::scan;
 mod notes_tab;
 mod output_files;
 mod parts;
+mod run_box;
+#[cfg(test)]
+pub(crate) use run_box::fixture_run;
+pub(crate) use run_box::{show as show_run_box, Open as ArtifactOpen, RunBoxState};
 mod runs;
 mod similar;
 mod summary;
@@ -499,6 +504,7 @@ impl MonitorApp {
                 self.samples_page.export = Some(super::export::ExportDialog::new(
                     &data.record,
                     data.chain.clone(),
+                    crate::export_dirs::default_folder(&self.options.data_dir, "custody"),
                 ));
             }
             Some(Action::Report) => self
@@ -828,6 +834,7 @@ impl SamplesPage {
             self.export = Some(super::export::ExportDialog::new(
                 &data.record,
                 data.chain.clone(),
+                std::env::temp_dir().join("antinomie-custody-test"),
             ));
         }
     }

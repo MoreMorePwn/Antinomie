@@ -19,6 +19,21 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+/// Counts every saved or removed key in this process. Anything that caches
+/// whether a key is set compares this number (see [`generation`]) and reads
+/// the key again when it moved, so a key set in Tools > API keys shows at once
+/// in every place that depends on it.
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The number of key changes made so far in this process.
+pub fn generation() -> u64 {
+    GENERATION.load(std::sync::atomic::Ordering::Acquire)
+}
+
+fn changed() {
+    GENERATION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+}
+
 const KEYS_FILE: &str = "api-keys.json";
 const USE_FILE: &str = "api-key-use.json";
 /// Longest key accepted.
@@ -207,7 +222,9 @@ pub fn set(data_dir: &Path, key: ApiKey, value: &str) -> Result<(), String> {
     }
     let mut stored = load(data_dir);
     stored.keys.insert(key.id().into(), value.to_owned());
-    store(data_dir, &mut stored)
+    store(data_dir, &mut stored)?;
+    changed();
+    Ok(())
 }
 
 /// Forget a key.
@@ -217,6 +234,7 @@ pub fn clear(data_dir: &Path, key: ApiKey) -> Result<(), String> {
         return Ok(());
     }
     store(data_dir, &mut stored)?;
+    changed();
     let mut used = load_use(data_dir);
     if used.remove(key.id()).is_some() {
         let _ = crate::storage::atomic_json(&data_dir.join(USE_FILE), &used);
@@ -323,6 +341,19 @@ mod tests {
         clear(&dir, ApiKey::Abusech).unwrap();
         assert!(!is_set(&dir, ApiKey::Abusech));
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn saving_or_removing_a_key_moves_the_generation_and_a_refused_one_does_not() {
+        let dir = temp("generation");
+        let start = generation();
+        set(&dir, ApiKey::Abusech, "generation-key-0001").unwrap();
+        assert!(generation() > start);
+        let saved = generation();
+        assert!(set(&dir, ApiKey::Abusech, "has space").is_err());
+        assert_eq!(generation(), saved);
+        clear(&dir, ApiKey::Abusech).unwrap();
+        assert!(generation() > saved);
     }
 
     #[test]

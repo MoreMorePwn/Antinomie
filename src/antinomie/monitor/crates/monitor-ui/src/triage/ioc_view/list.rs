@@ -557,11 +557,14 @@ impl View {
         } else {
             export::csv(&pairs)
         };
-        let name = format!(
-            "ioc-{}-{}.{}",
-            ty.id(),
-            feeds::now_unix(),
-            if json { "json" } else { "csv" }
+        let run = dir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let name = crate::export_dirs::stamped(
+            &format!("ioc-{}", ty.id()),
+            &run,
+            if json { "json" } else { "csv" },
         );
         match write_new(&dir.join("ioc"), &name, text.as_bytes()) {
             Ok(path) => self.message(

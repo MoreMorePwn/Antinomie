@@ -143,6 +143,10 @@ pub fn neutral_accent() -> Color32 {
 pub fn error() -> Color32 {
     palette().error
 }
+/// Between the warning amber and the error red: a score in the 70s and 80s.
+pub fn orange() -> Color32 {
+    error().lerp_to_gamma(warn(), 0.5)
+}
 pub fn info() -> Color32 {
     palette().info
 }
@@ -546,6 +550,7 @@ pub fn bold(ui: &egui::Ui, text: impl Into<String>) -> egui::RichText {
 
 pub fn install(ctx: &egui::Context) {
     ctx.set_fonts(fonts());
+    crate::widgets::end_drags_that_lose_their_release(ctx);
     apply(ctx, false);
     text_size(ctx, DEFAULT_TEXT_SIZE);
     // Screenshot fixtures: ANTINOMIE_QA_FONT picks the text size to render at.
