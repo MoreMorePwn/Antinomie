@@ -1656,7 +1656,10 @@ per line: a list command prints its items and then a last line
 | 3 | not_found | Sample, run, VM, base or job does not exist |
 | 4 | invalid | The arguments were refused (`invalid_argument`, `precondition_failed`, `conflict`) |
 | 5 | denied | Policy or file permission |
-| 10 to 14 | job_failed, job_partial, job_cancelled, job_rejected, wait_timeout | A waited job did not succeed (reserved for Auto mode, not produced yet) |
+| 10 | job_failed | `run exec` waited for the run and it failed |
+| 11 | job_partial | `run exec` waited for the run and it ended partial |
+| 12, 13 | job_cancelled, job_rejected | `run exec` waited for a run that was cancelled or rejected |
+| 14 | wait_timeout | A wait ran out: the engine did not answer in time, or `--timeout` passed (the VM is stopped) |
 | 20 | dependency | A required tool is missing; `doctor` shows which |
 | 21 | busy | The data directory is owned by another process, or the daemon is starting or stopping |
 | 22 | quota | `quota_exceeded` |

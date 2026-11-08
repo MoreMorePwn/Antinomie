@@ -371,9 +371,10 @@ the read is cancelled.
 - `recording.captured.read` takes the `field` string of an `Invocation` event
   field unchanged. The string is opaque (`<stream>.<task>.<call>.<event_seq>.
   <object_id>:<key>` today): it names the call, so no other state is needed.
-- `q` on `recording.trace.page` is `unsupported` until the `q` language moves
-  with the Triage crate (card P2-0). Class T operations are `unsupported` until
-  card Q-4.
+- `q` on `recording.trace.page` is `unsupported` until the service uses the
+  Triage filter language (the language is in `antinomie-triage` since card P2-0,
+  but the service does not link that crate yet; it is planned with card Q-4).
+  Class T operations are `unsupported` until card Q-4.
 - Reads run in two pools (light 16, heavy 2 by default). A full heavy pool is
   `quota_exceeded` with `details.reason = "heavy_read_limit"` and
   `retry_after_s`; a read past its deadline (10 s light, 60 s heavy) is
