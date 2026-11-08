@@ -1,0 +1,68 @@
+{
+  "case": "dm-hang",
+  "strategy": "snapshot_disk",
+  "workload": "hang",
+  "route_kind": "drop",
+  "headless": true,
+  "setup": {
+    "create_vm_s": 18.967019367,
+    "import_base_s": 12.964322531
+  },
+  "lane_prep": {
+    "create_snapshot_s": 0.071467032,
+    "first_boot_s": 2.338681785
+  },
+  "snapshot_id": "10a5357f235b1e381ce7c7cc4c878cab",
+  "cycles": [
+    {
+      "cycle": 1,
+      "handoff": {
+        "vm_id": "auto_cycle_22eda8c07940dcdd288345b98be2fd99",
+        "boot_id": "5fbfdddf826ee5a955e9722308e11589",
+        "run_id": "0673435983633b7847a787423fe168bf",
+        "run_directory": "/work/data-dm-hang/auto_cycle_22eda8c07940dcdd288345b98be2fd99/runs/0673435983633b7847a787423fe168bf",
+        "recording_directory": "/work/data-dm-hang/auto_cycle_22eda8c07940dcdd288345b98be2fd99",
+        "sample_sha256": "5f458ea49ae6d05cc8f3cf7023b882c827cecc63d5687f933084f6f38a7c6351",
+        "digest_file_present": false,
+        "artifacts_json_present": true
+      },
+      "stages": {
+        "artifacts_s": 0.000627012,
+        "collect_s": 1.414082112,
+        "cycle_s": 27.994046047,
+        "flush_done_s": 0.510527338,
+        "kernel_answered_s": 0.261638541,
+        "launch_s": 2.166425346,
+        "layer_wait_after_flush_s": 0.902905531,
+        "provision_upload_total_s": 4.045806267,
+        "revert_s": 2.196501542,
+        "run_design_exit_at_s": 20.367720669,
+        "run_flags_exit_at_s": 20.367720669,
+        "run_s": 20.367724556,
+        "stop_command_s": 0.510518622,
+        "stop_run_sent_at_s": 20.164922668,
+        "stop_to_layer_settled_s": 1.4134372370000001,
+        "stopped_s": 0.510524122,
+        "upload_s": 1.587625737,
+        "upload_tries": 2.0
+      },
+      "layer_pending_before_stop": true,
+      "layer_pending_at_flush_done": true,
+      "layer_settled": true,
+      "run_state": "Stopped",
+      "recording_error": null,
+      "route": "RouteRecord { kind: Drop, label: \"None (drop)\", via: Gateway, checked_ms: Some(1794121830378), stats: None, blocked_ports: [] }",
+      "terminal_has_end_marker": false,
+      "terminal_tail": "CYCLE-START\r\nwork-started\r\n",
+      "snapshot_nodes": 1,
+      "qcow2_files_in_snapshots_dir": 2,
+      "backing_chain_depth": 3,
+      "analyze_only_after_stop": null,
+      "vm_disk_dir_bytes": 201875456,
+      "vm_disk_dir_files": 35,
+      "recording_dir_bytes": 201875456,
+      "last_error": null
+    }
+  ],
+  "data_dir": "/work/data-dm-hang"
+}
