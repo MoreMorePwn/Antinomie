@@ -64,6 +64,7 @@ pub mod malshare;
 pub mod memory;
 pub mod mitre;
 pub mod network;
+pub mod network_link;
 mod object_pack;
 pub mod observation;
 pub mod packet_filter;
